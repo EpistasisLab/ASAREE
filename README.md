@@ -6,3 +6,6 @@ on core as a pinned library dependency (in-process, not a service call).
 
 See `project_plan/core_asaree_use_case.md` in the ARES repo for the design
 record: repo topology, what's already decided, and why.
+
+See [`vision.md`](vision.md) for what ASAREE is meant to be — and, at the
+bottom, how that compares to what's actually built so far.

@@ -17,6 +17,7 @@ from agentic_core.services.mcp_service import hydrate_registry
 from fastapi import FastAPI
 
 from asaree.api.datasets import router as datasets_router
+from asaree.api.mcp_servers import router as mcp_servers_router
 from asaree.api.users import router as users_router
 from asaree.config import get_settings
 from asaree.models.database import dispose_engine
@@ -46,6 +47,7 @@ def create_app() -> FastAPI:
 
     app.include_router(users_router)
     app.include_router(datasets_router)
+    app.include_router(mcp_servers_router)
 
     return app
 

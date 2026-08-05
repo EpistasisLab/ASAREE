@@ -16,7 +16,7 @@ resolution-markers = [
 [[package]]
 name = "agentic-core"
 version = "0.0.1"
-source = { git = "https://github.com/jay-m-dev/agentic-core.git?rev=e6cd5cdb6ea4677d952066fcfff75a10878a6638#e6cd5cdb6ea4677d952066fcfff75a10878a6638" }
+source = { git = "https://github.com/jay-m-dev/agentic-core.git?rev=2073e36de981a32febabc80069f463dbacdf2b05#2073e36de981a32febabc80069f463dbacdf2b05" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
@@ -240,7 +240,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentic-core", git = "https://github.com/jay-m-dev/agentic-core.git?rev=e6cd5cdb6ea4677d952066fcfff75a10878a6638" },
+    { name = "agentic-core", git = "https://github.com/jay-m-dev/agentic-core.git?rev=2073e36de981a32febabc80069f463dbacdf2b05" },
     { name = "alembic", specifier = ">=1.18.4" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "bcrypt", specifier = ">=4.2.0" },

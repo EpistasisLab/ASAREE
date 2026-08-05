@@ -32,6 +32,10 @@ class CreateRunRequest(BaseModel):
     agent_id: uuid.UUID
     user_input: str
     pattern_overrides: dict[str, Any] | None = None
+    # e.g. {"workspace_id": "..."} — the orchestrator lifts workspace_id out of
+    # this into every MCP tool call's ambient _meta (agentic-core runner.py
+    # docstring). Anything else here is just carried, not interpreted.
+    metadata: dict[str, Any] | None = None
 
 
 class RunResponse(BaseModel):
@@ -77,6 +81,7 @@ async def create_and_execute_run_endpoint(body: CreateRunRequest, user: CurrentU
         user_input=body.user_input,
         pattern_overrides=body.pattern_overrides,
         owner_id=user.id,
+        metadata=body.metadata,
     )
     await execute_run(run_id=run.id)
     finished = await get_run(run.id)

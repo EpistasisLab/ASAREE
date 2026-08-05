@@ -43,7 +43,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-agentic-core = { git = "https://github.com/jay-m-dev/agentic-core.git", rev = "e6cd5cdb6ea4677d952066fcfff75a10878a6638" }
+agentic-core = { git = "https://github.com/jay-m-dev/agentic-core.git", rev = "2073e36de981a32febabc80069f463dbacdf2b05" }
 
 [build-system]
 requires = ["hatchling"]

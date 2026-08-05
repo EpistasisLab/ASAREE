@@ -18,10 +18,11 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.50",
     "asyncpg>=0.30.0",
     "alembic>=1.18.4",
-    # Password hashing for the user model. Deliberately not agentic-core's
-    # concern (auth is explicitly a product decision — see CoreSettings'
-    # docstring) so it's declared here, not inherited.
+    # Password hashing and email validation for the user model. Deliberately
+    # not agentic-core's concern (auth is explicitly a product decision — see
+    # CoreSettings' docstring) so they're declared here, not inherited.
     "bcrypt>=4.2.0",
+    "email-validator>=2.2.0",
 ]
 
 [dependency-groups]
@@ -50,6 +51,12 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic revisions are generated. Reformatting them makes a diff against
+# what autogenerate produced unreadable, which is the one thing a migration
+# should be. Matches agentic-core's own convention.
+"src/asaree/migrations/versions/*.py" = ["E501", "I001", "W291"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["asaree"]

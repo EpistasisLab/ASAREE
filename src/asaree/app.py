@@ -16,6 +16,7 @@ from agentic_core.config import configure
 from agentic_core.services.mcp_service import hydrate_registry
 from fastapi import FastAPI
 
+from asaree.api.users import router as users_router
 from asaree.config import get_settings
 from asaree.models.database import dispose_engine
 
@@ -41,6 +42,8 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    app.include_router(users_router)
 
     return app
 

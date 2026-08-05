@@ -29,6 +29,10 @@ dependencies = [
     "pandas>=2.2.0",
     "scikit-learn>=1.6.0",
     "pyarrow>=18.0.0",
+    # Freedman-Lane permutation, BCa bootstrap, Holm correction, Levene's
+    # test — the spinal_surgery use case's factorial-analysis methodology
+    # (services.factorial_analysis).
+    "scipy>=1.14.0",
 ]
 
 [dependency-groups]
@@ -74,7 +78,7 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["sklearn.*"]
+module = ["sklearn.*", "scipy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

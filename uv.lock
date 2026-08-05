@@ -223,6 +223,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "scikit-learn" },
+    { name = "scipy" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -251,6 +252,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pydantic-settings", specifier = ">=2.14.1" },
     { name = "scikit-learn", specifier = ">=1.6.0" },
+    { name = "scipy", specifier = ">=1.14.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.50" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.38.0" },
 ]

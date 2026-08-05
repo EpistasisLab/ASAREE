@@ -24,6 +24,7 @@ from asaree.services.experiments import (
     get_experiment_by_name,
     list_experiments,
 )
+from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_factorial
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
@@ -155,6 +156,55 @@ async def generate_design_endpoint(experiment_id: uuid.UUID, user: CurrentUser, 
     except DesignValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return [CellResponse.model_validate(c) for c in cells]
+
+
+class AnalyzeFactorialRequest(BaseModel):
+    """The spinal_surgery use case's specific methodology (design doc §10) —
+    not the generic nonparametric-regression capability tracked separately
+    (ASAREE#1). Deliberately explicit rather than inferred: ``positive_levels``
+    and ``reference_condition`` are exactly the two things the source notebook
+    reads from a manifest instead of guessing, because guessing (e.g. a
+    substring match on a model name) can silently invert an effect's sign.
+    """
+
+    condition_factors: list[str]
+    positive_levels: dict[str, Any]
+    reference_condition: dict[str, Any]
+    primary_metric: str
+    alpha: float = 0.05
+    delta: float = 0.05
+    n_resamples: int = 10_000
+    seed: int = 42
+    failure_flag_key: str = "failure_flag"
+    cost_keys: list[str] = ["total_tokens", "usd", "wallclock_s"]  # noqa: RUF012
+
+
+@router.post("/{experiment_id}/analyze")
+async def analyze_factorial_endpoint(
+    experiment_id: uuid.UUID, body: AnalyzeFactorialRequest, user: CurrentUser, db: DbSession
+) -> dict[str, Any]:
+    """Failure homogeneity, factorial effects (Freedman-Lane + max-stat FWER),
+    estimated marginal means, non-inferiority vs. the reference condition
+    (BCa bootstrap + Holm), and heteroscedasticity diagnostics — computed
+    fresh from this experiment's current cells, not persisted."""
+    await _get_owned_experiment(db, experiment_id, user)
+    cells = await list_cells(db, experiment_id=experiment_id)
+    try:
+        return analyze_factorial(
+            cells,
+            condition_factors=body.condition_factors,
+            positive_levels=body.positive_levels,
+            reference_condition=body.reference_condition,
+            primary_metric=body.primary_metric,
+            alpha=body.alpha,
+            delta=body.delta,
+            n_resamples=body.n_resamples,
+            seed=body.seed,
+            failure_flag_key=body.failure_flag_key,
+            cost_keys=body.cost_keys,
+        )
+    except FactorialAnalysisError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.put("/{experiment_id}/cells/{cell_label}", response_model=CellResponse)

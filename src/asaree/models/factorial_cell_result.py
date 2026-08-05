@@ -35,7 +35,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import ForeignKey, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from asaree.models.base import Base, TimestampMixin, generate_uuid
@@ -61,9 +61,9 @@ class FactorialCellResult(Base, TimestampMixin):
     # a string path convention, not a foreign key target.
     workspace_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    factor_values: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    metric_values: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    artifacts: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    factor_values: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    metric_values: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    artifacts: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 __all__ = ["FactorialCellResult"]

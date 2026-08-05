@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from asaree.models.base import Base, TimestampMixin, generate_uuid
@@ -28,7 +28,7 @@ class ResearchExperiment(Base, TimestampMixin):
     # gets added. Only "factorial" is meaningful today.
     design_type: Mapped[str] = mapped_column(String(32), nullable=False, default="factorial")
     # Kept for provenance — the notebook's task_brief dict, verbatim.
-    task_brief: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    task_brief: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # RESTRICT, not CASCADE: deleting a user shouldn't silently discard the
     # experiments they ran. Matches RegisteredDataset.owner_id.
     owner_id: Mapped[uuid.UUID] = mapped_column(

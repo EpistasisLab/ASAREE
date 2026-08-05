@@ -1,11 +1,13 @@
 """Upserting and reading factorial cell results.
 
-``upsert_cell`` merges rather than replaces: only the keys actually present in
-*fields* are written. This is what lets a cell's pre-scoring write (factors,
-payload, SHA guards) and its later post-scoring write (test_metrics,
-importances) target the same row without the second call blanking out the
-first — exactly the durability property the original notebook's two-phase
-``runs.update`` calls relied on.
+``upsert_cell`` merges into ``factor_values``/``metric_values``/``artifacts``
+individually — a *dict update* into whatever's already stored, not a
+replace of the column. That's what lets a cell's pre-scoring write (factors,
+payload, SHA guards, all under ``artifacts``/``factor_values``) and its later
+post-scoring write (metrics, importances) land on the same row without either
+erasing the other, now that everything lives in three JSON columns instead of
+many named ones — replacing the whole column on the second write would have
+silently discarded the first write's keys.
 """
 
 from __future__ import annotations
@@ -19,32 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.factorial_cell_result import FactorialCellResult
 
-_SETTABLE_FIELDS = frozenset(
-    {
-        "run_id",
-        "workspace_id",
-        "tier",
-        "effort",
-        "critic",
-        "replicate",
-        "primary_metric",
-        "payload",
-        "raw_payload",
-        "payload_sanitize_notes",
-        "process_metrics",
-        "expected_payload_sha256",
-        "model_script_sha256",
-        "test_metrics",
-        "permutation_importance_top15",
-        "model_decisions",
-        "package_versions",
-        "test_class_distribution",
-        "n_test",
-        "code_sha256",
-        "payload_sha256",
-        "data_sha256",
-    }
-)
+_SCALAR_FIELDS = frozenset({"run_id", "workspace_id"})
+_MERGE_FIELDS = frozenset({"factor_values", "metric_values", "artifacts"})
+_SETTABLE_FIELDS = _SCALAR_FIELDS | _MERGE_FIELDS
 
 
 async def upsert_cell(
@@ -60,7 +39,12 @@ async def upsert_cell(
         db.add(cell)
 
     for key, value in fields.items():
-        setattr(cell, key, value)
+        if key in _MERGE_FIELDS:
+            merged = dict(getattr(cell, key) or {})
+            merged.update(value or {})
+            setattr(cell, key, merged)
+        else:
+            setattr(cell, key, value)
 
     await db.flush()
     await db.refresh(cell)

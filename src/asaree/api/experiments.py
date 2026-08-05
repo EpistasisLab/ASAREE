@@ -56,34 +56,21 @@ def _experiment_response(e: Any) -> ExperimentResponse:
 
 
 class UpsertCellRequest(BaseModel):
-    """All fields optional; only the ones the caller actually sets are written.
+    """All fields optional; only the ones actually set are written.
 
-    Pass just the pre-scoring fields on the first call, just the post-scoring
-    fields on the second — both land on the same row.
+    ``factor_values``/``metric_values``/``artifacts`` are merged into
+    whatever's already stored, not replaced — pass just the pre-scoring
+    fields (e.g. ``artifacts={"payload": ..., "code_sha256": ...}``) on the
+    first call, just the post-scoring ones (``metric_values={"roc_auc": ...}``,
+    ``artifacts={"permutation_importance_top15": [...]}``) on the second —
+    both land on the same row, neither erases the other.
     """
 
     run_id: uuid.UUID | None = None
     workspace_id: str | None = None
-    tier: str | None = None
-    effort: str | None = None
-    critic: bool | None = None
-    replicate: int | None = None
-    primary_metric: float | None = None
-    payload: dict[str, Any] | None = None
-    raw_payload: dict[str, Any] | None = None
-    payload_sanitize_notes: list[Any] | None = None
-    process_metrics: dict[str, Any] | None = None
-    expected_payload_sha256: str | None = None
-    model_script_sha256: str | None = None
-    test_metrics: dict[str, Any] | None = None
-    permutation_importance_top15: list[Any] | None = None
-    model_decisions: dict[str, Any] | None = None
-    package_versions: dict[str, Any] | None = None
-    test_class_distribution: dict[str, Any] | None = None
-    n_test: int | None = None
-    code_sha256: str | None = None
-    payload_sha256: str | None = None
-    data_sha256: str | None = None
+    factor_values: dict[str, Any] | None = None
+    metric_values: dict[str, Any] | None = None
+    artifacts: dict[str, Any] | None = None
 
 
 class CellResponse(BaseModel):
@@ -91,14 +78,9 @@ class CellResponse(BaseModel):
     cell_label: str
     run_id: uuid.UUID | None
     workspace_id: str | None
-    tier: str | None
-    effort: str | None
-    critic: bool | None
-    replicate: int | None
-    primary_metric: float | None
-    test_metrics: dict[str, Any] | None
-    process_metrics: dict[str, Any] | None
-    payload: dict[str, Any] | None
+    factor_values: dict[str, Any] | None
+    metric_values: dict[str, Any] | None
+    artifacts: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime
 

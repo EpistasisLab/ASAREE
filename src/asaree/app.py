@@ -13,14 +13,19 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from agentic_core.config import configure
+from agentic_core.services.credentials import set_credential_resolver
 from agentic_core.services.mcp_service import hydrate_registry
 from fastapi import FastAPI
 
+from asaree.api.agents import router as agents_router
 from asaree.api.datasets import router as datasets_router
+from asaree.api.llm_settings import router as llm_settings_router
 from asaree.api.mcp_servers import router as mcp_servers_router
+from asaree.api.runs import router as runs_router
 from asaree.api.users import router as users_router
 from asaree.config import get_settings
 from asaree.models.database import dispose_engine
+from asaree.services.credential_resolver import resolve as resolve_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +33,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure(get_settings())
+    set_credential_resolver(resolve_credentials)
 
     failed = await hydrate_registry()
     if failed:
@@ -48,6 +54,9 @@ def create_app() -> FastAPI:
     app.include_router(users_router)
     app.include_router(datasets_router)
     app.include_router(mcp_servers_router)
+    app.include_router(llm_settings_router)
+    app.include_router(agents_router)
+    app.include_router(runs_router)
 
     return app
 

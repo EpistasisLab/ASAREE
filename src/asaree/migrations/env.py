@@ -21,6 +21,7 @@ import asaree.models.dataset  # noqa: F401
 import asaree.models.dataset_workspace_event  # noqa: F401
 import asaree.models.user  # noqa: F401
 import asaree.models.user_api_token  # noqa: F401
+import asaree.models.user_llm_setting  # noqa: F401
 from asaree.config import get_settings
 from asaree.models.base import Base
 

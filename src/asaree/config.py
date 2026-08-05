@@ -39,6 +39,12 @@ class AsareeSettings(CoreSettings):
     # deliberately deferred decision.
     dataset_storage_dir: str = "./data/datasets"
 
+    # Encrypts per-user LLM provider API keys at rest (user_llm_settings).
+    # Deliberately ASAREE's own — core's services.encryption is explicitly a
+    # single server-side secret with no user in the picture at all, the
+    # opposite of what per-user credential storage needs.
+    encryption_key: str = "dev-only-not-for-production"
+
 
 _instance: AsareeSettings | None = None
 

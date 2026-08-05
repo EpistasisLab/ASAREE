@@ -66,7 +66,7 @@ class AsareeClient:
         self.tools = Tools(self)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        response = self._http.request(method, path, **kwargs)
+        response = self._http.request(method, f"/api{path}", **kwargs)
         raise_for_status(response)
         if response.status_code == 204:
             return None

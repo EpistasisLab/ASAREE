@@ -52,13 +52,13 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    app.include_router(users_router)
-    app.include_router(datasets_router)
-    app.include_router(mcp_servers_router)
-    app.include_router(llm_settings_router)
-    app.include_router(agents_router)
-    app.include_router(runs_router)
-    app.include_router(experiments_router)
+    app.include_router(users_router, prefix="/api")
+    app.include_router(datasets_router, prefix="/api")
+    app.include_router(mcp_servers_router, prefix="/api")
+    app.include_router(llm_settings_router, prefix="/api")
+    app.include_router(agents_router, prefix="/api")
+    app.include_router(runs_router, prefix="/api")
+    app.include_router(experiments_router, prefix="/api")
 
     return app
 

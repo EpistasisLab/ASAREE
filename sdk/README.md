@@ -18,9 +18,13 @@ ASAREE has no static server-wide API key; each user is provisioned once and
 issues their own token:
 
 ```bash
-curl -X POST $ASAREE_BASE_URL/users -d '{"email": "...", "password": "..."}'
-curl -X POST $ASAREE_BASE_URL/users/{user_id}/tokens -d '{"password": "..."}'
+curl -X POST $ASAREE_BASE_URL/api/users -d '{"email": "...", "password": "..."}'
+curl -X POST $ASAREE_BASE_URL/api/users/{user_id}/tokens -d '{"password": "..."}'
 ```
+
+Every ASAREE route lives under `/api` (except `/health`) — the client
+already knows this and prepends it to every request; you only need it
+yourself for the one-time bootstrap above, made directly with curl.
 
 This is a one-time setup step, not something the SDK does — set the
 resulting token as `ASAREE_API_KEY` (sent as `X-API-Key`) for everything

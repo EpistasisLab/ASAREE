@@ -36,6 +36,11 @@ class CreateRunRequest(BaseModel):
     # this into every MCP tool call's ambient _meta (agentic-core runner.py
     # docstring). Anything else here is just carried, not interpreted.
     metadata: dict[str, Any] | None = None
+    # Shallow-merged onto the agent's own model_config_data at execute time —
+    # e.g. {"model": "claude-opus-5", "effort": "xhigh"} to vary the model/
+    # effort per run (a factorial design's per-cell treatment) without
+    # touching the agent's stored configuration.
+    model_config_override: dict[str, Any] | None = None
 
 
 class RunResponse(BaseModel):
@@ -82,6 +87,7 @@ async def create_and_execute_run_endpoint(body: CreateRunRequest, user: CurrentU
         pattern_overrides=body.pattern_overrides,
         owner_id=user.id,
         metadata=body.metadata,
+        model_config_overrides=body.model_config_override,
     )
     await execute_run(run_id=run.id)
     finished = await get_run(run.id)

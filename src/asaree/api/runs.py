@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any
 
 from agentic_core.runner import create_run, execute_run, get_agent, get_run, get_run_steps, list_runs
+from agentic_core.schemas.output import parse_envelope
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -53,23 +54,36 @@ class RunResponse(BaseModel):
     status: str
     input: str
     output: str | None
+    # Derived from `output`: the human-readable text (unwrapped from the
+    # output-contract envelope, if any) and the structured payload the
+    # envelope carries when the agent declares an output_contract. Both
+    # None/output verbatim when the run predates envelopes or produced none.
+    output_text: str
+    payload: dict[str, Any] | None
     error: str | None
     token_usage: dict[str, Any] | None
     cost_estimate: float | None
+    run_metadata: dict[str, Any] | None
+    pattern_overrides: dict[str, Any] | None
     created_at: datetime
     completed_at: datetime | None
 
 
 def _to_response(run: Any) -> RunResponse:
+    envelope = parse_envelope(run.output)
     return RunResponse(
         id=run.id,
         agent_id=run.agent_id,
         status=run.status.value,
         input=run.input,
         output=run.output,
+        output_text=envelope.result if envelope is not None else (run.output or ""),
+        payload=envelope.payload if envelope is not None else None,
         error=run.error,
         token_usage=run.token_usage,
         cost_estimate=float(run.cost_estimate) if run.cost_estimate is not None else None,
+        run_metadata=run.run_metadata,
+        pattern_overrides=run.pattern_overrides,
         created_at=run.created_at,
         completed_at=run.completed_at,
     )

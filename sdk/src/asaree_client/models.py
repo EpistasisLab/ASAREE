@@ -26,6 +26,9 @@ class Agent(BaseModel):
     tool_config_data: dict[str, Any] = Field(alias="tool_config")
     memory_config_data: dict[str, Any] = Field(alias="memory_config")
     pattern_config: dict[str, Any] | None = None
+    output_contract: dict[str, Any] | None = None
+    budget_limit_usd: float | None = None
+    max_run_duration_seconds: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -38,9 +41,16 @@ class Run(BaseModel):
     status: str
     input: str
     output: str | None
+    # Derived from `output` server-side: the human-readable text (unwrapped
+    # from the output-contract envelope, if any) and the structured payload
+    # the envelope carries when the agent declares an output_contract.
+    output_text: str
+    payload: dict[str, Any] | None = None
     error: str | None
     token_usage: dict[str, Any] | None
     cost_estimate: float | None
+    run_metadata: dict[str, Any] | None = None
+    pattern_overrides: dict[str, Any] | None = None
     created_at: datetime
     completed_at: datetime | None
 

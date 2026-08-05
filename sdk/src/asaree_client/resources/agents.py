@@ -25,6 +25,9 @@ class Agents:
         pattern_config: dict[str, Any] | None = None,
         tool_config: dict[str, Any] | None = None,
         memory_config: dict[str, Any] | None = None,
+        output_contract: dict[str, Any] | None = None,
+        budget_limit_usd: float | None = None,
+        max_run_duration_seconds: int | None = None,
     ) -> Agent:
         payload: dict[str, Any] = {
             "name": name,
@@ -40,6 +43,12 @@ class Agents:
             payload["tool_config"] = tool_config
         if memory_config is not None:
             payload["memory_config"] = memory_config
+        if output_contract is not None:
+            payload["output_contract"] = output_contract
+        if budget_limit_usd is not None:
+            payload["budget_limit_usd"] = budget_limit_usd
+        if max_run_duration_seconds is not None:
+            payload["max_run_duration_seconds"] = max_run_duration_seconds
         data = self._client._post("/agents", json=payload)
         return Agent(**data)
 
@@ -67,6 +76,9 @@ class Agents:
         pattern_config: dict[str, Any] | None = None,
         tool_config: dict[str, Any] | None = None,
         memory_config: dict[str, Any] | None = None,
+        output_contract: dict[str, Any] | None = None,
+        budget_limit_usd: float | None = None,
+        max_run_duration_seconds: int | None = None,
     ) -> Agent:
         payload: dict[str, Any] = {}
         for key, value in {
@@ -78,6 +90,9 @@ class Agents:
             "pattern_config": pattern_config,
             "tool_config": tool_config,
             "memory_config": memory_config,
+            "output_contract": output_contract,
+            "budget_limit_usd": budget_limit_usd,
+            "max_run_duration_seconds": max_run_duration_seconds,
         }.items():
             if value is not None:
                 payload[key] = value

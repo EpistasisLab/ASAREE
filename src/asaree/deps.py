@@ -11,6 +11,8 @@ from asaree.models.database import get_db
 from asaree.models.user import User
 from asaree.services.api_tokens import authenticate_api_key
 
+DbSession = Annotated[AsyncSession, Depends(get_db)]
+
 
 async def get_current_user(
     db: Annotated[AsyncSession, Depends(get_db)],

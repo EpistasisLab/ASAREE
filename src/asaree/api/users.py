@@ -13,20 +13,16 @@ user has no token yet to authenticate a request for one.
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, EmailStr
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from asaree.models.database import get_db
+from asaree.deps import DbSession
 from asaree.security.passwords import verify_password
 from asaree.services.api_tokens import issue_api_token
 from asaree.services.users import create_user, get_user, get_user_by_email
 
 router = APIRouter(prefix="/users", tags=["users"])
-
-DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 class CreateUserRequest(BaseModel):

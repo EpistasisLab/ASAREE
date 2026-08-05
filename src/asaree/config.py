@@ -33,6 +33,12 @@ class AsareeSettings(CoreSettings):
     # fallback silently accepted in production, see get_settings().
     auth_secret_key: str = "dev-only-not-for-production"
 
+    # Local disk, matching ARES's current approach — see
+    # project_plan/core_asaree_use_case.md §9: metadata (this database) and
+    # hashes are what matter; where the bytes physically live is a separate,
+    # deliberately deferred decision.
+    dataset_storage_dir: str = "./data/datasets"
+
 
 _instance: AsareeSettings | None = None
 

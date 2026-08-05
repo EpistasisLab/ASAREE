@@ -23,6 +23,12 @@ dependencies = [
     # CoreSettings' docstring) so they're declared here, not inherited.
     "bcrypt>=4.2.0",
     "email-validator>=2.2.0",
+    # Dataset registration's inline train/test split — the same
+    # GroupShuffleSplit/stratified split_runner.py already used, minus the
+    # subprocess indirection (no worker in ASAREE for v1).
+    "pandas>=2.2.0",
+    "scikit-learn>=1.6.0",
+    "pyarrow>=18.0.0",
 ]
 
 [dependency-groups]
@@ -33,6 +39,7 @@ dev = [
     "ruff>=0.15.15",
     "mypy>=2.1.0",
     "httpx>=0.28.1",
+    "pandas-stubs>=3.0.5.260730",
 ]
 
 [tool.uv.sources]
@@ -65,6 +72,10 @@ known-first-party = ["asaree"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["sklearn.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

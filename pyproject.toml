@@ -1,0 +1,62 @@
+[project]
+name = "asaree"
+version = "0.0.1"
+description = "ASAREE — the product built on agentic-core."
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "agentic-core",
+    # Pinned to a real commit on agentic-core's main, bumped only as a
+    # deliberate, reviewed action — never left floating to that repo's main.
+    # See project_plan/core_asaree_use_case.md in the ARES repo.
+    "fastapi>=0.121.0",
+    "uvicorn[standard]>=0.38.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.14.1",
+    "sqlalchemy[asyncio]>=2.0.50",
+    "asyncpg>=0.30.0",
+    "alembic>=1.18.4",
+    # Password hashing for the user model. Deliberately not agentic-core's
+    # concern (auth is explicitly a product decision — see CoreSettings'
+    # docstring) so it's declared here, not inherited.
+    "bcrypt>=4.2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.15.15",
+    "mypy>=2.1.0",
+]
+
+[tool.uv.sources]
+agentic-core = { git = "https://github.com/jay-m-dev/agentic-core.git", rev = "08ea618b3470e653018e178a1adb6cc1296205fc" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/asaree"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["asaree"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

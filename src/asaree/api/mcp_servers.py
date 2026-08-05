@@ -27,6 +27,15 @@ from asaree.deps import CurrentUser
 router = APIRouter(prefix="/mcp-servers", tags=["mcp-servers"])
 
 
+class CallToolRequest(BaseModel):
+    arguments: dict[str, Any] = {}
+
+
+class CallToolResponse(BaseModel):
+    is_error: bool
+    content: str
+
+
 class RegisterServerRequest(BaseModel):
     name: str
     transport: str
@@ -145,3 +154,40 @@ async def reconnect_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> 
     config = await mcp_service.reconnect_server(server_id)
     assert config is not None
     return _to_response(config)
+
+
+@router.post("/{server_id}/tools/{tool_name}/call", response_model=CallToolResponse)
+async def call_tool_endpoint(
+    server_id: uuid.UUID, tool_name: str, body: CallToolRequest, user: CurrentUser
+) -> CallToolResponse:
+    """Invoke a tool directly, outside any agent run.
+
+    502, not 500 or 404: the server row exists and is owned by the caller, so
+    this isn't a not-found — it's the *downstream* MCP server refusing or
+    failing the call, the same shape as any other upstream-gateway failure.
+    """
+    existing = await mcp_service.get_server(server_id)
+    if existing is None or existing.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="No such server")
+    try:
+        outcome = await mcp_service.call_server_tool(server_id, tool_name, body.arguments)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if outcome is None:
+        raise HTTPException(status_code=404, detail="No such server")
+    is_error, content = outcome
+    return CallToolResponse(is_error=is_error, content=content)
+
+
+@router.post("/{server_id}/reset-session")
+async def reset_session_endpoint(server_id: uuid.UUID, user: CurrentUser) -> dict[str, Any]:
+    existing = await mcp_service.get_server(server_id)
+    if existing is None or existing.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="No such server")
+    try:
+        result = await mcp_service.reset_server_session(server_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="No such server")
+    return result

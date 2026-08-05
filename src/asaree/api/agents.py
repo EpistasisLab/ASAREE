@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import uuid
 
-from agentic_core.runner import create_agent, get_agent, get_agent_by_name, list_agents
+from agentic_core.engine.patterns.catalog import PatternConfigError
+from agentic_core.runner import create_agent, get_agent, get_agent_by_name, list_agents, update_agent
 from agentic_core.schemas.agent import AgentResponse, MemoryConfig, ModelConfig
 from agentic_core.schemas.pattern import PatternConfig
 from fastapi import APIRouter, HTTPException
@@ -29,6 +30,20 @@ class CreateAgentRequest(BaseModel):
     description: str = ""
     system_prompt: str = ""
     model_config_data: ModelConfig = ModelConfig()
+    pattern_config: PatternConfig | None = None
+    tool_config: dict[str, object] | None = None
+    memory_config: MemoryConfig | None = None
+
+
+class UpdateAgentRequest(BaseModel):
+    """All fields optional; ``None`` means "leave unchanged" — same convention
+    ``agentic_core.runner.update_agent`` itself uses."""
+
+    name: str | None = None
+    goal: str | None = None
+    description: str | None = None
+    system_prompt: str | None = None
+    model_config_data: ModelConfig | None = None
     pattern_config: PatternConfig | None = None
     tool_config: dict[str, object] | None = None
     memory_config: MemoryConfig | None = None
@@ -69,4 +84,27 @@ async def get_agent_endpoint(agent_id: uuid.UUID, user: CurrentUser) -> AgentRes
     agent = await get_agent(agent_id)
     if agent is None or agent.owner_id != user.id:
         raise HTTPException(status_code=404, detail="No such agent")
+    return AgentResponse.model_validate(agent)
+
+
+@router.patch("/{agent_id}", response_model=AgentResponse)
+async def update_agent_endpoint(agent_id: uuid.UUID, body: UpdateAgentRequest, user: CurrentUser) -> AgentResponse:
+    existing = await get_agent(agent_id)
+    if existing is None or existing.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="No such agent")
+    try:
+        agent = await update_agent(
+            agent_id,
+            name=body.name,
+            goal=body.goal,
+            description=body.description,
+            system_prompt=body.system_prompt,
+            model_config=body.model_config_data,
+            pattern_config=body.pattern_config.model_dump() if body.pattern_config else None,
+            tool_config=body.tool_config,
+            memory_config=body.memory_config.model_dump() if body.memory_config else None,
+        )
+    except PatternConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    assert agent is not None  # existence already checked above
     return AgentResponse.model_validate(agent)

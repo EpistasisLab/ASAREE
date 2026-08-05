@@ -142,9 +142,26 @@ def test_provenance() -> None:
     check("data_sha256 deterministic", h1 == h2 and len(h1) == 64)
 
 
+def test_owner_id_resolution() -> None:
+    print("=== owner_id ambient resolution ===")
+    meta = {core.META_KEY_OWNER_ID: "user-123"}
+    check("owner_id_from_meta reads the key", core.owner_id_from_meta(meta) == "user-123")
+    check("owner_id_from_meta absent -> empty string", core.owner_id_from_meta({}) == "")
+    check("owner_id_from_meta None -> empty string", core.owner_id_from_meta(None) == "")
+    # Optional by default (unlike workspace_id) — most tool calls don't need it.
+    check("resolve_owner_id_from_ctx(None) does not raise", core.resolve_owner_id_from_ctx(None) == "")
+    raised = False
+    try:
+        core.resolve_owner_id_from_ctx(None, required=True)
+    except core.WorkspaceError:
+        raised = True
+    check("resolve_owner_id_from_ctx(required=True) raises when absent", raised)
+
+
 def main() -> int:
     test_context_resolution()
     test_provenance()
+    test_owner_id_resolution()
     print(f"\nResults: {_PASS}/{_PASS + _FAIL} passed, {_FAIL} failed")
     return 1 if _FAIL else 0
 

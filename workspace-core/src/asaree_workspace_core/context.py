@@ -81,6 +81,35 @@ def resolve_workspace_id_from_ctx(
     )
 
 
+# Mirrors META_KEY_OWNER_ID in agentic_core.mcp.adapters exactly (see the
+# workspace_id key above for why this is a literal string, not an import).
+META_KEY_OWNER_ID = "agentic_core.owner_id"
+
+
+def owner_id_from_meta(meta: Mapping[str, Any] | None) -> str:
+    """Read the run's owner id from an ambient ``_meta`` mapping, or "" if absent."""
+    if not meta:
+        return ""
+    value = meta.get(META_KEY_OWNER_ID)
+    return value if isinstance(value, str) else ""
+
+
+def resolve_owner_id_from_ctx(ctx: Any, *, required: bool = False) -> str:
+    """Convenience: resolve the run's owner id from a FastMCP ctx's ambient meta.
+
+    Unlike workspace_id, not every tool call needs owner scoping (only ones
+    that check a resource's ownership, e.g. a shared workspace-management
+    tool reading a registered dataset) — so this defaults to optional.
+    """
+    owner_id = owner_id_from_meta(meta_mapping_from_ctx(ctx))
+    if not owner_id and required:
+        raise WorkspaceError(
+            "owner_id missing from request _meta "
+            f"({META_KEY_OWNER_ID!r}) but this operation requires it"
+        )
+    return owner_id
+
+
 def resolve_workspace_id(
     explicit: str,
     meta: Mapping[str, Any] | None,

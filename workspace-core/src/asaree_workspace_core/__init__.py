@@ -12,9 +12,12 @@ from __future__ import annotations
 
 from . import provenance, staging
 from .context import (
+    META_KEY_OWNER_ID,
     META_KEY_WORKSPACE_ID,
     meta_mapping_from_ctx,
+    owner_id_from_meta,
     resolve_matrix_from_head,
+    resolve_owner_id_from_ctx,
     resolve_stage_input,
     resolve_stage_working,
     resolve_workspace_id,
@@ -33,9 +36,12 @@ from .workspace import (
 __all__ = [
     "provenance",
     "staging",
+    "META_KEY_OWNER_ID",
     "META_KEY_WORKSPACE_ID",
     "meta_mapping_from_ctx",
+    "owner_id_from_meta",
     "resolve_matrix_from_head",
+    "resolve_owner_id_from_ctx",
     "resolve_stage_input",
     "resolve_stage_working",
     "resolve_workspace_id",

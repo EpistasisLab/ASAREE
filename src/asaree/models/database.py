@@ -8,7 +8,8 @@ route via ``Depends(get_db)``.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -55,6 +56,21 @@ def _get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency yielding an async session for the current request."""
+    factory = _get_session_factory()
+    async with factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@asynccontextmanager
+async def get_session() -> AsyncIterator[AsyncSession]:
+    """Same commit/rollback contract as :func:`get_db`, for callers outside FastAPI's
+    dependency injection — e.g. a standalone MCP server process that shares this
+    database but isn't a FastAPI route."""
     factory = _get_session_factory()
     async with factory() as session:
         try:

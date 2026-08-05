@@ -11,10 +11,11 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from agentic_core.config import configure
 from agentic_core.services.credentials import set_credential_resolver
-from agentic_core.services.mcp_service import hydrate_registry
+from agentic_core.services.mcp_service import get_server_by_name, hydrate_registry, register_server
 from fastapi import FastAPI
 
 from asaree.api.agents import router as agents_router
@@ -30,6 +31,26 @@ from asaree.services.credential_resolver import resolve as resolve_credentials
 
 logger = logging.getLogger(__name__)
 
+# ASAREE's own repo root, from src/asaree/app.py -> src/asaree -> src -> root.
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+WORKSPACE_SERVER_NAME = "asaree-workspace"
+
+
+async def _ensure_workspace_server_registered() -> None:
+    """Register ASAREE's own bundled workspace MCP server, once, as a global
+    system server (``is_system=True``, ``owner_id=None``) — not something a
+    researcher registers, and not one copy per owner. On every later boot,
+    ``hydrate_registry`` (called first) already reconnects the persisted row,
+    so this is a no-op after the first successful registration.
+    """
+    if await get_server_by_name(WORKSPACE_SERVER_NAME) is not None:
+        return
+    command = f"uv run --directory {_REPO_ROOT} python -m asaree.mcp_servers.workspace_server"
+    try:
+        await register_server(name=WORKSPACE_SERVER_NAME, transport="stdio", command=command, is_system=True)
+    except Exception:
+        logger.exception("asaree_workspace_server_registration_failed")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -39,6 +60,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     failed = await hydrate_registry()
     if failed:
         logger.warning("mcp_servers_failed_to_reconnect", extra={"servers": failed})
+
+    await _ensure_workspace_server_registered()
 
     yield
 

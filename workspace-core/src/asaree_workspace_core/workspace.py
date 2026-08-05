@@ -40,9 +40,13 @@ from typing import Any, cast
 
 import pandas as pd
 
-# Root under the same bind-mounted volume as dataset_upload_dir, so it is
-# host-visible and shared between the worker and backend containers.
-WORKSPACE_ROOT = os.environ.get("ARES_DATASET_WORKSPACE_DIR", "/app/data/workspaces")
+# ASAREE's own workspace-server process spawns as a child of the ASAREE
+# backend (stdio), so it shares the backend's filesystem automatically — no
+# bind mount needed (unlike ARES's separate backend/worker containers, the
+# reason this was ever env-configurable at all). Defaults to a path relative
+# to wherever that process's cwd is, matching dataset_storage_dir's own
+# default convention (asaree.config.AsareeSettings).
+WORKSPACE_ROOT = os.environ.get("ASAREE_DATASET_WORKSPACE_DIR", "./data/workspaces")
 
 # Ordered pipeline stages and their canonical output version. Each stage reads
 # the previous stage's accepted output (or the v0 seed for the first stage).

@@ -16,7 +16,7 @@ resolution-markers = [
 [[package]]
 name = "agentic-core"
 version = "0.0.1"
-source = { git = "https://github.com/jay-m-dev/agentic-core.git?rev=9c05c0fed197b199f2ef3b5cb5ac8217e6b1b4c3#9c05c0fed197b199f2ef3b5cb5ac8217e6b1b4c3" }
+source = { git = "https://github.com/jay-m-dev/agentic-core.git?rev=c831ccfa5e9065c2a760710bc7dcbc77b11aae04#c831ccfa5e9065c2a760710bc7dcbc77b11aae04" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
@@ -242,7 +242,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentic-core", git = "https://github.com/jay-m-dev/agentic-core.git?rev=9c05c0fed197b199f2ef3b5cb5ac8217e6b1b4c3" },
+    { name = "agentic-core", git = "https://github.com/jay-m-dev/agentic-core.git?rev=c831ccfa5e9065c2a760710bc7dcbc77b11aae04" },
     { name = "alembic", specifier = ">=1.18.4" },
     { name = "asaree-workspace-core", editable = "workspace-core" },
     { name = "asyncpg", specifier = ">=0.30.0" },

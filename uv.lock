@@ -214,6 +214,7 @@ source = { editable = "." }
 dependencies = [
     { name = "agentic-core" },
     { name = "alembic" },
+    { name = "asaree-workspace-core" },
     { name = "asyncpg" },
     { name = "bcrypt" },
     { name = "email-validator" },
@@ -243,6 +244,7 @@ dev = [
 requires-dist = [
     { name = "agentic-core", git = "https://github.com/jay-m-dev/agentic-core.git?rev=9c05c0fed197b199f2ef3b5cb5ac8217e6b1b4c3" },
     { name = "alembic", specifier = ">=1.18.4" },
+    { name = "asaree-workspace-core", editable = "workspace-core" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "bcrypt", specifier = ">=4.2.0" },
     { name = "email-validator", specifier = ">=2.2.0" },
@@ -266,6 +268,21 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
     { name = "pytest-cov", specifier = ">=6.0.0" },
     { name = "ruff", specifier = ">=0.15.15" },
+]
+
+[[package]]
+name = "asaree-workspace-core"
+version = "0.1.0"
+source = { editable = "workspace-core" }
+dependencies = [
+    { name = "pandas" },
+    { name = "pyarrow" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pandas", specifier = ">=2.1.0" },
+    { name = "pyarrow", specifier = ">=14.0.0" },
 ]
 
 [[package]]

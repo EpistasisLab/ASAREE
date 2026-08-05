@@ -11,6 +11,11 @@ dependencies = [
     # floating to that repo's main. See project_plan/core_asaree_use_case.md
     # in the ARES repo.
     "agentic-core",
+    # The on-disk versioned dataset workspace (see [tool.uv.sources] below) —
+    # its own package because domain-specific MCP servers (spinal-surgery-
+    # sklearn-servers) depend on the same on-disk format externally, the same
+    # way ASAREE itself depends on agentic-core.
+    "asaree-workspace-core",
     "fastapi>=0.121.0",
     "uvicorn[standard]>=0.38.0",
     "pydantic>=2.10.0",
@@ -48,6 +53,7 @@ dev = [
 
 [tool.uv.sources]
 agentic-core = { git = "https://github.com/jay-m-dev/agentic-core.git", rev = "9c05c0fed197b199f2ef3b5cb5ac8217e6b1b4c3" }
+asaree-workspace-core = { path = "workspace-core", editable = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -6,10 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12"
 
 dependencies = [
+    # Pinned to a real commit on agentic-core's main (see [tool.uv.sources]
+    # below), bumped only as a deliberate, reviewed action — never left
+    # floating to that repo's main. See project_plan/core_asaree_use_case.md
+    # in the ARES repo.
     "agentic-core",
-    # Pinned to a real commit on agentic-core's main, bumped only as a
-    # deliberate, reviewed action — never left floating to that repo's main.
-    # See project_plan/core_asaree_use_case.md in the ARES repo.
     "fastapi>=0.121.0",
     "uvicorn[standard]>=0.38.0",
     "pydantic>=2.10.0",
@@ -30,10 +31,11 @@ dev = [
     "pytest-cov>=6.0.0",
     "ruff>=0.15.15",
     "mypy>=2.1.0",
+    "httpx>=0.28.1",
 ]
 
 [tool.uv.sources]
-agentic-core = { git = "https://github.com/jay-m-dev/agentic-core.git", rev = "08ea618b3470e653018e178a1adb6cc1296205fc" }
+agentic-core = { git = "https://github.com/jay-m-dev/agentic-core.git", rev = "e6cd5cdb6ea4677d952066fcfff75a10878a6638" }
 
 [build-system]
 requires = ["hatchling"]

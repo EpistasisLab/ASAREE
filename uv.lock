@@ -14,7 +14,7 @@ resolution-markers = [
 [[package]]
 name = "agentic-core"
 version = "0.0.1"
-source = { git = "https://github.com/jay-m-dev/agentic-core.git?rev=08ea618b3470e653018e178a1adb6cc1296205fc#08ea618b3470e653018e178a1adb6cc1296205fc" }
+source = { git = "https://github.com/jay-m-dev/agentic-core.git?rev=e6cd5cdb6ea4677d952066fcfff75a10878a6638#e6cd5cdb6ea4677d952066fcfff75a10878a6638" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
@@ -223,6 +223,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -232,7 +233,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentic-core", git = "https://github.com/jay-m-dev/agentic-core.git?rev=08ea618b3470e653018e178a1adb6cc1296205fc" },
+    { name = "agentic-core", git = "https://github.com/jay-m-dev/agentic-core.git?rev=e6cd5cdb6ea4677d952066fcfff75a10878a6638" },
     { name = "alembic", specifier = ">=1.18.4" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "bcrypt", specifier = ">=4.2.0" },
@@ -245,6 +246,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "mypy", specifier = ">=2.1.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },

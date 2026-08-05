@@ -70,7 +70,10 @@ async def create_dataset(
     )
 
     dataset_id = uuid.uuid4()
-    dest = Path(get_settings().dataset_storage_dir) / str(dataset_id)
+    # Absolute, not just resolved relative to *this* process's cwd — the stored
+    # path is read back by other processes (e.g. the workspace MCP server),
+    # whose own cwd need not match this one's.
+    dest = Path(get_settings().dataset_storage_dir).resolve() / str(dataset_id)
     dest.mkdir(parents=True, exist_ok=True)
     train_path = dest / "train.parquet"
     test_path = dest / "test.parquet"

@@ -87,6 +87,7 @@ async def create_dataset_endpoint(
     description: Annotated[str | None, Form()] = None,
     dictionary_json: Annotated[str | None, Form()] = None,
     test_size: Annotated[float, Form()] = 0.2,
+    seed: Annotated[int, Form()] = 0,
 ) -> DatasetResponse:
     if await get_dataset_by_name(db, name) is not None:
         raise HTTPException(status_code=409, detail="A dataset with this name already exists")
@@ -101,6 +102,7 @@ async def create_dataset_endpoint(
             description=description,
             dictionary_json=dictionary_json,
             test_size=test_size,
+            seed=seed,
         )
     except DatasetValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

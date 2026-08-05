@@ -29,8 +29,9 @@ class Datasets:
         description: str | None = None,
         dictionary_json: str | None = None,
         test_size: float = 0.2,
+        seed: int = 0,
     ) -> RegisteredDataset:
-        form: dict[str, Any] = {"name": name, "test_size": str(test_size)}
+        form: dict[str, Any] = {"name": name, "test_size": str(test_size), "seed": str(seed)}
         if target_column is not None:
             form["target_column"] = target_column
         if group_column is not None:

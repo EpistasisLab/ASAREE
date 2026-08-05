@@ -29,6 +29,11 @@ class ResearchExperiment(Base, TimestampMixin):
     design_type: Mapped[str] = mapped_column(String(32), nullable=False, default="factorial")
     # Kept for provenance — the notebook's task_brief dict, verbatim.
     task_brief: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # {"factors": [{"name": ..., "levels": [...]}, ...]} — what
+    # services.design_generation.generate_design_cells reads to materialize
+    # FactorialCellResult rows. A declaration, not a computed design — the
+    # actual cross product is never stored here, only regenerated on demand.
+    design_spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # RESTRICT, not CASCADE: deleting a user shouldn't silently discard the
     # experiments they ran. Matches RegisteredDataset.owner_id.
     owner_id: Mapped[uuid.UUID] = mapped_column(

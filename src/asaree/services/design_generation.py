@@ -1,0 +1,88 @@
+"""Design generation — the "design experiments" half of ASAREE's vision
+(project_plan/core_asaree_use_case.md §10), the part safe to build as a
+genuine platform primitive: pure combinatorics over arbitrary factors, no
+use-case-specific assumptions. The other half (orchestration — the
+critic-gating loop, workspace staging) stays notebook-side, deliberately.
+
+Two responsibilities, kept separate: computing the design (pure, no I/O) and
+materializing it as ``FactorialCellResult`` rows (via the existing
+``upsert_cell`` merge, so generating a design twice — e.g. after adding a
+replicate level — only creates the new combinations; already-populated cells
+are untouched, since the merge only ever sets ``factor_values`` and nothing
+else).
+"""
+
+from __future__ import annotations
+
+import itertools
+import re
+import uuid
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from asaree.models.factorial_cell_result import FactorialCellResult
+from asaree.services.factorial_cells import upsert_cell
+
+
+class DesignValidationError(ValueError):
+    """A factor/level declaration that fails validation before anything is generated."""
+
+
+def _validate_factors(factors: list[dict[str, Any]]) -> None:
+    if not factors:
+        raise DesignValidationError("factors must be a non-empty list")
+    seen: set[str] = set()
+    for f in factors:
+        name = f.get("name")
+        levels = f.get("levels")
+        if not isinstance(name, str) or not name.strip():
+            raise DesignValidationError(f"factor name must be a non-empty string, got {name!r}")
+        if name in seen:
+            raise DesignValidationError(f"duplicate factor name: {name!r}")
+        seen.add(name)
+        if not isinstance(levels, list) or not levels:
+            raise DesignValidationError(f"factor {name!r} must have a non-empty list of levels")
+
+
+def generate_design(factors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The cross product of every factor's levels: ``∏ᵢ Lᵢ`` combinations,
+    each a dict of ``factor_name -> level_value``. Any factor names, any
+    level types — no assumption about what a "factor" or "level" means for a
+    particular use case."""
+    _validate_factors(factors)
+    names = [f["name"] for f in factors]
+    levels_lists = [f["levels"] for f in factors]
+    return [dict(zip(names, values, strict=True)) for values in itertools.product(*levels_lists)]
+
+
+def _slugify(value: Any) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value).strip().lower()).strip("-")
+    return slug or "x"
+
+
+def cell_label_for(combination: dict[str, Any]) -> str:
+    """A deterministic, sorted label for one combination — stable regardless
+    of the order factors were declared in, so the same combination always
+    lands on the same cell."""
+    return "__".join(f"{name}_{_slugify(value)}" for name, value in sorted(combination.items()))
+
+
+async def generate_design_cells(
+    db: AsyncSession, *, experiment_id: uuid.UUID, factors: list[dict[str, Any]]
+) -> list[FactorialCellResult]:
+    """Compute the design and materialize one cell row per combination.
+
+    Idempotent: re-running this (e.g. after widening a factor's levels) only
+    creates the new combinations — ``upsert_cell`` merges ``factor_values``
+    onto an existing row rather than resetting it, so a cell that already has
+    results is left alone.
+    """
+    combinations = generate_design(factors)
+    cells = []
+    for combo in combinations:
+        cell = await upsert_cell(
+            db, experiment_id=experiment_id, cell_label=cell_label_for(combo), fields={"factor_values": combo}
+        )
+        cells.append(cell)
+    return cells

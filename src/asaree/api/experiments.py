@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
+from asaree.services.design_generation import DesignValidationError, generate_design_cells
 from asaree.services.experiments import (
     create_experiment,
     delete_experiment,
@@ -28,11 +29,17 @@ from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
 router = APIRouter(prefix="/experiments", tags=["experiments"])
 
 
+class FactorSpec(BaseModel):
+    name: str
+    levels: list[Any]
+
+
 class CreateExperimentRequest(BaseModel):
     name: str
     description: str | None = None
     design_type: str = "factorial"
     task_brief: dict[str, Any] | None = None
+    factors: list[FactorSpec] | None = None
 
 
 class ExperimentResponse(BaseModel):
@@ -41,6 +48,7 @@ class ExperimentResponse(BaseModel):
     description: str | None
     design_type: str
     task_brief: dict[str, Any] | None
+    design_spec: dict[str, Any] | None
     created_at: datetime
 
 
@@ -51,6 +59,7 @@ def _experiment_response(e: Any) -> ExperimentResponse:
         description=e.description,
         design_type=e.design_type,
         task_brief=e.task_brief,
+        design_spec=e.design_spec,
         created_at=e.created_at,
     )
 
@@ -108,6 +117,7 @@ async def create_experiment_endpoint(
         description=body.description,
         design_type=body.design_type,
         task_brief=body.task_brief,
+        design_spec={"factors": [f.model_dump() for f in body.factors]} if body.factors else None,
     )
     return _experiment_response(experiment)
 
@@ -128,6 +138,23 @@ async def get_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, d
 async def delete_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> None:
     await _get_owned_experiment(db, experiment_id, user)
     await delete_experiment(db, experiment_id)
+
+
+@router.post("/{experiment_id}/generate-design", response_model=list[CellResponse])
+async def generate_design_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> list[CellResponse]:
+    """Materialize one cell per combination of the experiment's declared
+    factors — the cross product, computed fresh each call. Safe to call again
+    after widening a factor's levels: existing cells' results are untouched,
+    only the new combinations get created (see ``generate_design_cells``)."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    factors = (experiment.design_spec or {}).get("factors")
+    if not factors:
+        raise HTTPException(status_code=422, detail="This experiment has no factors declared (design_spec.factors)")
+    try:
+        cells = await generate_design_cells(db, experiment_id=experiment_id, factors=factors)
+    except DesignValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return [CellResponse.model_validate(c) for c in cells]
 
 
 @router.put("/{experiment_id}/cells/{cell_label}", response_model=CellResponse)

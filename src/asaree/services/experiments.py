@@ -20,9 +20,15 @@ async def create_experiment(
     description: str | None = None,
     design_type: str = "factorial",
     task_brief: dict[str, Any] | None = None,
+    design_spec: dict[str, Any] | None = None,
 ) -> ResearchExperiment:
     experiment = ResearchExperiment(
-        name=name, description=description, design_type=design_type, task_brief=task_brief, owner_id=owner_id
+        name=name,
+        description=description,
+        design_type=design_type,
+        task_brief=task_brief,
+        design_spec=design_spec,
+        owner_id=owner_id,
     )
     db.add(experiment)
     await db.flush()

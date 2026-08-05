@@ -24,10 +24,14 @@ import pandas as pd
 
 from .workspace import Workspace, WorkspaceError
 
-# Namespaced key ARES injects into the MCP request ``_meta`` (mirrors the
-# platform-side ``META_KEY_WORKSPACE_ID`` in ``ares.mcp.adapters``). Namespaced
-# so it never collides with transport meta (e.g. ``progressToken``).
-META_KEY_WORKSPACE_ID = "ares.workspace_id"
+# Namespaced key agentic-core injects into the MCP request ``_meta`` (mirrors
+# ``META_KEY_WORKSPACE_ID`` in ``agentic_core.mcp.adapters`` exactly — this
+# string, not an import, so this module stays MCP-free per the docstring
+# above). Namespaced so it never collides with transport meta (e.g.
+# ``progressToken``). Was "ares.workspace_id" from the ARES-era migration;
+# fixed to match what agentic-core actually emits — the mismatch meant no
+# tool call ever found its ambient workspace_id at all.
+META_KEY_WORKSPACE_ID = "agentic_core.workspace_id"
 
 
 def workspace_id_from_meta(meta: Mapping[str, Any] | None) -> str:

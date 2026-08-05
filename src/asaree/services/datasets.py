@@ -51,6 +51,7 @@ async def create_dataset(
     target_column: str | None = None,
     group_column: str | None = None,
     description: str | None = None,
+    dictionary_json: str | None = None,
     test_size: float = 0.2,
     seed: int = 0,
 ) -> RegisteredDataset:
@@ -89,6 +90,7 @@ async def create_dataset(
         test_sha256=sha256_file(test_path),
         target_column=target_column,
         description=description,
+        dictionary_json=dictionary_json,
         owner_id=owner_id,
     )
     db.add(dataset)

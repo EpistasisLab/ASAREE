@@ -31,6 +31,11 @@ class RegisteredDataset(Base, TimestampMixin):
     test_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     target_column: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Opaque, matching ARES's own dictionary_json contract exactly: a JSON-encoded
+    # string ASAREE never parses or queries into — per-column descriptions consumed
+    # entirely downstream by a domain MCP server (e.g. ares-sklearn-eda's
+    # get_data_dictionary), not structured data ASAREE's own code interprets.
+    dictionary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Opaque attribution — same pattern as agentic-core's Agent.owner_id, but
     # ASAREE has a real users table, so this one is an enforced FK.
     owner_id: Mapped[uuid.UUID] = mapped_column(

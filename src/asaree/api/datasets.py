@@ -29,6 +29,10 @@ class DatasetResponse(BaseModel):
     train_sha256: str
     test_sha256: str
     target_column: str | None
+    # Opaque JSON-encoded string — ASAREE never parses this; a domain MCP server
+    # (e.g. ares-sklearn-eda's get_data_dictionary) does, matching ARES's own
+    # dictionary_json contract exactly.
+    dictionary_json: str | None = None
 
 
 class WorkspaceEventRequest(BaseModel):
@@ -58,6 +62,7 @@ async def create_dataset_endpoint(
     target_column: Annotated[str | None, Form()] = None,
     group_column: Annotated[str | None, Form()] = None,
     description: Annotated[str | None, Form()] = None,
+    dictionary_json: Annotated[str | None, Form()] = None,
     test_size: Annotated[float, Form()] = 0.2,
 ) -> DatasetResponse:
     if await get_dataset_by_name(db, name) is not None:
@@ -71,6 +76,7 @@ async def create_dataset_endpoint(
             target_column=target_column,
             group_column=group_column,
             description=description,
+            dictionary_json=dictionary_json,
             test_size=test_size,
         )
     except DatasetValidationError as exc:
@@ -83,6 +89,7 @@ async def create_dataset_endpoint(
         train_sha256=dataset.train_sha256,
         test_sha256=dataset.test_sha256,
         target_column=dataset.target_column,
+        dictionary_json=dataset.dictionary_json,
     )
 
 
@@ -99,6 +106,7 @@ async def get_dataset_by_name_endpoint(name: str, db: DbSession, _user: CurrentU
         train_sha256=dataset.train_sha256,
         test_sha256=dataset.test_sha256,
         target_column=dataset.target_column,
+        dictionary_json=dataset.dictionary_json,
     )
 
 

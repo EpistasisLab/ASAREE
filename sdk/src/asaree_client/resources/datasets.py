@@ -27,6 +27,7 @@ class Datasets:
         target_column: str | None = None,
         group_column: str | None = None,
         description: str | None = None,
+        dictionary_json: str | None = None,
         test_size: float = 0.2,
     ) -> RegisteredDataset:
         form: dict[str, Any] = {"name": name, "test_size": str(test_size)}
@@ -36,6 +37,8 @@ class Datasets:
             form["group_column"] = group_column
         if description is not None:
             form["description"] = description
+        if dictionary_json is not None:
+            form["dictionary_json"] = dictionary_json
         with open(file_path, "rb") as f:
             data = self._client._post("/datasets", data=form, files={"file": (file_path, f)})
         return RegisteredDataset(**data)

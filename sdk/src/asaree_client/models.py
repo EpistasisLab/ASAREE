@@ -75,6 +75,7 @@ class RegisteredDataset(BaseModel):
     train_sha256: str
     test_sha256: str
     target_column: str | None
+    dictionary_json: str | None = None
 
 
 class WorkspaceEvent(BaseModel):

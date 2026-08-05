@@ -1,14 +1,17 @@
 """Dataset registration and workspace lineage endpoints.
 
 Every route requires auth (``CurrentUser``) — datasets have a real owner now,
-unlike agentic-core's opaque, unenforced ``owner_id``.
+unlike agentic-core's opaque, unenforced ``owner_id``, and every route below
+enforces it: a dataset (or its workspace events) not owned by the caller is
+a 404, the same convention ``experiments.py``'s ``_get_owned_experiment``
+already uses, not just "authenticated is enough."
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -16,9 +19,29 @@ from pydantic import BaseModel
 from asaree.deps import CurrentUser, DbSession
 from asaree.models.dataset_workspace_event import WorkspaceEventType
 from asaree.services.dataset_workspace_events import list_events, record_event
-from asaree.services.datasets import DatasetValidationError, create_dataset, delete_dataset, get_dataset_by_name
+from asaree.services.datasets import (
+    DatasetValidationError,
+    create_dataset,
+    delete_dataset,
+    get_dataset,
+    get_dataset_by_name,
+)
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
+
+
+async def _get_owned_dataset(db: DbSession, dataset_id: uuid.UUID, user: CurrentUser) -> Any:
+    dataset = await get_dataset(db, dataset_id)
+    if dataset is None or dataset.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="No such dataset")
+    return dataset
+
+
+async def _get_owned_dataset_by_name(db: DbSession, name: str, user: CurrentUser) -> Any:
+    dataset = await get_dataset_by_name(db, name)
+    if dataset is None or dataset.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="No such dataset")
+    return dataset
 
 
 class DatasetResponse(BaseModel):
@@ -94,10 +117,8 @@ async def create_dataset_endpoint(
 
 
 @router.get("/by-name/{name}", response_model=DatasetResponse)
-async def get_dataset_by_name_endpoint(name: str, db: DbSession, _user: CurrentUser) -> DatasetResponse:
-    dataset = await get_dataset_by_name(db, name)
-    if dataset is None:
-        raise HTTPException(status_code=404, detail="No such dataset")
+async def get_dataset_by_name_endpoint(name: str, db: DbSession, user: CurrentUser) -> DatasetResponse:
+    dataset = await _get_owned_dataset_by_name(db, name, user)
     return DatasetResponse(
         id=dataset.id,
         name=dataset.name,
@@ -111,15 +132,16 @@ async def get_dataset_by_name_endpoint(name: str, db: DbSession, _user: CurrentU
 
 
 @router.delete("/{dataset_id}", status_code=204)
-async def delete_dataset_endpoint(dataset_id: uuid.UUID, db: DbSession, _user: CurrentUser) -> None:
-    if not await delete_dataset(db, dataset_id):
-        raise HTTPException(status_code=404, detail="No such dataset")
+async def delete_dataset_endpoint(dataset_id: uuid.UUID, db: DbSession, user: CurrentUser) -> None:
+    await _get_owned_dataset(db, dataset_id, user)
+    await delete_dataset(db, dataset_id)
 
 
 @router.post("/{dataset_id}/workspace-events", response_model=WorkspaceEventResponse, status_code=201)
 async def record_workspace_event_endpoint(
-    dataset_id: uuid.UUID, body: WorkspaceEventRequest, db: DbSession, _user: CurrentUser
+    dataset_id: uuid.UUID, body: WorkspaceEventRequest, db: DbSession, user: CurrentUser
 ) -> WorkspaceEventResponse:
+    await _get_owned_dataset(db, dataset_id, user)
     event = await record_event(
         db,
         dataset_id=dataset_id,
@@ -142,8 +164,9 @@ async def record_workspace_event_endpoint(
 
 @router.get("/{dataset_id}/workspace-events", response_model=list[WorkspaceEventResponse])
 async def list_workspace_events_endpoint(
-    dataset_id: uuid.UUID, db: DbSession, _user: CurrentUser, workspace_id: str | None = None
+    dataset_id: uuid.UUID, db: DbSession, user: CurrentUser, workspace_id: str | None = None
 ) -> list[WorkspaceEventResponse]:
+    await _get_owned_dataset(db, dataset_id, user)
     events = await list_events(db, dataset_id=dataset_id, workspace_id=workspace_id)
     return [
         WorkspaceEventResponse(

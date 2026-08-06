@@ -27,6 +27,12 @@ if TYPE_CHECKING:
 MIGRATIONS_DIR = Path(__file__).resolve().parent
 
 
+def _resolve_url(url: str | None) -> str:
+    from asaree.config import get_settings
+
+    return url or get_settings().product_database_url
+
+
 def make_config(url: str | None = None) -> Config:
     """Build an Alembic config pointed at ASAREE's chain.
 
@@ -34,19 +40,57 @@ def make_config(url: str | None = None) -> Config:
     """
     from alembic.config import Config
 
-    from asaree.config import get_settings
-
     cfg = Config()
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
-    cfg.set_main_option("sqlalchemy.url", url or get_settings().product_database_url)
+    cfg.set_main_option("sqlalchemy.url", _resolve_url(url))
     return cfg
 
 
+async def _ensure_database_exists(url: str) -> None:
+    """Create the target database if it doesn't exist yet.
+
+    Postgres never does this on its own, and nothing in this project's setup
+    does either — unlike ``agentic_core``, which core's own docker-compose
+    creates via ``POSTGRES_DB`` on first boot, ``asaree`` has no equivalent
+    anywhere. Whoever hits this first has always had to create it by hand,
+    silently, which is exactly the gap this closes.
+
+    ``CREATE DATABASE`` cannot run inside a transaction, so this connects
+    with ``AUTOCOMMIT`` isolation, and to the server's own "postgres"
+    maintenance database rather than the target — which, by definition,
+    might not exist yet.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    target = make_url(url)
+    dbname = target.database
+    assert dbname, f"database URL has no database name: {url!r}"
+    server_url = target.set(database="postgres")
+
+    engine = create_async_engine(server_url, isolation_level="AUTOCOMMIT")
+    try:
+        async with engine.connect() as conn:
+            exists = await conn.scalar(text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": dbname})
+            if not exists:
+                # Can't parametrize a DDL identifier; quoted to tolerate any casing/specials.
+                await conn.execute(text(f'CREATE DATABASE "{dbname}"'))
+    finally:
+        await engine.dispose()
+
+
 def upgrade(url: str | None = None, revision: str = "head") -> None:
-    """Bring ASAREE's schema up to *revision*. Safe to call repeatedly."""
+    """Bring ASAREE's schema up to *revision*. Safe to call repeatedly.
+
+    Creates the target database first if it's missing — see
+    :func:`_ensure_database_exists`.
+    """
     from alembic import command
 
-    command.upgrade(make_config(url), revision)
+    resolved_url = _resolve_url(url)
+    asyncio.run(_ensure_database_exists(resolved_url))
+    command.upgrade(make_config(resolved_url), revision)
 
 
 def downgrade(url: str | None = None, revision: str = "-1") -> None:
@@ -73,9 +117,7 @@ async def current_revision(url: str | None = None) -> str | None:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from asaree.config import get_settings
-
-    engine = create_async_engine(url or get_settings().product_database_url)
+    engine = create_async_engine(_resolve_url(url))
     try:
         async with engine.connect() as conn:
             if await conn.scalar(text("SELECT to_regclass('alembic_version')")) is None:

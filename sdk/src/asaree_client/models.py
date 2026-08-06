@@ -55,6 +55,18 @@ class Run(BaseModel):
     completed_at: datetime | None
 
 
+class RunStep(BaseModel):
+    id: uuid.UUID
+    sequence: int
+    phase: str
+    input: dict[str, Any] | None
+    output: dict[str, Any] | None
+    llm_call: dict[str, Any] | None
+    tool_call: dict[str, Any] | None
+    started_at: datetime | None
+    completed_at: datetime | None
+
+
 class Experiment(BaseModel):
     id: uuid.UUID
     name: str

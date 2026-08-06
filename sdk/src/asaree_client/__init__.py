@@ -24,6 +24,7 @@ from asaree_client.models import (
     MCPServer,
     RegisteredDataset,
     Run,
+    RunStep,
     ToolCallResult,
     WorkspaceEvent,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "RegisteredDataset",
     "RetryPolicy",
     "Run",
+    "RunStep",
     "ToolCallResult",
     "WorkspaceEvent",
 ]

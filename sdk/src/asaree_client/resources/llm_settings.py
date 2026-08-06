@@ -11,11 +11,13 @@ class LLMSettings:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    def upsert(self, provider: str, api_key: str, *, api_base: str | None = None) -> LLMSetting:
-        """Create or replace this user's credential for *provider*.
+    def set_key(self, provider: str, api_key: str, *, api_base: str | None = None) -> LLMSetting:
+        """Set (or replace) this user's credential for *provider*.
 
         For ``azure_foundry``, *api_base* is the Foundry resource name (or a
-        full URL) — the server derives the actual endpoint from it.
+        full URL) — the server derives the actual endpoint from it. Calling
+        this again for the same provider replaces the old credential rather
+        than adding a second one.
         """
         payload: dict[str, Any] = {"provider": provider, "api_key": api_key}
         if api_base is not None:

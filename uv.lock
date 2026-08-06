@@ -16,11 +16,12 @@ resolution-markers = [
 [[package]]
 name = "agentic-core"
 version = "0.0.1"
-source = { git = "https://github.com/jay-m-dev/agentic-core.git?rev=c0b562c5b6b3dd8461b1b92cf1847519e4880b87#c0b562c5b6b3dd8461b1b92cf1847519e4880b87" }
+source = { git = "https://github.com/jay-m-dev/agentic-core.git?rev=0bfba8fb3afb7c5691e1b521c02fa36d9d2b6c49#0bfba8fb3afb7c5691e1b521c02fa36d9d2b6c49" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "cryptography" },
+    { name = "filelock" },
     { name = "httpx" },
     { name = "instructor" },
     { name = "jsonschema" },
@@ -33,6 +34,7 @@ dependencies = [
     { name = "pgvector" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyyaml" },
     { name = "redis" },
     { name = "sentence-transformers" },
     { name = "sqlalchemy", extra = ["asyncio"] },
@@ -242,7 +244,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentic-core", git = "https://github.com/jay-m-dev/agentic-core.git?rev=c0b562c5b6b3dd8461b1b92cf1847519e4880b87" },
+    { name = "agentic-core", git = "https://github.com/jay-m-dev/agentic-core.git?rev=0bfba8fb3afb7c5691e1b521c02fa36d9d2b6c49" },
     { name = "alembic", specifier = ">=1.18.4" },
     { name = "asaree-workspace-core", editable = "workspace-core" },
     { name = "asyncpg", specifier = ">=0.30.0" },

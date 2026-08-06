@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # ASAREE's own repo root, from src/asaree/app.py -> src/asaree -> src -> root.
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 WORKSPACE_SERVER_NAME = "asaree-workspace"
+OKF_SERVER_NAME = "agentic-core-okf"
 
 
 async def _ensure_workspace_server_registered() -> None:
@@ -52,6 +53,26 @@ async def _ensure_workspace_server_registered() -> None:
         logger.exception("asaree_workspace_server_registration_failed")
 
 
+async def _ensure_okf_server_registered() -> None:
+    """Register core's own bundled OKF server, once, as a global system
+    server — the same reasoning as the workspace server above, except this
+    one is agentic-core's own code, not ASAREE's (``agentic_core.mcp_servers.
+    okf``), run via ``uv run --directory`` pointed at *this* repo so it uses
+    ASAREE's own venv, which already depends on agentic-core.
+
+    Registered unconditionally, even if ``AGENTIC_OKF_BUNDLE_DIR`` is unset —
+    connecting needs no bundle to exist yet; a tool call without one just
+    returns a clear ``{"error": ...}`` rather than failing registration.
+    """
+    if await get_server_by_name(OKF_SERVER_NAME) is not None:
+        return
+    command = f"uv run --directory {_REPO_ROOT} python -m agentic_core.mcp_servers.okf"
+    try:
+        await register_server(name=OKF_SERVER_NAME, transport="stdio", command=command, is_system=True)
+    except Exception:
+        logger.exception("okf_server_registration_failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure(get_settings())
@@ -62,6 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("mcp_servers_failed_to_reconnect", extra={"servers": failed})
 
     await _ensure_workspace_server_registered()
+    await _ensure_okf_server_registered()
 
     yield
 

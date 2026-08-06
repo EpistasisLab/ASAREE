@@ -133,6 +133,7 @@ async def get_run_steps_endpoint(run_id: uuid.UUID, user: CurrentUser) -> list[d
         {
             "id": str(s.id),
             "sequence": s.sequence,
+            "iteration": s.iteration,
             "phase": s.phase.value,
             "input": s.input,
             "output": s.output,

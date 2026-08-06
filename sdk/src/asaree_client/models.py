@@ -58,6 +58,7 @@ class Run(BaseModel):
 class RunStep(BaseModel):
     id: uuid.UUID
     sequence: int
+    iteration: int | None
     phase: str
     input: dict[str, Any] | None
     output: dict[str, Any] | None

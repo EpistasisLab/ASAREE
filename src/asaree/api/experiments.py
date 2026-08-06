@@ -109,7 +109,7 @@ async def _get_owned_experiment(db: DbSession, experiment_id: uuid.UUID, user: C
 async def create_experiment_endpoint(
     body: CreateExperimentRequest, user: CurrentUser, db: DbSession
 ) -> ExperimentResponse:
-    if await get_experiment_by_name(db, body.name) is not None:
+    if await get_experiment_by_name(db, body.name, owner_id=user.id) is not None:
         raise HTTPException(status_code=409, detail="An experiment with this name already exists")
     experiment = await create_experiment(
         db,

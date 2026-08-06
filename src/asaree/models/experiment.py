@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,9 +19,11 @@ from asaree.models.base import Base, TimestampMixin, generate_uuid
 
 class ResearchExperiment(Base, TimestampMixin):
     __tablename__ = "research_experiments"
+    # Unique per owner, not per installation — see uq_research_experiments_owner_name.
+    __table_args__ = (Index("uq_research_experiments_owner_name", "owner_id", "name", unique=True),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # A plain string, not an enum — same reasoning as UserLLMSetting.provider:
     # this table shouldn't need a migration just because a new design type

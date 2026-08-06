@@ -42,8 +42,20 @@ async def get_experiment(db: AsyncSession, experiment_id: uuid.UUID) -> Research
     ).scalar_one_or_none()
 
 
-async def get_experiment_by_name(db: AsyncSession, name: str) -> ResearchExperiment | None:
-    return (await db.execute(select(ResearchExperiment).where(ResearchExperiment.name == name))).scalar_one_or_none()
+async def get_experiment_by_name(db: AsyncSession, name: str, *, owner_id: uuid.UUID) -> ResearchExperiment | None:
+    """Fetch an owner's experiment by name, or ``None``.
+
+    Names are unique per owner (uq_research_experiments_owner_name), not per
+    installation, so this always scopes to the caller — there is no
+    any-owner variant, unlike agentic-core's Agent/MCPServerConfig lookups,
+    since every call site here is a per-owner conflict pre-check."""
+    return (
+        await db.execute(
+            select(ResearchExperiment).where(
+                ResearchExperiment.name == name, ResearchExperiment.owner_id == owner_id
+            )
+        )
+    ).scalar_one_or_none()
 
 
 async def list_experiments(db: AsyncSession, *, owner_id: uuid.UUID) -> Sequence[ResearchExperiment]:

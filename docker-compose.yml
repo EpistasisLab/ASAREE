@@ -1,0 +1,67 @@
+# ASAREE's own compose file — separate from agentic-core's, joining its
+# network as an external dependency rather than merging into it. Mirrors
+# agentic-core's own migrate-then-serve shape (see agentic-core/compose.yml
+# and docker/Dockerfile.migrate).
+#
+# Requires agentic-core's stack already running (`docker compose up -d` in
+# the agentic-core repo) — this only joins its network by name, it doesn't
+# start Postgres/Redis itself. ASAREE has no backing services of its own.
+#
+# agentic-core is a private git dependency (see pyproject.toml); building
+# needs a GitHub token with read access to it, passed as a build secret --
+# GH_TOKEN=$(gh auth token) works if you're logged in via the gh CLI.
+#
+#   GH_TOKEN=$(gh auth token) docker compose up -d --build
+
+services:
+  asaree-migrate:
+    build:
+      context: .
+      secrets:
+        - gh_token
+    container_name: asaree-migrate
+    env_file: .env
+    environment:
+      # Internal container network, not the host-mapped ports in .env
+      # (which are wrong from inside a container on this network).
+      ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/agentic_core
+      ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/asaree
+    entrypoint: ["python", "-m", "asaree.migrations"]
+    command: ["upgrade"]
+    networks:
+      - agentic-core_default
+    restart: "no"
+
+  asaree-app:
+    build:
+      context: .
+      secrets:
+        - gh_token
+    container_name: asaree-app
+    depends_on:
+      asaree-migrate:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/agentic_core
+      ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/asaree
+      ASAREE_REDIS_URL: redis://agentic-core-redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persists dataset workspaces and the OKF bundle across restarts —
+      # otherwise both live inside the container's own ephemeral filesystem.
+      - ./data:/app/data
+    networks:
+      - agentic-core_default
+    restart: unless-stopped
+
+networks:
+  # Created by agentic-core's own compose.yml (project name "agentic-core" ->
+  # implicit network "agentic-core_default"). Not owned or created here.
+  agentic-core_default:
+    external: true
+
+secrets:
+  gh_token:
+    environment: GH_TOKEN

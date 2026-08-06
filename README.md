@@ -43,3 +43,32 @@ working state:
 ASAREE's own bundled servers (`asaree-workspace`, `agentic-core-okf`) don't need
 a manual step — they auto-register the next time the app starts (`app.py`'s
 lifespan), the same as they did the very first time.
+
+## Running with Docker
+
+Requires agentic-core's stack already running (`docker compose up -d` in the
+`agentic-core` repo) — this only joins its network by name, it doesn't start
+Postgres/Redis itself. `agentic-core` is a private git dependency
+([`pyproject.toml`](pyproject.toml)), so building needs a GitHub token with
+read access to it, passed as a build secret rather than baked into the image:
+
+```bash
+cp .env.example .env    # fill in provider credentials as usual
+GH_TOKEN=$(gh auth token) docker compose up -d --build
+```
+
+This runs `asaree-migrate` (applies ASAREE's own schema, creating the
+database first if needed — see `src/asaree/migrations`) to completion, then
+starts `asaree-app` on `:8000`. Both join `agentic-core_default` (the network
+`agentic-core`'s own `compose.yml` creates) to reach Postgres/Redis by
+container name — the host-side URLs in `.env` (`localhost:...`) are
+overridden inside `docker-compose.yml` for exactly this reason, the same
+pattern as `agentic-core`'s own `docker/Dockerfile.migrate`.
+
+One gotcha if you've also run ASAREE directly on the host against the same
+Postgres instance: `asaree-workspace`/`agentic-core-okf`'s persisted
+`command` column holds whichever filesystem path registered them first. A
+row registered from the host (`uv run --directory /path/on/host ...`) fails
+to reconnect inside the container (that path doesn't exist there) — delete
+the two rows from `mcp_server_configs` and restart to have them
+re-register fresh with the container's own path.

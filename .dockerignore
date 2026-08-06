@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+*.egg-info/
+data/
+.git/
+sdk/
+tests/
+*.log
+*_out.ipynb

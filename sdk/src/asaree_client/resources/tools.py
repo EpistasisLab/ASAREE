@@ -25,12 +25,26 @@ class Tools:
         return [MCPServer(**s) for s in data]
 
     def call_tool(
-        self, server_id: ResourceId, tool_name: str, arguments: dict[str, Any] | None = None
+        self,
+        server_id: ResourceId,
+        tool_name: str,
+        arguments: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+        retry: bool = True,
     ) -> ToolCallResult:
-        data = self._client._post(
-            f"/mcp-servers/{server_id}/tools/{tool_name}/call",
-            json={"arguments": arguments or {}},
-        )
+        """*timeout* overrides the client's default for just this call (e.g. a
+        long-running direct tool invocation like ``run_model_script``).
+        *retry* set to ``False`` opts this call out of the client's automatic
+        retry policy — for a non-idempotent call where re-sending on a
+        transient failure could double-run something expensive.
+        """
+        kwargs: dict[str, Any] = {"json": {"arguments": arguments or {}}}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        if not retry:
+            kwargs["extensions"] = {"asaree_no_retry": True}
+        data = self._client._post(f"/mcp-servers/{server_id}/tools/{tool_name}/call", **kwargs)
         return ToolCallResult(**data)
 
     def reset_session(self, server_id: ResourceId) -> dict[str, Any]:

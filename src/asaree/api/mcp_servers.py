@@ -8,8 +8,10 @@ modules (a disallowed stdio command, an SSRF-blocked URL) are ``ValueError``
 subclasses — caught broadly here and reported as 422 rather than a 500,
 since they're the caller's mistake, not ASAREE's.
 
-Listing is scoped to the caller's own servers — there's no admin/cross-user
-view yet, matching how far the user model itself has gotten.
+Reading/calling is scoped to the caller's own servers plus any global system
+server (e.g. ASAREE's own bundled ``asaree-workspace``) — mutating a
+server's registration is owner-only, with no admin/cross-user view yet,
+matching how far the user model itself has gotten.
 """
 
 from __future__ import annotations
@@ -25,6 +27,17 @@ from pydantic import BaseModel
 from asaree.deps import CurrentUser
 
 router = APIRouter(prefix="/mcp-servers", tags=["mcp-servers"])
+
+
+def _readable(config: Any, user: Any) -> bool:
+    """A server is readable/callable if the caller owns it, or it's a global
+    system server (``is_system=True``, ``owner_id=None``) — e.g. ASAREE's own
+    bundled ``asaree-workspace``, available to every user by definition.
+    Mutating actions (update/delete/refresh/reconnect) stay owner-only below —
+    a shared system server's registration/connection isn't any one user's to
+    change through this API.
+    """
+    return bool(config.owner_id == user.id or config.is_system)
 
 
 class CallToolRequest(BaseModel):
@@ -103,7 +116,7 @@ async def list_servers_endpoint(user: CurrentUser) -> list[ServerResponse]:
 @router.get("/{server_id}", response_model=ServerResponse)
 async def get_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> ServerResponse:
     config = await mcp_service.get_server(server_id)
-    if config is None or config.owner_id != user.id:
+    if config is None or not _readable(config, user):
         raise HTTPException(status_code=404, detail="No such server")
     return _to_response(config)
 
@@ -162,12 +175,13 @@ async def call_tool_endpoint(
 ) -> CallToolResponse:
     """Invoke a tool directly, outside any agent run.
 
-    502, not 500 or 404: the server row exists and is owned by the caller, so
-    this isn't a not-found — it's the *downstream* MCP server refusing or
-    failing the call, the same shape as any other upstream-gateway failure.
+    502, not 500 or 404: the server row is readable by the caller (their own,
+    or a global system server), so this isn't a not-found — it's the
+    *downstream* MCP server refusing or failing the call, the same shape as
+    any other upstream-gateway failure.
     """
     existing = await mcp_service.get_server(server_id)
-    if existing is None or existing.owner_id != user.id:
+    if existing is None or not _readable(existing, user):
         raise HTTPException(status_code=404, detail="No such server")
     try:
         outcome = await mcp_service.call_server_tool(server_id, tool_name, body.arguments)
@@ -182,7 +196,7 @@ async def call_tool_endpoint(
 @router.post("/{server_id}/reset-session")
 async def reset_session_endpoint(server_id: uuid.UUID, user: CurrentUser) -> dict[str, Any]:
     existing = await mcp_service.get_server(server_id)
-    if existing is None or existing.owner_id != user.id:
+    if existing is None or not _readable(existing, user):
         raise HTTPException(status_code=404, detail="No such server")
     try:
         result = await mcp_service.reset_server_session(server_id)

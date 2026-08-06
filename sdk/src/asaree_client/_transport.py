@@ -90,6 +90,19 @@ def raise_for_status(response: httpx.Response) -> None:
     raise AsareeAPIError(status_code=status, **kwargs)
 
 
+def _effective_max_retries(request: httpx.Request, policy: RetryPolicy) -> int:
+    """Per-request retry override: a truthy ``asaree_no_retry`` extension forces 0.
+
+    Callers set ``extensions={"asaree_no_retry": True}`` on a request (e.g. a
+    long, non-idempotent direct tool invocation like ``run_model_script``) to
+    opt out of automatic retries while keeping the client-wide policy for
+    everything else.
+    """
+    if request.extensions.get("asaree_no_retry"):
+        return 0
+    return policy.max_retries
+
+
 class RetryTransport(httpx.BaseTransport):
     """Sync transport wrapper that retries on transient failures."""
 
@@ -99,19 +112,20 @@ class RetryTransport(httpx.BaseTransport):
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         last_exc: Exception | None = None
-        for attempt in range(self._policy.max_retries + 1):
+        max_retries = _effective_max_retries(request, self._policy)
+        for attempt in range(max_retries + 1):
             try:
                 response = self._transport.handle_request(request)
-                if response.status_code not in self._policy.retry_statuses or attempt == self._policy.max_retries:
+                if response.status_code not in self._policy.retry_statuses or attempt == max_retries:
                     return response
                 response.close()
             except httpx.ConnectError as exc:
                 last_exc = exc
-                if attempt == self._policy.max_retries:
+                if attempt == max_retries:
                     raise AsareeConnectionError(str(exc)) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
-                if attempt == self._policy.max_retries:
+                if attempt == max_retries:
                     raise AsareeTimeoutError(str(exc)) from exc
             time.sleep(self._policy.compute_delay(attempt))
         raise AsareeConnectionError(str(last_exc))  # pragma: no cover

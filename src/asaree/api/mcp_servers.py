@@ -93,6 +93,8 @@ def _to_response(config: Any) -> ServerResponse:
 
 @router.post("", response_model=ServerResponse, status_code=201)
 async def register_server_endpoint(body: RegisterServerRequest, user: CurrentUser) -> ServerResponse:
+    if await mcp_service.get_server_by_name(body.name) is not None:
+        raise HTTPException(status_code=409, detail="A server with this name already exists")
     try:
         config = await mcp_service.register_server(
             name=body.name,

@@ -46,12 +46,39 @@ services:
       ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/agentic_core
       ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/asaree
       ASAREE_REDIS_URL: redis://agentic-core-redis:6379/0
+      # Domain-specific MCP servers (e.g. spinal-surgery-sklearn-servers,
+      # mounted below) are spawned via `uv run --directory ...` *at runtime*,
+      # whenever one gets registered -- not at image build time, so the
+      # build secret above doesn't cover this. Their own dependencies can
+      # include other private repos (asaree-workspace-core, fetched from
+      # this same ASAREE repo) that uv needs to fetch fresh inside the
+      # running container. Same one-shot-git-config mechanism as the
+      # Dockerfile's build step, just live for the container's whole
+      # lifetime instead of one RUN -- unlike the build secret, this makes
+      # the token visible via `docker inspect`/`docker exec env` on this
+      # container. Acceptable for a dev/research sandbox using your own
+      # `gh auth token`; reconsider before running this anywhere less trusted.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: "url.https://oauth2:${GH_TOKEN}@github.com/.insteadOf"
+      GIT_CONFIG_VALUE_0: "https://github.com/"
     ports:
       - "8000:8000"
     volumes:
       # Persists dataset workspaces and the OKF bundle across restarts —
       # otherwise both live inside the container's own ephemeral filesystem.
       - ./data:/app/data
+      # register_servers.py (run on the host, from a use-case repo) persists
+      # an absolute HOST path in each domain server's `command` column --
+      # `uv run --directory <host path> ...`. Mounted at the identical path
+      # so that command resolves inside the container too, without needing
+      # to re-register anything. Adjust the host side if your checkout of
+      # spinal-surgery-sklearn-servers lives somewhere else.
+      #
+      # Read-write, not read-only: uv run --directory manages that
+      # directory's own .venv (creating/rebuilding it as needed), and a host-
+      # built .venv doesn't match the container's interpreter, so uv needs to
+      # recreate it here on first run.
+      - /home/moranj3/dev/spinal-surgery-sklearn-servers:/home/moranj3/dev/spinal-surgery-sklearn-servers
     networks:
       - agentic-core_default
     restart: unless-stopped

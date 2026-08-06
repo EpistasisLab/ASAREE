@@ -101,6 +101,11 @@ class RegisteredDataset(BaseModel):
     dictionary_json: str | None = None
 
 
+class LLMSetting(BaseModel):
+    provider: str
+    api_base: str | None
+
+
 class WorkspaceEvent(BaseModel):
     id: uuid.UUID
     workspace_id: str

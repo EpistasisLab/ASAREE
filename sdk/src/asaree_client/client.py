@@ -12,6 +12,7 @@ from asaree_client.exceptions import AsareeError
 from asaree_client.resources.agents import Agents
 from asaree_client.resources.datasets import Datasets
 from asaree_client.resources.experiments import Experiments
+from asaree_client.resources.llm_settings import LLMSettings
 from asaree_client.resources.runs import Runs
 from asaree_client.resources.tools import Tools
 
@@ -64,6 +65,7 @@ class AsareeClient:
         self.experiments = Experiments(self)
         self.datasets = Datasets(self)
         self.tools = Tools(self)
+        self.llm_settings = LLMSettings(self)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         response = self._http.request(method, f"/api{path}", **kwargs)

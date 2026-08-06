@@ -63,6 +63,8 @@ class UpdateAgentRequest(BaseModel):
 
 @router.post("", response_model=AgentResponse, status_code=201)
 async def create_agent_endpoint(body: CreateAgentRequest, user: CurrentUser) -> AgentResponse:
+    if await get_agent_by_name(body.name) is not None:
+        raise HTTPException(status_code=409, detail="An agent with this name already exists")
     agent = await create_agent(
         name=body.name,
         goal=body.goal,

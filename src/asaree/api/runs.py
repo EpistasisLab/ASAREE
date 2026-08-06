@@ -128,7 +128,7 @@ async def create_and_execute_run_endpoint(body: CreateRunRequest, user: CurrentU
         metadata=body.metadata,
         model_config_overrides=body.model_config_override,
     )
-    await execute_run(run_id=run.id, available_tools=_gather_tools(agent))
+    await execute_run(run_id=run.id, registry=get_registry(), available_tools=_gather_tools(agent))
     finished = await get_run(run.id)
     assert finished is not None  # just created and executed above
     return _to_response(finished)

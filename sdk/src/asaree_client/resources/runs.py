@@ -4,6 +4,13 @@
 already terminal. ``wait`` exists only so a ported driver script that used
 to poll ARES doesn't need its call sites rewritten; here it's just a
 re-fetch, no actual waiting happens.
+
+Because the run executes inline, ``start`` itself is the long-blocking call —
+not ``wait``, despite the name suggesting otherwise. The client's default HTTP
+timeout (``ASAREE_TIMEOUT``, 30s) is nowhere near enough for a real ReAct loop
+with real tool calls; pass ``timeout=`` explicitly for anything but a trivial
+single-pass agent, the same way ``tools.call_tool`` takes one for long-running
+tools.
 """
 
 from __future__ import annotations
@@ -28,7 +35,14 @@ class Runs:
         pattern_overrides: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         model_config_override: dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> Run:
+        """Create and execute a run, blocking until it's terminal.
+
+        *timeout* overrides the client's default HTTP timeout for this one
+        call — see the module docstring for why that default is too short
+        for anything but a trivial run.
+        """
         payload: dict[str, Any] = {"agent_id": str(agent_id), "user_input": user_input}
         if pattern_overrides is not None:
             payload["pattern_overrides"] = pattern_overrides
@@ -36,7 +50,10 @@ class Runs:
             payload["metadata"] = metadata
         if model_config_override is not None:
             payload["model_config_override"] = model_config_override
-        data = self._client._post("/runs", json=payload)
+        kwargs: dict[str, Any] = {"json": payload}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        data = self._client._post("/runs", **kwargs)
         return Run(**data)
 
     def get(self, run_id: ResourceId) -> Run:

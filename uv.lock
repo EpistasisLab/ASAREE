@@ -16,7 +16,7 @@ resolution-markers = [
 [[package]]
 name = "agentic-core"
 version = "0.0.1"
-source = { git = "https://github.com/jay-m-dev/agentic-core.git?tag=v0.1.0#0bfba8fb3afb7c5691e1b521c02fa36d9d2b6c49" }
+source = { git = "https://github.com/jay-m-dev/agentic-core.git?tag=v0.1.0#737a847a3f2ea5030ebc721d7d5aceeed830beb2" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },

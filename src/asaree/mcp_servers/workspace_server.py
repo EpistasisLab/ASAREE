@@ -548,6 +548,35 @@ def read_stage_manifest(stage: str, workspace_id: str = "", ctx: Context[Any, An
 
 
 @mcp.tool()
+def read_scratch_learned(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
+    """Return a SCRATCH_STAGES stage's current in-progress attempt's learned
+    block — the provenance a domain server has written to its scratch dir so
+    far this attempt, before accept_stage ever promotes it (or reset_stage
+    discards it).
+
+    Unlike read_stage_manifest (which only ever has something once a stage is
+    ACCEPTED), this is the only place a rejected-but-not-yet-accepted attempt's
+    decisions exist — needed to snapshot them before a critic-requested
+    revision resets the scratch dir out from under them.
+
+    Args:
+        stage: one of ``dc``, ``fte``, ``fs``.
+        workspace_id: optional; resolved from _meta when omitted.
+    """
+    try:
+        wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
+        ws = Workspace(wid)
+        if not ws.exists():
+            return json.dumps({"error": f"workspace {wid!r} not initialized."})
+    except WorkspaceError as e:
+        return json.dumps({"error": f"read_scratch_learned: {e}"})
+    if stage not in SCRATCH_STAGES:
+        return json.dumps({"error": f"stage {stage!r} is not a scratch stage."})
+    scratch = _scratch_dir(ws, stage)
+    return json.dumps({"learned": _scratch_learned(scratch)})
+
+
+@mcp.tool()
 def reset_session() -> str:
     """No-op compatibility shim (the split servers hold no in-process session).
 

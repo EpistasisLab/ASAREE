@@ -50,7 +50,7 @@ export function LoginPage() {
       await login({ email, password })
       if (remember) sessionStorage.setItem(REMEMBER_KEY, email)
       else sessionStorage.removeItem(REMEMBER_KEY)
-      navigate('/profile')
+      navigate('/experiments')
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.code === 'rate_limited') {

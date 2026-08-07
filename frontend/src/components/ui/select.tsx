@@ -16,6 +16,9 @@ function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   )
 }
 
+// base-ui's Value shows the raw stored value with no children — pass a render
+// function (value) => label at the call site, or it displays e.g. "created_at"
+// instead of "Created".
 function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
   return (
     <SelectPrimitive.Value

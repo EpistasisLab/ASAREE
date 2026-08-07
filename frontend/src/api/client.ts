@@ -10,6 +10,7 @@ import type {
   User,
   UserUpdate,
 } from '@/types/auth'
+import type { Cell, Experiment } from '@/types/experiments'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -135,6 +136,12 @@ export const tokenApi = {
   list: (offset = 0, limit = 20) => request<TokenListResponse>(`/auth/me/tokens?offset=${offset}&limit=${limit}`),
   create: (data: TokenCreateRequest) => request<TokenCreateResponse>('/auth/me/tokens', { method: 'POST', body: data }),
   revoke: (id: string) => request<void>(`/auth/me/tokens/${id}`, { method: 'DELETE' }),
+}
+
+export const experimentsApi = {
+  list: () => request<Experiment[]>('/experiments'),
+  get: (id: string) => request<Experiment>(`/experiments/${id}`),
+  listCells: (id: string) => request<Cell[]>(`/experiments/${id}/cells`),
 }
 
 export { tryRefreshToken }

@@ -70,7 +70,9 @@ function CreateTokenDialog({ onCreated }: { onCreated: (token: string) => void }
             <Label htmlFor="token-expiry">Expires</Label>
             <Select value={expiresIn} onValueChange={(value) => value !== null && setExpiresIn(value)}>
               <SelectTrigger id="token-expiry" className="w-full">
-                <SelectValue />
+                <SelectValue>
+                  {(value: string) => EXPIRY_OPTIONS.find((opt) => opt.value === value)?.label ?? value}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {EXPIRY_OPTIONS.map((opt) => (

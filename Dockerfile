@@ -32,7 +32,7 @@ COPY workspace-core/ ./workspace-core/
 # agentic-core is a private repo (pinned git dependency, see pyproject.toml)
 # -- uv needs a credential to fetch it that the host's `gh`-backed git
 # credential helper doesn't carry into an isolated build. Passed as a
-# BuildKit secret (docker-compose.yml's `secrets:`), injected via one-shot
+# BuildKit secret (compose.yml's `secrets:`), injected via one-shot
 # git config env vars so the token touches only this RUN's environment --
 # never a file, never a committed layer.
 RUN --mount=type=secret,id=gh_token \

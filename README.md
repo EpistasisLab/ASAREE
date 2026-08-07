@@ -62,7 +62,7 @@ database first if needed — see `src/asaree/migrations`) to completion, then
 starts `asaree-app` on `:8000`. Both join `agentic-core_default` (the network
 `agentic-core`'s own `compose.yml` creates) to reach Postgres/Redis by
 container name — the host-side URLs in `.env` (`localhost:...`) are
-overridden inside `docker-compose.yml` for exactly this reason, the same
+overridden inside `compose.yml` for exactly this reason, the same
 pattern as `agentic-core`'s own `docker/Dockerfile.migrate`.
 
 One gotcha if you've also run ASAREE directly on the host against the same

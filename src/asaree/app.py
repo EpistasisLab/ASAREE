@@ -17,8 +17,10 @@ from agentic_core.config import configure
 from agentic_core.services.credentials import set_credential_resolver
 from agentic_core.services.mcp_service import get_server_by_name, hydrate_registry, register_server
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from asaree.api.agents import router as agents_router
+from asaree.api.auth import router as auth_router
 from asaree.api.datasets import router as datasets_router
 from asaree.api.experiments import router as experiments_router
 from asaree.api.llm_settings import router as llm_settings_router
@@ -27,6 +29,7 @@ from asaree.api.runs import router as runs_router
 from asaree.api.users import router as users_router
 from asaree.config import get_settings
 from asaree.models.database import dispose_engine
+from asaree.redis_client import dispose_redis
 from asaree.services.credential_resolver import resolve as resolve_credentials
 
 logger = logging.getLogger(__name__)
@@ -88,15 +91,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     await dispose_engine()
+    await dispose_redis()
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="ASAREE", lifespan=lifespan)
 
+    # The frontend (a separate origin in dev — the Vite dev server; a
+    # separate origin in prod too, unless it's served from behind the same
+    # reverse proxy) needs cookies (the refresh token) to actually be sent
+    # and read cross-origin, hence allow_credentials + an explicit origin
+    # list rather than "*" (browsers refuse credentialed requests with a
+    # wildcard origin anyway).
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[o.strip() for o in get_settings().cors_allowed_origins.split(",") if o.strip()],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    app.include_router(auth_router, prefix="/api")
     app.include_router(users_router, prefix="/api")
     app.include_router(datasets_router, prefix="/api")
     app.include_router(mcp_servers_router, prefix="/api")

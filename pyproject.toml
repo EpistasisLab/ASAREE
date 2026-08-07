@@ -23,11 +23,18 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.50",
     "asyncpg>=0.30.0",
     "alembic>=1.18.4",
-    # Password hashing and email validation for the user model. Deliberately
-    # not agentic-core's concern (auth is explicitly a product decision — see
-    # CoreSettings' docstring) so they're declared here, not inherited.
+    # Password hashing, JWT session tokens, and email validation for the user
+    # model. Deliberately not agentic-core's concern (auth is explicitly a
+    # product decision — see CoreSettings' docstring) so they're declared
+    # here, not inherited.
     "bcrypt>=4.2.0",
+    "pyjwt>=2.10.0",
     "email-validator>=2.2.0",
+    # ASAREE's OWN Redis connection (login/registration rate limiting, the
+    # JWT deny list) — separate from agentic-core's internal use of the same
+    # ASAREE_REDIS_URL for working memory; core owns that connection
+    # privately, so this product-level use needs its own client.
+    "redis>=5.2.0,<6",
     # Dataset registration's inline train/test split — the same
     # GroupShuffleSplit/stratified split_runner.py already used, minus the
     # subprocess indirection (no worker in ASAREE for v1).

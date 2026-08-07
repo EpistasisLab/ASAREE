@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,6 +29,12 @@ class UserApiToken(Base, TimestampMixin):
     # the input is already a high-entropy random token, not a user-chosen
     # secret vulnerable to a dictionary attack.
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    # Nullable, unlike a fresh token's row: a token issued before this column
+    # existed has no recoverable prefix (only its hash was ever stored), and
+    # there is nothing to backfill it with — the list UI shows those blank.
+    token_prefix: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

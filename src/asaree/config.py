@@ -30,8 +30,19 @@ class AsareeSettings(CoreSettings):
     product_database_url: str = "postgresql+asyncpg://agentic:agentic@localhost:5453/asaree"
 
     # Minimal auth. A real secret is required outside development — no
-    # fallback silently accepted in production, see get_settings().
+    # fallback silently accepted in production, see get_settings(). Also the
+    # JWT signing secret for browser sessions (services/auth_service.py) —
+    # one secret, not a second field, since both are "the thing that must
+    # never leak or a caller can forge identity."
     auth_secret_key: str = "dev-only-not-for-production"
+    access_token_expiry_seconds: int = 3600  # 1 hour
+    refresh_token_expiry_seconds: int = 60 * 60 * 24 * 7  # 7 days
+
+    # The frontend's own origin(s), comma-separated (same convention as
+    # agentic-core's mcp_allowed_env_vars — a plain str, split at the point of
+    # use) — no wildcard: the refresh cookie needs allow_credentials, which
+    # browsers refuse to combine with "*". Defaults to the Vite dev server.
+    cors_allowed_origins: str = "http://localhost:5173"
 
     # Local disk, matching ARES's current approach — see
     # project_plan/core_asaree_use_case.md §9: metadata (this database) and

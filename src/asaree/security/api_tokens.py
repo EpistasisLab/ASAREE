@@ -15,10 +15,13 @@ import secrets
 TOKEN_PREFIX = "asaree_"
 
 
-def generate_api_token() -> tuple[str, str]:
-    """Return ``(raw_token, token_hash)``. Only the hash is ever persisted."""
+def generate_api_token() -> tuple[str, str, str]:
+    """Return ``(raw_token, token_hash, token_prefix)``. Only the hash and the
+    prefix are ever persisted — the prefix (first 16 chars, includes
+    ``asaree_``) lets a list UI distinguish tokens without ever storing
+    enough to reconstruct one."""
     raw = TOKEN_PREFIX + secrets.token_urlsafe(32)
-    return raw, hash_api_token(raw)
+    return raw, hash_api_token(raw), raw[:16]
 
 
 def hash_api_token(raw: str) -> str:

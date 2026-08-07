@@ -17,10 +17,12 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # Importing for the metadata side effect — a model not imported here is a
 # table this chain cannot see. Add each new model module here as it's added.
+import asaree.models.audit_log_entry  # noqa: F401
 import asaree.models.dataset  # noqa: F401
 import asaree.models.dataset_workspace_event  # noqa: F401
 import asaree.models.experiment  # noqa: F401
 import asaree.models.factorial_cell_result  # noqa: F401
+import asaree.models.password_reset_token  # noqa: F401
 import asaree.models.user  # noqa: F401
 import asaree.models.user_api_token  # noqa: F401
 import asaree.models.user_llm_setting  # noqa: F401

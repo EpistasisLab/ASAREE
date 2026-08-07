@@ -68,6 +68,29 @@ services:
       - agentic-core_default
     restart: unless-stopped
 
+  asaree-frontend:
+    build:
+      context: ./frontend
+    container_name: asaree-frontend
+    depends_on:
+      - asaree-app
+    environment:
+      # Service name on the compose network, not 127.0.0.1 (see
+      # frontend/vite.config.ts) — 127.0.0.1 inside this container is
+      # itself, not asaree-app.
+      VITE_API_PROXY_TARGET: http://asaree-app:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      # Bind-mount for hot reload; node_modules stays the image's own
+      # (installed for Linux/the container's arch) rather than whatever's
+      # in the host checkout.
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - agentic-core_default
+    restart: unless-stopped
+
 networks:
   # Created by agentic-core's own compose.yml (project name "agentic-core" ->
   # implicit network "agentic-core_default"). Not owned or created here.

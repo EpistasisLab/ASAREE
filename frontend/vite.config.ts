@@ -17,7 +17,10 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        // Overridden in compose.yml to the backend's service name
+        // (asaree-app:8000) — 127.0.0.1 inside a container is the
+        // frontend container itself, not the backend's.
+        target: process.env.VITE_API_PROXY_TARGET ?? 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },

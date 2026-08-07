@@ -49,10 +49,22 @@ _STAGES = ("dc", "fte", "fs")
 # — it only reads/writes plain train.parquet/test.parquet/meta.json/learned.json
 # in its own disposable scratch directory (see _scratch_dir below), and this
 # server is the only thing that ever touches the permanent versioned tree.
-# Stages NOT in this set (fte, fs, until converted) keep using the old
-# committed-but-unaccepted-version flow (Workspace.write_stage/accept_stage/
-# discard_stage) directly against the shared library.
-SCRATCH_STAGES = {"dc"}
+#
+# Two calling conventions share this same scratch directory:
+#   - "chain" stages (dc, fte): each tool reads whatever's currently in
+#     train.parquet/test.parquet and overwrites it — the working copy evolves
+#     tool call by tool call within one attempt.
+#   - "fixed-input" stages (fs): every tool independently re-reads the
+#     UNCHANGING input_train.parquet/input_test.parquet (seeded once, never
+#     touched again this attempt) and writes its candidate selection to
+#     train.parquet/test.parquet — nothing chains via the working copy, so
+#     the fixed pair lets a stage's tools be fully independent of each
+#     other's call order, exactly like the old resolve_stage_input flow.
+# Both files are always seeded (see _seed_scratch); a "chain" stage's tools
+# simply never read the fixed pair, and a "fixed-input" stage's tools never
+# read/write the working pair until they're ready to produce their result.
+SCRATCH_STAGES = {"dc", "fte", "fs"}
+FIXED_INPUT_STAGES = {"fs"}
 
 
 def _scratch_dir(ws: Workspace, stage: str) -> Path:
@@ -69,31 +81,59 @@ def _scratch_dir(ws: Workspace, stage: str) -> Path:
 
 
 def _seed_scratch(ws: Workspace, stage: str, target: str) -> None:
-    """(Re)materialize a stage's current working matrix into its scratch dir.
+    """(Re)materialize a stage's input into its scratch dir, as BOTH the
+    working pair (train.parquet/test.parquet — a "chain" stage's starting
+    point) and the fixed pair (input_train.parquet/input_test.parquet — a
+    "fixed-input" stage's only input, see SCRATCH_STAGES/FIXED_INPUT_STAGES).
+    Writing both regardless of which convention this stage actually uses
+    keeps this function, and the accept_stage/reset_stage call sites, the
+    same for every scratch stage.
 
-    Called by open_workspace (attempt start) and reset_stage (revision restart)
-    — both cases want the domain server to see a clean, correct starting point.
+    Called by open_workspace (attempt start) and reset_stage (revision
+    restart) — both cases want the domain server to see a clean, correct
+    starting point. resolve_stage_input, not resolve_stage_working: nothing
+    ever gets committed to the permanent tree mid-attempt anymore (only
+    accept_stage's promote does), so "this stage's own committed-but-
+    unaccepted version" never exists to fall back from — the stage input
+    (prior accepted stage, or the v0_raw seed) is always the right seed.
     Safe to call repeatedly before the domain server's own tools have written
     anything (idempotent); MUST NOT be called after they have, or their
     in-progress work is lost — the notebook's own call ordering (reset_stage
     before a retry, open_workspace as the agent's first tool call in a fresh
     run) already guarantees this.
     """
-    X_train, y_train, X_test, y_test = ws.read_stage_working(stage)
+    X_train, y_train, X_test, y_test = ws.read_stage_input(stage)
     scratch = _scratch_dir(ws, stage)
     scratch.mkdir(parents=True, exist_ok=True)
     train_df = X_train.copy()
     train_df[target] = y_train.to_numpy()
     test_df = X_test.copy()
     test_df[target] = y_test.to_numpy()
-    train_df.to_parquet(scratch / "train.parquet", index=False)
-    test_df.to_parquet(scratch / "test.parquet", index=False)
+    train_df.to_parquet(scratch / "input_train.parquet", index=False)
+    test_df.to_parquet(scratch / "input_test.parquet", index=False)
+    if stage not in FIXED_INPUT_STAGES:
+        # A "chain" stage's first tool call expects something already in the
+        # working pair. A "fixed-input" stage must NOT get one here: its own
+        # tools only ever write train.parquet/test.parquet once they've
+        # produced a real result, and accept_stage's "nothing to accept" check
+        # relies on that file being ABSENT until then — a placeholder here
+        # would let accept_stage silently promote the untouched input as if a
+        # selection had actually happened.
+        train_df.to_parquet(scratch / "train.parquet", index=False)
+        test_df.to_parquet(scratch / "test.parquet", index=False)
     (scratch / "meta.json").write_text(json.dumps({"target_column": target}))
     # Clear any stale provenance from a prior (discarded) attempt at this stage.
     for name in ("learned.json", "run_meta.json"):
         f = scratch / name
         if f.is_file():
             f.unlink()
+    # A fixed-input stage's PRIOR attempt may have left a candidate selection
+    # behind; a fresh/reset attempt must not resume from it.
+    if stage in FIXED_INPUT_STAGES:
+        for name in ("train.parquet", "test.parquet"):
+            f = scratch / name
+            if f.is_file():
+                f.unlink()
 
 
 def _read_scratch_output(

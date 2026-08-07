@@ -19,7 +19,9 @@ agents and drives resume from here.
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -41,6 +43,139 @@ from asaree.services.datasets import get_dataset_by_name
 mcp = FastMCP("asaree-workspace")
 
 _STAGES = ("dc", "fte", "fs")
+
+# Stages migrated to the scratch-folder handoff (issue: BYO-MCP decoupling).
+# A domain server for a stage in this set never imports asaree_workspace_core
+# — it only reads/writes plain train.parquet/test.parquet/meta.json/learned.json
+# in its own disposable scratch directory (see _scratch_dir below), and this
+# server is the only thing that ever touches the permanent versioned tree.
+# Stages NOT in this set (fte, fs, until converted) keep using the old
+# committed-but-unaccepted-version flow (Workspace.write_stage/accept_stage/
+# discard_stage) directly against the shared library.
+SCRATCH_STAGES = {"dc"}
+
+
+def _scratch_dir(ws: Workspace, stage: str) -> Path:
+    """This stage attempt's disposable scratch directory.
+
+    Deterministic from (workspace_id, stage) — not a random id — so a domain
+    server can compute its own path from the ambient workspace_id plus its own
+    (hardcoded, per-server) stage name, without ever calling back into this
+    server or importing anything beyond stdlib os/pathlib. That formula is the
+    ENTIRE contract a domain server needs: two conventional file names inside
+    this directory, nothing about state.json or versioning.
+    """
+    return ws.dir / ".scratch" / stage
+
+
+def _seed_scratch(ws: Workspace, stage: str, target: str) -> None:
+    """(Re)materialize a stage's current working matrix into its scratch dir.
+
+    Called by open_workspace (attempt start) and reset_stage (revision restart)
+    — both cases want the domain server to see a clean, correct starting point.
+    Safe to call repeatedly before the domain server's own tools have written
+    anything (idempotent); MUST NOT be called after they have, or their
+    in-progress work is lost — the notebook's own call ordering (reset_stage
+    before a retry, open_workspace as the agent's first tool call in a fresh
+    run) already guarantees this.
+    """
+    X_train, y_train, X_test, y_test = ws.read_stage_working(stage)
+    scratch = _scratch_dir(ws, stage)
+    scratch.mkdir(parents=True, exist_ok=True)
+    train_df = X_train.copy()
+    train_df[target] = y_train.to_numpy()
+    test_df = X_test.copy()
+    test_df[target] = y_test.to_numpy()
+    train_df.to_parquet(scratch / "train.parquet", index=False)
+    test_df.to_parquet(scratch / "test.parquet", index=False)
+    (scratch / "meta.json").write_text(json.dumps({"target_column": target}))
+    # Clear any stale provenance from a prior (discarded) attempt at this stage.
+    for name in ("learned.json", "run_meta.json"):
+        f = scratch / name
+        if f.is_file():
+            f.unlink()
+
+
+def _read_scratch_output(
+    scratch: Path, target: str
+) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
+    """Load whatever the domain server last wrote to its scratch train/test files."""
+    train_df = pd.read_parquet(scratch / "train.parquet")
+    test_df = pd.read_parquet(scratch / "test.parquet")
+    X_train = train_df.drop(columns=[target]).reset_index(drop=True)
+    y_train = train_df[target].reset_index(drop=True)
+    X_test = test_df.drop(columns=[target]).reset_index(drop=True)
+    y_test = test_df[target].reset_index(drop=True)
+    return X_train, y_train, X_test, y_test
+
+
+def _scratch_learned(scratch: Path) -> dict[str, Any]:
+    f = scratch / "learned.json"
+    if not f.is_file():
+        return {}
+    try:
+        return dict(json.loads(f.read_text()))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _scratch_run_id(scratch: Path) -> str:
+    f = scratch / "run_meta.json"
+    if not f.is_file():
+        return ""
+    try:
+        return str(json.loads(f.read_text()).get("run_id", ""))
+    except (json.JSONDecodeError, OSError):
+        return ""
+
+
+def _structural_checks(
+    stage: str, target: str, train: pd.DataFrame, test: pd.DataFrame, state: dict[str, Any]
+) -> tuple[list[str], list[str]]:
+    """Deterministic post-stage assertions (no agent) — shared by check_stage_gate
+    (old-flow stages, reading a committed version from disk) and accept_stage's
+    scratch-promote path (new-flow stages, checking in-memory scratch frames
+    before they're ever written to the permanent tree). Per stage: train/test
+    feature-column sets match; the target is present in both; DC leaves zero
+    missing values; FS columns are a subset of v2_fte."""
+    checks: list[str] = []
+    errors: list[str] = []
+
+    train_cols = [c for c in train.columns if c != target]
+    test_cols = [c for c in test.columns if c != target]
+    if set(train_cols) == set(test_cols):
+        checks.append(f"train/test column sets match ({len(train_cols)} features)")
+    else:
+        only_tr = sorted(set(train_cols) - set(test_cols))
+        only_te = sorted(set(test_cols) - set(train_cols))
+        errors.append(f"train/test column mismatch: only_train={only_tr[:10]}, only_test={only_te[:10]}")
+
+    if target in train.columns and target in test.columns:
+        checks.append(f"target {target!r} present in both partitions")
+    else:
+        errors.append(f"target column {target!r} missing from a partition")
+
+    if stage == "dc":
+        n_missing_tr = int(train[train_cols].isna().sum().sum())
+        n_missing_te = int(test[test_cols].isna().sum().sum())
+        if n_missing_tr == 0 and n_missing_te == 0:
+            checks.append("zero missing values after DC")
+        else:
+            errors.append(f"DC left missing values: train={n_missing_tr}, test={n_missing_te}")
+
+    if stage == "fs":
+        fte_ver = next((v for v in state.get("versions", []) if v.get("id") == "v2_fte"), None)
+        if fte_ver is None:
+            errors.append("FS gate: no v2_fte version to check subset against")
+        else:
+            fte_cols = set(pd.read_parquet(fte_ver["train"]).columns) - {target}
+            extra = sorted(set(train_cols) - fte_cols)
+            if extra:
+                errors.append(f"FS selected columns not in v2_fte: {extra[:10]}")
+            else:
+                checks.append(f"FS columns subset of v2_fte ({len(train_cols)}/{len(fte_cols)})")
+
+    return checks, errors
 
 
 async def _fetch_owned_registration(
@@ -73,6 +208,7 @@ async def open_workspace(
     cell_label: str,
     name: str,
     target_column: str = "",
+    stage: str = "",
     ctx: Context[Any, Any, Any] | None = None,
 ) -> str:
     """Open (create if absent) the on-disk workspace for one pipeline cell.
@@ -92,6 +228,11 @@ async def open_workspace(
         name: Registered dataset name (must be a pre-split train/test registration,
             and owned by the user who started this run).
         target_column: Override target column; defaults to the registry's.
+        stage: For a stage migrated to the scratch-folder handoff (see
+            SCRATCH_STAGES) — one of "dc"/"fte"/"fs" — (re)materializes that
+            stage's current working matrix into its scratch directory, so the
+            calling domain server's tools have a clean starting point. Omit for
+            stages still on the old shared-library flow.
     """
     try:
         reg, err = await _fetch_owned_registration(name, ctx)
@@ -114,6 +255,8 @@ async def open_workspace(
             seed_test_path=reg["test_path"],
         )
         X_train, y_train, X_test, y_test = ws.read_head()  # noqa: N806 — matches sklearn convention throughout
+        if stage in SCRATCH_STAGES:
+            _seed_scratch(ws, stage, resolved_target)
     except (WorkspaceError, FileNotFoundError, OSError) as e:
         return json.dumps({"error": f"workspace: {e}"})
 
@@ -183,10 +326,18 @@ def workspace_status(workspace_id: str = "", ctx: Context[Any, Any, Any] | None 
 
 @mcp.tool()
 def accept_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
-    """Accept a stage's committed output and advance HEAD to it (critic-gated).
+    """Accept a stage's output and advance HEAD to it (critic-gated).
 
     The ONLY operation that advances HEAD, so a rejected or never-committed stage
     can never become a resume point or a scoring input.
+
+    For a SCRATCH_STAGES stage (see module docstring), this is also where the
+    domain server's scratch output first touches the permanent versioned tree at
+    all: it's read, run through the same structural checks check_stage_gate
+    exposes, and only promoted (written + accepted in one step) if they pass —
+    a failed check is reported and nothing is written, so a broken scratch
+    output never becomes visible history. For an old-flow stage, this just
+    advances HEAD to whatever was already committed (no structural judgment).
 
     Args:
         stage: one of ``dc``, ``fte``, ``fs``.
@@ -199,7 +350,34 @@ def accept_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any]
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
         if stage not in STAGE_VERSION:
             return json.dumps({"error": f"unknown stage {stage!r}; expected one of {list(STAGE_VERSION)}."})
-        ws.accept_stage(stage)
+
+        if stage in SCRATCH_STAGES:
+            scratch = _scratch_dir(ws, stage)
+            if not (scratch / "train.parquet").is_file() or not (scratch / "test.parquet").is_file():
+                return json.dumps(
+                    {"error": f"nothing to accept: {stage!r} scratch is empty "
+                              "— the domain server hasn't written an output yet."}
+                )
+            target = ws.target_column
+            X_train, y_train, X_test, y_test = _read_scratch_output(scratch, target)
+            state = ws.load_state()
+            checks, errors = _structural_checks(
+                stage, target,
+                pd.concat([X_train, y_train.rename(target)], axis=1),
+                pd.concat([X_test, y_test.rename(target)], axis=1),
+                state,
+            )
+            if errors:
+                return json.dumps({"error": "structural checks failed", "checks": checks, "errors": errors})
+            ws.write_stage(
+                stage,
+                X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test,
+                learned=_scratch_learned(scratch), run_id=_scratch_run_id(scratch),
+                accepted=True,
+            )
+            shutil.rmtree(scratch, ignore_errors=True)
+        else:
+            ws.accept_stage(stage)
         state = ws.load_state()
     except WorkspaceError as e:
         return json.dumps({"error": f"accept_stage: {e}"})
@@ -215,13 +393,17 @@ def accept_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any]
 
 @mcp.tool()
 def reset_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
-    """Discard a stage's committed-but-unaccepted version so a re-run starts clean.
+    """Discard a stage's in-progress attempt so a re-run starts clean.
 
-    Called by the orchestrator before a critic revision: the rejected attempt
-    committed ``v{n}`` (unaccepted), and since the stage's tools read the *working*
-    matrix, a naive re-run would transform on top of that rejected output. This
-    reverts the stage to its input (prior accepted stage or the ``v0_raw`` seed).
-    Refuses to touch an ACCEPTED version (HEAD/handoff); HEAD is never moved.
+    Called by the orchestrator before a critic revision. For a SCRATCH_STAGES
+    stage, this wipes the scratch directory and re-seeds it fresh from the
+    stage's input (same as open_workspace's first-attempt seeding) — the
+    domain server never committed anything to the permanent tree, so there is
+    nothing to discard there. For an old-flow stage, this discards the
+    committed-but-unaccepted version (the rejected attempt), since that stage's
+    tools read the *working* matrix and a naive re-run would transform on top
+    of it. Refuses to touch an ACCEPTED version (HEAD/handoff) either way; HEAD
+    is never moved.
 
     Args:
         stage: one of ``dc``, ``fte``, ``fs``.
@@ -234,7 +416,14 @@ def reset_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] 
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
         if stage not in STAGE_VERSION:
             return json.dumps({"error": f"unknown stage {stage!r}; expected one of {list(STAGE_VERSION)}."})
-        discarded = ws.discard_stage(stage)
+
+        if stage in SCRATCH_STAGES:
+            scratch = _scratch_dir(ws, stage)
+            discarded = scratch.is_dir() and any(scratch.iterdir())
+            shutil.rmtree(scratch, ignore_errors=True)
+            _seed_scratch(ws, stage, ws.target_column)
+        else:
+            discarded = ws.discard_stage(stage)
         state = ws.load_state()
     except WorkspaceError as e:
         return json.dumps({"error": f"reset_stage: {e}"})
@@ -279,43 +468,8 @@ def check_stage_gate(stage: str, workspace_id: str = "", ctx: Context[Any, Any, 
     except (WorkspaceError, OSError, FileNotFoundError) as e:
         return json.dumps({"passed": False, "errors": [f"gate read failed: {e}"]})
 
-    checks: list[str] = []
-    errors: list[str] = []
-
-    train_cols = [c for c in train.columns if c != target]
-    test_cols = [c for c in test.columns if c != target]
-    if set(train_cols) == set(test_cols):
-        checks.append(f"train/test column sets match ({len(train_cols)} features)")
-    else:
-        only_tr = sorted(set(train_cols) - set(test_cols))
-        only_te = sorted(set(test_cols) - set(train_cols))
-        errors.append(f"train/test column mismatch: only_train={only_tr[:10]}, only_test={only_te[:10]}")
-
-    if target in train.columns and target in test.columns:
-        checks.append(f"target {target!r} present in both partitions")
-    else:
-        errors.append(f"target column {target!r} missing from a partition")
-
-    if stage == "dc":
-        n_missing_tr = int(train[train_cols].isna().sum().sum())
-        n_missing_te = int(test[test_cols].isna().sum().sum())
-        if n_missing_tr == 0 and n_missing_te == 0:
-            checks.append("zero missing values after DC")
-        else:
-            errors.append(f"DC left missing values: train={n_missing_tr}, test={n_missing_te}")
-
-    if stage == "fs":
-        fte_ver = next((v for v in state.get("versions", []) if v.get("id") == "v2_fte"), None)
-        if fte_ver is None:
-            errors.append("FS gate: no v2_fte version to check subset against")
-        else:
-            fte_cols = set(pd.read_parquet(fte_ver["train"]).columns) - {target}
-            extra = sorted(set(train_cols) - fte_cols)
-            if extra:
-                errors.append(f"FS selected columns not in v2_fte: {extra[:10]}")
-            else:
-                checks.append(f"FS columns subset of v2_fte ({len(train_cols)}/{len(fte_cols)})")
-
+    checks, errors = _structural_checks(stage, target, train, test, state)
+    n_features = len([c for c in train.columns if c != target])
     return json.dumps(
         {
             "passed": not errors,
@@ -323,7 +477,7 @@ def check_stage_gate(stage: str, workspace_id: str = "", ctx: Context[Any, Any, 
             "version": version_id,
             "n_train": int(len(train)),
             "n_test": int(len(test)),
-            "n_features": len(train_cols),
+            "n_features": n_features,
             "checks": checks,
             "errors": errors,
         }

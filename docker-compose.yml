@@ -46,7 +46,7 @@ services:
       ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/agentic_core
       ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/asaree
       ASAREE_REDIS_URL: redis://agentic-core-redis:6379/0
-      # Domain-specific MCP servers (e.g. spinal-surgery-sklearn-servers,
+      # Domain-specific MCP servers (e.g. asaree-spinal-use-case/mcp-servers,
       # mounted below) are spawned via `uv run --directory ...` *at runtime*,
       # whenever one gets registered -- not at image build time, so the
       # build secret above doesn't cover this. Their own dependencies can
@@ -72,13 +72,13 @@ services:
       # `uv run --directory <host path> ...`. Mounted at the identical path
       # so that command resolves inside the container too, without needing
       # to re-register anything. Adjust the host side if your checkout of
-      # spinal-surgery-sklearn-servers lives somewhere else.
+      # asaree-spinal-use-case lives somewhere else.
       #
       # Read-write, not read-only: uv run --directory manages that
       # directory's own .venv (creating/rebuilding it as needed), and a host-
       # built .venv doesn't match the container's interpreter, so uv needs to
       # recreate it here on first run.
-      - /home/moranj3/dev/spinal-surgery-sklearn-servers:/home/moranj3/dev/spinal-surgery-sklearn-servers
+      - /home/moranj3/dev/asaree-spinal-use-case/mcp-servers:/home/moranj3/dev/asaree-spinal-use-case/mcp-servers
     networks:
       - agentic-core_default
     restart: unless-stopped

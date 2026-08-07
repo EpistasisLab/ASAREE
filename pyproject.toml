@@ -6,14 +6,14 @@ readme = "README.md"
 requires-python = ">=3.12"
 
 dependencies = [
-    # Pinned to a real commit on agentic-core's main (see [tool.uv.sources]
-    # below), bumped only as a deliberate, reviewed action — never left
-    # floating to that repo's main. See project_plan/core_asaree_use_case.md
-    # in the ARES repo.
+    # Pinned to a tagged release of agentic-core (see [tool.uv.sources] below —
+    # agentic-core's own README documents its semver-tag convention), bumped
+    # only as a deliberate, reviewed action — never left floating to that
+    # repo's main. See project_plan/core_asaree_use_case.md in the ARES repo.
     "agentic-core",
     # The on-disk versioned dataset workspace (see [tool.uv.sources] below) —
-    # its own package because domain-specific MCP servers (spinal-surgery-
-    # sklearn-servers) depend on the same on-disk format externally, the same
+    # its own package because domain-specific MCP servers (asaree-spinal-use-
+    # case/mcp-servers) depend on the same on-disk format externally, the same
     # way ASAREE itself depends on agentic-core.
     "asaree-workspace-core",
     "fastapi>=0.121.0",
@@ -52,7 +52,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-agentic-core = { git = "https://github.com/jay-m-dev/agentic-core.git", rev = "0bfba8fb3afb7c5691e1b521c02fa36d9d2b6c49" }
+agentic-core = { git = "https://github.com/jay-m-dev/agentic-core.git", tag = "v0.1.0" }
 asaree-workspace-core = { path = "workspace-core", editable = true }
 
 [build-system]

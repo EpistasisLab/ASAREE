@@ -1,6 +1,6 @@
 # ASAREE
 
-The product built on [`agentic-core`](https://github.com/jay-m-dev/agentic-core).
+The product built on [`agentic-core`](https://github.com/EpistasisLab/agentic-core).
 Core ships no HTTP layer, no auth, no UI — ASAREE provides those, and depends
 on core as a pinned library dependency (in-process, not a service call).
 

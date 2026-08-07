@@ -52,7 +52,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-agentic-core = { git = "https://github.com/jay-m-dev/agentic-core.git", tag = "v0.1.0" }
+agentic-core = { git = "https://github.com/EpistasisLab/agentic-core.git", tag = "v0.1.0" }
 asaree-workspace-core = { path = "workspace-core", editable = true }
 
 [build-system]

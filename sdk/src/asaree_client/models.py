@@ -75,6 +75,7 @@ class Experiment(BaseModel):
     design_type: str
     task_brief: dict[str, Any] | None
     design_spec: dict[str, Any] | None
+    dataset_id: uuid.UUID | None = None
     created_at: datetime
 
 
@@ -98,7 +99,9 @@ class RegisteredDataset(BaseModel):
     train_sha256: str
     test_sha256: str
     target_column: str | None
+    description: str | None = None
     dictionary_json: str | None = None
+    created_at: datetime | None = None
 
 
 class LLMSetting(BaseModel):

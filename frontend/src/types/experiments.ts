@@ -5,6 +5,7 @@ export interface Experiment {
   design_type: string
   task_brief: Record<string, unknown> | null
   design_spec: Record<string, unknown> | null
+  dataset_id: string | null
   created_at: string
 }
 

@@ -41,6 +41,11 @@ class ResearchExperiment(Base, TimestampMixin):
     owner_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    # Nullable and SET NULL on delete -- unlike owner_id, losing the dataset
+    # (or predating this column) isn't a reason to lose the experiment.
+    dataset_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("registered_datasets.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
 
 __all__ = ["ResearchExperiment"]

@@ -21,6 +21,7 @@ async def create_experiment(
     design_type: str = "factorial",
     task_brief: dict[str, Any] | None = None,
     design_spec: dict[str, Any] | None = None,
+    dataset_id: uuid.UUID | None = None,
 ) -> ResearchExperiment:
     experiment = ResearchExperiment(
         name=name,
@@ -29,8 +30,30 @@ async def create_experiment(
         task_brief=task_brief,
         design_spec=design_spec,
         owner_id=owner_id,
+        dataset_id=dataset_id,
     )
     db.add(experiment)
+    await db.flush()
+    await db.refresh(experiment)
+    return experiment
+
+
+async def update_experiment(
+    db: AsyncSession, experiment_id: uuid.UUID, *, dataset_id: uuid.UUID | None
+) -> ResearchExperiment | None:
+    """Set ``dataset_id`` on an existing experiment.
+
+    ``dataset_id=None`` here means "detach," not "leave unchanged" -- unlike
+    ``update_agent``'s fields, this is the only mutable field on an
+    experiment so far, and there's no other way to clear it. Registration
+    (Step 2 of the notebook) happens after the experiment is created (Step
+    1), so this exists to attach a dataset after the fact rather than only
+    at creation time.
+    """
+    experiment = await get_experiment(db, experiment_id)
+    if experiment is None:
+        return None
+    experiment.dataset_id = dataset_id
     await db.flush()
     await db.refresh(experiment)
     return experiment

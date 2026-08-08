@@ -48,3 +48,26 @@ or introduce a different aesthetic without being asked.
     on free-text cells, a shaded uppercase header row, subtle zebra striping, `font-mono` on
     technical values.
   - Both: paginate client-side once a list can realistically exceed ~10-20 rows.
+  - **Agent grids aren't a table either** (`ExperimentDetailPage.tsx`'s `AgentsSection`): a
+    dynamic card grid — icon, name, model badge, goal, run count, last-used — not a plain
+    table of name/role/added like ARES's Agents tab (that thin-table pattern was explicitly
+    what the user wanted to move away from).
+
+# Experiment data model
+
+- **`ResearchExperiment.dataset_id` is a real, nullable FK** to `registered_datasets`
+  (migration `a1b2c3d4e5f6`), unlike agents below — a dataset genuinely is a first-class,
+  one-to-one property of an experiment worth a real relationship, matching what ARES does.
+  It's set via `PATCH /experiments/{id}`, not at creation: the notebook's Step 1 (create the
+  experiment) runs *before* Step 2 (register the dataset), so there's nothing to attach yet
+  at create time — see the `client.experiments.update(...)` call added right after Step 2 in
+  `spinal_pipeline.ipynb`. Experiments created before this migration simply have
+  `dataset_id: null` — that's an expected, permanent state for them, not a bug to backfill.
+- **Agents are deliberately NOT a stored relationship** — there's no `experiment_agents` join
+  table, and none is planned. Agents are reusable per-user templates, not something an
+  experiment "owns"; asking "which agents ran in this experiment" is answered by scanning the
+  user's `Run`s for `run_metadata.experiment_id` matches (see `AgentsSection` in
+  `ExperimentDetailPage.tsx`) and cross-referencing `GET /agents`, not by a new backend
+  association. `GET /runs` has no server-side `experiment_id` filter (only `agent_id`) — this
+  fetches every run for the user and filters client-side, which is fine at today's scale but
+  is the place to add a real filter if a user's run history grows large enough to matter.

@@ -7,6 +7,7 @@ train/test inline on the request, there is no job to poll (unlike ARES's
 
 from __future__ import annotations
 
+import builtins
 import uuid
 from typing import Any
 
@@ -47,6 +48,14 @@ class Datasets:
     def get_by_name(self, name: str) -> RegisteredDataset:
         data = self._client._get(f"/datasets/by-name/{name}")
         return RegisteredDataset(**data)
+
+    def get(self, dataset_id: ResourceId) -> RegisteredDataset:
+        data = self._client._get(f"/datasets/{dataset_id}")
+        return RegisteredDataset(**data)
+
+    def list(self) -> builtins.list[RegisteredDataset]:
+        data = self._client._get("/datasets")
+        return [RegisteredDataset(**d) for d in data]
 
     def delete(self, dataset_id: ResourceId) -> None:
         self._client._delete(f"/datasets/{dataset_id}")

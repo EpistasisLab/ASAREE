@@ -10,7 +10,10 @@ import type {
   User,
   UserUpdate,
 } from '@/types/auth'
+import type { Agent } from '@/types/agents'
+import type { Dataset } from '@/types/datasets'
 import type { Cell, Experiment } from '@/types/experiments'
+import type { Run } from '@/types/runs'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -142,6 +145,20 @@ export const experimentsApi = {
   list: () => request<Experiment[]>('/experiments'),
   get: (id: string) => request<Experiment>(`/experiments/${id}`),
   listCells: (id: string) => request<Cell[]>(`/experiments/${id}/cells`),
+}
+
+export const datasetsApi = {
+  get: (id: string) => request<Dataset>(`/datasets/${id}`),
+}
+
+export const agentsApi = {
+  list: () => request<Agent[]>('/agents'),
+}
+
+export const runsApi = {
+  // No server-side experiment_id filter exists yet (runs.py only filters by
+  // agent_id) -- callers filter client-side on run_metadata.experiment_id.
+  list: () => request<Run[]>('/runs'),
 }
 
 export { tryRefreshToken }

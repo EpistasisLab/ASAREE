@@ -51,6 +51,13 @@ class Experiments:
     def delete(self, experiment_id: ResourceId) -> None:
         self._client._delete(f"/experiments/{experiment_id}")
 
+    def update(self, experiment_id: ResourceId, *, dataset_id: ResourceId | None) -> Experiment:
+        """Attach (or, passing ``None``, detach) a dataset after the fact —
+        registration (Step 2) happens after the experiment is created (Step
+        1), so there's no dataset to attach at create() time."""
+        data = self._client._patch(f"/experiments/{experiment_id}", json={"dataset_id": str(dataset_id) if dataset_id else None})
+        return Experiment(**data)
+
     def generate_design(self, experiment_id: ResourceId) -> builtins.list[Cell]:
         """Materialize one cell per combination of the experiment's declared
         factors. Safe to call again after widening a factor's levels."""

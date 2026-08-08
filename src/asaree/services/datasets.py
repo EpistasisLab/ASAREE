@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import shutil
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 
 import pandas as pd
@@ -108,6 +109,10 @@ async def get_dataset(db: AsyncSession, dataset_id: uuid.UUID) -> RegisteredData
 
 async def get_dataset_by_name(db: AsyncSession, name: str) -> RegisteredDataset | None:
     return (await db.execute(select(RegisteredDataset).where(RegisteredDataset.name == name))).scalar_one_or_none()
+
+
+async def list_datasets(db: AsyncSession, *, owner_id: uuid.UUID) -> Sequence[RegisteredDataset]:
+    return (await db.execute(select(RegisteredDataset).where(RegisteredDataset.owner_id == owner_id))).scalars().all()
 
 
 async def delete_dataset(db: AsyncSession, dataset_id: uuid.UUID) -> bool:

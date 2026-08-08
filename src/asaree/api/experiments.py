@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
+from asaree.services.datasets import get_dataset
 from asaree.services.design_generation import DesignValidationError, generate_design_cells
 from asaree.services.experiments import (
     create_experiment,
@@ -23,6 +24,7 @@ from asaree.services.experiments import (
     get_experiment,
     get_experiment_by_name,
     list_experiments,
+    update_experiment,
 )
 from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_factorial
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
@@ -41,6 +43,20 @@ class CreateExperimentRequest(BaseModel):
     design_type: str = "factorial"
     task_brief: dict[str, Any] | None = None
     factors: list[FactorSpec] | None = None
+    # Usable when the dataset is already registered before the experiment is
+    # created; the notebook's own flow registers it AFTER (Step 2 follows
+    # Step 1), so it attaches this later via PATCH instead — see
+    # UpdateExperimentRequest.
+    dataset_id: uuid.UUID | None = None
+
+
+class UpdateExperimentRequest(BaseModel):
+    """``dataset_id`` is the only mutable field so far. Explicitly setting it
+    (including to ``null``, to detach) is applied; omitting it entirely
+    leaves the experiment unchanged — same "unset vs. null" convention
+    ``UpsertCellRequest`` uses below."""
+
+    dataset_id: uuid.UUID | None = None
 
 
 class ExperimentResponse(BaseModel):
@@ -50,6 +66,7 @@ class ExperimentResponse(BaseModel):
     design_type: str
     task_brief: dict[str, Any] | None
     design_spec: dict[str, Any] | None
+    dataset_id: uuid.UUID | None
     created_at: datetime
 
 
@@ -61,8 +78,18 @@ def _experiment_response(e: Any) -> ExperimentResponse:
         design_type=e.design_type,
         task_brief=e.task_brief,
         design_spec=e.design_spec,
+        dataset_id=e.dataset_id,
         created_at=e.created_at,
     )
+
+
+async def _validated_dataset_id(dataset_id: uuid.UUID | None, db: DbSession, user: CurrentUser) -> uuid.UUID | None:
+    if dataset_id is None:
+        return None
+    dataset = await get_dataset(db, dataset_id)
+    if dataset is None or dataset.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="No such dataset")
+    return dataset_id
 
 
 class UpsertCellRequest(BaseModel):
@@ -111,6 +138,7 @@ async def create_experiment_endpoint(
 ) -> ExperimentResponse:
     if await get_experiment_by_name(db, body.name, owner_id=user.id) is not None:
         raise HTTPException(status_code=409, detail="An experiment with this name already exists")
+    dataset_id = await _validated_dataset_id(body.dataset_id, db, user)
     experiment = await create_experiment(
         db,
         name=body.name,
@@ -119,6 +147,7 @@ async def create_experiment_endpoint(
         design_type=body.design_type,
         task_brief=body.task_brief,
         design_spec={"factors": [f.model_dump() for f in body.factors]} if body.factors else None,
+        dataset_id=dataset_id,
     )
     return _experiment_response(experiment)
 
@@ -132,6 +161,19 @@ async def list_experiments_endpoint(user: CurrentUser, db: DbSession) -> list[Ex
 @router.get("/{experiment_id}", response_model=ExperimentResponse)
 async def get_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ExperimentResponse:
     experiment = await _get_owned_experiment(db, experiment_id, user)
+    return _experiment_response(experiment)
+
+
+@router.patch("/{experiment_id}", response_model=ExperimentResponse)
+async def update_experiment_endpoint(
+    experiment_id: uuid.UUID, body: UpdateExperimentRequest, user: CurrentUser, db: DbSession
+) -> ExperimentResponse:
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    fields = body.model_dump(exclude_unset=True)
+    if "dataset_id" in fields:
+        dataset_id = await _validated_dataset_id(fields["dataset_id"], db, user)
+        experiment = await update_experiment(db, experiment_id, dataset_id=dataset_id)
+        assert experiment is not None  # existence already checked above
     return _experiment_response(experiment)
 
 

@@ -25,6 +25,7 @@ from asaree.services.datasets import (
     delete_dataset,
     get_dataset,
     get_dataset_by_name,
+    list_datasets,
 )
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -52,10 +53,27 @@ class DatasetResponse(BaseModel):
     train_sha256: str
     test_sha256: str
     target_column: str | None
+    description: str | None = None
     # Opaque JSON-encoded string — ASAREE never parses this; a domain MCP server
     # (e.g. ares-sklearn-eda's get_data_dictionary) does, matching ARES's own
     # dictionary_json contract exactly.
     dictionary_json: str | None = None
+    created_at: datetime | None = None
+
+
+def _dataset_response(d: Any) -> DatasetResponse:
+    return DatasetResponse(
+        id=d.id,
+        name=d.name,
+        train_path=d.train_path,
+        test_path=d.test_path,
+        train_sha256=d.train_sha256,
+        test_sha256=d.test_sha256,
+        target_column=d.target_column,
+        description=d.description,
+        dictionary_json=d.dictionary_json,
+        created_at=d.created_at,
+    )
 
 
 class WorkspaceEventRequest(BaseModel):
@@ -106,31 +124,25 @@ async def create_dataset_endpoint(
         )
     except DatasetValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return DatasetResponse(
-        id=dataset.id,
-        name=dataset.name,
-        train_path=dataset.train_path,
-        test_path=dataset.test_path,
-        train_sha256=dataset.train_sha256,
-        test_sha256=dataset.test_sha256,
-        target_column=dataset.target_column,
-        dictionary_json=dataset.dictionary_json,
-    )
+    return _dataset_response(dataset)
+
+
+@router.get("", response_model=list[DatasetResponse])
+async def list_datasets_endpoint(user: CurrentUser, db: DbSession) -> list[DatasetResponse]:
+    datasets = await list_datasets(db, owner_id=user.id)
+    return [_dataset_response(d) for d in datasets]
 
 
 @router.get("/by-name/{name}", response_model=DatasetResponse)
 async def get_dataset_by_name_endpoint(name: str, db: DbSession, user: CurrentUser) -> DatasetResponse:
     dataset = await _get_owned_dataset_by_name(db, name, user)
-    return DatasetResponse(
-        id=dataset.id,
-        name=dataset.name,
-        train_path=dataset.train_path,
-        test_path=dataset.test_path,
-        train_sha256=dataset.train_sha256,
-        test_sha256=dataset.test_sha256,
-        target_column=dataset.target_column,
-        dictionary_json=dataset.dictionary_json,
-    )
+    return _dataset_response(dataset)
+
+
+@router.get("/{dataset_id}", response_model=DatasetResponse)
+async def get_dataset_endpoint(dataset_id: uuid.UUID, db: DbSession, user: CurrentUser) -> DatasetResponse:
+    dataset = await _get_owned_dataset(db, dataset_id, user)
+    return _dataset_response(dataset)
 
 
 @router.delete("/{dataset_id}", status_code=204)

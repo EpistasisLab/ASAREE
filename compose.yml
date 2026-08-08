@@ -1,17 +1,25 @@
-# ASAREE's own compose file — separate from agentic-core's, joining its
-# network as an external dependency rather than merging into it. Mirrors
-# agentic-core's own migrate-then-serve shape (see agentic-core/compose.yml
-# and docker/Dockerfile.migrate).
+# ASAREE's own compose file. `include:` pulls agentic-core's own compose.yml
+# in as part of this project, so a single `docker compose up` here also
+# brings up agentic-core-postgres/agentic-core-redis/agentic-core-migrate --
+# no separate `docker compose up -d` in the agentic-core repo needed first.
+# Mirrors agentic-core's own migrate-then-serve shape (see
+# agentic-core/compose.yml and docker/Dockerfile.migrate).
 #
-# Requires agentic-core's stack already running (`docker compose up -d` in
-# the agentic-core repo) — this only joins its network by name, it doesn't
-# start Postgres/Redis itself. ASAREE has no backing services of its own.
+# AGENTIC_CORE_DIR points at a checkout of agentic-core; defaults to a
+# sibling directory (../agentic-core relative to this file), matching how
+# it's actually checked out today. Override it (env var or .env) if yours
+# lives somewhere else. Don't also run `docker compose up` directly inside
+# that checkout while this is up -- same container_names/ports, so the two
+# would collide.
 #
 # agentic-core is a private git dependency (see pyproject.toml); building
 # needs a GitHub token with read access to it, passed as a build secret --
 # GH_TOKEN=$(gh auth token) works if you're logged in via the gh CLI.
 #
 #   GH_TOKEN=$(gh auth token) docker compose up -d --build
+
+include:
+  - path: ${AGENTIC_CORE_DIR:-../agentic-core}/compose.yml
 
 services:
   asaree-migrate:
@@ -20,6 +28,9 @@ services:
       secrets:
         - gh_token
     container_name: asaree-migrate
+    depends_on:
+      agentic-core-postgres:
+        condition: service_healthy
     env_file: .env
     environment:
       # Internal container network, not the host-mapped ports in .env
@@ -28,8 +39,6 @@ services:
       ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/asaree
     entrypoint: ["python", "-m", "asaree.migrations"]
     command: ["upgrade"]
-    networks:
-      - agentic-core_default
     restart: "no"
 
   asaree-app:
@@ -41,6 +50,8 @@ services:
     depends_on:
       asaree-migrate:
         condition: service_completed_successfully
+      agentic-core-redis:
+        condition: service_healthy
     env_file: .env
     environment:
       ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/agentic_core
@@ -64,8 +75,6 @@ services:
       # built .venv doesn't match the container's interpreter, so uv needs to
       # recreate it here on first run.
       - /home/moranj3/dev/asaree-spinal-use-case/mcp-servers:/home/moranj3/dev/asaree-spinal-use-case/mcp-servers
-    networks:
-      - agentic-core_default
     restart: unless-stopped
 
   # Same built image as asaree-app, running the arq worker instead of
@@ -82,6 +91,8 @@ services:
     depends_on:
       asaree-migrate:
         condition: service_completed_successfully
+      agentic-core-redis:
+        condition: service_healthy
     env_file: .env
     environment:
       ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/agentic_core
@@ -98,8 +109,6 @@ services:
       # path, that asaree-app has.
       - ./data:/app/data
       - /home/moranj3/dev/asaree-spinal-use-case/mcp-servers:/home/moranj3/dev/asaree-spinal-use-case/mcp-servers
-    networks:
-      - agentic-core_default
     restart: unless-stopped
 
   asaree-frontend:
@@ -121,15 +130,7 @@ services:
       # in the host checkout.
       - ./frontend:/app
       - /app/node_modules
-    networks:
-      - agentic-core_default
     restart: unless-stopped
-
-networks:
-  # Created by agentic-core's own compose.yml (project name "agentic-core" ->
-  # implicit network "agentic-core_default"). Not owned or created here.
-  agentic-core_default:
-    external: true
 
 secrets:
   gh_token:

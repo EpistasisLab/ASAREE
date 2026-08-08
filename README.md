@@ -19,6 +19,11 @@ Postgres server that hosts *two* databases side by side — `agentic_core`
 volume. Wiping it wipes both at once: every user, agent, experiment, dataset,
 MCP server registration, and LLM credential.
 
+(This is the host-based dev flow, running agentic-core's compose file
+standalone. If you're using the [Docker flow](#running-with-docker) below —
+where ASAREE's own `compose.yml` brings agentic-core up itself — reset from
+the ASAREE repo instead: `docker compose down -v` there tears down both.)
+
 ```bash
 # from the agentic-core repo
 cd path/to/agentic-core
@@ -46,24 +51,31 @@ lifespan), the same as they did the very first time.
 
 ## Running with Docker
 
-Requires agentic-core's stack already running (`docker compose up -d` in the
-`agentic-core` repo) — this only joins its network by name, it doesn't start
-Postgres/Redis itself. `agentic-core` is a private git dependency
-([`pyproject.toml`](pyproject.toml)), so building needs a GitHub token with
-read access to it, passed as a build secret rather than baked into the image:
+`compose.yml` `include`s agentic-core's own `compose.yml`, so this stack is
+self-sufficient — one `docker compose up` brings up
+`agentic-core-postgres`/`agentic-core-redis`/`agentic-core-migrate` alongside
+ASAREE's own services, with real `depends_on: condition: service_healthy`
+between them. It assumes a sibling checkout at `../agentic-core`; point
+`AGENTIC_CORE_DIR` at yours if it lives elsewhere. Don't also run
+`docker compose up` directly inside that checkout while this is up — same
+`container_name`s and ports, so the two collide. `agentic-core` is a private
+git dependency ([`pyproject.toml`](pyproject.toml)), so building needs a
+GitHub token with read access to it, passed as a build secret rather than
+baked into the image:
 
 ```bash
 cp .env.example .env    # fill in provider credentials as usual
 GH_TOKEN=$(gh auth token) docker compose up -d --build
 ```
 
-This runs `asaree-migrate` (applies ASAREE's own schema, creating the
-database first if needed — see `src/asaree/migrations`) to completion, then
-starts `asaree-app` on `:8000`. Both join `agentic-core_default` (the network
-`agentic-core`'s own `compose.yml` creates) to reach Postgres/Redis by
-container name — the host-side URLs in `.env` (`localhost:...`) are
-overridden inside `compose.yml` for exactly this reason, the same
-pattern as `agentic-core`'s own `docker/Dockerfile.migrate`.
+This brings up agentic-core's Postgres/Redis (and applies core's own schema
+via `agentic-core-migrate`), then runs `asaree-migrate` (applies ASAREE's own
+schema, creating the database first if needed — see `src/asaree/migrations`)
+to completion, then starts `asaree-app` on `:8000`. Everything shares one
+compose-managed network to reach Postgres/Redis by container name — the
+host-side URLs in `.env` (`localhost:...`) are overridden inside
+`compose.yml` for exactly this reason, the same pattern as `agentic-core`'s
+own `docker/Dockerfile.migrate`.
 
 One gotcha if you've also run ASAREE directly on the host against the same
 Postgres instance: `asaree-workspace`/`agentic-core-okf`'s persisted

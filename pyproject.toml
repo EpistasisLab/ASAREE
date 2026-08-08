@@ -45,6 +45,11 @@ dependencies = [
     # test — the spinal_surgery use case's factorial-analysis methodology
     # (services.factorial_analysis).
     "scipy>=1.14.0",
+    # The run worker (asaree.worker) — executes runs enqueued by POST /runs
+    # instead of inline, on the same Redis agentic-core and the rate-limiter
+    # already depend on. agentic-core's own pyproject.toml earmarks this as
+    # "arrives with the worker slice" — this is that slice, on ASAREE's side.
+    "arq>=0.26.0",
 ]
 
 [dependency-groups]

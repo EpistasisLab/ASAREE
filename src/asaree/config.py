@@ -56,6 +56,23 @@ class AsareeSettings(CoreSettings):
     # opposite of what per-user credential storage needs.
     encryption_key: str = "dev-only-not-for-production"
 
+    # Ceiling on how long the worker lets a single run's execute_run() call
+    # run before it force-fails it (asaree.worker.tasks.execute_run_task) —
+    # the fallback when the run's own agent has no max_run_duration_seconds
+    # set. Generous by design: this is a backstop, not the primary control:
+    # 24h to comfortably clear the spinal-fusion notebook's own AGENT_MAX_
+    # DURATION. An agent's max_run_duration_seconds should stay under this,
+    # since the arq worker's own job_timeout is set from this same value.
+    worker_job_timeout_seconds: int = 60 * 60 * 24
+
+    # How long a RUNNING run may go without a heartbeat (AgentRun.
+    # last_heartbeat_at, written every phase of every iteration by the
+    # orchestrator) before asaree.worker.tasks.check_stale_runs treats its
+    # worker as dead and force-fails it. Generous relative to the heartbeat
+    # cadence (per-phase, so at most a few LLM calls apart) — a slow provider
+    # response should never trip this on a run that is actually still alive.
+    run_heartbeat_stale_seconds: int = 300
+
 
 _instance: AsareeSettings | None = None
 

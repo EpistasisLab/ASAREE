@@ -68,6 +68,40 @@ services:
       - agentic-core_default
     restart: unless-stopped
 
+  # Same built image as asaree-app, running the arq worker instead of
+  # uvicorn -- see Dockerfile's CMD, overridden here via `command:`. Deployed
+  # alongside the still-inline POST /runs for now (asaree.api.runs hasn't
+  # been switched to enqueue yet); this service exists so the worker path can
+  # be smoke-tested against real Redis/Postgres before that switch lands.
+  asaree-worker:
+    build:
+      context: .
+      secrets:
+        - gh_token
+    container_name: asaree-worker
+    depends_on:
+      asaree-migrate:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/agentic_core
+      ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@agentic-core-postgres:5432/asaree
+      ASAREE_REDIS_URL: redis://agentic-core-redis:6379/0
+    command: ["arq", "asaree.worker.settings.WorkerSettings"]
+    volumes:
+      # Same two mounts as asaree-app, and for the same reasons: dataset
+      # workspaces/OKF bundle need to survive a restart, and hydrate_registry
+      # (asaree.worker.settings.on_startup) reconnects domain MCP servers by
+      # replaying their persisted `command`, which is a HOST path under this
+      # use-case repo -- the worker is now the process that actually spawns
+      # those subprocesses, so it needs the identical mount, at the identical
+      # path, that asaree-app has.
+      - ./data:/app/data
+      - /home/moranj3/dev/asaree-spinal-use-case/mcp-servers:/home/moranj3/dev/asaree-spinal-use-case/mcp-servers
+    networks:
+      - agentic-core_default
+    restart: unless-stopped
+
   asaree-frontend:
     build:
       context: ./frontend

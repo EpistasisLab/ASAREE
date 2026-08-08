@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import {
   ArrowDown,
   ArrowRight,
@@ -18,6 +18,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatDate, formatRelative } from '@/lib/format'
+import { cellsStatusAccent, factorCount } from '@/lib/experiment'
+import { cardAccent } from '@/lib/utils'
 import { experimentsApi } from '@/api/client'
 import type { Experiment } from '@/types/experiments'
 
@@ -33,11 +35,6 @@ const SORT_LABELS: Record<SortKey, string> = {
 function sortValue(experiment: Experiment, key: SortKey): string | number {
   if (key === 'created_at') return new Date(experiment.created_at).getTime()
   return experiment[key].toLowerCase()
-}
-
-function factorCount(designSpec: Experiment['design_spec']): number | null {
-  const factors = (designSpec as { factors?: unknown } | null)?.factors
-  return Array.isArray(factors) ? factors.length : null
 }
 
 const PAGE_SIZE = 9
@@ -63,6 +60,20 @@ export function ExperimentsPage() {
   const totalPages = Math.max(1, Math.ceil((sorted?.length ?? 0) / PAGE_SIZE))
   const currentPage = Math.min(page, totalPages)
   const paged = sorted?.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+
+  // One cells fetch per visible tile, to tint each by completion status --
+  // the same N+1 tradeoff already accepted for the Agents section on the
+  // detail page. Fine at a page size of 9; revisit with a real aggregate
+  // endpoint if this page ever needs to show many more at once.
+  const cellsQueries = useQueries({
+    queries: (paged ?? []).map((experiment) => ({
+      queryKey: ['experiments', experiment.id, 'cells'],
+      queryFn: () => experimentsApi.listCells(experiment.id),
+    })),
+  })
+  const accentByExperiment = new Map(
+    (paged ?? []).map((experiment, i) => [experiment.id, cellsStatusAccent(cellsQueries[i]?.data)]),
+  )
 
   return (
     <div className="min-h-svh bg-muted/30">
@@ -132,17 +143,18 @@ export function ExperimentsPage() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {(paged ?? []).map((experiment, i) => {
                 const factors = factorCount(experiment.design_spec)
+                const accent = accentByExperiment.get(experiment.id) ?? 'var(--primary)'
                 return (
                   <Card
                     key={experiment.id}
-                    style={{ animationDelay: `${i * 40}ms` }}
-                    className="animate-in fade-in slide-in-from-bottom-2 fill-mode-backwards cursor-pointer duration-300 transition-[transform,box-shadow] hover:scale-[1.02] hover:shadow-[0_0_32px_-8px_var(--primary)] active:scale-[0.99]"
+                    style={{ animationDelay: `${i * 40}ms`, ...cardAccent(accent) }}
+                    className="animate-in fade-in slide-in-from-bottom-2 fill-mode-backwards cursor-pointer duration-300 transition-[transform,box-shadow] hover:scale-[1.02] hover:shadow-[0_0_32px_-8px_var(--card-accent,var(--primary))] active:scale-[0.99]"
                     onClick={() => navigate(`/experiments/${experiment.id}`)}
                   >
-                    {/* Retrofuturist top accent strip */}
-                    <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-primary/0 via-primary to-primary/0" />
+                    {/* Retrofuturist top accent strip, tinted by completion status */}
+                    <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-[color:var(--card-accent,var(--primary))]/0 via-[color:var(--card-accent,var(--primary))] to-[color:var(--card-accent,var(--primary))]/0" />
                     {/* Faint watermark, purely decorative */}
-                    <FlaskConical className="pointer-events-none absolute -right-3 -bottom-3 size-24 text-primary/[0.04]" />
+                    <FlaskConical className="pointer-events-none absolute -right-3 -bottom-3 size-24 text-[color:var(--card-accent,var(--primary))]/[0.04]" />
                     {/* Hover shine sweep */}
                     <div className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/[0.04] to-transparent transition-transform duration-700 ease-out group-hover/card:translate-x-full" />
 
@@ -175,7 +187,7 @@ export function ExperimentsPage() {
                         <span className="text-muted-foreground/40">·</span>
                         <span className="text-muted-foreground/60">#{experiment.id.slice(0, 8)}</span>
                       </div>
-                      <ArrowRight className="size-4 opacity-60 transition-all group-hover/card:translate-x-1 group-hover/card:text-primary group-hover/card:opacity-100" />
+                      <ArrowRight className="size-4 opacity-60 transition-all group-hover/card:translate-x-1 group-hover/card:text-[color:var(--card-accent,var(--primary))] group-hover/card:opacity-100" />
                     </CardContent>
                   </Card>
                 )

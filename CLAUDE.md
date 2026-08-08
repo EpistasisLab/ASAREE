@@ -98,6 +98,10 @@ or introduce a different aesthetic without being asked.
     table of name/role/added like ARES's Agents tab (that thin-table pattern was explicitly
     what the user wanted to move away from).
 
+# Git commit conventions
+
+Do not add `Co-Authored-By` or `Generated-with` lines to commits or PRs.
+
 # Experiment data model
 
 - **`ResearchExperiment.dataset_id` is a real, nullable FK** to `registered_datasets`

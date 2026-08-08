@@ -1,6 +1,7 @@
 import { AppHeader } from '@/components/AppHeader'
 import { ProfileInfoSection } from '@/pages/profile/ProfileInfoSection'
 import { ChangePasswordSection } from '@/pages/profile/ChangePasswordSection'
+import { SdkInstallSection } from '@/pages/profile/SdkInstallSection'
 import { ApiTokensSection } from '@/pages/profile/ApiTokensSection'
 
 export function ProfilePage() {
@@ -15,6 +16,7 @@ export function ProfilePage() {
         </div>
         <ProfileInfoSection />
         <ChangePasswordSection />
+        <SdkInstallSection />
         <ApiTokensSection />
       </main>
     </div>

@@ -1,26 +1,32 @@
 """Run resource, matching asaree.api.runs.
 
-``POST /runs`` executes inline — by the time ``start`` returns, the run is
-already terminal. ``wait`` exists only so a ported driver script that used
-to poll ARES doesn't need its call sites rewritten; here it's just a
-re-fetch, no actual waiting happens.
-
-Because the run executes inline, ``start`` itself is the long-blocking call —
-not ``wait``, despite the name suggesting otherwise. The client's default HTTP
-timeout (``ASAREE_TIMEOUT``, 30s) is nowhere near enough for a real ReAct loop
-with real tool calls; pass ``timeout=`` explicitly for anything but a trivial
-single-pass agent, the same way ``tools.call_tool`` takes one for long-running
-tools.
+``POST /runs`` enqueues a run for the background worker (asaree.worker) and
+returns as soon as it's queued (status ``PENDING``), not once it's terminal
+— execution happens out of band. ``start`` returns quickly; ``wait`` is the
+long call now, polling ``GET /runs/{id}`` until the run reaches a terminal
+status. This is the inverse of this module's own history: it used to be
+``start`` that blocked (inline execution, pre-worker) and ``wait`` that was a
+same-request no-op re-fetch — callers written against that shape (``start``
+immediately followed by ``wait(timeout=..., poll_interval=...)``, reading
+only ``wait``'s return) need no changes; the ones already accepted-and-
+ignored ``timeout``/``poll_interval`` kwargs on ``wait`` are now real.
 """
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
 from asaree_client.models import Run, RunStep
 
 ResourceId = uuid.UUID | str
+
+# paused/awaiting_human are deliberately NOT terminal here: nothing in this
+# codebase drives either state back to running yet, so treating them as
+# "done" would have wait() silently under-deliver the moment a HITL story
+# lands and a caller's run parks in one of them mid-flight.
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 class Runs:
@@ -37,11 +43,13 @@ class Runs:
         model_config_override: dict[str, Any] | None = None,
         timeout: float | None = None,
     ) -> Run:
-        """Create and execute a run, blocking until it's terminal.
+        """Create a run and enqueue it. Returns immediately (status PENDING)
+        — call ``wait`` for the terminal result.
 
         *timeout* overrides the client's default HTTP timeout for this one
-        call — see the module docstring for why that default is too short
-        for anything but a trivial run.
+        call. No longer the long-blocking call it once was (enqueueing is
+        fast), but still accepted: a caller passing it for the old reason
+        does no harm passing it for no reason.
         """
         payload: dict[str, Any] = {"agent_id": str(agent_id), "user_input": user_input}
         if pattern_overrides is not None:
@@ -60,10 +68,31 @@ class Runs:
         data = self._client._get(f"/runs/{run_id}")
         return Run(**data)
 
-    def wait(self, run_id: ResourceId, **_kwargs: Any) -> Run:
-        """Re-fetch a run. Accepts and ignores ``timeout``/``poll_interval`` —
-        ASAREE runs are already terminal by the time ``start`` returns."""
-        return self.get(run_id)
+    def wait(
+        self,
+        run_id: ResourceId,
+        *,
+        timeout: float | None = None,
+        poll_interval: float = 2.0,
+    ) -> Run:
+        """Poll until *run_id* reaches a terminal status (completed, failed,
+        cancelled), then return it.
+
+        *timeout* bounds the total wait, in seconds — ``None`` (the default)
+        polls indefinitely. Raises ``TimeoutError`` if it elapses with the run
+        still non-terminal, rather than returning a PENDING/RUNNING run that
+        would look like a normal result to a caller that doesn't check.
+        """
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        while True:
+            run = self.get(run_id)
+            if run.status in _TERMINAL_STATUSES:
+                return run
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"run {run_id} did not reach a terminal status within {timeout}s (last status: {run.status})"
+                )
+            time.sleep(poll_interval)
 
     def list_all(self, *, agent_id: ResourceId | None = None) -> list[Run]:
         params = {"agent_id": str(agent_id)} if agent_id is not None else None

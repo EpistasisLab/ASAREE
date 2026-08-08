@@ -1,16 +1,17 @@
-"""Runs — a thin layer over agentic_core.runner, executed inline.
+"""Runs — a thin layer over agentic_core.runner, executed by the worker.
 
-``POST /runs`` both creates and executes in the same request — no worker for
-v1 (design doc §5). This still matches the SDK-facing shape a driver script
-expects (``start`` then ``wait``/poll): by the time ``start`` returns, the run
-is already terminal, so a subsequent poll just sees that immediately. Nothing
-about the API shape has to change if a worker gets added later; only what
-happens between create and execute does.
+``POST /runs`` creates the run and hands it to asaree.worker (arq) via
+``enqueue_run`` — it does not execute inline, and returns as soon as the run
+is queued (status ``PENDING``), not once it's terminal. The API shape did
+not need to change for this: the SDK's ``start`` then ``wait``/poll shape
+(``asaree_client.resources.runs``) was already the right one, since ``wait``
+now actually polls instead of being a same-request no-op.
 
 Credential resolution needs no wiring here at all: ``owner_id=user.id`` on
-``create_run`` is what ``execute_run`` uses as ``principal_id`` when nothing
-overrides it, which is exactly what the installed resolver
-(``asaree.services.credential_resolver``) keys its lookup on.
+``create_run`` is what ``execute_run`` (called from the worker, not here)
+uses as ``principal_id`` when nothing overrides it, which is exactly what
+the installed resolver (``asaree.services.credential_resolver``) keys its
+lookup on.
 """
 
 from __future__ import annotations
@@ -19,14 +20,13 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from agentic_core.mcp.registry import get_registry
-from agentic_core.runner import create_run, execute_run, get_agent, get_run, get_run_steps, list_runs
+from agentic_core.runner import create_run, get_agent, get_run, get_run_steps, list_runs
 from agentic_core.schemas.output import parse_envelope
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser
-from asaree.services.run_tools import gather_tools
+from asaree.worker.enqueue import enqueue_run
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -92,7 +92,7 @@ def _to_response(run: Any) -> RunResponse:
 
 
 @router.post("", response_model=RunResponse, status_code=201)
-async def create_and_execute_run_endpoint(body: CreateRunRequest, user: CurrentUser) -> RunResponse:
+async def create_run_endpoint(body: CreateRunRequest, user: CurrentUser) -> RunResponse:
     agent = await get_agent(body.agent_id)
     if agent is None or agent.owner_id != user.id:
         raise HTTPException(status_code=404, detail="No such agent")
@@ -105,10 +105,8 @@ async def create_and_execute_run_endpoint(body: CreateRunRequest, user: CurrentU
         metadata=body.metadata,
         model_config_overrides=body.model_config_override,
     )
-    await execute_run(run_id=run.id, registry=get_registry(), available_tools=gather_tools(agent))
-    finished = await get_run(run.id)
-    assert finished is not None  # just created and executed above
-    return _to_response(finished)
+    await enqueue_run(run.id)
+    return _to_response(run)
 
 
 @router.get("", response_model=list[RunResponse])

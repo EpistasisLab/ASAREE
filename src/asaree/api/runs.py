@@ -26,32 +26,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser
+from asaree.services.run_tools import gather_tools
 
 router = APIRouter(prefix="/runs", tags=["runs"])
-
-
-def _gather_tools(agent: Any) -> list[dict[str, Any]]:
-    """Resolve an agent's ``tool_config`` into this run's tool allow-list.
-
-    ``execute_run`` never reads ``Agent.tool_config_data`` itself (see its
-    ``available_tools`` param) -- the caller is responsible for turning it
-    into the resolved catalog entries the orchestrator enforces as an
-    allow-list (``agentic_core.mcp.adapters._tool_in_allowlist``).
-
-    ``tool_config`` here is ``{"server_names": [...], "tool_names":
-    ["server.tool", ...]}`` (asaree.api.agents.CreateAgentRequest / the
-    spinal-fusion notebook's ``make_agent``). ``tool_names`` is authoritative
-    -- membership in it, matched against the registry's namespaced ``name``,
-    is what admits a catalog entry; ``server_names`` is not separately
-    enforced, since every entry in ``tool_names`` already implies its server.
-    An agent with no ``tool_config``, or one naming no tools, gets none --
-    the executor fails closed on an empty allow-list rather than granting
-    every connected server's tools by default.
-    """
-    tool_names = set((agent.tool_config_data or {}).get("tool_names") or [])
-    if not tool_names:
-        return []
-    return [t for t in get_registry().get_all_tools() if t["name"] in tool_names]
 
 
 class CreateRunRequest(BaseModel):
@@ -128,7 +105,7 @@ async def create_and_execute_run_endpoint(body: CreateRunRequest, user: CurrentU
         metadata=body.metadata,
         model_config_overrides=body.model_config_override,
     )
-    await execute_run(run_id=run.id, registry=get_registry(), available_tools=_gather_tools(agent))
+    await execute_run(run_id=run.id, registry=get_registry(), available_tools=gather_tools(agent))
     finished = await get_run(run.id)
     assert finished is not None  # just created and executed above
     return _to_response(finished)

@@ -4,6 +4,8 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
+  ChevronLeft,
+  ChevronRight,
   ChevronsUpDown,
   Database,
   FlaskConical,
@@ -87,15 +89,24 @@ function availableMetricKeys(cells: Cell[]): string[] {
 const PREFERRED_METRICS = ['average_precision', 'roc_auc', 'accuracy', 'f1']
 
 /** Unit suffixes baked into a metric key's own name (cost_usd, duration_s)
- * read better as "cost (USD)"/"duration (seconds)" than a literal underscore
+ * read better as "cost (USD)"/"duration (minutes)" than a literal underscore
  * swap -- everything else still falls back to that. */
 const METRIC_LABEL_OVERRIDES: Record<string, string> = {
   cost_usd: 'cost (USD)',
-  duration_s: 'duration (seconds)',
+  duration_s: 'duration (minutes)',
 }
 
 function formatMetricLabel(key: string): string {
   return METRIC_LABEL_OVERRIDES[key] ?? key.replace(/_/g, ' ')
+}
+
+/** duration_s is stored (and averaged/sorted) in seconds -- minutes just
+ * reads better for a value that's usually in the hundreds/thousands. Purely
+ * a display-time rescale: sort order is unaffected (a positive linear
+ * scale), so cellSortValue/meanMetric stay on the raw seconds untouched;
+ * only the number shown to a human changes. */
+function scaledMetricValue(key: string, value: number): number {
+  return key === 'duration_s' ? value / 60 : value
 }
 
 function pickDefaultMetric(experiment: Experiment | undefined, cells: Cell[]): string | null {
@@ -232,12 +243,12 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
 
   return (
     <div className="mb-6 space-y-4">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>
-          by {rowFactor.name}
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold text-foreground">
+          {rowFactor.name}
           {colFactor.name ? ` × ${colFactor.name}` : ''}
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {availableMetrics.length > 1 && (
             <Select value={activeMetric} onValueChange={(v) => v !== null && setMetricKey(v)}>
               <SelectTrigger size="sm" className="w-40">
@@ -252,7 +263,7 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
               </SelectContent>
             </Select>
           )}
-          <span className="font-mono">{min.toFixed(3)}</span>
+          <span className="font-mono">{scaledMetricValue(activeMetric, min).toFixed(3)}</span>
           <div
             className="h-2 w-16 rounded-full"
             style={{
@@ -260,7 +271,7 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
                 'linear-gradient(to right, color-mix(in oklch, var(--muted) 100%, var(--primary) 10%), color-mix(in oklch, var(--muted) 100%, var(--primary) 90%))',
             }}
           />
-          <span className="font-mono">{max.toFixed(3)}</span>
+          <span className="font-mono">{scaledMetricValue(activeMetric, max).toFixed(3)}</span>
         </div>
       </div>
       <div className={cn('grid gap-4', facetLevels.length > 1 && 'sm:grid-cols-2')}>
@@ -272,7 +283,25 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
               </p>
             )}
             <div className="grid gap-1" style={{ gridTemplateColumns: `auto repeat(${colFactor.levels.length}, 1fr)` }}>
+              {/* Axis names, attached directly to the axis they label -- the
+                  title above names both factors, but only in "by X × Y"
+                  order, which a reader has to remember maps to rows-then-
+                  columns. These remove the need to remember that. The column
+                  axis name gets its own row (above the column headers); the
+                  row axis name sits directly beside those same headers, one
+                  row above its own values -- not stacked above them with an
+                  empty row in between, which read as disconnected from what
+                  it was labeling. */}
               <div />
+              <div
+                className="truncate text-center text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+                style={{ gridColumn: '2 / -1' }}
+              >
+                {colFactor.name}
+              </div>
+              <div className="flex items-center pr-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                {rowFactor.name}
+              </div>
               {colFactor.name
                 ? colFactor.levels.map((colLevel, ci) => (
                     <div key={ci} className="truncate text-center font-mono text-xs text-muted-foreground">
@@ -294,7 +323,11 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
                         style={cellData.value !== null ? { background: heatColor(cellData.value, min, max) } : undefined}
                         title={cellData.count > 0 ? `n=${cellData.count}` : 'no cell for this combination'}
                       >
-                        {cellData.value !== null ? cellData.value.toFixed(3) : cellData.count > 0 ? '…' : ''}
+                        {cellData.value !== null
+                          ? scaledMetricValue(activeMetric, cellData.value).toFixed(3)
+                          : cellData.count > 0
+                            ? '…'
+                            : ''}
                       </div>
                     )
                   })}
@@ -309,6 +342,8 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
 }
 
 type CellSort = { key: string; dir: 'asc' | 'desc' }
+
+const CELLS_PAGE_SIZE = 20
 
 function cellSortValue(cell: Cell, key: string): string | number {
   if (key === 'cell_label') return cell.cell_label.toLowerCase()
@@ -342,8 +377,8 @@ function SortableCellHead({ label, sortKey, sort, onSort }: { label: string; sor
   )
 }
 
-function formatMetricValue(value: unknown): string {
-  return typeof value === 'number' ? value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : '—'
+function formatMetricValue(key: string, value: unknown): string {
+  return typeof value === 'number' ? scaledMetricValue(key, value).toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : '—'
 }
 
 /** A real table -- one column per derived factor, one per curated metric --
@@ -351,11 +386,13 @@ function formatMetricValue(value: unknown): string {
  * Every column is independently sortable. */
 function CellsTable({ experiment, cells }: { experiment: Experiment; cells: Cell[] }) {
   const [sort, setSort] = useState<CellSort>({ key: 'updated_at', dir: 'desc' })
+  const [page, setPage] = useState(1)
   const factors = useMemo(() => deriveFactors(cells, experiment.design_spec) ?? [], [cells, experiment.design_spec])
   const metricColumns = useMemo(() => pickMetricColumns(experiment, cells), [experiment, cells])
 
   function handleSort(key: string) {
     setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
+    setPage(1)
   }
 
   const sorted = useMemo(() => {
@@ -369,43 +406,78 @@ function CellsTable({ experiment, cells }: { experiment: Experiment; cells: Cell
     return rows
   }, [cells, sort])
 
+  const totalPages = Math.max(1, Math.ceil(sorted.length / CELLS_PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const paged = sorted.slice((currentPage - 1) * CELLS_PAGE_SIZE, currentPage * CELLS_PAGE_SIZE)
+
   return (
-    <Table>
-      <TableHeader className="bg-muted/40">
-        <TableRow>
-          <SortableCellHead label="Cell" sortKey="cell_label" sort={sort} onSort={handleSort} />
-          {factors.map((f) => (
-            <SortableCellHead key={f.name} label={f.name} sortKey={`factor:${f.name}`} sort={sort} onSort={handleSort} />
-          ))}
-          {metricColumns.map((m) => (
-            <SortableCellHead key={m} label={formatMetricLabel(m)} sortKey={`metric:${m}`} sort={sort} onSort={handleSort} />
-          ))}
-          <SortableCellHead label="Status" sortKey="status" sort={sort} onSort={handleSort} />
-          <SortableCellHead label="Updated" sortKey="updated_at" sort={sort} onSort={handleSort} />
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {sorted.map((cell) => (
-          <TableRow key={cell.id} className="even:bg-muted/15">
-            <TableCell className="py-3.5 font-mono text-sm font-medium">{cell.cell_label}</TableCell>
+    <div className="space-y-3">
+      <Table>
+        <TableHeader className="bg-muted/40">
+          <TableRow>
+            <SortableCellHead label="Cell" sortKey="cell_label" sort={sort} onSort={handleSort} />
             {factors.map((f) => (
-              <TableCell key={f.name} className="py-3.5 font-mono text-xs text-muted-foreground">
-                {cell.factor_values && f.name in cell.factor_values ? String(cell.factor_values[f.name]) : '—'}
-              </TableCell>
+              <SortableCellHead key={f.name} label={f.name} sortKey={`factor:${f.name}`} sort={sort} onSort={handleSort} />
             ))}
             {metricColumns.map((m) => (
-              <TableCell key={m} className="py-3.5 font-mono text-xs text-muted-foreground">
-                {formatMetricValue(cell.metric_values?.[m])}
-              </TableCell>
+              <SortableCellHead key={m} label={formatMetricLabel(m)} sortKey={`metric:${m}`} sort={sort} onSort={handleSort} />
             ))}
-            <TableCell className="py-3.5">
-              <Badge variant={cell.metric_values ? 'default' : 'secondary'}>{cell.metric_values ? 'Scored' : 'Pending'}</Badge>
-            </TableCell>
-            <TableCell className="py-3.5 text-muted-foreground">{new Date(cell.updated_at).toLocaleString()}</TableCell>
+            <SortableCellHead label="Status" sortKey="status" sort={sort} onSort={handleSort} />
+            <SortableCellHead label="Updated" sortKey="updated_at" sort={sort} onSort={handleSort} />
           </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+        </TableHeader>
+        <TableBody>
+          {paged.map((cell) => (
+            <TableRow key={cell.id} className="even:bg-muted/15">
+              <TableCell className="py-3.5 font-mono text-sm font-medium">{cell.cell_label}</TableCell>
+              {factors.map((f) => (
+                <TableCell key={f.name} className="py-3.5 font-mono text-xs text-muted-foreground">
+                  {cell.factor_values && f.name in cell.factor_values ? String(cell.factor_values[f.name]) : '—'}
+                </TableCell>
+              ))}
+              {metricColumns.map((m) => (
+                <TableCell key={m} className="py-3.5 font-mono text-xs text-muted-foreground">
+                  {formatMetricValue(m, cell.metric_values?.[m])}
+                </TableCell>
+              ))}
+              <TableCell className="py-3.5">
+                <Badge variant={cell.metric_values ? 'default' : 'secondary'}>{cell.metric_values ? 'Scored' : 'Pending'}</Badge>
+              </TableCell>
+              <TableCell className="py-3.5 text-muted-foreground">{new Date(cell.updated_at).toLocaleString()}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">
+          Showing {(currentPage - 1) * CELLS_PAGE_SIZE + 1}–{Math.min(currentPage * CELLS_PAGE_SIZE, sorted.length)} of{' '}
+          {sorted.length}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            disabled={currentPage <= 1}
+            onClick={() => setPage((p) => p - 1)}
+            aria-label="Previous page"
+          >
+            <ChevronLeft className="size-4" />
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            Page {currentPage} of {totalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            disabled={currentPage >= totalPages}
+            onClick={() => setPage((p) => p + 1)}
+            aria-label="Next page"
+          >
+            <ChevronRight className="size-4" />
+          </Button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -720,7 +792,7 @@ export function ExperimentDetailPage() {
                     <StatCard
                       icon={Trophy}
                       label={best ? formatMetricLabel(best.key) : 'Best metric'}
-                      value={best ? best.value.toFixed(4) : '—'}
+                      value={best ? scaledMetricValue(best.key, best.value).toFixed(4) : '—'}
                       accent={best ? 'var(--chart-3)' : undefined}
                     />
                   </>

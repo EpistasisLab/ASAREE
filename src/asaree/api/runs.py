@@ -16,10 +16,12 @@ lookup on.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 from typing import Any
 
+from agentic_core.models.run import RunStatus
 from agentic_core.runner import create_run, get_agent, get_run, get_run_steps, list_runs
 from agentic_core.schemas.output import parse_envelope
 from fastapi import APIRouter, HTTPException
@@ -110,8 +112,36 @@ async def create_run_endpoint(body: CreateRunRequest, user: CurrentUser) -> RunR
 
 
 @router.get("", response_model=list[RunResponse])
-async def list_runs_endpoint(user: CurrentUser, agent_id: uuid.UUID | None = None) -> list[RunResponse]:
-    runs = await list_runs(agent_id=agent_id, owner_id=user.id)
+async def list_runs_endpoint(
+    user: CurrentUser,
+    agent_id: uuid.UUID | None = None,
+    status: str | None = None,
+    metadata: str | None = None,
+    limit: int | None = None,
+) -> list[RunResponse]:
+    """``metadata``, if given, is a JSON object string (e.g. a use case's own
+    experiment_id/treatment_group/replicate) -- every key/value pair must
+    match ``run_metadata`` exactly. Filtering happens in list_runs's own SQL,
+    not by pulling every run for ``agent_id`` and checking client-side: that
+    approach silently truncates once an agent has more total runs than
+    ``limit`` (a caller filtering on its own metadata has no way to know a
+    match was dropped, since nothing errors)."""
+    try:
+        metadata_filter = json.loads(metadata) if metadata else None
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=422, detail=f"metadata is not valid JSON: {e}") from e
+    if metadata_filter is not None and not isinstance(metadata_filter, dict):
+        raise HTTPException(status_code=422, detail="metadata must be a JSON object")
+    try:
+        status_filter = RunStatus(status) if status else None
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"invalid status: {status}") from e
+    kwargs: dict[str, Any] = {"agent_id": agent_id, "owner_id": user.id, "status": status_filter}
+    if metadata_filter is not None:
+        kwargs["metadata"] = metadata_filter
+    if limit is not None:
+        kwargs["limit"] = limit
+    runs = await list_runs(**kwargs)
     return [_to_response(r) for r in runs]
 
 

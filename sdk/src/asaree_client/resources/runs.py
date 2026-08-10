@@ -14,6 +14,7 @@ ignored ``timeout``/``poll_interval`` kwargs on ``wait`` are now real.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from typing import Any
@@ -94,9 +95,32 @@ class Runs:
                 )
             time.sleep(poll_interval)
 
-    def list_all(self, *, agent_id: ResourceId | None = None) -> list[Run]:
-        params = {"agent_id": str(agent_id)} if agent_id is not None else None
-        data = self._client._get("/runs", params=params)
+    def list_all(
+        self,
+        *,
+        agent_id: ResourceId | None = None,
+        status: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        limit: int | None = None,
+    ) -> list[Run]:
+        """*metadata*, if given, requires every key/value pair to match a
+        run's own ``run_metadata`` exactly, filtered server-side (in SQL) —
+        NOT by fetching every run for *agent_id* and checking client-side:
+        that silently drops matches once the agent has more total runs than
+        *limit* would otherwise return, with nothing to signal it happened.
+        Pass *metadata* to filter on e.g. an experiment id you stamped onto
+        ``run_metadata`` at ``start()`` time, instead of pulling everything.
+        """
+        params: dict[str, Any] = {}
+        if agent_id is not None:
+            params["agent_id"] = str(agent_id)
+        if status is not None:
+            params["status"] = status
+        if metadata is not None:
+            params["metadata"] = json.dumps(metadata)
+        if limit is not None:
+            params["limit"] = limit
+        data = self._client._get("/runs", params=params or None)
         return [Run(**r) for r in data]
 
     def get_steps(self, run_id: ResourceId) -> list[RunStep]:

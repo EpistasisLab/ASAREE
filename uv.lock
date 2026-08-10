@@ -16,7 +16,7 @@ resolution-markers = [
 [[package]]
 name = "agentic-core"
 version = "0.0.1"
-source = { git = "https://github.com/EpistasisLab/agentic-core.git?tag=v0.1.1#407ad887d9d1e35a4e0ecc010b5a7fe28036cc66" }
+source = { git = "https://github.com/EpistasisLab/agentic-core.git?tag=v0.1.2#7cbfb7abcf4118f64289cffdeadf8cce33df0ab2" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
@@ -260,7 +260,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentic-core", git = "https://github.com/EpistasisLab/agentic-core.git?tag=v0.1.1" },
+    { name = "agentic-core", git = "https://github.com/EpistasisLab/agentic-core.git?tag=v0.1.2" },
     { name = "alembic", specifier = ">=1.18.4" },
     { name = "arq", specifier = ">=0.26.0" },
     { name = "asaree-workspace-core", editable = "workspace-core" },

@@ -86,6 +86,18 @@ function availableMetricKeys(cells: Cell[]): string[] {
 
 const PREFERRED_METRICS = ['average_precision', 'roc_auc', 'accuracy', 'f1']
 
+/** Unit suffixes baked into a metric key's own name (cost_usd, duration_s)
+ * read better as "cost (USD)"/"duration (seconds)" than a literal underscore
+ * swap -- everything else still falls back to that. */
+const METRIC_LABEL_OVERRIDES: Record<string, string> = {
+  cost_usd: 'cost (USD)',
+  duration_s: 'duration (seconds)',
+}
+
+function formatMetricLabel(key: string): string {
+  return METRIC_LABEL_OVERRIDES[key] ?? key.replace(/_/g, ' ')
+}
+
 function pickDefaultMetric(experiment: Experiment | undefined, cells: Cell[]): string | null {
   const available = availableMetricKeys(cells)
   const hint = selectionMetricHint(experiment)
@@ -229,12 +241,12 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
           {availableMetrics.length > 1 && (
             <Select value={activeMetric} onValueChange={(v) => v !== null && setMetricKey(v)}>
               <SelectTrigger size="sm" className="w-40">
-                <SelectValue>{(v: string) => v.replace(/_/g, ' ')}</SelectValue>
+                <SelectValue>{(v: string) => formatMetricLabel(v)}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {availableMetrics.map((m) => (
                   <SelectItem key={m} value={m}>
-                    {m.replace(/_/g, ' ')}
+                    {formatMetricLabel(m)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -366,7 +378,7 @@ function CellsTable({ experiment, cells }: { experiment: Experiment; cells: Cell
             <SortableCellHead key={f.name} label={f.name} sortKey={`factor:${f.name}`} sort={sort} onSort={handleSort} />
           ))}
           {metricColumns.map((m) => (
-            <SortableCellHead key={m} label={m.replace(/_/g, ' ')} sortKey={`metric:${m}`} sort={sort} onSort={handleSort} />
+            <SortableCellHead key={m} label={formatMetricLabel(m)} sortKey={`metric:${m}`} sort={sort} onSort={handleSort} />
           ))}
           <SortableCellHead label="Status" sortKey="status" sort={sort} onSort={handleSort} />
           <SortableCellHead label="Updated" sortKey="updated_at" sort={sort} onSort={handleSort} />
@@ -707,7 +719,7 @@ export function ExperimentDetailPage() {
                     />
                     <StatCard
                       icon={Trophy}
-                      label={best ? best.key.replace(/_/g, ' ') : 'Best metric'}
+                      label={best ? formatMetricLabel(best.key) : 'Best metric'}
                       value={best ? best.value.toFixed(4) : '—'}
                       accent={best ? 'var(--chart-3)' : undefined}
                     />

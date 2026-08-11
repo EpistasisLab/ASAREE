@@ -94,19 +94,33 @@ const PREFERRED_METRICS = ['average_precision', 'roc_auc', 'accuracy', 'f1']
 const METRIC_LABEL_OVERRIDES: Record<string, string> = {
   cost_usd: 'cost (USD)',
   duration_s: 'duration (minutes)',
+  frac_created_selected: '% selected engineered',
 }
 
 function formatMetricLabel(key: string): string {
   return METRIC_LABEL_OVERRIDES[key] ?? key.replace(/_/g, ' ')
 }
 
-/** duration_s is stored (and averaged/sorted) in seconds -- minutes just
- * reads better for a value that's usually in the hundreds/thousands. Purely
- * a display-time rescale: sort order is unaffected (a positive linear
- * scale), so cellSortValue/meanMetric stay on the raw seconds untouched;
- * only the number shown to a human changes. */
+/** duration_s (seconds -> minutes) and frac_created_selected (a 0-1 fraction
+ * -> a 0-100 number, paired with the "%" suffix below) are stored/averaged/
+ * sorted in their raw units -- this only rescales what's displayed. Sort
+ * order is unaffected either way (a positive linear scale), so
+ * cellSortValue/meanMetric stay on the raw values untouched. */
 function scaledMetricValue(key: string, value: number): number {
-  return key === 'duration_s' ? value / 60 : value
+  if (key === 'duration_s') return value / 60
+  if (key === 'frac_created_selected') return value * 100
+  return value
+}
+
+/** Appended after the scaled, formatted number -- kept separate from
+ * scaledMetricValue so a metric can add a unit suffix without needing its
+ * own numeric rescale (or vice versa). */
+const METRIC_VALUE_SUFFIXES: Record<string, string> = {
+  frac_created_selected: '%',
+}
+
+function metricValueSuffix(key: string): string {
+  return METRIC_VALUE_SUFFIXES[key] ?? ''
 }
 
 function pickDefaultMetric(experiment: Experiment | undefined, cells: Cell[]): string | null {
@@ -263,7 +277,10 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
               </SelectContent>
             </Select>
           )}
-          <span className="font-mono">{scaledMetricValue(activeMetric, min).toFixed(3)}</span>
+          <span className="font-mono">
+            {scaledMetricValue(activeMetric, min).toFixed(3)}
+            {metricValueSuffix(activeMetric)}
+          </span>
           <div
             className="h-2 w-16 rounded-full"
             style={{
@@ -271,7 +288,10 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
                 'linear-gradient(to right, color-mix(in oklch, var(--muted) 100%, var(--primary) 10%), color-mix(in oklch, var(--muted) 100%, var(--primary) 90%))',
             }}
           />
-          <span className="font-mono">{scaledMetricValue(activeMetric, max).toFixed(3)}</span>
+          <span className="font-mono">
+            {scaledMetricValue(activeMetric, max).toFixed(3)}
+            {metricValueSuffix(activeMetric)}
+          </span>
         </div>
       </div>
       <div className={cn('grid gap-4', facetLevels.length > 1 && 'sm:grid-cols-2')}>
@@ -324,7 +344,7 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
                         title={cellData.count > 0 ? `n=${cellData.count}` : 'no cell for this combination'}
                       >
                         {cellData.value !== null
-                          ? scaledMetricValue(activeMetric, cellData.value).toFixed(3)
+                          ? `${scaledMetricValue(activeMetric, cellData.value).toFixed(3)}${metricValueSuffix(activeMetric)}`
                           : cellData.count > 0
                             ? '…'
                             : ''}
@@ -378,7 +398,9 @@ function SortableCellHead({ label, sortKey, sort, onSort }: { label: string; sor
 }
 
 function formatMetricValue(key: string, value: unknown): string {
-  return typeof value === 'number' ? scaledMetricValue(key, value).toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : '—'
+  if (typeof value !== 'number') return '—'
+  const formatted = scaledMetricValue(key, value).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+  return `${formatted}${metricValueSuffix(key)}`
 }
 
 /** A real table -- one column per derived factor, one per curated metric --
@@ -792,7 +814,7 @@ export function ExperimentDetailPage() {
                     <StatCard
                       icon={Trophy}
                       label={best ? formatMetricLabel(best.key) : 'Best metric'}
-                      value={best ? scaledMetricValue(best.key, best.value).toFixed(4) : '—'}
+                      value={best ? `${scaledMetricValue(best.key, best.value).toFixed(4)}${metricValueSuffix(best.key)}` : '—'}
                       accent={best ? 'var(--chart-3)' : undefined}
                     />
                   </>

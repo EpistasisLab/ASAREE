@@ -9,3 +9,4 @@ dist/
 *.egg-info/
 data/
 local_setup/
+local_files/

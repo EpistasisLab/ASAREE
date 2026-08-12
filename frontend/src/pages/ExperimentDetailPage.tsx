@@ -94,8 +94,9 @@ const PREFERRED_METRICS = ['average_precision', 'roc_auc', 'accuracy', 'f1']
 const METRIC_LABEL_OVERRIDES: Record<string, string> = {
   cost_usd: 'cost (USD)',
   duration_s: 'duration (minutes)',
-  n_created_selected: 'n engineered features',
-  frac_created_selected: '% engineered features selected',
+  n_features_created: 'n eng. feat.',
+  n_created_selected: 'n eng. feat. selected',
+  frac_created_selected: '% eng. feat. selected',
 }
 
 function formatMetricLabel(key: string): string {

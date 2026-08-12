@@ -94,7 +94,8 @@ const PREFERRED_METRICS = ['average_precision', 'roc_auc', 'accuracy', 'f1']
 const METRIC_LABEL_OVERRIDES: Record<string, string> = {
   cost_usd: 'cost (USD)',
   duration_s: 'duration (minutes)',
-  frac_created_selected: '% selected engineered',
+  n_created_selected: 'n engineered features',
+  frac_created_selected: '% engineered features selected',
 }
 
 function formatMetricLabel(key: string): string {
@@ -265,7 +266,7 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {availableMetrics.length > 1 && (
             <Select value={activeMetric} onValueChange={(v) => v !== null && setMetricKey(v)}>
-              <SelectTrigger size="sm" className="w-40">
+              <SelectTrigger size="sm" className="w-64">
                 <SelectValue>{(v: string) => formatMetricLabel(v)}</SelectValue>
               </SelectTrigger>
               <SelectContent>

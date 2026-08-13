@@ -16,24 +16,28 @@ import '@xyflow/react/dist/style.css'
 import { Play, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { protocolsApi } from '@/api/client'
-import { defaultAgentNodeData, defaultMcpToolNodeData } from '@/types/protocols'
-import type { AgentNodeData, McpToolNodeData, ProtocolGraph, ProtocolNode, ProtocolRun } from '@/types/protocols'
+import { defaultAgentNodeData, defaultCriticGateNodeData, defaultMcpToolNodeData } from '@/types/protocols'
+import type { AgentNodeData, CriticGateNodeData, McpToolNodeData, ProtocolGraph, ProtocolNode, ProtocolRun } from '@/types/protocols'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
 import { CanvasControls } from './CanvasControls'
+import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { DEFAULT_ZOOM } from './constants'
 import { findFreePosition } from './layout'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { AgentNode } from './nodes/AgentNode'
+import { CriticGateNode } from './nodes/CriticGateNode'
 import { McpToolNode } from './nodes/McpToolNode'
 
-const NODE_TYPES = { agent: AgentNode, mcp_tool: McpToolNode }
+const NODE_TYPES = { agent: AgentNode, mcp_tool: McpToolNode, critic_gate: CriticGateNode }
 const AUTOSAVE_DELAY_MS = 800
 const RUN_POLL_MS = 2000
 const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>(['completed', 'failed'])
 
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
-  return nodeType === 'mcp_tool' ? defaultMcpToolNodeData('New MCP Tool') : defaultAgentNodeData('New Agent')
+  if (nodeType === 'mcp_tool') return defaultMcpToolNodeData('New MCP Tool')
+  if (nodeType === 'critic_gate') return defaultCriticGateNodeData('New Critic Gate')
+  return defaultAgentNodeData('New Agent')
 }
 
 // crypto.randomUUID() only exists in a secure context (HTTPS or localhost) --
@@ -53,7 +57,7 @@ function toPersistedGraph(nodes: Node[], edges: Edge[]): ProtocolGraph {
       id: n.id,
       type: n.type ?? 'agent',
       position: n.position,
-      data: n.data as AgentNodeData | McpToolNodeData,
+      data: n.data as AgentNodeData | McpToolNodeData | CriticGateNodeData,
     })),
     edges: edges.map((e) => ({
       id: e.id,
@@ -138,7 +142,7 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null
 
-  function updateNodeData(nodeId: string, data: AgentNodeData | McpToolNodeData) {
+  function updateNodeData(nodeId: string, data: AgentNodeData | McpToolNodeData | CriticGateNodeData) {
     setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data } : n)))
   }
 
@@ -205,6 +209,13 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
       ) : selectedNode?.type === 'mcp_tool' ? (
         <McpToolNodeInspector
           node={{ id: selectedNode.id, type: 'mcp_tool', position: selectedNode.position, data: selectedNode.data as McpToolNodeData }}
+          onChange={updateNodeData}
+          onDelete={deleteNode}
+          onClose={() => setSelectedNodeId(null)}
+        />
+      ) : selectedNode?.type === 'critic_gate' ? (
+        <CriticGateNodeInspector
+          node={{ id: selectedNode.id, type: 'critic_gate', position: selectedNode.position, data: selectedNode.data as CriticGateNodeData }}
           onChange={updateNodeData}
           onDelete={deleteNode}
           onClose={() => setSelectedNodeId(null)}

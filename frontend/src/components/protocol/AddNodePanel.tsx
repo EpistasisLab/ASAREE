@@ -1,16 +1,23 @@
 import { useState } from 'react'
-import { Bot, Wrench, X } from 'lucide-react'
+import { Bot, ShieldCheck, Wrench, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
-// "dataset"/"critic_gate" still need real unbuilt backend meaning (a
-// dataset-binding decision, a genuinely new revision-loop primitive) --
-// adding entries here before that exists would be UI ceremony with no
-// backend behind it. "mcp_tool" earns its place now: GET /api/mcp-servers
-// already exists, so there's a real tool picker to back it.
+// "dataset" still needs real unbuilt backend meaning (a dataset-binding
+// decision) -- adding an entry before that exists would be UI ceremony with
+// no backend behind it. "mcp_tool" and "critic_gate" both earn their place:
+// GET /api/mcp-servers already backs the tool picker, and
+// services.protocol_execution._run_gated_worker already implements the
+// critic gate's revision loop.
 const NODE_CATALOG = [
   { type: 'agent', label: 'Agent', description: 'An LLM agent stage in the pipeline', icon: Bot },
   { type: 'mcp_tool', label: 'MCP Tool', description: 'Call one tool on a registered MCP server', icon: Wrench },
+  {
+    type: 'critic_gate',
+    label: 'Critic Gate',
+    description: "Reviews an upstream Agent's output, requests revisions",
+    icon: ShieldCheck,
+  },
 ]
 
 export function AddNodePanel({ onAdd, onClose }: { onAdd: (nodeType: string) => void; onClose: () => void }) {

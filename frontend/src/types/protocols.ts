@@ -17,7 +17,7 @@ export interface ProtocolNode {
   id: string
   type: string
   position: { x: number; y: number }
-  data: AgentNodeData | McpToolNodeData
+  data: AgentNodeData | McpToolNodeData | CriticGateNodeData
 }
 
 export interface ProtocolEdge {
@@ -101,6 +101,11 @@ export interface AgentNodeConfig {
 export interface AgentNodeData {
   label: string
   config: AgentNodeConfig
+  // field path (e.g. "model_config_data.temperature") -> factor name, for
+  // fields turned into experimental factors via "+ Make experimental
+  // factor". The factor itself lives on the linked experiment's own
+  // design_spec.factors -- this is only the node-side half of the binding.
+  factor_bindings?: Record<string, string>
   [key: string]: unknown
 }
 
@@ -141,4 +146,43 @@ export interface McpToolNodeData {
 
 export function defaultMcpToolNodeData(label = 'MCP Tool'): McpToolNodeData {
   return { label, config: { server_id: null, server_name: null, tool_name: null } }
+}
+
+// A "Critic Gate" reviews its single upstream Agent node's output and can
+// request revisions -- generalizes the notebook's run_stage revision loop
+// (src/asaree/services/protocol_execution.py's _run_gated_worker). No
+// tool_config/pattern_config/output_contract here: the critic never gets
+// tools, always runs single-pass, and its output_contract is hardcoded by
+// the executor (CRITIC_OUTPUT_CONTRACT) so it can always trust the verdict's
+// field names -- none of that is user-configurable.
+export interface CriticGateNodeConfig {
+  name: string
+  goal: string
+  description: string
+  system_prompt: string
+  model_config_data: AgentModelConfigData
+  enabled: boolean
+  max_revisions: number
+}
+
+export interface CriticGateNodeData {
+  label: string
+  config: CriticGateNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultCriticGateNodeData(label = 'Critic Gate'): CriticGateNodeData {
+  return {
+    label,
+    config: {
+      name: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'critic-gate',
+      goal: 'Review the given output and return an approval verdict with feedback.',
+      description: '',
+      system_prompt: '',
+      model_config_data: { provider: 'anthropic', model: 'claude-sonnet-5', temperature: 0.2, max_tokens: 4096 },
+      enabled: true,
+      max_revisions: 1, // matches the notebook's own MAX_REVISIONS
+    },
+  }
 }

@@ -12,6 +12,9 @@ import { OutputContractEditor } from './OutputContractEditor'
 import type { AgentNodeConfig, AgentNodeData, ProtocolNode } from '@/types/protocols'
 
 const EXECUTION_PATTERNS = ['reason_act', 'single_agent_baseline'] as const
+// Matches agentic_core.schemas.agent.ModelConfig.effort's exact literal
+// values -- for adaptive-thinking models that reject a plain temperature.
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const ACCENT = hashToChartHue('agent')
 
 // n8n opens a node's setup as a large centered floating window over the
@@ -124,7 +127,7 @@ export function AgentNodeInspector({
               />
             </div>
 
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label htmlFor="node-provider">Provider</Label>
                 <Input
@@ -141,6 +144,9 @@ export function AgentNodeInspector({
                   onChange={(e) => patchModelConfig({ model: e.target.value })}
                 />
               </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
               <div className="space-y-1.5">
                 <Label htmlFor="node-temperature">Temperature</Label>
                 <Input
@@ -152,6 +158,28 @@ export function AgentNodeInspector({
                   value={config.model_config_data.temperature ?? ''}
                   onChange={(e) => patchModelConfig({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
                 />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Effort</Label>
+                <Select
+                  value={config.model_config_data.effort ?? '__none__'}
+                  onValueChange={(value) => {
+                    if (value === null) return
+                    patchModelConfig({ effort: value === '__none__' ? null : value })
+                  }}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue>{(value: string) => (value === '__none__' ? '(none)' : value)}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">(none)</SelectItem>
+                    {EFFORT_LEVELS.map((level) => (
+                      <SelectItem key={level} value={level}>
+                        {level}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="node-max-tokens">Max tokens</Label>

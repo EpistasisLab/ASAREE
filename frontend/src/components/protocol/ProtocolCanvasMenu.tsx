@@ -229,15 +229,22 @@ export function ProtocolCanvasMenu({
 
   async function handleDownload() {
     const protocol = await protocolsApi.get(protocolId)
+    // Protocol.name is set once at creation ("Protocol: {experiment name
+    // at the time}") and never kept in sync when the experiment is renamed
+    // afterward -- the experiment's CURRENT name (already loaded above for
+    // the Archive/Delete/etc. actions) is what the user actually calls this
+    // thing, so that's what both the exported payload's name and the
+    // downloaded filename should reflect, not the stale internal one.
+    const displayName = experiment?.name ?? protocol.name
     // Serializes the canvas's own LIVE nodes/edges (props passed down from
     // ProtocolCanvas.tsx), not protocolsApi.get's possibly-stale graph --
     // reuses that file's own toPersistedGraph, the same helper its autosave uses.
-    const payload = { name: protocol.name, description: protocol.description, graph: toPersistedGraph(nodes, edges) }
+    const payload = { name: displayName, description: protocol.description, graph: toPersistedGraph(nodes, edges) }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${sanitizeFilename(protocol.name)}.json`
+    a.download = `${sanitizeFilename(displayName)}.json`
     a.click()
     URL.revokeObjectURL(url)
   }

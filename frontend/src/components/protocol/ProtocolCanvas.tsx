@@ -21,21 +21,45 @@ import { Button } from '@/components/ui/button'
 import { protocolsApi } from '@/api/client'
 import { toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
-import { defaultAgentNodeData, defaultCriticGateNodeData, defaultMcpToolNodeData } from '@/types/protocols'
-import type { AgentNodeData, CriticGateNodeData, McpToolNodeData, ProtocolGraph, ProtocolNode } from '@/types/protocols'
+import {
+  defaultAgentNodeData,
+  defaultCriticGateNodeData,
+  defaultLlmNodeData,
+  defaultMcpToolNodeData,
+  defaultMemoryNodeData,
+} from '@/types/protocols'
+import type {
+  AgentNodeData,
+  CriticGateNodeData,
+  LlmNodeData,
+  McpToolNodeData,
+  MemoryNodeData,
+  ProtocolGraph,
+  ProtocolNode,
+} from '@/types/protocols'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { DEFAULT_ZOOM } from './constants'
 import { findFreePosition } from './layout'
+import { LlmNodeInspector } from './LlmNodeInspector'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
+import { MemoryNodeInspector } from './MemoryNodeInspector'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
+import { LlmNode } from './nodes/LlmNode'
 import { McpToolNode } from './nodes/McpToolNode'
+import { MemoryNode } from './nodes/MemoryNode'
 import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 
-const NODE_TYPES = { agent: AgentNode, mcp_tool: McpToolNode, critic_gate: CriticGateNode }
+const NODE_TYPES = {
+  agent: AgentNode,
+  mcp_tool: McpToolNode,
+  critic_gate: CriticGateNode,
+  llm: LlmNode,
+  memory: MemoryNode,
+}
 const AUTOSAVE_DELAY_MS = 800
 const RUN_POLL_MS = 2000
 
@@ -57,6 +81,8 @@ function isNearViewport(a: Viewport, b: Viewport): boolean {
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData('New MCP Tool')
   if (nodeType === 'critic_gate') return defaultCriticGateNodeData('New Critic Gate')
+  if (nodeType === 'llm') return defaultLlmNodeData('New LLM')
+  if (nodeType === 'memory') return defaultMemoryNodeData('New Memory')
   return defaultAgentNodeData('New Agent')
 }
 
@@ -163,9 +189,38 @@ export function ProtocolCanvas({
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null
 
-  function updateNodeData(nodeId: string, data: AgentNodeData | McpToolNodeData | CriticGateNodeData) {
+  function updateNodeData(
+    nodeId: string,
+    data: AgentNodeData | McpToolNodeData | CriticGateNodeData | LlmNodeData | MemoryNodeData,
+  ) {
     setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data } : n)))
   }
+
+  // Client-side guardrail mirroring the backend's own connector validation
+  // (topological_order in services/protocol_execution.py is the real source
+  // of truth) -- an invalid drag never even completes, rather than
+  // completing and only failing later at Run time.
+  const isValidConnection = useCallback(
+    (connection: Edge | Connection) => {
+      const sourceNode = nodes.find((n) => n.id === connection.source)
+      const targetNode = nodes.find((n) => n.id === connection.target)
+      if (!sourceNode || !targetNode) return false
+      switch (connection.targetHandle) {
+        case 'llm':
+          return sourceNode.type === 'llm' && (targetNode.type === 'agent' || targetNode.type === 'critic_gate')
+        case 'tool':
+          return sourceNode.type === 'mcp_tool' && targetNode.type === 'agent'
+        case 'memory':
+          return sourceNode.type === 'memory' && targetNode.type === 'agent'
+        default:
+          // A plain "main" pipeline edge -- llm/memory nodes have no main
+          // handle to drag from in the first place, so this mostly guards
+          // against a stray connection, not real interactive use.
+          return sourceNode.type !== 'llm' && sourceNode.type !== 'memory'
+      }
+    },
+    [nodes],
+  )
 
   function deleteNode(nodeId: string) {
     setNodes((nds) => nds.filter((n) => n.id !== nodeId))
@@ -230,6 +285,7 @@ export function ProtocolCanvas({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          isValidConnection={isValidConnection}
           nodeTypes={NODE_TYPES}
           onNodeClick={() => setAddPanelOpen(false)}
           onNodeDoubleClick={(_, node) => {
@@ -305,6 +361,21 @@ export function ProtocolCanvas({
         <CriticGateNodeInspector
           node={{ id: selectedNode.id, type: 'critic_gate', position: selectedNode.position, data: selectedNode.data as CriticGateNodeData }}
           experimentId={experimentId}
+          onChange={updateNodeData}
+          onDelete={deleteNode}
+          onClose={() => setSelectedNodeId(null)}
+        />
+      ) : selectedNode?.type === 'llm' ? (
+        <LlmNodeInspector
+          node={{ id: selectedNode.id, type: 'llm', position: selectedNode.position, data: selectedNode.data as LlmNodeData }}
+          experimentId={experimentId}
+          onChange={updateNodeData}
+          onDelete={deleteNode}
+          onClose={() => setSelectedNodeId(null)}
+        />
+      ) : selectedNode?.type === 'memory' ? (
+        <MemoryNodeInspector
+          node={{ id: selectedNode.id, type: 'memory', position: selectedNode.position, data: selectedNode.data as MemoryNodeData }}
           onChange={updateNodeData}
           onDelete={deleteNode}
           onClose={() => setSelectedNodeId(null)}

@@ -1,14 +1,18 @@
 import { useState } from 'react'
-import { Bot, ShieldCheck, Wrench, X } from 'lucide-react'
+import { Bot, BrainCircuit, Cpu, ShieldCheck, Wrench, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 // "dataset" still needs real unbuilt backend meaning (a dataset-binding
 // decision) -- adding an entry before that exists would be UI ceremony with
-// no backend behind it. "mcp_tool" and "critic_gate" both earn their place:
-// GET /api/mcp-servers already backs the tool picker, and
+// no backend behind it. Every other entry here earns its place:
+// GET /api/mcp-servers already backs the tool picker,
 // services.protocol_execution._run_gated_worker already implements the
-// critic gate's revision loop.
+// critic gate's revision loop, and _resolve_llm_config/_resolve_tool_config
+// already resolve an agent's LLM/Tool connectors. "memory" is the one
+// exception -- it's real in the graph/validation sense (wiring it up is
+// accepted and does something visually) but has NO runtime effect yet,
+// documented on the node/inspector itself, not hidden from the catalog.
 const NODE_CATALOG = [
   { type: 'agent', label: 'Agent', description: 'An LLM agent stage in the pipeline', icon: Bot },
   { type: 'mcp_tool', label: 'MCP Tool', description: 'Call one tool on a registered MCP server', icon: Wrench },
@@ -17,6 +21,13 @@ const NODE_CATALOG = [
     label: 'Critic Gate',
     description: "Reviews an upstream Agent's output, requests revisions",
     icon: ShieldCheck,
+  },
+  { type: 'llm', label: 'LLM', description: "An Agent or Critic Gate's model, provider, and parameters", icon: Cpu },
+  {
+    type: 'memory',
+    label: 'Memory',
+    description: 'Not yet functional -- declares intent for a future phase',
+    icon: BrainCircuit,
   },
 ]
 

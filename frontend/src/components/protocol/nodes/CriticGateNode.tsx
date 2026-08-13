@@ -51,9 +51,20 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
       <p className="truncate font-mono text-[0.65rem] text-muted-foreground" title={summary}>
         {summary}
       </p>
+      {/* Same required LLM connector an agent node has -- no Tool/Memory
+          slots here, gates never use tools and are always single-pass. */}
+      <Handle
+        type="target"
+        id="llm"
+        position={Position.Bottom}
+        style={{ left: '30%' }}
+        title="LLM (required)"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
       <Handle
         type="source"
         position={Position.Bottom}
+        style={{ left: '70%' }}
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
     </div>

@@ -54,6 +54,20 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
         position={Position.Bottom}
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
+      {/* Dual-purpose: wired here (a normal main edge, above) this node is
+          still today's standalone pipeline step; wired via THIS handle
+          into an Agent's Tool connector instead, it becomes one of that
+          agent's own callable tools and isn't executed as its own step
+          (services.protocol_execution's _resolve_tool_config/
+          _tool_source_node_ids). A node can only be used one way at a
+          time -- topological_order rejects mixing both on one instance. */}
+      <Handle
+        type="source"
+        id="tool"
+        position={Position.Right}
+        title="Tool (plug into an Agent's Tool connector)"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
     </div>
   )
 }

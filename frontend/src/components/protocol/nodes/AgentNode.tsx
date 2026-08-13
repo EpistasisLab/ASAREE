@@ -47,9 +47,39 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
       <p className="truncate font-mono text-[0.65rem] text-muted-foreground" title={data.config?.goal || undefined}>
         {data.config?.goal || 'No goal set'}
       </p>
+      {/* n8n's own 3 bottom sub-connectors (Chat Model/Memory/Tool), adapted:
+          required LLM (exactly one), optional repeatable Tool, optional
+          max-1 Memory (visual scaffolding only -- see MemoryNodeData). The
+          main pipeline's own downstream handle moves to the right slot so
+          all 4 bottom dots stay visually distinct. */}
+      <Handle
+        type="target"
+        id="llm"
+        position={Position.Bottom}
+        style={{ left: '15%' }}
+        title="LLM (required)"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
+      <Handle
+        type="target"
+        id="tool"
+        position={Position.Bottom}
+        style={{ left: '38%' }}
+        title="Tool"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
+      <Handle
+        type="target"
+        id="memory"
+        position={Position.Bottom}
+        style={{ left: '61%' }}
+        title="Memory (not yet functional)"
+        className="!size-2 !border-2 !border-dashed !bg-background !border-[color:var(--card-accent)]"
+      />
       <Handle
         type="source"
         position={Position.Bottom}
+        style={{ left: '87%' }}
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
     </div>

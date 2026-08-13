@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Bot, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,9 +12,6 @@ import { OutputContractEditor } from './OutputContractEditor'
 import type { AgentNodeConfig, AgentNodeData, ProtocolNode } from '@/types/protocols'
 
 const EXECUTION_PATTERNS = ['reason_act', 'single_agent_baseline'] as const
-// Matches agentic_core.schemas.agent.ModelConfig.effort's exact literal
-// values -- for adaptive-thinking models that reject a plain temperature.
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const ACCENT = hashToChartHue('agent')
 
 // n8n opens a node's setup as a large centered floating window over the
@@ -46,12 +42,6 @@ export function AgentNodeInspector({
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
-  // Only the tool_config JSON textarea needs a local staging string (so an
-  // in-progress, momentarily-invalid edit doesn't get parsed on every
-  // keystroke); every other field commits straight through onChange.
-  const [toolConfigText, setToolConfigText] = useState<string | null>(null)
-  const [toolConfigError, setToolConfigError] = useState<string | null>(null)
-
   if (!node) return null
   const data = node.data
   const config = data.config
@@ -59,10 +49,6 @@ export function AgentNodeInspector({
 
   function patchConfig(patch: Partial<AgentNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
-  }
-
-  function patchModelConfig(patch: Partial<AgentNodeConfig['model_config_data']>) {
-    patchConfig({ model_config_data: { ...config.model_config_data, ...patch } })
   }
 
   function bindFactor(fieldPath: string, factorName: string) {
@@ -74,8 +60,6 @@ export function AgentNodeInspector({
     delete next[fieldPath]
     onChange(node!.id, { ...data, factor_bindings: next })
   }
-
-  const toolConfigJson = toolConfigText ?? JSON.stringify(config.tool_config, null, 2)
 
   return (
     <NodeInspectorDialog
@@ -148,102 +132,6 @@ export function AgentNodeInspector({
               </div>
             </FactorBindableField>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="node-provider">Provider</Label>
-                <Input
-                  id="node-provider"
-                  value={config.model_config_data.provider}
-                  onChange={(e) => patchModelConfig({ provider: e.target.value })}
-                />
-              </div>
-              <FactorBindableField
-                experimentId={experimentId}
-                fieldPath="config.model_config_data.model"
-                defaultLabel="Model"
-                levelType="string"
-                boundFactorName={bindings['config.model_config_data.model']}
-                onBind={(name) => bindFactor('config.model_config_data.model', name)}
-                onUnbind={() => unbindFactor('config.model_config_data.model')}
-              >
-                <div className="space-y-1.5">
-                  <Label htmlFor="node-model">Model</Label>
-                  <Input
-                    id="node-model"
-                    value={config.model_config_data.model}
-                    onChange={(e) => patchModelConfig({ model: e.target.value })}
-                  />
-                </div>
-              </FactorBindableField>
-            </div>
-
-            <div className="grid grid-cols-3 gap-4">
-              <FactorBindableField
-                experimentId={experimentId}
-                fieldPath="config.model_config_data.temperature"
-                defaultLabel="Temperature"
-                levelType="number"
-                boundFactorName={bindings['config.model_config_data.temperature']}
-                onBind={(name) => bindFactor('config.model_config_data.temperature', name)}
-                onUnbind={() => unbindFactor('config.model_config_data.temperature')}
-              >
-                <div className="space-y-1.5">
-                  <Label htmlFor="node-temperature">Temperature</Label>
-                  <Input
-                    id="node-temperature"
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    max="2"
-                    value={config.model_config_data.temperature ?? ''}
-                    onChange={(e) => patchModelConfig({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
-                  />
-                </div>
-              </FactorBindableField>
-              <FactorBindableField
-                experimentId={experimentId}
-                fieldPath="config.model_config_data.effort"
-                defaultLabel="Effort"
-                levelType="string"
-                boundFactorName={bindings['config.model_config_data.effort']}
-                onBind={(name) => bindFactor('config.model_config_data.effort', name)}
-                onUnbind={() => unbindFactor('config.model_config_data.effort')}
-              >
-                <div className="space-y-1.5">
-                  <Label>Effort</Label>
-                  <Select
-                    value={config.model_config_data.effort ?? '__none__'}
-                    onValueChange={(value) => {
-                      if (value === null) return
-                      patchModelConfig({ effort: value === '__none__' ? null : value })
-                    }}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue>{(value: string) => (value === '__none__' ? '(none)' : value)}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">(none)</SelectItem>
-                      {EFFORT_LEVELS.map((level) => (
-                        <SelectItem key={level} value={level}>
-                          {level}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </FactorBindableField>
-              <div className="space-y-1.5">
-                <Label htmlFor="node-max-tokens">Max tokens</Label>
-                <Input
-                  id="node-max-tokens"
-                  type="number"
-                  min="1"
-                  value={config.model_config_data.max_tokens}
-                  onChange={(e) => patchModelConfig({ max_tokens: Number(e.target.value) })}
-                />
-              </div>
-            </div>
-
             <div className="space-y-1.5">
               <Label>Execution pattern</Label>
               <Select
@@ -294,30 +182,6 @@ export function AgentNodeInspector({
             </div>
 
             <OutputContractEditor value={config.output_contract} onChange={(next) => patchConfig({ output_contract: next })} />
-
-            <div className="space-y-1.5">
-              <Label>Tool assignment (JSON)</Label>
-              <p className="text-xs text-muted-foreground">
-                <code className="font-mono">server_names</code>/<code className="font-mono">tool_names</code> -- no
-                dedicated picker yet (the MCP Tool node has one; reuse that pattern here later).
-              </p>
-              <Textarea
-                rows={5}
-                className="font-mono text-xs"
-                value={toolConfigJson}
-                onChange={(e) => {
-                  setToolConfigText(e.target.value)
-                  try {
-                    const parsed = JSON.parse(e.target.value)
-                    setToolConfigError(null)
-                    patchConfig({ tool_config: parsed })
-                  } catch {
-                    setToolConfigError('Invalid JSON')
-                  }
-                }}
-              />
-              {toolConfigError && <p className="text-xs text-destructive">{toolConfigError}</p>}
-            </div>
           </TabsContent>
       </Tabs>
     </NodeInspectorDialog>

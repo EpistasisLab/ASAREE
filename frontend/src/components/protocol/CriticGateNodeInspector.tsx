@@ -2,7 +2,6 @@ import { ShieldCheck, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
@@ -10,7 +9,6 @@ import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { CriticGateNodeConfig, CriticGateNodeData, ProtocolNode } from '@/types/protocols'
 
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const ACCENT = hashToChartHue('critic_gate')
 
 // Same fixed-size NodeInspectorDialog shell as AgentNodeInspector/
@@ -41,10 +39,6 @@ export function CriticGateNodeInspector({
 
   function patchConfig(patch: Partial<CriticGateNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
-  }
-
-  function patchModelConfig(patch: Partial<CriticGateNodeConfig['model_config_data']>) {
-    patchConfig({ model_config_data: { ...config.model_config_data, ...patch } })
   }
 
   function bindFactor(fieldPath: string, factorName: string) {
@@ -125,96 +119,15 @@ export function CriticGateNodeInspector({
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="gate-provider">Provider</Label>
-            <Input
-              id="gate-provider"
-              value={config.model_config_data.provider}
-              onChange={(e) => patchModelConfig({ provider: e.target.value })}
-            />
-          </div>
-          <FactorBindableField
-            experimentId={experimentId}
-            fieldPath="config.model_config_data.model"
-            defaultLabel="Model"
-            levelType="string"
-            boundFactorName={bindings['config.model_config_data.model']}
-            onBind={(name) => bindFactor('config.model_config_data.model', name)}
-            onUnbind={() => unbindFactor('config.model_config_data.model')}
-          >
-            <div className="space-y-1.5">
-              <Label htmlFor="gate-model">Model</Label>
-              <Input id="gate-model" value={config.model_config_data.model} onChange={(e) => patchModelConfig({ model: e.target.value })} />
-            </div>
-          </FactorBindableField>
-        </div>
-
-        <div className="grid grid-cols-3 gap-4">
-          <FactorBindableField
-            experimentId={experimentId}
-            fieldPath="config.model_config_data.temperature"
-            defaultLabel="Temperature"
-            levelType="number"
-            boundFactorName={bindings['config.model_config_data.temperature']}
-            onBind={(name) => bindFactor('config.model_config_data.temperature', name)}
-            onUnbind={() => unbindFactor('config.model_config_data.temperature')}
-          >
-            <div className="space-y-1.5">
-              <Label htmlFor="gate-temperature">Temperature</Label>
-              <Input
-                id="gate-temperature"
-                type="number"
-                step="0.1"
-                min="0"
-                max="2"
-                value={config.model_config_data.temperature ?? ''}
-                onChange={(e) => patchModelConfig({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
-              />
-            </div>
-          </FactorBindableField>
-          <FactorBindableField
-            experimentId={experimentId}
-            fieldPath="config.model_config_data.effort"
-            defaultLabel="Effort"
-            levelType="string"
-            boundFactorName={bindings['config.model_config_data.effort']}
-            onBind={(name) => bindFactor('config.model_config_data.effort', name)}
-            onUnbind={() => unbindFactor('config.model_config_data.effort')}
-          >
-            <div className="space-y-1.5">
-              <Label>Effort</Label>
-              <Select
-                value={config.model_config_data.effort ?? '__none__'}
-                onValueChange={(value) => {
-                  if (value === null) return
-                  patchModelConfig({ effort: value === '__none__' ? null : value })
-                }}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue>{(value: string) => (value === '__none__' ? '(none)' : value)}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">(none)</SelectItem>
-                  {EFFORT_LEVELS.map((level) => (
-                    <SelectItem key={level} value={level}>
-                      {level}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </FactorBindableField>
-          <div className="space-y-1.5">
-            <Label htmlFor="gate-max-revisions">Max revisions</Label>
-            <Input
-              id="gate-max-revisions"
-              type="number"
-              min="0"
-              value={config.max_revisions}
-              onChange={(e) => patchConfig({ max_revisions: Number(e.target.value) })}
-            />
-          </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="gate-max-revisions">Max revisions</Label>
+          <Input
+            id="gate-max-revisions"
+            type="number"
+            min="0"
+            value={config.max_revisions}
+            onChange={(e) => patchConfig({ max_revisions: Number(e.target.value) })}
+          />
         </div>
     </NodeInspectorDialog>
   )

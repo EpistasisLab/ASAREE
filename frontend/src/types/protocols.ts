@@ -17,7 +17,7 @@ export interface ProtocolNode {
   id: string
   type: string
   position: { x: number; y: number }
-  data: AgentNodeData | McpToolNodeData | CriticGateNodeData
+  data: AgentNodeData | McpToolNodeData | CriticGateNodeData | LlmNodeData | MemoryNodeData
 }
 
 export interface ProtocolEdge {
@@ -80,11 +80,6 @@ export interface AgentPatternConfig {
   pattern_params?: Record<string, Record<string, unknown>>
 }
 
-export interface AgentToolConfig {
-  server_names: string[]
-  tool_names: string[]
-}
-
 // Mirrors agentic-core's output_contract field-spec exactly: {"name":str,
 // "fields":[{"name","type","description"?,"default"?}]}. `type`/`default`
 // are free-form strings here (not a closed enum) -- the field-builder UI
@@ -107,9 +102,12 @@ export interface AgentNodeConfig {
   goal: string
   description: string
   system_prompt: string
-  model_config_data: AgentModelConfigData
+  // Model and tool assignment are no longer fields here -- resolved from
+  // the node's required LLM connector and optional Tool connector(s)
+  // instead (see LlmNodeData/McpToolNodeData and
+  // services.protocol_execution's _resolve_llm_config/_resolve_tool_config),
+  // matching n8n's own choice to keep these out of a node's own settings.
   pattern_config: AgentPatternConfig
-  tool_config: AgentToolConfig
   output_contract: OutputContract | null
   budget_limit_usd: number | null
   max_run_duration_seconds: number | null
@@ -141,9 +139,7 @@ export function defaultAgentNodeData(label = 'New Agent'): AgentNodeData {
       goal: '',
       description: '',
       system_prompt: '',
-      model_config_data: { provider: 'anthropic', model: 'claude-sonnet-5', temperature: 0.7, max_tokens: 4096 },
       pattern_config: { execution_pattern: 'reason_act', pattern_params: {} },
-      tool_config: { server_names: [], tool_names: [] },
       output_contract: null,
       budget_limit_usd: null,
       max_run_duration_seconds: null,
@@ -152,10 +148,16 @@ export function defaultAgentNodeData(label = 'New Agent'): AgentNodeData {
 }
 
 // An "MCP Tool" node references one tool on one registered MCP server --
-// resolved at execution time through agentic_core's mcp_service, the same
-// way an Agent node's tool_config.tool_names does (no ASAREE-side tool
-// registry to duplicate). server_name is carried alongside server_id purely
-// for display -- the id is the only thing execution will ever key off of.
+// resolved at execution time through agentic_core's mcp_service. Dual role:
+// wired inline via a normal edge it's a standalone pipeline step (unchanged
+// behavior); wired into an Agent's Tool connector it becomes one of that
+// agent's own callable tools instead, and isn't executed as its own step
+// (services.protocol_execution's _resolve_tool_config/_tool_source_node_ids).
+// A node can only be used one way at a time -- add a second MCP Tool node
+// for the other role. server_name is carried alongside server_id purely for
+// display -- the id is what standalone execution keys off of, the NAME is
+// what Tool-connector resolution keys off of (matches the `server_names`
+// field name AgentToolConfig always had).
 export interface McpToolNodeConfig {
   server_id: string | null
   server_name: string | null
@@ -186,7 +188,8 @@ export interface CriticGateNodeConfig {
   goal: string
   description: string
   system_prompt: string
-  model_config_data: AgentModelConfigData
+  // Resolved from the gate's required LLM connector instead, same as an
+  // agent node -- see AgentNodeConfig's own comment.
   // Critic gates have no separate top-level `active` flag the way
   // AgentNodeData/McpToolNodeData do -- this field already means exactly
   // that for the review step specifically ("off" = the worker's output
@@ -211,9 +214,54 @@ export function defaultCriticGateNodeData(label = 'Critic Gate'): CriticGateNode
       goal: 'Review the given output and return an approval verdict with feedback.',
       description: '',
       system_prompt: '',
-      model_config_data: { provider: 'anthropic', model: 'claude-sonnet-5', temperature: 0.2, max_tokens: 4096 },
       enabled: true,
       max_revisions: 1, // matches the notebook's own MAX_REVISIONS
     },
   }
+}
+
+// An "LLM" node -- ASAREE's own name for n8n's "Chat Model" connector
+// (matches this app's existing LLMProvider/LLMSetting vocabulary instead of
+// copying n8n's term). Supplies model/provider/temperature/effort/max_tokens
+// to whichever agent/critic_gate node(s) it's wired into via their required
+// LLM connector -- exactly today's AgentModelConfigData shape, just moved
+// out of the agent's own config into its own node so the agent's inspector
+// stays about the agent's behavior, not its model. One LLM node's output can
+// fan out to multiple agents (shared config, reused rather than
+// re-entered per agent) -- nothing prevents this, though there's no
+// dedicated UI for it yet.
+export type LlmNodeConfig = AgentModelConfigData
+
+export interface LlmNodeData {
+  label: string
+  config: LlmNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultLlmNodeData(label = 'LLM'): LlmNodeData {
+  return {
+    label,
+    config: { provider: 'anthropic', model: 'claude-sonnet-5', temperature: 0.7, max_tokens: 4096 },
+  }
+}
+
+// A "Memory" node -- visual/validation scaffolding only for now. Wiring one
+// into an Agent's Memory connector is accepted by the graph (validated the
+// same way LLM/Tool connectors are) but has NO effect on execution yet --
+// porting agentic-core's actual episodic-memory service (already built,
+// Postgres+pgvector-backed, just not yet invoked anywhere in ASAREE's own
+// execution path) is an explicit, deliberate follow-up, not this phase.
+export interface MemoryNodeConfig {
+  name: string
+}
+
+export interface MemoryNodeData {
+  label: string
+  config: MemoryNodeConfig
+  [key: string]: unknown
+}
+
+export function defaultMemoryNodeData(label = 'Memory'): MemoryNodeData {
+  return { label, config: { name: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'memory' } }
 }

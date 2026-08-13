@@ -47,17 +47,22 @@ export function NodeHoverToolbar({
   onRename,
 }: {
   nodeId: string
-  isActive: boolean
-  onToggleActive: () => void
+  // Absent for pure config-source nodes (llm/memory) -- "deactivate" has no
+  // meaning for something that isn't ever "run" in the first place, so
+  // those node types only get Delete + Rename, not the power icon.
+  isActive?: boolean
+  onToggleActive?: () => void
   onRename: () => void
 }) {
   const { deleteElements } = useReactFlow()
 
   return (
     <div className="absolute -top-8 left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-md border bg-card px-1 py-0.5 opacity-0 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20 transition-opacity group-hover:opacity-100">
-      <ToolbarIconButton label={isActive ? 'Deactivate' : 'Activate'} onClick={onToggleActive}>
-        {isActive ? <Power className="size-3" /> : <PowerOff className="size-3" />}
-      </ToolbarIconButton>
+      {isActive !== undefined && onToggleActive && (
+        <ToolbarIconButton label={isActive ? 'Deactivate' : 'Activate'} onClick={onToggleActive}>
+          {isActive ? <Power className="size-3" /> : <PowerOff className="size-3" />}
+        </ToolbarIconButton>
+      )}
       <ToolbarIconButton label="Delete" onClick={() => void deleteElements({ nodes: [{ id: nodeId }] })}>
         <Trash2 className="size-3" />
       </ToolbarIconButton>

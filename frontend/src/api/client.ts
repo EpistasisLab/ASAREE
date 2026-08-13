@@ -150,8 +150,17 @@ export const experimentsApi = {
   get: (id: string) => request<Experiment>(`/experiments/${id}`),
   create: (data: { name: string; description?: string | null }) =>
     request<Experiment>('/experiments', { method: 'POST', body: data }),
-  update: (id: string, data: { name?: string; description?: string | null; design_spec?: DesignSpec | null }) =>
-    request<Experiment>(`/experiments/${id}`, { method: 'PATCH', body: data }),
+  update: (
+    id: string,
+    data: {
+      name?: string
+      description?: string | null
+      design_spec?: DesignSpec | null
+      // A timestamp to archive, null to unarchive -- canvas menu's Archive/Unarchive action.
+      archived_at?: string | null
+    },
+  ) => request<Experiment>(`/experiments/${id}`, { method: 'PATCH', body: data }),
+  remove: (id: string) => request<void>(`/experiments/${id}`, { method: 'DELETE' }),
   listCells: (id: string) => request<Cell[]>(`/experiments/${id}/cells`),
   // Materializes one FactorialCellResult per combination of the experiment's
   // declared factors -- safe to call again after widening a factor's levels,

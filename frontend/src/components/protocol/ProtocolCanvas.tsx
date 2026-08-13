@@ -19,6 +19,7 @@ import '@xyflow/react/dist/style.css'
 import { Play, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { protocolsApi } from '@/api/client'
+import { toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import { defaultAgentNodeData, defaultCriticGateNodeData, defaultMcpToolNodeData } from '@/types/protocols'
 import type { AgentNodeData, CriticGateNodeData, McpToolNodeData, ProtocolGraph, ProtocolNode } from '@/types/protocols'
@@ -32,6 +33,7 @@ import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
 import { McpToolNode } from './nodes/McpToolNode'
+import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 
 const NODE_TYPES = { agent: AgentNode, mcp_tool: McpToolNode, critic_gate: CriticGateNode }
 const AUTOSAVE_DELAY_MS = 800
@@ -64,27 +66,6 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
 // restriction.
 function newNodeId(): string {
   return `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-}
-
-// Only durable fields are persisted -- xyflow annotates nodes/edges with
-// ephemeral UI state (selected, dragging, measured dimensions) that has no
-// meaning once reloaded from the backend.
-function toPersistedGraph(nodes: Node[], edges: Edge[]): ProtocolGraph {
-  return {
-    nodes: nodes.map((n) => ({
-      id: n.id,
-      type: n.type ?? 'agent',
-      position: n.position,
-      data: n.data as AgentNodeData | McpToolNodeData | CriticGateNodeData,
-    })),
-    edges: edges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      sourceHandle: e.sourceHandle,
-      targetHandle: e.targetHandle,
-    })),
-  }
 }
 
 export function ProtocolCanvas({
@@ -192,6 +173,54 @@ export function ProtocolCanvas({
     setSelectedNodeId(null)
   }
 
+  // "Import from file..." (ProtocolCanvasMenu) hands back the parsed
+  // {nodes, edges} -- merges them in ALONGSIDE the current canvas (not a
+  // replace, per the user's own read of n8n's import behavior): every
+  // imported node gets a fresh id (newNodeId is collision-safe by
+  // construction) and every edge's source/target is rewritten to match;
+  // the whole imported cluster is translated so its bounding-box center
+  // lands near the current viewport center (same placement logic addNode
+  // already uses), preserving the imported nodes' relative spacing to each
+  // other, then each translated position runs through the existing
+  // findFreePosition against both the current canvas's nodes AND whichever
+  // imported nodes have already been placed this same import -- so nothing
+  // lands exactly on top of an existing OR a freshly-imported node.
+  function handleImport(imported: ProtocolGraph) {
+    if (imported.nodes.length === 0) return
+    const idMap = new Map(imported.nodes.map((n) => [n.id, newNodeId()]))
+
+    const rect = paneRef.current?.getBoundingClientRect()
+    const center = rect
+      ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+      : { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+    const desiredCenter = screenToFlowPosition(center)
+
+    const xs = imported.nodes.map((n) => n.position.x)
+    const ys = imported.nodes.map((n) => n.position.y)
+    const bboxCenter = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 }
+    const offset = { x: desiredCenter.x - bboxCenter.x, y: desiredCenter.y - bboxCenter.y }
+
+    const placed: Node['position'][] = []
+    const newNodes: Node[] = imported.nodes.map((n) => {
+      const translated = { x: n.position.x + offset.x, y: n.position.y + offset.y }
+      const position = findFreePosition([...nodes.map((existing) => existing.position), ...placed], translated)
+      placed.push(position)
+      return { id: idMap.get(n.id)!, type: n.type, position, data: n.data }
+    })
+    const newEdges: Edge[] = imported.edges
+      .filter((e) => idMap.has(e.source) && idMap.has(e.target))
+      .map((e) => ({
+        id: newNodeId(),
+        source: idMap.get(e.source)!,
+        target: idMap.get(e.target)!,
+        sourceHandle: e.sourceHandle,
+        targetHandle: e.targetHandle,
+      }))
+
+    setNodes((nds) => nds.concat(newNodes))
+    setEdges((eds) => eds.concat(newEdges))
+  }
+
   return (
     <div className="flex h-full w-full">
       <div ref={paneRef} className="relative flex-1">
@@ -245,6 +274,13 @@ export function ProtocolCanvas({
           >
             <Plus className="size-4" />
           </Button>
+          <ProtocolCanvasMenu
+            protocolId={protocolId}
+            experimentId={experimentId}
+            nodes={nodes}
+            edges={edges}
+            onImport={handleImport}
+          />
         </div>
       </div>
       {addPanelOpen ? (

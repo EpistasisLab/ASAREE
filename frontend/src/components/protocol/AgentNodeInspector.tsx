@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
+import { OutputContractEditor } from './OutputContractEditor'
 import type { AgentNodeConfig, AgentNodeData, ProtocolNode } from '@/types/protocols'
 
 const EXECUTION_PATTERNS = ['reason_act', 'single_agent_baseline'] as const
@@ -37,11 +38,11 @@ export function AgentNodeInspector({
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
-  // Only "Advanced (JSON)" fields need a local staging string (so an
+  // Only the tool_config JSON textarea needs a local staging string (so an
   // in-progress, momentarily-invalid edit doesn't get parsed on every
   // keystroke); every other field commits straight through onChange.
-  const [advancedText, setAdvancedText] = useState<string | null>(null)
-  const [advancedError, setAdvancedError] = useState<string | null>(null)
+  const [toolConfigText, setToolConfigText] = useState<string | null>(null)
+  const [toolConfigError, setToolConfigError] = useState<string | null>(null)
 
   if (!node) return null
   const data = node.data
@@ -55,7 +56,7 @@ export function AgentNodeInspector({
     patchConfig({ model_config_data: { ...config.model_config_data, ...patch } })
   }
 
-  const advanced = advancedText ?? JSON.stringify({ tool_config: config.tool_config, output_contract: config.output_contract }, null, 2)
+  const toolConfigJson = toolConfigText ?? JSON.stringify(config.tool_config, null, 2)
 
   return (
     <Dialog
@@ -213,31 +214,30 @@ export function AgentNodeInspector({
               </div>
             </div>
 
+            <OutputContractEditor value={config.output_contract} onChange={(next) => patchConfig({ output_contract: next })} />
+
             <div className="space-y-1.5">
-              <Label>Tool assignment / output contract (JSON)</Label>
+              <Label>Tool assignment (JSON)</Label>
               <p className="text-xs text-muted-foreground">
-                <code className="font-mono">tool_config</code> (MCP server/tool names) and{' '}
-                <code className="font-mono">output_contract</code> (structured extraction) -- no dedicated editors yet.
+                <code className="font-mono">server_names</code>/<code className="font-mono">tool_names</code> -- no
+                dedicated picker yet (the MCP Tool node has one; reuse that pattern here later).
               </p>
               <Textarea
-                rows={10}
+                rows={5}
                 className="font-mono text-xs"
-                value={advanced}
+                value={toolConfigJson}
                 onChange={(e) => {
-                  setAdvancedText(e.target.value)
+                  setToolConfigText(e.target.value)
                   try {
                     const parsed = JSON.parse(e.target.value)
-                    setAdvancedError(null)
-                    patchConfig({
-                      tool_config: parsed.tool_config ?? config.tool_config,
-                      output_contract: parsed.output_contract ?? null,
-                    })
+                    setToolConfigError(null)
+                    patchConfig({ tool_config: parsed })
                   } catch {
-                    setAdvancedError('Invalid JSON')
+                    setToolConfigError('Invalid JSON')
                   }
                 }}
               />
-              {advancedError && <p className="text-xs text-destructive">{advancedError}</p>}
+              {toolConfigError && <p className="text-xs text-destructive">{toolConfigError}</p>}
             </div>
           </TabsContent>
         </Tabs>

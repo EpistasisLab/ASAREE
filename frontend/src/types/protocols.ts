@@ -49,6 +49,23 @@ export interface AgentToolConfig {
   tool_names: string[]
 }
 
+// Mirrors agentic-core's output_contract field-spec exactly: {"name":str,
+// "fields":[{"name","type","description"?,"default"?}]}. `type`/`default`
+// are free-form strings here (not a closed enum) -- the field-builder UI
+// offers a curated set of common JSON-ish types, but round-trips whatever a
+// hand-edited value already has instead of clobbering it.
+export interface OutputContractField {
+  name: string
+  type: string
+  description?: string
+  default?: string
+}
+
+export interface OutputContract {
+  name: string
+  fields: OutputContractField[]
+}
+
 export interface AgentNodeConfig {
   name: string
   goal: string
@@ -57,7 +74,7 @@ export interface AgentNodeConfig {
   model_config_data: AgentModelConfigData
   pattern_config: AgentPatternConfig
   tool_config: AgentToolConfig
-  output_contract: Record<string, unknown> | null
+  output_contract: OutputContract | null
   budget_limit_usd: number | null
   max_run_duration_seconds: number | null
 }

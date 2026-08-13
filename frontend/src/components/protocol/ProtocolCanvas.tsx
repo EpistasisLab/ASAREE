@@ -69,7 +69,15 @@ function toPersistedGraph(nodes: Node[], edges: Edge[]): ProtocolGraph {
   }
 }
 
-export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: string; initialGraph: ProtocolGraph }) {
+export function ProtocolCanvas({
+  protocolId,
+  experimentId,
+  initialGraph,
+}: {
+  protocolId: string
+  experimentId: string | null
+  initialGraph: ProtocolGraph
+}) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialGraph.nodes as Node[])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialGraph.edges as Edge[])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -216,6 +224,7 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
       ) : selectedNode?.type === 'critic_gate' ? (
         <CriticGateNodeInspector
           node={{ id: selectedNode.id, type: 'critic_gate', position: selectedNode.position, data: selectedNode.data as CriticGateNodeData }}
+          experimentId={experimentId}
           onChange={updateNodeData}
           onDelete={deleteNode}
           onClose={() => setSelectedNodeId(null)}
@@ -224,6 +233,7 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
         selectedNode && (
           <AgentNodeInspector
             node={{ id: selectedNode.id, type: selectedNode.type ?? 'agent', position: selectedNode.position, data: selectedNode.data as AgentNodeData }}
+            experimentId={experimentId}
             onChange={updateNodeData}
             onDelete={deleteNode}
             onClose={() => setSelectedNodeId(null)}

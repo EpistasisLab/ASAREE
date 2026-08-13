@@ -12,7 +12,7 @@ import type {
 } from '@/types/auth'
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
-import type { Cell, Experiment } from '@/types/experiments'
+import type { Cell, DesignSpec, Experiment } from '@/types/experiments'
 import type { LLMProvider, LLMSetting } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
@@ -149,9 +149,13 @@ export const experimentsApi = {
   get: (id: string) => request<Experiment>(`/experiments/${id}`),
   create: (data: { name: string; description?: string | null }) =>
     request<Experiment>('/experiments', { method: 'POST', body: data }),
-  update: (id: string, data: { name?: string; description?: string | null }) =>
+  update: (id: string, data: { name?: string; description?: string | null; design_spec?: DesignSpec | null }) =>
     request<Experiment>(`/experiments/${id}`, { method: 'PATCH', body: data }),
   listCells: (id: string) => request<Cell[]>(`/experiments/${id}/cells`),
+  // Materializes one FactorialCellResult per combination of the experiment's
+  // declared factors -- safe to call again after widening a factor's levels,
+  // existing cells are untouched (see services.design_generation).
+  generateDesign: (id: string) => request<Cell[]>(`/experiments/${id}/generate-design`, { method: 'POST' }),
 }
 
 export const protocolsApi = {

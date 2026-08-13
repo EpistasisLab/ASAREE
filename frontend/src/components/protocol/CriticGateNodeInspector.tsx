@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
+import { FactorBindableField } from './FactorBindableField'
 import type { CriticGateNodeConfig, CriticGateNodeData, ProtocolNode } from '@/types/protocols'
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
@@ -19,11 +20,13 @@ const ACCENT = hashToChartHue('critic_gate')
 // unlike an Agent node's much larger config surface.
 export function CriticGateNodeInspector({
   node,
+  experimentId,
   onChange,
   onDelete,
   onClose,
 }: {
   node: (ProtocolNode & { data: CriticGateNodeData }) | null
+  experimentId: string | null
   onChange: (nodeId: string, data: CriticGateNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
@@ -31,6 +34,7 @@ export function CriticGateNodeInspector({
   if (!node) return null
   const data = node.data
   const config = data.config
+  const bindings = data.factor_bindings ?? {}
 
   function patchConfig(patch: Partial<CriticGateNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
@@ -38,6 +42,16 @@ export function CriticGateNodeInspector({
 
   function patchModelConfig(patch: Partial<CriticGateNodeConfig['model_config_data']>) {
     patchConfig({ model_config_data: { ...config.model_config_data, ...patch } })
+  }
+
+  function bindFactor(fieldPath: string, factorName: string) {
+    onChange(node!.id, { ...data, factor_bindings: { ...bindings, [fieldPath]: factorName } })
+  }
+
+  function unbindFactor(fieldPath: string) {
+    const next = { ...bindings }
+    delete next[fieldPath]
+    onChange(node!.id, { ...data, factor_bindings: next })
   }
 
   return (
@@ -63,15 +77,25 @@ export function CriticGateNodeInspector({
           </div>
         </div>
 
-        <div className="flex items-center justify-between rounded-lg border px-3 py-2">
-          <div>
-            <Label htmlFor="gate-enabled">Enabled</Label>
-            <p className="text-xs text-muted-foreground">
-              Off: the upstream agent's output passes straight through, no review, no revisions.
-            </p>
+        <FactorBindableField
+          experimentId={experimentId}
+          fieldPath="config.enabled"
+          defaultLabel="Critic enabled"
+          levelType="boolean"
+          boundFactorName={bindings['config.enabled']}
+          onBind={(name) => bindFactor('config.enabled', name)}
+          onUnbind={() => unbindFactor('config.enabled')}
+        >
+          <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+            <div>
+              <Label htmlFor="gate-enabled">Enabled</Label>
+              <p className="text-xs text-muted-foreground">
+                Off: the upstream agent's output passes straight through, no review, no revisions.
+              </p>
+            </div>
+            <Switch id="gate-enabled" checked={config.enabled} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
           </div>
-          <Switch id="gate-enabled" checked={config.enabled} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
-        </div>
+        </FactorBindableField>
 
         <div className="space-y-1.5">
           <Label htmlFor="gate-label">Label</Label>
@@ -112,47 +136,77 @@ export function CriticGateNodeInspector({
               onChange={(e) => patchModelConfig({ provider: e.target.value })}
             />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="gate-model">Model</Label>
-            <Input id="gate-model" value={config.model_config_data.model} onChange={(e) => patchModelConfig({ model: e.target.value })} />
-          </div>
+          <FactorBindableField
+            experimentId={experimentId}
+            fieldPath="config.model_config_data.model"
+            defaultLabel="Model"
+            levelType="string"
+            boundFactorName={bindings['config.model_config_data.model']}
+            onBind={(name) => bindFactor('config.model_config_data.model', name)}
+            onUnbind={() => unbindFactor('config.model_config_data.model')}
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="gate-model">Model</Label>
+              <Input id="gate-model" value={config.model_config_data.model} onChange={(e) => patchModelConfig({ model: e.target.value })} />
+            </div>
+          </FactorBindableField>
         </div>
 
         <div className="grid grid-cols-3 gap-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="gate-temperature">Temperature</Label>
-            <Input
-              id="gate-temperature"
-              type="number"
-              step="0.1"
-              min="0"
-              max="2"
-              value={config.model_config_data.temperature ?? ''}
-              onChange={(e) => patchModelConfig({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Effort</Label>
-            <Select
-              value={config.model_config_data.effort ?? '__none__'}
-              onValueChange={(value) => {
-                if (value === null) return
-                patchModelConfig({ effort: value === '__none__' ? null : value })
-              }}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue>{(value: string) => (value === '__none__' ? '(none)' : value)}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">(none)</SelectItem>
-                {EFFORT_LEVELS.map((level) => (
-                  <SelectItem key={level} value={level}>
-                    {level}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <FactorBindableField
+            experimentId={experimentId}
+            fieldPath="config.model_config_data.temperature"
+            defaultLabel="Temperature"
+            levelType="number"
+            boundFactorName={bindings['config.model_config_data.temperature']}
+            onBind={(name) => bindFactor('config.model_config_data.temperature', name)}
+            onUnbind={() => unbindFactor('config.model_config_data.temperature')}
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="gate-temperature">Temperature</Label>
+              <Input
+                id="gate-temperature"
+                type="number"
+                step="0.1"
+                min="0"
+                max="2"
+                value={config.model_config_data.temperature ?? ''}
+                onChange={(e) => patchModelConfig({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
+              />
+            </div>
+          </FactorBindableField>
+          <FactorBindableField
+            experimentId={experimentId}
+            fieldPath="config.model_config_data.effort"
+            defaultLabel="Effort"
+            levelType="string"
+            boundFactorName={bindings['config.model_config_data.effort']}
+            onBind={(name) => bindFactor('config.model_config_data.effort', name)}
+            onUnbind={() => unbindFactor('config.model_config_data.effort')}
+          >
+            <div className="space-y-1.5">
+              <Label>Effort</Label>
+              <Select
+                value={config.model_config_data.effort ?? '__none__'}
+                onValueChange={(value) => {
+                  if (value === null) return
+                  patchModelConfig({ effort: value === '__none__' ? null : value })
+                }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue>{(value: string) => (value === '__none__' ? '(none)' : value)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">(none)</SelectItem>
+                  {EFFORT_LEVELS.map((level) => (
+                    <SelectItem key={level} value={level}>
+                      {level}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </FactorBindableField>
           <div className="space-y-1.5">
             <Label htmlFor="gate-max-revisions">Max revisions</Label>
             <Input

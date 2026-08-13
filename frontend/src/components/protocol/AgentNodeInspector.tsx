@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
+import { FactorBindableField } from './FactorBindableField'
 import { OutputContractEditor } from './OutputContractEditor'
 import type { AgentNodeConfig, AgentNodeData, ProtocolNode } from '@/types/protocols'
 
@@ -32,11 +33,13 @@ const ACCENT = hashToChartHue('agent')
 // kept unbuilt node types out of the palette.
 export function AgentNodeInspector({
   node,
+  experimentId,
   onChange,
   onDelete,
   onClose,
 }: {
   node: (ProtocolNode & { data: AgentNodeData }) | null
+  experimentId: string | null
   onChange: (nodeId: string, data: AgentNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
@@ -50,6 +53,7 @@ export function AgentNodeInspector({
   if (!node) return null
   const data = node.data
   const config = data.config
+  const bindings = data.factor_bindings ?? {}
 
   function patchConfig(patch: Partial<AgentNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
@@ -57,6 +61,16 @@ export function AgentNodeInspector({
 
   function patchModelConfig(patch: Partial<AgentNodeConfig['model_config_data']>) {
     patchConfig({ model_config_data: { ...config.model_config_data, ...patch } })
+  }
+
+  function bindFactor(fieldPath: string, factorName: string) {
+    onChange(node!.id, { ...data, factor_bindings: { ...bindings, [fieldPath]: factorName } })
+  }
+
+  function unbindFactor(fieldPath: string) {
+    const next = { ...bindings }
+    delete next[fieldPath]
+    onChange(node!.id, { ...data, factor_bindings: next })
   }
 
   const toolConfigJson = toolConfigText ?? JSON.stringify(config.tool_config, null, 2)
@@ -116,16 +130,26 @@ export function AgentNodeInspector({
               />
             </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="node-system-prompt">System prompt</Label>
-              <Textarea
-                id="node-system-prompt"
-                rows={6}
-                className="font-mono text-xs"
-                value={config.system_prompt}
-                onChange={(e) => patchConfig({ system_prompt: e.target.value })}
-              />
-            </div>
+            <FactorBindableField
+              experimentId={experimentId}
+              fieldPath="config.system_prompt"
+              defaultLabel="System prompt"
+              levelType="string"
+              boundFactorName={bindings['config.system_prompt']}
+              onBind={(name) => bindFactor('config.system_prompt', name)}
+              onUnbind={() => unbindFactor('config.system_prompt')}
+            >
+              <div className="w-full space-y-1.5">
+                <Label htmlFor="node-system-prompt">System prompt</Label>
+                <Textarea
+                  id="node-system-prompt"
+                  rows={6}
+                  className="font-mono text-xs"
+                  value={config.system_prompt}
+                  onChange={(e) => patchConfig({ system_prompt: e.target.value })}
+                />
+              </div>
+            </FactorBindableField>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
@@ -136,51 +160,81 @@ export function AgentNodeInspector({
                   onChange={(e) => patchModelConfig({ provider: e.target.value })}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="node-model">Model</Label>
-                <Input
-                  id="node-model"
-                  value={config.model_config_data.model}
-                  onChange={(e) => patchModelConfig({ model: e.target.value })}
-                />
-              </div>
+              <FactorBindableField
+                experimentId={experimentId}
+                fieldPath="config.model_config_data.model"
+                defaultLabel="Model"
+                levelType="string"
+                boundFactorName={bindings['config.model_config_data.model']}
+                onBind={(name) => bindFactor('config.model_config_data.model', name)}
+                onUnbind={() => unbindFactor('config.model_config_data.model')}
+              >
+                <div className="space-y-1.5">
+                  <Label htmlFor="node-model">Model</Label>
+                  <Input
+                    id="node-model"
+                    value={config.model_config_data.model}
+                    onChange={(e) => patchModelConfig({ model: e.target.value })}
+                  />
+                </div>
+              </FactorBindableField>
             </div>
 
             <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="node-temperature">Temperature</Label>
-                <Input
-                  id="node-temperature"
-                  type="number"
-                  step="0.1"
-                  min="0"
-                  max="2"
-                  value={config.model_config_data.temperature ?? ''}
-                  onChange={(e) => patchModelConfig({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Effort</Label>
-                <Select
-                  value={config.model_config_data.effort ?? '__none__'}
-                  onValueChange={(value) => {
-                    if (value === null) return
-                    patchModelConfig({ effort: value === '__none__' ? null : value })
-                  }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue>{(value: string) => (value === '__none__' ? '(none)' : value)}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">(none)</SelectItem>
-                    {EFFORT_LEVELS.map((level) => (
-                      <SelectItem key={level} value={level}>
-                        {level}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              <FactorBindableField
+                experimentId={experimentId}
+                fieldPath="config.model_config_data.temperature"
+                defaultLabel="Temperature"
+                levelType="number"
+                boundFactorName={bindings['config.model_config_data.temperature']}
+                onBind={(name) => bindFactor('config.model_config_data.temperature', name)}
+                onUnbind={() => unbindFactor('config.model_config_data.temperature')}
+              >
+                <div className="space-y-1.5">
+                  <Label htmlFor="node-temperature">Temperature</Label>
+                  <Input
+                    id="node-temperature"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="2"
+                    value={config.model_config_data.temperature ?? ''}
+                    onChange={(e) => patchModelConfig({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
+                  />
+                </div>
+              </FactorBindableField>
+              <FactorBindableField
+                experimentId={experimentId}
+                fieldPath="config.model_config_data.effort"
+                defaultLabel="Effort"
+                levelType="string"
+                boundFactorName={bindings['config.model_config_data.effort']}
+                onBind={(name) => bindFactor('config.model_config_data.effort', name)}
+                onUnbind={() => unbindFactor('config.model_config_data.effort')}
+              >
+                <div className="space-y-1.5">
+                  <Label>Effort</Label>
+                  <Select
+                    value={config.model_config_data.effort ?? '__none__'}
+                    onValueChange={(value) => {
+                      if (value === null) return
+                      patchModelConfig({ effort: value === '__none__' ? null : value })
+                    }}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue>{(value: string) => (value === '__none__' ? '(none)' : value)}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">(none)</SelectItem>
+                      {EFFORT_LEVELS.map((level) => (
+                        <SelectItem key={level} value={level}>
+                          {level}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </FactorBindableField>
               <div className="space-y-1.5">
                 <Label htmlFor="node-max-tokens">Max tokens</Label>
                 <Input

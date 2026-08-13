@@ -1,10 +1,20 @@
+export interface DesignFactor {
+  name: string
+  levels: unknown[]
+}
+
+export interface DesignSpec {
+  factors?: DesignFactor[]
+  [key: string]: unknown
+}
+
 export interface Experiment {
   id: string
   name: string
   description: string | null
   design_type: string
   task_brief: Record<string, unknown> | null
-  design_spec: Record<string, unknown> | null
+  design_spec: DesignSpec | null
   dataset_id: string | null
   created_at: string
 }

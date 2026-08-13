@@ -19,6 +19,7 @@ import '@xyflow/react/dist/style.css'
 import { Play, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { protocolsApi } from '@/api/client'
+import { newNodeId } from '@/lib/nodeId'
 import { toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import {
@@ -84,14 +85,6 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'llm') return defaultLlmNodeData('New LLM')
   if (nodeType === 'memory') return defaultMemoryNodeData('New Memory')
   return defaultAgentNodeData('New Agent')
-}
-
-// crypto.randomUUID() only exists in a secure context (HTTPS or localhost) --
-// throws in plain-HTTP dev setups reached via a LAN IP/forwarded hostname,
-// which silently aborted addNode before setNodes ever ran. This has no such
-// restriction.
-function newNodeId(): string {
-  return `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 export function ProtocolCanvas({

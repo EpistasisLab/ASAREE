@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { cardAccent, hashToChartHue } from '@/lib/utils'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { CriticGateNodeData, NodeRunStatus } from '@/types/protocols'
+import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
 import { EditableNodeLabel } from './EditableNodeLabel'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
@@ -63,6 +64,7 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left="30%">LLM</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="llm" left="30%" />
       <Handle
         type="source"
         position={Position.Bottom}

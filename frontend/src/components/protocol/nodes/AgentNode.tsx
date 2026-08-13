@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { cardAccent, hashToChartHue } from '@/lib/utils'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { AgentNodeData, NodeRunStatus } from '@/types/protocols'
+import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
 import { EditableNodeLabel } from './EditableNodeLabel'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
@@ -62,6 +63,7 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left="15%">LLM</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="llm" left="15%" />
       <Handle
         type="target"
         id="tool"
@@ -71,6 +73,7 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left="38%">Tool</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="tool" left="38%" allowMultiple />
       <Handle
         type="target"
         id="memory"
@@ -80,6 +83,7 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
         className="!size-2 !border-2 !border-dashed !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left="61%">Memory</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="memory" left="61%" />
       <Handle
         type="source"
         position={Position.Bottom}

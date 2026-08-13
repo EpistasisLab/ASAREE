@@ -16,8 +16,9 @@ import '@xyflow/react/dist/style.css'
 import { Play, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { protocolsApi } from '@/api/client'
+import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import { defaultAgentNodeData, defaultCriticGateNodeData, defaultMcpToolNodeData } from '@/types/protocols'
-import type { AgentNodeData, CriticGateNodeData, McpToolNodeData, ProtocolGraph, ProtocolNode, ProtocolRun } from '@/types/protocols'
+import type { AgentNodeData, CriticGateNodeData, McpToolNodeData, ProtocolGraph, ProtocolNode } from '@/types/protocols'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
 import { CanvasControls } from './CanvasControls'
@@ -32,7 +33,6 @@ import { McpToolNode } from './nodes/McpToolNode'
 const NODE_TYPES = { agent: AgentNode, mcp_tool: McpToolNode, critic_gate: CriticGateNode }
 const AUTOSAVE_DELAY_MS = 800
 const RUN_POLL_MS = 2000
-const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>(['completed', 'failed'])
 
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData('New MCP Tool')

@@ -15,7 +15,7 @@ import type { Dataset } from '@/types/datasets'
 import type { Cell, DesignSpec, Experiment } from '@/types/experiments'
 import type { LLMProvider, LLMSetting } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
-import type { Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
+import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
 import type { Run } from '@/types/runs'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
@@ -171,6 +171,11 @@ export const protocolsApi = {
   // status "pending"; poll getRun for progress.
   run: (id: string) => request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST' }),
   getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
+  listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
+  // "Run all cells" -- 422 if there's no linked experiment or the graph
+  // doesn't have exactly one final node; fans out one ProtocolRun per
+  // not-yet-scored FactorialCellResult, each polled via listRuns.
+  runCells: (id: string) => request<CellRunBatch>(`/protocols/${id}/cell-runs`, { method: 'POST' }),
 }
 
 export const datasetsApi = {

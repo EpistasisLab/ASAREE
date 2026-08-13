@@ -1,4 +1,8 @@
-import type { NodeRunStatus } from '@/types/protocols'
+import type { NodeRunStatus, ProtocolRun } from '@/types/protocols'
+
+// Shared by ProtocolCanvas's own single-run polling and the "run all cells"
+// batch polling on ProtocolCanvasPage -- one definition of "done" for both.
+export const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>(['completed', 'failed'])
 
 // Same status-color language the app already uses for cell-scoring progress
 // (cellsStatusAccent in lib/experiment.ts): amber = in progress/queued, cyan

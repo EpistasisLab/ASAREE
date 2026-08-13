@@ -43,8 +43,25 @@ export interface ProtocolRun {
   status: 'pending' | 'running' | 'completed' | 'failed'
   node_runs: Record<string, NodeRunState>
   error: string | null
+  // Both null for a plain graph run. Set together only for a run created by
+  // "run all cells" (POST /protocols/{id}/cell-runs) -- factor_values is the
+  // cell's own factor_values, substituted into the graph's factor-bound
+  // fields before execution; cell_label is which FactorialCellResult the
+  // result gets written back to.
+  cell_label: string | null
+  factor_values: Record<string, unknown> | null
   created_at: string
   updated_at: string
+}
+
+// One "run all cells" trigger fans out into these -- one ProtocolRun per
+// not-yet-scored cell. skipped is how many cells already had metric_values
+// and were left alone (resume semantics, same as generate-design's own
+// idempotency).
+export interface CellRunBatch {
+  protocol_run_ids: string[]
+  cell_labels: string[]
+  skipped: number
 }
 
 // Mirrors CreateAgentRequest (src/asaree/api/agents.py) field-for-field so a

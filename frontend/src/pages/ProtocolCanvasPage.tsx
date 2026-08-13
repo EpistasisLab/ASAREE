@@ -8,8 +8,12 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { experimentsApi, protocolsApi } from '@/api/client'
+import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
+import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import type { Experiment } from '@/types/experiments'
+import type { ProtocolRun } from '@/types/protocols'
+
+const RUN_POLL_MS = 2000
 
 // Click-to-rename, n8n's own pattern for a workflow created with a
 // placeholder name: no gate before creating, edit the name in place once
@@ -102,6 +106,72 @@ function DesignPreview({ experiment }: { experiment: Experiment }) {
   )
 }
 
+// Triggers POST /protocols/{id}/cell-runs (one ProtocolRun per not-yet-scored
+// cell, factor_values substituted at execution time -- see
+// services.protocol_execution.plan_cell_runs) and polls the existing
+// GET /protocols/{id}/runs, filtered to just the runs this click created,
+// until every one is terminal -- reusing protocolsApi.listRuns rather than
+// adding a new aggregate polling endpoint. Disabled once there are 0 cells
+// yet (nothing generated to run against).
+function RunAllCellsButton({ protocolId, experimentId, cellCount }: { protocolId: string; experimentId: string; cellCount: number }) {
+  const queryClient = useQueryClient()
+  const [triggeredIds, setTriggeredIds] = useState<string[] | null>(null)
+
+  const triggerMutation = useMutation({
+    mutationFn: () => protocolsApi.runCells(protocolId),
+    onSuccess: (batch) => setTriggeredIds(batch.protocol_run_ids),
+  })
+
+  const runsQuery = useQuery({
+    queryKey: ['protocols', protocolId, 'runs'],
+    queryFn: () => protocolsApi.listRuns(protocolId),
+    enabled: !!triggeredIds,
+    refetchInterval: (query) => {
+      const runs = query.state.data
+      if (!runs || !triggeredIds) return RUN_POLL_MS
+      const triggered = runs.filter((r) => triggeredIds.includes(r.id))
+      const allTerminal = triggered.length === triggeredIds.length && triggered.every((r) => TERMINAL_RUN_STATUSES.has(r.status))
+      if (allTerminal) {
+        queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'cells'] })
+        return false
+      }
+      return RUN_POLL_MS
+    },
+  })
+
+  const triggered: ProtocolRun[] = triggeredIds ? (runsQuery.data ?? []).filter((r) => triggeredIds.includes(r.id)) : []
+  const doneCount = triggered.filter((r) => TERMINAL_RUN_STATUSES.has(r.status)).length
+  const failedCount = triggered.filter((r) => r.status === 'failed').length
+  const isRunning = triggerMutation.isPending || (!!triggeredIds && doneCount < triggeredIds.length)
+
+  let statusLabel: string | null = null
+  if (triggerMutation.isPending) statusLabel = 'Starting…'
+  else if (triggeredIds && isRunning) statusLabel = `Running ${doneCount}/${triggeredIds.length} cells…`
+  else if (triggeredIds) statusLabel = `${triggeredIds.length - failedCount} done${failedCount ? `, ${failedCount} failed` : ''}`
+
+  const errorMessage = triggerMutation.isError
+    ? triggerMutation.error instanceof ApiError && typeof triggerMutation.error.detail === 'string'
+      ? triggerMutation.error.detail
+      : 'Could not start the run.'
+    : null
+
+  return (
+    <div className="flex items-center gap-2">
+      {errorMessage && (
+        <span className="max-w-64 truncate rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive" title={errorMessage}>
+          {errorMessage}
+        </span>
+      )}
+      {statusLabel && <span className="font-mono text-xs text-muted-foreground">{statusLabel}</span>}
+      <span title={cellCount === 0 ? 'Generate design first -- there are no cells to run yet.' : undefined}>
+        <Button size="sm" variant="outline" disabled={isRunning || cellCount === 0} onClick={() => triggerMutation.mutate()}>
+          {isRunning ? 'Running…' : 'Run all cells'}
+        </Button>
+      </span>
+    </div>
+  )
+}
+
 // One protocol per experiment is a V1 UX convention enforced here (find the
 // first protocol tagged with this experiment, or lazily create one), not a
 // schema constraint -- Protocol.experiment_id is nullable and a protocol is
@@ -127,6 +197,12 @@ export function ProtocolCanvasPage() {
     enabled: !!experimentId,
   })
 
+  const cellsQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'cells'],
+    queryFn: () => experimentsApi.listCells(experimentId!),
+    enabled: !!experimentId,
+  })
+
   return (
     <div className="flex h-svh flex-col bg-muted/30">
       <AppHeader />
@@ -139,6 +215,13 @@ export function ProtocolCanvasPage() {
           {experimentQuery.data && <EditableExperimentName experiment={experimentQuery.data} />}
           <div className="flex-1" />
           {experimentQuery.data && <DesignPreview experiment={experimentQuery.data} />}
+          {protocolQuery.data && experimentId && (
+            <RunAllCellsButton
+              protocolId={protocolQuery.data.id}
+              experimentId={experimentId}
+              cellCount={cellsQuery.data?.length ?? 0}
+            />
+          )}
         </div>
 
         {protocolQuery.isLoading ? (

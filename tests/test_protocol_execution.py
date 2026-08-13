@@ -4,11 +4,27 @@ _run_gated_worker (mocked -- never a real LLM call in an automated test)."""
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
+import pytest_asyncio
 
+import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for experiments' FK
+from asaree.models.database import dispose_engine, get_session
+from asaree.models.user import User
 from asaree.services import protocol_execution as pe
-from asaree.services.protocol_execution import ProtocolValidationError, find_gated_pairs, topological_order
+from asaree.services.experiments import create_experiment, delete_experiment
+from asaree.services.factorial_cells import get_cell, upsert_cell
+from asaree.services.protocol_execution import (
+    ProtocolValidationError,
+    apply_factor_bindings,
+    find_gated_pairs,
+    plan_cell_runs,
+    sink_node_ids,
+    topological_order,
+)
+from asaree.services.protocol_runs import create_protocol_run
+from asaree.services.protocols import create_protocol, delete_protocol
 
 
 def _graph(node_ids: list[str], edges: list[tuple[str, str]]) -> dict:
@@ -259,3 +275,226 @@ async def test_gated_worker_critic_failure_fails_the_pair(monkeypatch: pytest.Mo
     assert worker_run["status"] == "failed"
     assert "critic failed" in worker_run["error"]
     assert gate_run == {"status": "failed", "output_text": None, "error": "critic run timed out"}
+
+
+# --- apply_factor_bindings / sink_node_ids (pure) ----------------------------
+
+
+def test_apply_factor_bindings_substitutes_bound_field() -> None:
+    graph = {
+        "nodes": [
+            {
+                "id": "w1",
+                "type": "agent",
+                "data": {
+                    "config": {"model_config_data": {"temperature": 0.7}},
+                    "factor_bindings": {"config.model_config_data.temperature": "Temperature"},
+                },
+            }
+        ],
+        "edges": [],
+    }
+    patched = apply_factor_bindings(graph, {"Temperature": 0.2})
+    assert patched["nodes"][0]["data"]["config"]["model_config_data"]["temperature"] == 0.2
+    # A deep copy, not a mutation -- the original graph is untouched.
+    assert graph["nodes"][0]["data"]["config"]["model_config_data"]["temperature"] == 0.7
+
+
+def test_apply_factor_bindings_skips_factor_not_in_values() -> None:
+    graph = {
+        "nodes": [
+            {
+                "id": "w1",
+                "type": "agent",
+                "data": {
+                    "config": {"model_config_data": {"temperature": 0.7}},
+                    "factor_bindings": {"config.model_config_data.temperature": "Temperature"},
+                },
+            }
+        ],
+        "edges": [],
+    }
+    patched = apply_factor_bindings(graph, {"SomeOtherFactor": 1})
+    assert patched["nodes"][0]["data"]["config"]["model_config_data"]["temperature"] == 0.7
+
+
+def test_apply_factor_bindings_substitutes_critic_enabled_boolean() -> None:
+    graph = {
+        "nodes": [
+            {
+                "id": "g1",
+                "type": "critic_gate",
+                "data": {"config": {"enabled": True}, "factor_bindings": {"config.enabled": "CriticOn"}},
+            }
+        ],
+        "edges": [],
+    }
+    patched = apply_factor_bindings(graph, {"CriticOn": False})
+    assert patched["nodes"][0]["data"]["config"]["enabled"] is False
+
+
+def test_sink_node_ids_linear_chain_single_sink() -> None:
+    graph = _graph(["a", "b", "c"], [("a", "b"), ("b", "c")])
+    assert sink_node_ids(graph) == ["c"]
+
+
+def test_sink_node_ids_fanout_multiple_sinks() -> None:
+    graph = _graph(["a", "b", "c"], [("a", "b"), ("a", "c")])
+    assert set(sink_node_ids(graph)) == {"b", "c"}
+
+
+# --- plan_cell_runs / run_protocol cell writeback (real Postgres) -----------
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _fresh_engine_per_test() -> AsyncIterator[None]:
+    yield
+    await dispose_engine()
+
+
+@pytest_asyncio.fixture
+async def owner_id() -> AsyncIterator[uuid.UUID]:
+    async with get_session() as db:
+        user = User(
+            email=f"protocol-exec-test-{uuid.uuid4().hex}@example.com",
+            hashed_password="not-a-real-hash",
+            display_name="Protocol Execution Test User",
+        )
+        db.add(user)
+        await db.flush()
+        await db.refresh(user)
+        uid = user.id
+    yield uid
+    async with get_session() as db:
+        db_user = await db.get(User, uid)
+        if db_user is not None:
+            await db.delete(db_user)
+
+
+async def test_plan_cell_runs_raises_without_experiment(owner_id: uuid.UUID) -> None:
+    graph = _graph(["a", "b"], [("a", "b")])
+    async with get_session() as db:
+        with pytest.raises(ProtocolValidationError, match="no linked experiment"):
+            await plan_cell_runs(db, protocol_id=uuid.uuid4(), experiment_id=None, owner_id=owner_id, graph=graph)
+
+
+async def test_plan_cell_runs_raises_on_multi_sink_graph(owner_id: uuid.UUID) -> None:
+    graph = _graph(["a", "b", "c"], [("a", "b"), ("a", "c")])
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"cell-run-multisink-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+    try:
+        async with get_session() as db:
+            with pytest.raises(ProtocolValidationError, match="exactly one final node"):
+                await plan_cell_runs(
+                    db, protocol_id=uuid.uuid4(), experiment_id=experiment_id, owner_id=owner_id, graph=graph
+                )
+    finally:
+        async with get_session() as db:
+            await delete_experiment(db, experiment_id)
+
+
+async def test_plan_cell_runs_creates_one_run_per_pending_cell_skips_scored(owner_id: uuid.UUID) -> None:
+    graph = _graph(["a", "b"], [("a", "b")])
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"cell-run-pending-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db, name=f"cell-run-pending-protocol-{uuid.uuid4().hex}", owner_id=owner_id, experiment_id=experiment_id
+        )
+        protocol_id = protocol.id
+        await upsert_cell(db, experiment_id=experiment_id, cell_label="cell-1", fields={"factor_values": {"x": 1}})
+        await upsert_cell(db, experiment_id=experiment_id, cell_label="cell-2", fields={"factor_values": {"x": 2}})
+        # Already scored -- must be skipped, not re-run/re-billed.
+        await upsert_cell(
+            db,
+            experiment_id=experiment_id,
+            cell_label="cell-3",
+            fields={"factor_values": {"x": 3}, "metric_values": {"roc_auc": 0.9}},
+        )
+
+    try:
+        async with get_session() as db:
+            runs, skipped = await plan_cell_runs(
+                db, protocol_id=protocol_id, experiment_id=experiment_id, owner_id=owner_id, graph=graph
+            )
+        assert skipped == 1
+        assert {r.cell_label for r in runs} == {"cell-1", "cell-2"}
+        assert all(r.protocol_id == protocol_id for r in runs)
+        by_label = {r.cell_label: r for r in runs}
+        assert by_label["cell-1"].factor_values == {"x": 1}
+        assert by_label["cell-2"].factor_values == {"x": 2}
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)  # cascades the created ProtocolRuns
+            await delete_experiment(db, experiment_id)
+
+
+async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end (minus the actual LLM call): a run created with
+    cell_label/factor_values set gets the substituted value handed to
+    _run_agent_node, and the sink node's output lands on the right cell via
+    the real upsert_cell -- proves apply_factor_bindings is actually wired
+    into run_protocol, not just correct in isolation."""
+    received_configs = []
+
+    async def fake_run_agent_node(node, **kwargs):
+        received_configs.append(node["data"]["config"])
+        return f"output for {node['id']}", None
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"cell-run-e2e-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db,
+            name=f"cell-run-e2e-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment_id,
+            graph={
+                "nodes": [
+                    {
+                        "id": "worker",
+                        "type": "agent",
+                        "data": {
+                            "config": {"model_config_data": {"temperature": 0.9}},
+                            "factor_bindings": {"config.model_config_data.temperature": "Temperature"},
+                        },
+                    }
+                ],
+                "edges": [],
+            },
+        )
+        protocol_id = protocol.id
+        await upsert_cell(
+            db, experiment_id=experiment_id, cell_label="only-cell", fields={"factor_values": {"Temperature": 0.1}}
+        )
+        run = await create_protocol_run(
+            db,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            cell_label="only-cell",
+            factor_values={"Temperature": 0.1},
+        )
+        run_id = run.id
+
+    try:
+        await pe.run_protocol(run_id)
+
+        assert received_configs[0]["model_config_data"]["temperature"] == 0.1
+
+        async with get_session() as db:
+            cell = await get_cell(db, experiment_id=experiment_id, cell_label="only-cell")
+            assert cell is not None
+            assert cell.run_id == run_id
+            assert cell.factor_values == {"Temperature": 0.1}
+            assert cell.artifacts is not None
+            assert cell.artifacts["output_text"] == "output for worker"
+            assert cell.artifacts["protocol_run_id"] == str(run_id)
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
+            await delete_experiment(db, experiment_id)

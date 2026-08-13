@@ -47,6 +47,15 @@ class ProtocolRun(Base, TimestampMixin):
     # already recorded inside node_runs.
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Both null for a plain graph run. Set together only when this run was
+    # created by "run all cells" (services.protocol_execution.plan_cell_runs)
+    # for one FactorialCellResult under the protocol's own experiment_id --
+    # factor_values is that cell's own factor_values, substituted into the
+    # graph's factor_bindings-tagged fields before execution
+    # (apply_factor_bindings), and cell_label is where the result gets
+    # written back to via upsert_cell.
+    cell_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    factor_values: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 __all__ = ["ProtocolRun"]

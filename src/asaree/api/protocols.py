@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.experiments import get_experiment
-from asaree.services.protocol_execution import ProtocolValidationError, topological_order
+from asaree.services.protocol_execution import ProtocolValidationError, plan_cell_runs, topological_order
 from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, list_protocol_runs
 from asaree.services.protocols import (
     create_protocol,
@@ -70,11 +70,23 @@ class ProtocolRunResponse(BaseModel):
     status: str
     node_runs: dict[str, Any]
     error: str | None
+    cell_label: str | None
+    factor_values: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class CellRunBatchResponse(BaseModel):
+    """One "run all cells" trigger fans out into these -- one ProtocolRun per
+    not-yet-scored cell. ``skipped`` is how many cells already had
+    metric_values and were left alone (resume semantics)."""
+
+    protocol_run_ids: list[uuid.UUID]
+    cell_labels: list[str]
+    skipped: int
 
 
 async def _get_owned_protocol(db: DbSession, protocol_id: uuid.UUID, user: CurrentUser) -> Any:
@@ -162,6 +174,34 @@ async def create_protocol_run_endpoint(
     run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=user.id)
     await enqueue_protocol_run(run.id)
     return ProtocolRunResponse.model_validate(run)
+
+
+@router.post("/{protocol_id}/cell-runs", response_model=CellRunBatchResponse, status_code=201)
+async def create_cell_runs_endpoint(
+    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> CellRunBatchResponse:
+    """"Run all cells": one ProtocolRun per not-yet-scored FactorialCellResult
+    under this protocol's linked experiment, each with that cell's own
+    factor_values substituted into the graph's factor-bound fields at
+    execution time (see services.protocol_execution.run_protocol)."""
+    protocol = await _get_owned_protocol(db, protocol_id, user)
+    try:
+        runs, skipped = await plan_cell_runs(
+            db,
+            protocol_id=protocol.id,
+            experiment_id=protocol.experiment_id,
+            owner_id=user.id,
+            graph=protocol.graph,
+        )
+    except ProtocolValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    for run in runs:
+        await enqueue_protocol_run(run.id)
+    return CellRunBatchResponse(
+        protocol_run_ids=[r.id for r in runs],
+        cell_labels=[r.cell_label for r in runs if r.cell_label is not None],
+        skipped=skipped,
+    )
 
 
 @router.get("/{protocol_id}/runs", response_model=list[ProtocolRunResponse])

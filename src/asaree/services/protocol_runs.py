@@ -21,8 +21,25 @@ from asaree.models.protocol_run import ProtocolRun
 _TERMINAL_STATUSES = frozenset({"completed", "failed"})
 
 
-async def create_protocol_run(db: AsyncSession, *, protocol_id: uuid.UUID, owner_id: uuid.UUID) -> ProtocolRun:
-    run = ProtocolRun(protocol_id=protocol_id, owner_id=owner_id, status="pending", node_runs={})
+async def create_protocol_run(
+    db: AsyncSession,
+    *,
+    protocol_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    cell_label: str | None = None,
+    factor_values: dict[str, Any] | None = None,
+) -> ProtocolRun:
+    """``cell_label``/``factor_values`` are set together only for a run
+    created by "run all cells" (``services.protocol_execution.plan_cell_runs``)
+    -- both stay ``None`` for a plain graph run, the existing behavior."""
+    run = ProtocolRun(
+        protocol_id=protocol_id,
+        owner_id=owner_id,
+        status="pending",
+        node_runs={},
+        cell_label=cell_label,
+        factor_values=factor_values,
+    )
     db.add(run)
     await db.flush()
     await db.refresh(run)

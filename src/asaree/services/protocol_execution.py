@@ -18,6 +18,7 @@ graph structure.
 from __future__ import annotations
 
 import asyncio
+import copy
 import uuid
 from typing import Any
 
@@ -27,10 +28,13 @@ from agentic_core.schemas.agent import ModelConfig
 from agentic_core.schemas.output import parse_envelope
 from agentic_core.schemas.pattern import PatternConfig
 from agentic_core.services.mcp_service import call_server_tool
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.config import get_settings
 from asaree.models.database import get_session
-from asaree.services.protocol_runs import get_protocol_run, set_status, update_node_run
+from asaree.models.protocol_run import ProtocolRun
+from asaree.services.factorial_cells import list_cells, upsert_cell
+from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, set_status, update_node_run
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
 
@@ -147,6 +151,45 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             )
 
     return [nodes[nid] for nid in ordered]
+
+
+def sink_node_ids(graph: dict[str, Any]) -> list[str]:
+    """Every node with no outgoing edges -- used both to validate a graph is
+    runnable per-cell (exactly one sink required, see ``plan_cell_runs``) and
+    by ``run_protocol`` itself to find the node whose output becomes a cell's
+    result."""
+    nodes, downstream, _upstream = _adjacency(graph)
+    return [nid for nid in nodes if not downstream[nid]]
+
+
+def _set_path(root: dict[str, Any], dotted_path: str, value: Any) -> None:
+    parts = dotted_path.split(".")
+    target = root
+    for part in parts[:-1]:
+        if not isinstance(target.get(part), dict):
+            return  # malformed path -- nothing to set into, skip silently
+        target = target[part]
+    target[parts[-1]] = value
+
+
+def apply_factor_bindings(graph: dict[str, Any], factor_values: dict[str, Any]) -> dict[str, Any]:
+    """Returns a deep copy of *graph* with every node's ``data.factor_bindings``
+    substituted in from *factor_values* -- e.g. a node with
+    ``data.factor_bindings == {"config.model_config_data.temperature":
+    "Temperature"}`` gets ``node["data"]["config"]["model_config_data"]
+    ["temperature"]`` set to ``factor_values["Temperature"]``, if that factor
+    name is present. A binding to a factor absent from *factor_values*, or a
+    malformed field path, is silently skipped -- best-effort, the same way
+    the rest of this executor treats a missing/malformed config value rather
+    than raising."""
+    patched = copy.deepcopy(graph)
+    for node in patched.get("nodes") or []:
+        data = node.get("data") or {}
+        bindings = data.get("factor_bindings") or {}
+        for field_path, factor_name in bindings.items():
+            if factor_name in factor_values:
+                _set_path(data, field_path, factor_values[factor_name])
+    return patched
 
 
 def find_gated_pairs(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -461,6 +504,52 @@ async def _run_mcp_tool_node(node: dict[str, Any]) -> tuple[str | None, str | No
     return (None, content) if is_error else (content, None)
 
 
+async def plan_cell_runs(
+    db: AsyncSession,
+    *,
+    protocol_id: uuid.UUID,
+    experiment_id: uuid.UUID | None,
+    owner_id: uuid.UUID,
+    graph: dict[str, Any],
+) -> tuple[list[ProtocolRun], int]:
+    """"Run all cells": creates one pending :class:`ProtocolRun` per
+    not-yet-scored :class:`FactorialCellResult` under *experiment_id*, each
+    carrying that cell's own ``factor_values`` for ``run_protocol`` to
+    substitute at execution time via ``apply_factor_bindings``. Returns
+    ``(created_runs, skipped_count)`` -- a cell already carrying
+    ``metric_values`` is skipped (resume semantics: a repeat click doesn't
+    re-run, and re-bill, an already-scored cell). Raises
+    :class:`ProtocolValidationError` (same type the plain-run endpoint
+    already 422s on) if there's no linked experiment, the graph itself is
+    invalid, or the graph doesn't have exactly one sink node -- a cell's
+    result has to come from somewhere unambiguous, mirroring the notebook's
+    own single-pipeline (DC->FTE->FS->MLM) shape. Does NOT enqueue the
+    created runs -- that's the caller's job, same create-then-enqueue split
+    ``create_protocol_run_endpoint`` already uses for a plain run."""
+    if experiment_id is None:
+        raise ProtocolValidationError("This protocol has no linked experiment to run cells for.")
+    topological_order(graph)  # raises ProtocolValidationError on a cycle/empty graph
+    sinks = sink_node_ids(graph)
+    if len(sinks) != 1:
+        raise ProtocolValidationError(
+            f"This protocol must have exactly one final node to run per experimental cell (found {len(sinks)})."
+        )
+
+    cells = await list_cells(db, experiment_id=experiment_id)
+    pending = [c for c in cells if not c.metric_values]
+    runs = [
+        await create_protocol_run(
+            db,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            cell_label=cell.cell_label,
+            factor_values=cell.factor_values or {},
+        )
+        for cell in pending
+    ]
+    return runs, len(cells) - len(pending)
+
+
 async def run_protocol(protocol_run_id: uuid.UUID) -> None:
     async with get_session() as db:
         run = await get_protocol_run(db, protocol_run_id)
@@ -471,6 +560,15 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             await set_status(db, protocol_run_id, status="failed", error="protocol no longer exists")
             return
         protocol_id, owner_id, graph = protocol.id, run.owner_id, protocol.graph
+        experiment_id, cell_label, factor_values = protocol.experiment_id, run.cell_label, run.factor_values
+
+    # Both None for a plain graph run. Set together only for a run created by
+    # "run all cells" (plan_cell_runs) -- substitute this cell's factor
+    # values into whichever fields the canvas bound to a matching factor
+    # name before doing anything else, so every node below (including
+    # topological_order's own validation) sees the already-patched graph.
+    if factor_values:
+        graph = apply_factor_bindings(graph, factor_values)
 
     try:
         order = topological_order(graph)
@@ -483,6 +581,16 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
     async with get_session() as db:
         await set_status(db, protocol_run_id, status="running")
+        if cell_label and experiment_id:
+            # Pre-write, before any node executes: a crash/timeout mid-run
+            # still leaves this cell's provenance recorded (mirrors the
+            # notebook's own pre-scoring upsert_cell call).
+            await upsert_cell(
+                db,
+                experiment_id=experiment_id,
+                cell_label=cell_label,
+                fields={"run_id": protocol_run_id, "factor_values": factor_values or {}},
+            )
 
     node_runs: dict[str, Any] = {}
     failed = False
@@ -533,3 +641,25 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             await set_status(db, protocol_run_id, status="failed", error="one or more nodes failed")
         else:
             await set_status(db, protocol_run_id, status="completed")
+            if cell_label and experiment_id:
+                # Post-write, success only: fold the graph's single designated
+                # output (the sink node's raw output_text) into this cell's
+                # artifacts. metric_values is deliberately NOT auto-populated
+                # here -- there's no concept yet of "which output_contract
+                # field is the metric" (a real, documented limitation, not an
+                # oversight); a user promotes artifacts into metric_values
+                # manually via PUT /experiments/{id}/cells/{cell_label}, the
+                # same manual step the notebook's own score_payload is today.
+                sinks = sink_node_ids(graph)
+                if len(sinks) == 1 and node_runs.get(sinks[0], {}).get("status") == "completed":
+                    await upsert_cell(
+                        db,
+                        experiment_id=experiment_id,
+                        cell_label=cell_label,
+                        fields={
+                            "artifacts": {
+                                "output_text": node_runs[sinks[0]].get("output_text"),
+                                "protocol_run_id": str(protocol_run_id),
+                            }
+                        },
+                    )

@@ -244,6 +244,15 @@ export function ProtocolCanvas({
           fitViewOptions={{ maxZoom: DEFAULT_ZOOM }}
           defaultViewport={{ x: 0, y: 0, zoom: DEFAULT_ZOOM }}
           minZoom={0.2}
+          // xyflow's default is zoomOnScroll -- a two-finger trackpad
+          // scroll and a real pinch are both plain wheel events, and
+          // without panOnScroll xyflow can't tell them apart, so scrolling
+          // zoomed instead of panning. Flipping this pair (matching n8n/
+          // Figma/Miro) makes two-finger scroll pan; pinch still zooms,
+          // since xyflow's own wheel handler checks the event's ctrlKey
+          // (a real pinch gesture sets it, a plain scroll doesn't).
+          panOnScroll
+          zoomOnScroll={false}
           proOptions={{ hideAttribution: true }}
           onInit={onCanvasInit}
         >

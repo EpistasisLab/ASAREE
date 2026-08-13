@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.experiment import ResearchExperiment
 
-_SETTABLE_FIELDS = frozenset({"name", "description", "dataset_id", "design_spec"})
+_SETTABLE_FIELDS = frozenset({"name", "description", "dataset_id", "design_spec", "archived_at"})
 
 
 async def create_experiment(
@@ -47,9 +47,11 @@ async def update_experiment(
     the API layer) -- e.g. ``name``/``description`` from renaming an
     experiment created with a placeholder name straight from the GUI, or
     ``dataset_id`` (including explicit ``None``, to detach) from the
-    notebook's Step 2 attach-after-create flow, or ``design_spec`` (a full
-    replacement, not a merge) from the protocol canvas's factor-binding UI.
-    Same allow-listed setattr idiom as ``services.protocols.update_protocol``.
+    notebook's Step 2 attach-after-create flow, ``design_spec`` (a full
+    replacement, not a merge) from the protocol canvas's factor-binding UI,
+    or ``archived_at`` (a timestamp to archive, ``None`` to unarchive) from
+    the canvas menu's Archive/Unarchive action. Same allow-listed setattr
+    idiom as ``services.protocols.update_protocol``.
     """
     unknown = set(fields) - _SETTABLE_FIELDS
     if unknown:
@@ -87,8 +89,13 @@ async def get_experiment_by_name(db: AsyncSession, name: str, *, owner_id: uuid.
     ).scalar_one_or_none()
 
 
-async def list_experiments(db: AsyncSession, *, owner_id: uuid.UUID) -> Sequence[ResearchExperiment]:
-    return (await db.execute(select(ResearchExperiment).where(ResearchExperiment.owner_id == owner_id))).scalars().all()
+async def list_experiments(
+    db: AsyncSession, *, owner_id: uuid.UUID, include_archived: bool = False
+) -> Sequence[ResearchExperiment]:
+    query = select(ResearchExperiment).where(ResearchExperiment.owner_id == owner_id)
+    if not include_archived:
+        query = query.where(ResearchExperiment.archived_at.is_(None))
+    return (await db.execute(query)).scalars().all()
 
 
 async def delete_experiment(db: AsyncSession, experiment_id: uuid.UUID) -> bool:

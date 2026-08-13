@@ -8,9 +8,10 @@ discoveries, and the rest of ARES's broader experiment types).
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,6 +47,13 @@ class ResearchExperiment(Base, TimestampMixin):
     dataset_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("registered_datasets.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Null = active. A safer alternative to delete_experiment (which cascades
+    # every FactorialCellResult under it) -- archiving just hides the
+    # experiment from the default list (see list_experiments's
+    # include_archived kwarg), reversible by clearing this back to null. A
+    # timestamp rather than a bool gives "when" for free, same reasoning as
+    # ProtocolRun.last_heartbeat_at.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 __all__ = ["ResearchExperiment"]

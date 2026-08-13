@@ -59,12 +59,15 @@ class UpdateExperimentRequest(BaseModel):
     ``design_spec`` is a full replacement, not a merge -- the protocol
     canvas's "+ Make experimental factor" flow reads the current value,
     upserts-by-name into ``factors`` client-side, and PATCHes the whole
-    dict back, same as how ``Protocol.graph`` is PATCHed."""
+    dict back, same as how ``Protocol.graph`` is PATCHed. ``archived_at``
+    (a timestamp to archive, ``null`` to unarchive) is set by the canvas
+    menu's Archive/Unarchive action."""
 
     name: str | None = None
     description: str | None = None
     dataset_id: uuid.UUID | None = None
     design_spec: dict[str, Any] | None = None
+    archived_at: datetime | None = None
 
 
 class ExperimentResponse(BaseModel):
@@ -75,6 +78,7 @@ class ExperimentResponse(BaseModel):
     task_brief: dict[str, Any] | None
     design_spec: dict[str, Any] | None
     dataset_id: uuid.UUID | None
+    archived_at: datetime | None
     created_at: datetime
 
 
@@ -87,6 +91,7 @@ def _experiment_response(e: Any) -> ExperimentResponse:
         task_brief=e.task_brief,
         design_spec=e.design_spec,
         dataset_id=e.dataset_id,
+        archived_at=e.archived_at,
         created_at=e.created_at,
     )
 
@@ -161,8 +166,10 @@ async def create_experiment_endpoint(
 
 
 @router.get("", response_model=list[ExperimentResponse])
-async def list_experiments_endpoint(user: CurrentUser, db: DbSession) -> list[ExperimentResponse]:
-    experiments = await list_experiments(db, owner_id=user.id)
+async def list_experiments_endpoint(
+    user: CurrentUser, db: DbSession, include_archived: bool = False
+) -> list[ExperimentResponse]:
+    experiments = await list_experiments(db, owner_id=user.id, include_archived=include_archived)
     return [_experiment_response(e) for e in experiments]
 
 

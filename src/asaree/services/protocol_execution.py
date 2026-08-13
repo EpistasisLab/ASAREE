@@ -5,6 +5,14 @@ alone. ``run_protocol`` is the orchestrator, meant to run inside the arq
 worker (see ``asaree.worker.tasks.execute_protocol_run_task``), calling
 agentic-core's runner functions directly -- the same "direct call, not a
 nested enqueue" approach ``execute_run_task`` already uses for one agent run.
+
+A ``critic_gate`` node is never run on its own turn in the main loop -- its
+worker's ``find_gated_pairs`` entry means the worker's own turn dispatches to
+``_run_gated_worker``, which resolves BOTH nodes' outcomes together (see its
+docstring). This keeps ``topological_order``'s graph shape completely
+ordinary: Worker -> CriticGate -> NextNode is a plain forward DAG edge: the
+revision "loop" lives entirely inside how one pair is executed, not in the
+graph structure.
 """
 
 from __future__ import annotations
@@ -26,28 +34,87 @@ from asaree.services.protocol_runs import get_protocol_run, set_status, update_n
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
 
+# Mirrors the notebook's CRITIC_CONTRACT exactly (spinal_pipeline.ipynb cell
+# 15) -- hardcoded, not user-editable/stored in the graph, so the executor
+# can always trust these field names when reading a critic's verdict.
+CRITIC_OUTPUT_CONTRACT: dict[str, Any] = {
+    "name": "CriticVerdict",
+    "fields": [
+        {
+            "name": "approved",
+            "type": "bool",
+            "description": "true if the output passes every criterion, false if it needs revision",
+        },
+        {
+            "name": "feedback",
+            "type": "str",
+            "default": "",
+            "description": "actionable revision instructions when not approved; empty when approved",
+        },
+        {
+            "name": "rejection_scope",
+            "type": "str",
+            "default": "",
+            "description": (
+                "when not approved: 'partial' if the failing criteria are localized and every "
+                "uncriticized decision must be preserved, 'full' if the approach must be "
+                "reconsidered from first principles; empty when approved"
+            ),
+        },
+    ],
+}
+
+# Generalized from the notebook's own scope-clause text (run_stage, cell 19) --
+# dropped the workspace-manifest "prior_block" and tool-call-repeat warning,
+# neither of which has a generic-canvas equivalent (both assume the
+# file-based workspace handoff this one use case's MCP tools happen to use).
+_SCOPE_CLAUSES: dict[str, str] = {
+    "partial": (
+        "SCOPE -- this is a targeted correction, not a redesign. Change ONLY what the feedback "
+        "names. Every other decision in your previous output went uncriticized: reproduce it "
+        "exactly."
+    ),
+    "full": (
+        "SCOPE -- the reviewer rejected this output's approach, not one detail of it. Reconsider "
+        "it from first principles: you may change any decision, including ones the feedback does "
+        "not name. Do not anchor on your previous output -- it is shown below as a record of what "
+        "was tried and found wanting, not as a baseline to preserve."
+    ),
+}
+
 
 class ProtocolValidationError(Exception):
-    """The graph can't be run as-is (empty, or contains a cycle)."""
+    """The graph can't be run as-is (empty, a cycle, or a malformed critic-gate topology)."""
 
 
-def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
-    """Kahn's algorithm. Raises :class:`ProtocolValidationError` on an empty
-    graph or a cycle (any node Kahn's algorithm can't reach stays with a
-    nonzero in-degree, which is exactly the cycle signature)."""
+def _adjacency(
+    graph: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], dict[str, list[str]], dict[str, list[str]]]:
     nodes = {n["id"]: n for n in graph.get("nodes") or []}
-    if not nodes:
-        raise ProtocolValidationError("This protocol has no nodes.")
-
-    in_degree = dict.fromkeys(nodes, 0)
     downstream: dict[str, list[str]] = {nid: [] for nid in nodes}
+    upstream: dict[str, list[str]] = {nid: [] for nid in nodes}
     for edge in graph.get("edges") or []:
         source, target = edge.get("source"), edge.get("target")
         if source not in nodes or target not in nodes:
             continue  # a dangling edge is not this function's problem to reject
         downstream[source].append(target)
-        in_degree[target] += 1
+        upstream[target].append(source)
+    return nodes, downstream, upstream
 
+
+def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
+    """Kahn's algorithm. Raises :class:`ProtocolValidationError` on an empty
+    graph, a cycle (any node Kahn's algorithm can't reach stays with a
+    nonzero in-degree, which is exactly the cycle signature), or a malformed
+    critic-gate topology: a ``critic_gate`` node must have exactly one
+    incoming edge, from an ``agent`` node, and that agent node's *only*
+    outgoing edge must be to this gate -- no fan-out around a gate, since
+    anything wanting the reviewed output must consume it after the gate."""
+    nodes, downstream, upstream = _adjacency(graph)
+    if not nodes:
+        raise ProtocolValidationError("This protocol has no nodes.")
+
+    in_degree = {nid: len(ups) for nid, ups in upstream.items()}
     queue = [nid for nid, deg in in_degree.items() if deg == 0]
     ordered: list[str] = []
     while queue:
@@ -60,7 +127,38 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
 
     if len(ordered) != len(nodes):
         raise ProtocolValidationError("This protocol's graph has a cycle -- it can't be run in dependency order.")
+
+    for nid, node in nodes.items():
+        if node.get("type") != "critic_gate":
+            continue
+        ups = upstream[nid]
+        if len(ups) != 1:
+            raise ProtocolValidationError(
+                f"Critic Gate node {nid!r} must have exactly one incoming connection (found {len(ups)})."
+            )
+        worker_id = ups[0]
+        if nodes[worker_id].get("type") != "agent":
+            raise ProtocolValidationError(
+                f"Critic Gate node {nid!r}'s incoming connection must come from an Agent node."
+            )
+        if len(downstream[worker_id]) != 1:
+            raise ProtocolValidationError(
+                f"Agent node {worker_id!r} is gated by a Critic Gate and can't have any other outgoing connections."
+            )
+
     return [nodes[nid] for nid in ordered]
+
+
+def find_gated_pairs(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Maps worker_node_id -> its critic_gate node, for every gated pair.
+    Trusts the graph is already validated (call after ``topological_order``,
+    which is what actually enforces this shape)."""
+    nodes, _downstream, upstream = _adjacency(graph)
+    pairs: dict[str, dict[str, Any]] = {}
+    for nid, node in nodes.items():
+        if node.get("type") == "critic_gate" and upstream[nid]:
+            pairs[upstream[nid][0]] = node
+    return pairs
 
 
 def _upstream_ids(graph: dict[str, Any], node_id: str) -> list[str]:
@@ -86,6 +184,21 @@ def _build_user_input(node: dict[str, Any], graph: dict[str, Any], node_runs: di
     if not context:
         return goal
     return f"{goal}\n\nUpstream context:\n" + "\n\n".join(context)
+
+
+def _build_revision_instruction(base_instruction: str, verdict: dict[str, Any], previous_output: str) -> str:
+    scope_clause = _SCOPE_CLAUSES.get(verdict.get("rejection_scope") or "", "")
+    feedback = verdict.get("feedback") or ""
+    parts = [
+        base_instruction,
+        "--- REVISION REQUESTED ---\nA reviewer rejected your previous output. Produce a "
+        "corrected, complete output that addresses every point below.",
+    ]
+    if scope_clause:
+        parts.append(scope_clause)
+    parts.append(f"Reviewer feedback:\n{feedback}")
+    parts.append(f"Your previous output (for reference):\n\n{previous_output}")
+    return "\n\n".join(parts)
 
 
 async def _run_agent_node(
@@ -169,6 +282,167 @@ async def _run_agent_node(
     return output_text, None
 
 
+async def _run_critic(
+    gate: dict[str, Any], *, protocol_id: uuid.UUID, protocol_run_id: uuid.UUID, owner_id: uuid.UUID, worker_output: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Create-or-sync the gate's own critic agent and run it once. Returns
+    ``(verdict, error)`` -- exactly one is ``None``. The critic never gets
+    tools and always runs single-pass (matches the notebook's own
+    ``CRITIC_TOOLS = []`` / ``SINGLE_PASS_PATTERN``), and its
+    ``output_contract`` is always :data:`CRITIC_OUTPUT_CONTRACT` -- not
+    whatever (if anything) is in the node's own config."""
+    config = gate["data"]["config"]
+    agent_name = f"protocol-{protocol_id}-{gate['id']}"
+    model_config_data = {k: v for k, v in (config.get("model_config_data") or {}).items() if v is not None}
+    model_config = ModelConfig(**model_config_data)
+    pattern_config = PatternConfig(execution_pattern="single_agent_baseline").model_dump()
+    goal = config.get("goal") or "Review the given output and return an approval verdict with feedback."
+    description = config.get("description") or ""
+    label = gate.get("data", {}).get("label")
+    if label:
+        description = f"{description} (canvas label: {label})".strip()
+    tool_config = {"server_names": [], "tool_names": []}
+
+    existing = await get_agent_by_name(agent_name, owner_id=owner_id)
+    if existing is not None:
+        agent = await update_agent(
+            existing.id,
+            goal=goal,
+            description=description,
+            system_prompt=config.get("system_prompt") or "",
+            model_config=model_config,
+            pattern_config=pattern_config,
+            tool_config=tool_config,
+            output_contract=CRITIC_OUTPUT_CONTRACT,
+        )
+    else:
+        agent = await create_agent(
+            name=agent_name,
+            goal=goal,
+            description=description,
+            system_prompt=config.get("system_prompt") or "",
+            model_config=model_config,
+            pattern_config=pattern_config,
+            tool_config=tool_config,
+            output_contract=CRITIC_OUTPUT_CONTRACT,
+            owner_id=owner_id,
+        )
+    assert agent is not None
+
+    instruction = f"Review the following output and return your verdict.\n\nOutput to review:\n\n{worker_output}"
+    run = await create_run(
+        agent_id=agent.id,
+        user_input=instruction,
+        owner_id=owner_id,
+        metadata={"protocol_id": str(protocol_id), "protocol_run_id": str(protocol_run_id), "node_id": gate["id"]},
+    )
+    timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
+    try:
+        await asyncio.wait_for(
+            execute_run(run_id=run.id, registry=get_registry(), available_tools=gather_tools(agent)),
+            timeout=timeout,
+        )
+    except TimeoutError:
+        return None, f"critic run exceeded its {timeout}s execution budget"
+    except Exception as e:  # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
+
+    finished = await get_run(run.id)
+    if finished is None:
+        return None, "critic run vanished after execution"
+    if finished.error:
+        return None, finished.error
+    envelope = parse_envelope(finished.output)
+    if envelope is None or envelope.payload is None:
+        return None, "critic did not return a structured verdict"
+    return envelope.payload, None
+
+
+async def _run_gated_worker(
+    worker: dict[str, Any],
+    gate: dict[str, Any],
+    *,
+    protocol_id: uuid.UUID,
+    protocol_run_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    graph: dict[str, Any],
+    node_runs: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Generalizes the notebook's ``run_stage`` revision loop (cell 19):
+    run worker -> if the gate is enabled, run critic on its output -> on
+    rejection, rebuild the instruction with the critic's feedback and rerun
+    -> repeat up to ``max_revisions`` -- the FINAL attempt never calls the
+    critic at all (its verdict would be ignored anyway) and force-accepts,
+    the same optimization the notebook makes. No workspace-reset step here
+    (a real, documented limitation): the notebook resets on-disk state
+    between attempts via use-case-specific MCP tools with no generic canvas
+    equivalent -- a revision attempt just reruns the same agent with a new
+    instruction. Returns ``(worker_node_run, gate_node_run)``."""
+    gate_config = gate["data"]["config"]
+    max_revisions = max(int(gate_config.get("max_revisions") or 0), 0)
+    enabled = bool(gate_config.get("enabled", True))
+    base_instruction = _build_user_input(worker, graph, node_runs)
+    instruction = base_instruction
+
+    for attempt in range(max_revisions + 1):
+        output_text, error = await _run_agent_node(
+            worker,
+            protocol_id=protocol_id,
+            protocol_run_id=protocol_run_id,
+            owner_id=owner_id,
+            user_input=instruction,
+        )
+        if error:
+            return (
+                {"status": "failed", "output_text": None, "error": error, "attempts": attempt + 1},
+                {"status": "skipped"},
+            )
+
+        if not enabled:
+            return (
+                {"status": "completed", "output_text": output_text, "error": None, "attempts": attempt + 1},
+                {"status": "completed", "output_text": output_text, "approved": None, "revisions_used": 0},
+            )
+
+        if attempt == max_revisions:
+            return (
+                {"status": "completed", "output_text": output_text, "error": None, "attempts": attempt + 1},
+                {
+                    "status": "completed",
+                    "output_text": output_text,
+                    "approved": None,
+                    "revisions_used": attempt,
+                    "forced": True,
+                },
+            )
+
+        verdict, verdict_error = await _run_critic(
+            gate, protocol_id=protocol_id, protocol_run_id=protocol_run_id, owner_id=owner_id, worker_output=output_text
+        )
+        if verdict_error:
+            # The critic itself failed to run -- fail the whole gated pair
+            # rather than silently treating an unchecked output as approved.
+            return (
+                {
+                    "status": "failed",
+                    "output_text": output_text,
+                    "error": f"critic failed: {verdict_error}",
+                    "attempts": attempt + 1,
+                },
+                {"status": "failed", "output_text": None, "error": verdict_error},
+            )
+
+        if verdict.get("approved"):
+            return (
+                {"status": "completed", "output_text": output_text, "error": None, "attempts": attempt + 1},
+                {"status": "completed", "output_text": output_text, "approved": True, "revisions_used": attempt},
+            )
+
+        instruction = _build_revision_instruction(base_instruction, verdict, output_text)
+
+    raise AssertionError("_run_gated_worker fell through its attempt loop")  # unreachable
+
+
 async def _run_mcp_tool_node(node: dict[str, Any]) -> tuple[str | None, str | None]:
     """Calls the tool directly -- no AgentRun, no LLM loop. Empty arguments
     in V1 (no argument-mapping UI yet; a real, documented limitation)."""
@@ -205,6 +479,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             await set_status(db, protocol_run_id, status="failed", error=str(e))
         return
 
+    gated_by = find_gated_pairs(graph)
+
     async with get_session() as db:
         await set_status(db, protocol_run_id, status="running")
 
@@ -212,6 +488,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
     failed = False
     for node in order:
         node_id = node["id"]
+        if node_id in node_runs:
+            continue  # already resolved -- a critic_gate node handled via its worker's turn below
         if failed:
             node_runs[node_id] = {"status": "skipped"}
             async with get_session() as db:
@@ -220,6 +498,21 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, {"status": "running"})
+
+        if node_id in gated_by:
+            gate = gated_by[node_id]
+            worker_run, gate_run = await _run_gated_worker(
+                node, gate, protocol_id=protocol_id, protocol_run_id=protocol_run_id, owner_id=owner_id,
+                graph=graph, node_runs=node_runs,
+            )
+            node_runs[node_id] = worker_run
+            node_runs[gate["id"]] = gate_run
+            async with get_session() as db:
+                await update_node_run(db, protocol_run_id, node_id, worker_run)
+                await update_node_run(db, protocol_run_id, gate["id"], gate_run)
+            if worker_run["status"] == "failed" or gate_run["status"] == "failed":
+                failed = True
+            continue
 
         if node.get("type") == "mcp_tool":
             output_text, error = await _run_mcp_tool_node(node)

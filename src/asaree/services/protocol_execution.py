@@ -91,6 +91,15 @@ class ProtocolValidationError(Exception):
     """The graph can't be run as-is (empty, a cycle, or a malformed critic-gate topology)."""
 
 
+# The three connector-typed slots on an agent/critic_gate node -- confirmed
+# against n8n's own closed enum (ai_languageModel/ai_memory/ai_tool), reusing
+# ProtocolEdge's existing sourceHandle/targetHandle fields rather than adding
+# a new "connection type" concept. A "main" edge (today's plain pipeline
+# data-flow) is any edge whose targetHandle is one of these -- everything
+# else. The type marker always lives on the target side of an edge.
+_CONNECTOR_HANDLES = frozenset({"llm", "tool", "memory"})
+
+
 def _adjacency(
     graph: dict[str, Any],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, list[str]], dict[str, list[str]]]:
@@ -135,7 +144,10 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
     for nid, node in nodes.items():
         if node.get("type") != "critic_gate":
             continue
-        ups = upstream[nid]
+        # Main-pipeline incoming edges only -- a gate's own LLM connector
+        # edge is a separate concept (validated below) and must not count
+        # towards "how many things feed this gate on the main pipeline."
+        ups = _upstream_ids(graph, nid)
         if len(ups) != 1:
             raise ProtocolValidationError(
                 f"Critic Gate node {nid!r} must have exactly one incoming connection (found {len(ups)})."
@@ -155,16 +167,80 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 "deactivate the Critic Gate instead."
             )
 
+    for nid, node in nodes.items():
+        node_type = node.get("type")
+
+        if node_type in ("agent", "critic_gate"):
+            llm_edges = _edges_with_handle(graph, nid, "llm", direction="incoming")
+            if len(llm_edges) != 1:
+                raise ProtocolValidationError(
+                    f"Node {nid!r} must have exactly one LLM connection (found {len(llm_edges)})."
+                )
+            llm_source = nodes.get(llm_edges[0]["source"])
+            if llm_source is None or llm_source.get("type") != "llm":
+                raise ProtocolValidationError(f"Node {nid!r}'s LLM connection must come from an LLM node.")
+
+        tool_edges = _edges_with_handle(graph, nid, "tool", direction="incoming")
+        memory_edges = _edges_with_handle(graph, nid, "memory", direction="incoming")
+        if node_type == "agent":
+            for edge in tool_edges:
+                tool_source = nodes.get(edge["source"])
+                if tool_source is None or tool_source.get("type") != "mcp_tool":
+                    raise ProtocolValidationError(f"Node {nid!r}'s Tool connection must come from an MCP Tool node.")
+            if len(memory_edges) > 1:
+                raise ProtocolValidationError(
+                    f"Node {nid!r} can have at most one Memory connection (found {len(memory_edges)})."
+                )
+            for edge in memory_edges:
+                memory_source = nodes.get(edge["source"])
+                if memory_source is None or memory_source.get("type") != "memory":
+                    raise ProtocolValidationError(f"Node {nid!r}'s Memory connection must come from a Memory node.")
+        elif tool_edges or memory_edges:
+            raise ProtocolValidationError(f"Only Agent nodes can have a Tool or Memory connection (node {nid!r}).")
+
+        if node_type == "mcp_tool":
+            outgoing_tool = _edges_with_handle(graph, nid, "tool", direction="outgoing")
+            outgoing_other = [
+                e for e in graph.get("edges") or [] if e.get("source") == nid and e.get("targetHandle") != "tool"
+            ]
+            if outgoing_tool and outgoing_other:
+                raise ProtocolValidationError(
+                    f"MCP Tool node {nid!r} can't be both a standalone pipeline step and an Agent's Tool "
+                    "connection at once -- add a second MCP Tool node if you need both."
+                )
+
+        if node_type in ("llm", "memory"):
+            outgoing_wrong_handle = [
+                e for e in graph.get("edges") or [] if e.get("source") == nid and e.get("targetHandle") != node_type
+            ]
+            if outgoing_wrong_handle:
+                label = "LLM" if node_type == "llm" else "Memory"
+                raise ProtocolValidationError(
+                    f"{label} node {nid!r} can only connect to a node's {label} slot, not a regular pipeline edge."
+                )
+
     return [nodes[nid] for nid in ordered]
+
+
+def _edges_with_handle(graph: dict[str, Any], node_id: str, handle: str, *, direction: str) -> list[dict[str, Any]]:
+    """Edges into/out of *node_id* whose ``targetHandle`` matches *handle*
+    -- the connector-type marker always lives on the target side of an edge
+    (see ``_CONNECTOR_HANDLES``), regardless of which end is being queried.
+    ``direction`` is ``"incoming"`` (*node_id* is the edge's target) or
+    ``"outgoing"`` (*node_id* is the edge's source)."""
+    key = "target" if direction == "incoming" else "source"
+    return [e for e in graph.get("edges") or [] if e.get(key) == node_id and e.get("targetHandle") == handle]
 
 
 def sink_node_ids(graph: dict[str, Any]) -> list[str]:
     """Every node with no outgoing edges -- used both to validate a graph is
     runnable per-cell (exactly one sink required, see ``plan_cell_runs``) and
     by ``run_protocol`` itself to find the node whose output becomes a cell's
-    result."""
+    result. Excludes ``llm``/``memory`` nodes -- pure config sources are
+    never a pipeline's "final output," whether or not they're connected to
+    anything (an unwired one would otherwise falsely count as an extra sink)."""
     nodes, downstream, _upstream = _adjacency(graph)
-    return [nid for nid in nodes if not downstream[nid]]
+    return [nid for nid, node in nodes.items() if not downstream[nid] and node.get("type") not in ("llm", "memory")]
 
 
 def _set_path(root: dict[str, Any], dotted_path: str, value: Any) -> None:
@@ -210,7 +286,59 @@ def find_gated_pairs(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _upstream_ids(graph: dict[str, Any], node_id: str) -> list[str]:
-    return [e["source"] for e in graph.get("edges") or [] if e.get("target") == node_id]
+    """Only "main" pipeline edges -- an llm/memory node's inert placeholder,
+    or a tool-source mcp_tool node's, must never be treated as upstream
+    pipeline context (see ``_build_user_input``/``_upstream_output_text``)."""
+    return [
+        e["source"]
+        for e in graph.get("edges") or []
+        if e.get("target") == node_id and e.get("targetHandle") not in _CONNECTOR_HANDLES
+    ]
+
+
+def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """The node's connected ``llm`` node's own config -- agent/critic_gate
+    nodes no longer carry ``model_config_data`` themselves, it's resolved
+    from the required LLM connector instead (``topological_order`` already
+    validated it exists exactly once)."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    edges = _edges_with_handle(graph, node_id, "llm", direction="incoming")
+    if not edges:
+        return {}
+    source = nodes.get(edges[0]["source"])
+    if source is None:
+        return {}
+    return (source.get("data") or {}).get("config") or {}
+
+
+def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """``{"server_names": [...], "tool_names": [...]}`` built from every
+    ``mcp_tool`` node wired into this agent's Tool connector -- replaces the
+    agent's own (now-removed) ``tool_config`` field."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    server_names: list[str] = []
+    tool_names: list[str] = []
+    for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None:
+            continue
+        tool_node_config = (source.get("data") or {}).get("config") or {}
+        server_name = tool_node_config.get("server_name")
+        tool_name = tool_node_config.get("tool_name")
+        if server_name:
+            server_names.append(server_name)
+        if tool_name:
+            tool_names.append(tool_name)
+    return {"server_names": server_names, "tool_names": tool_names}
+
+
+def _tool_source_node_ids(graph: dict[str, Any]) -> set[str]:
+    """Every ``mcp_tool`` node with at least one outgoing Tool-handled edge
+    -- these don't get their own execution turn in ``run_protocol``'s main
+    loop (see ``_resolve_tool_config``); they're a pure config source for
+    whichever agent(s) they're wired into, the same way an ``llm`` node
+    always is."""
+    return {e["source"] for e in graph.get("edges") or [] if e.get("targetHandle") == "tool"}
 
 
 def _is_node_active(node: dict[str, Any]) -> bool:
@@ -274,7 +402,13 @@ def _build_revision_instruction(base_instruction: str, verdict: dict[str, Any], 
 
 
 async def _run_agent_node(
-    node: dict[str, Any], *, protocol_id: uuid.UUID, protocol_run_id: uuid.UUID, owner_id: uuid.UUID, user_input: str
+    node: dict[str, Any],
+    *,
+    protocol_id: uuid.UUID,
+    protocol_run_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    user_input: str,
+    graph: dict[str, Any],
 ) -> tuple[str | None, str | None]:
     """Create-or-sync the real agent and run it to completion. Returns
     ``(output_text, error)`` -- exactly one is ``None``."""
@@ -285,8 +419,12 @@ async def _run_agent_node(
     # each other's agent definition on every run. config.name is folded
     # into the description instead, purely as a human label.
     agent_name = f"protocol-{protocol_id}-{node['id']}"
-    model_config_data = {k: v for k, v in (config.get("model_config_data") or {}).items() if v is not None}
+    # Model/tool are no longer fields on the agent's own config -- resolved
+    # from its required LLM connector and its (optional, repeatable) Tool
+    # connectors instead (topological_order already validated their shape).
+    model_config_data = {k: v for k, v in _resolve_llm_config(graph, node["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
+    tool_config = _resolve_tool_config(graph, node["id"])
     pattern_config_data = config.get("pattern_config") or {}
     pattern_config = PatternConfig(
         execution_pattern=pattern_config_data.get("execution_pattern"),
@@ -306,7 +444,7 @@ async def _run_agent_node(
             system_prompt=config.get("system_prompt") or "",
             model_config=model_config,
             pattern_config=pattern_config,
-            tool_config=config.get("tool_config"),
+            tool_config=tool_config,
             output_contract=config.get("output_contract"),
             budget_limit_usd=config.get("budget_limit_usd"),
             max_run_duration_seconds=config.get("max_run_duration_seconds"),
@@ -319,7 +457,7 @@ async def _run_agent_node(
             system_prompt=config.get("system_prompt") or "",
             model_config=model_config,
             pattern_config=pattern_config,
-            tool_config=config.get("tool_config"),
+            tool_config=tool_config,
             output_contract=config.get("output_contract"),
             budget_limit_usd=config.get("budget_limit_usd"),
             max_run_duration_seconds=config.get("max_run_duration_seconds"),
@@ -355,17 +493,24 @@ async def _run_agent_node(
 
 
 async def _run_critic(
-    gate: dict[str, Any], *, protocol_id: uuid.UUID, protocol_run_id: uuid.UUID, owner_id: uuid.UUID, worker_output: str
+    gate: dict[str, Any],
+    *,
+    protocol_id: uuid.UUID,
+    protocol_run_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    worker_output: str,
+    graph: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Create-or-sync the gate's own critic agent and run it once. Returns
     ``(verdict, error)`` -- exactly one is ``None``. The critic never gets
     tools and always runs single-pass (matches the notebook's own
     ``CRITIC_TOOLS = []`` / ``SINGLE_PASS_PATTERN``), and its
     ``output_contract`` is always :data:`CRITIC_OUTPUT_CONTRACT` -- not
-    whatever (if anything) is in the node's own config."""
+    whatever (if anything) is in the node's own config. Model is resolved
+    from its required LLM connector, same as an agent node."""
     config = gate["data"]["config"]
     agent_name = f"protocol-{protocol_id}-{gate['id']}"
-    model_config_data = {k: v for k, v in (config.get("model_config_data") or {}).items() if v is not None}
+    model_config_data = {k: v for k, v in _resolve_llm_config(graph, gate["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
     pattern_config = PatternConfig(execution_pattern="single_agent_baseline").model_dump()
     goal = config.get("goal") or "Review the given output and return an approval verdict with feedback."
@@ -463,6 +608,7 @@ async def _run_gated_worker(
             protocol_run_id=protocol_run_id,
             owner_id=owner_id,
             user_input=instruction,
+            graph=graph,
         )
         if error:
             return (
@@ -489,7 +635,12 @@ async def _run_gated_worker(
             )
 
         verdict, verdict_error = await _run_critic(
-            gate, protocol_id=protocol_id, protocol_run_id=protocol_run_id, owner_id=owner_id, worker_output=output_text
+            gate,
+            protocol_id=protocol_id,
+            protocol_run_id=protocol_run_id,
+            owner_id=owner_id,
+            worker_output=output_text,
+            graph=graph,
         )
         if verdict_error:
             # The critic itself failed to run -- fail the whole gated pair
@@ -607,6 +758,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         return
 
     gated_by = find_gated_pairs(graph)
+    tool_source_ids = _tool_source_node_ids(graph)
 
     async with get_session() as db:
         await set_status(db, protocol_run_id, status="running")
@@ -631,6 +783,16 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             node_runs[node_id] = {"status": "skipped"}
             async with get_session() as db:
                 await update_node_run(db, protocol_run_id, node_id, {"status": "skipped"})
+            continue
+
+        if node.get("type") in ("llm", "memory") or node_id in tool_source_ids:
+            # Pure config sources -- never get their own execution turn (see
+            # _resolve_llm_config/_resolve_tool_config). "memory" nodes are
+            # visual scaffolding only this phase: connecting one declares
+            # intent for a future phase, but has no runtime effect yet.
+            node_runs[node_id] = {"status": "completed", "output_text": None, "error": None}
+            async with get_session() as db:
+                await update_node_run(db, protocol_run_id, node_id, node_runs[node_id])
             continue
 
         async with get_session() as db:
@@ -664,7 +826,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         else:
             user_input = _build_user_input(node, graph, node_runs)
             output_text, error = await _run_agent_node(
-                node, protocol_id=protocol_id, protocol_run_id=protocol_run_id, owner_id=owner_id, user_input=user_input
+                node,
+                protocol_id=protocol_id,
+                protocol_run_id=protocol_run_id,
+                owner_id=owner_id,
+                user_input=user_input,
+                graph=graph,
             )
 
         node_runs[node_id] = {"status": "failed" if error else "completed", "output_text": output_text, "error": error}

@@ -28,8 +28,11 @@ from asaree.services.protocols import create_protocol, delete_protocol
 
 
 def _graph(node_ids: list[str], edges: list[tuple[str, str]]) -> dict:
+    # "mcp_tool" -- not "agent" -- since these are pure DAG-shape tests
+    # (topological order, cycle detection, sink detection) that shouldn't
+    # need an LLM connection wired up; mcp_tool has no such requirement.
     return {
-        "nodes": [{"id": nid, "type": "agent", "data": {}} for nid in node_ids],
+        "nodes": [{"id": nid, "type": "mcp_tool", "data": {}} for nid in node_ids],
         "edges": [{"id": f"{s}-{t}", "source": s, "target": t} for s, t in edges],
     }
 
@@ -40,6 +43,42 @@ def _node(node_id: str, node_type: str, config: dict | None = None, label: str =
 
 def _edges(*pairs: tuple[str, str]) -> list[dict]:
     return [{"id": f"{s}-{t}", "source": s, "target": t} for s, t in pairs]
+
+
+def _llm_node(node_id: str = "llm", config: dict | None = None) -> dict:
+    return {"id": node_id, "type": "llm", "data": {"label": "", "config": config or {}}}
+
+
+def _llm_edge(source: str, target: str) -> dict:
+    return {"id": f"{source}-{target}-llm", "source": source, "target": target, "targetHandle": "llm"}
+
+
+def _memory_node(node_id: str = "memory") -> dict:
+    return {"id": node_id, "type": "memory", "data": {"label": "", "config": {}}}
+
+
+def _memory_edge(source: str, target: str) -> dict:
+    return {"id": f"{source}-{target}-memory", "source": source, "target": target, "targetHandle": "memory"}
+
+
+def _tool_node(node_id: str = "tool1", server_name: str = "srv", tool_name: str = "do_thing") -> dict:
+    return {
+        "id": node_id,
+        "type": "mcp_tool",
+        "data": {"label": "", "config": {"server_id": "s1", "server_name": server_name, "tool_name": tool_name}},
+    }
+
+
+def _tool_edge(source: str, target: str) -> dict:
+    return {"id": f"{source}-{target}-tool", "source": source, "target": target, "targetHandle": "tool"}
+
+
+def _agent_with_llm(node_id: str, llm_id: str = "llm") -> tuple[dict, dict]:
+    """A minimal valid agent + its required LLM connector edge -- the
+    boilerplate every connector-validation test below needs just to get
+    past the "every agent needs exactly one LLM connection" rule so it can
+    test the thing it actually cares about."""
+    return _node(node_id, "agent"), _llm_edge(llm_id, node_id)
 
 
 def test_linear_order() -> None:
@@ -69,7 +108,7 @@ def test_dangling_edge_ignored_not_a_cycle() -> None:
     # a node was deleted client-side without the edge being cleaned up) is
     # simply not counted -- it must not be misread as a cycle.
     graph = {
-        "nodes": [{"id": "a", "type": "agent", "data": {}}],
+        "nodes": [{"id": "a", "type": "mcp_tool", "data": {}}],
         "edges": [{"id": "a-ghost", "source": "a", "target": "ghost"}],
     }
     order = [n["id"] for n in topological_order(graph)]
@@ -80,13 +119,16 @@ def test_dangling_edge_ignored_not_a_cycle() -> None:
 
 
 def test_valid_gated_pair_passes_and_is_mapped() -> None:
+    llm = _llm_node()
     graph = {
-        "nodes": [_node("w1", "agent"), _node("g1", "critic_gate"), _node("n1", "agent")],
-        "edges": _edges(("w1", "g1"), ("g1", "n1")),
+        "nodes": [llm, _node("w1", "agent"), _node("g1", "critic_gate"), _node("n1", "agent")],
+        "edges": _edges(("w1", "g1"), ("g1", "n1"))
+        + [_llm_edge(llm["id"], "w1"), _llm_edge(llm["id"], "g1"), _llm_edge(llm["id"], "n1")],
     }
     order = [n["id"] for n in topological_order(graph)]
     assert order.index("w1") < order.index("g1") < order.index("n1")
-    assert find_gated_pairs(graph) == {"w1": graph["nodes"][1]}
+    gate_node = next(n for n in graph["nodes"] if n["id"] == "g1")
+    assert find_gated_pairs(graph) == {"w1": gate_node}
 
 
 def test_critic_gate_with_two_incoming_edges_raises() -> None:
@@ -434,14 +476,16 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
     owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """End-to-end (minus the actual LLM call): a run created with
-    cell_label/factor_values set gets the substituted value handed to
-    _run_agent_node, and the sink node's output lands on the right cell via
-    the real upsert_cell -- proves apply_factor_bindings is actually wired
-    into run_protocol, not just correct in isolation."""
+    cell_label/factor_values set gets the substituted value resolvable via
+    the worker's LLM connector, and the sink node's output lands on the
+    right cell via the real upsert_cell -- proves apply_factor_bindings is
+    actually wired into run_protocol, not just correct in isolation. Model
+    config lives on the connected `llm` node now, not the agent's own
+    config -- the factor binding targets that node instead."""
     received_configs = []
 
-    async def fake_run_agent_node(node, **kwargs):
-        received_configs.append(node["data"]["config"])
+    async def fake_run_agent_node(node, *, graph, **kwargs):
+        received_configs.append(pe._resolve_llm_config(graph, node["id"]))
         return f"output for {node['id']}", None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
@@ -457,15 +501,16 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
             graph={
                 "nodes": [
                     {
-                        "id": "worker",
-                        "type": "agent",
+                        "id": "llm1",
+                        "type": "llm",
                         "data": {
-                            "config": {"model_config_data": {"temperature": 0.9}},
-                            "factor_bindings": {"config.model_config_data.temperature": "Temperature"},
+                            "config": {"temperature": 0.9},
+                            "factor_bindings": {"config.temperature": "Temperature"},
                         },
-                    }
+                    },
+                    {"id": "worker", "type": "agent", "data": {"config": {}}},
                 ],
-                "edges": [],
+                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "llm"}],
             },
         )
         protocol_id = protocol.id
@@ -484,7 +529,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
     try:
         await pe.run_protocol(run_id)
 
-        assert received_configs[0]["model_config_data"]["temperature"] == 0.1
+        assert received_configs[0]["temperature"] == 0.1
 
         async with get_session() as db:
             cell = await get_cell(db, experiment_id=experiment_id, cell_label="only-cell")
@@ -561,9 +606,11 @@ async def test_run_protocol_deactivated_node_passes_through(
 
     middle = _node("b", "agent")
     middle["data"]["active"] = False
+    llm = _llm_node()
     graph = {
-        "nodes": [_node("a", "agent"), middle, _node("c", "agent")],
-        "edges": _edges(("a", "b"), ("b", "c")),
+        "nodes": [llm, _node("a", "agent"), middle, _node("c", "agent")],
+        "edges": _edges(("a", "b"), ("b", "c"))
+        + [_llm_edge(llm["id"], "a"), _llm_edge(llm["id"], "b"), _llm_edge(llm["id"], "c")],
     }
 
     async with get_session() as db:
@@ -584,6 +631,240 @@ async def test_run_protocol_deactivated_node_passes_through(
             assert fetched.node_runs["b"]["status"] == "completed"
             assert fetched.node_runs["b"]["output_text"] == "real output from a"
             assert fetched.node_runs["c"]["output_text"] == "real output from c"
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
+
+
+# --- LLM / Tool / Memory connector validation (pure) -------------------------
+
+
+def test_agent_missing_llm_connection_raises() -> None:
+    graph = {"nodes": [_node("a", "agent")], "edges": []}
+    with pytest.raises(ProtocolValidationError, match="exactly one LLM connection"):
+        topological_order(graph)
+
+
+def test_agent_duplicate_llm_connection_raises() -> None:
+    llm1, llm2 = _llm_node("llm1"), _llm_node("llm2")
+    graph = {
+        "nodes": [llm1, llm2, _node("a", "agent")],
+        "edges": [_llm_edge("llm1", "a"), _llm_edge("llm2", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="exactly one LLM connection"):
+        topological_order(graph)
+
+
+def test_critic_gate_missing_llm_connection_raises() -> None:
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate")],
+        "edges": [worker_llm_edge, {"id": "w1-g1", "source": "w1", "target": "g1"}],
+    }
+    with pytest.raises(ProtocolValidationError, match="exactly one LLM connection"):
+        topological_order(graph)
+
+
+def test_llm_connection_from_non_llm_source_raises() -> None:
+    graph = {
+        "nodes": [_node("t1", "mcp_tool"), _node("a", "agent")],
+        "edges": [{"id": "t1-a-llm", "source": "t1", "target": "a", "targetHandle": "llm"}],
+    }
+    with pytest.raises(ProtocolValidationError, match="must come from an LLM node"):
+        topological_order(graph)
+
+
+def test_tool_connection_from_non_mcp_tool_source_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _node("b", "agent")],
+        "edges": [agent_llm_edge, _tool_edge("b", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="must come from an MCP Tool node"):
+        topological_order(graph)
+
+
+def test_tool_connection_on_critic_gate_raises() -> None:
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    gate_llm_edge = _llm_edge("llm", "g1")
+    tool = _tool_node()
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate"), tool],
+        "edges": [
+            worker_llm_edge,
+            gate_llm_edge,
+            {"id": "w1-g1", "source": "w1", "target": "g1"},
+            _tool_edge("tool1", "g1"),
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="Only Agent nodes can have a Tool or Memory connection"):
+        topological_order(graph)
+
+
+def test_multiple_memory_connections_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    mem1, mem2 = _memory_node("m1"), _memory_node("m2")
+    graph = {
+        "nodes": [llm, agent, mem1, mem2],
+        "edges": [agent_llm_edge, _memory_edge("m1", "a"), _memory_edge("m2", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="at most one Memory connection"):
+        topological_order(graph)
+
+
+def test_memory_connection_from_non_memory_source_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _node("b", "agent")],
+        "edges": [agent_llm_edge, _memory_edge("b", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="must come from a Memory node"):
+        topological_order(graph)
+
+
+def test_mcp_tool_dual_role_raises() -> None:
+    # tool1 is wired BOTH as a standalone pipeline step (tool1 -> b, a plain
+    # edge) AND as an agent's Tool connector (tool1 -> a) -- not allowed at
+    # once, add a second MCP Tool node if both are wanted.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    tool = _tool_node()
+    graph = {
+        "nodes": [llm, agent, _node("b", "mcp_tool"), tool],
+        "edges": [agent_llm_edge, _tool_edge("tool1", "a"), {"id": "tool1-b", "source": "tool1", "target": "b"}],
+    }
+    with pytest.raises(ProtocolValidationError, match="can't be both a standalone pipeline step"):
+        topological_order(graph)
+
+
+def test_llm_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _node("b", "agent")],
+        "edges": [agent_llm_edge, {"id": "llm-b", "source": "llm", "target": "b"}],
+    }
+    with pytest.raises(ProtocolValidationError, match="LLM node .* can only connect to a node's LLM slot"):
+        topological_order(graph)
+
+
+def test_memory_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    memory = _memory_node()
+    graph = {
+        "nodes": [llm, agent, memory, _node("b", "agent")],
+        "edges": [agent_llm_edge, {"id": "memory-b", "source": "memory", "target": "b"}],
+    }
+    with pytest.raises(ProtocolValidationError, match="Memory node .* can only connect to a node's Memory slot"):
+        topological_order(graph)
+
+
+def test_valid_llm_tool_memory_wiring_passes() -> None:
+    llm = _llm_node(config={"provider": "anthropic", "model": "claude-sonnet-5"})
+    agent, agent_llm_edge = _agent_with_llm("a")
+    tool = _tool_node()
+    memory = _memory_node()
+    graph = {
+        "nodes": [llm, agent, tool, memory],
+        "edges": [agent_llm_edge, _tool_edge("tool1", "a"), _memory_edge("memory", "a")],
+    }
+    order = [n["id"] for n in topological_order(graph)]
+    assert set(order) == {"llm", "a", "tool1", "memory"}
+
+
+# --- LLM / Tool connector resolution (pure) -----------------------------------
+
+
+def test_resolve_llm_config_returns_connected_node_config() -> None:
+    llm = _llm_node(config={"provider": "anthropic", "model": "claude-sonnet-5", "temperature": 0.5})
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_llm_config(graph, "a") == {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5",
+        "temperature": 0.5,
+    }
+
+
+def test_resolve_llm_config_empty_when_unconnected() -> None:
+    graph = {"nodes": [_node("a", "agent")], "edges": []}
+    assert pe._resolve_llm_config(graph, "a") == {}
+
+
+def test_resolve_tool_config_collects_all_connected_tool_nodes() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    tool1 = _tool_node("tool1", server_name="srv-a", tool_name="fn_a")
+    tool2 = _tool_node("tool2", server_name="srv-b", tool_name="fn_b")
+    graph = {
+        "nodes": [agent, tool1, tool2],
+        "edges": [agent_llm_edge, _tool_edge("tool1", "a"), _tool_edge("tool2", "a")],
+    }
+    resolved = pe._resolve_tool_config(graph, "a")
+    assert resolved == {"server_names": ["srv-a", "srv-b"], "tool_names": ["fn_a", "fn_b"]}
+
+
+def test_resolve_tool_config_empty_when_no_tool_connections() -> None:
+    graph = {"nodes": [_node("a", "agent")], "edges": []}
+    assert pe._resolve_tool_config(graph, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_tool_source_node_ids_only_includes_tool_handled_edges() -> None:
+    graph = {
+        "nodes": [_node("a", "agent"), _tool_node("tool1"), _node("b", "mcp_tool")],
+        "edges": [_tool_edge("tool1", "a"), {"id": "b-a", "source": "b", "target": "a"}],
+    }
+    assert pe._tool_source_node_ids(graph) == {"tool1"}
+
+
+async def test_run_protocol_tool_source_node_never_gets_its_own_turn(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An mcp_tool node wired into an agent's Tool connector is a pure
+    config source -- it must never be dispatched to _run_mcp_tool_node."""
+    mcp_tool_calls = []
+
+    async def fake_run_mcp_tool_node(node):
+        mcp_tool_calls.append(node["id"])
+        return "should not happen", None
+
+    async def fake_run_agent_node(node, *, graph, **kwargs):
+        return f"output for {node['id']}", None
+
+    monkeypatch.setattr(pe, "_run_mcp_tool_node", fake_run_mcp_tool_node)
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    tool = _tool_node()
+    graph = {
+        "nodes": [llm, agent, tool],
+        "edges": [agent_llm_edge, _tool_edge("tool1", "a")],
+    }
+
+    async with get_session() as db:
+        protocol = await create_protocol(
+            db, name=f"tool-source-test-{uuid.uuid4().hex}", owner_id=owner_id, graph=graph
+        )
+        protocol_id = protocol.id
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run_id = run.id
+
+    try:
+        await pe.run_protocol(run_id)
+        assert mcp_tool_calls == []
+
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+            assert fetched is not None
+            assert fetched.status == "completed"
+            assert fetched.node_runs["tool1"]["status"] == "completed"
+            assert fetched.node_runs["a"]["output_text"] == "output for a"
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun

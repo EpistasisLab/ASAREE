@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { Trash2, Wrench, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { mcpServersApi } from '@/api/client'
 import { hashToChartHue } from '@/lib/utils'
+import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { McpToolNodeData, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = hashToChartHue('mcp_tool')
@@ -41,14 +41,13 @@ export function McpToolNodeInspector({
   }
 
   return (
-    <Dialog
+    <NodeInspectorDialog
       open
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-    >
-      <DialogContent showCloseButton={false} className="max-h-[85vh] w-full max-w-lg overflow-y-auto sm:max-w-lg">
-        <div className="flex items-center justify-between">
+      header={
+        <>
           <div className="flex items-center gap-2">
             <Wrench className="size-5" style={{ color: ACCENT }} />
             <h2 className="text-lg font-semibold">{data.label || 'MCP Tool'}</h2>
@@ -61,14 +60,15 @@ export function McpToolNodeInspector({
               <X className="size-4" />
             </Button>
           </div>
-        </div>
+        </>
+      }
+    >
+      <div className="space-y-1.5">
+        <Label htmlFor="mcp-node-label">Label</Label>
+        <Input id="mcp-node-label" value={data.label} onChange={(e) => onChange(node.id, { ...data, label: e.target.value })} />
+      </div>
 
-        <div className="space-y-1.5">
-          <Label htmlFor="mcp-node-label">Label</Label>
-          <Input id="mcp-node-label" value={data.label} onChange={(e) => onChange(node.id, { ...data, label: e.target.value })} />
-        </div>
-
-        {serversQuery.isLoading ? (
+      {serversQuery.isLoading ? (
           <Skeleton className="h-16 w-full" />
         ) : serversQuery.isError ? (
           <p className="text-sm text-destructive">Could not load your registered MCP servers.</p>
@@ -130,7 +130,6 @@ export function McpToolNodeInspector({
             </div>
           </>
         )}
-      </DialogContent>
-    </Dialog>
+    </NodeInspectorDialog>
   )
 }

@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { Bot, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -9,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
 import { FactorBindableField } from './FactorBindableField'
+import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { OutputContractEditor } from './OutputContractEditor'
 import type { AgentNodeConfig, AgentNodeData, ProtocolNode } from '@/types/protocols'
 
@@ -23,7 +23,9 @@ const ACCENT = hashToChartHue('agent')
 // takeover. Built on this app's own Dialog primitives (base-ui) rather than
 // a hand-rolled overlay -- Escape-to-close, backdrop-click-to-close, focus
 // trapping, and body scroll lock all come for free from `modal` (default
-// true), instead of reimplementing them.
+// true), instead of reimplementing them. Sizing (fixed, near-fullscreen,
+// unaffected by which Parameters/Settings tab is active) is shared with the
+// other node inspectors via `NodeInspectorDialog` -- see that file for why.
 //
 // Parameters/Settings mirrors n8n's own NDV split -- what defines the
 // agent's behavior/identity vs. what constrains its execution -- but drops
@@ -76,14 +78,13 @@ export function AgentNodeInspector({
   const toolConfigJson = toolConfigText ?? JSON.stringify(config.tool_config, null, 2)
 
   return (
-    <Dialog
+    <NodeInspectorDialog
       open
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-    >
-      <DialogContent showCloseButton={false} className="max-h-[85vh] w-full max-w-3xl overflow-y-auto sm:max-w-3xl">
-        <div className="flex items-center justify-between">
+      header={
+        <>
           <div className="flex items-center gap-2">
             <Bot className="size-5" style={{ color: ACCENT }} />
             <h2 className="text-lg font-semibold">{data.label || 'Agent'}</h2>
@@ -96,14 +97,15 @@ export function AgentNodeInspector({
               <X className="size-4" />
             </Button>
           </div>
-        </div>
+        </>
+      }
+    >
+      <div className="space-y-1.5">
+        <Label htmlFor="node-label">Label</Label>
+        <Input id="node-label" value={data.label} onChange={(e) => onChange(node.id, { ...data, label: e.target.value })} />
+      </div>
 
-        <div className="space-y-1.5">
-          <Label htmlFor="node-label">Label</Label>
-          <Input id="node-label" value={data.label} onChange={(e) => onChange(node.id, { ...data, label: e.target.value })} />
-        </div>
-
-        <Tabs defaultValue="parameters">
+      <Tabs defaultValue="parameters">
           <TabsList>
             <TabsTrigger value="parameters">Parameters</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
@@ -322,8 +324,7 @@ export function AgentNodeInspector({
               {toolConfigError && <p className="text-xs text-destructive">{toolConfigError}</p>}
             </div>
           </TabsContent>
-        </Tabs>
-      </DialogContent>
-    </Dialog>
+      </Tabs>
+    </NodeInspectorDialog>
   )
 }

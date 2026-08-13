@@ -1,6 +1,5 @@
 import { ShieldCheck, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -8,16 +7,20 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
 import { FactorBindableField } from './FactorBindableField'
+import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { CriticGateNodeConfig, CriticGateNodeData, ProtocolNode } from '@/types/protocols'
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const ACCENT = hashToChartHue('critic_gate')
 
-// Same floating-dialog shell as AgentNodeInspector/McpToolNodeInspector, but
-// deliberately smaller: the critic never gets tools, always runs
-// single-pass, and its output_contract is fixed by the executor
-// (CRITIC_OUTPUT_CONTRACT) -- none of that belongs in this UI at all,
-// unlike an Agent node's much larger config surface.
+// Same fixed-size NodeInspectorDialog shell as AgentNodeInspector/
+// McpToolNodeInspector (see that file), but with a deliberately smaller
+// field set: the critic never gets tools, always runs single-pass, and its
+// output_contract is fixed by the executor (CRITIC_OUTPUT_CONTRACT) --
+// none of that belongs in this UI at all, unlike an Agent node's much
+// larger config surface. Fewer fields no longer means a smaller dialog,
+// though -- the frame is fixed regardless, only the scrollable body inside
+// it is shorter.
 export function CriticGateNodeInspector({
   node,
   experimentId,
@@ -55,14 +58,13 @@ export function CriticGateNodeInspector({
   }
 
   return (
-    <Dialog
+    <NodeInspectorDialog
       open
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-    >
-      <DialogContent showCloseButton={false} className="max-h-[85vh] w-full max-w-lg overflow-y-auto sm:max-w-lg">
-        <div className="flex items-center justify-between">
+      header={
+        <>
           <div className="flex items-center gap-2">
             <ShieldCheck className="size-5" style={{ color: ACCENT }} />
             <h2 className="text-lg font-semibold">{data.label || 'Critic Gate'}</h2>
@@ -75,9 +77,10 @@ export function CriticGateNodeInspector({
               <X className="size-4" />
             </Button>
           </div>
-        </div>
-
-        <FactorBindableField
+        </>
+      }
+    >
+      <FactorBindableField
           experimentId={experimentId}
           fieldPath="config.enabled"
           defaultLabel="Critic enabled"
@@ -218,7 +221,6 @@ export function CriticGateNodeInspector({
             />
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+    </NodeInspectorDialog>
   )
 }

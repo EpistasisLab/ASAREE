@@ -8,9 +8,12 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useViewport,
   type Connection,
   type Edge,
   type Node,
+  type ReactFlowInstance,
+  type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { Play, Plus } from 'lucide-react'
@@ -33,6 +36,21 @@ import { McpToolNode } from './nodes/McpToolNode'
 const NODE_TYPES = { agent: AgentNode, mcp_tool: McpToolNode, critic_gate: CriticGateNode }
 const AUTOSAVE_DELAY_MS = 800
 const RUN_POLL_MS = 2000
+
+// x/y are pixel offsets of the flow's translation (screen space, not flow
+// coordinates), so a 1px tolerance is "same place" regardless of how large
+// the node layout is. zoom is a unitless scale factor -- same epsilon
+// CanvasControls already uses for its own "is this the default zoom" check.
+const VIEWPORT_EPSILON_XY = 1
+const VIEWPORT_EPSILON_ZOOM = 0.01
+
+function isNearViewport(a: Viewport, b: Viewport): boolean {
+  return (
+    Math.abs(a.x - b.x) < VIEWPORT_EPSILON_XY &&
+    Math.abs(a.y - b.y) < VIEWPORT_EPSILON_XY &&
+    Math.abs(a.zoom - b.zoom) < VIEWPORT_EPSILON_ZOOM
+  )
+}
 
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData('New MCP Tool')
@@ -85,6 +103,20 @@ export function ProtocolCanvas({
   const [runId, setRunId] = useState<string | null>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
+
+  // The canvas's "resting" viewport isn't a fixed constant -- fitView (set
+  // below) recomputes x/y/zoom from the actual node layout on mount, so we
+  // capture it once via onInit rather than assuming defaultViewport. onInit
+  // only fires after xyflow's own viewportInitialized flips true, which is
+  // after the declarative fitView has resolved -- until it fires, ref.current
+  // is null and we treat the canvas as at rest (MiniMap stays hidden), which
+  // is also the correct look while fitView is still settling.
+  const restingViewportRef = useRef<Viewport | null>(null)
+  const onCanvasInit = useCallback((instance: ReactFlowInstance) => {
+    restingViewportRef.current = instance.getViewport()
+  }, [])
+  const currentViewport = useViewport()
+  const isAtRest = !restingViewportRef.current || isNearViewport(currentViewport, restingViewportRef.current)
 
   const onConnect = useCallback((connection: Connection) => setEdges((eds) => addEdge(connection, eds)), [setEdges])
 
@@ -184,9 +216,12 @@ export function ProtocolCanvas({
           defaultViewport={{ x: 0, y: 0, zoom: DEFAULT_ZOOM }}
           minZoom={0.2}
           proOptions={{ hideAttribution: true }}
+          onInit={onCanvasInit}
         >
           <Background color="var(--primary)" gap={28} size={1} style={{ opacity: 0.2 }} />
-          <MiniMap pannable zoomable className="!bg-card" maskColor="color-mix(in oklch, var(--background), transparent 40%)" />
+          {!isAtRest && (
+            <MiniMap pannable zoomable className="!bg-card" maskColor="color-mix(in oklch, var(--background), transparent 40%)" />
+          )}
         </ReactFlow>
         <CanvasControls />
         <div className="absolute top-3 right-3 z-10 flex items-center gap-2">

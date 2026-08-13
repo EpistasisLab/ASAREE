@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import {
+  Archive,
   ArrowDown,
   ArrowRight,
   ArrowUp,
@@ -17,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { formatDate, formatRelative } from '@/lib/format'
 import { cellsStatusAccent, factorCount } from '@/lib/experiment'
 import { cardAccent } from '@/lib/utils'
@@ -41,7 +43,11 @@ const PAGE_SIZE = 9
 
 export function ExperimentsPage() {
   const navigate = useNavigate()
-  const { data, isLoading } = useQuery({ queryKey: ['experiments'], queryFn: () => experimentsApi.list() })
+  const [includeArchived, setIncludeArchived] = useState(false)
+  const { data, isLoading } = useQuery({
+    queryKey: ['experiments', { includeArchived }],
+    queryFn: () => experimentsApi.list({ includeArchived }),
+  })
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'created_at', dir: 'desc' })
   const [page, setPage] = useState(1)
 
@@ -92,39 +98,46 @@ export function ExperimentsPage() {
           <p className="text-sm text-muted-foreground">
             {isLoading ? 'Loading…' : `${sorted?.length ?? 0} experiment${sorted?.length === 1 ? '' : 's'}`}
           </p>
-          {sorted && sorted.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">Sort</span>
-              <Select
-                value={sort.key}
-                onValueChange={(value) => {
-                  if (value === null) return
-                  setSort((prev) => ({ ...prev, key: value as SortKey }))
-                  setPage(1)
-                }}
-              >
-                <SelectTrigger size="sm" className="w-32">
-                  <SelectValue>{(value: SortKey) => SORT_LABELS[value]}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="created_at">Created</SelectItem>
-                  <SelectItem value="name">Name</SelectItem>
-                  <SelectItem value="design_type">Design</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                variant="outline"
-                size="icon-sm"
-                onClick={() => {
-                  setSort((prev) => ({ ...prev, dir: prev.dir === 'asc' ? 'desc' : 'asc' }))
-                  setPage(1)
-                }}
-                aria-label={sort.dir === 'asc' ? 'Sort ascending' : 'Sort descending'}
-              >
-                {sort.dir === 'asc' ? <ArrowUp className="size-4" /> : <ArrowDown className="size-4" />}
-              </Button>
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Show archived</span>
+            {/* Not gated behind "sorted.length > 0" like the Sort controls below --
+                otherwise archiving your only experiment hides this toggle along with
+                the (now empty) list, with no way to reveal it again. */}
+            <Switch checked={includeArchived} onCheckedChange={setIncludeArchived} aria-label="Show archived" />
+            {sorted && sorted.length > 0 && (
+              <>
+                <span className="text-xs text-muted-foreground">Sort</span>
+                <Select
+                  value={sort.key}
+                  onValueChange={(value) => {
+                    if (value === null) return
+                    setSort((prev) => ({ ...prev, key: value as SortKey }))
+                    setPage(1)
+                  }}
+                >
+                  <SelectTrigger size="sm" className="w-32">
+                    <SelectValue>{(value: SortKey) => SORT_LABELS[value]}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="created_at">Created</SelectItem>
+                    <SelectItem value="name">Name</SelectItem>
+                    <SelectItem value="design_type">Design</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  onClick={() => {
+                    setSort((prev) => ({ ...prev, dir: prev.dir === 'asc' ? 'desc' : 'asc' }))
+                    setPage(1)
+                  }}
+                  aria-label={sort.dir === 'asc' ? 'Sort ascending' : 'Sort descending'}
+                >
+                  {sort.dir === 'asc' ? <ArrowUp className="size-4" /> : <ArrowDown className="size-4" />}
+                </Button>
+              </>
+            )}
+          </div>
         </div>
 
         {isLoading ? (
@@ -162,6 +175,12 @@ export function ExperimentsPage() {
                       <div className="flex min-w-0 items-start justify-between gap-2">
                         <CardTitle className="min-w-0 flex-1 truncate">{experiment.name}</CardTitle>
                         <div className="flex shrink-0 flex-col items-end gap-1">
+                          {experiment.archived_at !== null && (
+                            <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
+                              <Archive className="size-3" />
+                              Archived
+                            </Badge>
+                          )}
                           <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
                             <Layers className="size-3" />
                             {experiment.design_type}

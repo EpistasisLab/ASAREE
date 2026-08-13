@@ -145,7 +145,8 @@ export const tokenApi = {
 }
 
 export const experimentsApi = {
-  list: () => request<Experiment[]>('/experiments'),
+  list: (opts?: { includeArchived?: boolean }) =>
+    request<Experiment[]>(opts?.includeArchived ? '/experiments?include_archived=true' : '/experiments'),
   get: (id: string) => request<Experiment>(`/experiments/${id}`),
   create: (data: { name: string; description?: string | null }) =>
     request<Experiment>('/experiments', { method: 'POST', body: data }),

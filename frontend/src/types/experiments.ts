@@ -17,6 +17,7 @@ export interface Experiment {
   design_spec: DesignSpec | null
   dataset_id: string | null
   created_at: string
+  archived_at: string | null
 }
 
 export interface Cell {

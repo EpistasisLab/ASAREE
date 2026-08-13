@@ -91,6 +91,16 @@ class Cell(BaseModel):
     updated_at: datetime
 
 
+class Protocol(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str | None
+    experiment_id: uuid.UUID | None
+    graph: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
 class RegisteredDataset(BaseModel):
     id: uuid.UUID
     name: str

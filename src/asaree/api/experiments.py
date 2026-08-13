@@ -51,11 +51,14 @@ class CreateExperimentRequest(BaseModel):
 
 
 class UpdateExperimentRequest(BaseModel):
-    """``dataset_id`` is the only mutable field so far. Explicitly setting it
-    (including to ``null``, to detach) is applied; omitting it entirely
-    leaves the experiment unchanged — same "unset vs. null" convention
-    ``UpsertCellRequest`` uses below."""
+    """All fields optional; only the ones actually set are written -- same
+    "unset vs. null" convention ``UpsertCellRequest`` uses below. ``name``
+    is how the GUI renames an experiment created with a placeholder name
+    straight from the Experiments page; ``dataset_id`` (including explicit
+    ``null``, to detach) is the notebook's Step 2 attach-after-create flow."""
 
+    name: str | None = None
+    description: str | None = None
     dataset_id: uuid.UUID | None = None
 
 
@@ -170,9 +173,14 @@ async def update_experiment_endpoint(
 ) -> ExperimentResponse:
     experiment = await _get_owned_experiment(db, experiment_id, user)
     fields = body.model_dump(exclude_unset=True)
+    if "name" in fields and fields["name"] is not None:
+        existing = await get_experiment_by_name(db, fields["name"], owner_id=user.id)
+        if existing is not None and existing.id != experiment_id:
+            raise HTTPException(status_code=409, detail="An experiment with this name already exists")
     if "dataset_id" in fields:
-        dataset_id = await _validated_dataset_id(fields["dataset_id"], db, user)
-        experiment = await update_experiment(db, experiment_id, dataset_id=dataset_id)
+        fields["dataset_id"] = await _validated_dataset_id(fields["dataset_id"], db, user)
+    if fields:
+        experiment = await update_experiment(db, experiment_id, fields=fields)
         assert experiment is not None  # existence already checked above
     return _experiment_response(experiment)
 

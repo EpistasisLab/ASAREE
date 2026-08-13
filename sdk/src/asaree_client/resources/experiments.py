@@ -15,6 +15,10 @@ from typing import Any
 from asaree_client.models import Cell, Experiment
 
 ResourceId = uuid.UUID | str
+# Distinguishes "omit this kwarg" (leave unchanged) from "pass None"
+# (explicitly clear/detach) in update() below -- a plain default of None
+# can't tell those apart.
+_UNSET: Any = object()
 
 
 class Experiments:
@@ -51,11 +55,27 @@ class Experiments:
     def delete(self, experiment_id: ResourceId) -> None:
         self._client._delete(f"/experiments/{experiment_id}")
 
-    def update(self, experiment_id: ResourceId, *, dataset_id: ResourceId | None) -> Experiment:
-        """Attach (or, passing ``None``, detach) a dataset after the fact —
-        registration (Step 2) happens after the experiment is created (Step
-        1), so there's no dataset to attach at create() time."""
-        data = self._client._patch(f"/experiments/{experiment_id}", json={"dataset_id": str(dataset_id) if dataset_id else None})
+    def update(
+        self,
+        experiment_id: ResourceId,
+        *,
+        name: str | None = _UNSET,
+        description: str | None = _UNSET,
+        dataset_id: ResourceId | None = _UNSET,
+    ) -> Experiment:
+        """Only the fields actually passed are sent (omit one to leave it
+        unchanged; pass ``None`` explicitly to clear/detach it) --
+        ``dataset_id=None`` attaches nothing / detaches, same as before;
+        ``name``/``description`` are new, for renaming an experiment created
+        with a placeholder name straight from the GUI."""
+        payload: dict[str, Any] = {}
+        if name is not _UNSET:
+            payload["name"] = name
+        if description is not _UNSET:
+            payload["description"] = description
+        if dataset_id is not _UNSET:
+            payload["dataset_id"] = str(dataset_id) if dataset_id else None
+        data = self._client._patch(f"/experiments/{experiment_id}", json=payload)
         return Experiment(**data)
 
     def generate_design(self, experiment_id: ResourceId) -> builtins.list[Cell]:

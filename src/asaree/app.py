@@ -25,6 +25,7 @@ from asaree.api.datasets import router as datasets_router
 from asaree.api.experiments import router as experiments_router
 from asaree.api.llm_settings import router as llm_settings_router
 from asaree.api.mcp_servers import router as mcp_servers_router
+from asaree.api.protocols import router as protocols_router
 from asaree.api.runs import router as runs_router
 from asaree.api.users import router as users_router
 from asaree.config import get_settings
@@ -123,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(agents_router, prefix="/api")
     app.include_router(runs_router, prefix="/api")
     app.include_router(experiments_router, prefix="/api")
+    app.include_router(protocols_router, prefix="/api")
 
     return app
 

@@ -13,6 +13,7 @@ from asaree_client.resources.agents import Agents
 from asaree_client.resources.datasets import Datasets
 from asaree_client.resources.experiments import Experiments
 from asaree_client.resources.llm_settings import LLMSettings
+from asaree_client.resources.protocols import Protocols
 from asaree_client.resources.runs import Runs
 from asaree_client.resources.tools import Tools
 
@@ -63,6 +64,7 @@ class AsareeClient:
         self.agents = Agents(self)
         self.runs = Runs(self)
         self.experiments = Experiments(self)
+        self.protocols = Protocols(self)
         self.datasets = Datasets(self)
         self.tools = Tools(self)
         self.llm_settings = LLMSettings(self)

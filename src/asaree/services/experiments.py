@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.experiment import ResearchExperiment
 
+_SETTABLE_FIELDS = frozenset({"name", "description", "dataset_id"})
+
 
 async def create_experiment(
     db: AsyncSession,
@@ -39,21 +41,24 @@ async def create_experiment(
 
 
 async def update_experiment(
-    db: AsyncSession, experiment_id: uuid.UUID, *, dataset_id: uuid.UUID | None
+    db: AsyncSession, experiment_id: uuid.UUID, *, fields: dict[str, Any]
 ) -> ResearchExperiment | None:
-    """Set ``dataset_id`` on an existing experiment.
-
-    ``dataset_id=None`` here means "detach," not "leave unchanged" -- unlike
-    ``update_agent``'s fields, this is the only mutable field on an
-    experiment so far, and there's no other way to clear it. Registration
-    (Step 2 of the notebook) happens after the experiment is created (Step
-    1), so this exists to attach a dataset after the fact rather than only
-    at creation time.
+    """Set whichever fields the caller passed (an ``exclude_unset`` dump from
+    the API layer) -- e.g. ``name``/``description`` from renaming an
+    experiment created with a placeholder name straight from the GUI, or
+    ``dataset_id`` (including explicit ``None``, to detach) from the
+    notebook's Step 2 attach-after-create flow. Same allow-listed
+    setattr idiom as ``services.protocols.update_protocol``.
     """
+    unknown = set(fields) - _SETTABLE_FIELDS
+    if unknown:
+        raise ValueError(f"not settable on an experiment: {sorted(unknown)}")
+
     experiment = await get_experiment(db, experiment_id)
     if experiment is None:
         return None
-    experiment.dataset_id = dataset_id
+    for key, value in fields.items():
+        setattr(experiment, key, value)
     await db.flush()
     await db.refresh(experiment)
     return experiment

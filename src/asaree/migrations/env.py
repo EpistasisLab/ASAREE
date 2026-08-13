@@ -23,6 +23,7 @@ import asaree.models.dataset_workspace_event  # noqa: F401
 import asaree.models.experiment  # noqa: F401
 import asaree.models.factorial_cell_result  # noqa: F401
 import asaree.models.password_reset_token  # noqa: F401
+import asaree.models.protocol  # noqa: F401
 import asaree.models.user  # noqa: F401
 import asaree.models.user_api_token  # noqa: F401
 import asaree.models.user_llm_setting  # noqa: F401

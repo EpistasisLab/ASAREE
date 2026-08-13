@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   addEdge,
   Background,
@@ -12,11 +13,11 @@ import {
   type Node,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Plus } from 'lucide-react'
+import { Play, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { protocolsApi } from '@/api/client'
 import { defaultAgentNodeData, defaultMcpToolNodeData } from '@/types/protocols'
-import type { AgentNodeData, McpToolNodeData, ProtocolGraph, ProtocolNode } from '@/types/protocols'
+import type { AgentNodeData, McpToolNodeData, ProtocolGraph, ProtocolNode, ProtocolRun } from '@/types/protocols'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
 import { CanvasControls } from './CanvasControls'
@@ -26,6 +27,8 @@ import { McpToolNode } from './nodes/McpToolNode'
 
 const NODE_TYPES = { agent: AgentNode, mcp_tool: McpToolNode }
 const AUTOSAVE_DELAY_MS = 800
+const RUN_POLL_MS = 2000
+const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>(['completed', 'failed'])
 
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   return nodeType === 'mcp_tool' ? defaultMcpToolNodeData('New MCP Tool') : defaultAgentNodeData('New Agent')
@@ -65,10 +68,39 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialGraph.edges as Edge[])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [addPanelOpen, setAddPanelOpen] = useState(false)
+  const [runId, setRunId] = useState<string | null>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
 
   const onConnect = useCallback((connection: Connection) => setEdges((eds) => addEdge(connection, eds)), [setEdges])
+
+  const runMutation = useMutation({
+    mutationFn: () => protocolsApi.run(protocolId),
+    onSuccess: (run) => setRunId(run.id),
+  })
+
+  // First refetchInterval-based poll in this codebase -- no existing
+  // long-running-job UI to mirror. Function form so polling stops itself
+  // once the run reaches a terminal status, rather than polling forever.
+  const runQuery = useQuery({
+    queryKey: ['protocols', protocolId, 'runs', runId],
+    queryFn: () => protocolsApi.getRun(protocolId, runId!),
+    enabled: !!runId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      return status && TERMINAL_RUN_STATUSES.has(status) ? false : RUN_POLL_MS
+    },
+  })
+
+  const isRunning = runMutation.isPending || (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
+
+  const nodesWithRunStatus = useMemo(() => {
+    if (!runQuery.data) return nodes
+    return nodes.map((n) => ({
+      ...n,
+      data: { ...n.data, runStatus: runQuery.data!.node_runs[n.id]?.status },
+    }))
+  }, [nodes, runQuery.data])
 
   // n8n's own pattern: a "+" on the canvas opens a searchable node-type
   // panel on the right, rather than a static always-visible drag palette.
@@ -117,7 +149,7 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
     <div className="flex h-full w-full">
       <div ref={paneRef} className="relative flex-1">
         <ReactFlow
-          nodes={nodes}
+          nodes={nodesWithRunStatus}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
@@ -139,17 +171,28 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
           <MiniMap pannable zoomable className="!bg-card" maskColor="color-mix(in oklch, var(--background), transparent 40%)" />
         </ReactFlow>
         <CanvasControls />
-        <Button
-          size="icon"
-          className="absolute top-3 right-3 z-10 rounded-full"
-          aria-label="Add node"
-          onClick={() => {
-            setSelectedNodeId(null)
-            setAddPanelOpen(true)
-          }}
-        >
-          <Plus className="size-4" />
-        </Button>
+        <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
+          {(runMutation.isError || runQuery.data?.status === 'failed') && (
+            <span className="max-w-64 truncate rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive" title={runQuery.data?.error ?? undefined}>
+              {runQuery.data?.error ?? 'Could not start the run.'}
+            </span>
+          )}
+          <Button size="sm" disabled={isRunning} onClick={() => runMutation.mutate()}>
+            <Play className="size-4" />
+            {isRunning ? 'Running…' : 'Run'}
+          </Button>
+          <Button
+            size="icon"
+            className="rounded-full"
+            aria-label="Add node"
+            onClick={() => {
+              setSelectedNodeId(null)
+              setAddPanelOpen(true)
+            }}
+          >
+            <Plus className="size-4" />
+          </Button>
+        </div>
       </div>
       {addPanelOpen ? (
         <AddNodePanel onAdd={addNode} onClose={() => setAddPanelOpen(false)} />

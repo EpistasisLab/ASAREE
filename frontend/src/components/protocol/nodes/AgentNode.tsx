@@ -1,14 +1,17 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { Bot } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { cardAccent, hashToChartHue } from '@/lib/utils'
-import type { AgentNodeData } from '@/types/protocols'
+import { nodeRunBadge } from '@/lib/protocolRun'
+import type { AgentNodeData, NodeRunStatus } from '@/types/protocols'
 
 // All "agent" nodes share one hue in V1 -- type-based coloring (CLAUDE.md's
 // hash-driven tint rule for "real category variety"), not per-instance
 // variety, since a node's identity is its type, not its label.
 const ACCENT = hashToChartHue('agent')
 
-export function AgentNode({ data, selected }: NodeProps & { data: AgentNodeData }) {
+export function AgentNode({ data, selected }: NodeProps & { data: AgentNodeData & { runStatus?: NodeRunStatus } }) {
+  const badge = nodeRunBadge(data.runStatus)
   return (
     <div
       style={cardAccent(ACCENT)}
@@ -16,6 +19,9 @@ export function AgentNode({ data, selected }: NodeProps & { data: AgentNodeData 
         selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
       }`}
     >
+      {badge && (
+        <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
+      )}
       <Handle
         type="target"
         position={Position.Top}

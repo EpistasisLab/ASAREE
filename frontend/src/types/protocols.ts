@@ -28,6 +28,25 @@ export interface ProtocolEdge {
   targetHandle?: string | null
 }
 
+export type NodeRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+
+export interface NodeRunState {
+  status: NodeRunStatus
+  run_id?: string | null
+  output_text?: string | null
+  error?: string | null
+}
+
+export interface ProtocolRun {
+  id: string
+  protocol_id: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  node_runs: Record<string, NodeRunState>
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
 // Mirrors CreateAgentRequest (src/asaree/api/agents.py) field-for-field so a
 // later execution phase can hand `config` straight to client.agents.create(...)
 // with zero remapping.

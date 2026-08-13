@@ -1,16 +1,19 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { Wrench } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { cardAccent, hashToChartHue } from '@/lib/utils'
-import type { McpToolNodeData } from '@/types/protocols'
+import { nodeRunBadge } from '@/lib/protocolRun'
+import type { McpToolNodeData, NodeRunStatus } from '@/types/protocols'
 
 // A different hue from "agent" -- real category variety (CLAUDE.md's
 // hash-driven tint rule), all mcp_tool nodes still share this one hue.
 const ACCENT = hashToChartHue('mcp_tool')
 
-export function McpToolNode({ data, selected }: NodeProps & { data: McpToolNodeData }) {
+export function McpToolNode({ data, selected }: NodeProps & { data: McpToolNodeData & { runStatus?: NodeRunStatus } }) {
   const summary = data.config?.tool_name
     ? `${data.config.server_name ?? '?'}.${data.config.tool_name}`
     : 'Not configured'
+  const badge = nodeRunBadge(data.runStatus)
 
   return (
     <div
@@ -19,6 +22,9 @@ export function McpToolNode({ data, selected }: NodeProps & { data: McpToolNodeD
         selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
       }`}
     >
+      {badge && (
+        <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
+      )}
       <Handle
         type="target"
         position={Position.Top}

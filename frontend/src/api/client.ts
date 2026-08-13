@@ -14,7 +14,7 @@ import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
 import type { Cell, Experiment } from '@/types/experiments'
 import type { McpServer } from '@/types/mcpServers'
-import type { Protocol, ProtocolGraph } from '@/types/protocols'
+import type { Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
 import type { Run } from '@/types/runs'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
@@ -162,6 +162,10 @@ export const protocolsApi = {
   update: (id: string, data: { name?: string; description?: string | null; graph?: ProtocolGraph }) =>
     request<Protocol>(`/protocols/${id}`, { method: 'PATCH', body: data }),
   remove: (id: string) => request<void>(`/protocols/${id}`, { method: 'DELETE' }),
+  // 422 if the graph is empty or has a cycle -- returns immediately with
+  // status "pending"; poll getRun for progress.
+  run: (id: string) => request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST' }),
+  getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
 }
 
 export const datasetsApi = {

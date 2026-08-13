@@ -13,6 +13,7 @@ import type {
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
 import type { Cell, Experiment } from '@/types/experiments'
+import type { LLMProvider, LLMSetting } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
 import type { Run } from '@/types/runs'
@@ -187,6 +188,14 @@ export const mcpServersApi = {
   // existing scope (system servers like asaree-workspace aren't listed here
   // either; not something the MCP Tool node picker widens).
   list: () => request<McpServer[]>('/mcp-servers'),
+}
+
+export const llmSettingsApi = {
+  list: () => request<LLMSetting[]>('/llm-settings'),
+  // PUT, not POST: one row per (user, provider) -- a second call for the
+  // same provider replaces it, it doesn't create a second credential.
+  upsert: (data: { provider: LLMProvider; api_key: string; api_base?: string | null }) =>
+    request<LLMSetting>('/llm-settings', { method: 'PUT', body: data }),
 }
 
 export { tryRefreshToken }

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import {
   ArrowDown,
   ArrowRight,
@@ -8,7 +8,6 @@ import {
   ChevronRight,
   FlaskConical,
   Layers,
-  Plus,
   SlidersHorizontal,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -39,49 +38,6 @@ function sortValue(experiment: Experiment, key: SortKey): string | number {
 }
 
 const PAGE_SIZE = 9
-
-const UNTITLED_PATTERN = /^Untitled Experiment(?: (\d+))?$/
-
-// n8n-style: no name/description gate before creating -- a placeholder name
-// (bumped past whatever "Untitled Experiment [N]" the user already has, so
-// it doesn't collide with uq_research_experiments_owner_name) lets creation
-// be a single click, straight into the protocol canvas to rename and build
-// the pipeline as nodes. That's the point of creating from the GUI at all,
-// so there's no separate "empty experiment" landing state to design for.
-function nextUntitledName(existing: Experiment[] | undefined): string {
-  let maxN = 0
-  let sawUntitled = false
-  for (const e of existing ?? []) {
-    const m = UNTITLED_PATTERN.exec(e.name)
-    if (!m) continue
-    sawUntitled = true
-    maxN = Math.max(maxN, m[1] ? Number(m[1]) : 1)
-  }
-  return sawUntitled ? `Untitled Experiment ${maxN + 1}` : 'Untitled Experiment'
-}
-
-function CreateExperimentButton({ existing }: { existing: Experiment[] | undefined }) {
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
-
-  const createMutation = useMutation({
-    mutationFn: () => experimentsApi.create({ name: nextUntitledName(existing) }),
-    onSuccess: (experiment) => {
-      queryClient.invalidateQueries({ queryKey: ['experiments'] })
-      navigate(`/experiments/${experiment.id}/protocol`)
-    },
-  })
-
-  return (
-    <div className="flex flex-col items-end gap-1">
-      <Button size="sm" onClick={() => createMutation.mutate()} disabled={createMutation.isPending}>
-        <Plus className="size-4" />
-        {createMutation.isPending ? 'Creating…' : 'Create experiment'}
-      </Button>
-      {createMutation.isError && <p className="text-xs text-destructive">Could not create the experiment.</p>}
-    </div>
-  )
-}
 
 export function ExperimentsPage() {
   const navigate = useNavigate()
@@ -124,15 +80,12 @@ export function ExperimentsPage() {
       <AppHeader />
 
       <main className="mx-auto max-w-6xl space-y-6 px-6 py-10">
-        <div className="flex items-center justify-between gap-2.5">
-          <div className="flex items-center gap-2.5">
-            <FlaskConical className="size-6 text-primary" />
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight">Experiments</h1>
-              <p className="text-sm text-muted-foreground">Factorial sweeps run against this workspace.</p>
-            </div>
+        <div className="flex items-center gap-2.5">
+          <FlaskConical className="size-6 text-primary" />
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Experiments</h1>
+            <p className="text-sm text-muted-foreground">Factorial sweeps run against this workspace.</p>
           </div>
-          <CreateExperimentButton existing={data} />
         </div>
 
         <div className="flex items-center justify-between">

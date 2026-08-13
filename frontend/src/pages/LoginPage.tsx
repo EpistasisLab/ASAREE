@@ -18,9 +18,9 @@ export function LoginPage() {
   const location = useLocation()
   const successMessage = (location.state as { message?: string } | null)?.message
 
-  const [email, setEmail] = useState(() => sessionStorage.getItem(REMEMBER_KEY) ?? '')
+  const [email, setEmail] = useState(() => localStorage.getItem(REMEMBER_KEY) ?? '')
   const [password, setPassword] = useState('')
-  const [remember, setRemember] = useState(() => Boolean(sessionStorage.getItem(REMEMBER_KEY)))
+  const [remember, setRemember] = useState(() => Boolean(localStorage.getItem(REMEMBER_KEY)))
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({})
   const [error, setError] = useState<string | null>(null)
   const [retryAfter, setRetryAfter] = useState<number | null>(null)
@@ -48,8 +48,8 @@ export function LoginPage() {
     setSubmitting(true)
     try {
       await login({ email, password })
-      if (remember) sessionStorage.setItem(REMEMBER_KEY, email)
-      else sessionStorage.removeItem(REMEMBER_KEY)
+      if (remember) localStorage.setItem(REMEMBER_KEY, email)
+      else localStorage.removeItem(REMEMBER_KEY)
       navigate('/experiments')
     } catch (err) {
       if (err instanceof ApiError) {

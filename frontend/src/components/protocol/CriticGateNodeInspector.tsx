@@ -101,11 +101,6 @@ export function CriticGateNodeInspector({
         </FactorBindableField>
 
         <div className="space-y-1.5">
-          <Label htmlFor="gate-label">Label</Label>
-          <Input id="gate-label" value={data.label} onChange={(e) => onChange(node.id, { ...data, label: e.target.value })} />
-        </div>
-
-        <div className="space-y-1.5">
           <Label htmlFor="gate-name">Name</Label>
           <Input id="gate-name" value={config.name} onChange={(e) => patchConfig({ name: e.target.value })} />
         </div>

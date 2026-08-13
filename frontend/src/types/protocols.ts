@@ -123,6 +123,13 @@ export interface AgentNodeData {
   // factor". The factor itself lives on the linked experiment's own
   // design_spec.factors -- this is only the node-side half of the binding.
   factor_bindings?: Record<string, string>
+  // Absent/undefined means active -- every graph saved before this field
+  // existed is unaffected. A deactivated node's own logic is skipped
+  // entirely by the executor; its upstream input passes straight through
+  // as its own output unchanged (services.protocol_execution's
+  // _upstream_output_text). Toggled via the canvas's per-node hover
+  // toolbar, not exposed in the inspector.
+  active?: boolean
   [key: string]: unknown
 }
 
@@ -158,6 +165,8 @@ export interface McpToolNodeConfig {
 export interface McpToolNodeData {
   label: string
   config: McpToolNodeConfig
+  // Same passthrough-deactivate semantic as AgentNodeData.active.
+  active?: boolean
   [key: string]: unknown
 }
 
@@ -178,6 +187,11 @@ export interface CriticGateNodeConfig {
   description: string
   system_prompt: string
   model_config_data: AgentModelConfigData
+  // Critic gates have no separate top-level `active` flag the way
+  // AgentNodeData/McpToolNodeData do -- this field already means exactly
+  // that for the review step specifically ("off" = the worker's output
+  // passes straight through, no review), so the canvas's hover power icon
+  // toggles this same field rather than introducing a redundant one.
   enabled: boolean
   max_revisions: number
 }

@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Trash2, Wrench, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -63,11 +62,6 @@ export function McpToolNodeInspector({
         </>
       }
     >
-      <div className="space-y-1.5">
-        <Label htmlFor="mcp-node-label">Label</Label>
-        <Input id="mcp-node-label" value={data.label} onChange={(e) => onChange(node.id, { ...data, label: e.target.value })} />
-      </div>
-
       {serversQuery.isLoading ? (
           <Skeleton className="h-16 w-full" />
         ) : serversQuery.isError ? (

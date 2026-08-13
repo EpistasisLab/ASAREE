@@ -100,11 +100,6 @@ export function AgentNodeInspector({
         </>
       }
     >
-      <div className="space-y-1.5">
-        <Label htmlFor="node-label">Label</Label>
-        <Input id="node-label" value={data.label} onChange={(e) => onChange(node.id, { ...data, label: e.target.value })} />
-      </div>
-
       <Tabs defaultValue="parameters">
           <TabsList>
             <TabsTrigger value="parameters">Parameters</TabsTrigger>

@@ -1,7 +1,8 @@
-import { Maximize2, ZoomIn, ZoomOut } from 'lucide-react'
-import { useReactFlow } from '@xyflow/react'
+import { Maximize2, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
+import { useReactFlow, useViewport } from '@xyflow/react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { DEFAULT_ZOOM } from './constants'
 
 // Replaces xyflow's built-in <Controls /> -- its plain unstyled buttons read
 // as barely-visible against this theme's dark surface, and its native
@@ -27,7 +28,11 @@ function ControlIconButton({
 }
 
 export function CanvasControls() {
-  const { zoomIn, zoomOut, fitView } = useReactFlow()
+  const { zoomIn, zoomOut, fitView, zoomTo } = useReactFlow()
+  const { zoom } = useViewport()
+  // n8n's own pattern: a "reset zoom" button that only appears once the
+  // user has actually zoomed away from the canvas's default level.
+  const isDefaultZoom = Math.abs(zoom - DEFAULT_ZOOM) < 0.01
 
   return (
     <TooltipProvider delay={200}>
@@ -38,7 +43,14 @@ export function CanvasControls() {
         <ControlIconButton label="Zoom out" onClick={() => zoomOut()}>
           <ZoomOut className="size-4" />
         </ControlIconButton>
-        <ControlIconButton label="Fit view" onClick={() => fitView()}>
+        {!isDefaultZoom && (
+          // zoomTo (not fitView) keeps the current pan/center fixed --
+          // this resets scale only, not "recenter on all nodes" too.
+          <ControlIconButton label="Reset zoom" onClick={() => zoomTo(DEFAULT_ZOOM, { duration: 200 })}>
+            <RotateCcw className="size-4" />
+          </ControlIconButton>
+        )}
+        <ControlIconButton label="Fit view" onClick={() => fitView({ maxZoom: DEFAULT_ZOOM })}>
           <Maximize2 className="size-4" />
         </ControlIconButton>
       </div>

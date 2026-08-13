@@ -21,6 +21,8 @@ import type { AgentNodeData, McpToolNodeData, ProtocolGraph, ProtocolNode, Proto
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
 import { CanvasControls } from './CanvasControls'
+import { DEFAULT_ZOOM } from './constants'
+import { findFreePosition } from './layout'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { AgentNode } from './nodes/AgentNode'
 import { McpToolNode } from './nodes/McpToolNode'
@@ -104,15 +106,16 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
 
   // n8n's own pattern: a "+" on the canvas opens a searchable node-type
   // panel on the right, rather than a static always-visible drag palette.
-  // New nodes land near the pane's current center, with a little jitter so
-  // repeated adds don't stack exactly on top of each other.
+  // New nodes land near the pane's current center, nudged away from any
+  // node already there (findFreePosition) so a fresh node never lands on
+  // top of an existing one.
   function addNode(nodeType: string) {
     const rect = paneRef.current?.getBoundingClientRect()
     const center = rect
       ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
       : { x: window.innerWidth / 2, y: window.innerHeight / 2 }
-    const jitter = () => (Math.random() - 0.5) * 80
-    const position = screenToFlowPosition({ x: center.x + jitter(), y: center.y + jitter() })
+    const desired = screenToFlowPosition(center)
+    const position = findFreePosition(nodes.map((n) => n.position), desired)
     setNodes((nds) => nds.concat({ id: newNodeId(), type: nodeType, position, data: defaultDataFor(nodeType) }))
     setAddPanelOpen(false)
   }
@@ -165,6 +168,9 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
             if (deleted.some((n) => n.id === selectedNodeId)) setSelectedNodeId(null)
           }}
           fitView
+          fitViewOptions={{ maxZoom: DEFAULT_ZOOM }}
+          defaultViewport={{ x: 0, y: 0, zoom: DEFAULT_ZOOM }}
+          minZoom={0.2}
           proOptions={{ hideAttribution: true }}
         >
           <Background color="var(--primary)" gap={28} size={1} style={{ opacity: 0.2 }} />

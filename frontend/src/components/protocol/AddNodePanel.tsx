@@ -1,16 +1,16 @@
 import { useState } from 'react'
-import { Bot, X } from 'lucide-react'
+import { Bot, Wrench, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
-// V1 ships exactly one node type. "mcp_tool"/"dataset"/"critic_gate" each
-// need real unbuilt backend meaning (a tool picker, a dataset-binding
-// decision, a genuinely new revision-loop primitive) -- adding entries here
-// before that exists would be UI ceremony with no backend behind it. The
-// search box stays even at one entry so the panel doesn't need reshaping
-// once more node types land.
+// "dataset"/"critic_gate" still need real unbuilt backend meaning (a
+// dataset-binding decision, a genuinely new revision-loop primitive) --
+// adding entries here before that exists would be UI ceremony with no
+// backend behind it. "mcp_tool" earns its place now: GET /api/mcp-servers
+// already exists, so there's a real tool picker to back it.
 const NODE_CATALOG = [
   { type: 'agent', label: 'Agent', description: 'An LLM agent stage in the pipeline', icon: Bot },
+  { type: 'mcp_tool', label: 'MCP Tool', description: 'Call one tool on a registered MCP server', icon: Wrench },
 ]
 
 export function AddNodePanel({ onAdd, onClose }: { onAdd: (nodeType: string) => void; onClose: () => void }) {

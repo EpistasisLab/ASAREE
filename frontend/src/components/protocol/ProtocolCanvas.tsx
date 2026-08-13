@@ -15,15 +15,21 @@ import '@xyflow/react/dist/style.css'
 import { Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { protocolsApi } from '@/api/client'
-import { defaultAgentNodeData } from '@/types/protocols'
-import type { AgentNodeData, ProtocolGraph } from '@/types/protocols'
+import { defaultAgentNodeData, defaultMcpToolNodeData } from '@/types/protocols'
+import type { AgentNodeData, McpToolNodeData, ProtocolGraph, ProtocolNode } from '@/types/protocols'
 import { AddNodePanel } from './AddNodePanel'
+import { AgentNodeInspector } from './AgentNodeInspector'
 import { CanvasControls } from './CanvasControls'
+import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { AgentNode } from './nodes/AgentNode'
-import { NodeInspector } from './NodeInspector'
+import { McpToolNode } from './nodes/McpToolNode'
 
-const NODE_TYPES = { agent: AgentNode }
+const NODE_TYPES = { agent: AgentNode, mcp_tool: McpToolNode }
 const AUTOSAVE_DELAY_MS = 800
+
+function defaultDataFor(nodeType: string): ProtocolNode['data'] {
+  return nodeType === 'mcp_tool' ? defaultMcpToolNodeData('New MCP Tool') : defaultAgentNodeData('New Agent')
+}
 
 // crypto.randomUUID() only exists in a secure context (HTTPS or localhost) --
 // throws in plain-HTTP dev setups reached via a LAN IP/forwarded hostname,
@@ -42,7 +48,7 @@ function toPersistedGraph(nodes: Node[], edges: Edge[]): ProtocolGraph {
       id: n.id,
       type: n.type ?? 'agent',
       position: n.position,
-      data: n.data as AgentNodeData,
+      data: n.data as AgentNodeData | McpToolNodeData,
     })),
     edges: edges.map((e) => ({
       id: e.id,
@@ -75,7 +81,7 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
       : { x: window.innerWidth / 2, y: window.innerHeight / 2 }
     const jitter = () => (Math.random() - 0.5) * 80
     const position = screenToFlowPosition({ x: center.x + jitter(), y: center.y + jitter() })
-    setNodes((nds) => nds.concat({ id: newNodeId(), type: nodeType, position, data: defaultAgentNodeData('New Agent') }))
+    setNodes((nds) => nds.concat({ id: newNodeId(), type: nodeType, position, data: defaultDataFor(nodeType) }))
     setAddPanelOpen(false)
   }
 
@@ -97,7 +103,7 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null
 
-  function updateNodeData(nodeId: string, data: AgentNodeData) {
+  function updateNodeData(nodeId: string, data: AgentNodeData | McpToolNodeData) {
     setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data } : n)))
   }
 
@@ -147,9 +153,16 @@ export function ProtocolCanvas({ protocolId, initialGraph }: { protocolId: strin
       </div>
       {addPanelOpen ? (
         <AddNodePanel onAdd={addNode} onClose={() => setAddPanelOpen(false)} />
+      ) : selectedNode?.type === 'mcp_tool' ? (
+        <McpToolNodeInspector
+          node={{ id: selectedNode.id, type: 'mcp_tool', position: selectedNode.position, data: selectedNode.data as McpToolNodeData }}
+          onChange={updateNodeData}
+          onDelete={deleteNode}
+          onClose={() => setSelectedNodeId(null)}
+        />
       ) : (
         selectedNode && (
-          <NodeInspector
+          <AgentNodeInspector
             node={{ id: selectedNode.id, type: selectedNode.type ?? 'agent', position: selectedNode.position, data: selectedNode.data as AgentNodeData }}
             onChange={updateNodeData}
             onDelete={deleteNode}

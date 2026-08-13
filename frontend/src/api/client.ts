@@ -13,6 +13,7 @@ import type {
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
 import type { Cell, Experiment } from '@/types/experiments'
+import type { McpServer } from '@/types/mcpServers'
 import type { Protocol, ProtocolGraph } from '@/types/protocols'
 import type { Run } from '@/types/runs'
 
@@ -175,6 +176,13 @@ export const runsApi = {
   // No server-side experiment_id filter exists yet (runs.py only filters by
   // agent_id) -- callers filter client-side on run_metadata.experiment_id.
   list: () => request<Run[]>('/runs'),
+}
+
+export const mcpServersApi = {
+  // Only the caller's own registered servers -- matches GET /mcp-servers'
+  // existing scope (system servers like asaree-workspace aren't listed here
+  // either; not something the MCP Tool node picker widens).
+  list: () => request<McpServer[]>('/mcp-servers'),
 }
 
 export { tryRefreshToken }

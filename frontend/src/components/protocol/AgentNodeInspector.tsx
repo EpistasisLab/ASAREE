@@ -26,13 +26,13 @@ const ACCENT = hashToChartHue('agent')
 // exists once ASAREE has an execution engine (not yet built). Adding empty
 // IN/OUT panes now would be UI with nothing behind it, same reasoning that
 // kept unbuilt node types out of the palette.
-export function NodeInspector({
+export function AgentNodeInspector({
   node,
   onChange,
   onDelete,
   onClose,
 }: {
-  node: ProtocolNode | null
+  node: (ProtocolNode & { data: AgentNodeData }) | null
   onChange: (nodeId: string, data: AgentNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void

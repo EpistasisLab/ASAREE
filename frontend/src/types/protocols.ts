@@ -17,7 +17,7 @@ export interface ProtocolNode {
   id: string
   type: string
   position: { x: number; y: number }
-  data: AgentNodeData
+  data: AgentNodeData | McpToolNodeData
 }
 
 export interface ProtocolEdge {
@@ -84,4 +84,25 @@ export function defaultAgentNodeData(label = 'New Agent'): AgentNodeData {
       max_run_duration_seconds: null,
     },
   }
+}
+
+// An "MCP Tool" node references one tool on one registered MCP server --
+// resolved at execution time through agentic_core's mcp_service, the same
+// way an Agent node's tool_config.tool_names does (no ASAREE-side tool
+// registry to duplicate). server_name is carried alongside server_id purely
+// for display -- the id is the only thing execution will ever key off of.
+export interface McpToolNodeConfig {
+  server_id: string | null
+  server_name: string | null
+  tool_name: string | null
+}
+
+export interface McpToolNodeData {
+  label: string
+  config: McpToolNodeConfig
+  [key: string]: unknown
+}
+
+export function defaultMcpToolNodeData(label = 'MCP Tool'): McpToolNodeData {
+  return { label, config: { server_id: null, server_name: null, tool_name: null } }
 }

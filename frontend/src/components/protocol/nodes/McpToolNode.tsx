@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { cardAccent, hashToChartHue } from '@/lib/utils'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { McpToolNodeData, NodeRunStatus } from '@/types/protocols'
+import { ConnectorHandleLabel } from './ConnectorHandleLabel'
 import { EditableNodeLabel } from './EditableNodeLabel'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 
@@ -68,6 +69,7 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
         title="Tool (plug into an Agent's Tool connector)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
+      <ConnectorHandleLabel side="right">Tool</ConnectorHandleLabel>
     </div>
   )
 }

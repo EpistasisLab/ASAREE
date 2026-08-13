@@ -13,6 +13,7 @@ import type {
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
 import type { Cell, Experiment } from '@/types/experiments'
+import type { Protocol, ProtocolGraph } from '@/types/protocols'
 import type { Run } from '@/types/runs'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
@@ -144,7 +145,22 @@ export const tokenApi = {
 export const experimentsApi = {
   list: () => request<Experiment[]>('/experiments'),
   get: (id: string) => request<Experiment>(`/experiments/${id}`),
+  create: (data: { name: string; description?: string | null }) =>
+    request<Experiment>('/experiments', { method: 'POST', body: data }),
+  update: (id: string, data: { name?: string; description?: string | null }) =>
+    request<Experiment>(`/experiments/${id}`, { method: 'PATCH', body: data }),
   listCells: (id: string) => request<Cell[]>(`/experiments/${id}/cells`),
+}
+
+export const protocolsApi = {
+  create: (data: { name: string; description?: string | null; experiment_id?: string | null; graph?: ProtocolGraph }) =>
+    request<Protocol>('/protocols', { method: 'POST', body: data }),
+  get: (id: string) => request<Protocol>(`/protocols/${id}`),
+  list: (experimentId?: string) =>
+    request<Protocol[]>(experimentId ? `/protocols?experiment_id=${experimentId}` : '/protocols'),
+  update: (id: string, data: { name?: string; description?: string | null; graph?: ProtocolGraph }) =>
+    request<Protocol>(`/protocols/${id}`, { method: 'PATCH', body: data }),
+  remove: (id: string) => request<void>(`/protocols/${id}`, { method: 'DELETE' }),
 }
 
 export const datasetsApi = {

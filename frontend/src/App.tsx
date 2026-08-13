@@ -5,6 +5,7 @@ import { RegisterPage } from '@/pages/RegisterPage'
 import { ProfilePage } from '@/pages/ProfilePage'
 import { ExperimentsPage } from '@/pages/ExperimentsPage'
 import { ExperimentDetailPage } from '@/pages/ExperimentDetailPage'
+import { ProtocolCanvasPage } from '@/pages/ProtocolCanvasPage'
 
 export function App() {
   return (
@@ -15,6 +16,7 @@ export function App() {
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/experiments" element={<ExperimentsPage />} />
         <Route path="/experiments/:experimentId" element={<ExperimentDetailPage />} />
+        <Route path="/experiments/:experimentId/protocol" element={<ProtocolCanvasPage />} />
       </Route>
       <Route path="/" element={<Navigate to="/experiments" replace />} />
       <Route path="*" element={<Navigate to="/experiments" replace />} />

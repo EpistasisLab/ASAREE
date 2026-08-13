@@ -762,10 +762,15 @@ export function ExperimentDetailPage() {
       <AppHeader />
 
       <main className="mx-auto max-w-5xl space-y-6 px-6 py-10">
-        <div>
+        <div className="flex items-center justify-between">
           <Link to="/experiments" className="text-sm text-muted-foreground hover:underline">
             ← Experiments
           </Link>
+          {experimentId && (
+            <Button variant="outline" size="sm" render={<Link to={`/experiments/${experimentId}/protocol`} />}>
+              Protocol canvas
+            </Button>
+          )}
         </div>
 
         {experimentQuery.isLoading ? (

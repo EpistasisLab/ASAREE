@@ -5,6 +5,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
 import type { AgentNodeConfig, AgentNodeData, ProtocolNode } from '@/types/protocols'
@@ -18,6 +19,13 @@ const ACCENT = hashToChartHue('agent')
 // a hand-rolled overlay -- Escape-to-close, backdrop-click-to-close, focus
 // trapping, and body scroll lock all come for free from `modal` (default
 // true), instead of reimplementing them.
+//
+// Parameters/Settings mirrors n8n's own NDV split -- what defines the
+// agent's behavior/identity vs. what constrains its execution -- but drops
+// n8n's INPUT/OUTPUT panes: those show a node's actual run data, which only
+// exists once ASAREE has an execution engine (not yet built). Adding empty
+// IN/OUT panes now would be UI with nothing behind it, same reasoning that
+// kept unbuilt node types out of the palette.
 export function NodeInspector({
   node,
   onChange,
@@ -56,10 +64,7 @@ export function NodeInspector({
         if (!open) onClose()
       }}
     >
-      <DialogContent
-        showCloseButton={false}
-        className="max-h-[85vh] w-full max-w-3xl overflow-y-auto sm:max-w-3xl"
-      >
+      <DialogContent showCloseButton={false} className="max-h-[85vh] w-full max-w-3xl overflow-y-auto sm:max-w-3xl">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Bot className="size-5" style={{ color: ACCENT }} />
@@ -75,147 +80,167 @@ export function NodeInspector({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="node-label">Label</Label>
-            <Input id="node-label" value={data.label} onChange={(e) => onChange(node.id, { ...data, label: e.target.value })} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="node-name">Name</Label>
-            <Input id="node-name" value={config.name} onChange={(e) => patchConfig({ name: e.target.value })} />
-          </div>
-        </div>
-
         <div className="space-y-1.5">
-          <Label htmlFor="node-goal">Goal</Label>
-          <Textarea id="node-goal" rows={2} value={config.goal} onChange={(e) => patchConfig({ goal: e.target.value })} />
+          <Label htmlFor="node-label">Label</Label>
+          <Input id="node-label" value={data.label} onChange={(e) => onChange(node.id, { ...data, label: e.target.value })} />
         </div>
 
-        <div className="space-y-1.5">
-          <Label htmlFor="node-description">Description</Label>
-          <Textarea
-            id="node-description"
-            rows={2}
-            value={config.description}
-            onChange={(e) => patchConfig({ description: e.target.value })}
-          />
-        </div>
+        <Tabs defaultValue="parameters">
+          <TabsList>
+            <TabsTrigger value="parameters">Parameters</TabsTrigger>
+            <TabsTrigger value="settings">Settings</TabsTrigger>
+          </TabsList>
 
-        <div className="space-y-1.5">
-          <Label htmlFor="node-system-prompt">System prompt</Label>
-          <Textarea
-            id="node-system-prompt"
-            rows={6}
-            className="font-mono text-xs"
-            value={config.system_prompt}
-            onChange={(e) => patchConfig({ system_prompt: e.target.value })}
-          />
-        </div>
+          <TabsContent value="parameters" className="space-y-4 pt-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="node-name">Name</Label>
+              <Input id="node-name" value={config.name} onChange={(e) => patchConfig({ name: e.target.value })} />
+            </div>
 
-        <div className="grid grid-cols-4 gap-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="node-provider">Provider</Label>
-            <Input
-              id="node-provider"
-              value={config.model_config_data.provider}
-              onChange={(e) => patchModelConfig({ provider: e.target.value })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="node-model">Model</Label>
-            <Input id="node-model" value={config.model_config_data.model} onChange={(e) => patchModelConfig({ model: e.target.value })} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="node-temperature">Temperature</Label>
-            <Input
-              id="node-temperature"
-              type="number"
-              step="0.1"
-              min="0"
-              max="2"
-              value={config.model_config_data.temperature ?? ''}
-              onChange={(e) => patchModelConfig({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="node-max-tokens">Max tokens</Label>
-            <Input
-              id="node-max-tokens"
-              type="number"
-              min="1"
-              value={config.model_config_data.max_tokens}
-              onChange={(e) => patchModelConfig({ max_tokens: Number(e.target.value) })}
-            />
-          </div>
-        </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="node-goal">Goal</Label>
+              <Textarea id="node-goal" rows={2} value={config.goal} onChange={(e) => patchConfig({ goal: e.target.value })} />
+            </div>
 
-        <div className="grid grid-cols-3 gap-4">
-          <div className="space-y-1.5">
-            <Label>Execution pattern</Label>
-            <Select
-              value={config.pattern_config.execution_pattern}
-              onValueChange={(value) => {
-                if (value === null) return
-                patchConfig({ pattern_config: { ...config.pattern_config, execution_pattern: value as typeof EXECUTION_PATTERNS[number] } })
-              }}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue>{(value: string) => value}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {EXECUTION_PATTERNS.map((p) => (
-                  <SelectItem key={p} value={p}>
-                    {p}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="node-budget">Budget (USD)</Label>
-            <Input
-              id="node-budget"
-              type="number"
-              min="0"
-              value={config.budget_limit_usd ?? ''}
-              onChange={(e) => patchConfig({ budget_limit_usd: e.target.value === '' ? null : Number(e.target.value) })}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="node-duration">Max duration (s)</Label>
-            <Input
-              id="node-duration"
-              type="number"
-              min="0"
-              value={config.max_run_duration_seconds ?? ''}
-              onChange={(e) => patchConfig({ max_run_duration_seconds: e.target.value === '' ? null : Number(e.target.value) })}
-            />
-          </div>
-        </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="node-description">Description</Label>
+              <Textarea
+                id="node-description"
+                rows={2}
+                value={config.description}
+                onChange={(e) => patchConfig({ description: e.target.value })}
+              />
+            </div>
 
-        <details className="space-y-1.5">
-          <summary className="cursor-pointer text-sm font-medium text-muted-foreground">Advanced (JSON)</summary>
-          <p className="pt-1.5 pb-1 text-xs text-muted-foreground">tool_config / output_contract</p>
-          <Textarea
-            rows={8}
-            className="font-mono text-xs"
-            value={advanced}
-            onChange={(e) => {
-              setAdvancedText(e.target.value)
-              try {
-                const parsed = JSON.parse(e.target.value)
-                setAdvancedError(null)
-                patchConfig({
-                  tool_config: parsed.tool_config ?? config.tool_config,
-                  output_contract: parsed.output_contract ?? null,
-                })
-              } catch {
-                setAdvancedError('Invalid JSON')
-              }
-            }}
-          />
-          {advancedError && <p className="pt-1 text-xs text-destructive">{advancedError}</p>}
-        </details>
+            <div className="space-y-1.5">
+              <Label htmlFor="node-system-prompt">System prompt</Label>
+              <Textarea
+                id="node-system-prompt"
+                rows={6}
+                className="font-mono text-xs"
+                value={config.system_prompt}
+                onChange={(e) => patchConfig({ system_prompt: e.target.value })}
+              />
+            </div>
+
+            <div className="grid grid-cols-4 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="node-provider">Provider</Label>
+                <Input
+                  id="node-provider"
+                  value={config.model_config_data.provider}
+                  onChange={(e) => patchModelConfig({ provider: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="node-model">Model</Label>
+                <Input
+                  id="node-model"
+                  value={config.model_config_data.model}
+                  onChange={(e) => patchModelConfig({ model: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="node-temperature">Temperature</Label>
+                <Input
+                  id="node-temperature"
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="2"
+                  value={config.model_config_data.temperature ?? ''}
+                  onChange={(e) => patchModelConfig({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="node-max-tokens">Max tokens</Label>
+                <Input
+                  id="node-max-tokens"
+                  type="number"
+                  min="1"
+                  value={config.model_config_data.max_tokens}
+                  onChange={(e) => patchModelConfig({ max_tokens: Number(e.target.value) })}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Execution pattern</Label>
+              <Select
+                value={config.pattern_config.execution_pattern}
+                onValueChange={(value) => {
+                  if (value === null) return
+                  patchConfig({
+                    pattern_config: { ...config.pattern_config, execution_pattern: value as typeof EXECUTION_PATTERNS[number] },
+                  })
+                }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue>{(value: string) => value}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {EXECUTION_PATTERNS.map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {p}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="settings" className="space-y-4 pt-2">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="node-budget">Budget (USD)</Label>
+                <Input
+                  id="node-budget"
+                  type="number"
+                  min="0"
+                  value={config.budget_limit_usd ?? ''}
+                  onChange={(e) => patchConfig({ budget_limit_usd: e.target.value === '' ? null : Number(e.target.value) })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="node-duration">Max duration (s)</Label>
+                <Input
+                  id="node-duration"
+                  type="number"
+                  min="0"
+                  value={config.max_run_duration_seconds ?? ''}
+                  onChange={(e) => patchConfig({ max_run_duration_seconds: e.target.value === '' ? null : Number(e.target.value) })}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Tool assignment / output contract (JSON)</Label>
+              <p className="text-xs text-muted-foreground">
+                <code className="font-mono">tool_config</code> (MCP server/tool names) and{' '}
+                <code className="font-mono">output_contract</code> (structured extraction) -- no dedicated editors yet.
+              </p>
+              <Textarea
+                rows={10}
+                className="font-mono text-xs"
+                value={advanced}
+                onChange={(e) => {
+                  setAdvancedText(e.target.value)
+                  try {
+                    const parsed = JSON.parse(e.target.value)
+                    setAdvancedError(null)
+                    patchConfig({
+                      tool_config: parsed.tool_config ?? config.tool_config,
+                      output_contract: parsed.output_contract ?? null,
+                    })
+                  } catch {
+                    setAdvancedError('Invalid JSON')
+                  }
+                }}
+              />
+              {advancedError && <p className="text-xs text-destructive">{advancedError}</p>}
+            </div>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   )

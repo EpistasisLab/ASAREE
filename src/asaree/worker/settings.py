@@ -29,7 +29,7 @@ from asaree.config import get_settings
 from asaree.models.database import dispose_engine
 from asaree.redis_client import dispose_redis
 from asaree.services.credential_resolver import resolve as resolve_credentials
-from asaree.worker.tasks import check_stale_runs, execute_run_task
+from asaree.worker.tasks import check_stale_runs, execute_protocol_run_task, execute_run_task
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions = [execute_run_task]
+    functions = [execute_run_task, execute_protocol_run_task]
     cron_jobs = [cron(check_stale_runs, second={0, 30})]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     on_startup = on_startup

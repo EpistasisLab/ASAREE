@@ -1,7 +1,9 @@
 """Protocols -- the executable agent/tool graph a visual canvas edits.
 
-V1 is data-at-rest only: the graph is freely editable JSON the canvas reads
-and writes whole. No execution endpoint exists yet.
+The graph itself is freely editable JSON the canvas reads and writes whole.
+``POST /{id}/runs`` compiles it (topological order, rejecting a cycle/empty
+graph before anything is created) and hands the walk to the worker --
+mirroring ``POST /runs``'s own create-then-enqueue shape.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.experiments import get_experiment
+from asaree.services.protocol_execution import ProtocolValidationError, topological_order
+from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, list_protocol_runs
 from asaree.services.protocols import (
     create_protocol,
     delete_protocol,
@@ -23,6 +27,7 @@ from asaree.services.protocols import (
     list_protocols,
     update_protocol,
 )
+from asaree.worker.enqueue import enqueue_protocol_run
 
 router = APIRouter(prefix="/protocols", tags=["protocols"])
 
@@ -52,6 +57,19 @@ class ProtocolResponse(BaseModel):
     description: str | None
     experiment_id: uuid.UUID | None
     graph: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ProtocolRunResponse(BaseModel):
+    id: uuid.UUID
+    protocol_id: uuid.UUID
+    status: str
+    node_runs: dict[str, Any]
+    error: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -130,3 +148,37 @@ async def update_protocol_endpoint(
 async def delete_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> None:
     await _get_owned_protocol(db, protocol_id, user)
     await delete_protocol(db, protocol_id)
+
+
+@router.post("/{protocol_id}/runs", response_model=ProtocolRunResponse, status_code=201)
+async def create_protocol_run_endpoint(
+    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> ProtocolRunResponse:
+    protocol = await _get_owned_protocol(db, protocol_id, user)
+    try:
+        topological_order(protocol.graph)
+    except ProtocolValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=user.id)
+    await enqueue_protocol_run(run.id)
+    return ProtocolRunResponse.model_validate(run)
+
+
+@router.get("/{protocol_id}/runs", response_model=list[ProtocolRunResponse])
+async def list_protocol_runs_endpoint(
+    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> list[ProtocolRunResponse]:
+    await _get_owned_protocol(db, protocol_id, user)
+    runs = await list_protocol_runs(db, protocol_id=protocol_id)
+    return [ProtocolRunResponse.model_validate(r) for r in runs]
+
+
+@router.get("/{protocol_id}/runs/{run_id}", response_model=ProtocolRunResponse)
+async def get_protocol_run_endpoint(
+    protocol_id: uuid.UUID, run_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> ProtocolRunResponse:
+    await _get_owned_protocol(db, protocol_id, user)
+    run = await get_protocol_run(db, run_id)
+    if run is None or run.protocol_id != protocol_id:
+        raise HTTPException(status_code=404, detail="No such protocol run")
+    return ProtocolRunResponse.model_validate(run)

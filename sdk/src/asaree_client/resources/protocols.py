@@ -6,7 +6,7 @@ import builtins
 import uuid
 from typing import Any
 
-from asaree_client.models import Protocol
+from asaree_client.models import Protocol, ProtocolRun
 
 ResourceId = uuid.UUID | str
 
@@ -65,3 +65,18 @@ class Protocols:
 
     def delete(self, protocol_id: ResourceId) -> None:
         self._client._delete(f"/protocols/{protocol_id}")
+
+    def run(self, protocol_id: ResourceId) -> ProtocolRun:
+        """Compile and run this protocol's current graph -- 422 if it's
+        empty or has a cycle. Returns immediately with status "pending";
+        poll with get_run."""
+        data = self._client._post(f"/protocols/{protocol_id}/runs")
+        return ProtocolRun(**data)
+
+    def get_run(self, protocol_id: ResourceId, run_id: ResourceId) -> ProtocolRun:
+        data = self._client._get(f"/protocols/{protocol_id}/runs/{run_id}")
+        return ProtocolRun(**data)
+
+    def list_runs(self, protocol_id: ResourceId) -> builtins.list[ProtocolRun]:
+        data = self._client._get(f"/protocols/{protocol_id}/runs")
+        return [ProtocolRun(**r) for r in data]

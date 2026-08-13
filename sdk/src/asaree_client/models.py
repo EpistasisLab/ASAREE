@@ -101,6 +101,16 @@ class Protocol(BaseModel):
     updated_at: datetime
 
 
+class ProtocolRun(BaseModel):
+    id: uuid.UUID
+    protocol_id: uuid.UUID
+    status: str
+    node_runs: dict[str, Any]
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class RegisteredDataset(BaseModel):
     id: uuid.UUID
     name: str

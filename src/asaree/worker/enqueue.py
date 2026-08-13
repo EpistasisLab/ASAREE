@@ -36,6 +36,15 @@ async def enqueue_run(run_id: uuid.UUID) -> None:
     await pool.enqueue_job("execute_run_task", str(run_id), _job_id=f"run:{run_id}")
 
 
+async def enqueue_protocol_run(protocol_run_id: uuid.UUID) -> None:
+    """Same idempotent-enqueue pattern as :func:`enqueue_run`, for
+    asaree.worker.tasks.execute_protocol_run_task."""
+    pool = await _get_pool()
+    await pool.enqueue_job(
+        "execute_protocol_run_task", str(protocol_run_id), _job_id=f"protocol-run:{protocol_run_id}"
+    )
+
+
 async def dispose_pool() -> None:
     global _pool
     if _pool is not None:

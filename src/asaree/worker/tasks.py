@@ -1,10 +1,11 @@
-"""arq task functions the worker registers: the run executor and the
-stale-run cron that backstops it.
+"""arq task functions the worker registers: the run executor, the
+protocol-run executor, and the stale-run cron that backstops the former.
 
-Both are plain core-API callers (get_run/get_agent/execute_run/fail_run/
-list_runs), same boundary asaree.api.runs already respects -- no raw session,
-no core model import beyond RunStatus (needed to filter/compare, not to touch
-a table).
+execute_run_task is a plain core-API caller (get_run/get_agent/execute_run/
+fail_run/list_runs), same boundary asaree.api.runs already respects -- no raw
+session, no core model import beyond RunStatus (needed to filter/compare, not
+to touch a table). execute_protocol_run_task is a thin wrapper the same
+shape, delegating the actual graph walk to services.protocol_execution.
 """
 
 from __future__ import annotations
@@ -19,7 +20,19 @@ from agentic_core.mcp.registry import get_registry
 from agentic_core.models.run import RunStatus
 from agentic_core.runner import execute_run, fail_run, get_agent, get_run, list_runs
 
+# The worker process never imports asaree.api.*/asaree.deps (unlike the API
+# process, where every router module transitively imports these already) --
+# without them, ProtocolRun/Protocol's mapper can't resolve their FK targets
+# the first time this process touches either table (SQLAlchemy's
+# cross-table _sorted_tables() needs every referenced model's module
+# actually imported, not just the FK's string target to exist in the DB).
+import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for Protocol->experiment's FK
+import asaree.models.experiment  # noqa: F401 -- registers research_experiments for Protocol's FK
+import asaree.models.user  # noqa: F401 -- registers users for Protocol/ProtocolRun's owner_id FK
 from asaree.config import get_settings
+from asaree.models.database import get_session
+from asaree.services.protocol_execution import run_protocol
+from asaree.services.protocol_runs import fail_protocol_run, get_protocol_run
 from asaree.services.run_tools import gather_tools
 
 logger = logging.getLogger(__name__)
@@ -65,6 +78,37 @@ async def execute_run_task(ctx: dict[str, Any], run_id_str: str) -> None:
         # max_tries — not safe to assume idempotent.
         logger.exception("execute_run_task_failed", extra={"run_id": run_id_str})
         await fail_run(run_id, error=f"{type(e).__name__}: {e}")
+
+
+async def execute_protocol_run_task(ctx: dict[str, Any], protocol_run_id_str: str) -> None:
+    """Walk one protocol run to completion. Same shape as execute_run_task:
+    resolve the row, bound the whole walk with a timeout, and force-fail on
+    timeout/exception rather than letting arq retry a partially-executed
+    graph (real agent runs, real tool calls -- not safe to assume idempotent).
+    """
+    protocol_run_id = uuid.UUID(protocol_run_id_str)
+    async with get_session() as db:
+        run = await get_protocol_run(db, protocol_run_id)
+    if run is None:
+        logger.warning("execute_protocol_run_task_missing_run", extra={"protocol_run_id": protocol_run_id_str})
+        return
+    if run.status not in ("pending", "running"):
+        logger.info(
+            "execute_protocol_run_task_skip_non_actionable",
+            extra={"protocol_run_id": protocol_run_id_str, "status": run.status},
+        )
+        return
+
+    timeout = get_settings().worker_job_timeout_seconds
+    try:
+        await asyncio.wait_for(run_protocol(protocol_run_id), timeout=timeout)
+    except TimeoutError:
+        async with get_session() as db:
+            await fail_protocol_run(db, protocol_run_id, error=f"protocol run exceeded its {timeout}s execution budget")
+    except Exception as e:  # noqa: BLE001 -- same boundary reasoning as execute_run_task
+        logger.exception("execute_protocol_run_task_failed", extra={"protocol_run_id": protocol_run_id_str})
+        async with get_session() as db:
+            await fail_protocol_run(db, protocol_run_id, error=f"{type(e).__name__}: {e}")
 
 
 async def check_stale_runs(ctx: dict[str, Any]) -> None:

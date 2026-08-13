@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.experiment import ResearchExperiment
 
-_SETTABLE_FIELDS = frozenset({"name", "description", "dataset_id"})
+_SETTABLE_FIELDS = frozenset({"name", "description", "dataset_id", "design_spec"})
 
 
 async def create_experiment(
@@ -47,8 +47,9 @@ async def update_experiment(
     the API layer) -- e.g. ``name``/``description`` from renaming an
     experiment created with a placeholder name straight from the GUI, or
     ``dataset_id`` (including explicit ``None``, to detach) from the
-    notebook's Step 2 attach-after-create flow. Same allow-listed
-    setattr idiom as ``services.protocols.update_protocol``.
+    notebook's Step 2 attach-after-create flow, or ``design_spec`` (a full
+    replacement, not a merge) from the protocol canvas's factor-binding UI.
+    Same allow-listed setattr idiom as ``services.protocols.update_protocol``.
     """
     unknown = set(fields) - _SETTABLE_FIELDS
     if unknown:

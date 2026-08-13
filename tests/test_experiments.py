@@ -62,6 +62,24 @@ async def test_rename_and_set_description(owner_id: uuid.UUID) -> None:
         await db.delete(fetched)
 
 
+async def test_set_design_spec(owner_id: uuid.UUID) -> None:
+    async with get_session() as db:
+        experiment = await create_experiment(db, name="Untitled Experiment", owner_id=owner_id)
+        experiment_id = experiment.id
+
+    spec = {"factors": [{"name": "temperature", "levels": [0.2, 0.8]}]}
+    async with get_session() as db:
+        updated = await update_experiment(db, experiment_id, fields={"design_spec": spec})
+        assert updated is not None
+        assert updated.design_spec == spec
+
+    async with get_session() as db:
+        fetched = await get_experiment(db, experiment_id)
+        assert fetched is not None
+        assert fetched.design_spec == spec
+        await db.delete(fetched)
+
+
 async def test_update_unknown_field_rejected(owner_id: uuid.UUID) -> None:
     async with get_session() as db:
         experiment = await create_experiment(db, name="Untitled Experiment", owner_id=owner_id)

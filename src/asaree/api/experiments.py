@@ -55,11 +55,16 @@ class UpdateExperimentRequest(BaseModel):
     "unset vs. null" convention ``UpsertCellRequest`` uses below. ``name``
     is how the GUI renames an experiment created with a placeholder name
     straight from the Experiments page; ``dataset_id`` (including explicit
-    ``null``, to detach) is the notebook's Step 2 attach-after-create flow."""
+    ``null``, to detach) is the notebook's Step 2 attach-after-create flow.
+    ``design_spec`` is a full replacement, not a merge -- the protocol
+    canvas's "+ Make experimental factor" flow reads the current value,
+    upserts-by-name into ``factors`` client-side, and PATCHes the whole
+    dict back, same as how ``Protocol.graph`` is PATCHed."""
 
     name: str | None = None
     description: str | None = None
     dataset_id: uuid.UUID | None = None
+    design_spec: dict[str, Any] | None = None
 
 
 class ExperimentResponse(BaseModel):

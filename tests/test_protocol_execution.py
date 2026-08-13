@@ -498,3 +498,92 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
         async with get_session() as db:
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
             await delete_experiment(db, experiment_id)
+
+
+# --- node deactivate passthrough (pure helpers + wired-in run_protocol) -----
+
+
+def test_upstream_output_text_no_upstream_is_empty() -> None:
+    graph = _graph(["a"], [])
+    assert pe._upstream_output_text(graph, "a", {}) == ""
+
+
+def test_upstream_output_text_joins_completed_upstream_nodes() -> None:
+    graph = _graph(["a", "b", "c"], [("a", "c"), ("b", "c")])
+    node_runs = {
+        "a": {"status": "completed", "output_text": "from a"},
+        "b": {"status": "completed", "output_text": "from b"},
+    }
+    assert pe._upstream_output_text(graph, "c", node_runs) == "from a\n\nfrom b"
+
+
+def test_upstream_output_text_skips_upstream_with_no_output() -> None:
+    graph = _graph(["a", "b"], [("a", "b")])
+    assert pe._upstream_output_text(graph, "b", {"a": {"status": "failed", "output_text": None}}) == ""
+
+
+def test_is_node_active_defaults_true_when_absent() -> None:
+    assert pe._is_node_active(_node("a", "agent")) is True
+
+
+def test_is_node_active_false_when_explicitly_deactivated() -> None:
+    node = _node("a", "agent")
+    node["data"]["active"] = False
+    assert pe._is_node_active(node) is False
+
+
+def test_deactivated_gated_worker_raises() -> None:
+    worker = _node("w1", "agent")
+    worker["data"]["active"] = False
+    graph = {
+        "nodes": [worker, _node("g1", "critic_gate")],
+        "edges": _edges(("w1", "g1")),
+    }
+    with pytest.raises(ProtocolValidationError, match="can't be deactivated"):
+        topological_order(graph)
+
+
+async def test_run_protocol_deactivated_node_passes_through(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deactivated middle node never calls _run_agent_node -- its
+    node_runs output_text is the upstream node's output, verbatim. Real
+    Postgres rows (same convention as every other run_protocol-level test
+    in this file), only the LLM call itself is mocked."""
+    call_count = 0
+
+    async def fake_run_agent_node(node, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return f"real output from {node['id']}", None
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+
+    middle = _node("b", "agent")
+    middle["data"]["active"] = False
+    graph = {
+        "nodes": [_node("a", "agent"), middle, _node("c", "agent")],
+        "edges": _edges(("a", "b"), ("b", "c")),
+    }
+
+    async with get_session() as db:
+        protocol = await create_protocol(db, name=f"deactivate-test-{uuid.uuid4().hex}", owner_id=owner_id, graph=graph)
+        protocol_id = protocol.id
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run_id = run.id
+
+    try:
+        await pe.run_protocol(run_id)
+
+        assert call_count == 2  # only "a" and "c" -- "b" is deactivated
+
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+            assert fetched is not None
+            assert fetched.status == "completed"
+            assert fetched.node_runs["b"]["status"] == "completed"
+            assert fetched.node_runs["b"]["output_text"] == "real output from a"
+            assert fetched.node_runs["c"]["output_text"] == "real output from c"
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun

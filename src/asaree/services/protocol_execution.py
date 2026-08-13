@@ -149,6 +149,11 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             raise ProtocolValidationError(
                 f"Agent node {worker_id!r} is gated by a Critic Gate and can't have any other outgoing connections."
             )
+        if not _is_node_active(nodes[worker_id]):
+            raise ProtocolValidationError(
+                f"Agent node {worker_id!r} is gated by a Critic Gate and can't be deactivated -- "
+                "deactivate the Critic Gate instead."
+            )
 
     return [nodes[nid] for nid in ordered]
 
@@ -206,6 +211,30 @@ def find_gated_pairs(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def _upstream_ids(graph: dict[str, Any], node_id: str) -> list[str]:
     return [e["source"] for e in graph.get("edges") or [] if e.get("target") == node_id]
+
+
+def _is_node_active(node: dict[str, Any]) -> bool:
+    """Whether this node's own logic actually runs -- a deactivated node
+    passes its upstream input straight through as its own output instead
+    (see ``_upstream_output_text``), matching n8n's node-disable semantic.
+    Absent ``data.active`` means active, so every graph saved before this
+    field existed is unaffected. ``critic_gate`` nodes have no separate
+    ``active`` flag of their own: their existing ``config.enabled`` already
+    means exactly this for the review step specifically (see
+    ``_run_gated_worker``) -- deactivating a WORKER that feeds a gate is a
+    separate, deliberately unsupported case (see ``topological_order``'s
+    validation of gated pairs)."""
+    return bool((node.get("data") or {}).get("active", True))
+
+
+def _upstream_output_text(graph: dict[str, Any], node_id: str, node_runs: dict[str, Any]) -> str:
+    """What a deactivated node's own output becomes: its upstream context,
+    verbatim, with no goal/prompt mixed in -- the literal "pass the input
+    straight through unchanged" semantic a disabled node has in n8n. Empty
+    string for a start node (nothing upstream to pass through)."""
+    upstream_ids = _upstream_ids(graph, node_id)
+    parts = [node_runs[uid]["output_text"] for uid in upstream_ids if node_runs.get(uid, {}).get("output_text")]
+    return "\n\n".join(parts)
 
 
 def _build_user_input(node: dict[str, Any], graph: dict[str, Any], node_runs: dict[str, Any]) -> str:
@@ -622,7 +651,15 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 failed = True
             continue
 
-        if node.get("type") == "mcp_tool":
+        if not _is_node_active(node):
+            # Deactivated: skip this node's own logic entirely -- its
+            # upstream input passes straight through as its output
+            # unchanged, matching n8n's node-disable semantic. Gated
+            # workers can't reach here (topological_order already rejects
+            # that combination), so this only ever applies to a plain
+            # agent/mcp_tool node.
+            output_text, error = _upstream_output_text(graph, node_id, node_runs), None
+        elif node.get("type") == "mcp_tool":
             output_text, error = await _run_mcp_tool_node(node)
         else:
             user_input = _build_user_input(node, graph, node_runs)

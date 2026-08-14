@@ -37,12 +37,13 @@ export function CanvasControls() {
   return (
     <TooltipProvider delay={200}>
       <div className="absolute bottom-3 left-3 z-10 flex flex-col gap-1 rounded-lg border bg-card p-1 shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20">
-        <ControlIconButton label="Zoom in" onClick={() => zoomIn()}>
-          <ZoomIn className="size-4" />
-        </ControlIconButton>
-        <ControlIconButton label="Zoom out" onClick={() => zoomOut()}>
-          <ZoomOut className="size-4" />
-        </ControlIconButton>
+        {/* This conditional button must stay FIRST in the list -- the
+            container is bottom-anchored (`bottom-3`), so a child growing/
+            shrinking the stack only shifts whatever's ABOVE it; everything
+            at or after this slot (Zoom in/Zoom out/Fit view below) stays
+            pinned to the same screen position whether this row is present
+            or not. It used to sit between Zoom out and Fit view, which
+            shifted Zoom in/out every time it appeared. */}
         {!isDefaultZoom && (
           // zoomTo (not fitView) keeps the current pan/center fixed --
           // this resets scale only, not "recenter on all nodes" too.
@@ -50,6 +51,12 @@ export function CanvasControls() {
             <RotateCcw className="size-4" />
           </ControlIconButton>
         )}
+        <ControlIconButton label="Zoom in" onClick={() => zoomIn()}>
+          <ZoomIn className="size-4" />
+        </ControlIconButton>
+        <ControlIconButton label="Zoom out" onClick={() => zoomOut()}>
+          <ZoomOut className="size-4" />
+        </ControlIconButton>
         <ControlIconButton label="Fit view" onClick={() => fitView({ maxZoom: DEFAULT_ZOOM })}>
           <Maximize2 className="size-4" />
         </ControlIconButton>

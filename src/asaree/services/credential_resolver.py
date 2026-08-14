@@ -25,6 +25,22 @@ from asaree.services.user_llm_settings import decrypt_api_key, get_setting
 SUPPORTED_PROVIDERS = frozenset({"anthropic", "openai", "azure_foundry"})
 
 
+class LLMCredentialNotConfiguredError(RuntimeError):
+    """Raised when a run needs a provider this resolver owns, but the user has no saved credential for it.
+
+    ASAREE deliberately has no server-environment fallback for these three
+    providers (matching ARES's own M112 decision) -- returning ``None`` here
+    would let ``agentic_core.services.credentials.resolve`` fall through to
+    ``config.api_key`` (always unset for ASAREE's flow), which litellm itself
+    would then try to satisfy by reading ANTHROPIC_API_KEY/OPENAI_API_KEY
+    straight from the process environment. That's a silently-shared server
+    key wearing a per-user credential's clothes. Raising here instead
+    propagates up through execute_run() and is caught by protocol_execution.py's
+    existing `except Exception` boundaries, which already turn it into a clean
+    run.error message -- no new plumbing needed.
+    """
+
+
 async def resolve(config: Any, principal_id: uuid.UUID | None) -> dict[str, str | None] | None:
     if principal_id is None:
         return None
@@ -36,7 +52,10 @@ async def resolve(config: Any, principal_id: uuid.UUID | None) -> dict[str, str 
     async with factory() as db:
         setting = await get_setting(db, user_id=principal_id, provider=provider)
         if setting is None:
-            return None
+            raise LLMCredentialNotConfiguredError(
+                f"No {provider} credential configured for this user. Add one under LLM Settings before running "
+                f"an agent that uses {provider}."
+            )
 
         if provider == "azure_foundry":
             # api_base here is the Foundry *resource name or URL* the user

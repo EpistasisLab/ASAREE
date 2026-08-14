@@ -13,6 +13,7 @@ import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { PROVIDER_META } from './nodes/LlmNode'
 import type { LlmNodeConfig, LlmNodeData, ProtocolNode } from '@/types/protocols'
+import type { LLMProvider } from '@/types/llmSettings'
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
@@ -41,16 +42,15 @@ export function LlmNodeInspector({
   onClose: () => void
 }) {
   const [credentialDialogOpen, setCredentialDialogOpen] = useState(false)
-  // Only Azure Foundry has a real credential requirement/UI today -- the
-  // query is scoped to that provider so the other two (informational note
-  // only, see below) never fetch settings they'll never show.
+  // Every provider now has a real per-user credential (credential_resolver.py's
+  // SUPPORTED_PROVIDERS) -- no more "informational, nothing to set up" branch.
   const provider = node?.data.config?.provider
   const credentialsQuery = useQuery({
     queryKey: ['llm-settings'],
     queryFn: () => llmSettingsApi.list(),
-    enabled: provider === 'azure_foundry',
+    enabled: !!provider,
   })
-  const hasFoundryCredential = (credentialsQuery.data ?? []).some((c) => c.provider === 'azure_foundry')
+  const hasCredential = (credentialsQuery.data ?? []).some((c) => c.provider === provider)
   // GET /llm-settings/{provider}/models -- static, credential-free catalog
   // for anthropic/openai; a live Azure Foundry deployment discovery once a
   // credential exists (see llm_model_discovery.py for why Azure can't use a
@@ -59,7 +59,7 @@ export function LlmNodeInspector({
   const modelsQuery = useQuery({
     queryKey: ['llm-settings', provider, 'models'],
     queryFn: () => llmSettingsApi.listModels(provider!),
-    enabled: !!provider && (provider !== 'azure_foundry' || hasFoundryCredential),
+    enabled: !!provider && (provider !== 'azure_foundry' || hasCredential),
   })
 
   if (!node) return null
@@ -119,31 +119,18 @@ export function LlmNodeInspector({
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
           <Label>Credential</Label>
-          {provider === 'azure_foundry' ? (
-            credentialsQuery.isLoading ? (
-              <Skeleton className="h-8 w-full" />
-            ) : (
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full justify-between"
-                onClick={() => setCredentialDialogOpen(true)}
-              >
-                <span>{hasFoundryCredential ? 'Azure AI Foundry credential connected' : 'Set up credential'}</span>
-                {hasFoundryCredential && <Check className="size-4 text-[color:var(--chart-3)]" />}
-              </Button>
-            )
+          {credentialsQuery.isLoading ? (
+            <Skeleton className="h-8 w-full" />
           ) : (
-            // Anthropic/OpenAI: no per-user credential UI yet (only Azure
-            // Foundry is in LLM_PROVIDER_CATALOG) -- this is not a dead
-            // end, it's today's real backend behavior (credential_resolver.py):
-            // with no saved credential, these two providers silently fall
-            // back to ASAREE's own deployment-wide API key, so there's
-            // nothing broken to "set up" here.
-            <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-              Uses ASAREE's own configured {meta.label} API key. Per-user {meta.label} credentials aren't supported in
-              this UI yet.
-            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full justify-between"
+              onClick={() => setCredentialDialogOpen(true)}
+            >
+              <span>{hasCredential ? `${meta.label} credential connected` : 'Set up credential'}</span>
+              {hasCredential && <Check className="size-4 text-[color:var(--chart-3)]" />}
+            </Button>
           )}
         </div>
         <FactorBindableField
@@ -263,7 +250,11 @@ export function LlmNodeInspector({
           />
         </div>
       </div>
-      <CreateCredentialDialog open={credentialDialogOpen} onOpenChange={setCredentialDialogOpen} />
+      <CreateCredentialDialog
+        open={credentialDialogOpen}
+        onOpenChange={setCredentialDialogOpen}
+        defaultProvider={(provider as LLMProvider | undefined) ?? null}
+      />
     </NodeInspectorDialog>
   )
 }

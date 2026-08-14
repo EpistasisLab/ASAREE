@@ -2,20 +2,21 @@
 // much thinner than what a provider's real settings could hold (no
 // display_name/is_default/delete yet, one row per (user, provider), PUT
 // upserts it). api_key is write-only: never echoed back in any response.
-export type LLMProvider = 'azure_foundry'
+export type LLMProvider = 'anthropic' | 'openai' | 'azure_foundry'
 
 export interface LLMSetting {
   provider: LLMProvider
   api_base: string | null
 }
 
-// Only Azure Foundry for now (matches ASAREE's backend SUPPORTED_PROVIDERS
-// today -- anthropic/openai are also technically accepted server-side, but
-// this was scoped to what ARES already supports as a starting point). The
-// single shared source for provider display info -- CreateCredentialDialog's
-// provider picker and the LLM node inspector's Credential dropdown both read
+// Matches ASAREE's backend SUPPORTED_PROVIDERS (credential_resolver.py) --
+// every provider a per-user credential can be resolved for. The single
+// shared source for provider display info -- CreateCredentialDialog's
+// provider picker and the LLM node inspector's Credential section both read
 // this instead of keeping their own copy.
 export const LLM_PROVIDER_CATALOG: { id: LLMProvider; label: string; description: string }[] = [
+  { id: 'anthropic', label: 'Anthropic', description: 'Route requests through your own Anthropic account' },
+  { id: 'openai', label: 'OpenAI', description: 'Route requests through your own OpenAI account' },
   { id: 'azure_foundry', label: 'Azure AI Foundry', description: 'Route models through your own Azure resource' },
 ]
 

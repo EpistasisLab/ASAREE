@@ -6,6 +6,7 @@ import { nodeRunBadge } from '@/lib/protocolRun'
 import type { AgentNodeData, NodeRunStatus } from '@/types/protocols'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
+import { MainEdgeAddStub } from './MainEdgeAddStub'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 import { NodeSummaryLine } from './NodeSummaryLine'
 
@@ -30,17 +31,24 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
       {badge && (
         <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
       )}
-      {/* Main pipeline flow is left-to-right (n8n's own convention) --
-          input on the left, output on the right. The 4 sub-connectors
-          below stay on the bottom edge regardless, same as n8n's own AI
-          sub-connectors (Chat Model/Memory/Tool) always hang below a node
-          no matter which way the main flow runs. */}
+      {/* Main flow is left-to-right (n8n's own convention) -- the 4
+          sub-connectors below stay on the bottom edge regardless, same as
+          n8n's own AI sub-connectors (Chat Model/Memory/Tool) always hang
+          below a node no matter which way the main flow runs.
+
+          Left/right no longer mean strict sequential handoff -- they mean
+          "this agent can interact with that one" (which coordination
+          strategy is active decides what "interact" actually does at
+          runtime, see design_spec.coordination_strategy). Fan-out/fan-in
+          are both unrestricted, so the "+" stub never hides (unlike a
+          capped connector slot). */}
       <Handle
         type="target"
         position={Position.Left}
-        title="Input (the previous pipeline step's output)"
+        title="Connect to another agent (or a Critic Gate)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
+      <MainEdgeAddStub nodeId={id} direction="incoming" />
       <div className="flex items-center gap-1.5">
         <Bot className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
         {/* Renaming happens in the Inspector's own title now (click it,
@@ -100,9 +108,10 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
       <Handle
         type="source"
         position={Position.Right}
-        title="Output (drag to the next pipeline step)"
+        title="Connect to another agent (or a Critic Gate)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
+      <MainEdgeAddStub nodeId={id} direction="outgoing" />
     </div>
   )
 }

@@ -53,7 +53,12 @@ import { findFreePosition } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { MemoryNodeInspector } from './MemoryNodeInspector'
-import { ProtocolCanvasActionsProvider, type ConnectorAddRequest, type ConnectorSlot } from './ProtocolCanvasContext'
+import {
+  ProtocolCanvasActionsProvider,
+  type ConnectorAddRequest,
+  type ConnectorSlot,
+  type MainEdgeAddRequest,
+} from './ProtocolCanvasContext'
 import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
 import { AgentNode } from './nodes/AgentNode'
@@ -146,6 +151,10 @@ export function ProtocolCanvas({
   // and open its Inspector immediately, instead of dropping it unconnected
   // near the viewport center.
   const [pendingConnectorAdd, setPendingConnectorAdd] = useState<ConnectorAddRequest | null>(null)
+  // Same idea, requested from a MainEdgeAddStub instead -- always creates
+  // another Agent, wired via a plain edge (no handle id) in whichever
+  // direction the requesting stub sits.
+  const [pendingMainEdgeAdd, setPendingMainEdgeAdd] = useState<MainEdgeAddRequest | null>(null)
   const [runId, setRunId] = useState<string | null>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
@@ -197,6 +206,7 @@ export function ProtocolCanvas({
   function closeAddPanel() {
     setAddPanelOpen(false)
     setPendingConnectorAdd(null)
+    setPendingMainEdgeAdd(null)
   }
 
   // A connector "+" stub (ConnectorAddStub) requests this instead of
@@ -208,7 +218,43 @@ export function ProtocolCanvas({
     setPendingConnectorAdd(request)
     setAddPanelOpen(true)
   }, [])
-  const canvasActions = useMemo(() => ({ requestConnectorAdd }), [requestConnectorAdd])
+  // A MainEdgeAddStub requests this instead -- same panel, restricted to
+  // "agent" (the only node type this stub ever creates), and addNode()
+  // below wires a plain edge (no handle id) in whichever direction the
+  // requesting stub sits.
+  const requestMainEdgeAdd = useCallback((request: MainEdgeAddRequest) => {
+    setSelectedNodeId(null)
+    setPendingMainEdgeAdd(request)
+    setAddPanelOpen(true)
+  }, [])
+  const canvasActions = useMemo(
+    () => ({ requestConnectorAdd, requestMainEdgeAdd }),
+    [requestConnectorAdd, requestMainEdgeAdd],
+  )
+
+  // Every new Agent gets its own explicit default execution-pattern node
+  // (agentic-core's own "reason_act" via _resolve_pattern_config) wired in
+  // immediately -- delete it (or swap it for Single-Agent Baseline) to opt
+  // out/change it. Shared by both add paths that create a bare Agent (the
+  // unrestricted "+" toolbar and MainEdgeAddStub).
+  function agentDefaultPattern(agentId: string, agentPosition: { x: number; y: number }, otherPositions: { x: number; y: number }[]) {
+    const patternId = newNodeId()
+    const patternPosition = findFreePosition([...otherPositions, agentPosition], { x: agentPosition.x, y: agentPosition.y + 160 })
+    const patternNode: Node = {
+      id: patternId,
+      type: 'pattern_reason_act',
+      position: patternPosition,
+      data: defaultReasonActPatternNodeData(),
+    }
+    const patternEdge: Edge = {
+      id: newNodeId(),
+      source: patternId,
+      sourceHandle: 'architectural_pattern',
+      target: agentId,
+      targetHandle: 'architectural_pattern',
+    }
+    return { patternNode, patternEdge }
+  }
 
   // n8n's own pattern: a "+" on the canvas opens a searchable node-type
   // panel on the right, rather than a static always-visible drag palette.
@@ -234,6 +280,31 @@ export function ProtocolCanvas({
       setSelectedNodeId(newId)
       return
     }
+    if (pendingMainEdgeAdd) {
+      // Always an Agent -- AddNodePanel is restricted to ['agent'] for this
+      // request (see the allowedTypes prop below), matching what
+      // MainEdgeAddStub is for. Positioned left/right of the origin (main
+      // flow is left-to-right) rather than below it, unlike a connector add.
+      const { nodeId: originId, direction } = pendingMainEdgeAdd
+      const originNode = nodes.find((n) => n.id === originId)
+      const desired = originNode
+        ? { x: originNode.position.x + (direction === 'outgoing' ? 340 : -340), y: originNode.position.y }
+        : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+      const position = findFreePosition(nodes.map((n) => n.position), desired)
+      const newId = newNodeId()
+      const newNode: Node = { id: newId, type: 'agent', position, data: defaultDataFor('agent') }
+      const mainEdge: Edge =
+        direction === 'outgoing'
+          ? { id: newNodeId(), source: originId, target: newId }
+          : { id: newNodeId(), source: newId, target: originId }
+      const { patternNode, patternEdge } = agentDefaultPattern(newId, position, nodes.map((n) => n.position))
+      setNodes((nds) => nds.concat(newNode, patternNode))
+      setEdges((eds) => eds.concat(mainEdge, patternEdge))
+      setPendingMainEdgeAdd(null)
+      setAddPanelOpen(false)
+      setSelectedNodeId(newId)
+      return
+    }
     const rect = paneRef.current?.getBoundingClientRect()
     const center = rect
       ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
@@ -244,30 +315,10 @@ export function ProtocolCanvas({
     const newNode: Node = { id: newId, type: nodeType, position, data: defaultDataFor(nodeType) }
 
     if (nodeType === 'agent') {
-      // The execution pattern's default (agentic-core's own "reason_act",
-      // see _resolve_pattern_config) deliberately never stays invisible --
-      // unlike LLM (no auto-created default; you must wire one), every new
-      // Agent gets an explicit, real "Reason + Act" node created and wired
-      // in immediately. Delete it (or swap it for Single-Agent Baseline) to
-      // opt out/change it -- the connector itself stays optional.
-      const patternId = newNodeId()
-      const patternPosition = findFreePosition(
-        [...nodes.map((n) => n.position), position],
-        { x: position.x, y: position.y + 160 },
-      )
-      const patternNode: Node = {
-        id: patternId,
-        type: 'pattern_reason_act',
-        position: patternPosition,
-        data: defaultReasonActPatternNodeData(),
-      }
-      const patternEdge: Edge = {
-        id: newNodeId(),
-        source: patternId,
-        sourceHandle: 'architectural_pattern',
-        target: newId,
-        targetHandle: 'architectural_pattern',
-      }
+      // Unlike LLM (no auto-created default; you must wire one), every new
+      // Agent gets an explicit default pattern immediately -- see
+      // agentDefaultPattern's own comment.
+      const { patternNode, patternEdge } = agentDefaultPattern(newId, position, nodes.map((n) => n.position))
       setNodes((nds) => nds.concat(newNode, patternNode))
       setEdges((eds) => eds.concat(patternEdge))
       setAddPanelOpen(false)
@@ -490,8 +541,20 @@ export function ProtocolCanvas({
           <AddNodePanel
             onAdd={addNode}
             onClose={closeAddPanel}
-            allowedTypes={pendingConnectorAdd ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].allowedTypes : undefined}
-            title={pendingConnectorAdd ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].title : undefined}
+            allowedTypes={
+              pendingConnectorAdd
+                ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].allowedTypes
+                : pendingMainEdgeAdd
+                  ? ['agent']
+                  : undefined
+            }
+            title={
+              pendingConnectorAdd
+                ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].title
+                : pendingMainEdgeAdd
+                  ? 'Connect an agent'
+                  : undefined
+            }
           />
         ) : selectedNode?.type === 'mcp_tool' ? (
           <McpToolNodeInspector

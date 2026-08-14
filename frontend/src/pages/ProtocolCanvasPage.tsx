@@ -158,7 +158,19 @@ export function ProtocolCanvasPage() {
       const existing = await protocolsApi.list(experimentId!)
       if (existing.length > 0) return existing[0]
       const experiment = await experimentsApi.get(experimentId!)
-      return protocolsApi.create({ name: `Protocol: ${experiment.name}`, experiment_id: experimentId! })
+      // Protocol names are unique per owner (uq_protocols_owner_name) --
+      // two experiments sharing a name (trivially true for the "Untitled
+      // Experiment" default every new one starts with) would otherwise
+      // collide here and 409 forever, since a plain-name retry hits the
+      // exact same conflict every time. The experiment's own id is unique
+      // by construction, so suffixing it (matching the "[shortid]"
+      // disambiguation convention already used elsewhere, e.g. a real
+      // protocol named "...Benchmark [079976db]") makes this create call
+      // collision-proof.
+      return protocolsApi.create({
+        name: `Protocol: ${experiment.name} [${experimentId!.slice(0, 8)}]`,
+        experiment_id: experimentId!,
+      })
     },
     enabled: !!experimentId,
   })

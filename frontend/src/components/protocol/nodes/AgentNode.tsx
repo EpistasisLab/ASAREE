@@ -80,11 +80,19 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
         id="architectural_pattern"
         position={Position.Bottom}
         style={{ left: '38%' }}
-        title="Architectural Pattern (optional -- defaults to Reason + Act)"
+        title="Architectural Pattern -- always exactly one; pick a node here to swap it"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left="38%">Pattern</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="38%" />
+      {/* Never hides once connected (unlike LLM/Memory) -- an execution
+          pattern must never go to zero (agentic-core silently falls back
+          to reason_act if left unconnected, undoing the whole point of
+          making the default explicit), so the only way to change it is to
+          replace it via this same stub, never a bare delete. See
+          addNode()'s own pendingConnectorAdd branch for the replace logic,
+          and ProtocolCanvas.tsx's nodesWithRunStatus for why the connected
+          pattern node itself can't be deleted directly either. */}
+      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="38%" alwaysVisible />
       <Handle
         type="target"
         id="memory"
@@ -104,7 +112,7 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left="86%">Tool</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="tool" left="86%" allowMultiple />
+      <ConnectorAddStub nodeId={id} slot="tool" left="86%" alwaysVisible />
       <Handle
         type="source"
         position={Position.Right}

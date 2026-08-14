@@ -205,13 +205,27 @@ export function ProtocolCanvas({
 
   const isRunning = runMutation.isPending || (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
 
-  const nodesWithRunStatus = useMemo(() => {
-    if (!runQuery.data) return nodes
+  // A connected execution-pattern node must never be deletable directly
+  // (Backspace/Delete key, NodeHoverToolbar's trash icon -- both go through
+  // xyflow's own deleteElements, which skips any node with deletable:
+  // false) -- an agent's pattern connector must never go to zero (see
+  // AgentNode.tsx's own comment), so the only way to remove one is to
+  // replace it via the connector's own "+" (addNode()'s pendingConnectorAdd
+  // branch). The cap of one means being the source of ANY
+  // architectural_pattern edge already identifies the sole pattern node
+  // for its target agent -- no need to also check "exactly one" here.
+  const nonDeletablePatternNodeIds = useMemo(
+    () => new Set(edges.filter((e) => e.targetHandle === 'architectural_pattern').map((e) => e.source)),
+    [edges],
+  )
+
+  const nodesWithRunStatus = useMemo((): Node[] => {
     return nodes.map((n) => ({
       ...n,
-      data: { ...n.data, runStatus: runQuery.data!.node_runs[n.id]?.status },
+      deletable: !nonDeletablePatternNodeIds.has(n.id),
+      data: { ...n.data, runStatus: runQuery.data?.node_runs[n.id]?.status },
     }))
-  }, [nodes, runQuery.data])
+  }, [nodes, runQuery.data, nonDeletablePatternNodeIds])
 
   function closeAddPanel() {
     setAddPanelOpen(false)
@@ -289,8 +303,22 @@ export function ProtocolCanvas({
         : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
       const position = findFreePosition(nodes.map((n) => n.position), desired)
       const newId = newNodeId()
-      setNodes((nds) => nds.concat({ id: newId, type: nodeType, position, data: defaultDataFor(nodeType) }))
-      setEdges((eds) => eds.concat({ id: newNodeId(), source: newId, sourceHandle: slot, target: originId, targetHandle: slot }))
+      // Execution pattern is capped at one but must never go to zero (see
+      // AgentNode.tsx's own comment) -- its "+" stays visible even once
+      // connected, and picking a node here always REPLACES whichever
+      // pattern node is currently wired (removing it and its edge) rather
+      // than adding a second, which protocol_execution.py's own "at most
+      // one execution-pattern connection" validation would reject anyway.
+      const existingPatternEdge =
+        slot === 'architectural_pattern'
+          ? edges.find((e) => e.target === originId && e.targetHandle === 'architectural_pattern')
+          : undefined
+      setNodes((nds) => nds.filter((n) => n.id !== existingPatternEdge?.source).concat({ id: newId, type: nodeType, position, data: defaultDataFor(nodeType) }))
+      setEdges((eds) =>
+        eds
+          .filter((e) => e.id !== existingPatternEdge?.id)
+          .concat({ id: newNodeId(), source: newId, sourceHandle: slot, target: originId, targetHandle: slot }),
+      )
       setPendingConnectorAdd(null)
       setAddPanelOpen(false)
       // Mirrors n8n's own flow: picking a node from the connector panel

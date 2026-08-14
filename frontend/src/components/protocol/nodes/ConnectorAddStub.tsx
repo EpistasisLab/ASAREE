@@ -9,25 +9,29 @@ import { useProtocolCanvasActions, type ConnectorSlot } from '../ProtocolCanvasC
 // this slot's allowed node type(s) -- matching n8n's picker rather than
 // instant-creating a node, so this keeps working the same way once a slot
 // ever offers more than one kind of node. Hidden once the slot has a
-// connection, unless `allowMultiple` (Tool is unlimited -- n8n keeps its
-// own "+" visible there even after the first connection).
+// connection, unless `alwaysVisible` -- Tool is genuinely unlimited (n8n
+// keeps its own "+" visible there even after the first connection);
+// Architectural Pattern is capped at one but must never go to zero either
+// (see AgentNode.tsx's own comment), so its stub also never hides, but
+// picking a new node there REPLACES the existing one instead of adding a
+// second (addNode()'s own pendingConnectorAdd branch, not this component).
 export function ConnectorAddStub({
   nodeId,
   slot,
   left,
   side = 'bottom',
-  allowMultiple = false,
+  alwaysVisible = false,
 }: {
   nodeId: string
   slot: ConnectorSlot
   left?: string
   side?: 'bottom' | 'right'
-  allowMultiple?: boolean
+  alwaysVisible?: boolean
 }) {
   const connections = useNodeConnections({ id: nodeId, handleType: 'target', handleId: slot })
   const { requestConnectorAdd } = useProtocolCanvasActions()
 
-  if (connections.length > 0 && !allowMultiple) return null
+  if (connections.length > 0 && !alwaysVisible) return null
 
   function handleClick(e: MouseEvent) {
     e.stopPropagation()

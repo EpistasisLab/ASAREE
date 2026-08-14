@@ -223,7 +223,7 @@ export const llmSettingsApi = {
   list: () => request<LLMSetting[]>('/llm-settings'),
   // PUT, not POST: one row per (user, provider) -- a second call for the
   // same provider replaces it, it doesn't create a second credential.
-  upsert: (data: { provider: LLMProvider; api_key: string; api_base?: string | null }) =>
+  upsert: (data: { provider: LLMProvider; api_key: string; api_base?: string | null; azure_project_endpoint?: string | null }) =>
     request<LLMSetting>('/llm-settings', { method: 'PUT', body: data }),
   // `provider` is a plain string, not LLMProvider -- unlike credential
   // storage (scoped to azure_foundry only in the UI today), model listing

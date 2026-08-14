@@ -24,18 +24,31 @@ async def list_settings(db: AsyncSession, *, user_id: uuid.UUID) -> list[UserLLM
 
 
 async def upsert_setting(
-    db: AsyncSession, *, user_id: uuid.UUID, provider: str, api_key: str, api_base: str | None = None
+    db: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    provider: str,
+    api_key: str,
+    api_base: str | None = None,
+    azure_project_endpoint: str | None = None,
 ) -> UserLLMSetting:
     """Create or replace the credential for this (user, provider) pair."""
     existing = await get_setting(db, user_id=user_id, provider=provider)
     if existing is not None:
         existing.api_key_encrypted = encrypt(api_key)
         existing.api_base = api_base
+        existing.azure_project_endpoint = azure_project_endpoint
         await db.flush()
         await db.refresh(existing)
         return existing
 
-    setting = UserLLMSetting(user_id=user_id, provider=provider, api_key_encrypted=encrypt(api_key), api_base=api_base)
+    setting = UserLLMSetting(
+        user_id=user_id,
+        provider=provider,
+        api_key_encrypted=encrypt(api_key),
+        api_base=api_base,
+        azure_project_endpoint=azure_project_endpoint,
+    )
     db.add(setting)
     await db.flush()
     await db.refresh(setting)

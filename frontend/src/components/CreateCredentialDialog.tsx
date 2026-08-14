@@ -28,6 +28,7 @@ export function CreateCredentialDialog({
   const [provider, setProvider] = useState<LLMProvider | null>(defaultProvider)
   const [apiKey, setApiKey] = useState('')
   const [apiBase, setApiBase] = useState('')
+  const [azureProjectEndpoint, setAzureProjectEndpoint] = useState('')
   const queryClient = useQueryClient()
 
   // A single dialog instance is reused across whichever node's inspector
@@ -47,7 +48,12 @@ export function CreateCredentialDialog({
 
   const saveMutation = useMutation({
     mutationFn: () =>
-      llmSettingsApi.upsert({ provider: provider!, api_key: apiKey, api_base: requiresApiBase ? apiBase || null : null }),
+      llmSettingsApi.upsert({
+        provider: provider!,
+        api_key: apiKey,
+        api_base: requiresApiBase ? apiBase || null : null,
+        azure_project_endpoint: requiresApiBase ? azureProjectEndpoint || null : null,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['llm-settings'] })
       reset()
@@ -60,6 +66,7 @@ export function CreateCredentialDialog({
     setProvider(null)
     setApiKey('')
     setApiBase('')
+    setAzureProjectEndpoint('')
     saveMutation.reset()
   }
 
@@ -137,6 +144,22 @@ export function CreateCredentialDialog({
                 />
                 <p className="text-xs text-muted-foreground">
                   Your Azure Foundry resource name, or its full endpoint URL.
+                </p>
+              </div>
+            )}
+
+            {requiresApiBase && (
+              <div className="space-y-1.5">
+                <Label htmlFor="credential-azure-project-endpoint">Project endpoint (optional)</Label>
+                <Input
+                  id="credential-azure-project-endpoint"
+                  placeholder="https://my-resource.services.ai.azure.com/api/projects/my-project"
+                  value={azureProjectEndpoint}
+                  onChange={(e) => setAzureProjectEndpoint(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Needed to list your deployments in the Model dropdown -- copy this from the Foundry portal's
+                  connection info. Not required for running agents; without it, type the deployment name directly.
                 </p>
               </div>
             )}

@@ -7,6 +7,14 @@ export type LLMProvider = 'anthropic' | 'openai' | 'azure_foundry'
 export interface LLMSetting {
   provider: LLMProvider
   api_base: string | null
+  // azure_foundry only -- the *project*-scoped endpoint
+  // (https://{resource}.services.ai.azure.com/api/projects/{project}), a
+  // genuinely different piece of connection info than api_base's resource
+  // host: the resource host authenticates inference, but listing what's
+  // actually deployed is a project-scoped call that 404s against the bare
+  // resource host. Optional -- inference works with just api_base; only
+  // the Model dropdown's live discovery needs this too.
+  azure_project_endpoint: string | null
 }
 
 // Matches ASAREE's backend SUPPORTED_PROVIDERS (credential_resolver.py) --

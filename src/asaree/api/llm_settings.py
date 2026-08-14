@@ -30,11 +30,15 @@ class UpsertLLMSettingRequest(BaseModel):
     provider: str
     api_key: str
     api_base: str | None = None
+    # azure_foundry only -- see UserLLMSetting's own comment for why this is
+    # a genuinely separate field from api_base, not derived from it.
+    azure_project_endpoint: str | None = None
 
 
 class LLMSettingResponse(BaseModel):
     provider: str
     api_base: str | None
+    azure_project_endpoint: str | None
 
 
 class LLMModelInfoResponse(BaseModel):
@@ -58,15 +62,25 @@ async def upsert_llm_setting_endpoint(
     if body.provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=422, detail=f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}")
     setting = await upsert_setting(
-        db, user_id=user.id, provider=body.provider, api_key=body.api_key, api_base=body.api_base
+        db,
+        user_id=user.id,
+        provider=body.provider,
+        api_key=body.api_key,
+        api_base=body.api_base,
+        azure_project_endpoint=body.azure_project_endpoint,
     )
-    return LLMSettingResponse(provider=setting.provider, api_base=setting.api_base)
+    return LLMSettingResponse(
+        provider=setting.provider, api_base=setting.api_base, azure_project_endpoint=setting.azure_project_endpoint
+    )
 
 
 @router.get("", response_model=list[LLMSettingResponse])
 async def list_llm_settings_endpoint(user: CurrentUser, db: DbSession) -> list[LLMSettingResponse]:
     settings = await list_settings(db, user_id=user.id)
-    return [LLMSettingResponse(provider=s.provider, api_base=s.api_base) for s in settings]
+    return [
+        LLMSettingResponse(provider=s.provider, api_base=s.api_base, azure_project_endpoint=s.azure_project_endpoint)
+        for s in settings
+    ]
 
 
 @router.get("/{provider}/models", response_model=LLMSettingModelsResponse)

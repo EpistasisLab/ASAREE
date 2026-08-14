@@ -552,24 +552,29 @@ def _upstream_output_text(graph: dict[str, Any], node_id: str, node_runs: dict[s
 
 
 def _build_user_input(node: dict[str, Any], graph: dict[str, Any], node_runs: dict[str, Any]) -> str:
-    """The node's own goal, plus (flat, unstructured -- a deliberate V1
-    simplification) each already-completed upstream node's output_text as
-    context. Real structured handoff via output_contract.payload is a
-    fast-follow, the same way the source notebook's own stage-report-block
-    pattern could graduate to using it."""
+    """The node's own prompt (falling back to its goal, then its canvas
+    label), plus (flat, unstructured -- a deliberate V1 simplification) each
+    already-completed upstream node's output_text as context. `prompt` is
+    the one field meant to change per run (mirrors n8n's AI Agent node's own
+    "Prompt (User Message)"); `goal` is a persistent objective, only used
+    here as prompt's own fallback when the user hasn't set one. Real
+    structured handoff via output_contract.payload is a fast-follow, the
+    same way the source notebook's own stage-report-block pattern could
+    graduate to using it."""
     data = node.get("data") or {}
-    goal = data.get("config", {}).get("goal") or data.get("label", "")
+    config = data.get("config", {})
+    seed = config.get("prompt") or config.get("goal") or data.get("label", "")
     upstream_ids = _upstream_ids(graph, node["id"])
     if not upstream_ids:
-        return goal
+        return seed
     context = [
         f"[{uid}]: {node_runs[uid]['output_text']}"
         for uid in upstream_ids
         if node_runs.get(uid, {}).get("output_text")
     ]
     if not context:
-        return goal
-    return f"{goal}\n\nUpstream context:\n" + "\n\n".join(context)
+        return seed
+    return f"{seed}\n\nUpstream context:\n" + "\n\n".join(context)
 
 
 def _build_revision_instruction(base_instruction: str, verdict: dict[str, Any], previous_output: str) -> str:

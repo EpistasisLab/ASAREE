@@ -100,6 +100,12 @@ export interface OutputContract {
 }
 
 export interface AgentNodeConfig {
+  // The task/message for a specific run -- optional; falls back to `goal`
+  // (services.protocol_execution's _build_user_input) when blank. Mirrors
+  // n8n's AI Agent node's own "Prompt (User Message)" field -- the one
+  // thing meant to change between runs, distinct from `goal` (a persistent
+  // objective) and `system_prompt` (persistent behavioral instructions).
+  prompt: string
   goal: string
   description: string
   system_prompt: string
@@ -137,6 +143,7 @@ export function defaultAgentNodeData(label = 'Agent'): AgentNodeData {
   return {
     label,
     config: {
+      prompt: '',
       goal: '',
       description: '',
       system_prompt: '',

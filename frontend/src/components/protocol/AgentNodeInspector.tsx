@@ -91,8 +91,22 @@ export function AgentNodeInspector({
 
           <TabsContent value="parameters" className="space-y-4 pt-2">
             <div className="space-y-1.5">
-              <Label htmlFor="node-goal">Goal</Label>
+              <Label htmlFor="node-prompt">Prompt (User Message)</Label>
+              <Textarea id="node-prompt" rows={2} value={config.prompt} onChange={(e) => patchConfig({ prompt: e.target.value })} />
+              <p className="text-xs text-muted-foreground">
+                The task for this run -- what you're actually asking this agent to do. Leave blank to fall back
+                to Goal (or, once wired to an earlier step, that step's own output).
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="node-goal">Goal (Optional)</Label>
               <Textarea id="node-goal" rows={2} value={config.goal} onChange={(e) => patchConfig({ goal: e.target.value })} />
+              <p className="text-xs text-muted-foreground">
+                A persistent, one-line objective for this agent -- distinct from Prompt (this run's specific
+                ask) and System prompt (detailed behavioral instructions). Doubles as this agent's default
+                Prompt when one isn't given.
+              </p>
             </div>
 
             <div className="space-y-1.5">

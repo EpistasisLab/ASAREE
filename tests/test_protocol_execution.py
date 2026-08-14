@@ -186,6 +186,34 @@ def test_gated_worker_fanout_raises() -> None:
         topological_order(graph)
 
 
+# --- _build_user_input -------------------------------------------------------
+
+
+def test_build_user_input_prefers_prompt_over_goal() -> None:
+    config = {"prompt": "Summarize this quarter's results", "goal": "Analyze financials"}
+    node = _node("a", "agent", config, label="Analyst")
+    assert pe._build_user_input(node, {"nodes": [node], "edges": []}, {}) == "Summarize this quarter's results"
+
+
+def test_build_user_input_falls_back_to_goal_when_prompt_blank() -> None:
+    node = _node("a", "agent", {"prompt": "", "goal": "Analyze financials"}, label="Analyst")
+    assert pe._build_user_input(node, {"nodes": [node], "edges": []}, {}) == "Analyze financials"
+
+
+def test_build_user_input_falls_back_to_label_when_both_blank() -> None:
+    node = _node("a", "agent", {"prompt": "", "goal": ""}, label="Analyst")
+    assert pe._build_user_input(node, {"nodes": [node], "edges": []}, {}) == "Analyst"
+
+
+def test_build_user_input_appends_upstream_context_after_prompt() -> None:
+    upstream = _node("u", "agent", {"goal": "produce a draft"}, label="Drafter")
+    downstream = _node("d", "agent", {"prompt": "Polish the draft"}, label="Editor")
+    graph = {"nodes": [upstream, downstream], "edges": _edges(("u", "d"))}
+    node_runs = {"u": {"output_text": "draft text here"}}
+    result = pe._build_user_input(downstream, graph, node_runs)
+    assert result == "Polish the draft\n\nUpstream context:\n[u]: draft text here"
+
+
 # --- _run_gated_worker (mocked -- no real LLM calls) -------------------------
 
 

@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pencil, Trash2 } from 'lucide-react'
+import { Pencil, ShieldCheck, TriangleAlert, Trash2 } from 'lucide-react'
 import { llmSettingsApi } from '@/api/client'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -89,6 +90,26 @@ export function LlmCredentialsSection() {
         </Button>
       </CardHeader>
       <CardContent>
+        <div className="mb-4 space-y-2">
+          <Alert>
+            <ShieldCheck />
+            <AlertTitle>How your API keys are secured</AlertTitle>
+            <AlertDescription>
+              Your API keys are encrypted at rest (Fernet symmetric encryption) before being stored, and only
+              decrypted at the moment a run actually needs them -- never logged or cached in plaintext.
+            </AlertDescription>
+          </Alert>
+          <Alert>
+            <TriangleAlert className="text-[color:var(--chart-4)]" />
+            <AlertTitle className="text-[color:var(--chart-4)]">Important</AlertTitle>
+            <AlertDescription>
+              Storing API keys in any application carries inherent risk -- if this server's encryption key were
+              ever compromised, stored credentials could be exposed. Use scoped, provider-specific keys with
+              minimal permissions, and rotate them regularly.
+            </AlertDescription>
+          </Alert>
+        </div>
+
         {isLoading ? (
           <div className="space-y-2">
             <Skeleton className="h-8 w-full" />

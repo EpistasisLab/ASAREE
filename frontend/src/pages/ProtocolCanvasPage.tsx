@@ -64,7 +64,7 @@ function EditableExperimentName({ experiment }: { experiment: Experiment }) {
         setEditing(true)
       }}
       title="Click to rename"
-      className="rounded-md px-1.5 py-0.5 -ml-1.5 text-lg font-semibold tracking-tight hover:bg-muted"
+      className="-ml-1.5 cursor-pointer rounded-md px-1.5 py-0.5 text-lg font-semibold tracking-tight hover:bg-muted"
     >
       {experiment.name}
     </button>

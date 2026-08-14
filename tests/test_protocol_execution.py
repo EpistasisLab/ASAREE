@@ -46,7 +46,10 @@ def _edges(*pairs: tuple[str, str]) -> list[dict]:
 
 
 def _llm_node(node_id: str = "llm", config: dict | None = None) -> dict:
-    return {"id": node_id, "type": "llm", "data": {"label": "", "config": config or {}}}
+    # llm_anthropic -- one arbitrary member of the LLM node-type family
+    # (pe._LLM_NODE_TYPES); which one doesn't matter for these DAG-shape/
+    # validation tests, only that it's a family member.
+    return {"id": node_id, "type": "llm_anthropic", "data": {"label": "", "config": config or {}}}
 
 
 def _llm_edge(source: str, target: str) -> dict:
@@ -59,6 +62,21 @@ def _memory_node(node_id: str = "memory") -> dict:
 
 def _memory_edge(source: str, target: str) -> dict:
     return {"id": f"{source}-{target}-memory", "source": source, "target": target, "targetHandle": "memory"}
+
+
+def _pattern_node(node_id: str = "pattern") -> dict:
+    # pattern_reason_act -- one arbitrary member of the pattern node-type
+    # family (pe._PATTERN_NODE_TYPES), same reasoning as _llm_node above.
+    return {"id": node_id, "type": "pattern_reason_act", "data": {"label": "", "config": {}}}
+
+
+def _pattern_edge(source: str, target: str) -> dict:
+    return {
+        "id": f"{source}-{target}-architectural_pattern",
+        "source": source,
+        "target": target,
+        "targetHandle": "architectural_pattern",
+    }
 
 
 def _tool_node(node_id: str = "tool1", server_name: str = "srv", tool_name: str = "do_thing") -> dict:
@@ -502,7 +520,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
                 "nodes": [
                     {
                         "id": "llm1",
-                        "type": "llm",
+                        "type": "llm_anthropic",
                         "data": {
                             "config": {"temperature": 0.9},
                             "factor_bindings": {"config.temperature": "Temperature"},
@@ -700,7 +718,7 @@ def test_tool_connection_on_critic_gate_raises() -> None:
             _tool_edge("tool1", "g1"),
         ],
     }
-    with pytest.raises(ProtocolValidationError, match="Only Agent nodes can have a Tool or Memory connection"):
+    with pytest.raises(ProtocolValidationError, match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection"):
         topological_order(graph)
 
 
@@ -765,17 +783,102 @@ def test_memory_node_with_plain_outgoing_edge_raises() -> None:
         topological_order(graph)
 
 
+def test_multiple_architectural_pattern_connections_pass() -> None:
+    # Unlimited, same as Tool -- unlike Memory's max-1, an agent can have
+    # several architectural patterns wired in at once.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    p1, p2 = _pattern_node("p1"), _pattern_node("p2")
+    graph = {
+        "nodes": [llm, agent, p1, p2],
+        "edges": [agent_llm_edge, _pattern_edge("p1", "a"), _pattern_edge("p2", "a")],
+    }
+    order = [n["id"] for n in topological_order(graph)]
+    assert set(order) == {"llm", "a", "p1", "p2"}
+
+
+def test_architectural_pattern_connection_from_non_pattern_source_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _node("b", "agent")],
+        "edges": [agent_llm_edge, _pattern_edge("b", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="must come from an Architectural Pattern node"):
+        topological_order(graph)
+
+
+def test_architectural_pattern_connection_on_critic_gate_raises() -> None:
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    gate_llm_edge = _llm_edge("llm", "g1")
+    pattern = _pattern_node()
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate"), pattern],
+        "edges": [
+            worker_llm_edge,
+            gate_llm_edge,
+            {"id": "w1-g1", "source": "w1", "target": "g1"},
+            _pattern_edge("pattern", "g1"),
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection"):
+        topological_order(graph)
+
+
+def test_architectural_pattern_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    pattern = _pattern_node()
+    graph = {
+        "nodes": [llm, agent, pattern, _node("b", "agent")],
+        "edges": [agent_llm_edge, {"id": "pattern-b", "source": "pattern", "target": "b"}],
+    }
+    with pytest.raises(
+        ProtocolValidationError, match="Architectural Pattern node .* can only connect to a node's Architectural Pattern slot"
+    ):
+        topological_order(graph)
+
+
 def test_valid_llm_tool_memory_wiring_passes() -> None:
     llm = _llm_node(config={"provider": "anthropic", "model": "claude-sonnet-5"})
     agent, agent_llm_edge = _agent_with_llm("a")
     tool = _tool_node()
     memory = _memory_node()
+    pattern = _pattern_node()
     graph = {
-        "nodes": [llm, agent, tool, memory],
-        "edges": [agent_llm_edge, _tool_edge("tool1", "a"), _memory_edge("memory", "a")],
+        "nodes": [llm, agent, tool, memory, pattern],
+        "edges": [agent_llm_edge, _tool_edge("tool1", "a"), _memory_edge("memory", "a"), _pattern_edge("pattern", "a")],
     }
     order = [n["id"] for n in topological_order(graph)]
-    assert set(order) == {"llm", "a", "tool1", "memory"}
+    assert set(order) == {"llm", "a", "tool1", "memory", "pattern"}
+
+
+def test_llm_connection_accepts_any_provider_node_type() -> None:
+    # Membership, not equality -- llm_openai/llm_azure_foundry are just as
+    # valid an LLM connector source as _llm_node()'s default llm_anthropic.
+    agent1, agent1_llm_edge = _agent_with_llm("a1", llm_id="openai")
+    agent2, agent2_llm_edge = _agent_with_llm("a2", llm_id="foundry")
+    openai_llm = {"id": "openai", "type": "llm_openai", "data": {"label": "", "config": {}}}
+    foundry_llm = {"id": "foundry", "type": "llm_azure_foundry", "data": {"label": "", "config": {}}}
+    graph = {
+        "nodes": [agent1, agent2, openai_llm, foundry_llm],
+        "edges": [agent1_llm_edge, agent2_llm_edge],
+    }
+    order = [n["id"] for n in topological_order(graph)]
+    assert set(order) == {"a1", "a2", "openai", "foundry"}
+
+
+def test_architectural_pattern_connection_accepts_any_pattern_node_type() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    baseline_pattern = {"id": "baseline", "type": "pattern_single_agent_baseline", "data": {"label": "", "config": {}}}
+    graph = {
+        "nodes": [llm, agent, baseline_pattern],
+        "edges": [agent_llm_edge, _pattern_edge("baseline", "a")],
+    }
+    order = [n["id"] for n in topological_order(graph)]
+    assert set(order) == {"llm", "a", "baseline"}
 
 
 # --- LLM / Tool connector resolution (pure) -----------------------------------

@@ -91,13 +91,54 @@ class ProtocolValidationError(Exception):
     """The graph can't be run as-is (empty, a cycle, or a malformed critic-gate topology)."""
 
 
-# The three connector-typed slots on an agent/critic_gate node -- confirmed
-# against n8n's own closed enum (ai_languageModel/ai_memory/ai_tool), reusing
+# The connector-typed slots on an agent/critic_gate node. llm/tool/memory
+# were confirmed against n8n's own closed enum (ai_languageModel/ai_memory/
+# ai_tool); architectural_pattern is ASAREE's own addition (no n8n
+# equivalent) for ARES's pluggable architectural patterns -- visual/
+# validation scaffolding only for now, same deliberate non-implementation as
+# "memory" (see ArchitecturalPatternNodeData on the frontend). Reuses
 # ProtocolEdge's existing sourceHandle/targetHandle fields rather than adding
 # a new "connection type" concept. A "main" edge (today's plain pipeline
 # data-flow) is any edge whose targetHandle is one of these -- everything
 # else. The type marker always lives on the target side of an edge.
-_CONNECTOR_HANDLES = frozenset({"llm", "tool", "memory"})
+_CONNECTOR_HANDLES = frozenset({"llm", "tool", "memory", "architectural_pattern"})
+
+# Each connector slot accepts a FAMILY of node types, not one exact type --
+# mirrors how "tool" already accepts any mcp_tool node. LLM and Architectural
+# Pattern are each split one-node-per-provider/pattern (matches n8n's own
+# convention of a dedicated node per capability, e.g. per tool service,
+# rather than one generic node with an internal picker) instead of a single
+# generic node with a Provider/kind field -- config shape is identical
+# across LLM providers (provider is baked into the node type instead of a
+# user-editable field), but genuinely differs per architectural pattern (see
+# each pattern's own NodeConfig on the frontend), so the LLM family shares
+# one inspector while each pattern gets its own.
+_LLM_NODE_TYPES = frozenset({"llm_anthropic", "llm_openai", "llm_azure_foundry"})
+# Only two builtin execution patterns exist in agentic-core today
+# (engine/patterns/builtin/) -- PatternConfig already has unused slots for
+# safety_patterns/coordination_pattern/knowledge_patterns/quality_patterns/
+# routing_pattern/resolution_patterns, so this set (and the Architectural
+# Pattern connector these types plug into) is exactly where those would land
+# as more get ported, each as its own node type alongside these two.
+_PATTERN_NODE_TYPES = frozenset({"pattern_reason_act", "pattern_single_agent_baseline"})
+_MEMORY_NODE_TYPES = frozenset({"memory"})  # one today; kept as a set for symmetry with the other two families
+
+# Every node type that's a pure config source -- never gets its own execution
+# turn, never a pipeline "final output" (see sink_node_ids/run_protocol's
+# main loop), and may only ever emit its own connector-typed edge (see the
+# "outgoing wrong handle" check in topological_order below).
+_PURE_CONFIG_SOURCE_TYPES = _LLM_NODE_TYPES | _PATTERN_NODE_TYPES | _MEMORY_NODE_TYPES
+
+# Which connector handle each pure-config-source node type may exclusively
+# emit into, and the human-facing label for that handle -- both keyed off
+# the same family grouping so a new provider/pattern node type only needs
+# adding to _LLM_NODE_TYPES/_PATTERN_NODE_TYPES above, not a second lookup.
+_NODE_TYPE_TO_HANDLE: dict[str, str] = {
+    **{t: "llm" for t in _LLM_NODE_TYPES},
+    **{t: "architectural_pattern" for t in _PATTERN_NODE_TYPES},
+    **{t: "memory" for t in _MEMORY_NODE_TYPES},
+}
+_HANDLE_LABELS: dict[str, str] = {"llm": "LLM", "memory": "Memory", "architectural_pattern": "Architectural Pattern"}
 
 
 def _adjacency(
@@ -177,11 +218,12 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                     f"Node {nid!r} must have exactly one LLM connection (found {len(llm_edges)})."
                 )
             llm_source = nodes.get(llm_edges[0]["source"])
-            if llm_source is None or llm_source.get("type") != "llm":
+            if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
                 raise ProtocolValidationError(f"Node {nid!r}'s LLM connection must come from an LLM node.")
 
         tool_edges = _edges_with_handle(graph, nid, "tool", direction="incoming")
         memory_edges = _edges_with_handle(graph, nid, "memory", direction="incoming")
+        pattern_edges = _edges_with_handle(graph, nid, "architectural_pattern", direction="incoming")
         if node_type == "agent":
             for edge in tool_edges:
                 tool_source = nodes.get(edge["source"])
@@ -195,8 +237,16 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 memory_source = nodes.get(edge["source"])
                 if memory_source is None or memory_source.get("type") != "memory":
                     raise ProtocolValidationError(f"Node {nid!r}'s Memory connection must come from a Memory node.")
-        elif tool_edges or memory_edges:
-            raise ProtocolValidationError(f"Only Agent nodes can have a Tool or Memory connection (node {nid!r}).")
+            for edge in pattern_edges:
+                pattern_source = nodes.get(edge["source"])
+                if pattern_source is None or pattern_source.get("type") not in _PATTERN_NODE_TYPES:
+                    raise ProtocolValidationError(
+                        f"Node {nid!r}'s Architectural Pattern connection must come from an Architectural Pattern node."
+                    )
+        elif tool_edges or memory_edges or pattern_edges:
+            raise ProtocolValidationError(
+                f"Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection (node {nid!r})."
+            )
 
         if node_type == "mcp_tool":
             outgoing_tool = _edges_with_handle(graph, nid, "tool", direction="outgoing")
@@ -209,12 +259,15 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                     "connection at once -- add a second MCP Tool node if you need both."
                 )
 
-        if node_type in ("llm", "memory"):
+        if node_type in _NODE_TYPE_TO_HANDLE:
+            expected_handle = _NODE_TYPE_TO_HANDLE[node_type]
             outgoing_wrong_handle = [
-                e for e in graph.get("edges") or [] if e.get("source") == nid and e.get("targetHandle") != node_type
+                e
+                for e in graph.get("edges") or []
+                if e.get("source") == nid and e.get("targetHandle") != expected_handle
             ]
             if outgoing_wrong_handle:
-                label = "LLM" if node_type == "llm" else "Memory"
+                label = _HANDLE_LABELS[expected_handle]
                 raise ProtocolValidationError(
                     f"{label} node {nid!r} can only connect to a node's {label} slot, not a regular pipeline edge."
                 )
@@ -236,11 +289,12 @@ def sink_node_ids(graph: dict[str, Any]) -> list[str]:
     """Every node with no outgoing edges -- used both to validate a graph is
     runnable per-cell (exactly one sink required, see ``plan_cell_runs``) and
     by ``run_protocol`` itself to find the node whose output becomes a cell's
-    result. Excludes ``llm``/``memory`` nodes -- pure config sources are
-    never a pipeline's "final output," whether or not they're connected to
-    anything (an unwired one would otherwise falsely count as an extra sink)."""
+    result. Excludes every pure-config-source node type (every LLM provider/
+    architectural pattern node, plus ``memory``) -- these are never a
+    pipeline's "final output," whether or not they're connected to anything
+    (an unwired one would otherwise falsely count as an extra sink)."""
     nodes, downstream, _upstream = _adjacency(graph)
-    return [nid for nid, node in nodes.items() if not downstream[nid] and node.get("type") not in ("llm", "memory")]
+    return [nid for nid, node in nodes.items() if not downstream[nid] and node.get("type") not in _PURE_CONFIG_SOURCE_TYPES]
 
 
 def _set_path(root: dict[str, Any], dotted_path: str, value: Any) -> None:
@@ -785,11 +839,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 await update_node_run(db, protocol_run_id, node_id, {"status": "skipped"})
             continue
 
-        if node.get("type") in ("llm", "memory") or node_id in tool_source_ids:
+        if node.get("type") in _PURE_CONFIG_SOURCE_TYPES or node_id in tool_source_ids:
             # Pure config sources -- never get their own execution turn (see
-            # _resolve_llm_config/_resolve_tool_config). "memory" nodes are
-            # visual scaffolding only this phase: connecting one declares
-            # intent for a future phase, but has no runtime effect yet.
+            # _resolve_llm_config/_resolve_tool_config). Memory and
+            # architectural-pattern nodes are visual scaffolding only this
+            # phase: connecting one declares intent for a future phase, but
+            # has no runtime effect yet.
             node_runs[node_id] = {"status": "completed", "output_text": None, "error": None}
             async with get_session() as db:
                 await update_node_run(db, protocol_run_id, node_id, node_runs[node_id])

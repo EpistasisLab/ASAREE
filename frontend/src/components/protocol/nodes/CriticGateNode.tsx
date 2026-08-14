@@ -41,9 +41,13 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
       {badge && (
         <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
       )}
+      {/* Main pipeline flow is left-to-right -- input on the left, output on
+          the right, same convention as AgentNode. The LLM sub-connector
+          stays on the bottom edge regardless. */}
       <Handle
         type="target"
-        position={Position.Top}
+        position={Position.Left}
+        title="Input (the previous pipeline step's output)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <div className="flex items-center gap-1.5">
@@ -59,16 +63,16 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
         type="target"
         id="llm"
         position={Position.Bottom}
-        style={{ left: '30%' }}
+        style={{ left: '50%' }}
         title="LLM (required)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="30%">LLM</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="llm" left="30%" />
+      <ConnectorHandleLabel left="50%">LLM</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="llm" left="50%" />
       <Handle
         type="source"
-        position={Position.Bottom}
-        style={{ left: '70%' }}
+        position={Position.Right}
+        title="Output (drag to the next pipeline step)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
     </div>

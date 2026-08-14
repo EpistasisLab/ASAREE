@@ -4,16 +4,24 @@
 // affect the node card's own layout/height.
 export function ConnectorHandleLabel({
   left,
+  top,
   side = 'bottom',
   children,
 }: {
   left?: string
+  // Only meaningful for side="right" -- lets two right-side connectors (e.g.
+  // McpToolNode's main output and its Tool connector) each get their own
+  // vertical slot instead of both defaulting to dead center.
+  top?: string
   side?: 'bottom' | 'right'
   children: string
 }) {
   if (side === 'right') {
     return (
-      <span className="absolute top-1/2 -right-9 -translate-y-1/2 text-[0.55rem] font-medium whitespace-nowrap text-muted-foreground">
+      <span
+        className="absolute -right-9 -translate-y-1/2 text-[0.55rem] font-medium whitespace-nowrap text-muted-foreground"
+        style={{ top: top ?? '50%' }}
+      >
         {children}
       </span>
     )

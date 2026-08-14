@@ -17,7 +17,14 @@ export interface ProtocolNode {
   id: string
   type: string
   position: { x: number; y: number }
-  data: AgentNodeData | McpToolNodeData | CriticGateNodeData | LlmNodeData | MemoryNodeData
+  data:
+    | AgentNodeData
+    | McpToolNodeData
+    | CriticGateNodeData
+    | LlmNodeData
+    | MemoryNodeData
+    | ReasonActPatternNodeData
+    | SingleAgentBaselinePatternNodeData
 }
 
 export interface ProtocolEdge {
@@ -220,16 +227,22 @@ export function defaultCriticGateNodeData(label = 'Critic Gate'): CriticGateNode
   }
 }
 
-// An "LLM" node -- ASAREE's own name for n8n's "Chat Model" connector
-// (matches this app's existing LLMProvider/LLMSetting vocabulary instead of
-// copying n8n's term). Supplies model/provider/temperature/effort/max_tokens
-// to whichever agent/critic_gate node(s) it's wired into via their required
-// LLM connector -- exactly today's AgentModelConfigData shape, just moved
-// out of the agent's own config into its own node so the agent's inspector
-// stays about the agent's behavior, not its model. One LLM node's output can
-// fan out to multiple agents (shared config, reused rather than
-// re-entered per agent) -- nothing prevents this, though there's no
-// dedicated UI for it yet.
+// The LLM connector's node family -- ASAREE's own name for n8n's "Chat
+// Model" connector (matches this app's existing LLMProvider/LLMSetting
+// vocabulary instead of copying n8n's term). One node type per provider
+// (llm_anthropic/llm_openai/llm_azure_foundry), not one generic node with a
+// Provider field -- mirrors n8n's own convention of a dedicated node per
+// capability (see e.g. its separate HTTP Request Tool/Code Tool/MCP Client
+// Tool nodes) rather than one node with an internal picker. Config shape is
+// identical across all three (provider is baked into which node type you
+// picked, not user-editable), so they share this one config/data shape and
+// -- see LlmNodeInspector.tsx -- one inspector component, varying only the
+// hardcoded `provider` each default-data factory below sets. Supplies
+// model/provider/temperature/effort/max_tokens to whichever agent/
+// critic_gate node(s) it's wired into via their required LLM connector.
+// One LLM node's output can fan out to multiple agents (shared config,
+// reused rather than re-entered per agent) -- nothing prevents this, though
+// there's no dedicated UI for it yet.
 export type LlmNodeConfig = AgentModelConfigData
 
 export interface LlmNodeData {
@@ -239,11 +252,16 @@ export interface LlmNodeData {
   [key: string]: unknown
 }
 
-export function defaultLlmNodeData(label = 'LLM'): LlmNodeData {
-  return {
-    label,
-    config: { provider: 'anthropic', model: 'claude-sonnet-5', temperature: 0.7, max_tokens: 4096 },
-  }
+export function defaultAnthropicLlmNodeData(label = 'Anthropic'): LlmNodeData {
+  return { label, config: { provider: 'anthropic', model: 'claude-sonnet-5', temperature: 0.7, max_tokens: 4096 } }
+}
+
+export function defaultOpenAiLlmNodeData(label = 'OpenAI'): LlmNodeData {
+  return { label, config: { provider: 'openai', model: 'gpt-5', temperature: 0.7, max_tokens: 4096 } }
+}
+
+export function defaultAzureFoundryLlmNodeData(label = 'Azure AI Foundry'): LlmNodeData {
+  return { label, config: { provider: 'azure_foundry', model: 'gpt-5', temperature: 0.7, max_tokens: 4096 } }
 }
 
 // A "Memory" node -- visual/validation scaffolding only for now. Wiring one
@@ -264,4 +282,67 @@ export interface MemoryNodeData {
 
 export function defaultMemoryNodeData(label = 'Memory'): MemoryNodeData {
   return { label, config: { name: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'memory' } }
+}
+
+// The Architectural Pattern connector's node family -- same deliberate
+// non-implementation as Memory (see MemoryNodeData's own comment): wiring
+// one into an Agent's Architectural Pattern connector has NO effect on
+// execution yet (services.protocol_execution accepts and validates the
+// connection, never resolves it into anything) -- porting the real
+// agentic-core pattern plugin behind each node is an explicit follow-up.
+// No n8n equivalent -- ASAREE's own addition alongside LLM/Tool/Memory.
+//
+// One node type per pattern (pattern_reason_act/pattern_single_agent_baseline),
+// not one generic node with a Pattern-name field -- same reasoning as the
+// LLM node family above, and unlike that family these genuinely have
+// different config shapes (agentic-core's own `pattern_params` schema per
+// plugin, see engine/patterns/builtin/*.py), so each gets its own dedicated
+// inspector rather than sharing one. `PatternConfig` (agentic-core) already
+// has unused slots for safety_patterns/coordination_pattern/
+// knowledge_patterns/quality_patterns/routing_pattern/resolution_patterns --
+// no builtin plugins exist for those yet, but that's exactly where more
+// node types land as agentic-core grows them, same connector, same
+// per-pattern-node convention.
+
+// Mirrors agentic-core's ReasonActPattern.configuration_schema
+// (engine/patterns/builtin/reason_act.py) -- a native tool-calling loop:
+// each iteration either calls a tool or calls `final_answer`, repeating
+// until `final_answer` fires or max_iterations is hit.
+export interface ReasonActPatternConfig {
+  max_iterations: number
+  include_scratchpad: boolean
+  scratchpad_window: number
+  observation_format: 'raw' | 'summarized'
+}
+
+export interface ReasonActPatternNodeData {
+  label: string
+  config: ReasonActPatternConfig
+  [key: string]: unknown
+}
+
+export function defaultReasonActPatternNodeData(label = 'Reason + Act'): ReasonActPatternNodeData {
+  return {
+    label,
+    config: { max_iterations: 15, include_scratchpad: true, scratchpad_window: 10, observation_format: 'raw' },
+  }
+}
+
+// Mirrors agentic-core's SingleAgentBaselinePattern.configuration_schema
+// (engine/patterns/builtin/single_agent_baseline.py) -- the plain,
+// unmodified Sense->Reason->Plan->Act loop with no tool-call interleaving;
+// agentic-core's own default/fallback when no pattern_config is set at all.
+export interface SingleAgentBaselinePatternConfig {
+  max_iterations: number
+  stop_on_first_success: boolean
+}
+
+export interface SingleAgentBaselinePatternNodeData {
+  label: string
+  config: SingleAgentBaselinePatternConfig
+  [key: string]: unknown
+}
+
+export function defaultSingleAgentBaselinePatternNodeData(label = 'Single-Agent Baseline'): SingleAgentBaselinePatternNodeData {
+  return { label, config: { max_iterations: 10, stop_on_first_success: true } }
 }

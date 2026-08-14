@@ -45,14 +45,22 @@ export function EditableNodeLabel({
           }
         }}
         onClick={(e) => e.stopPropagation()}
-        className="h-5 px-1 py-0 text-xs"
+        className="h-5 min-w-0 flex-1 px-1 py-0 text-xs"
       />
     )
   }
 
   return (
     <span
-      className="truncate text-xs font-medium"
+      // flex-1 (the parent row is a flex container in every node card)
+      // stretches this span's own box across the row's remaining width,
+      // not just as wide as its own text -- otherwise the actual
+      // double-click target is only the tight text itself, and a wider
+      // card (e.g. AgentNode, which has much more empty row space beside
+      // a short label) makes it easy to double-click just next to the
+      // text and land on the card's own onDoubleClick (opens the
+      // Inspector) instead of renaming.
+      className="min-w-0 flex-1 truncate text-xs font-medium"
       title={label}
       onDoubleClick={(e) => {
         // Overrides the card's own onNodeDoubleClick (opens the inspector)

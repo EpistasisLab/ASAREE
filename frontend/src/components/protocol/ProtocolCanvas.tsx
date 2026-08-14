@@ -24,10 +24,14 @@ import { toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import {
   defaultAgentNodeData,
+  defaultAnthropicLlmNodeData,
+  defaultAzureFoundryLlmNodeData,
   defaultCriticGateNodeData,
-  defaultLlmNodeData,
   defaultMcpToolNodeData,
   defaultMemoryNodeData,
+  defaultOpenAiLlmNodeData,
+  defaultReasonActPatternNodeData,
+  defaultSingleAgentBaselinePatternNodeData,
 } from '@/types/protocols'
 import type {
   AgentNodeData,
@@ -37,6 +41,8 @@ import type {
   MemoryNodeData,
   ProtocolGraph,
   ProtocolNode,
+  ReasonActPatternNodeData,
+  SingleAgentBaselinePatternNodeData,
 } from '@/types/protocols'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
@@ -47,19 +53,38 @@ import { findFreePosition } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { MemoryNodeInspector } from './MemoryNodeInspector'
+import { ProtocolCanvasActionsProvider, type ConnectorAddRequest, type ConnectorSlot } from './ProtocolCanvasContext'
+import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
+import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
 import { LlmNode } from './nodes/LlmNode'
 import { McpToolNode } from './nodes/McpToolNode'
 import { MemoryNode } from './nodes/MemoryNode'
+import { ReasonActPatternNode } from './nodes/ReasonActPatternNode'
+import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatternNode'
 import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
+
+// One node type per LLM provider / architectural pattern (see LlmNodeData/
+// ReasonActPatternNodeData's own comments in types/protocols.ts) -- each
+// connector slot accepts this whole family, not one exact type, mirroring
+// how the "tool" slot already accepts any mcp_tool node.
+const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry']
+const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
 
 const NODE_TYPES = {
   agent: AgentNode,
   mcp_tool: McpToolNode,
   critic_gate: CriticGateNode,
-  llm: LlmNode,
+  // All three LLM provider types render through the same component -- it
+  // derives icon/accent/placeholder from data.config.provider, not from
+  // which of these three keys it was registered under.
+  llm_anthropic: LlmNode,
+  llm_openai: LlmNode,
+  llm_azure_foundry: LlmNode,
   memory: MemoryNode,
+  pattern_reason_act: ReasonActPatternNode,
+  pattern_single_agent_baseline: SingleAgentBaselinePatternNode,
 }
 const AUTOSAVE_DELAY_MS = 800
 const RUN_POLL_MS = 2000
@@ -82,9 +107,24 @@ function isNearViewport(a: Viewport, b: Viewport): boolean {
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData('New MCP Tool')
   if (nodeType === 'critic_gate') return defaultCriticGateNodeData('New Critic Gate')
-  if (nodeType === 'llm') return defaultLlmNodeData('New LLM')
+  if (nodeType === 'llm_anthropic') return defaultAnthropicLlmNodeData('New Anthropic')
+  if (nodeType === 'llm_openai') return defaultOpenAiLlmNodeData('New OpenAI')
+  if (nodeType === 'llm_azure_foundry') return defaultAzureFoundryLlmNodeData('New Azure AI Foundry')
   if (nodeType === 'memory') return defaultMemoryNodeData('New Memory')
+  if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData('New Reason + Act')
+  if (nodeType === 'pattern_single_agent_baseline') return defaultSingleAgentBaselinePatternNodeData('New Single-Agent Baseline')
   return defaultAgentNodeData('New Agent')
+}
+
+// Mirrors isValidConnection's own per-slot source-type-family rule -- the
+// panel that opens for a connector "+" is pre-filtered to that slot's whole
+// family of node types (LLM_NODE_TYPES/PATTERN_NODE_TYPES above) rather than
+// the full catalog.
+const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; title: string }> = {
+  llm: { allowedTypes: LLM_NODE_TYPES, title: 'Add LLM' },
+  tool: { allowedTypes: ['mcp_tool'], title: 'Add Tool' },
+  memory: { allowedTypes: ['memory'], title: 'Add Memory' },
+  architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
 }
 
 export function ProtocolCanvas({
@@ -100,6 +140,12 @@ export function ProtocolCanvas({
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialGraph.edges as Edge[])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [addPanelOpen, setAddPanelOpen] = useState(false)
+  // Set only while the "+" panel was opened via a connector stub (as
+  // opposed to the canvas's own unrestricted toolbar "+") -- addNode()
+  // branches on this to wire the new node into the requesting node's slot
+  // and open its Inspector immediately, instead of dropping it unconnected
+  // near the viewport center.
+  const [pendingConnectorAdd, setPendingConnectorAdd] = useState<ConnectorAddRequest | null>(null)
   const [runId, setRunId] = useState<string | null>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
@@ -148,12 +194,46 @@ export function ProtocolCanvas({
     }))
   }, [nodes, runQuery.data])
 
+  function closeAddPanel() {
+    setAddPanelOpen(false)
+    setPendingConnectorAdd(null)
+  }
+
+  // A connector "+" stub (ConnectorAddStub) requests this instead of
+  // opening the unrestricted toolbar panel -- same panel, pre-filtered to
+  // the slot's node type via CONNECTOR_PANEL_INFO, and addNode() below
+  // wires the picked node straight into the requesting node's handle.
+  const requestConnectorAdd = useCallback((request: ConnectorAddRequest) => {
+    setSelectedNodeId(null)
+    setPendingConnectorAdd(request)
+    setAddPanelOpen(true)
+  }, [])
+  const canvasActions = useMemo(() => ({ requestConnectorAdd }), [requestConnectorAdd])
+
   // n8n's own pattern: a "+" on the canvas opens a searchable node-type
   // panel on the right, rather than a static always-visible drag palette.
   // New nodes land near the pane's current center, nudged away from any
   // node already there (findFreePosition) so a fresh node never lands on
   // top of an existing one.
   function addNode(nodeType: string) {
+    if (pendingConnectorAdd) {
+      const { nodeId: originId, slot } = pendingConnectorAdd
+      const originNode = nodes.find((n) => n.id === originId)
+      const desired = originNode
+        ? { x: originNode.position.x, y: originNode.position.y + 160 }
+        : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+      const position = findFreePosition(nodes.map((n) => n.position), desired)
+      const newId = newNodeId()
+      setNodes((nds) => nds.concat({ id: newId, type: nodeType, position, data: defaultDataFor(nodeType) }))
+      setEdges((eds) => eds.concat({ id: newNodeId(), source: newId, sourceHandle: slot, target: originId, targetHandle: slot }))
+      setPendingConnectorAdd(null)
+      setAddPanelOpen(false)
+      // Mirrors n8n's own flow: picking a node from the connector panel
+      // goes straight into that node's Inspector to set it up, rather than
+      // leaving the user to double-click it themselves.
+      setSelectedNodeId(newId)
+      return
+    }
     const rect = paneRef.current?.getBoundingClientRect()
     const center = rect
       ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
@@ -184,7 +264,14 @@ export function ProtocolCanvas({
 
   function updateNodeData(
     nodeId: string,
-    data: AgentNodeData | McpToolNodeData | CriticGateNodeData | LlmNodeData | MemoryNodeData,
+    data:
+      | AgentNodeData
+      | McpToolNodeData
+      | CriticGateNodeData
+      | LlmNodeData
+      | MemoryNodeData
+      | ReasonActPatternNodeData
+      | SingleAgentBaselinePatternNodeData,
   ) {
     setNodes((nds) => nds.map((n) => (n.id === nodeId ? { ...n, data } : n)))
   }
@@ -200,16 +287,25 @@ export function ProtocolCanvas({
       if (!sourceNode || !targetNode) return false
       switch (connection.targetHandle) {
         case 'llm':
-          return sourceNode.type === 'llm' && (targetNode.type === 'agent' || targetNode.type === 'critic_gate')
+          return (
+            LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
+            (targetNode.type === 'agent' || targetNode.type === 'critic_gate')
+          )
         case 'tool':
           return sourceNode.type === 'mcp_tool' && targetNode.type === 'agent'
         case 'memory':
           return sourceNode.type === 'memory' && targetNode.type === 'agent'
+        case 'architectural_pattern':
+          return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
         default:
-          // A plain "main" pipeline edge -- llm/memory nodes have no main
-          // handle to drag from in the first place, so this mostly guards
-          // against a stray connection, not real interactive use.
-          return sourceNode.type !== 'llm' && sourceNode.type !== 'memory'
+          // A plain "main" pipeline edge -- LLM/memory/pattern nodes have
+          // no main handle to drag from in the first place, so this mostly
+          // guards against a stray connection, not real interactive use.
+          return (
+            !LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
+            sourceNode.type !== 'memory' &&
+            !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '')
+          )
       }
     },
     [nodes],
@@ -270,120 +366,152 @@ export function ProtocolCanvas({
   }
 
   return (
-    <div className="flex h-full w-full">
-      <div ref={paneRef} className="relative flex-1">
-        <ReactFlow
-          nodes={nodesWithRunStatus}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          isValidConnection={isValidConnection}
-          nodeTypes={NODE_TYPES}
-          onNodeClick={() => setAddPanelOpen(false)}
-          onNodeDoubleClick={(_, node) => {
-            setAddPanelOpen(false)
-            setSelectedNodeId(node.id)
-          }}
-          onPaneClick={() => setSelectedNodeId(null)}
-          onNodesDelete={(deleted) => {
-            if (deleted.some((n) => n.id === selectedNodeId)) setSelectedNodeId(null)
-          }}
-          fitView
-          fitViewOptions={{ maxZoom: DEFAULT_ZOOM }}
-          defaultViewport={{ x: 0, y: 0, zoom: DEFAULT_ZOOM }}
-          minZoom={0.2}
-          // xyflow's default is zoomOnScroll -- a two-finger trackpad
-          // scroll and a real pinch are both plain wheel events, and
-          // without panOnScroll xyflow can't tell them apart, so scrolling
-          // zoomed instead of panning. Flipping this pair (matching n8n/
-          // Figma/Miro) makes two-finger scroll pan; pinch still zooms,
-          // since xyflow's own wheel handler checks the event's ctrlKey
-          // (a real pinch gesture sets it, a plain scroll doesn't).
-          panOnScroll
-          zoomOnScroll={false}
-          proOptions={{ hideAttribution: true }}
-          onInit={onCanvasInit}
-        >
-          <Background color="var(--primary)" gap={28} size={1} style={{ opacity: 0.2 }} />
-          {!isAtRest && (
-            <MiniMap pannable zoomable className="!bg-card" maskColor="color-mix(in oklch, var(--background), transparent 40%)" />
-          )}
-        </ReactFlow>
-        <CanvasControls />
-        <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
-          {(runMutation.isError || runQuery.data?.status === 'failed') && (
-            <span className="max-w-64 truncate rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive" title={runQuery.data?.error ?? undefined}>
-              {runQuery.data?.error ?? 'Could not start the run.'}
-            </span>
-          )}
-          <Button size="sm" disabled={isRunning} onClick={() => runMutation.mutate()}>
-            <Play className="size-4" />
-            {isRunning ? 'Running…' : 'Run'}
-          </Button>
-          <Button
-            size="icon"
-            className="rounded-full"
-            aria-label="Add node"
-            onClick={() => {
-              setSelectedNodeId(null)
-              setAddPanelOpen(true)
-            }}
-          >
-            <Plus className="size-4" />
-          </Button>
-          <ProtocolCanvasMenu
-            protocolId={protocolId}
-            experimentId={experimentId}
-            nodes={nodes}
+    <ProtocolCanvasActionsProvider value={canvasActions}>
+      <div className="flex h-full w-full">
+        <div ref={paneRef} className="relative flex-1">
+          <ReactFlow
+            nodes={nodesWithRunStatus}
             edges={edges}
-            onImport={handleImport}
-          />
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            isValidConnection={isValidConnection}
+            nodeTypes={NODE_TYPES}
+            onNodeClick={() => setAddPanelOpen(false)}
+            onNodeDoubleClick={(_, node) => {
+              setAddPanelOpen(false)
+              setSelectedNodeId(node.id)
+            }}
+            onPaneClick={() => setSelectedNodeId(null)}
+            onNodesDelete={(deleted) => {
+              if (deleted.some((n) => n.id === selectedNodeId)) setSelectedNodeId(null)
+            }}
+            fitView
+            fitViewOptions={{ maxZoom: DEFAULT_ZOOM }}
+            defaultViewport={{ x: 0, y: 0, zoom: DEFAULT_ZOOM }}
+            minZoom={0.2}
+            // xyflow's default is zoomOnScroll -- a two-finger trackpad
+            // scroll and a real pinch are both plain wheel events, and
+            // without panOnScroll xyflow can't tell them apart, so scrolling
+            // zoomed instead of panning. Flipping this pair (matching n8n/
+            // Figma/Miro) makes two-finger scroll pan; pinch still zooms,
+            // since xyflow's own wheel handler checks the event's ctrlKey
+            // (a real pinch gesture sets it, a plain scroll doesn't).
+            panOnScroll
+            zoomOnScroll={false}
+            proOptions={{ hideAttribution: true }}
+            onInit={onCanvasInit}
+          >
+            <Background color="var(--primary)" gap={28} size={1} style={{ opacity: 0.2 }} />
+            {!isAtRest && (
+              <MiniMap pannable zoomable className="!bg-card" maskColor="color-mix(in oklch, var(--background), transparent 40%)" />
+            )}
+          </ReactFlow>
+          <CanvasControls />
+          <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
+            {(runMutation.isError || runQuery.data?.status === 'failed') && (
+              <span className="max-w-64 truncate rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive" title={runQuery.data?.error ?? undefined}>
+                {runQuery.data?.error ?? 'Could not start the run.'}
+              </span>
+            )}
+            <Button size="sm" disabled={isRunning} onClick={() => runMutation.mutate()}>
+              <Play className="size-4" />
+              {isRunning ? 'Running…' : 'Run'}
+            </Button>
+            <Button
+              size="icon"
+              className="rounded-full"
+              aria-label="Add node"
+              onClick={() => {
+                setSelectedNodeId(null)
+                setPendingConnectorAdd(null)
+                setAddPanelOpen(true)
+              }}
+            >
+              <Plus className="size-4" />
+            </Button>
+            <ProtocolCanvasMenu
+              protocolId={protocolId}
+              experimentId={experimentId}
+              nodes={nodes}
+              edges={edges}
+              onImport={handleImport}
+            />
+          </div>
         </div>
-      </div>
-      {addPanelOpen ? (
-        <AddNodePanel onAdd={addNode} onClose={() => setAddPanelOpen(false)} />
-      ) : selectedNode?.type === 'mcp_tool' ? (
-        <McpToolNodeInspector
-          node={{ id: selectedNode.id, type: 'mcp_tool', position: selectedNode.position, data: selectedNode.data as McpToolNodeData }}
-          onChange={updateNodeData}
-          onDelete={deleteNode}
-          onClose={() => setSelectedNodeId(null)}
-        />
-      ) : selectedNode?.type === 'critic_gate' ? (
-        <CriticGateNodeInspector
-          node={{ id: selectedNode.id, type: 'critic_gate', position: selectedNode.position, data: selectedNode.data as CriticGateNodeData }}
-          experimentId={experimentId}
-          onChange={updateNodeData}
-          onDelete={deleteNode}
-          onClose={() => setSelectedNodeId(null)}
-        />
-      ) : selectedNode?.type === 'llm' ? (
-        <LlmNodeInspector
-          node={{ id: selectedNode.id, type: 'llm', position: selectedNode.position, data: selectedNode.data as LlmNodeData }}
-          experimentId={experimentId}
-          onChange={updateNodeData}
-          onDelete={deleteNode}
-          onClose={() => setSelectedNodeId(null)}
-        />
-      ) : selectedNode?.type === 'memory' ? (
-        <MemoryNodeInspector
-          node={{ id: selectedNode.id, type: 'memory', position: selectedNode.position, data: selectedNode.data as MemoryNodeData }}
-          onChange={updateNodeData}
-          onDelete={deleteNode}
-          onClose={() => setSelectedNodeId(null)}
-        />
-      ) : (
-        selectedNode && (
-          <AgentNodeInspector
-            node={{ id: selectedNode.id, type: selectedNode.type ?? 'agent', position: selectedNode.position, data: selectedNode.data as AgentNodeData }}
+        {addPanelOpen ? (
+          <AddNodePanel
+            onAdd={addNode}
+            onClose={closeAddPanel}
+            allowedTypes={pendingConnectorAdd ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].allowedTypes : undefined}
+            title={pendingConnectorAdd ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].title : undefined}
+          />
+        ) : selectedNode?.type === 'mcp_tool' ? (
+          <McpToolNodeInspector
+            node={{ id: selectedNode.id, type: 'mcp_tool', position: selectedNode.position, data: selectedNode.data as McpToolNodeData }}
+            onChange={updateNodeData}
+            onDelete={deleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'critic_gate' ? (
+          <CriticGateNodeInspector
+            node={{ id: selectedNode.id, type: 'critic_gate', position: selectedNode.position, data: selectedNode.data as CriticGateNodeData }}
             experimentId={experimentId}
             onChange={updateNodeData}
             onDelete={deleteNode}
             onClose={() => setSelectedNodeId(null)}
           />
-        )
-      )}
-    </div>
+        ) : LLM_NODE_TYPES.includes(selectedNode?.type ?? '') ? (
+          <LlmNodeInspector
+            node={{ id: selectedNode!.id, type: selectedNode!.type!, position: selectedNode!.position, data: selectedNode!.data as LlmNodeData }}
+            experimentId={experimentId}
+            onChange={updateNodeData}
+            onDelete={deleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'memory' ? (
+          <MemoryNodeInspector
+            node={{ id: selectedNode.id, type: 'memory', position: selectedNode.position, data: selectedNode.data as MemoryNodeData }}
+            onChange={updateNodeData}
+            onDelete={deleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'pattern_reason_act' ? (
+          <ReasonActPatternNodeInspector
+            node={{
+              id: selectedNode.id,
+              type: 'pattern_reason_act',
+              position: selectedNode.position,
+              data: selectedNode.data as ReasonActPatternNodeData,
+            }}
+            onChange={updateNodeData}
+            onDelete={deleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'pattern_single_agent_baseline' ? (
+          <SingleAgentBaselinePatternNodeInspector
+            node={{
+              id: selectedNode.id,
+              type: 'pattern_single_agent_baseline',
+              position: selectedNode.position,
+              data: selectedNode.data as SingleAgentBaselinePatternNodeData,
+            }}
+            onChange={updateNodeData}
+            onDelete={deleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : (
+          selectedNode && (
+            <AgentNodeInspector
+              node={{ id: selectedNode.id, type: selectedNode.type ?? 'agent', position: selectedNode.position, data: selectedNode.data as AgentNodeData }}
+              experimentId={experimentId}
+              onChange={updateNodeData}
+              onDelete={deleteNode}
+              onClose={() => setSelectedNodeId(null)}
+            />
+          )
+        )}
+      </div>
+    </ProtocolCanvasActionsProvider>
   )
 }

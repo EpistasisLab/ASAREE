@@ -8,15 +8,14 @@ import type { McpToolNodeData, NodeRunStatus } from '@/types/protocols'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
 import { EditableNodeLabel } from './EditableNodeLabel'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
+import { NodeSummaryLine } from './NodeSummaryLine'
 
 // A different hue from "agent" -- real category variety (CLAUDE.md's
 // hash-driven tint rule), all mcp_tool nodes still share this one hue.
 const ACCENT = hashToChartHue('mcp_tool')
 
 export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolNodeData & { runStatus?: NodeRunStatus } }) {
-  const summary = data.config?.tool_name
-    ? `${data.config.server_name ?? '?'}.${data.config.tool_name}`
-    : 'Not configured'
+  const summary = data.config?.tool_name ? `${data.config.server_name ?? '?'}.${data.config.tool_name}` : null
   const badge = nodeRunBadge(data.runStatus)
   const [renaming, setRenaming] = useState(false)
   const { updateNodeData } = useReactFlow()
@@ -25,7 +24,7 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
   return (
     <div
       style={cardAccent(ACCENT)}
-      className={`group relative w-36 rounded-md border bg-card px-2 py-1.5 shadow-[0_0_12px_-6px_var(--card-accent)] ring-1 ring-[color:var(--card-accent)]/40 ${
+      className={`group relative w-36 rounded-md border bg-card px-2 py-3 shadow-[0_0_12px_-6px_var(--card-accent)] ring-1 ring-[color:var(--card-accent)]/40 ${
         selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
       } ${isActive ? '' : 'opacity-50'}`}
     >
@@ -40,19 +39,24 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
       )}
       <Handle
         type="target"
-        position={Position.Top}
+        position={Position.Left}
+        title="Input (the previous pipeline step's output)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <div className="flex items-center gap-1.5">
         <Wrench className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
         <EditableNodeLabel nodeId={id} label={data.label} placeholder="MCP Tool" renaming={renaming} onRenamingChange={setRenaming} />
       </div>
-      <p className="truncate font-mono text-[0.65rem] text-muted-foreground" title={summary}>
-        {summary}
-      </p>
+      <NodeSummaryLine text={summary} emptyLabel="Not configured -- pick a server and tool" />
+      {/* Two right-side handles share the edge, so each needs its own
+          vertical slot (ConnectorHandleLabel's `top`) instead of both
+          defaulting to dead center: plain pipeline output above, the
+          dual-purpose Tool connector below. */}
       <Handle
         type="source"
-        position={Position.Bottom}
+        position={Position.Right}
+        style={{ top: '30%' }}
+        title="Output (drag to the next pipeline step)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       {/* Dual-purpose: wired here (a normal main edge, above) this node is
@@ -66,10 +70,11 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
         type="source"
         id="tool"
         position={Position.Right}
+        style={{ top: '70%' }}
         title="Tool (plug into an Agent's Tool connector)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel side="right">Tool</ConnectorHandleLabel>
+      <ConnectorHandleLabel side="right" top="70%">Tool</ConnectorHandleLabel>
     </div>
   )
 }

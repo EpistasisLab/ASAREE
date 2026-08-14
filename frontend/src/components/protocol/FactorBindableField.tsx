@@ -76,7 +76,7 @@ export function FactorBindableField({
         {children}
         <Badge variant="outline" className="gap-1">
           Factor: {boundFactorName}
-          <button type="button" onClick={onUnbind} aria-label="Remove factor binding" className="hover:text-destructive">
+          <button type="button" onClick={onUnbind} aria-label="Remove factor binding" className="cursor-pointer hover:text-destructive">
             <X className="size-3" />
           </button>
         </Badge>

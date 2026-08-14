@@ -1,22 +1,32 @@
-import { Cpu, Trash2, X } from 'lucide-react'
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Check, Sparkles, Trash2, X } from 'lucide-react'
+import { llmSettingsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
+import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
 import { hashToChartHue } from '@/lib/utils'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
+import { PROVIDER_META } from './nodes/LlmNode'
 import type { LlmNodeConfig, LlmNodeData, ProtocolNode } from '@/types/protocols'
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
-const ACCENT = hashToChartHue('llm')
 
-// Same fixed-size NodeInspectorDialog shell as every other node inspector.
-// Exactly the Provider/Model/Temperature/Effort/Max tokens fields
-// AgentNodeInspector/CriticGateNodeInspector used to have, relocated here --
-// this is now the ONLY place that config lives, resolved at execution time
-// via the agent/critic_gate's required LLM connector
-// (services.protocol_execution's _resolve_llm_config).
+// Shared by all three LLM provider node types (llm_anthropic/llm_openai/
+// llm_azure_foundry) -- fields are identical across providers (see
+// LlmNodeData's own comment in types/protocols.ts), only the Credential
+// section's content differs, branched on config.provider below. Model/
+// Temperature/Effort/Max tokens are exactly the fields AgentNodeInspector/
+// CriticGateNodeInspector used to have, relocated here -- this is now the
+// ONLY place that config lives, resolved at execution time via the agent/
+// critic_gate's required LLM connector (services.protocol_execution's
+// _resolve_llm_config). The free-text "Provider" field is gone entirely --
+// n8n-style, provider is fixed by which node type you picked from the "+"
+// panel, not a field you fill in.
 export function LlmNodeInspector({
   node,
   experimentId,
@@ -30,10 +40,25 @@ export function LlmNodeInspector({
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
+  const [credentialDialogOpen, setCredentialDialogOpen] = useState(false)
+  // Only Azure Foundry has a real credential requirement/UI today -- the
+  // query is scoped to that provider so the other two (informational note
+  // only, see below) never fetch settings they'll never show.
+  const provider = node?.data.config?.provider
+  const credentialsQuery = useQuery({
+    queryKey: ['llm-settings'],
+    queryFn: () => llmSettingsApi.list(),
+    enabled: provider === 'azure_foundry',
+  })
+
   if (!node) return null
   const data = node.data
   const config = data.config
   const bindings = data.factor_bindings ?? {}
+  const meta = PROVIDER_META[provider!] ?? { label: provider, icon: Sparkles }
+  const Icon = meta.icon
+  const ACCENT = hashToChartHue(provider || 'llm')
+  const hasFoundryCredential = (credentialsQuery.data ?? []).some((c) => c.provider === 'azure_foundry')
 
   function patchConfig(patch: Partial<LlmNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
@@ -58,8 +83,8 @@ export function LlmNodeInspector({
       header={
         <>
           <div className="flex items-center gap-2">
-            <Cpu className="size-5" style={{ color: ACCENT }} />
-            <h2 className="text-lg font-semibold">{data.label || 'LLM'}</h2>
+            <Icon className="size-5" style={{ color: ACCENT }} />
+            <h2 className="text-lg font-semibold">{data.label || meta.label}</h2>
           </div>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>
@@ -74,8 +99,33 @@ export function LlmNodeInspector({
     >
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
-          <Label htmlFor="llm-provider">Provider</Label>
-          <Input id="llm-provider" value={config.provider} onChange={(e) => patchConfig({ provider: e.target.value })} />
+          <Label>Credential</Label>
+          {provider === 'azure_foundry' ? (
+            credentialsQuery.isLoading ? (
+              <Skeleton className="h-8 w-full" />
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full justify-between"
+                onClick={() => setCredentialDialogOpen(true)}
+              >
+                <span>{hasFoundryCredential ? 'Azure AI Foundry credential connected' : 'Set up credential'}</span>
+                {hasFoundryCredential && <Check className="size-4 text-[color:var(--chart-3)]" />}
+              </Button>
+            )
+          ) : (
+            // Anthropic/OpenAI: no per-user credential UI yet (only Azure
+            // Foundry is in LLM_PROVIDER_CATALOG) -- this is not a dead
+            // end, it's today's real backend behavior (credential_resolver.py):
+            // with no saved credential, these two providers silently fall
+            // back to ASAREE's own deployment-wide API key, so there's
+            // nothing broken to "set up" here.
+            <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
+              Uses ASAREE's own configured {meta.label} API key. Per-user {meta.label} credentials aren't supported in
+              this UI yet.
+            </div>
+          )}
         </div>
         <FactorBindableField
           experimentId={experimentId}
@@ -159,6 +209,7 @@ export function LlmNodeInspector({
           />
         </div>
       </div>
+      <CreateCredentialDialog open={credentialDialogOpen} onOpenChange={setCredentialDialogOpen} />
     </NodeInspectorDialog>
   )
 }

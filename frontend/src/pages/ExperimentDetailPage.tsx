@@ -388,7 +388,7 @@ function SortableCellHead({ label, sortKey, sort, onSort }: { label: string; sor
         type="button"
         onClick={() => onSort(sortKey)}
         className={cn(
-          'flex items-center gap-1 text-xs font-semibold tracking-wide uppercase hover:text-foreground',
+          'flex cursor-pointer items-center gap-1 text-xs font-semibold tracking-wide uppercase hover:text-foreground',
           active ? 'text-foreground' : 'text-muted-foreground',
         )}
       >

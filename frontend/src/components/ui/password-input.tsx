@@ -13,7 +13,7 @@ export const PasswordInput = forwardRef<HTMLInputElement, React.ComponentProps<'
         <button
           type="button"
           onClick={() => setVisible((v) => !v)}
-          className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-muted-foreground hover:text-foreground"
+          className="absolute inset-y-0 right-0 flex w-10 cursor-pointer items-center justify-center text-muted-foreground hover:text-foreground"
           aria-label={visible ? 'Hide password' : 'Show password'}
           tabIndex={-1}
         >

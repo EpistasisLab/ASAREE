@@ -7,16 +7,12 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PasswordInput } from '@/components/ui/password-input'
-import type { LLMProvider } from '@/types/llmSettings'
+import { LLM_PROVIDER_CATALOG, type LLMProvider } from '@/types/llmSettings'
 
-// Only Azure Foundry for now (matches ASAREE's backend SUPPORTED_PROVIDERS
-// today -- anthropic/openai are also technically accepted server-side, but
-// the user asked to scope this to what ARES already supports as a starting
-// point). The search box stays even at one entry so this doesn't need
-// reshaping once more providers are added.
-const PROVIDER_CATALOG: { id: LLMProvider; label: string; description: string }[] = [
-  { id: 'azure_foundry', label: 'Azure AI Foundry', description: 'Route models through your own Azure resource' },
-]
+// The search box stays even at one entry so this doesn't need reshaping
+// once more providers are added -- see LLM_PROVIDER_CATALOG's own comment
+// for why only Azure Foundry is listed today.
+const PROVIDER_CATALOG = LLM_PROVIDER_CATALOG
 
 export function CreateCredentialDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [query, setQuery] = useState('')
@@ -77,7 +73,7 @@ export function CreateCredentialDialog({ open, onOpenChange }: { open: boolean; 
                   key={p.id}
                   type="button"
                   onClick={() => setProvider(p.id)}
-                  className="flex items-center gap-2.5 rounded-lg border bg-background px-3 py-2.5 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20 transition-colors hover:bg-muted"
+                  className="flex cursor-pointer items-center gap-2.5 rounded-lg border bg-background px-3 py-2.5 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20 transition-colors hover:bg-muted"
                 >
                   <Cloud className="size-4 shrink-0 text-primary" />
                   <div className="min-w-0">

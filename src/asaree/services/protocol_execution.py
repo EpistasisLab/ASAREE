@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.experiments import get_experiment
 from asaree.services.factorial_cells import list_cells, upsert_cell
 from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, set_status, update_node_run
 from asaree.services.protocols import get_protocol
@@ -163,6 +164,52 @@ _EXECUTION_PATTERN_SLUGS: dict[str, str] = {
     "pattern_reason_act": "reason_act",
     "pattern_single_agent_baseline": "single_agent_baseline",
 }
+
+# design_spec.coordination_strategy.slug -- an EXPERIMENT-level declaration
+# (ResearchExperiment.design_spec, edited from the Design tab), not a canvas
+# connector node the way an execution pattern is: this is a multi-agent-
+# system concern, not one agent's own architectural pattern. "sequential"
+# (absent/default) is a no-op -- today's exact existing DAG-handoff
+# behavior, unchanged. "critic_gate" promotes the existing gated-pair
+# mechanism (find_gated_pairs/_run_gated_worker, unchanged) from purely
+# implicit-in-the-graph to an explicit, checked declaration: the graph must
+# actually contain a gated pair, or the declared intent doesn't match
+# reality. The rest mirror ARES's own coordination-category patterns
+# (supervisor/swarm/task-bidding/supervision-tree/event-driven/multi-agent-
+# planning) -- named placeholders pending a later ARES -> agentic-core
+# migration (the user's own call), matching this codebase's "declares
+# intent, no runtime effect yet" posture for Memory nodes -- except a
+# placeholder coordination strategy is REJECTED at run time rather than
+# silently inert, since (unlike a Memory node) choosing one is a claim about
+# how the whole graph runs, not a connector with no effect either way.
+_PLACEHOLDER_COORDINATION_STRATEGIES = frozenset(
+    {
+        "supervisor_architecture",
+        "swarm_architecture",
+        "task_bidding",
+        "supervision_tree_with_guarded_capabilities",
+        "event_driven_reactivity",
+        "multi_agent_planning",
+    }
+)
+
+
+def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, has_gated_pair: bool) -> None:
+    slug = ((design_spec or {}).get("coordination_strategy") or {}).get("slug") or "sequential"
+    if slug == "sequential":
+        return
+    if slug == "critic_gate":
+        if not has_gated_pair:
+            raise ProtocolValidationError(
+                "This experiment's coordination strategy is 'Critic Gate' but this protocol has no Critic Gate "
+                "node wired in -- add one, or change the coordination strategy on the Design tab."
+            )
+        return
+    if slug in _PLACEHOLDER_COORDINATION_STRATEGIES:
+        raise ProtocolValidationError(
+            f"Coordination strategy {slug!r} isn't implemented yet -- coming with the ARES pattern migration."
+        )
+    raise ProtocolValidationError(f"Unknown coordination strategy: {slug!r}")
 
 
 def _adjacency(
@@ -784,10 +831,12 @@ async def plan_cell_runs(
     re-run, and re-bill, an already-scored cell). Raises
     :class:`ProtocolValidationError` (same type the plain-run endpoint
     already 422s on) if there's no linked experiment, the graph itself is
-    invalid, or the graph doesn't have exactly one sink node -- a cell's
-    result has to come from somewhere unambiguous, mirroring the notebook's
-    own single-pipeline (DC->FTE->FS->MLM) shape. Does NOT enqueue the
-    created runs -- that's the caller's job, same create-then-enqueue split
+    invalid, the graph doesn't have exactly one sink node -- a cell's result
+    has to come from somewhere unambiguous, mirroring the notebook's own
+    single-pipeline (DC->FTE->FS->MLM) shape -- or the experiment's declared
+    coordination strategy rejects this graph (see
+    ``validate_coordination_strategy``). Does NOT enqueue the created runs --
+    that's the caller's job, same create-then-enqueue split
     ``create_protocol_run_endpoint`` already uses for a plain run."""
     if experiment_id is None:
         raise ProtocolValidationError("This protocol has no linked experiment to run cells for.")
@@ -797,6 +846,9 @@ async def plan_cell_runs(
         raise ProtocolValidationError(
             f"This protocol must have exactly one final node to run per experimental cell (found {len(sinks)})."
         )
+    experiment = await get_experiment(db, experiment_id)
+    design_spec = experiment.design_spec if experiment is not None else None
+    validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(graph)))
 
     cells = await list_cells(db, experiment_id=experiment_id)
     pending = [c for c in cells if not c.metric_values]
@@ -824,6 +876,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             return
         protocol_id, owner_id, graph = protocol.id, run.owner_id, protocol.graph
         experiment_id, cell_label, factor_values = protocol.experiment_id, run.cell_label, run.factor_values
+        experiment = await get_experiment(db, experiment_id) if experiment_id else None
+        design_spec = experiment.design_spec if experiment is not None else None
 
     # Both None for a plain graph run. Set together only for a run created by
     # "run all cells" (plan_cell_runs) -- substitute this cell's factor
@@ -835,12 +889,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
     try:
         order = topological_order(graph)
+        gated_by = find_gated_pairs(graph)
+        validate_coordination_strategy(design_spec, has_gated_pair=bool(gated_by))
     except ProtocolValidationError as e:
         async with get_session() as db:
             await set_status(db, protocol_run_id, status="failed", error=str(e))
         return
-
-    gated_by = find_gated_pairs(graph)
 
     async with get_session() as db:
         await set_status(db, protocol_run_id, status="running")

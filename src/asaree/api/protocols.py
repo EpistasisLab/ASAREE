@@ -17,7 +17,13 @@ from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.experiments import get_experiment
-from asaree.services.protocol_execution import ProtocolValidationError, plan_cell_runs, topological_order
+from asaree.services.protocol_execution import (
+    ProtocolValidationError,
+    find_gated_pairs,
+    plan_cell_runs,
+    topological_order,
+    validate_coordination_strategy,
+)
 from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, list_protocol_runs
 from asaree.services.protocols import (
     create_protocol,
@@ -169,6 +175,9 @@ async def create_protocol_run_endpoint(
     protocol = await _get_owned_protocol(db, protocol_id, user)
     try:
         topological_order(protocol.graph)
+        experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
+        design_spec = experiment.design_spec if experiment is not None else None
+        validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(protocol.graph)))
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=user.id)

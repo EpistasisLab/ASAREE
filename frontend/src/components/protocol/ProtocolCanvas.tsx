@@ -18,7 +18,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { Play, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { protocolsApi } from '@/api/client'
+import { ApiError, protocolsApi } from '@/api/client'
 import { newNodeId } from '@/lib/nodeId'
 import { toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
@@ -446,8 +446,19 @@ export function ProtocolCanvas({
           <CanvasControls />
           <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
             {(runMutation.isError || runQuery.data?.status === 'failed') && (
-              <span className="max-w-64 truncate rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive" title={runQuery.data?.error ?? undefined}>
-                {runQuery.data?.error ?? 'Could not start the run.'}
+              // runMutation.error is the real validation message (e.g.
+              // topological_order/validate_coordination_strategy rejecting
+              // the graph before any ProtocolRun row even exists) --
+              // runQuery.data?.error only ever exists once a run row was
+              // created and later failed asynchronously in the worker.
+              <span
+                className="max-w-64 truncate rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive"
+                title={runQuery.data?.error ?? (runMutation.error instanceof ApiError && typeof runMutation.error.detail === 'string' ? runMutation.error.detail : undefined)}
+              >
+                {runQuery.data?.error ??
+                  (runMutation.error instanceof ApiError && typeof runMutation.error.detail === 'string'
+                    ? runMutation.error.detail
+                    : 'Could not start the run.')}
               </span>
             )}
             <Button size="sm" disabled={isRunning} onClick={() => runMutation.mutate()}>

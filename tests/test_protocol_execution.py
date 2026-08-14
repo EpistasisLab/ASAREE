@@ -22,6 +22,7 @@ from asaree.services.protocol_execution import (
     plan_cell_runs,
     sink_node_ids,
     topological_order,
+    validate_coordination_strategy,
 )
 from asaree.services.protocol_runs import create_protocol_run
 from asaree.services.protocols import create_protocol, delete_protocol
@@ -1007,3 +1008,69 @@ async def test_run_protocol_tool_source_node_never_gets_its_own_turn(
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
+
+
+# --- Coordination strategy validation (pure) ---------------------------------
+
+
+def test_coordination_strategy_absent_is_a_noop() -> None:
+    validate_coordination_strategy(None, has_gated_pair=False)
+    validate_coordination_strategy({}, has_gated_pair=False)
+
+
+def test_coordination_strategy_sequential_is_a_noop() -> None:
+    validate_coordination_strategy({"coordination_strategy": {"slug": "sequential"}}, has_gated_pair=False)
+    validate_coordination_strategy({"coordination_strategy": {"slug": "sequential"}}, has_gated_pair=True)
+
+
+def test_coordination_strategy_critic_gate_requires_a_gated_pair() -> None:
+    with pytest.raises(ProtocolValidationError, match="no Critic Gate node wired in"):
+        validate_coordination_strategy({"coordination_strategy": {"slug": "critic_gate"}}, has_gated_pair=False)
+
+
+def test_coordination_strategy_critic_gate_passes_with_a_gated_pair() -> None:
+    validate_coordination_strategy({"coordination_strategy": {"slug": "critic_gate"}}, has_gated_pair=True)
+
+
+def test_coordination_strategy_placeholder_slug_raises() -> None:
+    with pytest.raises(ProtocolValidationError, match="isn't implemented yet"):
+        validate_coordination_strategy({"coordination_strategy": {"slug": "supervisor_architecture"}}, has_gated_pair=False)
+
+
+def test_coordination_strategy_unknown_slug_raises() -> None:
+    with pytest.raises(ProtocolValidationError, match="Unknown coordination strategy"):
+        validate_coordination_strategy({"coordination_strategy": {"slug": "not-a-real-slug"}}, has_gated_pair=False)
+
+
+async def test_run_protocol_rejects_placeholder_coordination_strategy(owner_id: uuid.UUID) -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
+
+    async with get_session() as db:
+        experiment = await create_experiment(
+            db,
+            name=f"coord-strategy-test-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            design_spec={"coordination_strategy": {"slug": "swarm_architecture"}},
+        )
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db, name=f"coord-strategy-protocol-{uuid.uuid4().hex}", owner_id=owner_id, experiment_id=experiment_id, graph=graph
+        )
+        protocol_id = protocol.id
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run_id = run.id
+
+    try:
+        await pe.run_protocol(run_id)
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+            assert fetched is not None
+            assert fetched.status == "failed"
+            assert fetched.error is not None
+            assert "isn't implemented yet" in fetched.error
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+            await delete_experiment(db, experiment_id)

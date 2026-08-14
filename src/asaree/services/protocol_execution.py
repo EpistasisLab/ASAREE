@@ -212,6 +212,38 @@ def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, has_ga
     raise ProtocolValidationError(f"Unknown coordination strategy: {slug!r}")
 
 
+_NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
+    "agent": "Agent",
+    "critic_gate": "Critic Gate",
+    "mcp_tool": "MCP Tool",
+    "memory": "Memory",
+    "pattern_reason_act": "Reason + Act",
+    "pattern_single_agent_baseline": "Single-Agent Baseline",
+    "llm_anthropic": "Anthropic",
+    "llm_openai": "OpenAI",
+    "llm_azure_foundry": "Azure AI Foundry",
+}
+
+
+def _node_display_name(node: dict[str, Any]) -> str:
+    """A validation-error-friendly name for a node -- its canvas label if the
+    user has set one (matching what they'd actually see in the inspector
+    header/on the card), else the same placeholder text the frontend shows
+    for an unnamed node of that type (EditableNodeTitle's own `placeholder`
+    prop, or the provider label for the three LLM node types). Never the
+    bare internal node id -- that's graph bookkeeping (see newNodeId on the
+    frontend), meaningless to a user reading a failed-validation message."""
+    data = node.get("data")
+    label = data.get("label") if isinstance(data, dict) else None
+    if isinstance(label, str) and label:
+        return label
+    node_type = node.get("type")
+    if isinstance(node_type, str):
+        return _NODE_TYPE_DISPLAY_NAMES.get(node_type, node_type)
+    node_id = node.get("id")
+    return node_id if isinstance(node_id, str) else "node"
+
+
 def _adjacency(
     graph: dict[str, Any],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, list[str]], dict[str, list[str]]]:
@@ -262,35 +294,39 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
         ups = _upstream_ids(graph, nid)
         if len(ups) != 1:
             raise ProtocolValidationError(
-                f"Critic Gate node {nid!r} must have exactly one incoming connection (found {len(ups)})."
+                f"Critic Gate node {_node_display_name(node)!r} must have exactly one incoming connection "
+                f"(found {len(ups)})."
             )
         worker_id = ups[0]
-        if nodes[worker_id].get("type") != "agent":
+        worker_node = nodes[worker_id]
+        if worker_node.get("type") != "agent":
             raise ProtocolValidationError(
-                f"Critic Gate node {nid!r}'s incoming connection must come from an Agent node."
+                f"Critic Gate node {_node_display_name(node)!r}'s incoming connection must come from an Agent node."
             )
         if len(downstream[worker_id]) != 1:
             raise ProtocolValidationError(
-                f"Agent node {worker_id!r} is gated by a Critic Gate and can't have any other outgoing connections."
+                f"Agent node {_node_display_name(worker_node)!r} is gated by a Critic Gate and can't have any "
+                "other outgoing connections."
             )
-        if not _is_node_active(nodes[worker_id]):
+        if not _is_node_active(worker_node):
             raise ProtocolValidationError(
-                f"Agent node {worker_id!r} is gated by a Critic Gate and can't be deactivated -- "
-                "deactivate the Critic Gate instead."
+                f"Agent node {_node_display_name(worker_node)!r} is gated by a Critic Gate and can't be "
+                "deactivated -- deactivate the Critic Gate instead."
             )
 
     for nid, node in nodes.items():
         node_type = node.get("type")
+        name = _node_display_name(node)
 
         if node_type in ("agent", "critic_gate"):
             llm_edges = _edges_with_handle(graph, nid, "llm", direction="incoming")
             if len(llm_edges) != 1:
                 raise ProtocolValidationError(
-                    f"Node {nid!r} must have exactly one LLM connection (found {len(llm_edges)})."
+                    f"Node {name!r} must have exactly one LLM connection (found {len(llm_edges)})."
                 )
             llm_source = nodes.get(llm_edges[0]["source"])
             if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
-                raise ProtocolValidationError(f"Node {nid!r}'s LLM connection must come from an LLM node.")
+                raise ProtocolValidationError(f"Node {name!r}'s LLM connection must come from an LLM node.")
 
         tool_edges = _edges_with_handle(graph, nid, "tool", direction="incoming")
         memory_edges = _edges_with_handle(graph, nid, "memory", direction="incoming")
@@ -299,15 +335,15 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             for edge in tool_edges:
                 tool_source = nodes.get(edge["source"])
                 if tool_source is None or tool_source.get("type") != "mcp_tool":
-                    raise ProtocolValidationError(f"Node {nid!r}'s Tool connection must come from an MCP Tool node.")
+                    raise ProtocolValidationError(f"Node {name!r}'s Tool connection must come from an MCP Tool node.")
             if len(memory_edges) > 1:
                 raise ProtocolValidationError(
-                    f"Node {nid!r} can have at most one Memory connection (found {len(memory_edges)})."
+                    f"Node {name!r} can have at most one Memory connection (found {len(memory_edges)})."
                 )
             for edge in memory_edges:
                 memory_source = nodes.get(edge["source"])
                 if memory_source is None or memory_source.get("type") != "memory":
-                    raise ProtocolValidationError(f"Node {nid!r}'s Memory connection must come from a Memory node.")
+                    raise ProtocolValidationError(f"Node {name!r}'s Memory connection must come from a Memory node.")
             # Capped at one, but scoped to the execution-pattern family
             # specifically (see _EXECUTION_PATTERN_NODE_TYPES's own comment)
             # -- a future non-execution pattern node type connected
@@ -318,17 +354,19 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             ]
             if len(execution_pattern_edges) > 1:
                 raise ProtocolValidationError(
-                    f"Node {nid!r} can have at most one execution-pattern connection (found {len(execution_pattern_edges)})."
+                    f"Node {name!r} can have at most one execution-pattern connection "
+                    f"(found {len(execution_pattern_edges)})."
                 )
             for edge in pattern_edges:
                 pattern_source = nodes.get(edge["source"])
                 if pattern_source is None or pattern_source.get("type") not in _EXECUTION_PATTERN_NODE_TYPES:
                     raise ProtocolValidationError(
-                        f"Node {nid!r}'s Architectural Pattern connection must come from an Architectural Pattern node."
+                        f"Node {name!r}'s Architectural Pattern connection must come from an Architectural "
+                        "Pattern node."
                     )
         elif tool_edges or memory_edges or pattern_edges:
             raise ProtocolValidationError(
-                f"Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection (node {nid!r})."
+                f"Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection (node {name!r})."
             )
 
         if node_type in _NODE_TYPE_TO_HANDLE:
@@ -339,9 +377,10 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 if e.get("source") == nid and e.get("targetHandle") != expected_handle
             ]
             if outgoing_wrong_handle:
-                label = _HANDLE_LABELS[expected_handle]
+                handle_label = _HANDLE_LABELS[expected_handle]
                 raise ProtocolValidationError(
-                    f"{label} node {nid!r} can only connect to a node's {label} slot, not a regular pipeline edge."
+                    f"{handle_label} node {name!r} can only connect to a node's {handle_label} slot, not a "
+                    "regular pipeline edge."
                 )
 
     return [nodes[nid] for nid in ordered]

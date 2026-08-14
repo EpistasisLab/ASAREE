@@ -150,6 +150,9 @@ export function CreateCredentialDialog({
             <div className="space-y-1.5">
               <Label htmlFor="credential-api-key">API key</Label>
               <PasswordInput id="credential-api-key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+              <p className="text-xs text-muted-foreground">
+                Encrypted at rest before storage -- only decrypted at the moment a run needs it, never logged.
+              </p>
             </div>
 
             {requiresProjectEndpoint && (

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { KeyRound, Plus, SquarePlus } from 'lucide-react'
+import { ChevronDown, KeyRound, SquarePlus, UserRound } from 'lucide-react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { experimentsApi } from '@/api/client'
 import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils'
 
 const NAV_LINKS = [
   { to: '/experiments', label: 'Experiments' },
-  { to: '/profile', label: 'Account' },
+  { to: '/profile', label: 'Profile' },
 ]
 
 export function AppHeader() {
@@ -47,21 +47,40 @@ export function AppHeader() {
             </div>
             <span className="font-semibold tracking-wide">ASAREE</span>
           </Link>
-          <DropdownMenu>
-            <DropdownMenuTrigger render={<Button size="icon-sm" aria-label="Create" disabled={createExperimentMutation.isPending} />}>
-              <Plus className="size-4" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem onClick={() => createExperimentMutation.mutate()}>
-                <SquarePlus className="size-4" />
-                Create experiment
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setCredentialDialogOpen(true)}>
-                <KeyRound className="size-4" />
-                Create credential
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {/* n8n-style split button: the main segment is the primary,
+              one-click action; the chevron segment opens a menu for
+              secondary create actions -- replaces the old icon-only "+"
+              that put both behind an equal-weight menu. */}
+          <div className="flex items-center">
+            <Button
+              size="sm"
+              className="rounded-r-none"
+              onClick={() => createExperimentMutation.mutate()}
+              disabled={createExperimentMutation.isPending}
+            >
+              <SquarePlus className="size-4" />
+              {createExperimentMutation.isPending ? 'Creating…' : 'Create experiment'}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    size="sm"
+                    aria-label="More create options"
+                    className="rounded-l-none border-l border-l-primary-foreground/20 px-1.5"
+                  />
+                }
+              >
+                <ChevronDown className="size-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem onClick={() => setCredentialDialogOpen(true)}>
+                  <KeyRound className="size-4" />
+                  Create credential
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
           <nav className="flex items-center gap-4">
             {NAV_LINKS.map((link) => (
               <NavLink
@@ -80,7 +99,25 @@ export function AppHeader() {
           </nav>
         </div>
         <div className="flex items-center gap-4">
-          <span className="text-sm text-muted-foreground">{user?.display_name}</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <button
+                  type="button"
+                  className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground aria-expanded:text-foreground"
+                />
+              }
+            >
+              {user?.display_name}
+              <ChevronDown className="size-3.5" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => navigate('/profile')}>
+                <UserRound className="size-4" />
+                Profile
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button variant="outline" size="sm" onClick={handleLogout}>
             Log out
           </Button>

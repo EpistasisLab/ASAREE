@@ -114,6 +114,20 @@ export interface Experiment {
   archived_at: string | null
 }
 
+// One row of the Runs tab's trial list -- "trial" means cell (a
+// factor-level combination x replicate), not ProtocolRun; a cell that's
+// never been run at all is still a trial, reported with status "queued".
+// Matches src/asaree/api/experiments.py's TrialResponse exactly.
+export interface Trial {
+  cell_label: string
+  factor_values: Record<string, unknown>
+  metric_values: Record<string, unknown>
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  run_id: string | null
+  error: string | null
+  updated_at: string
+}
+
 export interface Cell {
   id: string
   cell_label: string

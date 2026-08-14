@@ -12,7 +12,7 @@ import type {
 } from '@/types/auth'
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
-import type { Cell, DesignSpec, Experiment } from '@/types/experiments'
+import type { Cell, DesignSpec, Experiment, Trial } from '@/types/experiments'
 import type { LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
@@ -167,6 +167,10 @@ export const experimentsApi = {
   // declared factors -- safe to call again after widening a factor's levels,
   // existing cells are untouched (see services.design_generation).
   generateDesign: (id: string) => request<Cell[]>(`/experiments/${id}/generate-design`, { method: 'POST' }),
+  // One row per cell (a "trial"), not per ProtocolRun -- a cell that's never
+  // been run is still listed, with status "queued" (see TrialResponse /
+  // services.protocol_runs.list_experiment_trials).
+  listTrials: (id: string) => request<Trial[]>(`/experiments/${id}/runs`),
 }
 
 export const protocolsApi = {

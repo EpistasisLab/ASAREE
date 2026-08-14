@@ -28,6 +28,7 @@ from asaree.services.experiments import (
 )
 from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_factorial
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
+from asaree.services.protocol_runs import list_experiment_trials
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
 
@@ -307,3 +308,41 @@ async def list_cells_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: D
     await _get_owned_experiment(db, experiment_id, user)
     cells = await list_cells(db, experiment_id=experiment_id)
     return [CellResponse.model_validate(c) for c in cells]
+
+
+# "pending" is ProtocolRun's own internal vocabulary -- the Runs tab shows
+# "queued" instead, matching a cell that has no run at all yet (see
+# ExperimentTrial's own docstring on why "trial" means cell, not ProtocolRun).
+_RUN_STATUS_TO_TRIAL_STATUS = {"pending": "queued"}
+
+
+class TrialResponse(BaseModel):
+    cell_label: str
+    factor_values: dict[str, Any]
+    metric_values: dict[str, Any]
+    status: str
+    run_id: uuid.UUID | None
+    error: str | None
+    updated_at: datetime
+
+
+@router.get("/{experiment_id}/runs", response_model=list[TrialResponse])
+async def list_experiment_trials_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> list[TrialResponse]:
+    """One row per cell (a "trial" -- a factor-level combination x replicate),
+    not per ProtocolRun -- a cell that's never been run is still a trial
+    (status "queued"), which listing ProtocolRuns alone would miss. See
+    services.protocol_runs.list_experiment_trials."""
+    await _get_owned_experiment(db, experiment_id, user)
+    trials = await list_experiment_trials(db, experiment_id=experiment_id)
+    return [
+        TrialResponse(
+            cell_label=t.cell_label,
+            factor_values=t.factor_values,
+            metric_values=t.metric_values,
+            status=_RUN_STATUS_TO_TRIAL_STATUS.get(t.status, t.status),
+            run_id=t.run_id,
+            error=t.error,
+            updated_at=t.updated_at,
+        )
+        for t in trials
+    ]

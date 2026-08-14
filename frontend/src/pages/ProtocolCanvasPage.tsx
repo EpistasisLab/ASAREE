@@ -190,7 +190,11 @@ export function ProtocolCanvasPage() {
         </div>
 
         <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
-          <ExperimentSidePanel experiment={experimentQuery.data} isLoading={experimentQuery.isLoading} />
+          <ExperimentSidePanel
+            experiment={experimentQuery.data}
+            protocolId={protocolQuery.data?.id}
+            isLoading={experimentQuery.isLoading}
+          />
 
           {protocolQuery.isLoading ? (
             <Skeleton className="flex-1" />

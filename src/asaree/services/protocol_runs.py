@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from asaree.models.factorial_cell_result import FactorialCellResult
 from asaree.models.protocol_run import ProtocolRun
 
 _TERMINAL_STATUSES = frozenset({"completed", "failed"})
@@ -111,3 +113,70 @@ async def fail_protocol_run(db: AsyncSession, protocol_run_id: uuid.UUID, *, err
     await db.flush()
     await db.refresh(run)
     return run
+
+
+@dataclass
+class ExperimentTrial:
+    """One row of the Runs tab's trial list -- "trial" means cell (one
+    factor-level combination x replicate), not "ProtocolRun": a cell that's
+    never been run at all is still a trial (status "queued"), which a query
+    scoped to ProtocolRun rows alone would miss entirely."""
+
+    cell_label: str
+    factor_values: dict[str, Any]
+    metric_values: dict[str, Any]
+    status: str  # "queued" | "pending" | "running" | "completed" | "failed"
+    run_id: uuid.UUID | None
+    error: str | None
+    updated_at: datetime
+
+
+async def list_experiment_trials(db: AsyncSession, *, experiment_id: uuid.UUID) -> list[ExperimentTrial]:
+    """Every cell under *experiment_id*, cross-referenced with its most
+    recent run (``FactorialCellResult.run_id`` is kept pointing at the
+    latest ``ProtocolRun`` that touched the cell -- see
+    ``run_protocol``'s pre-write in services.protocol_execution) for
+    status/error/timestamp. A cell can be scored without ever having gone
+    through a ProtocolRun at all (e.g. upserted directly by a notebook) --
+    such a cell has no run_id but real metric_values, and is reported
+    "completed" rather than "queued"."""
+    cells = (
+        (
+            await db.execute(
+                select(FactorialCellResult)
+                .where(FactorialCellResult.experiment_id == experiment_id)
+                .order_by(FactorialCellResult.cell_label)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    run_ids = [c.run_id for c in cells if c.run_id is not None]
+    runs_by_id: dict[uuid.UUID, ProtocolRun] = {}
+    if run_ids:
+        result = await db.execute(select(ProtocolRun).where(ProtocolRun.id.in_(run_ids)))
+        runs_by_id = {r.id: r for r in result.scalars().all()}
+
+    trials = []
+    for cell in cells:
+        run = runs_by_id.get(cell.run_id) if cell.run_id else None
+        if run is not None:
+            status = run.status
+            error = run.error
+            updated_at = run.updated_at
+        elif cell.metric_values:
+            status, error, updated_at = "completed", None, cell.updated_at
+        else:
+            status, error, updated_at = "queued", None, cell.updated_at
+        trials.append(
+            ExperimentTrial(
+                cell_label=cell.cell_label,
+                factor_values=cell.factor_values or {},
+                metric_values=cell.metric_values or {},
+                status=status,
+                run_id=cell.run_id,
+                error=error,
+                updated_at=updated_at,
+            )
+        )
+    return trials

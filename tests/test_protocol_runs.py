@@ -9,13 +9,17 @@ from collections.abc import AsyncIterator
 import pytest
 import pytest_asyncio
 
+import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for experiments' FK
 import asaree.models.experiment  # noqa: F401 -- registers research_experiments for protocols' FK
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.user import User
+from asaree.services.experiments import create_experiment, delete_experiment
+from asaree.services.factorial_cells import upsert_cell
 from asaree.services.protocol_runs import (
     create_protocol_run,
     fail_protocol_run,
     get_protocol_run,
+    list_experiment_trials,
     list_protocol_runs,
     update_node_run,
 )
@@ -119,3 +123,44 @@ async def test_list_protocol_runs_scoped_to_protocol(owner_id: uuid.UUID, protoc
         runs = await list_protocol_runs(db, protocol_id=protocol_id)
         assert [r.id for r in runs] == [run_a.id]
         await delete_protocol(db, other_protocol_id)
+
+
+async def test_list_experiment_trials_reflects_queued_running_and_completed(
+    owner_id: uuid.UUID, protocol_id: uuid.UUID
+) -> None:
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"trial-test-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+
+        # Never run at all -- still a trial, status "queued".
+        await upsert_cell(db, experiment_id=experiment_id, cell_label="cell-queued", fields={"factor_values": {"x": 1}})
+
+        # Has a live ProtocolRun, still going -- status "running".
+        running_run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        running_run.status = "running"
+        await db.flush()
+        await upsert_cell(
+            db,
+            experiment_id=experiment_id,
+            cell_label="cell-running",
+            fields={"factor_values": {"x": 2}, "run_id": running_run.id},
+        )
+
+        # Scored directly (no ProtocolRun at all) -- status "completed".
+        await upsert_cell(
+            db,
+            experiment_id=experiment_id,
+            cell_label="cell-scored-externally",
+            fields={"factor_values": {"x": 3}, "metric_values": {"accuracy": 0.9}},
+        )
+
+    async with get_session() as db:
+        trials = await list_experiment_trials(db, experiment_id=experiment_id)
+        by_label = {t.cell_label: t for t in trials}
+        assert by_label["cell-queued"].status == "queued"
+        assert by_label["cell-running"].status == "running"
+        assert by_label["cell-scored-externally"].status == "completed"
+        assert by_label["cell-scored-externally"].run_id is None
+
+    async with get_session() as db:
+        await delete_experiment(db, experiment_id)

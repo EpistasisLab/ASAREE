@@ -2,6 +2,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DesignTab } from './DesignTab'
+import { RunsTab } from './RunsTab'
 import type { Experiment } from '@/types/experiments'
 
 // A fixed left panel on the protocol canvas -- the primary place to build
@@ -12,9 +13,11 @@ import type { Experiment } from '@/types/experiments'
 // just at the page layout level instead of a floating dialog.
 export function ExperimentSidePanel({
   experiment,
+  protocolId,
   isLoading,
 }: {
   experiment: Experiment | undefined
+  protocolId: string | undefined
   isLoading: boolean
 }) {
   return (
@@ -42,10 +45,12 @@ export function ExperimentSidePanel({
             <DesignTab experiment={experiment} />
           </TabsContent>
 
-          <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto p-3">
-            <p className="text-sm text-muted-foreground">
-              Trial-level run status, filtering, and drill-in are coming in a later phase.
-            </p>
+          <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto">
+            {protocolId ? (
+              <RunsTab experimentId={experiment.id} protocolId={protocolId} />
+            ) : (
+              <p className="p-3 text-sm text-muted-foreground">This experiment has no protocol yet.</p>
+            )}
           </TabsContent>
 
           <TabsContent value="results" className="min-h-0 flex-1 overflow-y-auto p-3">

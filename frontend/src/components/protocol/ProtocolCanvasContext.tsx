@@ -18,6 +18,15 @@ export interface MainEdgeAddRequest {
   direction: 'incoming' | 'outgoing'
 }
 
+// InteractEdge's own "+" (hover toolbar on a plain main edge) -- splits an
+// existing A->B edge into A->newAgent->B, same "always an Agent" scope as
+// MainEdgeAddRequest.
+export interface EdgeInsertRequest {
+  edgeId: string
+  source: string
+  target: string
+}
+
 interface ProtocolCanvasActions {
   // Opens the "+" side panel filtered to whatever node type(s) fill this
   // slot (today always exactly one per slot, but the panel-based flow
@@ -29,6 +38,9 @@ interface ProtocolCanvasActions {
   // Same idea for the main pipeline handle -- always creates and wires
   // another Agent node (see MainEdgeAddRequest's own comment).
   requestMainEdgeAdd: (request: MainEdgeAddRequest) => void
+  // Same idea again, requested from an existing edge's own hover toolbar
+  // (see EdgeInsertRequest's own comment).
+  requestEdgeInsert: (request: EdgeInsertRequest) => void
 }
 
 // Node renderers (AgentNode, CriticGateNode, ...) are deeply nested,

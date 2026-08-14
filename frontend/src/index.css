@@ -121,6 +121,30 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    /* Firefox -- a thin cyan-tinted thumb on a transparent track, matching
+       the theme instead of the browser's plain default gray. */
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--primary), transparent 60%) transparent;
+    }
+  /* Chromium/Safari -- same idea via the vendor pseudo-elements. Unscoped
+     (not per-component) so every scrollable area in the app picks it up
+     for free, matching how every other shared visual motif here lives in
+     one place rather than a per-page override. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+    }
+  ::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklch, var(--primary), transparent 65%);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklch, var(--primary), transparent 40%);
     }
   body {
     @apply bg-background text-foreground;

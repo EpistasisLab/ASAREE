@@ -57,10 +57,12 @@ import {
   ProtocolCanvasActionsProvider,
   type ConnectorAddRequest,
   type ConnectorSlot,
+  type EdgeInsertRequest,
   type MainEdgeAddRequest,
 } from './ProtocolCanvasContext'
 import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
+import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
 import { LlmNode } from './nodes/LlmNode'
@@ -91,6 +93,11 @@ const NODE_TYPES = {
   pattern_reason_act: ReasonActPatternNode,
   pattern_single_agent_baseline: SingleAgentBaselinePatternNode,
 }
+// Every edge (plain or connector) renders through InteractEdge -- no edge
+// ever has an explicit `type`, so overriding xyflow's own built-in
+// "default" key covers all of them, matching how none of them are wired
+// via a separate registered edge type.
+const EDGE_TYPES = { default: InteractEdge }
 const AUTOSAVE_DELAY_MS = 800
 const RUN_POLL_MS = 2000
 
@@ -155,6 +162,9 @@ export function ProtocolCanvas({
   // another Agent, wired via a plain edge (no handle id) in whichever
   // direction the requesting stub sits.
   const [pendingMainEdgeAdd, setPendingMainEdgeAdd] = useState<MainEdgeAddRequest | null>(null)
+  // Same idea again, requested from an existing edge's own hover "+"
+  // (InteractEdge) -- splits that edge into origin->newAgent->target.
+  const [pendingEdgeInsert, setPendingEdgeInsert] = useState<EdgeInsertRequest | null>(null)
   const [runId, setRunId] = useState<string | null>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
@@ -207,6 +217,7 @@ export function ProtocolCanvas({
     setAddPanelOpen(false)
     setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(null)
+    setPendingEdgeInsert(null)
   }
 
   // A connector "+" stub (ConnectorAddStub) requests this instead of
@@ -227,9 +238,17 @@ export function ProtocolCanvas({
     setPendingMainEdgeAdd(request)
     setAddPanelOpen(true)
   }, [])
+  // An InteractEdge's own "+" requests this -- same panel again, restricted
+  // to "agent", and addNode() below removes the original edge and rewires
+  // origin->newAgent->target instead.
+  const requestEdgeInsert = useCallback((request: EdgeInsertRequest) => {
+    setSelectedNodeId(null)
+    setPendingEdgeInsert(request)
+    setAddPanelOpen(true)
+  }, [])
   const canvasActions = useMemo(
-    () => ({ requestConnectorAdd, requestMainEdgeAdd }),
-    [requestConnectorAdd, requestMainEdgeAdd],
+    () => ({ requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert }),
+    [requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert],
   )
 
   // Every new Agent gets its own explicit default execution-pattern node
@@ -301,6 +320,36 @@ export function ProtocolCanvas({
       setNodes((nds) => nds.concat(newNode, patternNode))
       setEdges((eds) => eds.concat(mainEdge, patternEdge))
       setPendingMainEdgeAdd(null)
+      setAddPanelOpen(false)
+      setSelectedNodeId(newId)
+      return
+    }
+    if (pendingEdgeInsert) {
+      // Splits the original edge into origin->newAgent->target -- always an
+      // Agent (AddNodePanel restricted to ['agent'] below), positioned at
+      // the midpoint of the two nodes the removed edge used to connect.
+      const { edgeId, source, target } = pendingEdgeInsert
+      const sourceNode = nodes.find((n) => n.id === source)
+      const targetNode = nodes.find((n) => n.id === target)
+      const desired =
+        sourceNode && targetNode
+          ? { x: (sourceNode.position.x + targetNode.position.x) / 2, y: (sourceNode.position.y + targetNode.position.y) / 2 }
+          : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+      const position = findFreePosition(nodes.map((n) => n.position), desired)
+      const newId = newNodeId()
+      const newNode: Node = { id: newId, type: 'agent', position, data: defaultDataFor('agent') }
+      const { patternNode, patternEdge } = agentDefaultPattern(newId, position, nodes.map((n) => n.position))
+      setNodes((nds) => nds.concat(newNode, patternNode))
+      setEdges((eds) =>
+        eds
+          .filter((e) => e.id !== edgeId)
+          .concat(
+            { id: newNodeId(), source, target: newId },
+            { id: newNodeId(), source: newId, target },
+            patternEdge,
+          ),
+      )
+      setPendingEdgeInsert(null)
       setAddPanelOpen(false)
       setSelectedNodeId(newId)
       return
@@ -464,6 +513,7 @@ export function ProtocolCanvas({
             onConnect={onConnect}
             isValidConnection={isValidConnection}
             nodeTypes={NODE_TYPES}
+            edgeTypes={EDGE_TYPES}
             onNodeClick={() => setAddPanelOpen(false)}
             onNodeDoubleClick={(_, node) => {
               setAddPanelOpen(false)
@@ -544,7 +594,7 @@ export function ProtocolCanvas({
             allowedTypes={
               pendingConnectorAdd
                 ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].allowedTypes
-                : pendingMainEdgeAdd
+                : pendingMainEdgeAdd || pendingEdgeInsert
                   ? ['agent']
                   : undefined
             }
@@ -553,7 +603,9 @@ export function ProtocolCanvas({
                 ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].title
                 : pendingMainEdgeAdd
                   ? 'Connect an agent'
-                  : undefined
+                  : pendingEdgeInsert
+                    ? 'Insert an agent'
+                    : undefined
             }
           />
         ) : selectedNode?.type === 'mcp_tool' ? (

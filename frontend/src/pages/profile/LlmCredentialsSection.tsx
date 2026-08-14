@@ -101,7 +101,6 @@ export function LlmCredentialsSection() {
             <TableHeader>
               <TableRow>
                 <TableHead>Provider</TableHead>
-                <TableHead>Resource / endpoint</TableHead>
                 <TableHead>Project endpoint</TableHead>
                 <TableHead className="w-20" />
               </TableRow>
@@ -117,9 +116,6 @@ export function LlmCredentialsSection() {
                         {Icon && <Icon className="size-4 text-muted-foreground" />}
                         {LLM_PROVIDER_LABELS[setting.provider]}
                       </span>
-                    </TableCell>
-                    <TableCell className="max-w-64 truncate font-mono text-xs text-muted-foreground" title={setting.api_base ?? undefined}>
-                      {setting.api_base ?? '—'}
                     </TableCell>
                     <TableCell
                       className="max-w-64 truncate font-mono text-xs text-muted-foreground"

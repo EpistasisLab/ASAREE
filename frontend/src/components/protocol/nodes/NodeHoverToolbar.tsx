@@ -1,6 +1,6 @@
 import type { MouseEvent, ReactNode } from 'react'
 import { useReactFlow } from '@xyflow/react'
-import { Power, PowerOff, Trash2 } from 'lucide-react'
+import { Power, PowerOff, Repeat, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 function ToolbarIconButton({
@@ -43,6 +43,7 @@ export function NodeHoverToolbar({
   nodeId,
   isActive,
   onToggleActive,
+  swap,
 }: {
   nodeId: string
   // Absent for pure config-source nodes (llm/memory/pattern) -- "deactivate"
@@ -50,6 +51,12 @@ export function NodeHoverToolbar({
   // so those node types only get Delete, not the power icon.
   isActive?: boolean
   onToggleActive?: () => void
+  // Replaces Delete with a Swap icon entirely -- for a node that must never
+  // go to zero (today: the sole connected execution-pattern node on an
+  // agent), deleting isn't a valid action at all, only replacing it with a
+  // different node is. See ReasonActPatternNode.tsx's own comment for why
+  // this is conditional on actually being connected to something.
+  swap?: { label: string; onSwap: () => void }
 }) {
   const { deleteElements } = useReactFlow()
 
@@ -60,9 +67,15 @@ export function NodeHoverToolbar({
           {isActive ? <Power className="size-3" /> : <PowerOff className="size-3" />}
         </ToolbarIconButton>
       )}
-      <ToolbarIconButton label="Delete" onClick={() => void deleteElements({ nodes: [{ id: nodeId }] })}>
-        <Trash2 className="size-3" />
-      </ToolbarIconButton>
+      {swap ? (
+        <ToolbarIconButton label={swap.label} onClick={swap.onSwap}>
+          <Repeat className="size-3" />
+        </ToolbarIconButton>
+      ) : (
+        <ToolbarIconButton label="Delete" onClick={() => void deleteElements({ nodes: [{ id: nodeId }] })}>
+          <Trash2 className="size-3" />
+        </ToolbarIconButton>
+      )}
     </div>
   )
 }

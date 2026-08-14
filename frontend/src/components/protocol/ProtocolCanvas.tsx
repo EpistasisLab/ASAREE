@@ -675,7 +675,6 @@ export function ProtocolCanvas({
               data: selectedNode.data as ReasonActPatternNodeData,
             }}
             onChange={updateNodeData}
-            onDelete={deleteNode}
             onClose={() => setSelectedNodeId(null)}
           />
         ) : selectedNode?.type === 'pattern_single_agent_baseline' ? (
@@ -687,7 +686,6 @@ export function ProtocolCanvas({
               data: selectedNode.data as SingleAgentBaselinePatternNodeData,
             }}
             onChange={updateNodeData}
-            onDelete={deleteNode}
             onClose={() => setSelectedNodeId(null)}
           />
         ) : (

@@ -1,4 +1,4 @@
-import { ArrowRight, Trash2, X } from 'lucide-react'
+import { ArrowRight, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -15,15 +15,17 @@ const ACCENT = hashToChartHue('pattern_single_agent_baseline')
 // own comment in types/protocols.ts): connecting this to an agent declares
 // intent for a future phase, editing these fields has no effect on
 // execution today.
+// No Delete button in the header -- an agent's execution pattern must
+// never go to zero (see ProtocolCanvas.tsx's nonDeletablePatternNodeIds),
+// so this node is only ever removed by swapping it for a different one
+// (the node's own canvas hover toolbar), never a bare delete.
 export function SingleAgentBaselinePatternNodeInspector({
   node,
   onChange,
-  onDelete,
   onClose,
 }: {
   node: (ProtocolNode & { data: SingleAgentBaselinePatternNodeData }) | null
   onChange: (nodeId: string, data: SingleAgentBaselinePatternNodeData) => void
-  onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
   if (!node) return null
@@ -47,9 +49,6 @@ export function SingleAgentBaselinePatternNodeInspector({
             <h2 className="text-lg font-semibold">{data.label || 'Single-Agent Baseline'}</h2>
           </div>
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>
-              <Trash2 className="size-4" />
-            </Button>
             <Button variant="outline" size="icon" aria-label="Close" onClick={onClose}>
               <X className="size-4" />
             </Button>

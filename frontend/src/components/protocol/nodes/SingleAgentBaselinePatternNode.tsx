@@ -1,7 +1,8 @@
-import type { NodeProps } from '@xyflow/react'
+import { useNodeConnections, type NodeProps } from '@xyflow/react'
 import { ArrowRight } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { SingleAgentBaselinePatternNodeData } from '@/types/protocols'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
 
 // The other Architectural Pattern connector node type (see
@@ -16,6 +17,13 @@ export function SingleAgentBaselinePatternNode({
   data,
   selected,
 }: NodeProps & { data: SingleAgentBaselinePatternNodeData }) {
+  // See ReasonActPatternNode.tsx's own comment -- same swap-instead-of-
+  // delete treatment, since an agent's execution pattern must never go to
+  // zero.
+  const connections = useNodeConnections({ id, handleType: 'source', handleId: 'architectural_pattern' })
+  const { requestConnectorAdd } = useProtocolCanvasActions()
+  const targetAgentId = connections[0]?.target
+
   return (
     <CircleNode
       id={id}
@@ -26,6 +34,11 @@ export function SingleAgentBaselinePatternNode({
       placeholder="Single-Agent Baseline"
       handleId="architectural_pattern"
       dashed
+      swap={
+        targetAgentId
+          ? { label: 'Swap pattern', onSwap: () => requestConnectorAdd({ nodeId: targetAgentId, slot: 'architectural_pattern' }) }
+          : undefined
+      }
     />
   )
 }

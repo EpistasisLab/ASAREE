@@ -22,6 +22,7 @@ export function CircleNode({
   handleId,
   dashed,
   warning,
+  swap,
 }: {
   id: string
   selected?: boolean
@@ -36,10 +37,12 @@ export function CircleNode({
   // server/tool picked yet) rather than a permanent non-implementation.
   dashed?: boolean
   warning?: string
+  // Passed straight through to NodeHoverToolbar -- see its own comment.
+  swap?: { label: string; onSwap: () => void }
 }) {
   return (
     <div className="group relative flex flex-col items-center">
-      <NodeHoverToolbar nodeId={id} />
+      <NodeHoverToolbar nodeId={id} swap={swap} />
       <div className="relative">
         <div
           style={cardAccent(accent)}

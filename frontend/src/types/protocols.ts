@@ -100,7 +100,6 @@ export interface OutputContract {
 }
 
 export interface AgentNodeConfig {
-  name: string
   goal: string
   description: string
   system_prompt: string
@@ -138,7 +137,6 @@ export function defaultAgentNodeData(label = 'Agent'): AgentNodeData {
   return {
     label,
     config: {
-      name: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'agent',
       goal: '',
       description: '',
       system_prompt: '',

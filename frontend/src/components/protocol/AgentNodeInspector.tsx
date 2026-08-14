@@ -91,11 +91,6 @@ export function AgentNodeInspector({
 
           <TabsContent value="parameters" className="space-y-4 pt-2">
             <div className="space-y-1.5">
-              <Label htmlFor="node-name">Name</Label>
-              <Input id="node-name" value={config.name} onChange={(e) => patchConfig({ name: e.target.value })} />
-            </div>
-
-            <div className="space-y-1.5">
               <Label htmlFor="node-goal">Goal</Label>
               <Textarea id="node-goal" rows={2} value={config.goal} onChange={(e) => patchConfig({ goal: e.target.value })} />
             </div>

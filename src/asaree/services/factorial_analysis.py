@@ -390,3 +390,79 @@ def analyze_factorial(
             "delta": delta,
         },
     }
+
+
+def analyze_experiment_design(design_spec: dict[str, Any] | None, cells: Sequence[Any]) -> dict[str, Any]:
+    """The Results tab's own entry point -- a thin wrapper around
+    ``analyze_factorial`` that needs no caller-supplied parameters at all.
+    ``condition_factors``/``positive_levels``/``reference_condition``/
+    ``primary_metric`` are all derived from the experiment's own Design tab
+    declarations (``design_spec.factors``/``metrics``) instead of a second,
+    separate configuration UI.
+
+    ``analyze_factorial``'s own effect-coding methodology requires every
+    condition factor to have exactly 2 levels (see this module's own
+    docstring) -- the first declared level is treated as the reference/
+    baseline, the second as "positive," a standard baseline-vs-treatment
+    convention that needs no additional UI to declare.
+
+    Always returns a plain dict, never raises -- ``available: False`` (with
+    a human-readable ``reason``) covers every "nothing to show yet" case,
+    whether that's a missing declaration or ``analyze_factorial`` itself
+    raising ``FactorialAnalysisError`` (e.g. not enough scored replicates).
+    """
+    design_spec = design_spec or {}
+    factors = design_spec.get("factors") or []
+    metrics = design_spec.get("metrics") or []
+    primary = next((m for m in metrics if m.get("primary")), None)
+
+    if not factors:
+        return {"available": False, "reason": "No factors declared yet -- add some on the Design tab.", "analysis": None, "best_condition": None}
+    if primary is None:
+        return {
+            "available": False,
+            "reason": "No primary metric declared yet -- set one on the Design tab.",
+            "analysis": None,
+            "best_condition": None,
+        }
+    non_binary = [f["name"] for f in factors if len(f.get("levels") or []) != 2]
+    if non_binary:
+        return {
+            "available": False,
+            "reason": f"This analysis requires every factor to have exactly 2 levels ({', '.join(non_binary)} doesn't).",
+            "analysis": None,
+            "best_condition": None,
+        }
+
+    condition_factors = [f["name"] for f in factors]
+    reference_condition = {f["name"]: f["levels"][0] for f in factors}
+    positive_levels = {f["name"]: f["levels"][1] for f in factors}
+
+    try:
+        analysis = analyze_factorial(
+            cells,
+            condition_factors=condition_factors,
+            positive_levels=positive_levels,
+            reference_condition=reference_condition,
+            primary_metric=primary["name"],
+        )
+    except FactorialAnalysisError as exc:
+        return {"available": False, "reason": str(exc), "analysis": None, "best_condition": None}
+    except (ZeroDivisionError, ValueError, ArithmeticError) as exc:
+        # analyze_factorial's saturated OLS model (intercept + one term per
+        # non-empty factor subset) needs at least as many scored data points
+        # as model terms -- too few hits a raw numeric error (e.g. division
+        # by zero fitting with n <= p) before its own "fewer than 2 scored
+        # replicates" check is ever reached. Same "not enough data yet" UI
+        # state as a FactorialAnalysisError, just a different code path --
+        # this function's whole contract is to never crash the Results tab,
+        # regardless of which numeric edge case degenerate data hits.
+        return {"available": False, "reason": f"Not enough scored data yet to analyze: {exc}", "analysis": None, "best_condition": None}
+
+    emm_cells = analysis.get("emm_cells") or []
+    best_condition = None
+    if emm_cells:
+        pick = max if primary.get("direction", "maximize") == "maximize" else min
+        best_condition = pick(emm_cells, key=lambda c: c["mean"])
+
+    return {"available": True, "reason": None, "analysis": analysis, "best_condition": best_condition}

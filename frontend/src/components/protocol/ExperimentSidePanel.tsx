@@ -2,6 +2,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DesignTab } from './DesignTab'
+import { ResultsTab } from './ResultsTab'
 import { RunsTab } from './RunsTab'
 import type { Experiment } from '@/types/experiments'
 
@@ -53,10 +54,8 @@ export function ExperimentSidePanel({
             )}
           </TabsContent>
 
-          <TabsContent value="results" className="min-h-0 flex-1 overflow-y-auto p-3">
-            <p className="text-sm text-muted-foreground">
-              Summarized metrics, factor effects, and uncertainty are coming in a later phase.
-            </p>
+          <TabsContent value="results" className="min-h-0 flex-1 overflow-y-auto">
+            <ResultsTab experimentId={experiment.id} />
           </TabsContent>
         </Tabs>
       )}

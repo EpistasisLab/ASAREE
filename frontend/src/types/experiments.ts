@@ -128,6 +128,74 @@ export interface Trial {
   updated_at: string
 }
 
+// One row of analysis["emm_cells"] -- one factor-level combination's
+// estimated marginal mean, with its own CI (the Results tab's "uncertainty"
+// ask). _condition_label matches services.design_generation.cell_label_for's
+// own format (e.g. "tier_large"), computed fresh from condition_factors, not
+// stored anywhere.
+export interface EmmCell {
+  _condition_label: string
+  mean: number
+  std: number
+  count: number
+  se: number
+  ci_lo: number
+  ci_hi: number
+}
+
+// One row of analysis["factorial_effects"] -- "effect" has no ":" for a
+// single factor's main effect, one or more ":"-joined factor names for an
+// interaction (see services.factorial_analysis._design_matrix's own
+// ":".join(...) term naming).
+export interface FactorialEffect {
+  effect: string
+  estimate_half_diff: number
+  t: number
+  p_perm: number
+  p_maxstat_fwer: number
+  mc_se_p: number
+}
+
+export interface NonInferiorityRow {
+  condition: string
+  contrast_vs_reference: number
+  lower_bound: number
+  neg_delta: number
+  p_one_sided: number
+  p_holm?: number
+  ni_decision?: string
+  [key: string]: unknown
+}
+
+// The full services.factorial_analysis.analyze_factorial return shape --
+// deliberately loose (an index signature, not every key modeled) since this
+// is a dict[str, Any] on the backend too, not a typed Pydantic model.
+export interface ExperimentAnalysis {
+  n_attempted: number
+  n_scored: number
+  n_failed: number
+  n_not_yet_run: number
+  emm_cells: EmmCell[]
+  factorial_effects: FactorialEffect[]
+  non_inferiority: NonInferiorityRow[]
+  ni_reportable: boolean
+  metric_summary: Record<string, unknown>[]
+  cost_time_summary: Record<string, unknown>[]
+  footer: { primary_metric: string; condition_factors: string[]; [key: string]: unknown }
+  [key: string]: unknown
+}
+
+// GET /experiments/{id}/results -- available is false (with a human-
+// readable reason) whenever there's nothing to show yet: no factors/primary
+// metric declared, a factor with other than 2 levels, or not enough scored
+// replicates (see services.factorial_analysis.analyze_experiment_design).
+export interface ExperimentResults {
+  available: boolean
+  reason: string | null
+  analysis: ExperimentAnalysis | null
+  best_condition: EmmCell | null
+}
+
 export interface Cell {
   id: string
   cell_label: string

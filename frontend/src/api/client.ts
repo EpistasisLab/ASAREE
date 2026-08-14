@@ -12,7 +12,7 @@ import type {
 } from '@/types/auth'
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
-import type { Cell, DesignSpec, Experiment, Trial } from '@/types/experiments'
+import type { Cell, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
 import type { LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
@@ -171,6 +171,11 @@ export const experimentsApi = {
   // been run is still listed, with status "queued" (see TrialResponse /
   // services.protocol_runs.list_experiment_trials).
   listTrials: (id: string) => request<Trial[]>(`/experiments/${id}/runs`),
+  // Derives analyze_factorial's own condition_factors/positive_levels/
+  // reference_condition/primary_metric from this experiment's Design tab
+  // declarations -- no request body needed (see
+  // services.factorial_analysis.analyze_experiment_design).
+  getResults: (id: string) => request<ExperimentResults>(`/experiments/${id}/results`),
 }
 
 export const protocolsApi = {

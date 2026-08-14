@@ -26,7 +26,7 @@ from asaree.services.experiments import (
     list_experiments,
     update_experiment,
 )
-from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_factorial
+from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_experiment_design, analyze_factorial
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
 from asaree.services.protocol_runs import list_experiment_trials
 
@@ -280,6 +280,31 @@ async def analyze_factorial_endpoint(
         )
     except FactorialAnalysisError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class ResultsResponse(BaseModel):
+    available: bool
+    # Set only when available is False -- why there's nothing to show yet
+    # (no factors/primary metric declared, a factor with other than 2
+    # levels, or not enough scored replicates), surfaced as one consistent
+    # state for the Results tab regardless of which precondition failed.
+    reason: str | None
+    analysis: dict[str, Any] | None
+    # analysis["emm_cells"], picked by the declared primary metric's own
+    # direction -- analyze_factorial itself has no notion of "best," only
+    # non-inferiority vs. a reference condition.
+    best_condition: dict[str, Any] | None
+
+
+@router.get("/{experiment_id}/results", response_model=ResultsResponse)
+async def get_experiment_results_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ResultsResponse:
+    """See services.factorial_analysis.analyze_experiment_design -- this
+    endpoint is a thin pass-through, all the real derivation/wrapping logic
+    lives there so it's unit-testable without a request/response cycle."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    cells = await list_cells(db, experiment_id=experiment_id)
+    result = analyze_experiment_design(experiment.design_spec, cells)
+    return ResultsResponse(**result)
 
 
 @router.put("/{experiment_id}/cells/{cell_label}", response_model=CellResponse)

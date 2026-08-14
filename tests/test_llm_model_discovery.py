@@ -103,3 +103,23 @@ async def test_discover_models_azure_failure_scrubs_api_key(monkeypatch: pytest.
     assert models == []
     assert source == "error"
     assert "secret-key" not in (note or "")
+
+
+async def test_discover_models_azure_404_gets_a_specific_friendly_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A services.ai.azure.com host has no api-key-authenticated deployment-
+    # listing endpoint at all (confirmed against ARES's own discovery code) --
+    # this is the expected, common case for a Foundry resource hosting Claude
+    # models, not a raw httpx exception dump.
+    fake_response = _FakeResponse({}, status_code=404)
+    monkeypatch.setattr(
+        discovery.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(fake_response, captured_headers=[])
+    )
+
+    models, source, note = await discovery.discover_models(provider="azure_foundry", setting=_foundry_setting())
+
+    assert models == []
+    assert source == "error"
+    assert note == (
+        "This Azure resource has no deployment-listing API available -- enter your deployment's name directly "
+        "in the Model field below (expected for a Foundry resource hosting Claude models)."
+    )

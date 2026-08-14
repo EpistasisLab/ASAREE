@@ -8,11 +8,21 @@ the source of truth for those two. No live call, no credential needed.
 
 Azure Foundry deployments are the opposite: per-resource, so nothing short
 of asking that resource can know what's actually deployed there. Mirrors
-ARES's own proven approach (user_llm_settings_service.py's _discover_azure):
-the classic Azure OpenAI "list deployments" endpoint, plain api-key header
-auth (no Azure AD/OAuth2/app-registration -- the newer AI Foundry
-"deployments" API needs that, and ASAREE's credential shape has nowhere to
-put it), raw httpx (no Azure SDK, no litellm involvement).
+ARES's own approach (user_llm_settings_service.py's _discover_azure): the
+classic Azure OpenAI "list deployments" endpoint, plain api-key header auth
+(no Azure AD/OAuth2/app-registration -- the newer AI Foundry "deployments"
+API needs that, and ASAREE's credential shape has nowhere to put it), raw
+httpx (no Azure SDK, no litellm involvement).
+
+That listing endpoint genuinely 404s on every services.ai.azure.com host --
+confirmed against ARES's own code, which hits the identical wall and
+settled on the same conclusion ("credentials, not deployments" -- see that
+file's `validate_setting`). There's no api-key-authenticated way to
+enumerate what's actually deployed on this kind of resource at all,
+Claude-hosting or otherwise; ARES's own model-listing function has no
+special case for it either. A 404 here is treated as "no listing API",
+not a broken credential -- the caller's free-text Model field is the
+intended fallback, not a dead end.
 """
 
 from __future__ import annotations
@@ -72,6 +82,28 @@ async def _discover_azure(setting: UserLLMSetting) -> tuple[list[ModelInfo], str
             )
             response.raise_for_status()
         data = response.json().get("data") or []
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            # Confirmed against ARES's own _discover_azure (user_llm_settings_
+            # service.py), which hits this exact same wall: there is no
+            # api-key-authenticated deployment-LISTING endpoint on the
+            # services.ai.azure.com host at all -- that needs the ARM
+            # management-plane API with Azure AD/OAuth2, which this
+            # credential shape (and ARES's) has nowhere to put. ARES's own
+            # comment on this: "a provider (credentials + endpoint holder)
+            # can't be validated against a list." This 404s unconditionally
+            # here, not just for a misconfigured resource -- especially
+            # expected for a Foundry resource hosting Claude models rather
+            # than an OpenAI deployment. Not a broken state: the Model
+            # field's free-text fallback (LlmNodeInspector.tsx, keyed off
+            # source == "error") is the intended path for this case.
+            return [], "error", (
+                "This Azure resource has no deployment-listing API available -- enter your deployment's name "
+                "directly in the Model field below (expected for a Foundry resource hosting Claude models)."
+            )
+        message = str(e).replace(api_key, "***")
+        logger.warning("azure_foundry_model_discovery_failed", extra={"error": message})
+        return [], "error", f"Could not reach Azure Foundry to list models: {message}"
     except httpx.HTTPError as e:
         # Never leak the raw key if it ended up embedded in a request/response repr.
         message = str(e).replace(api_key, "***")

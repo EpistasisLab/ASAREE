@@ -10,10 +10,16 @@ import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 // (unlike NodeHoverToolbar's CSS-only group-hover) this needs real hover
 // state -- there's no shared DOM ancestor for a group-hover to key off of.
 //
-// Delete works for any edge. "+" (insert a node in the middle) only shows
-// for a plain "main" edge (no source/targetHandle) -- inserting an
-// arbitrary node into a typed connector edge (LLM/Tool/Memory/Pattern)
-// would violate that connector's own required shape, so it's hidden there.
+// Delete works for any edge except one into an agent's architectural_pattern
+// handle -- an agent's execution pattern must never go to zero (see
+// ProtocolCanvas.tsx's nonDeletablePatternNodeIds/edgesWithDeletable), so
+// removing just the EDGE (leaving the pattern node orphaned but the agent
+// unwired) would strand it exactly the same way removing the node directly
+// would. Swapping (which removes both atomically) is still the only way to
+// change it. "+" (insert a node in the middle) only shows for a plain
+// "main" edge (no source/targetHandle) -- inserting an arbitrary node into
+// a typed connector edge (LLM/Tool/Memory/Pattern) would violate that
+// connector's own required shape, so it's hidden there too.
 export function InteractEdge({
   id,
   source,
@@ -34,6 +40,11 @@ export function InteractEdge({
   const { requestEdgeInsert } = useProtocolCanvasActions()
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
   const isMainEdge = !sourceHandleId && !targetHandleId
+  const isPatternEdge = targetHandleId === 'architectural_pattern'
+
+  if (isPatternEdge) {
+    return <BaseEdge id={id} path={edgePath} style={style} markerEnd={markerEnd} interactionWidth={24} />
+  }
 
   return (
     <>

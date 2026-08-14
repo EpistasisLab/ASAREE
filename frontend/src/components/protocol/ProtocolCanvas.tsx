@@ -227,6 +227,17 @@ export function ProtocolCanvas({
     }))
   }, [nodes, runQuery.data, nonDeletablePatternNodeIds])
 
+  // Same protection, one layer up -- the architectural_pattern EDGE itself
+  // must not be deletable either (Backspace/Delete key while it's
+  // selected, or InteractEdge's own hover-toolbar "delete connection"
+  // button, which reads this same flag), or a user could strand the agent
+  // at zero patterns by removing just the edge without touching the node.
+  // Swapping (which removes both atomically) is still the only way to
+  // change it.
+  const edgesWithDeletable = useMemo((): Edge[] => {
+    return edges.map((e) => ({ ...e, deletable: e.targetHandle !== 'architectural_pattern' }))
+  }, [edges])
+
   function closeAddPanel() {
     setAddPanelOpen(false)
     setPendingConnectorAdd(null)
@@ -535,7 +546,7 @@ export function ProtocolCanvas({
         <div ref={paneRef} className="relative flex-1">
           <ReactFlow
             nodes={nodesWithRunStatus}
-            edges={edges}
+            edges={edgesWithDeletable}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}

@@ -27,7 +27,6 @@ export function CreateCredentialDialog({
   const [query, setQuery] = useState('')
   const [provider, setProvider] = useState<LLMProvider | null>(defaultProvider)
   const [apiKey, setApiKey] = useState('')
-  const [apiBase, setApiBase] = useState('')
   const [azureProjectEndpoint, setAzureProjectEndpoint] = useState('')
   const queryClient = useQueryClient()
 
@@ -37,7 +36,12 @@ export function CreateCredentialDialog({
     enabled: open,
   })
   const existing = settingsQuery.data?.find((s) => s.provider === provider)
-  const requiresApiBase = provider === 'azure_foundry'
+  // azure_foundry's Project endpoint is the only field asked for -- the
+  // resource host api_base needs for inference is derived from it
+  // server-side (upsert_setting), since it's already a prefix of that same
+  // URL. Asking for both looked like two near-identical URLs with no
+  // visible reason to differ.
+  const requiresProjectEndpoint = provider === 'azure_foundry'
 
   // Selecting a provider (either directly from the search list, or via
   // defaultProvider when opened from an existing credential's own "Edit")
@@ -47,7 +51,6 @@ export function CreateCredentialDialog({
   function selectProvider(id: LLMProvider | null) {
     setProvider(id)
     const existingSetting = id ? settingsQuery.data?.find((s) => s.provider === id) : undefined
-    setApiBase(existingSetting?.api_base ?? '')
     setAzureProjectEndpoint(existingSetting?.azure_project_endpoint ?? '')
   }
 
@@ -57,7 +60,7 @@ export function CreateCredentialDialog({
   // initializer only applies on first mount.
   // selectProvider is deliberately not a dependency here -- it's a plain
   // function recreated every render, and depending on it would re-run this
-  // effect (and reset apiBase/azureProjectEndpoint) on every keystroke.
+  // effect (and reset azureProjectEndpoint) on every keystroke.
   useEffect(() => {
     if (open) selectProvider(defaultProvider)
   }, [open, defaultProvider, settingsQuery.data])
@@ -67,8 +70,9 @@ export function CreateCredentialDialog({
       llmSettingsApi.upsert({
         provider: provider!,
         api_key: apiKey,
-        api_base: requiresApiBase ? apiBase || null : null,
-        azure_project_endpoint: requiresApiBase ? azureProjectEndpoint || null : null,
+        // api_base is derived server-side from azure_project_endpoint --
+        // not sent here at all (see upsert_setting's own comment).
+        azure_project_endpoint: requiresProjectEndpoint ? azureProjectEndpoint || null : null,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['llm-settings'] })
@@ -81,7 +85,6 @@ export function CreateCredentialDialog({
     setQuery('')
     setProvider(null)
     setApiKey('')
-    setApiBase('')
     setAzureProjectEndpoint('')
     saveMutation.reset()
   }
@@ -96,7 +99,7 @@ export function CreateCredentialDialog({
         if (!next) reset()
       }}
     >
-      <DialogContent showCloseButton={false} className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>New credential</DialogTitle>
           <DialogDescription>
@@ -149,24 +152,9 @@ export function CreateCredentialDialog({
               <PasswordInput id="credential-api-key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
             </div>
 
-            {requiresApiBase && (
+            {requiresProjectEndpoint && (
               <div className="space-y-1.5">
-                <Label htmlFor="credential-api-base">Resource name or endpoint URL</Label>
-                <Input
-                  id="credential-api-base"
-                  placeholder="https://my-resource.openai.azure.com"
-                  value={apiBase}
-                  onChange={(e) => setApiBase(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Your Azure Foundry resource name, or its full endpoint URL.
-                </p>
-              </div>
-            )}
-
-            {requiresApiBase && (
-              <div className="space-y-1.5">
-                <Label htmlFor="credential-azure-project-endpoint">Project endpoint (optional)</Label>
+                <Label htmlFor="credential-azure-project-endpoint">Project endpoint</Label>
                 <Input
                   id="credential-azure-project-endpoint"
                   placeholder="https://my-resource.services.ai.azure.com/api/projects/my-project"
@@ -174,8 +162,8 @@ export function CreateCredentialDialog({
                   onChange={(e) => setAzureProjectEndpoint(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Needed to list your deployments in the Model dropdown -- copy this from the Foundry portal's
-                  connection info. Not required for running agents; without it, type the deployment name directly.
+                  Copy this from the Foundry portal's connection info -- used to both run agents and list your
+                  deployments.
                 </p>
               </div>
             )}
@@ -185,7 +173,7 @@ export function CreateCredentialDialog({
             <DialogFooter>
               <Button
                 onClick={() => saveMutation.mutate()}
-                disabled={!apiKey.trim() || (requiresApiBase && !apiBase.trim()) || saveMutation.isPending}
+                disabled={!apiKey.trim() || (requiresProjectEndpoint && !azureProjectEndpoint.trim()) || saveMutation.isPending}
               >
                 {saveMutation.isPending ? 'Saving…' : 'Save credential'}
               </Button>

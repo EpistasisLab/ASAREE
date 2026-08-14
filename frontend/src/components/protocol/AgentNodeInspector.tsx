@@ -8,8 +8,9 @@ import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
+import { NodeRunOutputPanel } from './NodeRunOutputPanel'
 import { OutputContractEditor } from './OutputContractEditor'
-import type { AgentNodeConfig, AgentNodeData, ProtocolNode } from '@/types/protocols'
+import type { AgentNodeConfig, AgentNodeData, NodeRunState, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = hashToChartHue('agent')
 
@@ -23,20 +24,21 @@ const ACCENT = hashToChartHue('agent')
 // other node inspectors via `NodeInspectorDialog` -- see that file for why.
 //
 // Parameters/Settings mirrors n8n's own NDV split -- what defines the
-// agent's behavior/identity vs. what constrains its execution -- but drops
-// n8n's INPUT/OUTPUT panes: those show a node's actual run data, which only
-// exists once ASAREE has an execution engine (not yet built). Adding empty
-// IN/OUT panes now would be UI with nothing behind it, same reasoning that
-// kept unbuilt node types out of the palette.
+// agent's behavior/identity vs. what constrains its execution. A third
+// Output tab (n8n's own INPUT/OUTPUT panes, deferred until now for lack of
+// an execution engine) shows this node's actual run data once one exists --
+// see NodeRunOutputPanel.
 export function AgentNodeInspector({
   node,
   experimentId,
+  nodeRun,
   onChange,
   onDelete,
   onClose,
 }: {
   node: (ProtocolNode & { data: AgentNodeData }) | null
   experimentId: string | null
+  nodeRun?: NodeRunState
   onChange: (nodeId: string, data: AgentNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
@@ -87,6 +89,7 @@ export function AgentNodeInspector({
           <TabsList>
             <TabsTrigger value="parameters">Parameters</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
+            <TabsTrigger value="output">Output</TabsTrigger>
           </TabsList>
 
           <TabsContent value="parameters" className="space-y-4 pt-2">
@@ -166,6 +169,10 @@ export function AgentNodeInspector({
             </div>
 
             <OutputContractEditor value={config.output_contract} onChange={(next) => patchConfig({ output_contract: next })} />
+          </TabsContent>
+
+          <TabsContent value="output" className="pt-2">
+            <NodeRunOutputPanel nodeRun={nodeRun} />
           </TabsContent>
       </Tabs>
     </NodeInspectorDialog>

@@ -745,6 +745,7 @@ export function ProtocolCanvas({
             <AgentNodeInspector
               node={{ id: selectedNode.id, type: selectedNode.type ?? 'agent', position: selectedNode.position, data: selectedNode.data as AgentNodeData }}
               experimentId={experimentId}
+              nodeRun={runQuery.data?.node_runs[selectedNode.id]}
               onChange={updateNodeData}
               onDelete={deleteNode}
               onClose={() => setSelectedNodeId(null)}

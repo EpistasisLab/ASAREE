@@ -16,7 +16,7 @@ import type { Cell, DesignSpec, Experiment, ExperimentResults, Trial } from '@/t
 import type { LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
-import type { Run } from '@/types/runs'
+import type { Run, RunStep } from '@/types/runs'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -210,6 +210,7 @@ export const runsApi = {
   // No server-side experiment_id filter exists yet (runs.py only filters by
   // agent_id) -- callers filter client-side on run_metadata.experiment_id.
   list: () => request<Run[]>('/runs'),
+  getSteps: (runId: string) => request<RunStep[]>(`/runs/${runId}/steps`),
 }
 
 export const mcpServersApi = {

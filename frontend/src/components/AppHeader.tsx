@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { KeyRound, Plus, SquarePlus } from 'lucide-react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { experimentsApi } from '@/api/client'
 import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
 import { Button } from '@/components/ui/button'
@@ -41,12 +41,12 @@ export function AppHeader() {
     <header className="border-b bg-background">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
         <div className="flex items-center gap-6">
-          <div className="flex items-center gap-3">
+          <Link to="/experiments" className="flex items-center gap-3">
             <div className="flex size-8 items-center justify-center rounded-lg bg-primary font-mono text-sm font-semibold text-primary-foreground shadow-[0_0_14px_-3px_var(--primary)]">
               A
             </div>
             <span className="font-semibold tracking-wide">ASAREE</span>
-          </div>
+          </Link>
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button size="icon-sm" aria-label="Create" disabled={createExperimentMutation.isPending} />}>
               <Plus className="size-4" />

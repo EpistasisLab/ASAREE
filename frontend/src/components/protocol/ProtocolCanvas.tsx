@@ -16,7 +16,7 @@ import {
   type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Play, Plus } from 'lucide-react'
+import { Play, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, protocolsApi } from '@/api/client'
 import { newNodeId } from '@/lib/nodeId'
@@ -152,6 +152,10 @@ export function ProtocolCanvas({
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialGraph.edges as Edge[])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [addPanelOpen, setAddPanelOpen] = useState(false)
+  // n8n-style dismissible error banner (own close button, no auto-hide) --
+  // reset on every new Run click so a fresh attempt always gets a clean
+  // slate even if the previous failure was never dismissed.
+  const [runErrorDismissed, setRunErrorDismissed] = useState(false)
   // Set only while the "+" panel was opened via a connector stub (as
   // opposed to the canvas's own unrestricted toolbar "+") -- addNode()
   // branches on this to wire the new node into the requesting node's slot
@@ -600,24 +604,45 @@ export function ProtocolCanvas({
             )}
           </ReactFlow>
           <CanvasControls />
-          <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
-            {(runMutation.isError || runQuery.data?.status === 'failed') && (
-              // runMutation.error is the real validation message (e.g.
-              // topological_order/validate_coordination_strategy rejecting
-              // the graph before any ProtocolRun row even exists) --
-              // runQuery.data?.error only ever exists once a run row was
-              // created and later failed asynchronously in the worker.
-              <span
-                className="max-w-64 truncate rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive"
-                title={runQuery.data?.error ?? (runMutation.error instanceof ApiError && typeof runMutation.error.detail === 'string' ? runMutation.error.detail : undefined)}
+          {(() => {
+            // runMutation.error is the real validation message (e.g.
+            // topological_order/validate_coordination_strategy rejecting the
+            // graph before any ProtocolRun row even exists) --
+            // runQuery.data?.error only ever exists once a run row was
+            // created and later failed asynchronously in the worker.
+            const runErrorText =
+              runQuery.data?.error ??
+              (runMutation.isError
+                ? runMutation.error instanceof ApiError && typeof runMutation.error.detail === 'string'
+                  ? runMutation.error.detail
+                  : 'Could not start the run.'
+                : null)
+            if (!runErrorText || runErrorDismissed) return null
+            return (
+              // A full-text, wrapping, dismissible banner -- n8n's own
+              // convention for a run failure (a toast with the complete
+              // message and a close button) rather than this app's usual
+              // single-line truncate+title-tooltip idiom, which hides
+              // exactly the detail (e.g. "No anthropic credential
+              // configured...") a failed run needs to actually show.
+              <div
+                role="alert"
+                className="absolute top-14 right-3 z-10 flex max-w-sm items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive shadow-[0_0_16px_-6px_var(--destructive)]"
               >
-                {runQuery.data?.error ??
-                  (runMutation.error instanceof ApiError && typeof runMutation.error.detail === 'string'
-                    ? runMutation.error.detail
-                    : 'Could not start the run.')}
-              </span>
-            )}
-            <Button size="sm" disabled={isRunning} onClick={() => runMutation.mutate()}>
+                <span className="whitespace-pre-wrap">{runErrorText}</span>
+                <button
+                  type="button"
+                  aria-label="Dismiss"
+                  onClick={() => setRunErrorDismissed(true)}
+                  className="-mt-0.5 -mr-1 shrink-0 cursor-pointer rounded p-0.5 text-destructive/70 hover:bg-destructive/20 hover:text-destructive"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            )
+          })()}
+          <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
+            <Button size="sm" disabled={isRunning} onClick={() => { setRunErrorDismissed(false); runMutation.mutate() }}>
               <Play className="size-4" />
               {isRunning ? 'Running…' : 'Run'}
             </Button>

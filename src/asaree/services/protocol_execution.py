@@ -27,7 +27,6 @@ from agentic_core.runner import create_agent, create_run, execute_run, get_agent
 from agentic_core.schemas.agent import ModelConfig
 from agentic_core.schemas.output import parse_envelope
 from agentic_core.schemas.pattern import PatternConfig
-from agentic_core.services.mcp_service import call_server_tool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.config import get_settings
@@ -127,12 +126,19 @@ _LLM_NODE_TYPES = frozenset({"llm_anthropic", "llm_openai", "llm_azure_foundry"}
 # cap, coexisting freely with one connected execution-pattern node.
 _EXECUTION_PATTERN_NODE_TYPES = frozenset({"pattern_reason_act", "pattern_single_agent_baseline"})
 _MEMORY_NODE_TYPES = frozenset({"memory"})  # one today; kept as a set for symmetry with the other two families
+# One today; an mcp_tool node is always a Tool-connector source (one server
+# connection, allow-listing a subset of its tools) -- it never gets its own
+# execution turn, matching every other connector-source family. There's no
+# more "standalone pipeline step" role: calling one tool directly with no
+# agent isn't supported (a real, deliberate feature removal -- see the
+# removed _run_mcp_tool_node).
+_MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool"})
 
 # Every node type that's a pure config source -- never gets its own execution
 # turn, never a pipeline "final output" (see sink_node_ids/run_protocol's
 # main loop), and may only ever emit its own connector-typed edge (see the
 # "outgoing wrong handle" check in topological_order below).
-_PURE_CONFIG_SOURCE_TYPES = _LLM_NODE_TYPES | _EXECUTION_PATTERN_NODE_TYPES | _MEMORY_NODE_TYPES
+_PURE_CONFIG_SOURCE_TYPES = _LLM_NODE_TYPES | _EXECUTION_PATTERN_NODE_TYPES | _MEMORY_NODE_TYPES | _MCP_TOOL_NODE_TYPES
 
 # Which connector handle each pure-config-source node type may exclusively
 # emit into, and the human-facing label for that handle -- both keyed off
@@ -143,8 +149,14 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "llm" for t in _LLM_NODE_TYPES},
     **{t: "architectural_pattern" for t in _EXECUTION_PATTERN_NODE_TYPES},
     **{t: "memory" for t in _MEMORY_NODE_TYPES},
+    **{t: "tool" for t in _MCP_TOOL_NODE_TYPES},
 }
-_HANDLE_LABELS: dict[str, str] = {"llm": "LLM", "memory": "Memory", "architectural_pattern": "Architectural Pattern"}
+_HANDLE_LABELS: dict[str, str] = {
+    "llm": "LLM",
+    "memory": "Memory",
+    "architectural_pattern": "Architectural Pattern",
+    "tool": "Tool",
+}
 
 # node type -> agentic-core PatternConfig slug, for _resolve_pattern_config.
 _EXECUTION_PATTERN_SLUGS: dict[str, str] = {
@@ -272,17 +284,6 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 f"Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection (node {nid!r})."
             )
 
-        if node_type == "mcp_tool":
-            outgoing_tool = _edges_with_handle(graph, nid, "tool", direction="outgoing")
-            outgoing_other = [
-                e for e in graph.get("edges") or [] if e.get("source") == nid and e.get("targetHandle") != "tool"
-            ]
-            if outgoing_tool and outgoing_other:
-                raise ProtocolValidationError(
-                    f"MCP Tool node {nid!r} can't be both a standalone pipeline step and an Agent's Tool "
-                    "connection at once -- add a second MCP Tool node if you need both."
-                )
-
         if node_type in _NODE_TYPE_TO_HANDLE:
             expected_handle = _NODE_TYPE_TO_HANDLE[node_type]
             outgoing_wrong_handle = [
@@ -314,9 +315,10 @@ def sink_node_ids(graph: dict[str, Any]) -> list[str]:
     runnable per-cell (exactly one sink required, see ``plan_cell_runs``) and
     by ``run_protocol`` itself to find the node whose output becomes a cell's
     result. Excludes every pure-config-source node type (every LLM provider/
-    architectural pattern node, plus ``memory``) -- these are never a
-    pipeline's "final output," whether or not they're connected to anything
-    (an unwired one would otherwise falsely count as an extra sink)."""
+    architectural pattern node, plus ``memory`` and ``mcp_tool``) -- these are
+    never a pipeline's "final output," whether or not they're connected to
+    anything (an unwired one would otherwise falsely count as an extra
+    sink)."""
     nodes, downstream, _upstream = _adjacency(graph)
     return [nid for nid, node in nodes.items() if not downstream[nid] and node.get("type") not in _PURE_CONFIG_SOURCE_TYPES]
 
@@ -364,9 +366,10 @@ def find_gated_pairs(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _upstream_ids(graph: dict[str, Any], node_id: str) -> list[str]:
-    """Only "main" pipeline edges -- an llm/memory node's inert placeholder,
-    or a tool-source mcp_tool node's, must never be treated as upstream
-    pipeline context (see ``_build_user_input``/``_upstream_output_text``)."""
+    """Only "main" pipeline edges -- a pure-config-source node's (llm/memory/
+    pattern/mcp_tool) inert placeholder output must never be treated as
+    upstream pipeline context (see ``_build_user_input``/
+    ``_upstream_output_text``)."""
     return [
         e["source"]
         for e in graph.get("edges") or []
@@ -414,9 +417,14 @@ def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, An
 
 
 def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
-    """``{"server_names": [...], "tool_names": [...]}`` built from every
-    ``mcp_tool`` node wired into this agent's Tool connector -- replaces the
-    agent's own (now-removed) ``tool_config`` field."""
+    """``{"server_names": [...], "tool_names": [...]}`` -- this IS
+    agentic-core's own allow-list shape (``RunContext.available_tools``,
+    matched by ``_tool_in_allowlist``), built from every ``mcp_tool`` node
+    wired into this agent's Tool connector -- replaces the agent's own
+    (now-removed) ``tool_config`` field. Each ``mcp_tool`` node represents one
+    MCP server connection and can allow-list *several* of that server's
+    tools (``config.tool_names``, plural) -- n8n's own MCP Client Tool node
+    is likewise a per-server node with a tools filter, not a node per tool."""
     nodes, _downstream, _upstream = _adjacency(graph)
     server_names: list[str] = []
     tool_names: list[str] = []
@@ -426,21 +434,11 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
             continue
         tool_node_config = (source.get("data") or {}).get("config") or {}
         server_name = tool_node_config.get("server_name")
-        tool_name = tool_node_config.get("tool_name")
+        node_tool_names = tool_node_config.get("tool_names") or []
         if server_name:
             server_names.append(server_name)
-        if tool_name:
-            tool_names.append(tool_name)
+        tool_names.extend(node_tool_names)
     return {"server_names": server_names, "tool_names": tool_names}
-
-
-def _tool_source_node_ids(graph: dict[str, Any]) -> set[str]:
-    """Every ``mcp_tool`` node with at least one outgoing Tool-handled edge
-    -- these don't get their own execution turn in ``run_protocol``'s main
-    loop (see ``_resolve_tool_config``); they're a pure config source for
-    whichever agent(s) they're wired into, the same way an ``llm`` node
-    always is."""
-    return {e["source"] for e in graph.get("edges") or [] if e.get("targetHandle") == "tool"}
 
 
 def _is_node_active(node: dict[str, Any]) -> bool:
@@ -769,24 +767,6 @@ async def _run_gated_worker(
     raise AssertionError("_run_gated_worker fell through its attempt loop")  # unreachable
 
 
-async def _run_mcp_tool_node(node: dict[str, Any]) -> tuple[str | None, str | None]:
-    """Calls the tool directly -- no AgentRun, no LLM loop. Empty arguments
-    in V1 (no argument-mapping UI yet; a real, documented limitation)."""
-    config = node["data"]["config"]
-    server_id = config.get("server_id")
-    tool_name = config.get("tool_name")
-    if not server_id or not tool_name:
-        return None, "this MCP Tool node has no server/tool selected"
-    try:
-        outcome = await call_server_tool(uuid.UUID(server_id), tool_name, {})
-    except RuntimeError as e:
-        return None, str(e)
-    if outcome is None:
-        return None, f"no such server: {server_id}"
-    is_error, content = outcome
-    return (None, content) if is_error else (content, None)
-
-
 async def plan_cell_runs(
     db: AsyncSession,
     *,
@@ -861,7 +841,6 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         return
 
     gated_by = find_gated_pairs(graph)
-    tool_source_ids = _tool_source_node_ids(graph)
 
     async with get_session() as db:
         await set_status(db, protocol_run_id, status="running")
@@ -888,7 +867,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 await update_node_run(db, protocol_run_id, node_id, {"status": "skipped"})
             continue
 
-        if node.get("type") in _PURE_CONFIG_SOURCE_TYPES or node_id in tool_source_ids:
+        if node.get("type") in _PURE_CONFIG_SOURCE_TYPES:
             # Pure config sources -- never get their own execution turn (see
             # _resolve_llm_config/_resolve_tool_config). Memory and
             # architectural-pattern nodes are visual scaffolding only this
@@ -922,11 +901,10 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             # upstream input passes straight through as its output
             # unchanged, matching n8n's node-disable semantic. Gated
             # workers can't reach here (topological_order already rejects
-            # that combination), so this only ever applies to a plain
-            # agent/mcp_tool node.
+            # that combination), and pure config sources (including
+            # mcp_tool) never reach this point at all, so this only ever
+            # applies to a plain agent node.
             output_text, error = _upstream_output_text(graph, node_id, node_runs), None
-        elif node.get("type") == "mcp_tool":
-            output_text, error = await _run_mcp_tool_node(node)
         else:
             user_input = _build_user_input(node, graph, node_runs)
             output_text, error = await _run_agent_node(

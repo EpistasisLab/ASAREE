@@ -20,7 +20,7 @@ import { Input } from '@/components/ui/input'
 // own family via allowedTypes, IS that picker.
 const NODE_CATALOG = [
   { type: 'agent', label: 'Agent', description: 'An LLM agent stage in the pipeline', icon: Bot },
-  { type: 'mcp_tool', label: 'MCP Tool', description: 'Call one tool on a registered MCP server', icon: Wrench },
+  { type: 'mcp_tool', label: 'MCP Tool', description: "Allow-list a subset of a registered MCP server's tools for an Agent", icon: Wrench },
   {
     type: 'critic_gate',
     label: 'Critic Gate',

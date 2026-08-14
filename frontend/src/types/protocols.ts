@@ -149,33 +149,33 @@ export function defaultAgentNodeData(label = 'Agent'): AgentNodeData {
   }
 }
 
-// An "MCP Tool" node references one tool on one registered MCP server --
-// resolved at execution time through agentic_core's mcp_service. Dual role:
-// wired inline via a normal edge it's a standalone pipeline step (unchanged
-// behavior); wired into an Agent's Tool connector it becomes one of that
-// agent's own callable tools instead, and isn't executed as its own step
-// (services.protocol_execution's _resolve_tool_config/_tool_source_node_ids).
-// A node can only be used one way at a time -- add a second MCP Tool node
-// for the other role. server_name is carried alongside server_id purely for
-// display -- the id is what standalone execution keys off of, the NAME is
-// what Tool-connector resolution keys off of (matches the `server_names`
-// field name AgentToolConfig always had).
+// An "MCP Tool" node represents one connection to a registered MCP server,
+// with an allow-list of that server's tools (tool_names, plural) -- matches
+// n8n's own MCP Client Tool node (one node per server, a tools filter inside
+// it) and agentic-core's real allow-list primitive (RunContext.available_tools/
+// _tool_in_allowlist), not "one node per tool." Always an Agent's Tool-
+// connector source -- never a standalone pipeline step (there's no single
+// well-defined action for "run all of these tools" with no agent). Rendered
+// via CircleNode, same as Llm/Memory/pattern nodes -- a pure config source,
+// never its own execution turn (services.protocol_execution's
+// _PURE_CONFIG_SOURCE_TYPES). server_name is carried alongside server_id
+// purely for display -- the NAME is what Tool-connector resolution
+// (_resolve_tool_config) keys off of (matches the `server_names` field name
+// AgentToolConfig always had).
 export interface McpToolNodeConfig {
   server_id: string | null
   server_name: string | null
-  tool_name: string | null
+  tool_names: string[]
 }
 
 export interface McpToolNodeData {
   label: string
   config: McpToolNodeConfig
-  // Same passthrough-deactivate semantic as AgentNodeData.active.
-  active?: boolean
   [key: string]: unknown
 }
 
 export function defaultMcpToolNodeData(label = 'MCP Tool'): McpToolNodeData {
-  return { label, config: { server_id: null, server_name: null, tool_name: null } }
+  return { label, config: { server_id: null, server_name: null, tool_names: [] } }
 }
 
 // A "Critic Gate" reviews its single upstream Agent node's output and can

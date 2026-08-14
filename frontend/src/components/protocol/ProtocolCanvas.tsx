@@ -332,12 +332,14 @@ export function ProtocolCanvas({
         case 'architectural_pattern':
           return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
         default:
-          // A plain "main" pipeline edge -- LLM/memory/pattern nodes have
-          // no main handle to drag from in the first place, so this mostly
-          // guards against a stray connection, not real interactive use.
+          // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool
+          // nodes have no main handle to drag from in the first place, so
+          // this mostly guards against a stray connection, not real
+          // interactive use.
           return (
             !LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'memory' &&
+            sourceNode.type !== 'mcp_tool' &&
             !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '')
           )
       }

@@ -28,11 +28,15 @@ from asaree.services.protocols import create_protocol, delete_protocol
 
 
 def _graph(node_ids: list[str], edges: list[tuple[str, str]]) -> dict:
-    # "mcp_tool" -- not "agent" -- since these are pure DAG-shape tests
-    # (topological order, cycle detection, sink detection) that shouldn't
-    # need an LLM connection wired up; mcp_tool has no such requirement.
+    # "step" is a deliberately-unregistered node type -- not "agent" (needs
+    # an LLM connector) and not "mcp_tool" (now handle-restricted to its own
+    # Tool connector, see _MCP_TOOL_NODE_TYPES) -- so these pure DAG-shape
+    # tests (topological order, cycle detection, sink detection) can wire
+    # plain edges freely with zero setup. topological_order only applies
+    # type-specific validation to types it recognizes, so an unrecognized
+    # type sails through with just the generic Kahn's-algorithm order check.
     return {
-        "nodes": [{"id": nid, "type": "mcp_tool", "data": {}} for nid in node_ids],
+        "nodes": [{"id": nid, "type": "step", "data": {}} for nid in node_ids],
         "edges": [{"id": f"{s}-{t}", "source": s, "target": t} for s, t in edges],
     }
 
@@ -79,11 +83,14 @@ def _pattern_edge(source: str, target: str) -> dict:
     }
 
 
-def _tool_node(node_id: str = "tool1", server_name: str = "srv", tool_name: str = "do_thing") -> dict:
+def _tool_node(node_id: str = "tool1", server_name: str = "srv", tool_names: list[str] | None = None) -> dict:
     return {
         "id": node_id,
         "type": "mcp_tool",
-        "data": {"label": "", "config": {"server_id": "s1", "server_name": server_name, "tool_name": tool_name}},
+        "data": {
+            "label": "",
+            "config": {"server_id": "s1", "server_name": server_name, "tool_names": tool_names or ["do_thing"]},
+        },
     }
 
 
@@ -126,7 +133,7 @@ def test_dangling_edge_ignored_not_a_cycle() -> None:
     # a node was deleted client-side without the edge being cleaned up) is
     # simply not counted -- it must not be misread as a cycle.
     graph = {
-        "nodes": [{"id": "a", "type": "mcp_tool", "data": {}}],
+        "nodes": [{"id": "a", "type": "step", "data": {}}],
         "edges": [{"id": "a-ghost", "source": "a", "target": "ghost"}],
     }
     order = [n["id"] for n in topological_order(graph)]
@@ -686,7 +693,7 @@ def test_critic_gate_missing_llm_connection_raises() -> None:
 
 def test_llm_connection_from_non_llm_source_raises() -> None:
     graph = {
-        "nodes": [_node("t1", "mcp_tool"), _node("a", "agent")],
+        "nodes": [_node("t1", "step"), _node("a", "agent")],
         "edges": [{"id": "t1-a-llm", "source": "t1", "target": "a", "targetHandle": "llm"}],
     }
     with pytest.raises(ProtocolValidationError, match="must come from an LLM node"):
@@ -745,18 +752,19 @@ def test_memory_connection_from_non_memory_source_raises() -> None:
         topological_order(graph)
 
 
-def test_mcp_tool_dual_role_raises() -> None:
-    # tool1 is wired BOTH as a standalone pipeline step (tool1 -> b, a plain
-    # edge) AND as an agent's Tool connector (tool1 -> a) -- not allowed at
-    # once, add a second MCP Tool node if both are wanted.
+def test_mcp_tool_node_with_plain_outgoing_edge_raises() -> None:
+    # An mcp_tool node is always a Tool-connector source -- there's no more
+    # "standalone pipeline step" role, so a plain edge out of one (even
+    # alongside a real Tool connection) is rejected the same way an LLM/
+    # Memory/Pattern node's plain edge already is.
     llm = _llm_node()
     agent, agent_llm_edge = _agent_with_llm("a")
     tool = _tool_node()
     graph = {
-        "nodes": [llm, agent, _node("b", "mcp_tool"), tool],
+        "nodes": [llm, agent, tool, _node("b", "agent")],
         "edges": [agent_llm_edge, _tool_edge("tool1", "a"), {"id": "tool1-b", "source": "tool1", "target": "b"}],
     }
-    with pytest.raises(ProtocolValidationError, match="can't be both a standalone pipeline step"):
+    with pytest.raises(ProtocolValidationError, match="Tool node .* can only connect to a node's Tool slot"):
         topological_order(graph)
 
 
@@ -902,8 +910,8 @@ def test_resolve_llm_config_empty_when_unconnected() -> None:
 
 def test_resolve_tool_config_collects_all_connected_tool_nodes() -> None:
     agent, agent_llm_edge = _agent_with_llm("a")
-    tool1 = _tool_node("tool1", server_name="srv-a", tool_name="fn_a")
-    tool2 = _tool_node("tool2", server_name="srv-b", tool_name="fn_b")
+    tool1 = _tool_node("tool1", server_name="srv-a", tool_names=["fn_a"])
+    tool2 = _tool_node("tool2", server_name="srv-b", tool_names=["fn_b"])
     graph = {
         "nodes": [agent, tool1, tool2],
         "edges": [agent_llm_edge, _tool_edge("tool1", "a"), _tool_edge("tool2", "a")],
@@ -915,6 +923,18 @@ def test_resolve_tool_config_collects_all_connected_tool_nodes() -> None:
 def test_resolve_tool_config_empty_when_no_tool_connections() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
     assert pe._resolve_tool_config(graph, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_resolve_tool_config_allows_multiple_tools_from_one_server() -> None:
+    """One mcp_tool node == one server connection, which can allow-list
+    several of that server's tools -- not one node per tool."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    tool = _tool_node(server_name="srv-a", tool_names=["fn_a", "fn_b", "fn_c"])
+    graph = {"nodes": [agent, tool], "edges": [agent_llm_edge, _tool_edge("tool1", "a")]}
+    resolved = pe._resolve_tool_config(graph, "a")
+    assert resolved == {"server_names": ["srv-a"], "tool_names": ["fn_a", "fn_b", "fn_c"]}
+
+
 
 
 def test_resolve_pattern_config_returns_connected_node_config() -> None:
@@ -946,29 +966,17 @@ def test_resolve_pattern_config_empty_when_unconnected() -> None:
     assert pe._resolve_pattern_config(graph, "a") == {}
 
 
-def test_tool_source_node_ids_only_includes_tool_handled_edges() -> None:
-    graph = {
-        "nodes": [_node("a", "agent"), _tool_node("tool1"), _node("b", "mcp_tool")],
-        "edges": [_tool_edge("tool1", "a"), {"id": "b-a", "source": "b", "target": "a"}],
-    }
-    assert pe._tool_source_node_ids(graph) == {"tool1"}
-
-
 async def test_run_protocol_tool_source_node_never_gets_its_own_turn(
     owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An mcp_tool node wired into an agent's Tool connector is a pure
-    config source -- it must never be dispatched to _run_mcp_tool_node."""
-    mcp_tool_calls = []
-
-    async def fake_run_mcp_tool_node(node):
-        mcp_tool_calls.append(node["id"])
-        return "should not happen", None
+    """An mcp_tool node is always a pure config source (see
+    _PURE_CONFIG_SOURCE_TYPES) -- it must complete instantly with no output,
+    the same way an llm/memory/pattern node does, never routed to
+    _run_agent_node."""
 
     async def fake_run_agent_node(node, *, graph, **kwargs):
         return f"output for {node['id']}", None
 
-    monkeypatch.setattr(pe, "_run_mcp_tool_node", fake_run_mcp_tool_node)
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
     llm = _llm_node()
@@ -989,13 +997,12 @@ async def test_run_protocol_tool_source_node_never_gets_its_own_turn(
 
     try:
         await pe.run_protocol(run_id)
-        assert mcp_tool_calls == []
 
         async with get_session() as db:
             fetched = await pe.get_protocol_run(db, run_id)
             assert fetched is not None
             assert fetched.status == "completed"
-            assert fetched.node_runs["tool1"]["status"] == "completed"
+            assert fetched.node_runs["tool1"] == {"status": "completed", "output_text": None, "error": None}
             assert fetched.node_runs["a"]["output_text"] == "output for a"
     finally:
         async with get_session() as db:

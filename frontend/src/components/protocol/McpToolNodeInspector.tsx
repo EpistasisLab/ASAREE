@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { mcpServersApi } from '@/api/client'
 import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
@@ -13,10 +14,14 @@ import type { McpToolNodeData, ProtocolNode } from '@/types/protocols'
 const ACCENT = hashToChartHue('mcp_tool')
 
 // Same floating-dialog shell as AgentNodeInspector, but the "parameters" a
-// tool node needs are just "which server, which tool" -- resolved from the
-// caller's own registered MCP servers (GET /mcp-servers), not hand-typed.
-// No Settings tab yet: there's nothing execution-constraint-shaped for a
-// tool node the way budget/duration are for an agent.
+// tool node needs are just "which server, which of its tools to allow" --
+// resolved from the caller's own registered MCP servers (GET /mcp-servers),
+// not hand-typed. Tools render as a toggle list, not a single-select --
+// this node is a per-SERVER connection with an allow-list (matches n8n's
+// own MCP Client Tool node and agentic-core's real allow-list primitive,
+// see McpToolNodeConfig's own comment), not a node per individual tool. No
+// Settings tab yet: there's nothing execution-constraint-shaped for a tool
+// node the way budget/duration are for an agent.
 export function McpToolNodeInspector({
   node,
   onChange,
@@ -35,9 +40,14 @@ export function McpToolNodeInspector({
   const config = data.config
   const selectedServer = serversQuery.data?.find((s) => s.id === config.server_id)
   const tools = selectedServer?.capabilities?.tools ?? []
+  const selectedTools = config.tool_names ?? []
 
   function patchConfig(patch: Partial<McpToolNodeData['config']>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
+  }
+
+  function toggleTool(name: string, allowed: boolean) {
+    patchConfig({ tool_names: allowed ? [...selectedTools, name] : selectedTools.filter((t) => t !== name) })
   }
 
   return (
@@ -76,17 +86,20 @@ export function McpToolNodeInspector({
             <div className="space-y-1.5">
               <Label>Server</Label>
               <Select
-                value={config.server_id ?? undefined}
+                value={config.server_id ?? '__none__'}
                 onValueChange={(value) => {
-                  if (value === null) return
+                  if (!value || value === '__none__') return
                   const server = serversQuery.data.find((s) => s.id === value)
-                  patchConfig({ server_id: value, server_name: server?.name ?? null, tool_name: null })
+                  patchConfig({ server_id: value, server_name: server?.name ?? null, tool_names: [] })
                 }}
               >
                 <SelectTrigger className="w-full">
                   <SelectValue>{() => selectedServer?.name ?? 'Select a server…'}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="__none__" disabled>
+                    Select a server…
+                  </SelectItem>
                   {serversQuery.data.map((server) => (
                     <SelectItem key={server.id} value={server.id}>
                       {server.name}
@@ -97,30 +110,44 @@ export function McpToolNodeInspector({
             </div>
 
             <div className="space-y-1.5">
-              <Label>Tool</Label>
-              <Select
-                value={config.tool_name ?? undefined}
-                onValueChange={(value) => {
-                  if (value !== null) patchConfig({ tool_name: value })
-                }}
-              >
-                <SelectTrigger className="w-full" disabled={!config.server_id}>
-                  <SelectValue>{() => config.tool_name ?? (config.server_id ? 'Select a tool…' : 'Pick a server first')}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {tools.length === 0 ? (
-                    <p className="px-2 py-1.5 text-sm text-muted-foreground">This server has no tools.</p>
-                  ) : (
-                    tools.map((tool) => (
-                      <SelectItem key={tool.name} value={tool.name}>
-                        {tool.name}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
-              {config.tool_name && tools.find((t) => t.name === config.tool_name)?.description && (
-                <p className="text-xs text-muted-foreground">{tools.find((t) => t.name === config.tool_name)?.description}</p>
+              <div className="flex items-center justify-between">
+                <Label>Tools allowed</Label>
+                {tools.length > 0 && (
+                  <div className="flex gap-3 text-xs text-muted-foreground">
+                    <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: tools.map((t) => t.name) })}>
+                      All
+                    </button>
+                    <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: [] })}>
+                      None
+                    </button>
+                  </div>
+                )}
+              </div>
+              {!config.server_id ? (
+                <p className="text-sm text-muted-foreground">Pick a server first.</p>
+              ) : tools.length === 0 ? (
+                <p className="text-sm text-muted-foreground">This server has no tools.</p>
+              ) : (
+                <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-lg border p-1.5">
+                  {tools.map((tool) => (
+                    <div key={tool.name} className="flex items-start justify-between gap-3 rounded-md px-1.5 py-1 hover:bg-muted">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{tool.name}</p>
+                        {tool.description && (
+                          <p className="truncate text-xs text-muted-foreground" title={tool.description}>
+                            {tool.description}
+                          </p>
+                        )}
+                      </div>
+                      <Switch
+                        size="sm"
+                        className="mt-0.5 shrink-0"
+                        checked={selectedTools.includes(tool.name)}
+                        onCheckedChange={(allowed) => toggleTool(tool.name, allowed)}
+                      />
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </>

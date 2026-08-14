@@ -228,15 +228,30 @@ export function ProtocolCanvas({
   }, [nodes, runQuery.data, nonDeletablePatternNodeIds])
 
   // Same protection, one layer up -- the architectural_pattern EDGE itself
-  // must not be deletable either (Backspace/Delete key while it's
-  // selected, or InteractEdge's own hover-toolbar "delete connection"
-  // button, which reads this same flag), or a user could strand the agent
-  // at zero patterns by removing just the edge without touching the node.
-  // Swapping (which removes both atomically) is still the only way to
-  // change it.
-  const edgesWithDeletable = useMemo((): Edge[] => {
-    return edges.map((e) => ({ ...e, deletable: e.targetHandle !== 'architectural_pattern' }))
-  }, [edges])
+  // must not be removable on its own (InteractEdge never renders a hover
+  // toolbar for one, so the only way a user can attempt this is selecting
+  // the edge directly and pressing Backspace), or they could strand the
+  // agent at zero patterns by removing just the edge without touching the
+  // node. This has to be an onBeforeDelete veto rather than edge.deletable:
+  // false the way the node-level guard above works -- deletable: false
+  // would ALSO block xyflow's own cascade-removal of this same edge when
+  // its AGENT is deleted (Backspace on the agent, or its hover-toolbar
+  // trash icon), leaving a dangling edge that still points at the
+  // now-gone agent -- which is exactly what stranded the orphaned pattern
+  // node as permanently non-deletable/stuck showing "Swap" (nonDeletablePatternNodeIds
+  // and useNodeConnections both still saw that stale edge). Here we can
+  // tell the two cases apart: veto only when the edge's own target agent
+  // isn't ALSO in this same delete batch.
+  const onBeforeDelete = useCallback(
+    async ({ nodes: deleting, edges: deletingEdges }: { nodes: Node[]; edges: Edge[] }) => {
+      const deletedNodeIds = new Set(deleting.map((n) => n.id))
+      return {
+        nodes: deleting,
+        edges: deletingEdges.filter((e) => e.targetHandle !== 'architectural_pattern' || deletedNodeIds.has(e.target)),
+      }
+    },
+    [],
+  )
 
   function closeAddPanel() {
     setAddPanelOpen(false)
@@ -546,13 +561,14 @@ export function ProtocolCanvas({
         <div ref={paneRef} className="relative flex-1">
           <ReactFlow
             nodes={nodesWithRunStatus}
-            edges={edgesWithDeletable}
+            edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             isValidConnection={isValidConnection}
             nodeTypes={NODE_TYPES}
             edgeTypes={EDGE_TYPES}
+            onBeforeDelete={onBeforeDelete}
             onNodeClick={() => setAddPanelOpen(false)}
             onNodeDoubleClick={(_, node) => {
               setAddPanelOpen(false)

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.experiment import ResearchExperiment
 
-_SETTABLE_FIELDS = frozenset({"name", "description", "dataset_id", "design_spec", "archived_at"})
+_SETTABLE_FIELDS = frozenset({"name", "description", "hypothesis", "dataset_id", "design_spec", "archived_at"})
 
 
 async def create_experiment(

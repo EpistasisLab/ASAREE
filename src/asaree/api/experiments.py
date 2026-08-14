@@ -65,6 +65,9 @@ class UpdateExperimentRequest(BaseModel):
 
     name: str | None = None
     description: str | None = None
+    # Free text, edited from the Design tab -- same "unset vs. null"
+    # convention as every other field here.
+    hypothesis: str | None = None
     dataset_id: uuid.UUID | None = None
     design_spec: dict[str, Any] | None = None
     archived_at: datetime | None = None
@@ -74,6 +77,7 @@ class ExperimentResponse(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
+    hypothesis: str | None
     design_type: str
     task_brief: dict[str, Any] | None
     design_spec: dict[str, Any] | None
@@ -87,6 +91,7 @@ def _experiment_response(e: Any) -> ExperimentResponse:
         id=e.id,
         name=e.name,
         description=e.description,
+        hypothesis=e.hypothesis,
         design_type=e.design_type,
         task_brief=e.task_brief,
         design_spec=e.design_spec,
@@ -210,11 +215,18 @@ async def generate_design_endpoint(experiment_id: uuid.UUID, user: CurrentUser, 
     after widening a factor's levels: existing cells' results are untouched,
     only the new combinations get created (see ``generate_design_cells``)."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
-    factors = (experiment.design_spec or {}).get("factors")
+    design_spec = experiment.design_spec or {}
+    factors = design_spec.get("factors")
     if not factors:
         raise HTTPException(status_code=422, detail="This experiment has no factors declared (design_spec.factors)")
     try:
-        cells = await generate_design_cells(db, experiment_id=experiment_id, factors=factors)
+        cells = await generate_design_cells(
+            db,
+            experiment_id=experiment_id,
+            factors=factors,
+            replicates=design_spec.get("replicates") or 1,
+            randomization_seed=design_spec.get("randomization_seed"),
+        )
     except DesignValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return [CellResponse.model_validate(c) for c in cells]

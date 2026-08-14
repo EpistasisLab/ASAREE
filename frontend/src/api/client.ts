@@ -155,6 +155,7 @@ export const experimentsApi = {
     data: {
       name?: string
       description?: string | null
+      hypothesis?: string | null
       design_spec?: DesignSpec | null
       // A timestamp to archive, null to unarchive -- canvas menu's Archive/Unarchive action.
       archived_at?: string | null

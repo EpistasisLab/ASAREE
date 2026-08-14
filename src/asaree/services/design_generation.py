@@ -15,6 +15,7 @@ else).
 from __future__ import annotations
 
 import itertools
+import random
 import re
 import uuid
 from typing import Any
@@ -61,28 +62,51 @@ def _slugify(value: Any) -> str:
     return slug or "x"
 
 
-def cell_label_for(combination: dict[str, Any]) -> str:
+def cell_label_for(combination: dict[str, Any], *, replicate: int = 1) -> str:
     """A deterministic, sorted label for one combination — stable regardless
     of the order factors were declared in, so the same combination always
-    lands on the same cell."""
-    return "__".join(f"{name}_{_slugify(value)}" for name, value in sorted(combination.items()))
+    lands on the same cell. ``replicate`` is 1-indexed; replicate 1's label is
+    left exactly as it always was (no suffix) so existing single-replicate
+    experiments are unaffected and a later replicates increase only adds new
+    cells (2, 3, ...) rather than renaming the original one."""
+    base = "__".join(f"{name}_{_slugify(value)}" for name, value in sorted(combination.items()))
+    return base if replicate <= 1 else f"{base}__rep{replicate}"
 
 
 async def generate_design_cells(
-    db: AsyncSession, *, experiment_id: uuid.UUID, factors: list[dict[str, Any]]
+    db: AsyncSession,
+    *,
+    experiment_id: uuid.UUID,
+    factors: list[dict[str, Any]],
+    replicates: int = 1,
+    randomization_seed: int | None = None,
 ) -> list[FactorialCellResult]:
-    """Compute the design and materialize one cell row per combination.
+    """Compute the design and materialize ``replicates`` cell rows per
+    combination (default 1 — today's exact behavior, unchanged).
 
-    Idempotent: re-running this (e.g. after widening a factor's levels) only
-    creates the new combinations — ``upsert_cell`` merges ``factor_values``
-    onto an existing row rather than resetting it, so a cell that already has
-    results is left alone.
+    Idempotent: re-running this (e.g. after widening a factor's levels or
+    raising ``replicates``) only creates the new combinations/replicates —
+    ``upsert_cell`` merges ``factor_values`` onto an existing row rather than
+    resetting it, so a cell that already has results is left alone.
+
+    ``randomization_seed``, when set, only shuffles the *order* of the
+    returned list (assignment-order independence, standard factorial-design
+    practice) — it never affects which combinations/replicates are generated
+    or their (deterministic) cell_label.
     """
+    if replicates < 1:
+        raise DesignValidationError(f"replicates must be at least 1, got {replicates}")
     combinations = generate_design(factors)
     cells = []
     for combo in combinations:
-        cell = await upsert_cell(
-            db, experiment_id=experiment_id, cell_label=cell_label_for(combo), fields={"factor_values": combo}
-        )
-        cells.append(cell)
+        for replicate in range(1, replicates + 1):
+            cell = await upsert_cell(
+                db,
+                experiment_id=experiment_id,
+                cell_label=cell_label_for(combo, replicate=replicate),
+                fields={"factor_values": combo},
+            )
+            cells.append(cell)
+    if randomization_seed is not None:
+        random.Random(randomization_seed).shuffle(cells)
     return cells

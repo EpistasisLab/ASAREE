@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ReactFlowProvider } from '@xyflow/react'
 import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
+import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
 import { ProtocolCanvas } from '@/components/protocol/ProtocolCanvas'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -68,41 +69,6 @@ function EditableExperimentName({ experiment }: { experiment: Experiment }) {
     >
       {experiment.name}
     </button>
-  )
-}
-
-// Shows what the canvas's "+ Make experimental factor" bindings have
-// produced so far -- N factors on the linked experiment's design_spec, and
-// the cross-product size that "Generate design" would materialize (client
-// computed, mirrors services.design_generation's own combinatorics). Hidden
-// entirely once there are no factors yet, same as CellsSection being gated
-// behind design_type === 'factorial' -- nothing to preview or generate.
-function DesignPreview({ experiment }: { experiment: Experiment }) {
-  const queryClient = useQueryClient()
-  const factors = experiment.design_spec?.factors ?? []
-  const combinations = factors.reduce((acc, f) => acc * Math.max(f.levels.length, 1), 1)
-
-  const generateMutation = useMutation({
-    mutationFn: () => experimentsApi.generateDesign(experiment.id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'cells'] })
-    },
-  })
-
-  if (factors.length === 0) return null
-
-  return (
-    <div className="flex items-center gap-2 rounded-md border bg-card px-3 py-1.5">
-      <span className="font-mono text-xs text-muted-foreground">
-        {factors.length} factor{factors.length === 1 ? '' : 's'} → {combinations} combination{combinations === 1 ? '' : 's'}
-      </span>
-      <Button size="sm" variant="outline" disabled={generateMutation.isPending} onClick={() => generateMutation.mutate()}>
-        {generateMutation.isPending ? 'Generating…' : 'Generate design'}
-      </Button>
-      {generateMutation.data && (
-        <span className="text-xs text-muted-foreground">{generateMutation.data.length} cell(s) total</span>
-      )}
-    </div>
   )
 }
 
@@ -207,14 +173,13 @@ export function ProtocolCanvasPage() {
     <div className="flex h-svh flex-col bg-muted/30">
       <AppHeader />
 
-      <main className="flex flex-1 flex-col gap-3 overflow-hidden px-6 py-6">
-        <div className="flex items-center gap-3">
+      <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-6 py-6">
+        <div className="flex shrink-0 items-center gap-3">
           <Link to={`/experiments/${experimentId}`} className="text-sm text-muted-foreground hover:underline">
             ← Experiment
           </Link>
           {experimentQuery.data && <EditableExperimentName experiment={experimentQuery.data} />}
           <div className="flex-1" />
-          {experimentQuery.data && <DesignPreview experiment={experimentQuery.data} />}
           {protocolQuery.data && experimentId && (
             <RunAllCellsButton
               protocolId={protocolQuery.data.id}
@@ -224,22 +189,26 @@ export function ProtocolCanvasPage() {
           )}
         </div>
 
-        {protocolQuery.isLoading ? (
-          <Skeleton className="flex-1" />
-        ) : protocolQuery.isError || !protocolQuery.data ? (
-          <p className="text-sm text-muted-foreground">Could not load this experiment's protocol.</p>
-        ) : (
-          <Card className="flex-1 overflow-hidden p-0">
-            <ReactFlowProvider>
-              <ProtocolCanvas
-                key={protocolQuery.data.id}
-                protocolId={protocolQuery.data.id}
-                experimentId={protocolQuery.data.experiment_id}
-                initialGraph={protocolQuery.data.graph}
-              />
-            </ReactFlowProvider>
-          </Card>
-        )}
+        <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
+          <ExperimentSidePanel experiment={experimentQuery.data} isLoading={experimentQuery.isLoading} />
+
+          {protocolQuery.isLoading ? (
+            <Skeleton className="flex-1" />
+          ) : protocolQuery.isError || !protocolQuery.data ? (
+            <p className="text-sm text-muted-foreground">Could not load this experiment's protocol.</p>
+          ) : (
+            <Card className="flex-1 overflow-hidden p-0">
+              <ReactFlowProvider>
+                <ProtocolCanvas
+                  key={protocolQuery.data.id}
+                  protocolId={protocolQuery.data.id}
+                  experimentId={protocolQuery.data.experiment_id}
+                  initialGraph={protocolQuery.data.graph}
+                />
+              </ReactFlowProvider>
+            </Card>
+          )}
+        </div>
       </main>
     </div>
   )

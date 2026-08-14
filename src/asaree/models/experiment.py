@@ -26,6 +26,9 @@ class ResearchExperiment(Base, TimestampMixin):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Free text, same shape as description -- always-relevant, no structure
+    # to validate, so a plain nullable column rather than a design_spec key.
+    hypothesis: Mapped[str | None] = mapped_column(Text, nullable=True)
     # A plain string, not an enum — same reasoning as UserLLMSetting.provider:
     # this table shouldn't need a migration just because a new design type
     # gets added. Only "factorial" is meaningful today.
@@ -36,6 +39,30 @@ class ResearchExperiment(Base, TimestampMixin):
     # services.design_generation.generate_design_cells reads to materialize
     # FactorialCellResult rows. A declaration, not a computed design — the
     # actual cross product is never stored here, only regenerated on demand.
+    #
+    # Also holds these optional keys (all absent = today's exact behavior,
+    # additive/backward-compatible, no migration needed for JSONB):
+    #   "replicates": int -- copies per factor-level combination (default 1
+    #     when absent, see services.design_generation).
+    #   "randomization_seed": int | None -- shuffles generated cells'
+    #     execution order (not the combinations themselves) when set.
+    #   "metrics": [{"name": str, "primary": bool, "direction": "maximize"|
+    #     "minimize"}, ...] -- declared up front, unlike the frontend's
+    #     purely-inferred availableMetricKeys, so a primary metric/direction
+    #     exists before any cell has run (services.factorial_analysis reads
+    #     this to default its own primary_metric/reference_condition params).
+    #   "coordination_strategy": {"slug": str, "params": dict} -- "sequential"
+    #     (default when absent -- today's exact existing DAG-handoff
+    #     behavior, unchanged) or "critic_gate" (promotes the existing
+    #     gated-pair mechanism to an explicit declaration; the canvas
+    #     critic_gate node itself is unchanged) are real; the 6 ARES-derived
+    #     coordination slugs (supervisor_architecture, swarm_architecture,
+    #     task_bidding, supervision_tree_with_guarded_capabilities,
+    #     event_driven_reactivity, multi_agent_planning) are named
+    #     placeholders -- selectable and saveable, but
+    #     services.protocol_execution rejects a run attempted with one of
+    #     these active until the ARES->agentic-core pattern migration lands
+    #     (see COORDINATION_STRATEGIES).
     design_spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # RESTRICT, not CASCADE: deleting a user shouldn't silently discard the
     # experiments they ran. Matches RegisteredDataset.owner_id.

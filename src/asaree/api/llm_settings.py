@@ -14,7 +14,7 @@ from asaree.deps import CurrentUser, DbSession
 from asaree.services.credential_resolver import SUPPORTED_PROVIDERS
 from asaree.services.llm_model_discovery import discover_models
 from asaree.services.rate_limit import check_rate_limit, record_attempt
-from asaree.services.user_llm_settings import get_setting, list_settings, upsert_setting
+from asaree.services.user_llm_settings import delete_setting, get_setting, list_settings, upsert_setting
 
 router = APIRouter(prefix="/llm-settings", tags=["llm-settings"])
 
@@ -81,6 +81,15 @@ async def list_llm_settings_endpoint(user: CurrentUser, db: DbSession) -> list[L
         LLMSettingResponse(provider=s.provider, api_base=s.api_base, azure_project_endpoint=s.azure_project_endpoint)
         for s in settings
     ]
+
+
+@router.delete("/{provider}", status_code=204)
+async def delete_llm_setting_endpoint(provider: str, user: CurrentUser, db: DbSession) -> None:
+    if provider not in SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=422, detail=f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}")
+    deleted = await delete_setting(db, user_id=user.id, provider=provider)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="No credential saved for this provider.")
 
 
 @router.get("/{provider}/models", response_model=LLMSettingModelsResponse)

@@ -55,5 +55,15 @@ async def upsert_setting(
     return setting
 
 
+async def delete_setting(db: AsyncSession, *, user_id: uuid.UUID, provider: str) -> bool:
+    """Delete the credential for this (user, provider) pair. Returns whether one existed."""
+    existing = await get_setting(db, user_id=user_id, provider=provider)
+    if existing is None:
+        return False
+    await db.delete(existing)
+    await db.flush()
+    return True
+
+
 def decrypt_api_key(setting: UserLLMSetting) -> str:
     return decrypt(setting.api_key_encrypted)

@@ -9,7 +9,6 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { hashToChartHue } from '@/lib/utils'
-import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { PROVIDER_META } from './nodes/LlmNode'
@@ -104,7 +103,7 @@ export function LlmNodeInspector({
         <>
           <div className="flex items-center gap-2">
             <Icon className="size-5" style={{ color: ACCENT }} />
-            <EditableNodeTitle label={data.label} placeholder={meta.label} onCommit={(label) => onChange(node.id, { ...data, label })} />
+            <h2 className="text-lg font-semibold">{data.label || meta.label}</h2>
           </div>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>

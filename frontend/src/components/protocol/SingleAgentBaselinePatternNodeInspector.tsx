@@ -4,7 +4,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { hashToChartHue } from '@/lib/utils'
-import { EditableNodeTitle } from './EditableNodeTitle'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { SingleAgentBaselinePatternConfig, SingleAgentBaselinePatternNodeData, ProtocolNode } from '@/types/protocols'
 
@@ -45,11 +44,7 @@ export function SingleAgentBaselinePatternNodeInspector({
         <>
           <div className="flex items-center gap-2">
             <ArrowRight className="size-5" style={{ color: ACCENT }} />
-            <EditableNodeTitle
-              label={data.label}
-              placeholder="Single-Agent Baseline"
-              onCommit={(label) => onChange(node.id, { ...data, label })}
-            />
+            <h2 className="text-lg font-semibold">{data.label || 'Single-Agent Baseline'}</h2>
           </div>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>

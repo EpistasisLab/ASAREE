@@ -5,7 +5,6 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { hashToChartHue } from '@/lib/utils'
-import { EditableNodeTitle } from './EditableNodeTitle'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { ReasonActPatternConfig, ReasonActPatternNodeData, ProtocolNode } from '@/types/protocols'
 
@@ -46,7 +45,7 @@ export function ReasonActPatternNodeInspector({
         <>
           <div className="flex items-center gap-2">
             <Repeat2 className="size-5" style={{ color: ACCENT }} />
-            <EditableNodeTitle label={data.label} placeholder="Reason + Act" onCommit={(label) => onChange(node.id, { ...data, label })} />
+            <h2 className="text-lg font-semibold">{data.label || 'Reason + Act'}</h2>
           </div>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>

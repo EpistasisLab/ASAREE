@@ -31,13 +31,6 @@ export function CreateCredentialDialog({
   const [azureProjectEndpoint, setAzureProjectEndpoint] = useState('')
   const queryClient = useQueryClient()
 
-  // A single dialog instance is reused across whichever node's inspector
-  // opens it -- re-sync to the newly-requested provider each time it opens,
-  // since a plain useState initializer only applies on first mount.
-  useEffect(() => {
-    if (open) setProvider(defaultProvider)
-  }, [open, defaultProvider])
-
   const settingsQuery = useQuery({
     queryKey: ['llm-settings'],
     queryFn: () => llmSettingsApi.list(),
@@ -45,6 +38,29 @@ export function CreateCredentialDialog({
   })
   const existing = settingsQuery.data?.find((s) => s.provider === provider)
   const requiresApiBase = provider === 'azure_foundry'
+
+  // Selecting a provider (either directly from the search list, or via
+  // defaultProvider when opened from an existing credential's own "Edit")
+  // pre-fills its non-secret fields from any already-saved setting -- the
+  // API key stays blank either way, since it's write-only and never
+  // echoed back by the API.
+  function selectProvider(id: LLMProvider | null) {
+    setProvider(id)
+    const existingSetting = id ? settingsQuery.data?.find((s) => s.provider === id) : undefined
+    setApiBase(existingSetting?.api_base ?? '')
+    setAzureProjectEndpoint(existingSetting?.azure_project_endpoint ?? '')
+  }
+
+  // A single dialog instance is reused across whichever node's inspector (or
+  // the Profile page's credentials list) opens it -- re-sync to the
+  // newly-requested provider each time it opens, since a plain useState
+  // initializer only applies on first mount.
+  // selectProvider is deliberately not a dependency here -- it's a plain
+  // function recreated every render, and depending on it would re-run this
+  // effect (and reset apiBase/azureProjectEndpoint) on every keystroke.
+  useEffect(() => {
+    if (open) selectProvider(defaultProvider)
+  }, [open, defaultProvider, settingsQuery.data])
 
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -99,7 +115,7 @@ export function CreateCredentialDialog({
                   <button
                     key={p.id}
                     type="button"
-                    onClick={() => setProvider(p.id)}
+                    onClick={() => selectProvider(p.id)}
                     className="flex cursor-pointer items-center gap-2.5 rounded-lg border bg-background px-3 py-2.5 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20 transition-colors hover:bg-muted"
                   >
                     <Icon className="size-4 shrink-0 text-primary" />

@@ -225,6 +225,7 @@ export const llmSettingsApi = {
   // same provider replaces it, it doesn't create a second credential.
   upsert: (data: { provider: LLMProvider; api_key: string; api_base?: string | null; azure_project_endpoint?: string | null }) =>
     request<LLMSetting>('/llm-settings', { method: 'PUT', body: data }),
+  remove: (provider: LLMProvider) => request<void>(`/llm-settings/${provider}`, { method: 'DELETE' }),
   // `provider` is a plain string, not LLMProvider -- unlike credential
   // storage (scoped to azure_foundry only in the UI today), model listing
   // works for anthropic/openai too (no credential needed, see

@@ -10,10 +10,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { nextUntitledName } from '@/lib/experiment'
 import { cn } from '@/lib/utils'
 
-const NAV_LINKS = [
-  { to: '/experiments', label: 'Experiments' },
-  { to: '/profile', label: 'Profile' },
-]
+const NAV_LINKS = [{ to: '/experiments', label: 'Experiments' }]
 
 export function AppHeader() {
   const { user, logout } = useAuth()

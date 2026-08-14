@@ -101,7 +101,7 @@ export function AgentNodeInspector({
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="node-description">Description</Label>
+              <Label htmlFor="node-description">Description (Optional)</Label>
               <Textarea
                 id="node-description"
                 rows={2}

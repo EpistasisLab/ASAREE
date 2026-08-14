@@ -783,9 +783,9 @@ def test_memory_node_with_plain_outgoing_edge_raises() -> None:
         topological_order(graph)
 
 
-def test_multiple_architectural_pattern_connections_pass() -> None:
-    # Unlimited, same as Tool -- unlike Memory's max-1, an agent can have
-    # several architectural patterns wired in at once.
+def test_multiple_execution_pattern_connections_raises() -> None:
+    # Capped at one -- execution_pattern is a single value, unlike Tool
+    # (repeatable) or Memory (already max-1 for a different reason).
     llm = _llm_node()
     agent, agent_llm_edge = _agent_with_llm("a")
     p1, p2 = _pattern_node("p1"), _pattern_node("p2")
@@ -793,8 +793,8 @@ def test_multiple_architectural_pattern_connections_pass() -> None:
         "nodes": [llm, agent, p1, p2],
         "edges": [agent_llm_edge, _pattern_edge("p1", "a"), _pattern_edge("p2", "a")],
     }
-    order = [n["id"] for n in topological_order(graph)]
-    assert set(order) == {"llm", "a", "p1", "p2"}
+    with pytest.raises(ProtocolValidationError, match="at most one execution-pattern connection"):
+        topological_order(graph)
 
 
 def test_architectural_pattern_connection_from_non_pattern_source_raises() -> None:
@@ -915,6 +915,35 @@ def test_resolve_tool_config_collects_all_connected_tool_nodes() -> None:
 def test_resolve_tool_config_empty_when_no_tool_connections() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
     assert pe._resolve_tool_config(graph, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_resolve_pattern_config_returns_connected_node_config() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    pattern = _pattern_node()
+    pattern["data"]["config"] = {"max_iterations": 20, "include_scratchpad": False}
+    graph = {"nodes": [agent, pattern], "edges": [agent_llm_edge, _pattern_edge("pattern", "a")]}
+    assert pe._resolve_pattern_config(graph, "a") == {
+        "execution_pattern": "reason_act",
+        "pattern_params": {"reason_act": {"max_iterations": 20, "include_scratchpad": False}},
+    }
+
+
+def test_resolve_pattern_config_maps_baseline_slug() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    baseline = {"id": "baseline", "type": "pattern_single_agent_baseline", "data": {"label": "", "config": {"max_iterations": 5}}}
+    graph = {"nodes": [agent, baseline], "edges": [agent_llm_edge, _pattern_edge("baseline", "a")]}
+    assert pe._resolve_pattern_config(graph, "a") == {
+        "execution_pattern": "single_agent_baseline",
+        "pattern_params": {"single_agent_baseline": {"max_iterations": 5}},
+    }
+
+
+def test_resolve_pattern_config_empty_when_unconnected() -> None:
+    # Optional connector -- an unconnected agent resolves to {}, letting
+    # PatternConfig(execution_pattern=None) fall through to agentic-core's
+    # own "reason_act" default, not an ASAREE-side hardcoded one.
+    graph = {"nodes": [_node("a", "agent")], "edges": []}
+    assert pe._resolve_pattern_config(graph, "a") == {}
 
 
 def test_tool_source_node_ids_only_includes_tool_handled_edges() -> None:

@@ -22,3 +22,28 @@ export const LLM_PROVIDER_CATALOG: { id: LLMProvider; label: string; description
 export const LLM_PROVIDER_LABELS: Record<LLMProvider, string> = Object.fromEntries(
   LLM_PROVIDER_CATALOG.map((p) => [p.id, p.label]),
 ) as Record<LLMProvider, string>
+
+// Matches src/asaree/api/llm_settings.py's LLMModelInfoResponse/
+// LLMSettingModelsResponse -- GET /llm-settings/{provider}/models.
+// supports_temperature/supports_effort/effort_levels come straight from
+// agentic-core's own model_capabilities registry (some newer models 400 on
+// an explicit temperature and take an `effort` dial instead), so the same
+// response tells the Inspector both which models to list AND which control
+// to show for whichever one is selected.
+export interface LLMModelInfo {
+  id: string
+  label: string | null
+  supports_temperature: boolean
+  supports_effort: boolean
+  effort_levels: string[]
+}
+
+export interface LLMSettingModelsResponse {
+  models: LLMModelInfo[]
+  // "static" -- Anthropic/OpenAI's curated, provider-wide catalog, no
+  // credential needed. "api" -- a live Azure Foundry deployment discovery
+  // that succeeded. "error" -- discovery couldn't run at all (see `note`);
+  // the Inspector falls back to a free-text Model field in this case.
+  source: 'static' | 'api' | 'error'
+  note: string | null
+}

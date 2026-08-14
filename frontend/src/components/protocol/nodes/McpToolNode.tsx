@@ -1,12 +1,11 @@
-import { useState } from 'react'
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useNodeConnections, useReactFlow, type NodeProps } from '@xyflow/react'
 import { Wrench } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { cardAccent, hashToChartHue } from '@/lib/utils'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { McpToolNodeData, NodeRunStatus } from '@/types/protocols'
+import { CircleNode } from './CircleNode'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
-import { EditableNodeLabel } from './EditableNodeLabel'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 import { NodeSummaryLine } from './NodeSummaryLine'
 
@@ -17,9 +16,32 @@ const ACCENT = hashToChartHue('mcp_tool')
 export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolNodeData & { runStatus?: NodeRunStatus } }) {
   const summary = data.config?.tool_name ? `${data.config.server_name ?? '?'}.${data.config.tool_name}` : null
   const badge = nodeRunBadge(data.runStatus)
-  const [renaming, setRenaming] = useState(false)
   const { updateNodeData } = useReactFlow()
   const isActive = data.active ?? true
+  // Dual-purpose (see the Handle comment below): wired via this node's own
+  // "tool" handle into an Agent's Tool connector, it plays the same role
+  // n8n's dedicated MCP Client Tool node does, so it gets that node's own
+  // n8n-style circle rendering instead of today's rounded-rectangle
+  // pipeline-step card -- topological_order's dual-role-exclusivity rule
+  // means it's never both at once, so this is a clean either/or, not a
+  // partial overlay.
+  const toolConnections = useNodeConnections({ id, handleType: 'source', handleId: 'tool' })
+  const isToolSource = toolConnections.length > 0
+
+  if (isToolSource) {
+    return (
+      <CircleNode
+        id={id}
+        selected={selected}
+        accent={ACCENT}
+        icon={Wrench}
+        label={data.label}
+        placeholder="MCP Tool"
+        handleId="tool"
+        warning={summary ? undefined : 'Not configured -- pick a server and tool'}
+      />
+    )
+  }
 
   return (
     <div
@@ -28,12 +50,7 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
         selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
       } ${isActive ? '' : 'opacity-50'}`}
     >
-      <NodeHoverToolbar
-        nodeId={id}
-        isActive={isActive}
-        onToggleActive={() => updateNodeData(id, { active: !isActive })}
-        onRename={() => setRenaming(true)}
-      />
+      <NodeHoverToolbar nodeId={id} isActive={isActive} onToggleActive={() => updateNodeData(id, { active: !isActive })} />
       {badge && (
         <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
       )}
@@ -45,7 +62,9 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
       />
       <div className="flex items-center gap-1.5">
         <Wrench className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
-        <EditableNodeLabel nodeId={id} label={data.label} placeholder="MCP Tool" renaming={renaming} onRenamingChange={setRenaming} />
+        <span className="truncate text-xs font-medium" title={data.label}>
+          {data.label || 'MCP Tool'}
+        </span>
       </div>
       <NodeSummaryLine text={summary} emptyLabel="Not configured -- pick a server and tool" />
       {/* Two right-side handles share the edge, so each needs its own

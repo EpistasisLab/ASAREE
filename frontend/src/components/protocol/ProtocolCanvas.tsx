@@ -105,15 +105,15 @@ function isNearViewport(a: Viewport, b: Viewport): boolean {
 }
 
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
-  if (nodeType === 'mcp_tool') return defaultMcpToolNodeData('New MCP Tool')
-  if (nodeType === 'critic_gate') return defaultCriticGateNodeData('New Critic Gate')
-  if (nodeType === 'llm_anthropic') return defaultAnthropicLlmNodeData('New Anthropic')
-  if (nodeType === 'llm_openai') return defaultOpenAiLlmNodeData('New OpenAI')
-  if (nodeType === 'llm_azure_foundry') return defaultAzureFoundryLlmNodeData('New Azure AI Foundry')
-  if (nodeType === 'memory') return defaultMemoryNodeData('New Memory')
-  if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData('New Reason + Act')
-  if (nodeType === 'pattern_single_agent_baseline') return defaultSingleAgentBaselinePatternNodeData('New Single-Agent Baseline')
-  return defaultAgentNodeData('New Agent')
+  if (nodeType === 'mcp_tool') return defaultMcpToolNodeData()
+  if (nodeType === 'critic_gate') return defaultCriticGateNodeData()
+  if (nodeType === 'llm_anthropic') return defaultAnthropicLlmNodeData()
+  if (nodeType === 'llm_openai') return defaultOpenAiLlmNodeData()
+  if (nodeType === 'llm_azure_foundry') return defaultAzureFoundryLlmNodeData()
+  if (nodeType === 'memory') return defaultMemoryNodeData()
+  if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData()
+  if (nodeType === 'pattern_single_agent_baseline') return defaultSingleAgentBaselinePatternNodeData()
+  return defaultAgentNodeData()
 }
 
 // Mirrors isValidConnection's own per-slot source-type-family rule -- the
@@ -240,7 +240,41 @@ export function ProtocolCanvas({
       : { x: window.innerWidth / 2, y: window.innerHeight / 2 }
     const desired = screenToFlowPosition(center)
     const position = findFreePosition(nodes.map((n) => n.position), desired)
-    setNodes((nds) => nds.concat({ id: newNodeId(), type: nodeType, position, data: defaultDataFor(nodeType) }))
+    const newId = newNodeId()
+    const newNode: Node = { id: newId, type: nodeType, position, data: defaultDataFor(nodeType) }
+
+    if (nodeType === 'agent') {
+      // The execution pattern's default (agentic-core's own "reason_act",
+      // see _resolve_pattern_config) deliberately never stays invisible --
+      // unlike LLM (no auto-created default; you must wire one), every new
+      // Agent gets an explicit, real "Reason + Act" node created and wired
+      // in immediately. Delete it (or swap it for Single-Agent Baseline) to
+      // opt out/change it -- the connector itself stays optional.
+      const patternId = newNodeId()
+      const patternPosition = findFreePosition(
+        [...nodes.map((n) => n.position), position],
+        { x: position.x, y: position.y + 160 },
+      )
+      const patternNode: Node = {
+        id: patternId,
+        type: 'pattern_reason_act',
+        position: patternPosition,
+        data: defaultReasonActPatternNodeData(),
+      }
+      const patternEdge: Edge = {
+        id: newNodeId(),
+        source: patternId,
+        sourceHandle: 'architectural_pattern',
+        target: newId,
+        targetHandle: 'architectural_pattern',
+      }
+      setNodes((nds) => nds.concat(newNode, patternNode))
+      setEdges((eds) => eds.concat(patternEdge))
+      setAddPanelOpen(false)
+      return
+    }
+
+    setNodes((nds) => nds.concat(newNode))
     setAddPanelOpen(false)
   }
 

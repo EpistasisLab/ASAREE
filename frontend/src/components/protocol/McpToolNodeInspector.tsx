@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { mcpServersApi } from '@/api/client'
 import { hashToChartHue } from '@/lib/utils'
+import { EditableNodeTitle } from './EditableNodeTitle'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { McpToolNodeData, ProtocolNode } from '@/types/protocols'
 
@@ -49,7 +50,7 @@ export function McpToolNodeInspector({
         <>
           <div className="flex items-center gap-2">
             <Wrench className="size-5" style={{ color: ACCENT }} />
-            <h2 className="text-lg font-semibold">{data.label || 'MCP Tool'}</h2>
+            <EditableNodeTitle label={data.label} placeholder="MCP Tool" onCommit={(label) => onChange(node.id, { ...data, label })} />
           </div>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>

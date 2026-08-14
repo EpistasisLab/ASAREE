@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { Bot } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -7,7 +6,6 @@ import { nodeRunBadge } from '@/lib/protocolRun'
 import type { AgentNodeData, NodeRunStatus } from '@/types/protocols'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
-import { EditableNodeLabel } from './EditableNodeLabel'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 import { NodeSummaryLine } from './NodeSummaryLine'
 
@@ -18,7 +16,6 @@ const ACCENT = hashToChartHue('agent')
 
 export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeData & { runStatus?: NodeRunStatus } }) {
   const badge = nodeRunBadge(data.runStatus)
-  const [renaming, setRenaming] = useState(false)
   const { updateNodeData } = useReactFlow()
   const isActive = data.active ?? true
 
@@ -29,12 +26,7 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
         selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
       } ${isActive ? '' : 'opacity-50'}`}
     >
-      <NodeHoverToolbar
-        nodeId={id}
-        isActive={isActive}
-        onToggleActive={() => updateNodeData(id, { active: !isActive })}
-        onRename={() => setRenaming(true)}
-      />
+      <NodeHoverToolbar nodeId={id} isActive={isActive} onToggleActive={() => updateNodeData(id, { active: !isActive })} />
       {badge && (
         <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
       )}
@@ -51,15 +43,20 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
       />
       <div className="flex items-center gap-1.5">
         <Bot className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
-        <EditableNodeLabel nodeId={id} label={data.label} placeholder="Agent" renaming={renaming} onRenamingChange={setRenaming} />
+        {/* Renaming happens in the Inspector's own title now (click it,
+            same as the experiment name) -- not here anymore. */}
+        <span className="truncate text-xs font-medium" title={data.label}>
+          {data.label || 'Agent'}
+        </span>
       </div>
       <NodeSummaryLine text={data.config?.goal || null} emptyLabel="No goal set" />
       {/* n8n's own 3 bottom sub-connectors (Chat Model/Memory/Tool), adapted
           and extended with a 4th (Architectural Pattern, ASAREE's own
           addition, no n8n equivalent): required LLM (exactly one), optional
-          max-1 Memory (visual scaffolding only -- see MemoryNodeData),
-          optional repeatable Architectural Pattern (same unlimited cardinality
-          as Tool -- an agent can combine several patterns at once) and Tool. */}
+          max-1 Architectural Pattern (capped for the execution-pattern
+          category specifically -- see _EXECUTION_PATTERN_NODE_TYPES in
+          protocol_execution.py) and Memory (visual scaffolding only -- see
+          MemoryNodeData), and optional repeatable Tool. */}
       <Handle
         type="target"
         id="llm"
@@ -75,11 +72,11 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
         id="architectural_pattern"
         position={Position.Bottom}
         style={{ left: '38%' }}
-        title="Architectural Pattern (not yet functional)"
-        className="!size-2 !border-2 !border-dashed !bg-background !border-[color:var(--card-accent)]"
+        title="Architectural Pattern (optional -- defaults to Reason + Act)"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left="38%">Pattern</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="38%" allowMultiple />
+      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="38%" />
       <Handle
         type="target"
         id="memory"

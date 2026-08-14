@@ -13,7 +13,7 @@ import type {
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
 import type { Cell, DesignSpec, Experiment } from '@/types/experiments'
-import type { LLMProvider, LLMSetting } from '@/types/llmSettings'
+import type { LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
 import type { Run } from '@/types/runs'
@@ -215,6 +215,11 @@ export const llmSettingsApi = {
   // same provider replaces it, it doesn't create a second credential.
   upsert: (data: { provider: LLMProvider; api_key: string; api_base?: string | null }) =>
     request<LLMSetting>('/llm-settings', { method: 'PUT', body: data }),
+  // `provider` is a plain string, not LLMProvider -- unlike credential
+  // storage (scoped to azure_foundry only in the UI today), model listing
+  // works for anthropic/openai too (no credential needed, see
+  // llm_model_discovery.py's static catalog path).
+  listModels: (provider: string) => request<LLMSettingModelsResponse>(`/llm-settings/${provider}/models`),
 }
 
 export { tryRefreshToken }

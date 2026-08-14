@@ -117,28 +117,40 @@ _LLM_NODE_TYPES = frozenset({"llm_anthropic", "llm_openai", "llm_azure_foundry"}
 # Only two builtin execution patterns exist in agentic-core today
 # (engine/patterns/builtin/) -- PatternConfig already has unused slots for
 # safety_patterns/coordination_pattern/knowledge_patterns/quality_patterns/
-# routing_pattern/resolution_patterns, so this set (and the Architectural
-# Pattern connector these types plug into) is exactly where those would land
-# as more get ported, each as its own node type alongside these two.
-_PATTERN_NODE_TYPES = frozenset({"pattern_reason_act", "pattern_single_agent_baseline"})
+# routing_pattern/resolution_patterns, which are *lists* (several active at
+# once is meaningful for those), unlike execution_pattern which is a single
+# value -- an agent can't run two execution loops at once. So this set is
+# named for its category specifically: the "at most one" cap below
+# (_validate_pattern_connections) only ever counts members of THIS set, not
+# the whole Architectural Pattern connector -- a future safety/quality
+# pattern node type would get its own set and its own (probably unbounded)
+# cap, coexisting freely with one connected execution-pattern node.
+_EXECUTION_PATTERN_NODE_TYPES = frozenset({"pattern_reason_act", "pattern_single_agent_baseline"})
 _MEMORY_NODE_TYPES = frozenset({"memory"})  # one today; kept as a set for symmetry with the other two families
 
 # Every node type that's a pure config source -- never gets its own execution
 # turn, never a pipeline "final output" (see sink_node_ids/run_protocol's
 # main loop), and may only ever emit its own connector-typed edge (see the
 # "outgoing wrong handle" check in topological_order below).
-_PURE_CONFIG_SOURCE_TYPES = _LLM_NODE_TYPES | _PATTERN_NODE_TYPES | _MEMORY_NODE_TYPES
+_PURE_CONFIG_SOURCE_TYPES = _LLM_NODE_TYPES | _EXECUTION_PATTERN_NODE_TYPES | _MEMORY_NODE_TYPES
 
 # Which connector handle each pure-config-source node type may exclusively
 # emit into, and the human-facing label for that handle -- both keyed off
 # the same family grouping so a new provider/pattern node type only needs
-# adding to _LLM_NODE_TYPES/_PATTERN_NODE_TYPES above, not a second lookup.
+# adding to _LLM_NODE_TYPES/_EXECUTION_PATTERN_NODE_TYPES above, not a
+# second lookup.
 _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "llm" for t in _LLM_NODE_TYPES},
-    **{t: "architectural_pattern" for t in _PATTERN_NODE_TYPES},
+    **{t: "architectural_pattern" for t in _EXECUTION_PATTERN_NODE_TYPES},
     **{t: "memory" for t in _MEMORY_NODE_TYPES},
 }
 _HANDLE_LABELS: dict[str, str] = {"llm": "LLM", "memory": "Memory", "architectural_pattern": "Architectural Pattern"}
+
+# node type -> agentic-core PatternConfig slug, for _resolve_pattern_config.
+_EXECUTION_PATTERN_SLUGS: dict[str, str] = {
+    "pattern_reason_act": "reason_act",
+    "pattern_single_agent_baseline": "single_agent_baseline",
+}
 
 
 def _adjacency(
@@ -237,9 +249,21 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 memory_source = nodes.get(edge["source"])
                 if memory_source is None or memory_source.get("type") != "memory":
                     raise ProtocolValidationError(f"Node {nid!r}'s Memory connection must come from a Memory node.")
+            # Capped at one, but scoped to the execution-pattern family
+            # specifically (see _EXECUTION_PATTERN_NODE_TYPES's own comment)
+            # -- a future non-execution pattern node type connected
+            # alongside one execution-pattern node is not this check's
+            # business.
+            execution_pattern_edges = [
+                e for e in pattern_edges if (nodes.get(e["source"]) or {}).get("type") in _EXECUTION_PATTERN_NODE_TYPES
+            ]
+            if len(execution_pattern_edges) > 1:
+                raise ProtocolValidationError(
+                    f"Node {nid!r} can have at most one execution-pattern connection (found {len(execution_pattern_edges)})."
+                )
             for edge in pattern_edges:
                 pattern_source = nodes.get(edge["source"])
-                if pattern_source is None or pattern_source.get("type") not in _PATTERN_NODE_TYPES:
+                if pattern_source is None or pattern_source.get("type") not in _EXECUTION_PATTERN_NODE_TYPES:
                     raise ProtocolValidationError(
                         f"Node {nid!r}'s Architectural Pattern connection must come from an Architectural Pattern node."
                     )
@@ -365,6 +389,30 @@ def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     return (source.get("data") or {}).get("config") or {}
 
 
+def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """``{"execution_pattern": slug, "pattern_params": {slug: {...}}}`` from
+    the node's connected execution-pattern node, or ``{}`` if none is
+    connected -- unlike LLM, this connector is optional (``topological_order``
+    caps it at one, but doesn't require it): an agent with nothing connected
+    gets ``execution_pattern=None`` passed to ``PatternConfig``, and
+    agentic-core's own ``PatternOrchestrator`` already defaults that to
+    "reason_act" (``DEFAULT_EXECUTION_PATTERN``). ASAREE deliberately doesn't
+    duplicate that default here -- see AgentNode's own auto-created "Reason +
+    Act" node on the frontend for how the default stays visible instead of
+    silently applying."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    edges = _edges_with_handle(graph, node_id, "architectural_pattern", direction="incoming")
+    if not edges:
+        return {}
+    source = nodes.get(edges[0]["source"])
+    if source is None:
+        return {}
+    slug = _EXECUTION_PATTERN_SLUGS.get(source.get("type"))
+    if slug is None:
+        return {}
+    return {"execution_pattern": slug, "pattern_params": {slug: (source.get("data") or {}).get("config") or {}}}
+
+
 def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """``{"server_names": [...], "tool_names": [...]}`` built from every
     ``mcp_tool`` node wired into this agent's Tool connector -- replaces the
@@ -473,13 +521,14 @@ async def _run_agent_node(
     # each other's agent definition on every run. config.name is folded
     # into the description instead, purely as a human label.
     agent_name = f"protocol-{protocol_id}-{node['id']}"
-    # Model/tool are no longer fields on the agent's own config -- resolved
-    # from its required LLM connector and its (optional, repeatable) Tool
-    # connectors instead (topological_order already validated their shape).
+    # Model/tool/execution-pattern are no longer fields on the agent's own
+    # config -- resolved from its required LLM connector, its (optional,
+    # repeatable) Tool connectors, and its optional Architectural Pattern
+    # connector instead (topological_order already validated their shape).
     model_config_data = {k: v for k, v in _resolve_llm_config(graph, node["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
     tool_config = _resolve_tool_config(graph, node["id"])
-    pattern_config_data = config.get("pattern_config") or {}
+    pattern_config_data = _resolve_pattern_config(graph, node["id"])
     pattern_config = PatternConfig(
         execution_pattern=pattern_config_data.get("execution_pattern"),
         pattern_params=pattern_config_data.get("pattern_params") or {},

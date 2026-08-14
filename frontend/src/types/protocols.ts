@@ -82,11 +82,6 @@ export interface AgentModelConfigData {
   max_tokens: number
 }
 
-export interface AgentPatternConfig {
-  execution_pattern: 'reason_act' | 'single_agent_baseline'
-  pattern_params?: Record<string, Record<string, unknown>>
-}
-
 // Mirrors agentic-core's output_contract field-spec exactly: {"name":str,
 // "fields":[{"name","type","description"?,"default"?}]}. `type`/`default`
 // are free-form strings here (not a closed enum) -- the field-builder UI
@@ -109,12 +104,13 @@ export interface AgentNodeConfig {
   goal: string
   description: string
   system_prompt: string
-  // Model and tool assignment are no longer fields here -- resolved from
-  // the node's required LLM connector and optional Tool connector(s)
-  // instead (see LlmNodeData/McpToolNodeData and
-  // services.protocol_execution's _resolve_llm_config/_resolve_tool_config),
-  // matching n8n's own choice to keep these out of a node's own settings.
-  pattern_config: AgentPatternConfig
+  // Model, tool assignment, and execution pattern are no longer fields
+  // here -- resolved from the node's required LLM connector, optional Tool
+  // connector(s), and optional Architectural Pattern connector instead (see
+  // LlmNodeData/McpToolNodeData/ReasonActPatternNodeData and
+  // services.protocol_execution's _resolve_llm_config/_resolve_tool_config/
+  // _resolve_pattern_config), matching n8n's own choice to keep these out
+  // of a node's own settings.
   output_contract: OutputContract | null
   budget_limit_usd: number | null
   max_run_duration_seconds: number | null
@@ -138,7 +134,7 @@ export interface AgentNodeData {
   [key: string]: unknown
 }
 
-export function defaultAgentNodeData(label = 'New Agent'): AgentNodeData {
+export function defaultAgentNodeData(label = 'Agent'): AgentNodeData {
   return {
     label,
     config: {
@@ -146,7 +142,6 @@ export function defaultAgentNodeData(label = 'New Agent'): AgentNodeData {
       goal: '',
       description: '',
       system_prompt: '',
-      pattern_config: { execution_pattern: 'reason_act', pattern_params: {} },
       output_contract: null,
       budget_limit_usd: null,
       max_run_duration_seconds: null,

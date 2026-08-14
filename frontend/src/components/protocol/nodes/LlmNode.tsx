@@ -1,11 +1,8 @@
-import { useState } from 'react'
-import { Handle, Position, type NodeProps } from '@xyflow/react'
+import type { NodeProps } from '@xyflow/react'
 import { Atom, Cloud, Sparkles } from 'lucide-react'
-import { cardAccent, hashToChartHue } from '@/lib/utils'
+import { hashToChartHue } from '@/lib/utils'
 import type { LlmNodeData } from '@/types/protocols'
-import { EditableNodeLabel } from './EditableNodeLabel'
-import { NodeHoverToolbar } from './NodeHoverToolbar'
-import { NodeSummaryLine } from './NodeSummaryLine'
+import { CircleNode } from './CircleNode'
 
 // One shared card renderer for all three LLM provider node types
 // (llm_anthropic/llm_openai/llm_azure_foundry -- see LlmNodeData's own
@@ -16,14 +13,11 @@ import { NodeSummaryLine } from './NodeSummaryLine'
 // distinct hue (CLAUDE.md's hash-driven tint rule: real category variety,
 // not a uniform "LLM" hue for three actually-different things).
 //
-// A pure config source: no target handle at all -- it never receives
-// input, only supplies model config to whichever agent/critic_gate node(s)
-// plug into it, matching n8n's own Chat Model nodes having zero regular
-// data ports. No run-status badge either: the executor gives it an
-// instant, inert placeholder node_run (never a real execution), so a
-// "Done"-style badge would misleadingly imply it did something. No
-// "deactivate" toggle on its hover toolbar either, for the same reason --
-// only Delete/Rename apply.
+// Rendered as n8n's own small circle-with-icon (see CircleNode) -- a pure
+// config source, no target handle at all, model/temperature/etc. only show
+// in the Inspector (n8n's own Chat Model nodes don't surface their model on
+// canvas either). No run-status badge or "deactivate": the executor gives
+// it an instant, inert placeholder node_run (never a real execution).
 export const PROVIDER_META: Record<string, { label: string; icon: typeof Sparkles }> = {
   anthropic: { label: 'Anthropic', icon: Sparkles },
   openai: { label: 'OpenAI', icon: Atom },
@@ -31,30 +25,19 @@ export const PROVIDER_META: Record<string, { label: string; icon: typeof Sparkle
 }
 
 export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData }) {
-  const [renaming, setRenaming] = useState(false)
   const meta = PROVIDER_META[data.config?.provider] ?? { label: data.config?.provider || 'LLM', icon: Sparkles }
-  const Icon = meta.icon
   const accent = hashToChartHue(data.config?.provider || 'llm')
 
   return (
-    <div
-      style={cardAccent(accent)}
-      className={`group relative w-36 rounded-md border bg-card px-2 py-1.5 shadow-[0_0_12px_-6px_var(--card-accent)] ring-1 ring-[color:var(--card-accent)]/40 ${
-        selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
-      }`}
-    >
-      <NodeHoverToolbar nodeId={id} onRename={() => setRenaming(true)} />
-      <div className="flex items-center gap-1.5">
-        <Icon className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
-        <EditableNodeLabel nodeId={id} label={data.label} placeholder={meta.label} renaming={renaming} onRenamingChange={setRenaming} />
-      </div>
-      <NodeSummaryLine text={data.config?.model || null} emptyLabel="No model set" />
-      <Handle
-        type="source"
-        id="llm"
-        position={Position.Top}
-        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
-      />
-    </div>
+    <CircleNode
+      id={id}
+      selected={selected}
+      accent={accent}
+      icon={meta.icon}
+      label={data.label}
+      placeholder={meta.label}
+      handleId="llm"
+      warning={data.config?.model ? undefined : 'No model set'}
+    />
   )
 }

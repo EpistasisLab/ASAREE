@@ -2,16 +2,15 @@ import { Bot, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
+import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { OutputContractEditor } from './OutputContractEditor'
 import type { AgentNodeConfig, AgentNodeData, ProtocolNode } from '@/types/protocols'
 
-const EXECUTION_PATTERNS = ['reason_act', 'single_agent_baseline'] as const
 const ACCENT = hashToChartHue('agent')
 
 // n8n opens a node's setup as a large centered floating window over the
@@ -71,7 +70,7 @@ export function AgentNodeInspector({
         <>
           <div className="flex items-center gap-2">
             <Bot className="size-5" style={{ color: ACCENT }} />
-            <h2 className="text-lg font-semibold">{data.label || 'Agent'}</h2>
+            <EditableNodeTitle label={data.label} placeholder="Agent" onCommit={(label) => onChange(node.id, { ...data, label })} />
           </div>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>
@@ -131,30 +130,6 @@ export function AgentNodeInspector({
                 />
               </div>
             </FactorBindableField>
-
-            <div className="space-y-1.5">
-              <Label>Execution pattern</Label>
-              <Select
-                value={config.pattern_config.execution_pattern}
-                onValueChange={(value) => {
-                  if (value === null) return
-                  patchConfig({
-                    pattern_config: { ...config.pattern_config, execution_pattern: value as typeof EXECUTION_PATTERNS[number] },
-                  })
-                }}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue>{(value: string) => value}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {EXECUTION_PATTERNS.map((p) => (
-                    <SelectItem key={p} value={p}>
-                      {p}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
           </TabsContent>
 
           <TabsContent value="settings" className="space-y-4 pt-2">

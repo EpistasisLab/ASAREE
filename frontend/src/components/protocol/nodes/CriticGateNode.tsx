@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { ShieldCheck, ShieldOff } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -7,7 +6,6 @@ import { nodeRunBadge } from '@/lib/protocolRun'
 import type { CriticGateNodeData, NodeRunStatus } from '@/types/protocols'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
-import { EditableNodeLabel } from './EditableNodeLabel'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 
 // A third hue, distinct from "agent"/"mcp_tool" -- real category variety
@@ -19,7 +17,6 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
   const Icon = enabled ? ShieldCheck : ShieldOff
   const summary = enabled ? `Up to ${data.config?.max_revisions ?? 1} revision(s)` : 'Gate disabled'
   const badge = nodeRunBadge(data.runStatus)
-  const [renaming, setRenaming] = useState(false)
   const { updateNodeData } = useReactFlow()
 
   return (
@@ -36,7 +33,6 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
         // CriticGateNodeConfig's own comment on this field).
         isActive={enabled}
         onToggleActive={() => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
-        onRename={() => setRenaming(true)}
       />
       {badge && (
         <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
@@ -52,7 +48,9 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
       />
       <div className="flex items-center gap-1.5">
         <Icon className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
-        <EditableNodeLabel nodeId={id} label={data.label} placeholder="Critic Gate" renaming={renaming} onRenamingChange={setRenaming} />
+        <span className="truncate text-xs font-medium" title={data.label}>
+          {data.label || 'Critic Gate'}
+        </span>
       </div>
       <p className="truncate font-mono text-[0.65rem] text-muted-foreground" title={summary}>
         {summary}

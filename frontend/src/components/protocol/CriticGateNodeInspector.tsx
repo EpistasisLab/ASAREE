@@ -5,6 +5,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
+import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { CriticGateNodeConfig, CriticGateNodeData, ProtocolNode } from '@/types/protocols'
@@ -61,7 +62,7 @@ export function CriticGateNodeInspector({
         <>
           <div className="flex items-center gap-2">
             <ShieldCheck className="size-5" style={{ color: ACCENT }} />
-            <h2 className="text-lg font-semibold">{data.label || 'Critic Gate'}</h2>
+            <EditableNodeTitle label={data.label} placeholder="Critic Gate" onCommit={(label) => onChange(node.id, { ...data, label })} />
           </div>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>

@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { hashToChartHue } from '@/lib/utils'
+import { EditableNodeTitle } from './EditableNodeTitle'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { MemoryNodeConfig, MemoryNodeData, ProtocolNode } from '@/types/protocols'
 
@@ -42,7 +43,7 @@ export function MemoryNodeInspector({
         <>
           <div className="flex items-center gap-2">
             <BrainCircuit className="size-5" style={{ color: ACCENT }} />
-            <h2 className="text-lg font-semibold">{data.label || 'Memory'}</h2>
+            <EditableNodeTitle label={data.label} placeholder="Memory" onCommit={(label) => onChange(node.id, { ...data, label })} />
           </div>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>

@@ -1,8 +1,7 @@
 import type { MouseEvent, ReactNode } from 'react'
 import { useReactFlow } from '@xyflow/react'
-import { MoreVertical, Pencil, Power, PowerOff, Trash2 } from 'lucide-react'
+import { Power, PowerOff, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 
 function ToolbarIconButton({
   label,
@@ -44,15 +43,13 @@ export function NodeHoverToolbar({
   nodeId,
   isActive,
   onToggleActive,
-  onRename,
 }: {
   nodeId: string
-  // Absent for pure config-source nodes (llm/memory) -- "deactivate" has no
-  // meaning for something that isn't ever "run" in the first place, so
-  // those node types only get Delete + Rename, not the power icon.
+  // Absent for pure config-source nodes (llm/memory/pattern) -- "deactivate"
+  // has no meaning for something that isn't ever "run" in the first place,
+  // so those node types only get Delete, not the power icon.
   isActive?: boolean
   onToggleActive?: () => void
-  onRename: () => void
 }) {
   const { deleteElements } = useReactFlow()
 
@@ -66,19 +63,6 @@ export function NodeHoverToolbar({
       <ToolbarIconButton label="Delete" onClick={() => void deleteElements({ nodes: [{ id: nodeId }] })}>
         <Trash2 className="size-3" />
       </ToolbarIconButton>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={<Button variant="ghost" size="icon-xs" aria-label="More" title="More" onClick={(e) => e.stopPropagation()} />}
-        >
-          <MoreVertical className="size-3" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="center" onClick={(e) => e.stopPropagation()}>
-          <DropdownMenuItem onClick={onRename}>
-            <Pencil className="size-4" />
-            Rename
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
     </div>
   )
 }

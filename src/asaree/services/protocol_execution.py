@@ -600,9 +600,14 @@ async def _run_agent_node(
     owner_id: uuid.UUID,
     user_input: str,
     graph: dict[str, Any],
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, uuid.UUID | None]:
     """Create-or-sync the real agent and run it to completion. Returns
-    ``(output_text, error)`` -- exactly one is ``None``."""
+    ``(output_text, error, run_id)`` -- exactly one of output_text/error is
+    ``None``. ``run_id`` is the underlying agentic-core AgentRun id -- always
+    populated once ``create_run`` succeeds (even on a later timeout/error),
+    since that's what the canvas's Output tab uses to fetch this node's own
+    step trace (``GET /runs/{run_id}/steps``); only ``None`` if agent
+    creation/sync itself failed before a run could even be created."""
     config = node["data"]["config"]
     # Deterministic, not config["name"]: Agent.name is unique per OWNER, not
     # per protocol, so trusting the freeform (often identically-defaulted)
@@ -670,18 +675,18 @@ async def _run_agent_node(
             timeout=timeout,
         )
     except TimeoutError:
-        return None, f"run exceeded its {timeout}s execution budget"
+        return None, f"run exceeded its {timeout}s execution budget", run.id
     except Exception as e:  # noqa: BLE001 -- same boundary reasoning as execute_run_task
-        return None, f"{type(e).__name__}: {e}"
+        return None, f"{type(e).__name__}: {e}", run.id
 
     finished = await get_run(run.id)
     if finished is None:
-        return None, "run vanished after execution"
+        return None, "run vanished after execution", run.id
     if finished.error:
-        return None, finished.error
+        return None, finished.error, run.id
     envelope = parse_envelope(finished.output)
     output_text = envelope.result if envelope is not None else (finished.output or "")
-    return output_text, None
+    return output_text, None, run.id
 
 
 async def _run_critic(
@@ -794,7 +799,7 @@ async def _run_gated_worker(
     instruction = base_instruction
 
     for attempt in range(max_revisions + 1):
-        output_text, error = await _run_agent_node(
+        output_text, error, run_id = await _run_agent_node(
             worker,
             protocol_id=protocol_id,
             protocol_run_id=protocol_run_id,
@@ -802,21 +807,40 @@ async def _run_gated_worker(
             user_input=instruction,
             graph=graph,
         )
+        run_id_str = str(run_id) if run_id else None
         if error:
             return (
-                {"status": "failed", "output_text": None, "error": error, "attempts": attempt + 1},
+                {
+                    "status": "failed",
+                    "output_text": None,
+                    "error": error,
+                    "attempts": attempt + 1,
+                    "run_id": run_id_str,
+                },
                 {"status": "skipped"},
             )
 
         if not enabled:
             return (
-                {"status": "completed", "output_text": output_text, "error": None, "attempts": attempt + 1},
+                {
+                    "status": "completed",
+                    "output_text": output_text,
+                    "error": None,
+                    "attempts": attempt + 1,
+                    "run_id": run_id_str,
+                },
                 {"status": "completed", "output_text": output_text, "approved": None, "revisions_used": 0},
             )
 
         if attempt == max_revisions:
             return (
-                {"status": "completed", "output_text": output_text, "error": None, "attempts": attempt + 1},
+                {
+                    "status": "completed",
+                    "output_text": output_text,
+                    "error": None,
+                    "attempts": attempt + 1,
+                    "run_id": run_id_str,
+                },
                 {
                     "status": "completed",
                     "output_text": output_text,
@@ -843,13 +867,20 @@ async def _run_gated_worker(
                     "output_text": output_text,
                     "error": f"critic failed: {verdict_error}",
                     "attempts": attempt + 1,
+                    "run_id": run_id_str,
                 },
                 {"status": "failed", "output_text": None, "error": verdict_error},
             )
 
         if verdict.get("approved"):
             return (
-                {"status": "completed", "output_text": output_text, "error": None, "attempts": attempt + 1},
+                {
+                    "status": "completed",
+                    "output_text": output_text,
+                    "error": None,
+                    "attempts": attempt + 1,
+                    "run_id": run_id_str,
+                },
                 {"status": "completed", "output_text": output_text, "approved": True, "revisions_used": attempt},
             )
 
@@ -1002,10 +1033,10 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             # that combination), and pure config sources (including
             # mcp_tool) never reach this point at all, so this only ever
             # applies to a plain agent node.
-            output_text, error = _upstream_output_text(graph, node_id, node_runs), None
+            output_text, error, run_id = _upstream_output_text(graph, node_id, node_runs), None, None
         else:
             user_input = _build_user_input(node, graph, node_runs)
-            output_text, error = await _run_agent_node(
+            output_text, error, run_id = await _run_agent_node(
                 node,
                 protocol_id=protocol_id,
                 protocol_run_id=protocol_run_id,
@@ -1014,7 +1045,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 graph=graph,
             )
 
-        node_runs[node_id] = {"status": "failed" if error else "completed", "output_text": output_text, "error": error}
+        node_runs[node_id] = {
+            "status": "failed" if error else "completed",
+            "output_text": output_text,
+            "error": error,
+            "run_id": str(run_id) if run_id else None,
+        }
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, node_runs[node_id])
         if error:

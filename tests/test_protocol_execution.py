@@ -240,7 +240,7 @@ async def test_gated_worker_approved_first_attempt(monkeypatch: pytest.MonkeyPat
     critic_calls = []
 
     async def fake_run_agent_node(node, **kwargs):
-        return "worker output v1", None
+        return "worker output v1", None, None
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(kwargs["worker_output"])
@@ -250,7 +250,13 @@ async def test_gated_worker_approved_first_attempt(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
 
     worker_run, gate_run = await _run(*_worker_gate())
-    assert worker_run == {"status": "completed", "output_text": "worker output v1", "error": None, "attempts": 1}
+    assert worker_run == {
+        "status": "completed",
+        "output_text": "worker output v1",
+        "error": None,
+        "attempts": 1,
+        "run_id": None,
+    }
     assert gate_run["approved"] is True
     assert gate_run["revisions_used"] == 0
     assert critic_calls == ["worker output v1"]
@@ -262,7 +268,7 @@ async def test_gated_worker_rejected_then_approved_on_revision(monkeypatch: pyte
 
     async def fake_run_agent_node(node, *, user_input, **_kwargs):
         instructions.append(user_input)
-        return f"worker output v{len(instructions)}", None
+        return f"worker output v{len(instructions)}", None, None
 
     async def fake_run_critic(gate, *, worker_output, **_kwargs):
         critic_calls.append(worker_output)
@@ -278,7 +284,13 @@ async def test_gated_worker_rejected_then_approved_on_revision(monkeypatch: pyte
     # below) -- this test needs room for a real "rejected, revised,
     # re-reviewed, approved" cycle before the final attempt.
     worker_run, gate_run = await _run(*_worker_gate(max_revisions=2))
-    assert worker_run == {"status": "completed", "output_text": "worker output v2", "error": None, "attempts": 2}
+    assert worker_run == {
+        "status": "completed",
+        "output_text": "worker output v2",
+        "error": None,
+        "attempts": 2,
+        "run_id": None,
+    }
     assert gate_run["approved"] is True
     assert gate_run["revisions_used"] == 1
     assert len(critic_calls) == 2
@@ -295,7 +307,7 @@ async def test_gated_worker_force_accepts_without_final_critic_call(monkeypatch:
 
     async def fake_run_agent_node(node, *, user_input, **_kwargs):
         attempts.append(user_input)
-        return f"worker output v{len(attempts)}", None
+        return f"worker output v{len(attempts)}", None, None
 
     async def fake_run_critic(gate, *, worker_output, **_kwargs):
         critic_calls.append(worker_output)
@@ -323,7 +335,7 @@ async def test_gated_worker_disabled_skips_critic_entirely(monkeypatch: pytest.M
     critic_calls = []
 
     async def fake_run_agent_node(node, **kwargs):
-        return "worker output", None
+        return "worker output", None, None
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(1)
@@ -342,7 +354,7 @@ async def test_gated_worker_worker_failure_stops_immediately(monkeypatch: pytest
     critic_calls = []
 
     async def fake_run_agent_node(node, **kwargs):
-        return None, "the LLM call failed"
+        return None, "the LLM call failed", None
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(1)
@@ -352,14 +364,20 @@ async def test_gated_worker_worker_failure_stops_immediately(monkeypatch: pytest
     monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
 
     worker_run, gate_run = await _run(*_worker_gate())
-    assert worker_run == {"status": "failed", "output_text": None, "error": "the LLM call failed", "attempts": 1}
+    assert worker_run == {
+        "status": "failed",
+        "output_text": None,
+        "error": "the LLM call failed",
+        "attempts": 1,
+        "run_id": None,
+    }
     assert gate_run == {"status": "skipped"}
     assert critic_calls == []
 
 
 async def test_gated_worker_critic_failure_fails_the_pair(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_agent_node(node, **kwargs):
-        return "worker output", None
+        return "worker output", None, None
 
     async def fake_run_critic(gate, **kwargs):
         return None, "critic run timed out"
@@ -540,7 +558,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
 
     async def fake_run_agent_node(node, *, graph, **kwargs):
         received_configs.append(pe._resolve_llm_config(graph, node["id"]))
-        return f"output for {node['id']}", None
+        return f"output for {node['id']}", None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -654,7 +672,7 @@ async def test_run_protocol_deactivated_node_passes_through(
     async def fake_run_agent_node(node, **kwargs):
         nonlocal call_count
         call_count += 1
-        return f"real output from {node['id']}", None
+        return f"real output from {node['id']}", None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -1004,7 +1022,7 @@ async def test_run_protocol_tool_source_node_never_gets_its_own_turn(
     _run_agent_node."""
 
     async def fake_run_agent_node(node, *, graph, **kwargs):
-        return f"output for {node['id']}", None
+        return f"output for {node['id']}", None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 

@@ -15,7 +15,11 @@ import { NodeSummaryLine } from './NodeSummaryLine'
 // variety, since a node's identity is its type, not its label.
 const ACCENT = hashToChartHue('agent')
 
-export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeData & { runStatus?: NodeRunStatus } }) {
+export function AgentNode({
+  id,
+  data,
+  selected,
+}: NodeProps & { data: AgentNodeData & { runStatus?: NodeRunStatus; missingLlm?: boolean } }) {
   const badge = nodeRunBadge(data.runStatus)
   const { updateNodeData } = useReactFlow()
   const isActive = data.active ?? true
@@ -57,7 +61,10 @@ export function AgentNode({ id, data, selected }: NodeProps & { data: AgentNodeD
           {data.label || 'Agent'}
         </span>
       </div>
-      <NodeSummaryLine text={data.config?.goal || null} emptyLabel="No goal set" />
+      <NodeSummaryLine
+        text={data.config?.prompt || data.config?.goal || null}
+        warning={data.missingLlm ? "No LLM connected -- this agent can't run" : null}
+      />
       {/* n8n's own 3 bottom sub-connectors (Chat Model/Memory/Tool), adapted
           and extended with a 4th (Architectural Pattern, ASAREE's own
           addition, no n8n equivalent): required LLM (exactly one), optional

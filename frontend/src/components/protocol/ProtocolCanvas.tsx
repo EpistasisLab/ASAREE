@@ -223,13 +223,26 @@ export function ProtocolCanvas({
     [edges],
   )
 
+  // The one node-level "this can't run" condition an Agent card can flag
+  // without a live check: no LLM wired at all (topological_order's own
+  // "exactly one LLM connection" requirement). Every OTHER connector
+  // mismatch topological_order checks for is already prevented at
+  // wire-time by isValidConnection, and an execution pattern can never
+  // reach zero (see nonDeletablePatternNodeIds above) -- so this is the
+  // only one actually reachable through normal use.
+  const agentIdsWithLlm = useMemo(() => new Set(edges.filter((e) => e.targetHandle === 'llm').map((e) => e.target)), [edges])
+
   const nodesWithRunStatus = useMemo((): Node[] => {
     return nodes.map((n) => ({
       ...n,
       deletable: !nonDeletablePatternNodeIds.has(n.id),
-      data: { ...n.data, runStatus: runQuery.data?.node_runs[n.id]?.status },
+      data: {
+        ...n.data,
+        runStatus: runQuery.data?.node_runs[n.id]?.status,
+        missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
+      },
     }))
-  }, [nodes, runQuery.data, nonDeletablePatternNodeIds])
+  }, [nodes, runQuery.data, nonDeletablePatternNodeIds, agentIdsWithLlm])
 
   // Same protection, one layer up -- the architectural_pattern EDGE itself
   // must not be removable on its own (InteractEdge never renders a hover

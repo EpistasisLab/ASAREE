@@ -940,6 +940,73 @@ async def plan_cell_runs(
     return runs, len(cells) - len(pending)
 
 
+def validate_single_node_runnable(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """Validates a node can run in isolation (the canvas's per-node Play
+    icon) -- a deliberately narrower check than topological_order's
+    full-graph validation, since a single-node run must not fail because of
+    some OTHER, unrelated node's own incomplete config elsewhere in the same
+    graph. Returns the node dict on success."""
+    nodes: dict[str, dict[str, Any]] = {n["id"]: n for n in graph.get("nodes") or []}
+    node = nodes.get(node_id)
+    if node is None:
+        raise ProtocolValidationError(f"No such node: {node_id!r}")
+    if node.get("type") != "agent":
+        raise ProtocolValidationError("Only Agent nodes can be run on their own.")
+    if _upstream_ids(graph, node_id):
+        raise ProtocolValidationError(
+            "This agent has upstream input from another node -- running it alone isn't supported yet. "
+            "Use the canvas's main Run button to run the whole pipeline."
+        )
+    llm_edges = _edges_with_handle(graph, node_id, "llm", direction="incoming")
+    if len(llm_edges) != 1:
+        raise ProtocolValidationError(
+            f"Node {_node_display_name(node)!r} must have exactly one LLM connection (found {len(llm_edges)})."
+        )
+    llm_source = nodes.get(llm_edges[0]["source"])
+    if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
+        raise ProtocolValidationError(f"Node {_node_display_name(node)!r}'s LLM connection must come from an LLM node.")
+    return node
+
+
+async def _run_single_node(
+    protocol_run_id: uuid.UUID, *, protocol_id: uuid.UUID, owner_id: uuid.UUID, graph: dict[str, Any], node_id: str
+) -> None:
+    """The canvas's per-node Play run: one Agent node, no upstream, no gated
+    pair, no factor substitution, no coordination-strategy check -- none of
+    those concepts apply to a single node run in isolation. A deliberately
+    separate path from the main topological walk below, not a special case
+    bolted onto it."""
+    try:
+        node = validate_single_node_runnable(graph, node_id)
+    except ProtocolValidationError as e:
+        async with get_session() as db:
+            await set_status(db, protocol_run_id, status="failed", error=str(e))
+        return
+
+    async with get_session() as db:
+        await set_status(db, protocol_run_id, status="running")
+        await update_node_run(db, protocol_run_id, node_id, {"status": "running"})
+
+    user_input = _build_user_input(node, graph, {})
+    output_text, error, run_id = await _run_agent_node(
+        node,
+        protocol_id=protocol_id,
+        protocol_run_id=protocol_run_id,
+        owner_id=owner_id,
+        user_input=user_input,
+        graph=graph,
+    )
+    node_run = {
+        "status": "failed" if error else "completed",
+        "output_text": output_text,
+        "error": error,
+        "run_id": str(run_id) if run_id else None,
+    }
+    async with get_session() as db:
+        await update_node_run(db, protocol_run_id, node_id, node_run)
+        await set_status(db, protocol_run_id, status="failed" if error else "completed", error=error)
+
+
 async def run_protocol(protocol_run_id: uuid.UUID) -> None:
     async with get_session() as db:
         run = await get_protocol_run(db, protocol_run_id)
@@ -951,8 +1018,15 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             return
         protocol_id, owner_id, graph = protocol.id, run.owner_id, protocol.graph
         experiment_id, cell_label, factor_values = protocol.experiment_id, run.cell_label, run.factor_values
+        target_node_id = run.target_node_id
         experiment = await get_experiment(db, experiment_id) if experiment_id else None
         design_spec = experiment.design_spec if experiment is not None else None
+
+    if target_node_id:
+        await _run_single_node(
+            protocol_run_id, protocol_id=protocol_id, owner_id=owner_id, graph=graph, node_id=target_node_id
+        )
+        return
 
     # Both None for a plain graph run. Set together only for a run created by
     # "run all cells" (plan_cell_runs) -- substitute this cell's factor

@@ -190,6 +190,10 @@ export const protocolsApi = {
   // 422 if the graph is empty or has a cycle -- returns immediately with
   // status "pending"; poll getRun for progress.
   run: (id: string) => request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST' }),
+  // The per-node Play icon -- 422 if the node has upstream input or isn't a
+  // runnable Agent (see validate_single_node_runnable). Same polling shape
+  // as a plain run (getRun), just with node_runs carrying only this one key.
+  runNode: (id: string, nodeId: string) => request<ProtocolRun>(`/protocols/${id}/nodes/${nodeId}/run`, { method: 'POST' }),
   getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
   listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
   // "Run all cells" -- 422 if there's no linked experiment or the graph

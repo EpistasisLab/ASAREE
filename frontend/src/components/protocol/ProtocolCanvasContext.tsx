@@ -41,6 +41,11 @@ interface ProtocolCanvasActions {
   // Same idea again, requested from an existing edge's own hover toolbar
   // (see EdgeInsertRequest's own comment).
   requestEdgeInsert: (request: EdgeInsertRequest) => void
+  // The canvas's per-node Play icon (NodeHoverToolbar) -- runs one Agent
+  // node in isolation via POST /protocols/{id}/nodes/{nodeId}/run. Only
+  // ever called for a node with no upstream input (see AgentNode.tsx's own
+  // canRunAlone computation); the backend re-validates this regardless.
+  requestRunNode: (nodeId: string) => void
 }
 
 // Node renderers (AgentNode, CriticGateNode, ...) are deeply nested,

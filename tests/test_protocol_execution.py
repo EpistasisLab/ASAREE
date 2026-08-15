@@ -1120,3 +1120,114 @@ async def test_run_protocol_rejects_placeholder_coordination_strategy(owner_id: 
         async with get_session() as db:
             await delete_protocol(db, protocol_id)
             await delete_experiment(db, experiment_id)
+
+
+# --- validate_single_node_runnable / single-node "Play" runs -----------------
+
+
+def test_validate_single_node_runnable_missing_node_raises() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [agent], "edges": [agent_llm_edge]}
+    with pytest.raises(ProtocolValidationError, match="No such node"):
+        pe.validate_single_node_runnable(graph, "does-not-exist")
+
+
+def test_validate_single_node_runnable_rejects_non_agent_type() -> None:
+    node = _node("g1", "critic_gate")
+    graph = {"nodes": [node], "edges": []}
+    with pytest.raises(ProtocolValidationError, match="Only Agent nodes"):
+        pe.validate_single_node_runnable(graph, "g1")
+
+
+def test_validate_single_node_runnable_rejects_a_node_with_upstream_input() -> None:
+    upstream = _node("u", "agent")
+    downstream, downstream_llm_edge = _agent_with_llm("d")
+    graph = {"nodes": [upstream, downstream], "edges": _edges(("u", "d")) + [downstream_llm_edge]}
+    with pytest.raises(ProtocolValidationError, match="upstream input"):
+        pe.validate_single_node_runnable(graph, "d")
+
+
+def test_validate_single_node_runnable_rejects_zero_llm_connections() -> None:
+    graph = {"nodes": [_node("a", "agent")], "edges": []}
+    with pytest.raises(ProtocolValidationError, match="must have exactly one LLM connection"):
+        pe.validate_single_node_runnable(graph, "a")
+
+
+def test_validate_single_node_runnable_rejects_llm_edge_from_wrong_node_type() -> None:
+    agent = _node("a", "agent")
+    not_an_llm = _node("x", "agent")
+    graph = {"nodes": [agent, not_an_llm], "edges": [_llm_edge("x", "a")]}
+    with pytest.raises(ProtocolValidationError, match="must come from an LLM node"):
+        pe.validate_single_node_runnable(graph, "a")
+
+
+def test_validate_single_node_runnable_accepts_a_valid_standalone_agent() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [agent, _llm_node()], "edges": [agent_llm_edge]}
+    assert pe.validate_single_node_runnable(graph, "a") is agent
+
+
+async def test_run_single_node_ignores_an_unrelated_broken_sibling_node(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point of a narrower, per-node check: a single-node Play run
+    must not fail because some OTHER node elsewhere in the same graph is
+    unrelated and broken (e.g. missing its own LLM connector) -- only
+    topological_order's full-graph walk cares about that."""
+
+    async def fake_run_agent_node(node, *, user_input, **_kwargs):
+        return f"solo output for {node['id']} given {user_input!r}", None, None
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+
+    target, target_llm_edge = _agent_with_llm("target")
+    target["data"]["config"] = {"prompt": "do the one thing", "goal": ""}
+    broken_sibling = _node("broken", "agent")  # no LLM connector at all
+
+    graph = {"nodes": [target, broken_sibling, _llm_node()], "edges": [target_llm_edge]}
+
+    async with get_session() as db:
+        protocol = await create_protocol(
+            db, name=f"single-node-test-{uuid.uuid4().hex}", owner_id=owner_id, graph=graph
+        )
+        protocol_id = protocol.id
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id, target_node_id="target")
+        run_id = run.id
+
+    try:
+        await pe.run_protocol(run_id)
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+            assert fetched is not None
+            assert fetched.status == "completed"
+            assert fetched.node_runs.keys() == {"target"}  # the broken sibling is never touched
+            assert fetched.node_runs["target"]["output_text"] == "solo output for target given 'do the one thing'"
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+
+
+async def test_run_single_node_with_upstream_input_fails_cleanly(owner_id: uuid.UUID) -> None:
+    upstream = _node("u", "agent")
+    downstream, downstream_llm_edge = _agent_with_llm("d")
+    graph = {"nodes": [upstream, downstream, _llm_node()], "edges": _edges(("u", "d")) + [downstream_llm_edge]}
+
+    async with get_session() as db:
+        protocol = await create_protocol(
+            db, name=f"single-node-upstream-test-{uuid.uuid4().hex}", owner_id=owner_id, graph=graph
+        )
+        protocol_id = protocol.id
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id, target_node_id="d")
+        run_id = run.id
+
+    try:
+        await pe.run_protocol(run_id)
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+            assert fetched is not None
+            assert fetched.status == "failed"
+            assert fetched.error is not None
+            assert "upstream input" in fetched.error
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)

@@ -30,10 +30,14 @@ async def create_protocol_run(
     owner_id: uuid.UUID,
     cell_label: str | None = None,
     factor_values: dict[str, Any] | None = None,
+    target_node_id: str | None = None,
 ) -> ProtocolRun:
     """``cell_label``/``factor_values`` are set together only for a run
     created by "run all cells" (``services.protocol_execution.plan_cell_runs``)
-    -- both stay ``None`` for a plain graph run, the existing behavior."""
+    -- both stay ``None`` for a plain graph run, the existing behavior.
+    ``target_node_id`` is set only for a single-node "Play" run (see
+    ``ProtocolRun`` model's own comment) -- mutually exclusive with
+    cell_label/factor_values in practice, though nothing enforces that here."""
     run = ProtocolRun(
         protocol_id=protocol_id,
         owner_id=owner_id,
@@ -41,6 +45,7 @@ async def create_protocol_run(
         node_runs={},
         cell_label=cell_label,
         factor_values=factor_values,
+        target_node_id=target_node_id,
     )
     db.add(run)
     await db.flush()

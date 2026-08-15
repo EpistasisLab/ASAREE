@@ -9,6 +9,7 @@ import { ConnectorHandleLabel } from './ConnectorHandleLabel'
 import { MainEdgeAddStub } from './MainEdgeAddStub'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 import { NodeSummaryLine } from './NodeSummaryLine'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 
 // All "agent" nodes share one hue in V1 -- type-based coloring (CLAUDE.md's
 // hash-driven tint rule for "real category variety"), not per-instance
@@ -19,9 +20,12 @@ export function AgentNode({
   id,
   data,
   selected,
-}: NodeProps & { data: AgentNodeData & { runStatus?: NodeRunStatus; missingLlm?: boolean } }) {
+}: NodeProps & {
+  data: AgentNodeData & { runStatus?: NodeRunStatus; missingLlm?: boolean; canRunAlone?: boolean }
+}) {
   const badge = nodeRunBadge(data.runStatus)
   const { updateNodeData } = useReactFlow()
+  const { requestRunNode } = useProtocolCanvasActions()
   const isActive = data.active ?? true
 
   return (
@@ -31,7 +35,12 @@ export function AgentNode({
         selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
       } ${isActive ? '' : 'opacity-50'}`}
     >
-      <NodeHoverToolbar nodeId={id} isActive={isActive} onToggleActive={() => updateNodeData(id, { active: !isActive })} />
+      <NodeHoverToolbar
+        nodeId={id}
+        isActive={isActive}
+        onToggleActive={() => updateNodeData(id, { active: !isActive })}
+        runAlone={{ canRun: !!data.canRunAlone, onRun: () => requestRunNode(id) }}
+      />
       {badge && (
         <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
       )}

@@ -57,6 +57,9 @@ export interface ProtocolRun {
   // result gets written back to.
   cell_label: string | null
   factor_values: Record<string, unknown> | null
+  // Set only for a per-node "Play" run (POST /protocols/{id}/nodes/{nodeId}/run)
+  // -- null for both a plain graph run and a "run all cells" run.
+  target_node_id: string | null
   created_at: string
   updated_at: string
 }

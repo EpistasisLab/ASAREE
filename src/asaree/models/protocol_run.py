@@ -56,6 +56,14 @@ class ProtocolRun(Base, TimestampMixin):
     # written back to via upsert_cell.
     cell_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     factor_values: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Set only for a canvas "Play" run on one Agent node in isolation (the
+    # node's own hover-toolbar icon, not the top-level Run button) -- null
+    # for both a plain graph run and a "run all cells" run. run_protocol
+    # branches on this at the very top: present, run just this one node
+    # (which must have no upstream input -- see
+    # protocol_execution.validate_single_node_runnable); absent, the
+    # existing full topological walk, unchanged.
+    target_node_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 __all__ = ["ProtocolRun"]

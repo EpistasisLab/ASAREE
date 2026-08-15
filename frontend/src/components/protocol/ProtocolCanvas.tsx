@@ -78,6 +78,9 @@ import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 // how the "tool" slot already accepts any mcp_tool node.
 const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry']
 const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
+// Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
+// whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
+const CONNECTOR_HANDLES = new Set(['llm', 'tool', 'memory', 'architectural_pattern'])
 
 const NODE_TYPES = {
   agent: AgentNode,
@@ -194,6 +197,16 @@ export function ProtocolCanvas({
     onSuccess: (run) => setRunId(run.id),
   })
 
+  // The canvas's per-node Play icon -- reuses the exact same runId/runQuery
+  // polling state as the main Run button, since a node-scoped run's
+  // node_runs just carries one key instead of the whole graph's; the
+  // Output tab and status badge both already read from that same state
+  // with no changes needed.
+  const runNodeMutation = useMutation({
+    mutationFn: (nodeId: string) => protocolsApi.runNode(protocolId, nodeId),
+    onSuccess: (run) => setRunId(run.id),
+  })
+
   // First refetchInterval-based poll in this codebase -- no existing
   // long-running-job UI to mirror. Function form so polling stops itself
   // once the run reaches a terminal status, rather than polling forever.
@@ -232,6 +245,18 @@ export function ProtocolCanvas({
   // only one actually reachable through normal use.
   const agentIdsWithLlm = useMemo(() => new Set(edges.filter((e) => e.targetHandle === 'llm').map((e) => e.target)), [edges])
 
+  // The canvas's per-node Play icon is only offered for a node with no
+  // upstream *main* pipeline edge (mirrors services.protocol_execution's
+  // _upstream_ids: any edge into this node whose targetHandle ISN'T one of
+  // the typed connector slots) -- running a node mid-pipeline against real
+  // upstream output needs a bounded/partial-run entrypoint this executor
+  // doesn't have yet (see NodeHoverToolbar.tsx's own long-standing note on
+  // n8n's "Execute step").
+  const agentIdsWithUpstream = useMemo(
+    () => new Set(edges.filter((e) => !CONNECTOR_HANDLES.has(e.targetHandle ?? '')).map((e) => e.target)),
+    [edges],
+  )
+
   const nodesWithRunStatus = useMemo((): Node[] => {
     return nodes.map((n) => ({
       ...n,
@@ -240,9 +265,10 @@ export function ProtocolCanvas({
         ...n.data,
         runStatus: runQuery.data?.node_runs[n.id]?.status,
         missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
+        canRunAlone: n.type === 'agent' && !agentIdsWithUpstream.has(n.id),
       },
     }))
-  }, [nodes, runQuery.data, nonDeletablePatternNodeIds, agentIdsWithLlm])
+  }, [nodes, runQuery.data, nonDeletablePatternNodeIds, agentIdsWithLlm, agentIdsWithUpstream])
 
   // Same protection, one layer up -- the architectural_pattern EDGE itself
   // must not be removable on its own (InteractEdge never renders a hover
@@ -303,9 +329,19 @@ export function ProtocolCanvas({
     setPendingEdgeInsert(request)
     setAddPanelOpen(true)
   }, [])
+  // The canvas's per-node Play icon (NodeHoverToolbar) -- see
+  // runNodeMutation's own comment for why this reuses the main Run
+  // button's runId/runQuery polling state instead of a separate one.
+  const requestRunNode = useCallback(
+    (nodeId: string) => {
+      setRunErrorDismissed(false)
+      runNodeMutation.mutate(nodeId)
+    },
+    [runNodeMutation],
+  )
   const canvasActions = useMemo(
-    () => ({ requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert }),
-    [requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert],
+    () => ({ requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode }),
+    [requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode],
   )
 
   // Every new Agent gets its own explicit default execution-pattern node
@@ -618,16 +654,17 @@ export function ProtocolCanvas({
           </ReactFlow>
           <CanvasControls />
           {(() => {
-            // runMutation.error is the real validation message (e.g.
-            // topological_order/validate_coordination_strategy rejecting the
-            // graph before any ProtocolRun row even exists) --
+            // runMutation.error/runNodeMutation.error is the real validation
+            // message (e.g. topological_order/validate_single_node_runnable
+            // rejecting before any ProtocolRun row even exists) --
             // runQuery.data?.error only ever exists once a run row was
             // created and later failed asynchronously in the worker.
+            const failedMutation = runMutation.isError ? runMutation : runNodeMutation.isError ? runNodeMutation : null
             const runErrorText =
               runQuery.data?.error ??
-              (runMutation.isError
-                ? runMutation.error instanceof ApiError && typeof runMutation.error.detail === 'string'
-                  ? runMutation.error.detail
+              (failedMutation
+                ? failedMutation.error instanceof ApiError && typeof failedMutation.error.detail === 'string'
+                  ? failedMutation.error.detail
                   : 'Could not start the run.'
                 : null)
             if (!runErrorText || runErrorDismissed) return null

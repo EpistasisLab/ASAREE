@@ -23,6 +23,7 @@ from asaree.services.protocol_execution import (
     plan_cell_runs,
     topological_order,
     validate_coordination_strategy,
+    validate_single_node_runnable,
 )
 from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, list_protocol_runs
 from asaree.services.protocols import (
@@ -78,6 +79,7 @@ class ProtocolRunResponse(BaseModel):
     error: str | None
     cell_label: str | None
     factor_values: dict[str, Any] | None
+    target_node_id: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -181,6 +183,25 @@ async def create_protocol_run_endpoint(
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=user.id)
+    await enqueue_protocol_run(run.id)
+    return ProtocolRunResponse.model_validate(run)
+
+
+@router.post("/{protocol_id}/nodes/{node_id}/run", response_model=ProtocolRunResponse, status_code=201)
+async def run_single_node_endpoint(
+    protocol_id: uuid.UUID, node_id: str, user: CurrentUser, db: DbSession
+) -> ProtocolRunResponse:
+    """The canvas's per-node Play icon -- runs one Agent node in isolation.
+    Scoped to a node with no upstream input (validated up front, same
+    fail-before-creating-anything shape as the plain-run endpoint above):
+    running a node mid-pipeline against real upstream output needs a
+    bounded/partial-run entrypoint this executor doesn't have yet."""
+    protocol = await _get_owned_protocol(db, protocol_id, user)
+    try:
+        validate_single_node_runnable(protocol.graph, node_id)
+    except ProtocolValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=user.id, target_node_id=node_id)
     await enqueue_protocol_run(run.id)
     return ProtocolRunResponse.model_validate(run)
 

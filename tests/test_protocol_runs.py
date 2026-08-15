@@ -6,7 +6,6 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 
-import pytest
 import pytest_asyncio
 
 import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for experiments' FK

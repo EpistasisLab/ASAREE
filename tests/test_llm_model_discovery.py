@@ -10,7 +10,6 @@ from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.services import llm_model_discovery as discovery
 from asaree.services.user_llm_settings import encrypt
 
-
 _PROJECT_ENDPOINT = "https://my-resource.services.ai.azure.com/api/projects/my-project"
 
 
@@ -72,7 +71,7 @@ class _FakeAsyncClient:
         self._response = response
         self._captured_headers = captured_headers
 
-    async def __aenter__(self) -> "_FakeAsyncClient":
+    async def __aenter__(self) -> _FakeAsyncClient:
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
@@ -87,7 +86,9 @@ async def test_discover_models_azure_success_maps_deployments(monkeypatch: pytes
     captured_headers: list[dict] = []
     fake_response = _FakeResponse({"data": [{"id": "my-gpt4-deployment"}, {"id": "claude-sonnet-5"}]})
     monkeypatch.setattr(
-        discovery.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(fake_response, captured_headers=captured_headers)
+        discovery.httpx,
+        "AsyncClient",
+        lambda **kwargs: _FakeAsyncClient(fake_response, captured_headers=captured_headers),
     )
 
     models, source, note = await discovery.discover_models(provider="azure_foundry", setting=_foundry_setting())
@@ -104,7 +105,9 @@ async def test_discover_models_azure_success_maps_deployments(monkeypatch: pytes
 
 async def test_discover_models_azure_failure_scrubs_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_response = _FakeResponse({}, status_code=401)
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(fake_response, captured_headers=[]))
+    monkeypatch.setattr(
+        discovery.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(fake_response, captured_headers=[])
+    )
 
     models, source, note = await discovery.discover_models(provider="azure_foundry", setting=_foundry_setting())
 

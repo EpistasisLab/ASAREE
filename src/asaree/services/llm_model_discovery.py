@@ -129,6 +129,7 @@ async def _discover_azure_via_project(setting: UserLLMSetting) -> tuple[list[Mod
 
 
 async def _discover_azure_classic(setting: UserLLMSetting) -> tuple[list[ModelInfo], str, str | None]:
+    assert setting.api_base, "caller (discover_models) already checked setting.api_base is set"
     base = foundry_api_base(setting.api_base)
     api_key = decrypt_api_key(setting)
     try:

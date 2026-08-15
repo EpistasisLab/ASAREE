@@ -122,7 +122,8 @@ async def current_revision(url: str | None = None) -> str | None:
         async with engine.connect() as conn:
             if await conn.scalar(text("SELECT to_regclass('alembic_version')")) is None:
                 return None
-            return await conn.scalar(text("SELECT version_num FROM alembic_version LIMIT 1"))
+            version_num = await conn.scalar(text("SELECT version_num FROM alembic_version LIMIT 1"))
+            return str(version_num) if version_num is not None else None
     finally:
         await engine.dispose()
 

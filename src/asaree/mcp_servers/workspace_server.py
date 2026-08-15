@@ -498,7 +498,7 @@ def check_stage_gate(stage: str, workspace_id: str = "", ctx: Context[Any, Any, 
         if stage not in STAGE_VERSION:
             return json.dumps({"passed": False, "errors": [f"unknown stage {stage!r}."]})
         state = ws.load_state()
-        target = state.get("target_column")
+        target = ws.target_column
         version_id = STAGE_VERSION[stage]
         ver = next((v for v in state.get("versions", []) if v.get("id") == version_id), None)
         if ver is None:

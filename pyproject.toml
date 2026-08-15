@@ -86,6 +86,10 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "SIM"]
 # what autogenerate produced unreadable, which is the one thing a migration
 # should be. Matches agentic-core's own convention.
 "src/asaree/migrations/versions/*.py" = ["E501", "I001", "W291"]
+# X_train/X_test are scikit-learn's own capitalization convention (X = a
+# feature matrix, y = a target vector) -- renaming to x_train would read as
+# wrong to anyone coming from that ecosystem, not more correct.
+"src/asaree/mcp_servers/workspace_server.py" = ["N806"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["asaree"]

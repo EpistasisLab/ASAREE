@@ -98,11 +98,16 @@ async def list_models_endpoint(provider: str, user: CurrentUser, db: DbSession) 
         raise HTTPException(status_code=422, detail=f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}")
 
     key = f"model-discovery:{user.id}:{provider}"
-    allowed, retry_after = await check_rate_limit(key, limit=_DISCOVERY_MAX_ATTEMPTS, window_seconds=_DISCOVERY_WINDOW_SECONDS)
+    allowed, retry_after = await check_rate_limit(
+        key, limit=_DISCOVERY_MAX_ATTEMPTS, window_seconds=_DISCOVERY_WINDOW_SECONDS
+    )
     if not allowed:
         raise HTTPException(
             status_code=429,
-            detail={"message": f"Too many model list requests. Please wait {retry_after} seconds.", "retry_after_seconds": retry_after},
+            detail={
+                "message": f"Too many model list requests. Please wait {retry_after} seconds.",
+                "retry_after_seconds": retry_after,
+            },
         )
     await record_attempt(key, window_seconds=_DISCOVERY_WINDOW_SECONDS)
 

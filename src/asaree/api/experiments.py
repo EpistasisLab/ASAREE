@@ -297,7 +297,9 @@ class ResultsResponse(BaseModel):
 
 
 @router.get("/{experiment_id}/results", response_model=ResultsResponse)
-async def get_experiment_results_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ResultsResponse:
+async def get_experiment_results_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> ResultsResponse:
     """See services.factorial_analysis.analyze_experiment_design -- this
     endpoint is a thin pass-through, all the real derivation/wrapping logic
     lives there so it's unit-testable without a request/response cycle."""
@@ -352,7 +354,9 @@ class TrialResponse(BaseModel):
 
 
 @router.get("/{experiment_id}/runs", response_model=list[TrialResponse])
-async def list_experiment_trials_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> list[TrialResponse]:
+async def list_experiment_trials_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> list[TrialResponse]:
     """One row per cell (a "trial" -- a factor-level combination x replicate),
     not per ProtocolRun -- a cell that's never been run is still a trial
     (status "queued"), which listing ProtocolRuns alone would miss. See

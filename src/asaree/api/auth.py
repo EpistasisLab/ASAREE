@@ -232,7 +232,9 @@ async def login(
     await db.commit()
 
     access_token, refresh_token = create_user_tokens(user.id, user.email)
-    bg.add_task(log_action, action="user.login", resource_type="user", resource_id=user.id, user_id=user.id, request=request)
+    bg.add_task(
+        log_action, action="user.login", resource_type="user", resource_id=user.id, user_id=user.id, request=request
+    )
     _set_refresh_cookie(response, refresh_token)
     return TokenResponse(
         access_token=access_token,

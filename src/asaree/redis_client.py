@@ -17,7 +17,7 @@ def get_redis() -> redis.Redis:
     """Get or create the async Redis client (lazy singleton)."""
     global _client
     if _client is None:
-        _client = redis.from_url(get_settings().redis_url, decode_responses=True)
+        _client = redis.from_url(get_settings().redis_url, decode_responses=True)  # type: ignore[no-untyped-call]
     return _client
 
 

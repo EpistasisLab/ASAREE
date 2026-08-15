@@ -31,7 +31,9 @@ def _design_spec(**overrides: Any) -> dict[str, Any]:
 
 
 def test_no_factors_is_unavailable() -> None:
-    result = analyze_experiment_design({"metrics": [{"name": "accuracy", "primary": True, "direction": "maximize"}]}, [])
+    result = analyze_experiment_design(
+        {"metrics": [{"name": "accuracy", "primary": True, "direction": "maximize"}]}, []
+    )
     assert result["available"] is False
     assert "factors" in result["reason"]
     assert result["analysis"] is None
@@ -39,7 +41,9 @@ def test_no_factors_is_unavailable() -> None:
 
 
 def test_no_primary_metric_is_unavailable() -> None:
-    result = analyze_experiment_design(_design_spec(metrics=[{"name": "accuracy", "primary": False, "direction": "maximize"}]), [])
+    result = analyze_experiment_design(
+        _design_spec(metrics=[{"name": "accuracy", "primary": False, "direction": "maximize"}]), []
+    )
     assert result["available"] is False
     assert "primary metric" in result["reason"]
 

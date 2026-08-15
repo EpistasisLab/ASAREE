@@ -406,7 +406,11 @@ def sink_node_ids(graph: dict[str, Any]) -> list[str]:
     anything (an unwired one would otherwise falsely count as an extra
     sink)."""
     nodes, downstream, _upstream = _adjacency(graph)
-    return [nid for nid, node in nodes.items() if not downstream[nid] and node.get("type") not in _PURE_CONFIG_SOURCE_TYPES]
+    return [
+        nid
+        for nid, node in nodes.items()
+        if not downstream[nid] and node.get("type") not in _PURE_CONFIG_SOURCE_TYPES
+    ]
 
 
 def _set_path(root: dict[str, Any], dotted_path: str, value: Any) -> None:
@@ -496,7 +500,7 @@ def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, An
     source = nodes.get(edges[0]["source"])
     if source is None:
         return {}
-    slug = _EXECUTION_PATTERN_SLUGS.get(source.get("type"))
+    slug = _EXECUTION_PATTERN_SLUGS.get(source.get("type", ""))
     if slug is None:
         return {}
     return {"execution_pattern": slug, "pattern_params": {slug: (source.get("data") or {}).get("config") or {}}}
@@ -561,9 +565,9 @@ def _build_user_input(node: dict[str, Any], graph: dict[str, Any], node_runs: di
     structured handoff via output_contract.payload is a fast-follow, the
     same way the source notebook's own stage-report-block pattern could
     graduate to using it."""
-    data = node.get("data") or {}
-    config = data.get("config", {})
-    seed = config.get("prompt") or config.get("goal") or data.get("label", "")
+    data: dict[str, Any] = node.get("data") or {}
+    config: dict[str, Any] = data.get("config", {})
+    seed: str = config.get("prompt") or config.get("goal") or data.get("label", "")
     upstream_ids = _upstream_ids(graph, node["id"])
     if not upstream_ids:
         return seed
@@ -715,7 +719,7 @@ async def _run_critic(
     label = gate.get("data", {}).get("label")
     if label:
         description = f"{description} (canvas label: {label})".strip()
-    tool_config = {"server_names": [], "tool_names": []}
+    tool_config: dict[str, list[str]] = {"server_names": [], "tool_names": []}
 
     existing = await get_agent_by_name(agent_name, owner_id=owner_id)
     if existing is not None:
@@ -819,6 +823,7 @@ async def _run_gated_worker(
                 },
                 {"status": "skipped"},
             )
+        assert output_text is not None, "_run_agent_node guarantees output_text when error is falsy"
 
         if not enabled:
             return (
@@ -871,6 +876,7 @@ async def _run_gated_worker(
                 },
                 {"status": "failed", "output_text": None, "error": verdict_error},
             )
+        assert verdict is not None, "_run_critic guarantees verdict when verdict_error is falsy"
 
         if verdict.get("approved"):
             return (
@@ -1099,6 +1105,9 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 failed = True
             continue
 
+        output_text: str | None
+        error: str | None
+        run_id: uuid.UUID | None
         if not _is_node_active(node):
             # Deactivated: skip this node's own logic entirely -- its
             # upstream input passes straight through as its output

@@ -772,7 +772,9 @@ def test_tool_connection_on_critic_gate_raises() -> None:
             _tool_edge("tool1", "g1"),
         ],
     }
-    with pytest.raises(ProtocolValidationError, match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection"):
+    with pytest.raises(
+        ProtocolValidationError, match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection"
+    ):
         topological_order(graph)
 
 
@@ -877,7 +879,9 @@ def test_architectural_pattern_connection_on_critic_gate_raises() -> None:
             _pattern_edge("pattern", "g1"),
         ],
     }
-    with pytest.raises(ProtocolValidationError, match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection"):
+    with pytest.raises(
+        ProtocolValidationError, match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection"
+    ):
         topological_order(graph)
 
 
@@ -890,7 +894,8 @@ def test_architectural_pattern_node_with_plain_outgoing_edge_raises() -> None:
         "edges": [agent_llm_edge, {"id": "pattern-b", "source": "pattern", "target": "b"}],
     }
     with pytest.raises(
-        ProtocolValidationError, match="Architectural Pattern node .* can only connect to a node's Architectural Pattern slot"
+        ProtocolValidationError,
+        match="Architectural Pattern node .* can only connect to a node's Architectural Pattern slot",
     ):
         topological_order(graph)
 
@@ -997,7 +1002,11 @@ def test_resolve_pattern_config_returns_connected_node_config() -> None:
 
 def test_resolve_pattern_config_maps_baseline_slug() -> None:
     agent, agent_llm_edge = _agent_with_llm("a")
-    baseline = {"id": "baseline", "type": "pattern_single_agent_baseline", "data": {"label": "", "config": {"max_iterations": 5}}}
+    baseline = {
+        "id": "baseline",
+        "type": "pattern_single_agent_baseline",
+        "data": {"label": "", "config": {"max_iterations": 5}},
+    }
     graph = {"nodes": [agent, baseline], "edges": [agent_llm_edge, _pattern_edge("baseline", "a")]}
     assert pe._resolve_pattern_config(graph, "a") == {
         "execution_pattern": "single_agent_baseline",
@@ -1080,7 +1089,9 @@ def test_coordination_strategy_critic_gate_passes_with_a_gated_pair() -> None:
 
 def test_coordination_strategy_placeholder_slug_raises() -> None:
     with pytest.raises(ProtocolValidationError, match="isn't implemented yet"):
-        validate_coordination_strategy({"coordination_strategy": {"slug": "supervisor_architecture"}}, has_gated_pair=False)
+        validate_coordination_strategy(
+            {"coordination_strategy": {"slug": "supervisor_architecture"}}, has_gated_pair=False
+        )
 
 
 def test_coordination_strategy_unknown_slug_raises() -> None:
@@ -1102,7 +1113,11 @@ async def test_run_protocol_rejects_placeholder_coordination_strategy(owner_id: 
         )
         experiment_id = experiment.id
         protocol = await create_protocol(
-            db, name=f"coord-strategy-protocol-{uuid.uuid4().hex}", owner_id=owner_id, experiment_id=experiment_id, graph=graph
+            db,
+            name=f"coord-strategy-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment_id,
+            graph=graph,
         )
         protocol_id = protocol.id
         run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)

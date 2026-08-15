@@ -417,7 +417,12 @@ def analyze_experiment_design(design_spec: dict[str, Any] | None, cells: Sequenc
     primary = next((m for m in metrics if m.get("primary")), None)
 
     if not factors:
-        return {"available": False, "reason": "No factors declared yet -- add some on the Design tab.", "analysis": None, "best_condition": None}
+        return {
+            "available": False,
+            "reason": "No factors declared yet -- add some on the Design tab.",
+            "analysis": None,
+            "best_condition": None,
+        }
     if primary is None:
         return {
             "available": False,
@@ -429,7 +434,9 @@ def analyze_experiment_design(design_spec: dict[str, Any] | None, cells: Sequenc
     if non_binary:
         return {
             "available": False,
-            "reason": f"This analysis requires every factor to have exactly 2 levels ({', '.join(non_binary)} doesn't).",
+            "reason": (
+                f"This analysis requires every factor to have exactly 2 levels ({', '.join(non_binary)} doesn't)."
+            ),
             "analysis": None,
             "best_condition": None,
         }
@@ -457,7 +464,12 @@ def analyze_experiment_design(design_spec: dict[str, Any] | None, cells: Sequenc
         # state as a FactorialAnalysisError, just a different code path --
         # this function's whole contract is to never crash the Results tab,
         # regardless of which numeric edge case degenerate data hits.
-        return {"available": False, "reason": f"Not enough scored data yet to analyze: {exc}", "analysis": None, "best_condition": None}
+        return {
+            "available": False,
+            "reason": f"Not enough scored data yet to analyze: {exc}",
+            "analysis": None,
+            "best_condition": None,
+        }
 
     emm_cells = analysis.get("emm_cells") or []
     best_condition = None

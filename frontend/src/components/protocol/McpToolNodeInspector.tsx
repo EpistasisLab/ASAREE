@@ -82,7 +82,15 @@ export function McpToolNodeInspector({
                 onValueChange={(value) => {
                   if (!value || value === '__none__') return
                   const server = serversQuery.data.find((s) => s.id === value)
-                  patchConfig({ server_id: value, server_name: server?.name ?? null, tool_names: [] })
+                  // All tools allowed by default -- an allow-list that starts
+                  // empty just means every tool silently does nothing until
+                  // the user discovers they need to flip each one on; "All"
+                  // is also already one click away if they want to narrow it.
+                  patchConfig({
+                    server_id: value,
+                    server_name: server?.name ?? null,
+                    tool_names: server?.capabilities?.tools?.map((t) => t.name) ?? [],
+                  })
                 }}
               >
                 <SelectTrigger className="w-full">

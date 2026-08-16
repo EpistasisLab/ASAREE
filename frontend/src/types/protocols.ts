@@ -255,16 +255,21 @@ export interface LlmNodeData {
   [key: string]: unknown
 }
 
+// 128000 (not agentic-core's own smaller schema default) matches
+// WORKER_MAX_TOKENS in the real spinal-fusion notebook
+// (asaree-spinal-use-case/spinal_pipeline.ipynb) -- used uniformly across
+// every one of its agents/critics, well under agentic-core's own
+// ModelConfig cap of 200000.
 export function defaultAnthropicLlmNodeData(label = 'Anthropic'): LlmNodeData {
-  return { label, config: { provider: 'anthropic', model: 'claude-sonnet-5', temperature: 0.7, max_tokens: 4096 } }
+  return { label, config: { provider: 'anthropic', model: 'claude-sonnet-5', temperature: 0.7, max_tokens: 128000 } }
 }
 
 export function defaultOpenAiLlmNodeData(label = 'OpenAI'): LlmNodeData {
-  return { label, config: { provider: 'openai', model: 'gpt-5', temperature: 0.7, max_tokens: 4096 } }
+  return { label, config: { provider: 'openai', model: 'gpt-5', temperature: 0.7, max_tokens: 128000 } }
 }
 
 export function defaultAzureFoundryLlmNodeData(label = 'Azure AI Foundry'): LlmNodeData {
-  return { label, config: { provider: 'azure_foundry', model: 'gpt-5', temperature: 0.7, max_tokens: 4096 } }
+  return { label, config: { provider: 'azure_foundry', model: 'gpt-5', temperature: 0.7, max_tokens: 128000 } }
 }
 
 // A "Memory" node -- visual/validation scaffolding only for now. Wiring one

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Check, Sparkles } from 'lucide-react'
 import { llmSettingsApi } from '@/api/client'
@@ -62,6 +62,30 @@ export function LlmNodeInspector({
     enabled: !!provider && (provider !== 'azure_foundry' || hasCredential),
   })
 
+  const configForEffort = node?.data.config
+  const models = modelsQuery.data?.models ?? []
+  const selectedModelInfo = models.find((m) => m.id === configForEffort?.model)
+  const showEffort = selectedModelInfo?.supports_effort ?? false
+  const effortLevels = selectedModelInfo?.effort_levels.length ? selectedModelInfo.effort_levels : EFFORT_LEVELS
+
+  // A model that supports effort defaults to something usable instead of
+  // "(none)" -- "medium" when the model offers it (a reasonable middle
+  // ground of quality vs. cost), otherwise whatever its own list's first
+  // entry is. Only fires when effort is genuinely unset AND the currently
+  // selected model actually supports it -- switching to a model that
+  // doesn't support effort leaves config.effort alone (it's just not shown
+  // or used), rather than clearing a value the user may switch back to.
+  // Runs before the `!node` early return below (hooks can't be conditional).
+  useEffect(() => {
+    if (node && showEffort && !configForEffort?.effort && effortLevels.length > 0) {
+      onChange(node.id, {
+        ...node.data,
+        config: { ...node.data.config, effort: effortLevels.includes('medium') ? 'medium' : effortLevels[0] },
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node, showEffort, configForEffort?.effort, effortLevels])
+
   if (!node) return null
   const data = node.data
   const config = data.config
@@ -70,14 +94,10 @@ export function LlmNodeInspector({
   const Icon = meta.icon
   const ACCENT = hashToChartHue(provider || 'llm')
 
-  const models = modelsQuery.data?.models ?? []
-  const selectedModelInfo = models.find((m) => m.id === config.model)
   // Unrecognized model (list still loading, discovery failed, or a
   // hand-typed value not in the catalog) -- default to temperature-only,
   // the same safe fallback agentic-core's own DEFAULT_CAPABILITIES uses.
   const showTemperature = selectedModelInfo?.supports_temperature ?? true
-  const showEffort = selectedModelInfo?.supports_effort ?? false
-  const effortLevels = selectedModelInfo?.effort_levels.length ? selectedModelInfo.effort_levels : EFFORT_LEVELS
 
   function patchConfig(patch: Partial<LlmNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
@@ -237,16 +257,27 @@ export function LlmNodeInspector({
             </div>
           </FactorBindableField>
         )}
-        <div className="space-y-1.5">
-          <Label htmlFor="llm-max-tokens">Max tokens</Label>
-          <Input
-            id="llm-max-tokens"
-            type="number"
-            min="1"
-            value={config.max_tokens}
-            onChange={(e) => patchConfig({ max_tokens: Number(e.target.value) })}
-          />
-        </div>
+        <FactorBindableField
+          experimentId={experimentId}
+          fieldPath="config.max_tokens"
+          defaultLabel="Max tokens"
+          levelType="number"
+          currentValue={config.max_tokens}
+          boundFactorName={bindings['config.max_tokens']}
+          onBind={(name) => bindFactor('config.max_tokens', name)}
+          onUnbind={() => unbindFactor('config.max_tokens')}
+        >
+          <div className="space-y-1.5">
+            <Label htmlFor="llm-max-tokens">Max tokens</Label>
+            <Input
+              id="llm-max-tokens"
+              type="number"
+              min="1"
+              value={config.max_tokens}
+              onChange={(e) => patchConfig({ max_tokens: Number(e.target.value) })}
+            />
+          </div>
+        </FactorBindableField>
       </div>
       <CreateCredentialDialog
         open={credentialDialogOpen}

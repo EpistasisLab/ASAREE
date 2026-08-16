@@ -46,6 +46,7 @@ import type {
 } from '@/types/protocols'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
+import { agentTracedLabel } from './bindableFields'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { DeleteNodeConfirmDialog } from './DeleteNodeConfirmDialog'
@@ -557,6 +558,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   }, [nodes, edges, protocolId])
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null
+  // Computed once per selection change, not per FactorBindableField -- an
+  // LLM/Tool/Memory node's plain label alone doesn't say which agent it
+  // belongs to (see bindableFields.ts's own comment), so every inspector
+  // that wraps a field in "+ Make experimental factor" gets this instead of
+  // data.label for that purpose specifically; the header title itself still
+  // shows the node's own plain label, unaffected.
+  const factorNodeLabel = selectedNode ? agentTracedLabel(selectedNode, edges, nodes) : ''
 
   function updateNodeData(
     nodeId: string,
@@ -808,6 +816,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : selectedNode?.type === 'mcp_tool' ? (
           <McpToolNodeInspector
             node={{ id: selectedNode.id, type: 'mcp_tool', position: selectedNode.position, data: selectedNode.data as McpToolNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
@@ -824,6 +834,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           <LlmNodeInspector
             node={{ id: selectedNode!.id, type: selectedNode!.type!, position: selectedNode!.position, data: selectedNode!.data as LlmNodeData }}
             experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
@@ -831,6 +842,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : selectedNode?.type === 'memory' ? (
           <MemoryNodeInspector
             node={{ id: selectedNode.id, type: 'memory', position: selectedNode.position, data: selectedNode.data as MemoryNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}

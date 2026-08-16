@@ -5,7 +5,7 @@ export interface DesignFactor {
   // working unchanged. Drives which control the factor editor renders per
   // level (see components/protocol/factorLevels.ts); purely a frontend/UX
   // concern, not enforced by the backend (design_spec is opaque JSONB).
-  level_type?: 'string' | 'text' | 'number' | 'boolean'
+  level_type?: 'string' | 'text' | 'number' | 'boolean' | 'llm_config' | 'tool_config' | 'pattern'
 }
 
 export interface DesignMetric {

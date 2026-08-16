@@ -85,7 +85,7 @@ function AddFactorButton({
     },
   })
 
-  const fields = unboundBindableFields(graphQuery.data?.nodes ?? [])
+  const fields = unboundBindableFields(graphQuery.data?.nodes ?? [], graphQuery.data?.edges ?? [])
 
   return (
     <>

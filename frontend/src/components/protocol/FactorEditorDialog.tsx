@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Plus, Variable, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -6,14 +7,271 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { llmSettingsApi, mcpServersApi } from '@/api/client'
 import { cardAccent, cn, hashToChartHue, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
 import type { UnboundField } from './bindableFields'
-import { computeFactorName, LEVEL_TYPE_LABELS, levelTypeOf, parseLevelValue, seedLevels, type LevelType } from './factorLevels'
+import {
+  computeFactorName,
+  emptyStructuredLevel,
+  isStructuredLevelType,
+  LEVEL_TYPE_LABELS,
+  levelTypeOf,
+  parseLevelValue,
+  seedLevels,
+  seedStructuredLevels,
+  type LevelType,
+} from './factorLevels'
 import { NODE_INSPECTOR_CONTENT_CLASSNAME } from './NodeInspectorDialog'
+import { PROVIDER_META } from './nodes/LlmNode'
 import type { DesignFactor } from '@/types/experiments'
 
-const LEVEL_TYPES: LevelType[] = ['string', 'text', 'number', 'boolean']
+const LEVEL_TYPES: LevelType[] = ['string', 'text', 'number', 'boolean', 'llm_config', 'tool_config', 'pattern']
+const EFFORT_LEVELS_FALLBACK = ['low', 'medium', 'high', 'xhigh', 'max']
+const PATTERN_OPTIONS = [
+  { slug: 'reason_act', label: 'Reason + Act' },
+  { slug: 'single_agent_baseline', label: 'Single-Agent Baseline' },
+]
+
+type StructuredLevel = Record<string, unknown>
+
+// One row of an "llm_config" factor's levels -- mirrors LlmNodeInspector's
+// own Provider/Model/Temperature/Effort/Max tokens fields exactly, since a
+// level here IS a whole LLM node's config (protocol_execution.py's
+// _resolve_llm_config reads it verbatim, never the node's xyflow type).
+function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+  const provider = (value.provider as string) || 'anthropic'
+  const modelsQuery = useQuery({
+    queryKey: ['llm-settings', provider, 'models'],
+    queryFn: () => llmSettingsApi.listModels(provider),
+    enabled: !!provider,
+  })
+  const models = modelsQuery.data?.models ?? []
+  const selectedModelInfo = models.find((m) => m.id === value.model)
+  const showEffort = selectedModelInfo?.supports_effort ?? false
+  const effortLevels = selectedModelInfo?.effort_levels.length ? selectedModelInfo.effort_levels : EFFORT_LEVELS_FALLBACK
+
+  function patch(patch: StructuredLevel) {
+    onChange({ ...value, ...patch })
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-2 rounded-lg border p-2">
+      <div className="space-y-1">
+        <Label className="text-xs">Provider</Label>
+        <Select value={provider} onValueChange={(v) => v && patch({ provider: v, model: '' })}>
+          <SelectTrigger className="h-8 w-full">
+            <SelectValue>{() => PROVIDER_META[provider]?.label ?? provider}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {Object.keys(PROVIDER_META).map((p) => (
+              <SelectItem key={p} value={p}>
+                {PROVIDER_META[p].label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Model</Label>
+        {models.length > 0 ? (
+          <Select value={(value.model as string) || '__none__'} onValueChange={(v) => v && v !== '__none__' && patch({ model: v })}>
+            <SelectTrigger className="h-8 w-full">
+              <SelectValue>{() => models.find((m) => m.id === value.model)?.label ?? (value.model as string) ?? 'Select…'}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__" disabled>
+                Select a model…
+              </SelectItem>
+              {models.map((m) => (
+                <SelectItem key={m.id} value={m.id}>
+                  {m.label ?? m.id}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <Input className="h-8" value={(value.model as string) ?? ''} onChange={(e) => patch({ model: e.target.value })} />
+        )}
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Temperature</Label>
+        <Input
+          className="h-8"
+          type="number"
+          step="0.1"
+          min="0"
+          max="2"
+          value={(value.temperature as number | undefined) ?? ''}
+          onChange={(e) => patch({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
+        />
+      </div>
+      {showEffort && (
+        <div className="space-y-1">
+          <Label className="text-xs">Effort</Label>
+          <Select value={(value.effort as string) || '__none__'} onValueChange={(v) => patch({ effort: v === '__none__' ? null : v })}>
+            <SelectTrigger className="h-8 w-full">
+              <SelectValue>{(v: string) => (v === '__none__' ? '(none)' : v)}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">(none)</SelectItem>
+              {effortLevels.map((level) => (
+                <SelectItem key={level} value={level}>
+                  {level}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      <div className="space-y-1">
+        <Label className="text-xs">Max tokens</Label>
+        <Input
+          className="h-8"
+          type="number"
+          min="1"
+          value={(value.max_tokens as number | undefined) ?? ''}
+          onChange={(e) => patch({ max_tokens: Number(e.target.value) })}
+        />
+      </div>
+    </div>
+  )
+}
+
+// One row of a "tool_config" factor's levels -- mirrors McpToolNodeInspector's
+// own Server/Tools-allowed fields; a level here is a whole mcp_tool node's
+// config (protocol_execution.py's _resolve_tool_config reads each wired
+// node's own config fresh).
+function ToolConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+  const serversQuery = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list() })
+  const servers = serversQuery.data ?? []
+  const selectedServer = servers.find((s) => s.id === value.server_id)
+  const tools = selectedServer?.capabilities?.tools ?? []
+  const selectedTools = (value.tool_names as string[] | undefined) ?? []
+
+  function patch(patch: StructuredLevel) {
+    onChange({ ...value, ...patch })
+  }
+
+  function toggleTool(name: string, allowed: boolean) {
+    patch({ tool_names: allowed ? [...selectedTools, name] : selectedTools.filter((t) => t !== name) })
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border p-2">
+      <div className="space-y-1">
+        <Label className="text-xs">Server</Label>
+        <Select
+          value={(value.server_id as string) || '__none__'}
+          onValueChange={(v) => {
+            if (!v || v === '__none__') return
+            const server = servers.find((s) => s.id === v)
+            patch({
+              server_id: v,
+              server_name: server?.name ?? null,
+              tool_names: server?.capabilities?.tools?.map((t) => t.name) ?? [],
+            })
+          }}
+        >
+          <SelectTrigger className="h-8 w-full">
+            <SelectValue>{() => selectedServer?.name ?? 'Select a server…'}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__" disabled>
+              Select a server…
+            </SelectItem>
+            {servers.map((s) => (
+              <SelectItem key={s.id} value={s.id}>
+                {s.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {!value.server_id ? (
+        <p className="text-xs text-muted-foreground">Pick a server first.</p>
+      ) : tools.length === 0 ? (
+        <p className="text-xs text-muted-foreground">This server has no tools.</p>
+      ) : (
+        <div className="max-h-32 space-y-0.5 overflow-y-auto rounded-md border p-1">
+          {tools.map((tool) => (
+            <div key={tool.name} className="flex items-center justify-between gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted">
+              <span className="truncate">{tool.name}</span>
+              <Switch size="sm" checked={selectedTools.includes(tool.name)} onCheckedChange={(allowed) => toggleTool(tool.name, allowed)} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// One row of a "pattern" factor's levels -- a whole {execution_pattern,
+// pattern_params} payload, mirroring ReasonActPatternNodeInspector/
+// SingleAgentBaselinePatternNodeInspector's own fields conditionally by
+// slug. Written onto the agent's own synthetic data.pattern_override (see
+// bindableFields.ts) -- protocol_execution.py's _resolve_pattern_config
+// checks this before falling back to the wired connector node.
+function PatternLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+  const slug = (value.execution_pattern as string) || 'reason_act'
+  const allParams = (value.pattern_params as Record<string, StructuredLevel> | undefined) ?? {}
+  const params = allParams[slug] ?? {}
+
+  function patchParams(patch: StructuredLevel) {
+    onChange({ execution_pattern: slug, pattern_params: { [slug]: { ...params, ...patch } } })
+  }
+
+  function changeSlug(nextSlug: string) {
+    onChange({ execution_pattern: nextSlug, pattern_params: { [nextSlug]: allParams[nextSlug] ?? {} } })
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border p-2">
+      <div className="space-y-1">
+        <Label className="text-xs">Pattern</Label>
+        <Select value={slug} onValueChange={(v) => v && changeSlug(v)}>
+          <SelectTrigger className="h-8 w-full">
+            <SelectValue>{() => PATTERN_OPTIONS.find((p) => p.slug === slug)?.label ?? slug}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {PATTERN_OPTIONS.map((p) => (
+              <SelectItem key={p.slug} value={p.slug}>
+                {p.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Max iterations</Label>
+        <Input
+          className="h-8"
+          type="number"
+          min="1"
+          value={(params.max_iterations as number | undefined) ?? ''}
+          onChange={(e) => patchParams({ max_iterations: Number(e.target.value) })}
+        />
+      </div>
+      {slug === 'reason_act' && (
+        <div className="flex items-center justify-between rounded-md border px-2 py-1.5">
+          <Label className="text-xs">Include scratchpad</Label>
+          <Switch size="sm" checked={(params.include_scratchpad as boolean | undefined) ?? true} onCheckedChange={(checked) => patchParams({ include_scratchpad: checked })} />
+        </div>
+      )}
+      {slug === 'single_agent_baseline' && (
+        <div className="flex items-center justify-between rounded-md border px-2 py-1.5">
+          <Label className="text-xs">Stop on first success</Label>
+          <Switch
+            size="sm"
+            checked={(params.stop_on_first_success as boolean | undefined) ?? true}
+            onCheckedChange={(checked) => patchParams({ stop_on_first_success: checked })}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
 
 // A per-factor editor with real room -- reuses the node inspector's own
 // fixed near-fullscreen frame sizing (NODE_INSPECTOR_CONTENT_CLASSNAME) and
@@ -42,9 +300,7 @@ export function FactorEditorDialog({
   // (not a separate small popover before this dialog even opens) since a
   // canvas can realistically have a large number of fields to search
   // through, and this dialog already has the room a cramped popover
-  // wouldn't. FactorBindableField's own quick-create (already scoped to one
-  // specific field) and DesignTab's "Edit" on an existing factor both omit
-  // this -- there's nothing to pick, the field is already known.
+  // wouldn't.
   pickableFields?: UnboundField[]
   // Needed to dedupe the computed name once a field is picked -- only
   // meaningful alongside pickableFields.
@@ -57,7 +313,7 @@ export function FactorEditorDialog({
   const [selectedField, setSelectedField] = useState<UnboundField | null>(null)
   const [search, setSearch] = useState('')
   const [levelType, setLevelType] = useState<LevelType>(levelTypeOf(factor))
-  const [levels, setLevels] = useState<string[]>(factor.levels.map((l) => String(l)))
+  const [levels, setLevels] = useState<unknown[]>(() => (isStructuredLevelType(levelTypeOf(factor)) ? factor.levels : factor.levels.map((l) => String(l))))
 
   // Re-seed the local draft every time this dialog (re)opens -- same
   // "re-seed on open" convention DesignTab.tsx and FactorBindableField.tsx's
@@ -68,8 +324,9 @@ export function FactorEditorDialog({
       setSelectedField(null)
       setSearch('')
       if (!pickableFields) {
-        setLevelType(levelTypeOf(factor))
-        setLevels(factor.levels.map((l) => String(l)))
+        const t = levelTypeOf(factor)
+        setLevelType(t)
+        setLevels(isStructuredLevelType(t) ? factor.levels : factor.levels.map((l) => String(l)))
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -78,16 +335,18 @@ export function FactorEditorDialog({
   function pickField(field: UnboundField) {
     setSelectedField(field)
     setLevelType(field.levelType)
-    setLevels(seedLevels(field.currentValue))
+    setLevels(isStructuredLevelType(field.levelType) ? seedStructuredLevels(field.currentValue, field.levelType) : seedLevels(field.currentValue))
   }
 
   function changeLevelType(next: LevelType) {
     setLevelType(next)
-    // Boolean levels are fixed ([true, false], nothing to type); leaving
-    // boolean has nothing meaningful to recover into either -- both
-    // directions just reset to that type's own default starting levels.
-    if (next === 'boolean' || levelType === 'boolean') {
-      setLevels((next === 'boolean' ? [true, false] : ['', '']).map((l) => String(l)))
+    // Boolean levels are fixed ([true, false], nothing to type); the 3
+    // structured kinds carry objects, never strings -- any of these
+    // transitions (into/out of boolean, into/out of a structured kind)
+    // can't carry the old levels forward, so both directions just reset to
+    // that type's own default starting levels.
+    if (next === 'boolean' || levelType === 'boolean' || isStructuredLevelType(next) || isStructuredLevelType(levelType)) {
+      setLevels(next === 'boolean' ? [true, false] : isStructuredLevelType(next) ? [emptyStructuredLevel(next), emptyStructuredLevel(next)] : ['', ''])
     }
   }
 
@@ -100,15 +359,18 @@ export function FactorEditorDialog({
   const needsFieldPick = !!pickableFields && !selectedField
 
   function save() {
-    const parsedLevels =
-      levelType === 'boolean' ? [true, false] : levels.filter((l) => l.trim() !== '').map((l) => parseLevelValue(l, levelType))
+    const parsedLevels = isStructuredLevelType(levelType)
+      ? levels
+      : levelType === 'boolean'
+        ? [true, false]
+        : (levels as string[]).filter((l) => l.trim() !== '').map((l) => parseLevelValue(l, levelType))
     onSave({ name, levels: parsedLevels, level_type: levelType }, selectedField ?? undefined)
     onOpenChange(false)
   }
 
   const accent = hashToChartHue(name || 'factor')
   const filteredFields = (pickableFields ?? []).filter((f) =>
-    `${f.nodeLabel}: ${f.fieldLabel}`.toLowerCase().includes(search.trim().toLowerCase()),
+    `${f.nodeLabel}:${f.fieldLabel}`.toLowerCase().includes(search.trim().toLowerCase()),
   )
 
   return (
@@ -147,7 +409,7 @@ export function FactorEditorDialog({
                     className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
                   >
                     <span className="truncate">
-                      {field.nodeLabel}: {field.fieldLabel}
+                      {field.nodeLabel}:{field.fieldLabel}
                     </span>
                     <Badge variant="outline" className="shrink-0">
                       {LEVEL_TYPE_LABELS[field.levelType]}
@@ -195,7 +457,7 @@ export function FactorEditorDialog({
                   <p className="text-xs text-muted-foreground">Levels: true, false</p>
                 ) : levelType === 'text' ? (
                   <div className="space-y-2">
-                    {levels.map((level, i) => (
+                    {(levels as string[]).map((level, i) => (
                       <div key={i} className="flex items-start gap-1.5">
                         <Textarea
                           rows={6}
@@ -217,9 +479,45 @@ export function FactorEditorDialog({
                       <Plus className="size-3.5" /> Add level
                     </Button>
                   </div>
+                ) : levelType === 'llm_config' || levelType === 'tool_config' || levelType === 'pattern' ? (
+                  <div className="space-y-2">
+                    {levels.map((level, i) => (
+                      <div key={i} className="flex items-start gap-1.5">
+                        <div className="flex-1">
+                          {levelType === 'llm_config' ? (
+                            <LlmConfigLevelRow
+                              value={level as StructuredLevel}
+                              onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
+                            />
+                          ) : levelType === 'tool_config' ? (
+                            <ToolConfigLevelRow
+                              value={level as StructuredLevel}
+                              onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
+                            />
+                          ) : (
+                            <PatternLevelRow
+                              value={level as StructuredLevel}
+                              onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
+                            />
+                          )}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="Remove level"
+                          onClick={() => setLevels((ls) => ls.filter((_, j) => j !== i))}
+                        >
+                          <X className="size-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button variant="outline" size="sm" onClick={() => setLevels((ls) => [...ls, emptyStructuredLevel(levelType)])}>
+                      <Plus className="size-3.5" /> Add level
+                    </Button>
+                  </div>
                 ) : (
                   <div className="space-y-1.5">
-                    {levels.map((level, i) => (
+                    {(levels as string[]).map((level, i) => (
                       <div key={i} className="flex items-center gap-1.5">
                         <Input
                           type={levelType === 'number' ? 'number' : 'text'}

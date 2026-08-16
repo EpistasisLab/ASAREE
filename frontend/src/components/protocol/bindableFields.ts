@@ -1,4 +1,4 @@
-import type { Node } from '@xyflow/react'
+import type { Edge, Node } from '@xyflow/react'
 import type { LevelType } from './factorLevels'
 
 export interface BindableFieldSpec {
@@ -6,6 +6,11 @@ export interface BindableFieldSpec {
   label: string
   levelType: LevelType
 }
+
+// The connector-type node families whose whole `config` (or, for Pattern, a
+// synthetic `pattern_override`) can itself become a factor -- see each
+// bindableFieldsForNode case below and the node-as-factor plan.
+const LLM_NODE_TYPES = new Set(['llm_anthropic', 'llm_openai', 'llm_azure_foundry'])
 
 // The Design tab's "Add factor" picker needs to know, for any node type,
 // which fields are ever wrapped in a FactorBindableField "+" -- this is the
@@ -27,12 +32,29 @@ export interface BindableFieldSpec {
 // `data.config`), so `data.active` is already a real, working bindable
 // field today with zero backend changes; only the frontend never offered
 // a way to bind it until now.
+//
+// The whole-`config`/`pattern_override` entries below (llm_config/
+// tool_config/pattern) are how a NODE itself becomes a factor -- e.g. an
+// LLM node's levels can be entirely different provider+model+credential
+// combinations, not just one scalar field varying inside an unchanging
+// node. These are additive to (and mutually exclusive with, see
+// unboundBindableFields) the ordinary per-field entries -- exposed only
+// through this Design-tab picker, not a new inline "+" on the node
+// inspectors themselves.
 export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
   switch (node.type) {
     case 'agent':
       return [
         { fieldPath: 'config.system_prompt', label: 'System prompt', levelType: 'text' },
         { fieldPath: 'active', label: 'Active', levelType: 'boolean' },
+        // A synthetic field, not a real config value the frontend otherwise
+        // reads -- see protocol_execution.py's _resolve_pattern_config,
+        // which checks this before falling back to the wired connector
+        // node. Lets a Pattern factor vary the node TYPE itself (Reason +
+        // Act vs Single-Agent Baseline), which no ordinary field binding can
+        // do since those are different node types with different config
+        // shapes.
+        { fieldPath: 'pattern_override', label: 'Execution pattern', levelType: 'pattern' },
       ]
     case 'critic_gate':
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
@@ -44,7 +66,27 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
         { fieldPath: 'config.temperature', label: 'Temperature', levelType: 'number' },
         { fieldPath: 'config.effort', label: 'Effort', levelType: 'string' },
         { fieldPath: 'config.max_tokens', label: 'Max tokens', levelType: 'number' },
+        // The whole node as a factor -- levels are entirely different
+        // provider+model+credential combinations. _resolve_llm_config reads
+        // a connected LLM node's whole config verbatim (never the node's
+        // xyflow `type`), so replacing it wholesale per cell already works
+        // with zero backend changes.
+        { fieldPath: 'config', label: 'Provider & model', levelType: 'llm_config' },
       ]
+    case 'mcp_tool':
+      return [
+        { fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' },
+        // The whole node as a factor -- levels can be entirely different MCP
+        // servers (each with their own allowed tools). _resolve_tool_config
+        // reads each wired mcp_tool node's own config fresh, so this already
+        // works with zero backend changes.
+        { fieldPath: 'config', label: 'Server & tools', levelType: 'tool_config' },
+      ]
+    case 'memory':
+      // No runtime effect yet (Memory execution isn't implemented at all) --
+      // ships as declared capability only, matching Memory's existing
+      // status everywhere else in this codebase.
+      return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     default:
       return []
   }
@@ -60,7 +102,10 @@ export interface UnboundField {
   // text) -- lets FactorEditorDialog's field-picker seed the first level the
   // same way FactorBindableField's own popover already does, matching
   // services.protocol_execution's own apply_factor_bindings, which resolves
-  // a dotted path starting at the node's whole `data` object.
+  // a dotted path starting at the node's whole `data` object. For
+  // `pattern_override` specifically (a synthetic field with no real current
+  // value under `data`), this is instead derived from whichever pattern
+  // node the agent currently has wired (see derivePatternOverrideCurrentValue).
   currentValue: unknown
 }
 
@@ -73,26 +118,90 @@ function getPath(data: Record<string, unknown>, dottedPath: string): unknown {
   return target
 }
 
+// Mirrors protocol_execution.py's _EXECUTION_PATTERN_SLUGS -- the raw
+// agentic-core slug each pattern node type resolves to.
+const PATTERN_SLUGS: Record<string, string> = {
+  pattern_reason_act: 'reason_act',
+  pattern_single_agent_baseline: 'single_agent_baseline',
+}
+
+// The agent's CURRENTLY wired pattern, reshaped exactly like
+// _resolve_pattern_config's own return value -- so binding "Execution
+// pattern" as a factor starts from "the pattern you already have, plus
+// whatever alternates you want to try," same seeding principle as every
+// other field.
+function derivePatternOverrideCurrentValue(agentNode: Node, edges: Edge[], nodes: Node[]): unknown {
+  const edge = edges.find((e) => e.target === agentNode.id && e.targetHandle === 'architectural_pattern')
+  if (!edge) return undefined
+  const patternNode = nodes.find((n) => n.id === edge.source)
+  const slug = patternNode ? PATTERN_SLUGS[patternNode.type ?? ''] : undefined
+  if (!patternNode || !slug) return undefined
+  return { execution_pattern: slug, pattern_params: { [slug]: (patternNode.data as { config?: unknown })?.config ?? {} } }
+}
+
+function isConnectorNodeType(type: string | undefined): boolean {
+  return type === 'memory' || type === 'mcp_tool' || LLM_NODE_TYPES.has(type ?? '') || (type ?? '').startsWith('pattern_')
+}
+
+// A connector node's own label alone doesn't say which agent it belongs to
+// -- two different agents can each have an LLM node labeled "Anthropic," and
+// the factor dialog otherwise can't tell them apart. Traces from the
+// connector node to whichever single agent/critic_gate it's wired into (via
+// the matching connector edge) and prefixes the label with that agent's own
+// -- falls back to the plain label when unwired or fanned out to more than
+// one agent (the existing rare/ambiguous case). Agent/critic_gate nodes
+// themselves need no tracing -- they ARE the agent, not a connector.
+//
+// Colon-joined ("<agent>:<node>") so the eventual factor name (see
+// computeFactorName, which appends ":<field>" to this) reads as one
+// consistent "<agent>:<node>:<field>" chain throughout.
+export function agentTracedLabel(node: Node, edges: Edge[], nodes: Node[]): string {
+  const label = (node.data as { label?: string })?.label || node.type || 'Node'
+  if (!isConnectorNodeType(node.type)) return label
+  const targetIds = new Set(edges.filter((e) => e.source === node.id).map((e) => e.target))
+  if (targetIds.size !== 1) return label
+  const [targetId] = [...targetIds]
+  const targetNode = nodes.find((n) => n.id === targetId)
+  const targetLabel = (targetNode?.data as { label?: string })?.label || targetNode?.type
+  return targetLabel ? `${targetLabel}:${label}` : label
+}
+
 // Every bindable field across the canvas that ISN'T already bound to a
 // factor -- what the Design tab's "Add factor" picker lists. A field
 // already bound just shows its "Factor: {name}" badge in the inspector
 // instead of the "+" trigger, so it has nothing left to offer here either.
-export function unboundBindableFields(nodes: Node[]): UnboundField[] {
+//
+// Mutual exclusion: a node's whole `config` and any of its `config.*`
+// sub-fields can never both be bound at once -- which one "wins" at
+// substitution time would depend on factor_bindings iteration order, so
+// this is prevented at the picker level entirely rather than relied on to
+// "just work out." Once one side is bound, the other's entries are hidden
+// here (the inspector's own already-bound field still shows its own
+// "Factor: {name}" badge as normal; only the *unbound* opposite-side
+// entries disappear from this picker).
+export function unboundBindableFields(nodes: Node[], edges: Edge[]): UnboundField[] {
   const result: UnboundField[] = []
   for (const node of nodes) {
     const bindings = (node.data as { factor_bindings?: Record<string, string> })?.factor_bindings ?? {}
-    const label = (node.data as { label?: string })?.label || node.type || 'Node'
+    const label = agentTracedLabel(node, edges, nodes)
+    const wholeConfigBound = !!bindings.config
+    const configSubFieldBound = Object.keys(bindings).some((path) => path !== 'config' && path.startsWith('config.'))
     for (const field of bindableFieldsForNode(node)) {
-      if (!bindings[field.fieldPath]) {
-        result.push({
-          nodeId: node.id,
-          nodeLabel: label,
-          fieldPath: field.fieldPath,
-          fieldLabel: field.label,
-          levelType: field.levelType,
-          currentValue: getPath(node.data as Record<string, unknown>, field.fieldPath),
-        })
-      }
+      if (bindings[field.fieldPath]) continue
+      if (field.fieldPath === 'config' && configSubFieldBound) continue
+      if (field.fieldPath.startsWith('config.') && wholeConfigBound) continue
+      const currentValue =
+        field.fieldPath === 'pattern_override'
+          ? derivePatternOverrideCurrentValue(node, edges, nodes)
+          : getPath(node.data as Record<string, unknown>, field.fieldPath)
+      result.push({
+        nodeId: node.id,
+        nodeLabel: label,
+        fieldPath: field.fieldPath,
+        fieldLabel: field.label,
+        levelType: field.levelType,
+        currentValue,
+      })
     }
   }
   return result

@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch'
 import { mcpServersApi } from '@/api/client'
 import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
+import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { McpToolNodeData, ProtocolNode } from '@/types/protocols'
 
@@ -23,11 +24,21 @@ const ACCENT = hashToChartHue('mcp_tool')
 // node the way budget/duration are for an agent.
 export function McpToolNodeInspector({
   node,
+  experimentId,
+  factorNodeLabel,
   onChange,
   onDelete,
   onClose,
 }: {
   node: (ProtocolNode & { data: McpToolNodeData }) | null
+  experimentId: string | null
+  // The agent-traced display label (see bindableFields.ts's
+  // agentTracedLabel) -- distinct from data.label, which is this node's own
+  // plain label shown in the header title. Only used to scope this node's
+  // "+ Make experimental factor" names, e.g. "Research Agent — Search API:
+  // Enabled" instead of an ambiguous plain "Search API: Enabled" that can't
+  // tell two agents' identically-labeled tool nodes apart.
+  factorNodeLabel: string
   onChange: (nodeId: string, data: McpToolNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
@@ -37,6 +48,7 @@ export function McpToolNodeInspector({
   if (!node) return null
   const data = node.data
   const config = data.config
+  const bindings = data.factor_bindings ?? {}
   const selectedServer = serversQuery.data?.find((s) => s.id === config.server_id)
   const tools = selectedServer?.capabilities?.tools ?? []
   const selectedTools = config.tool_names ?? []
@@ -47,6 +59,16 @@ export function McpToolNodeInspector({
 
   function toggleTool(name: string, allowed: boolean) {
     patchConfig({ tool_names: allowed ? [...selectedTools, name] : selectedTools.filter((t) => t !== name) })
+  }
+
+  function bindFactor(fieldPath: string, factorName: string) {
+    onChange(node!.id, { ...data, factor_bindings: { ...bindings, [fieldPath]: factorName } })
+  }
+
+  function unbindFactor(fieldPath: string) {
+    const next = { ...bindings }
+    delete next[fieldPath]
+    onChange(node!.id, { ...data, factor_bindings: next })
   }
 
   return (
@@ -65,6 +87,25 @@ export function McpToolNodeInspector({
       onDelete={() => onDelete(node.id)}
       onClose={onClose}
     >
+      <FactorBindableField
+        experimentId={experimentId}
+        fieldPath="config.enabled"
+        defaultLabel="Enabled"
+        nodeLabel={factorNodeLabel}
+        levelType="boolean"
+        boundFactorName={bindings['config.enabled']}
+        onBind={(name) => bindFactor('config.enabled', name)}
+        onUnbind={() => unbindFactor('config.enabled')}
+      >
+        <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+          <div>
+            <Label htmlFor="tool-enabled">Enabled</Label>
+            <p className="text-xs text-muted-foreground">Off: this server's tools aren't offered to the agent at all.</p>
+          </div>
+          <Switch id="tool-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
+        </div>
+      </FactorBindableField>
+
       {serversQuery.isLoading ? (
           <Skeleton className="h-16 w-full" />
         ) : serversQuery.isError ? (

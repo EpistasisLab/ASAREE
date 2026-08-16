@@ -174,16 +174,23 @@ export interface McpToolNodeConfig {
   server_id: string | null
   server_name: string | null
   tool_names: string[]
+  // Absent means enabled, matching `active`'s own convention (AgentNodeData)
+  // -- lets a Tool factor's levels be a plain boolean (this server on/off)
+  // as well as an entirely different server (see bindableFields.ts).
+  // services.protocol_execution's _resolve_tool_config skips a disabled
+  // tool node's contribution entirely.
+  enabled?: boolean
 }
 
 export interface McpToolNodeData {
   label: string
   config: McpToolNodeConfig
+  factor_bindings?: Record<string, string>
   [key: string]: unknown
 }
 
 export function defaultMcpToolNodeData(label = 'MCP Tool'): McpToolNodeData {
-  return { label, config: { server_id: null, server_name: null, tool_names: [] } }
+  return { label, config: { server_id: null, server_name: null, tool_names: [], enabled: true } }
 }
 
 // A "Critic Gate" reviews its single upstream Agent node's output and can
@@ -280,16 +287,28 @@ export function defaultAzureFoundryLlmNodeData(label = 'Azure AI Foundry'): LlmN
 // execution path) is an explicit, deliberate follow-up, not this phase.
 export interface MemoryNodeConfig {
   name: string
+  // Absent means enabled, matching `active`'s own convention (AgentNodeData)
+  // -- lets Memory be bound as a plain boolean factor. No runtime effect yet
+  // (Memory execution isn't implemented at all), same "framework now,
+  // backing later" status as the rest of this node type.
+  enabled?: boolean
 }
 
 export interface MemoryNodeData {
   label: string
   config: MemoryNodeConfig
+  factor_bindings?: Record<string, string>
   [key: string]: unknown
 }
 
 export function defaultMemoryNodeData(label = 'Memory'): MemoryNodeData {
-  return { label, config: { name: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'memory' } }
+  return {
+    label,
+    config: {
+      name: label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'memory',
+      enabled: true,
+    },
+  }
 }
 
 // The Architectural Pattern connector's node family -- same deliberate

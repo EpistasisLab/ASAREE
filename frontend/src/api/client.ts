@@ -159,6 +159,10 @@ export const experimentsApi = {
       design_spec?: DesignSpec | null
       // A timestamp to archive, null to unarchive -- canvas menu's Archive/Unarchive action.
       archived_at?: string | null
+      // Set from the canvas's own Dataset node (DatasetNodeInspector) the
+      // moment a user picks a dataset there -- keeps the node's own config
+      // and this experiment's real dataset_id FK from drifting apart.
+      dataset_id?: string | null
     },
   ) => request<Experiment>(`/experiments/${id}`, { method: 'PATCH', body: data }),
   remove: (id: string) => request<void>(`/experiments/${id}`, { method: 'DELETE' }),
@@ -203,6 +207,9 @@ export const protocolsApi = {
 }
 
 export const datasetsApi = {
+  // Owner-scoped, same convention as mcpServersApi.list -- backs the
+  // Dataset node's own Server-select-style picker (DatasetNodeInspector).
+  list: () => request<Dataset[]>('/datasets'),
   get: (id: string) => request<Dataset>(`/datasets/${id}`),
 }
 

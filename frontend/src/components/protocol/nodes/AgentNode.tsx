@@ -75,31 +75,33 @@ export function AgentNode({
         warning={data.missingLlm ? "No LLM connected -- this agent can't run" : null}
       />
       {/* n8n's own 3 bottom sub-connectors (Chat Model/Memory/Tool), adapted
-          and extended with a 4th (Architectural Pattern, ASAREE's own
-          addition, no n8n equivalent): required LLM (exactly one), optional
-          max-1 Architectural Pattern (capped for the execution-pattern
-          category specifically -- see _EXECUTION_PATTERN_NODE_TYPES in
-          protocol_execution.py) and Memory (visual scaffolding only -- see
-          MemoryNodeData), and optional repeatable Tool. */}
+          and extended with ASAREE's own additions (Architectural Pattern,
+          Dataset, Script -- none has an n8n equivalent): required LLM
+          (exactly one), optional max-1 Architectural Pattern (capped for the
+          execution-pattern category specifically -- see
+          _EXECUTION_PATTERN_NODE_TYPES in protocol_execution.py), optional
+          max-1 Memory (visual scaffolding only -- see MemoryNodeData) and
+          Dataset (a real runtime effect -- see DatasetNodeData), optional
+          repeatable Tool, and optional max-1 Script (see ScriptNodeData). */}
       <Handle
         type="target"
         id="llm"
         position={Position.Bottom}
-        style={{ left: '14%' }}
+        style={{ left: '10%' }}
         title="LLM (required)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="14%">LLM</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="llm" left="14%" />
+      <ConnectorHandleLabel left="10%">LLM</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="llm" left="10%" />
       <Handle
         type="target"
         id="architectural_pattern"
         position={Position.Bottom}
-        style={{ left: '38%' }}
+        style={{ left: '26%' }}
         title="Architectural Pattern -- always exactly one; pick a node here to swap it"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="38%">Pattern</ConnectorHandleLabel>
+      <ConnectorHandleLabel left="26%">Pattern</ConnectorHandleLabel>
       {/* Never hides once connected (unlike LLM/Memory) -- an execution
           pattern must never go to zero (agentic-core silently falls back
           to reason_act if left unconnected, undoing the whole point of
@@ -108,27 +110,47 @@ export function AgentNode({
           addNode()'s own pendingConnectorAdd branch for the replace logic,
           and ProtocolCanvas.tsx's nodesWithRunStatus for why the connected
           pattern node itself can't be deleted directly either. */}
-      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="38%" alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="26%" alwaysVisible />
       <Handle
         type="target"
         id="memory"
         position={Position.Bottom}
-        style={{ left: '62%' }}
+        style={{ left: '42%' }}
         title="Memory (not yet functional)"
         className="!size-2 !border-2 !border-dashed !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="62%">Memory</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="memory" left="62%" />
+      <ConnectorHandleLabel left="42%">Memory</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="memory" left="42%" />
       <Handle
         type="target"
         id="tool"
         position={Position.Bottom}
-        style={{ left: '86%' }}
+        style={{ left: '58%' }}
         title="Tool"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="86%">Tool</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="tool" left="86%" alwaysVisible />
+      <ConnectorHandleLabel left="58%">Tool</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="tool" left="58%" alwaysVisible />
+      <Handle
+        type="target"
+        id="dataset"
+        position={Position.Bottom}
+        style={{ left: '74%' }}
+        title="Dataset -- which registered dataset this agent's workspace tools operate on"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
+      <ConnectorHandleLabel left="74%">Dataset</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="dataset" left="74%" />
+      <Handle
+        type="target"
+        id="script"
+        position={Position.Bottom}
+        style={{ left: '90%' }}
+        title="Script -- a fixed piece of code this agent passes verbatim into some tool"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
+      <ConnectorHandleLabel left="90%">Script</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="script" left="90%" />
       <Handle
         type="source"
         position={Position.Right}

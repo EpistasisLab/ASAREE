@@ -23,6 +23,8 @@ export interface ProtocolNode {
     | CriticGateNodeData
     | LlmNodeData
     | MemoryNodeData
+    | DatasetNodeData
+    | ScriptNodeData
     | ReasonActPatternNodeData
     | SingleAgentBaselinePatternNodeData
 }
@@ -309,6 +311,60 @@ export function defaultMemoryNodeData(label = 'Memory'): MemoryNodeData {
       enabled: true,
     },
   }
+}
+
+// A "Dataset" node -- declares which registered dataset an Agent's
+// workspace tools (e.g. a domain MCP server's open_workspace) operate on.
+// Unlike Memory/Architectural Pattern, this DOES have a real runtime effect
+// once wired: services.protocol_execution's _build_user_input folds a
+// "Dataset context" block (naming dataset_name plus this run's own
+// experiment_id/cell_label) into the wired agent's own instruction, since
+// open_workspace is the one workspace tool with no ambient _meta fallback.
+// dataset_id/dataset_name mirrors McpToolNodeConfig's own server_id/
+// server_name pairing -- picked from the caller's own registered datasets
+// (GET /datasets), never uploaded/ingested through this node itself.
+export interface DatasetNodeConfig {
+  dataset_id: string | null
+  dataset_name: string | null
+  // Absent means enabled, matching every other connector's own convention.
+  enabled?: boolean
+}
+
+export interface DatasetNodeData {
+  label: string
+  config: DatasetNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultDatasetNodeData(label = 'Dataset'): DatasetNodeData {
+  return { label, config: { dataset_id: null, dataset_name: null, enabled: true } }
+}
+
+// A "Script" node -- carries a fixed piece of code an Agent passes verbatim
+// as some tool's own code-shaped argument (e.g. a domain MCP server's
+// run_model_script's `code`). Not executed by ASAREE itself -- same "pure
+// config source" status as every other connector; _build_user_input folds
+// the code, fenced, into the wired agent's own instruction. Python-only for
+// now (language is fixed, not a picker) -- matches the one real use case in
+// evidence (a fixed XGBoost+Optuna scoring script whose only per-cell
+// variation is the hyperparameters an upstream agent proposes, not the code
+// itself).
+export interface ScriptNodeConfig {
+  name: string
+  language: 'python'
+  code: string
+}
+
+export interface ScriptNodeData {
+  label: string
+  config: ScriptNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultScriptNodeData(label = 'Script'): ScriptNodeData {
+  return { label, config: { name: 'script', language: 'python', code: '' } }
 }
 
 // The Architectural Pattern connector's node family -- same deliberate

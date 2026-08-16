@@ -125,6 +125,18 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
         { fieldPath: 'config.max_iterations', label: 'Max iterations', levelType: 'number' },
         { fieldPath: 'config.stop_on_first_success', label: 'Stop on first success', levelType: 'boolean' },
       ]
+    case 'dataset':
+      // No runtime effect from `enabled` beyond skipping the Dataset-context
+      // block in _build_user_input -- no whole-node "swap the whole dataset
+      // per cell" factor kind yet (a real, separable future capability,
+      // deliberately deferred).
+      return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
+    case 'script':
+      // The whole node as a factor -- levels are entirely different scripts.
+      // _resolve_script_config reads the wired script node's whole config
+      // verbatim, so comparing two scoring scripts already works with zero
+      // backend changes, same reasoning as llm_config/tool_config.
+      return [{ fieldPath: 'config', label: 'Script', levelType: 'script_config' }]
     default:
       return []
   }
@@ -178,7 +190,14 @@ function derivePatternOverrideCurrentValue(agentNode: Node, edges: Edge[], nodes
 }
 
 function isConnectorNodeType(type: string | undefined): boolean {
-  return type === 'memory' || type === 'mcp_tool' || LLM_NODE_TYPES.has(type ?? '') || (type ?? '').startsWith('pattern_')
+  return (
+    type === 'memory' ||
+    type === 'mcp_tool' ||
+    type === 'dataset' ||
+    type === 'script' ||
+    LLM_NODE_TYPES.has(type ?? '') ||
+    (type ?? '').startsWith('pattern_')
+  )
 }
 
 // A connector node's own label alone doesn't say which agent it belongs to

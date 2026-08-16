@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 
-export type ConnectorSlot = 'llm' | 'tool' | 'memory' | 'architectural_pattern'
+export type ConnectorSlot = 'llm' | 'tool' | 'memory' | 'architectural_pattern' | 'dataset' | 'script'
 
 export interface ConnectorAddRequest {
   nodeId: string

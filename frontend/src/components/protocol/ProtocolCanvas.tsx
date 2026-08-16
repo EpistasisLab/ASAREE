@@ -27,21 +27,25 @@ import {
   defaultAnthropicLlmNodeData,
   defaultAzureFoundryLlmNodeData,
   defaultCriticGateNodeData,
+  defaultDatasetNodeData,
   defaultMcpToolNodeData,
   defaultMemoryNodeData,
   defaultOpenAiLlmNodeData,
   defaultReasonActPatternNodeData,
+  defaultScriptNodeData,
   defaultSingleAgentBaselinePatternNodeData,
 } from '@/types/protocols'
 import type {
   AgentNodeData,
   CriticGateNodeData,
+  DatasetNodeData,
   LlmNodeData,
   McpToolNodeData,
   MemoryNodeData,
   ProtocolGraph,
   ProtocolNode,
   ReasonActPatternNodeData,
+  ScriptNodeData,
   SingleAgentBaselinePatternNodeData,
 } from '@/types/protocols'
 import type { DesignFactor } from '@/types/experiments'
@@ -50,6 +54,7 @@ import { AgentNodeInspector } from './AgentNodeInspector'
 import { agentTracedLabel, unboundBindableFields, type UnboundField } from './bindableFields'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
+import { DatasetNodeInspector } from './DatasetNodeInspector'
 import { DeleteNodeConfirmDialog } from './DeleteNodeConfirmDialog'
 import { DEFAULT_ZOOM } from './constants'
 import { FactorEditorDialog } from './FactorEditorDialog'
@@ -65,14 +70,17 @@ import {
   type MainEdgeAddRequest,
 } from './ProtocolCanvasContext'
 import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
+import { ScriptNodeInspector } from './ScriptNodeInspector'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
 import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
+import { DatasetNode } from './nodes/DatasetNode'
 import { LlmNode } from './nodes/LlmNode'
 import { McpToolNode } from './nodes/McpToolNode'
 import { MemoryNode } from './nodes/MemoryNode'
 import { ReasonActPatternNode } from './nodes/ReasonActPatternNode'
+import { ScriptNode } from './nodes/ScriptNode'
 import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatternNode'
 import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 
@@ -84,7 +92,7 @@ const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry']
 const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
 // Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
 // whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
-const CONNECTOR_HANDLES = new Set(['llm', 'tool', 'memory', 'architectural_pattern'])
+const CONNECTOR_HANDLES = new Set(['llm', 'tool', 'memory', 'architectural_pattern', 'dataset', 'script'])
 
 const NODE_TYPES = {
   agent: AgentNode,
@@ -97,6 +105,8 @@ const NODE_TYPES = {
   llm_openai: LlmNode,
   llm_azure_foundry: LlmNode,
   memory: MemoryNode,
+  dataset: DatasetNode,
+  script: ScriptNode,
   pattern_reason_act: ReasonActPatternNode,
   pattern_single_agent_baseline: SingleAgentBaselinePatternNode,
 }
@@ -130,6 +140,8 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'llm_openai') return defaultOpenAiLlmNodeData()
   if (nodeType === 'llm_azure_foundry') return defaultAzureFoundryLlmNodeData()
   if (nodeType === 'memory') return defaultMemoryNodeData()
+  if (nodeType === 'dataset') return defaultDatasetNodeData()
+  if (nodeType === 'script') return defaultScriptNodeData()
   if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData()
   if (nodeType === 'pattern_single_agent_baseline') return defaultSingleAgentBaselinePatternNodeData()
   return defaultAgentNodeData()
@@ -144,6 +156,8 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   tool: { allowedTypes: ['mcp_tool'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
+  dataset: { allowedTypes: ['dataset'], title: 'Add Dataset' },
+  script: { allowedTypes: ['script'], title: 'Add Script' },
 }
 
 // Imperative, not a prop -- DesignTab.tsx (a sibling of ProtocolCanvas, not
@@ -628,6 +642,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | CriticGateNodeData
       | LlmNodeData
       | MemoryNodeData
+      | DatasetNodeData
+      | ScriptNodeData
       | ReasonActPatternNodeData
       | SingleAgentBaselinePatternNodeData,
   ) {
@@ -655,15 +671,21 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           return sourceNode.type === 'memory' && targetNode.type === 'agent'
         case 'architectural_pattern':
           return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
+        case 'dataset':
+          return sourceNode.type === 'dataset' && targetNode.type === 'agent'
+        case 'script':
+          return sourceNode.type === 'script' && targetNode.type === 'agent'
         default:
-          // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool
-          // nodes have no main handle to drag from in the first place, so
-          // this mostly guards against a stray connection, not real
-          // interactive use.
+          // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool/
+          // dataset/script nodes have no main handle to drag from in the
+          // first place, so this mostly guards against a stray connection,
+          // not real interactive use.
           return (
             !LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'memory' &&
             sourceNode.type !== 'mcp_tool' &&
+            sourceNode.type !== 'dataset' &&
+            sourceNode.type !== 'script' &&
             !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '')
           )
       }
@@ -896,6 +918,24 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : selectedNode?.type === 'memory' ? (
           <MemoryNodeInspector
             node={{ id: selectedNode.id, type: 'memory', position: selectedNode.position, data: selectedNode.data as MemoryNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'dataset' ? (
+          <DatasetNodeInspector
+            node={{ id: selectedNode.id, type: 'dataset', position: selectedNode.position, data: selectedNode.data as DatasetNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'script' ? (
+          <ScriptNodeInspector
+            node={{ id: selectedNode.id, type: 'script', position: selectedNode.position, data: selectedNode.data as ScriptNodeData }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}

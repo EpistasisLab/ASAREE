@@ -1,23 +1,22 @@
 import { useState } from 'react'
-import { ArrowRight, Atom, Bot, BrainCircuit, Cloud, Repeat2, ShieldCheck, Sparkles, Wrench, X } from 'lucide-react'
+import { ArrowRight, Atom, Bot, BrainCircuit, Cloud, Code2, Database, Repeat2, ShieldCheck, Sparkles, Wrench, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
-// "dataset" still needs real unbuilt backend meaning (a dataset-binding
-// decision) -- adding an entry before that exists would be UI ceremony with
-// no backend behind it. Every other entry here earns its place:
-// GET /api/mcp-servers already backs the tool picker,
+// Every entry here earns its place: GET /api/mcp-servers already backs the
+// tool picker, GET /datasets already backs the dataset picker,
 // services.protocol_execution._run_gated_worker already implements the
-// critic gate's revision loop, and _resolve_llm_config/_resolve_tool_config
-// already resolve an agent's LLM/Tool connectors. "memory" and the two
-// pattern entries are the exceptions -- each is real in the graph/
-// validation sense (wiring one up is accepted and does something visually)
-// but has NO runtime effect yet, documented on the node/inspector itself,
-// not hidden from the catalog. LLM/Architectural Pattern are each a family
-// of node types (one per provider/pattern -- see LlmNodeData/
-// ReasonActPatternNodeData in types/protocols.ts for why), not one generic
-// entry with an internal picker -- this catalog, filtered to a connector's
-// own family via allowedTypes, IS that picker.
+// critic gate's revision loop, and _resolve_llm_config/_resolve_tool_config/
+// _resolve_dataset_config/_resolve_script_config already resolve an agent's
+// respective connectors. "memory" and the two pattern entries are the
+// exceptions -- each is real in the graph/validation sense (wiring one up is
+// accepted and does something visually) but has NO runtime effect yet,
+// documented on the node/inspector itself, not hidden from the catalog.
+// LLM/Architectural Pattern are each a family of node types (one per
+// provider/pattern -- see LlmNodeData/ReasonActPatternNodeData in
+// types/protocols.ts for why), not one generic entry with an internal
+// picker -- this catalog, filtered to a connector's own family via
+// allowedTypes, IS that picker.
 const NODE_CATALOG = [
   { type: 'agent', label: 'Agent', description: 'An LLM agent stage in the pipeline', icon: Bot },
   { type: 'mcp_tool', label: 'MCP Tool', description: "Allow-list a subset of a registered MCP server's tools for an Agent", icon: Wrench },
@@ -52,6 +51,18 @@ const NODE_CATALOG = [
     label: 'Memory',
     description: 'Not yet functional -- declares intent for a future phase',
     icon: BrainCircuit,
+  },
+  {
+    type: 'dataset',
+    label: 'Dataset',
+    description: "Declares which registered dataset an Agent's workspace tools operate on",
+    icon: Database,
+  },
+  {
+    type: 'script',
+    label: 'Script',
+    description: 'A fixed piece of Python code an Agent passes verbatim into some tool',
+    icon: Code2,
   },
 ]
 

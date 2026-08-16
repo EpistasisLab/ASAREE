@@ -11,7 +11,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { llmSettingsApi, mcpServersApi } from '@/api/client'
 import { cardAccent, cn, hashToChartHue, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
-import type { UnboundField } from './bindableFields'
+import { pickToolNamesForServer, type UnboundField } from './bindableFields'
 import {
   computeFactorName,
   emptyStructuredLevel,
@@ -167,10 +167,11 @@ function ToolConfigLevelRow({ value, onChange }: { value: StructuredLevel; onCha
           onValueChange={(v) => {
             if (!v || v === '__none__') return
             const server = servers.find((s) => s.id === v)
+            const availableToolNames = server?.capabilities?.tools?.map((t) => t.name) ?? []
             patch({
               server_id: v,
               server_name: server?.name ?? null,
-              tool_names: server?.capabilities?.tools?.map((t) => t.name) ?? [],
+              tool_names: pickToolNamesForServer(selectedTools, availableToolNames),
             })
           }}
         >

@@ -7,6 +7,22 @@ export interface BindableFieldSpec {
   levelType: LevelType
 }
 
+// Picking a server for an MCP Tool node's Tool connector -- shared by
+// McpToolNodeInspector's own Server select and FactorEditorDialog's
+// tool_config structured level editor, both of which need the same "which
+// tools end up allow-listed when the server changes" decision. Keeps
+// whichever of the PREVIOUS allow-list's tool names still exist on the
+// newly picked server (e.g. re-selecting a server after importing a
+// protocol JSON, where tool_names was already set but server_id was null --
+// the intended allow-list should survive that reselection intact) -- only
+// falls back to "every tool enabled" when nothing carries over, which is
+// exactly the case for a genuinely fresh node (empty tool_names) or a
+// switch to a server with no name overlap at all.
+export function pickToolNamesForServer(previousToolNames: string[], availableToolNames: string[]): string[] {
+  const carried = previousToolNames.filter((name) => availableToolNames.includes(name))
+  return carried.length > 0 ? carried : availableToolNames
+}
+
 // The connector-type node families whose whole `config` (or, for Pattern, a
 // synthetic `pattern_override`) can itself become a factor -- see each
 // bindableFieldsForNode case below and the node-as-factor plan.

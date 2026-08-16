@@ -6,6 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { mcpServersApi } from '@/api/client'
 import { hashToChartHue } from '@/lib/utils'
+import { pickToolNamesForServer } from './bindableFields'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
@@ -143,14 +144,20 @@ export function McpToolNodeInspector({
                     onValueChange={(value) => {
                       if (!value || value === '__none__') return
                       const server = serversQuery.data.find((s) => s.id === value)
-                      // All tools allowed by default -- an allow-list that starts
-                      // empty just means every tool silently does nothing until
-                      // the user discovers they need to flip each one on; "All"
-                      // is also already one click away if they want to narrow it.
+                      const availableToolNames = server?.capabilities?.tools?.map((t) => t.name) ?? []
+                      // Keeps whichever of the current allow-list's tool names
+                      // still exist on the newly picked server (e.g.
+                      // reselecting after importing a protocol JSON, where
+                      // tool_names was already set but server_id was null) --
+                      // only defaults to "all tools" when nothing carries
+                      // over, so a genuinely fresh pick still starts from the
+                      // friendly "everything enabled" default rather than an
+                      // allow-list that silently does nothing until the user
+                      // discovers they need to flip each tool on.
                       patchConfig({
                         server_id: value,
                         server_name: server?.name ?? null,
-                        tool_names: server?.capabilities?.tools?.map((t) => t.name) ?? [],
+                        tool_names: pickToolNamesForServer(selectedTools, availableToolNames),
                       })
                     }}
                   >

@@ -91,6 +91,22 @@ class Cell(BaseModel):
     updated_at: datetime
 
 
+class ExperimentArtifact(BaseModel):
+    """A durable, experiment-level (not per-cell) record -- an ``analyze``
+    snapshot, a CSV export, or anything else a use case wants to keep past
+    one run. ``content`` is opaque to ASAREE -- a CSV export and a
+    JSON-encoded analyze result serialize completely differently, and
+    neither is interpreted server-side."""
+
+    id: uuid.UUID
+    experiment_id: uuid.UUID
+    name: str
+    kind: str
+    content: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class Protocol(BaseModel):
     id: uuid.UUID
     name: str

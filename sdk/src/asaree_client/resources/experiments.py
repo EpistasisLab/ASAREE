@@ -12,7 +12,7 @@ import builtins
 import uuid
 from typing import Any
 
-from asaree_client.models import Cell, Experiment
+from asaree_client.models import Cell, Experiment, ExperimentArtifact
 
 ResourceId = uuid.UUID | str
 # Distinguishes "omit this kwarg" (leave unchanged) from "pass None"
@@ -153,3 +153,28 @@ class Experiments:
         if cost_keys is not None:
             payload["cost_keys"] = cost_keys
         return self._client._post(f"/experiments/{experiment_id}/analyze", json=payload)  # type: ignore[no-any-return]
+
+    def create_artifact(
+        self, experiment_id: ResourceId, *, name: str, kind: str, content: str
+    ) -> ExperimentArtifact:
+        """A durable landing spot for anything worth keeping past one run --
+        e.g. ``analyze(...)``'s own result (``kind="analyze_result"``,
+        ``content=json.dumps(result)``) or a flattened CSV export
+        (``kind="csv_export"``), in place of writing either to local disk.
+        Create-once/append-style: calling this again with the same ``name``
+        creates a NEW row, it never overwrites the last one."""
+        data = self._client._post(
+            f"/experiments/{experiment_id}/artifacts", json={"name": name, "kind": kind, "content": content}
+        )
+        return ExperimentArtifact(**data)
+
+    def list_artifacts(self, experiment_id: ResourceId) -> builtins.list[ExperimentArtifact]:
+        data = self._client._get(f"/experiments/{experiment_id}/artifacts")
+        return [ExperimentArtifact(**a) for a in data]
+
+    def get_artifact(self, experiment_id: ResourceId, artifact_id: ResourceId) -> ExperimentArtifact:
+        data = self._client._get(f"/experiments/{experiment_id}/artifacts/{artifact_id}")
+        return ExperimentArtifact(**data)
+
+    def delete_artifact(self, experiment_id: ResourceId, artifact_id: ResourceId) -> None:
+        self._client._delete(f"/experiments/{experiment_id}/artifacts/{artifact_id}")

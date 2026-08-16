@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.datasets import get_dataset
 from asaree.services.design_generation import DesignValidationError, generate_design_cells
+from asaree.services.experiment_artifacts import create_artifact, delete_artifact, get_artifact, list_artifacts
 from asaree.services.experiments import (
     create_experiment,
     delete_experiment,
@@ -335,6 +336,69 @@ async def list_cells_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: D
     await _get_owned_experiment(db, experiment_id, user)
     cells = await list_cells(db, experiment_id=experiment_id)
     return [CellResponse.model_validate(c) for c in cells]
+
+
+class CreateArtifactRequest(BaseModel):
+    name: str
+    kind: str
+    content: str
+
+
+class ArtifactResponse(BaseModel):
+    id: uuid.UUID
+    experiment_id: uuid.UUID
+    name: str
+    kind: str
+    content: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+@router.post("/{experiment_id}/artifacts", response_model=ArtifactResponse, status_code=201)
+async def create_artifact_endpoint(
+    experiment_id: uuid.UUID, body: CreateArtifactRequest, user: CurrentUser, db: DbSession
+) -> ArtifactResponse:
+    """A durable landing spot for anything a use case wants to keep past one
+    run -- an ``analyze`` snapshot, a CSV export, or anything else -- create-
+    once/append-style, never an upsert target the way a cell is (see
+    ExperimentArtifact's own docstring)."""
+    await _get_owned_experiment(db, experiment_id, user)
+    artifact = await create_artifact(
+        db, experiment_id=experiment_id, name=body.name, kind=body.kind, content=body.content
+    )
+    return ArtifactResponse.model_validate(artifact)
+
+
+@router.get("/{experiment_id}/artifacts", response_model=list[ArtifactResponse])
+async def list_artifacts_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> list[ArtifactResponse]:
+    await _get_owned_experiment(db, experiment_id, user)
+    artifacts = await list_artifacts(db, experiment_id=experiment_id)
+    return [ArtifactResponse.model_validate(a) for a in artifacts]
+
+
+@router.get("/{experiment_id}/artifacts/{artifact_id}", response_model=ArtifactResponse)
+async def get_artifact_endpoint(
+    experiment_id: uuid.UUID, artifact_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> ArtifactResponse:
+    await _get_owned_experiment(db, experiment_id, user)
+    artifact = await get_artifact(db, experiment_id=experiment_id, artifact_id=artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="No such artifact")
+    return ArtifactResponse.model_validate(artifact)
+
+
+@router.delete("/{experiment_id}/artifacts/{artifact_id}", status_code=204)
+async def delete_artifact_endpoint(
+    experiment_id: uuid.UUID, artifact_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> None:
+    await _get_owned_experiment(db, experiment_id, user)
+    artifact = await get_artifact(db, experiment_id=experiment_id, artifact_id=artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="No such artifact")
+    await delete_artifact(db, artifact_id=artifact_id)
 
 
 # "pending" is ProtocolRun's own internal vocabulary -- the Runs tab shows

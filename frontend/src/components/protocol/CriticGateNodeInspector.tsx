@@ -4,6 +4,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
+import { defaultSystemPrompt } from './defaultSystemPrompt'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
@@ -115,7 +116,9 @@ export function CriticGateNodeInspector({
             className="font-mono text-xs"
             value={config.system_prompt}
             onChange={(e) => patchConfig({ system_prompt: e.target.value })}
+            placeholder={defaultSystemPrompt(data.label, 'Critic Gate')}
           />
+          <p className="text-xs text-muted-foreground">Leave blank to use the explicit default shown above instead (this gate's own canvas label).</p>
         </div>
 
         <div className="space-y-1.5">

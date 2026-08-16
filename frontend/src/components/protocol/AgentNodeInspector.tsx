@@ -4,6 +4,7 @@ import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
+import { defaultSystemPrompt } from './defaultSystemPrompt'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
@@ -143,11 +144,12 @@ export function AgentNodeInspector({
                       className="font-mono text-xs"
                       value={config.system_prompt}
                       onChange={(e) => patchConfig({ system_prompt: e.target.value })}
+                      placeholder={defaultSystemPrompt(data.label, 'Agent')}
                     />
                     <p className="text-xs text-muted-foreground">
                       Behavioral instructions layered on top of the Reason + Act pattern's own built-in system
-                      prompt. Leave blank to run on that built-in behavior alone -- there's no bare, uninstructed
-                      mode to fall back to further than that.
+                      prompt. Leave blank to use the explicit default shown above instead (this agent's own canvas
+                      label, not a bare/uninstructed mode).
                     </p>
                   </div>
                 )}

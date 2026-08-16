@@ -1,13 +1,69 @@
-import { useState } from 'react'
+import { useState, type DragEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Upload } from 'lucide-react'
 import { ApiError, datasetsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
+import { cn, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
 import type { Dataset } from '@/types/datasets'
+
+// A drag-and-drop file field, same footprint as the plain Input it replaces
+// (h-8, rounded-lg border) -- a <label> wrapping a visually-hidden (not
+// display:none, so Tab still reaches it) file input, which is both the
+// standard accessible custom-file-input pattern and gives this a natural
+// drop target: the label itself listens for the drag events, no extra
+// wrapper div needed.
+function FileDropInput({
+  id,
+  accept,
+  file,
+  onChange,
+  placeholder,
+}: {
+  id: string
+  accept: string
+  file: File | null
+  onChange: (file: File | null) => void
+  placeholder: string
+}) {
+  const [dragOver, setDragOver] = useState(false)
+
+  function handleDrop(e: DragEvent<HTMLLabelElement>) {
+    e.preventDefault()
+    setDragOver(false)
+    const dropped = e.dataTransfer.files?.[0]
+    if (dropped) onChange(dropped)
+  }
+
+  return (
+    <label
+      htmlFor={id}
+      onDragOver={(e) => {
+        e.preventDefault()
+        setDragOver(true)
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={handleDrop}
+      className={cn(
+        'flex h-8 w-full cursor-pointer items-center gap-1.5 rounded-lg border border-dashed border-input px-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50',
+        dragOver && 'border-ring bg-muted/50 ring-3 ring-ring/50',
+      )}
+    >
+      <Upload className="size-3.5 shrink-0" />
+      <span className={cn('truncate', file && 'font-mono text-xs text-foreground')}>{file ? file.name : placeholder}</span>
+      <input
+        id={id}
+        type="file"
+        accept={accept}
+        className="sr-only"
+        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
+      />
+    </label>
+  )
+}
 
 // Registers a dataset directly from wherever a Dataset node needs one
 // (DatasetNodeInspector) -- there's no dedicated Datasets page/route in this
@@ -122,7 +178,7 @@ export function RegisterDatasetDialog({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="dataset-file">CSV file</Label>
-              <Input id="dataset-file" type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+              <FileDropInput id="dataset-file" accept=".csv" file={file} onChange={setFile} placeholder="Drop a CSV or click to browse" />
             </div>
           </div>
 
@@ -146,7 +202,13 @@ export function RegisterDatasetDialog({
 
           <div className="space-y-1.5">
             <Label htmlFor="dataset-dictionary">Data dictionary</Label>
-            <Input id="dataset-dictionary" type="file" accept=".json" onChange={(e) => setDictionaryFile(e.target.files?.[0] ?? null)} />
+            <FileDropInput
+              id="dataset-dictionary"
+              accept=".json"
+              file={dictionaryFile}
+              onChange={setDictionaryFile}
+              placeholder="Drop a JSON file or click to browse (optional)"
+            />
             <p className="text-xs text-muted-foreground">
               Optional JSON file, opaque to ASAREE itself -- read by a domain MCP server's own EDA tools. There's no way
               to add or replace this after registering yet -- upload it now if you already have one.

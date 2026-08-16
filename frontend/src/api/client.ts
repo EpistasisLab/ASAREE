@@ -217,27 +217,41 @@ export const datasetsApi = {
   // Dataset node's own Server-select-style picker (DatasetNodeInspector).
   list: () => request<Dataset[]>('/datasets'),
   get: (id: string) => request<Dataset>(`/datasets/${id}`),
-  // POST /datasets is a multipart upload -- the split itself (group-aware
-  // GroupShuffleSplit when group_column is present, else a stratified
-  // train_test_split on target_column) happens server-side
-  // (services.datasets.create_dataset), so this only ever sends ONE CSV,
-  // never pre-split train/test files. 409s if `name` is already taken.
-  create: (data: {
-    name: string
-    file: File
-    targetColumn?: string
-    groupColumn?: string
-    description?: string
-    dictionaryJson?: string
-  }) => {
+  // POST /datasets is a multipart upload -- stores ONLY the raw file,
+  // verbatim (services.datasets.create_dataset); it never splits it.
+  // 409s if `name` is already taken. Splitting is one of the two separate
+  // actions below, once the dataset exists.
+  create: (data: { name: string; file: File; targetColumn?: string; description?: string; dictionaryJson?: string }) => {
     const form = new FormData()
     form.set('name', data.name)
     form.set('file', data.file)
     if (data.targetColumn) form.set('target_column', data.targetColumn)
-    if (data.groupColumn) form.set('group_column', data.groupColumn)
     if (data.description) form.set('description', data.description)
     if (data.dictionaryJson) form.set('dictionary_json', data.dictionaryJson)
     return request<Dataset>('/datasets', { method: 'POST', body: form })
+  },
+  // ASAREE's own built-in split (group-aware GroupShuffleSplit when
+  // groupColumn is given and present, else stratified train_test_split on
+  // targetColumn) -- covers the common case. Safe to call again (e.g. a
+  // different seed): overwrites whichever split currently exists rather
+  // than accumulating one per call.
+  quickSplit: (id: string, data: { targetColumn?: string; groupColumn?: string; testSize?: number; seed?: number }) => {
+    const form = new FormData()
+    if (data.targetColumn) form.set('target_column', data.targetColumn)
+    if (data.groupColumn) form.set('group_column', data.groupColumn)
+    if (data.testSize != null) form.set('test_size', String(data.testSize))
+    if (data.seed != null) form.set('seed', String(data.seed))
+    return request<Dataset>(`/datasets/${id}/split/quick`, { method: 'POST', body: form })
+  },
+  // Registers an already-split train/test pair computed however the user
+  // needed (k-fold, time-based, a custom cohort rule, ...) -- ASAREE only
+  // validates that both parse as tabular data, the same "bring your own
+  // code" precedent the Script node already established for scoring.
+  manualSplit: (id: string, data: { trainFile: File; testFile: File }) => {
+    const form = new FormData()
+    form.set('train_file', data.trainFile)
+    form.set('test_file', data.testFile)
+    return request<Dataset>(`/datasets/${id}/split/manual`, { method: 'POST', body: form })
   },
 }
 

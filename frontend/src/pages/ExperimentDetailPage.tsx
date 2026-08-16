@@ -633,14 +633,18 @@ function DatasetCard({ datasetId }: { datasetId: string }) {
             <dt className="text-muted-foreground">Train split</dt>
             <dd className="flex items-center gap-1.5">
               <span className="size-1.5 rounded-full bg-primary shadow-[0_0_6px_var(--primary)]" />
-              <span className="font-mono text-xs text-muted-foreground">{dataset.train_sha256.slice(0, 10)}</span>
+              <span className="font-mono text-xs text-muted-foreground">
+                {dataset.train_sha256 ? dataset.train_sha256.slice(0, 10) : 'not split yet'}
+              </span>
             </dd>
           </div>
           <div className="flex items-center justify-between">
             <dt className="text-muted-foreground">Test split</dt>
             <dd className="flex items-center gap-1.5">
               <span className="size-1.5 rounded-full bg-primary shadow-[0_0_6px_var(--primary)]" />
-              <span className="font-mono text-xs text-muted-foreground">{dataset.test_sha256.slice(0, 10)}</span>
+              <span className="font-mono text-xs text-muted-foreground">
+                {dataset.test_sha256 ? dataset.test_sha256.slice(0, 10) : 'not split yet'}
+              </span>
             </dd>
           </div>
           {dataset.dictionary_json && (

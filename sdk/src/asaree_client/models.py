@@ -130,10 +130,16 @@ class ProtocolRun(BaseModel):
 class RegisteredDataset(BaseModel):
     id: uuid.UUID
     name: str
-    train_path: str
-    test_path: str
-    train_sha256: str
-    test_sha256: str
+    raw_path: str | None = None
+    raw_sha256: str | None = None
+    # Null until a split is actually produced (Datasets.quick_split/
+    # register_manual_split) -- registration itself only stores the raw
+    # file, it never splits (see RegisteredDataset's own comment in the
+    # backend model).
+    train_path: str | None = None
+    test_path: str | None = None
+    train_sha256: str | None = None
+    test_sha256: str | None = None
     target_column: str | None
     description: str | None = None
     dictionary_json: str | None = None

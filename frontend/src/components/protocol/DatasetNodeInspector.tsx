@@ -14,6 +14,7 @@ import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { RegisterDatasetDialog } from './RegisterDatasetDialog'
+import { SplitDatasetDialog } from './SplitDatasetDialog'
 import type { DatasetNodeData, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = hashToChartHue('dataset')
@@ -76,6 +77,7 @@ export function DatasetNodeInspector({
   onClose: () => void
 }) {
   const [registerDialogOpen, setRegisterDialogOpen] = useState(false)
+  const [splitDialogOpen, setSplitDialogOpen] = useState(false)
   const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: () => datasetsApi.list() })
   const syncExperimentDataset = useMutation({
     mutationFn: (datasetId: string) => experimentsApi.update(experimentId!, { dataset_id: datasetId }),
@@ -210,16 +212,30 @@ export function DatasetNodeInspector({
               <p className="text-muted-foreground">Target column</p>
               <p className="truncate font-mono">{selectedDataset.target_column ?? '—'}</p>
             </div>
-            <div>
-              <p className="text-muted-foreground">Train / test hash</p>
-              <p
-                className="truncate font-mono"
-                title={`train: ${selectedDataset.train_sha256}\ntest: ${selectedDataset.test_sha256}`}
-              >
-                {selectedDataset.train_sha256.slice(0, 10)}… / {selectedDataset.test_sha256.slice(0, 10)}…
-              </p>
-            </div>
+            {selectedDataset.train_sha256 && selectedDataset.test_sha256 && (
+              <div>
+                <p className="text-muted-foreground">Train / test hash</p>
+                <p
+                  className="truncate font-mono"
+                  title={`train: ${selectedDataset.train_sha256}\ntest: ${selectedDataset.test_sha256}`}
+                >
+                  {selectedDataset.train_sha256.slice(0, 10)}… / {selectedDataset.test_sha256.slice(0, 10)}…
+                </p>
+              </div>
+            )}
           </div>
+          {selectedDataset.train_path ? (
+            <Button variant="outline" size="sm" onClick={() => setSplitDialogOpen(true)}>
+              Re-split
+            </Button>
+          ) : (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-dashed px-2.5 py-1.5">
+              <p className="text-xs text-muted-foreground">Not split yet -- can't be used in a workspace until it is.</p>
+              <Button variant="outline" size="sm" onClick={() => setSplitDialogOpen(true)}>
+                Split dataset
+              </Button>
+            </div>
+          )}
           {selectedDataset.dictionary_json &&
             (() => {
               const dictionary = parseDictionary(selectedDataset.dictionary_json)
@@ -258,6 +274,7 @@ export function DatasetNodeInspector({
         onOpenChange={setRegisterDialogOpen}
         onCreated={(dataset) => selectDataset(dataset)}
       />
+      {selectedDataset && <SplitDatasetDialog open={splitDialogOpen} onOpenChange={setSplitDialogOpen} dataset={selectedDataset} />}
     </NodeInspectorDialog>
   )
 }

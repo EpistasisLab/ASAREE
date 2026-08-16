@@ -1,10 +1,15 @@
 export interface Dataset {
   id: string
   name: string
-  train_path: string
-  test_path: string
-  train_sha256: string
-  test_sha256: string
+  raw_path: string | null
+  raw_sha256: string | null
+  // Null until a split is actually produced (datasetsApi.quickSplit/
+  // manualSplit) -- registration itself only stores the raw file, it never
+  // splits (see RegisteredDataset's own comment in the backend model).
+  train_path: string | null
+  test_path: string | null
+  train_sha256: string | null
+  test_sha256: string | null
   target_column: string | null
   description: string | null
   dictionary_json: string | null

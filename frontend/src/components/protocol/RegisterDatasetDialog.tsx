@@ -1,69 +1,14 @@
-import { useState, type DragEvent } from 'react'
+import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Upload } from 'lucide-react'
 import { ApiError, datasetsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { cn, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
+import { HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
 import type { Dataset } from '@/types/datasets'
-
-// A drag-and-drop file field, same footprint as the plain Input it replaces
-// (h-8, rounded-lg border) -- a <label> wrapping a visually-hidden (not
-// display:none, so Tab still reaches it) file input, which is both the
-// standard accessible custom-file-input pattern and gives this a natural
-// drop target: the label itself listens for the drag events, no extra
-// wrapper div needed.
-function FileDropInput({
-  id,
-  accept,
-  file,
-  onChange,
-  placeholder,
-}: {
-  id: string
-  accept: string
-  file: File | null
-  onChange: (file: File | null) => void
-  placeholder: string
-}) {
-  const [dragOver, setDragOver] = useState(false)
-
-  function handleDrop(e: DragEvent<HTMLLabelElement>) {
-    e.preventDefault()
-    setDragOver(false)
-    const dropped = e.dataTransfer.files?.[0]
-    if (dropped) onChange(dropped)
-  }
-
-  return (
-    <label
-      htmlFor={id}
-      onDragOver={(e) => {
-        e.preventDefault()
-        setDragOver(true)
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={handleDrop}
-      className={cn(
-        'flex h-8 w-full cursor-pointer items-center gap-1.5 rounded-lg border border-dashed border-input px-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50',
-        dragOver && 'border-ring bg-muted/50 ring-3 ring-ring/50',
-      )}
-    >
-      <Upload className="size-3.5 shrink-0" />
-      <span className={cn('truncate', file && 'font-mono text-xs text-foreground')}>{file ? file.name : placeholder}</span>
-      <input
-        id={id}
-        type="file"
-        accept={accept}
-        className="sr-only"
-        onChange={(e) => onChange(e.target.files?.[0] ?? null)}
-      />
-    </label>
-  )
-}
+import { FileDropInput } from './FileDropInput'
 
 // Registers a dataset directly from wherever a Dataset node needs one
 // (DatasetNodeInspector) -- there's no dedicated Datasets page/route in this
@@ -71,24 +16,25 @@ function FileDropInput({
 // dataset outside a protocol today, so a plain dialog at the one place this
 // comes up is the right scope, not a new top-level resource.
 //
-// Only ONE csv is ever uploaded -- the split into train/test happens
-// server-side (services.datasets.create_dataset's own group-aware
-// GroupShuffleSplit / stratified train_test_split), so there's no "upload
-// train, upload test" pair of fields here. test_size/seed are left at their
-// server defaults (0.2/0) rather than exposed here -- not worth the extra
-// form surface for a v1 upload flow.
+// This ONLY stores the raw uploaded file -- it never splits it (see
+// RegisteredDataset's own comment in the backend model for why: scientific
+// splitting needs vary per experiment, and baking exactly one strategy into
+// registration, irreversibly discarding the source, made every other
+// strategy unreachable without re-uploading from scratch). Splitting is a
+// separate action (SplitDatasetDialog) against the raw file this dialog
+// registers, available once the dataset exists.
 //
-// dictionary_json is included (unlike test_size/seed) because there's
-// currently no PATCH /datasets/{id} -- once registered, this is the ONLY
-// chance to set it; adding it after the fact means deleting and
-// re-registering the whole dataset. Uploaded as its own JSON file, not
-// pasted into a textarea -- matching the real workflow this mirrors (see
-// asaree-spinal-use-case's own data/spine_data_dictionary.json, authored
-// once by a data scientist and handed off as a file, not hand-typed at
-// registration time). It's opaque to ASAREE itself (a domain MCP server
-// like ares-sklearn-eda's get_data_dictionary is the one that actually
-// reads it), so this only checks that the file parses as JSON at all, not
-// any particular shape within it.
+// dictionary_json is included at registration (unlike split params, which
+// don't belong here at all) because there's currently no PATCH
+// /datasets/{id} -- once registered, this is the ONLY chance to set it.
+// Uploaded as its own JSON file, not pasted into a textarea -- matching the
+// real workflow this mirrors (see asaree-spinal-use-case's own
+// data/spine_data_dictionary.json, authored once by a data scientist and
+// handed off as a file, not hand-typed at registration time). It's opaque
+// to ASAREE itself (a domain MCP server like ares-sklearn-eda's
+// get_data_dictionary is the one that actually reads it), so this only
+// checks that the file parses as JSON at all, not any particular shape
+// within it.
 export function RegisterDatasetDialog({
   open,
   onOpenChange,
@@ -103,7 +49,6 @@ export function RegisterDatasetDialog({
   const [name, setName] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [targetColumn, setTargetColumn] = useState('')
-  const [groupColumn, setGroupColumn] = useState('')
   const [description, setDescription] = useState('')
   const [dictionaryFile, setDictionaryFile] = useState<File | null>(null)
   const queryClient = useQueryClient()
@@ -112,7 +57,6 @@ export function RegisterDatasetDialog({
     setName('')
     setFile(null)
     setTargetColumn('')
-    setGroupColumn('')
     setDescription('')
     setDictionaryFile(null)
     createMutation.reset()
@@ -133,7 +77,6 @@ export function RegisterDatasetDialog({
         name: name.trim(),
         file: file!,
         targetColumn: targetColumn.trim() || undefined,
-        groupColumn: groupColumn.trim() || undefined,
         description: description.trim() || undefined,
         dictionaryJson,
       })
@@ -166,7 +109,7 @@ export function RegisterDatasetDialog({
         <DialogHeader>
           <DialogTitle>Register a dataset</DialogTitle>
           <DialogDescription>
-            Upload one CSV -- it's split into train/test server-side, so there's nothing to split by hand.
+            Uploads the raw file as-is -- it's never split here. Split it (however you need to) once it's registered.
           </DialogDescription>
         </DialogHeader>
 
@@ -182,17 +125,10 @@ export function RegisterDatasetDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="dataset-target-column">Target column</Label>
-              <Input id="dataset-target-column" value={targetColumn} onChange={(e) => setTargetColumn(e.target.value)} placeholder="(optional)" />
-              <p className="text-xs text-muted-foreground">Stratifies the split when there's no group column.</p>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="dataset-group-column">Group column</Label>
-              <Input id="dataset-group-column" value={groupColumn} onChange={(e) => setGroupColumn(e.target.value)} placeholder="(optional)" />
-              <p className="text-xs text-muted-foreground">Keeps each group's rows on one side of the split.</p>
-            </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="dataset-target-column">Target column</Label>
+            <Input id="dataset-target-column" value={targetColumn} onChange={(e) => setTargetColumn(e.target.value)} placeholder="(optional)" />
+            <p className="text-xs text-muted-foreground">Descriptive for now -- also used as the default stratification column if you later use the quick split.</p>
           </div>
 
           <div className="space-y-1.5">

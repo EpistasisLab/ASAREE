@@ -26,6 +26,8 @@ from asaree.services.datasets import (
     get_dataset,
     get_dataset_by_name,
     list_datasets,
+    quick_split_dataset,
+    register_manual_split,
 )
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -48,10 +50,15 @@ async def _get_owned_dataset_by_name(db: DbSession, name: str, user: CurrentUser
 class DatasetResponse(BaseModel):
     id: uuid.UUID
     name: str
-    train_path: str
-    test_path: str
-    train_sha256: str
-    test_sha256: str
+    raw_path: str | None
+    raw_sha256: str | None
+    # Null until a split is actually produced (POST .../split/quick or
+    # .../split/manual) -- registration itself never splits (see
+    # RegisteredDataset's own module docstring).
+    train_path: str | None
+    test_path: str | None
+    train_sha256: str | None
+    test_sha256: str | None
     target_column: str | None
     description: str | None = None
     # Opaque JSON-encoded string — ASAREE never parses this; a domain MCP server
@@ -65,6 +72,8 @@ def _dataset_response(d: Any) -> DatasetResponse:
     return DatasetResponse(
         id=d.id,
         name=d.name,
+        raw_path=d.raw_path,
+        raw_sha256=d.raw_sha256,
         train_path=d.train_path,
         test_path=d.test_path,
         train_sha256=d.train_sha256,
@@ -101,12 +110,11 @@ async def create_dataset_endpoint(
     name: Annotated[str, Form()],
     file: Annotated[UploadFile, File()],
     target_column: Annotated[str | None, Form()] = None,
-    group_column: Annotated[str | None, Form()] = None,
     description: Annotated[str | None, Form()] = None,
     dictionary_json: Annotated[str | None, Form()] = None,
-    test_size: Annotated[float, Form()] = 0.2,
-    seed: Annotated[int, Form()] = 0,
 ) -> DatasetResponse:
+    """Stores the raw file, verbatim -- never splits it. See a split's own
+    two endpoints below (`.../split/quick`, `.../split/manual`)."""
     if await get_dataset_by_name(db, name) is not None:
         raise HTTPException(status_code=409, detail="A dataset with this name already exists")
     try:
@@ -116,11 +124,62 @@ async def create_dataset_endpoint(
             csv_bytes=await file.read(),
             owner_id=user.id,
             target_column=target_column,
-            group_column=group_column,
             description=description,
             dictionary_json=dictionary_json,
+        )
+    except DatasetValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _dataset_response(dataset)
+
+
+@router.post("/{dataset_id}/split/quick", response_model=DatasetResponse)
+async def quick_split_dataset_endpoint(
+    dataset_id: uuid.UUID,
+    db: DbSession,
+    user: CurrentUser,
+    target_column: Annotated[str | None, Form()] = None,
+    group_column: Annotated[str | None, Form()] = None,
+    test_size: Annotated[float, Form()] = 0.2,
+    seed: Annotated[int, Form()] = 0,
+) -> DatasetResponse:
+    """ASAREE's own built-in split (group-aware when group_column is given
+    and present, else stratified on target_column) -- covers the common
+    case. Safe to call again (e.g. a different seed): overwrites whichever
+    split currently exists rather than accumulating one per call."""
+    dataset = await _get_owned_dataset(db, dataset_id, user)
+    try:
+        dataset = await quick_split_dataset(
+            db,
+            dataset=dataset,
+            target_column=target_column,
+            group_column=group_column,
             test_size=test_size,
             seed=seed,
+        )
+    except DatasetValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _dataset_response(dataset)
+
+
+@router.post("/{dataset_id}/split/manual", response_model=DatasetResponse)
+async def register_manual_split_endpoint(
+    dataset_id: uuid.UUID,
+    db: DbSession,
+    user: CurrentUser,
+    train_file: Annotated[UploadFile, File()],
+    test_file: Annotated[UploadFile, File()],
+) -> DatasetResponse:
+    """Register an already-split train/test pair computed however the user
+    needed (k-fold, time-based, a custom cohort rule, ...) -- ASAREE only
+    validates that both parse as tabular data, the same "bring your own
+    code" precedent the Script node already established for scoring."""
+    dataset = await _get_owned_dataset(db, dataset_id, user)
+    try:
+        dataset = await register_manual_split(
+            db,
+            dataset=dataset,
+            train_csv_bytes=await train_file.read(),
+            test_csv_bytes=await test_file.read(),
         )
     except DatasetValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

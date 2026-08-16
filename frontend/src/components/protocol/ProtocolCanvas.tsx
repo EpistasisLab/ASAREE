@@ -18,7 +18,6 @@ import {
 import '@xyflow/react/dist/style.css'
 import { Play, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { newNodeId } from '@/lib/nodeId'
 import { protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
@@ -74,6 +73,7 @@ import {
 import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
 import { RunWithIssuesDialog } from './RunWithIssuesDialog'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
+import { SelectCellDialog } from './SelectCellDialog'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
 import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
@@ -310,6 +310,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // services.protocol_execution.plan_single_cell_run), picked from the
   // dropdown next to the Run button.
   const [selectedCellLabel, setSelectedCellLabel] = useState<string | null>(null)
+  const [cellPickerOpen, setCellPickerOpen] = useState(false)
   const cellsQuery = useQuery({
     queryKey: ['experiments', experimentId, 'cells'],
     queryFn: () => experimentsApi.listCells(experimentId!),
@@ -978,22 +979,22 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           })()}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
             {cellOptions.length > 0 && (
-              <Select
-                value={selectedCellLabel ?? '__adhoc__'}
-                onValueChange={(value) => setSelectedCellLabel(value === '__adhoc__' ? null : value)}
-              >
-                <SelectTrigger size="sm" className="w-40">
-                  <SelectValue>{(value: string) => (value === '__adhoc__' ? 'Ad-hoc run' : value)}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__adhoc__">Ad-hoc run</SelectItem>
-                  {cellOptions.map((cell) => (
-                    <SelectItem key={cell.cell_label} value={cell.cell_label}>
-                      {cell.cell_label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Button size="sm" variant="outline" className="max-w-40" onClick={() => setCellPickerOpen(true)}>
+                <span className={`truncate ${selectedCellLabel ? 'font-mono' : ''}`} title={selectedCellLabel ?? undefined}>
+                  {selectedCellLabel ?? 'Run cell'}
+                </span>
+              </Button>
+            )}
+            {cellPickerOpen && (
+              <SelectCellDialog
+                cells={cellOptions}
+                selectedCellLabel={selectedCellLabel}
+                onCancel={() => setCellPickerOpen(false)}
+                onSelect={(cellLabel) => {
+                  setSelectedCellLabel(cellLabel)
+                  setCellPickerOpen(false)
+                }}
+              />
             )}
             <Button size="sm" disabled={isRunning} onClick={requestRun}>
               <Play className="size-4" />

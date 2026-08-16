@@ -11,12 +11,10 @@ import type { SingleAgentBaselinePatternConfig, SingleAgentBaselinePatternNodeDa
 const ACCENT = hashToChartHue('pattern_single_agent_baseline')
 
 // Fields mirror agentic-core's own SingleAgentBaselinePattern.configuration_schema
-// (engine/patterns/builtin/single_agent_baseline.py) exactly -- but nothing
-// here is wired to a real run yet (see SingleAgentBaselinePatternNodeData's
-// own comment in types/protocols.ts): connecting this to an agent declares
-// intent for a future phase, editing these fields has no effect on
-// execution today. Each field is still factor-bindable, though -- same
-// reasoning as ReasonActPatternNodeInspector's own comment.
+// (engine/patterns/builtin/single_agent_baseline.py) exactly, and ARE wired
+// to a real run -- see ReasonActPatternNodeInspector's own comment for how
+// _resolve_pattern_config/PatternConfig thread this node's config into
+// create_agent/update_agent. Each field is also factor-bindable.
 // No Delete button in the header -- an agent's execution pattern must
 // never go to zero (see ProtocolCanvas.tsx's nonDeletablePatternNodeIds),
 // so this node is only ever removed by swapping it for a different one
@@ -74,11 +72,6 @@ export function SingleAgentBaselinePatternNodeInspector({
       }
       onClose={onClose}
     >
-      <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-        Not yet wired up to agentic-core's real single_agent_baseline pattern -- connecting this to an agent declares
-        intent for a future phase, but has no effect on execution yet.
-      </div>
-
       <FactorBindableField
         experimentId={experimentId}
         fieldPath="config.max_iterations"

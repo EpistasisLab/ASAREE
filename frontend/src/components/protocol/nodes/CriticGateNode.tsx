@@ -4,9 +4,11 @@ import { Badge } from '@/components/ui/badge'
 import { cardAccent, hashToChartHue } from '@/lib/utils'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { CriticGateNodeData, NodeRunStatus } from '@/types/protocols'
+import { hasBoundFactor } from '../bindableFields'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
+import { NodeFactorBadge } from './NodeFactorBadge'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 
 // A third hue, distinct from "agent"/"mcp_tool" -- real category variety
@@ -40,6 +42,7 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
       {badge && (
         <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
       )}
+      {hasBoundFactor(data) && <NodeFactorBadge className="top-1 left-1.5" />}
       {/* Main pipeline flow is left-to-right -- input on the left, output on
           the right, same convention as AgentNode. The LLM sub-connector
           stays on the bottom edge regardless. */}

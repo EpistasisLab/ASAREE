@@ -13,15 +13,13 @@ const OBSERVATION_FORMATS = ['raw', 'summarized'] as const
 const ACCENT = hashToChartHue('pattern_reason_act')
 
 // Fields mirror agentic-core's own ReasonActPattern.configuration_schema
-// (engine/patterns/builtin/reason_act.py) exactly -- but nothing here is
-// wired to a real run yet (see ReasonActPatternNodeData's own comment in
-// types/protocols.ts): connecting this to an agent declares intent for a
-// future phase, editing these fields has no effect on execution today. Each
-// field is still factor-bindable, though -- protocol_execution.py's
-// _resolve_pattern_config reads the wired pattern node's own (already
-// factor-patched) data.config verbatim, so varying e.g. max_iterations
-// across cells already works with zero backend changes, same as it will the
-// moment this pattern IS wired up for real.
+// (engine/patterns/builtin/reason_act.py) exactly, and ARE wired to a real
+// run: protocol_execution.py's _resolve_pattern_config reads this wired
+// pattern node's own (already factor-patched) data.config into a real
+// agentic-core PatternConfig, passed straight into create_agent/update_agent
+// -- editing max_iterations/observation_format/etc. here changes execution.
+// Each field is also factor-bindable, so varying e.g. max_iterations across
+// cells works the same way any other field-level binding does.
 // No Delete button in the header -- an agent's execution pattern must
 // never go to zero (see ProtocolCanvas.tsx's nonDeletablePatternNodeIds),
 // so this node is only ever removed by swapping it for a different one
@@ -79,11 +77,6 @@ export function ReasonActPatternNodeInspector({
       }
       onClose={onClose}
     >
-      <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-        Not yet wired up to agentic-core's real reason_act pattern -- connecting this to an agent declares intent for
-        a future phase, but has no effect on execution yet.
-      </div>
-
       <div className="grid grid-cols-2 gap-4">
         <FactorBindableField
           experimentId={experimentId}

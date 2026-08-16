@@ -2,6 +2,7 @@ import type { NodeProps } from '@xyflow/react'
 import { Wrench } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { McpToolNodeData } from '@/types/protocols'
+import { hasBoundFactor } from '../bindableFields'
 import { CircleNode } from './CircleNode'
 
 // A different hue from "agent" -- real category variety (CLAUDE.md's
@@ -29,6 +30,7 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
       placeholder="MCP Tool"
       handleId="tool"
       warning={summary ? undefined : 'Not configured -- pick a server and at least one tool'}
+      hasFactor={hasBoundFactor(data)}
     />
   )
 }

@@ -2,6 +2,7 @@ import type { NodeProps } from '@xyflow/react'
 import { BrainCircuit } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { MemoryNodeData } from '@/types/protocols'
+import { hasBoundFactor } from '../bindableFields'
 import { CircleNode } from './CircleNode'
 
 // Visual/validation scaffolding only -- see MemoryNodeData's own comment in
@@ -22,6 +23,7 @@ export function MemoryNode({ id, data, selected }: NodeProps & { data: MemoryNod
       placeholder="Memory"
       handleId="memory"
       dashed
+      hasFactor={hasBoundFactor(data)}
     />
   )
 }

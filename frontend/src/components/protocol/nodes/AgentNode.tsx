@@ -4,12 +4,14 @@ import { Badge } from '@/components/ui/badge'
 import { cardAccent, hashToChartHue } from '@/lib/utils'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { AgentNodeData, NodeRunStatus } from '@/types/protocols'
+import { hasBoundFactor } from '../bindableFields'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
 import { MainEdgeAddStub } from './MainEdgeAddStub'
+import { NodeFactorBadge } from './NodeFactorBadge'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 import { NodeSummaryLine } from './NodeSummaryLine'
-import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 
 // All "agent" nodes share one hue in V1 -- type-based coloring (CLAUDE.md's
 // hash-driven tint rule for "real category variety"), not per-instance
@@ -31,7 +33,7 @@ export function AgentNode({
   return (
     <div
       style={cardAccent(ACCENT)}
-      className={`group relative w-60 rounded-md border bg-card px-2.5 py-3 shadow-[0_0_12px_-6px_var(--card-accent)] ring-1 ring-[color:var(--card-accent)]/40 ${
+      className={`group relative flex min-h-20 w-60 flex-col justify-center rounded-md border bg-card px-2.5 py-3.5 shadow-[0_0_12px_-6px_var(--card-accent)] ring-1 ring-[color:var(--card-accent)]/40 ${
         selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
       } ${isActive ? '' : 'opacity-50'}`}
     >
@@ -44,6 +46,11 @@ export function AgentNode({
       {badge && (
         <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
       )}
+      {/* Top-left corner is the one free spot inside the card: top-right is
+          the run-status Badge, top-center (on hover) is NodeHoverToolbar,
+          and the Architectural Pattern connector's own label/stub live
+          OUTSIDE the card (negative offsets), not in this corner. */}
+      {hasBoundFactor(data) && <NodeFactorBadge className="top-1.5 left-1.5" />}
       {/* Main flow is left-to-right (n8n's own convention) -- the 4
           sub-connectors below stay on the bottom edge regardless, same as
           n8n's own AI sub-connectors (Chat Model/Memory/Tool) always hang
@@ -74,44 +81,36 @@ export function AgentNode({
         text={data.config?.prompt || data.config?.goal || null}
         warning={data.missingLlm ? "No LLM connected -- this agent can't run" : null}
       />
-      {/* n8n's own 3 bottom sub-connectors (Chat Model/Memory/Tool), adapted
-          and extended with ASAREE's own addition (Architectural Pattern, no
-          n8n equivalent): required LLM (exactly one), optional max-1
-          Architectural Pattern (capped for the execution-pattern category
-          specifically -- see _EXECUTION_PATTERN_NODE_TYPES in
-          protocol_execution.py), optional max-1 Memory (visual scaffolding
-          only -- see MemoryNodeData), and optional repeatable Tool. Dataset
-          and Script are pure config sources too, but deliberately do NOT get
-          their own bottom slot -- they wire into this same Tool connector
-          (n8n's own convention for a connector that accepts a FAMILY of
-          node types, matching agentic-core's own _NODE_TYPE_TO_HANDLE): the
-          Tool "+" panel's search just lists mcp_tool/Dataset/Script side by
-          side (see CONNECTOR_PANEL_INFO.tool's allowedTypes in
-          ProtocolCanvas.tsx), and which sub-kind a given wired node actually
-          is gets recovered from its own node `type`, not from a dedicated
-          handle. Adding two more bottom slots for them was tried and looked
-          cluttered -- reusing Tool is both closer to n8n and keeps this row
-          at a stable 4 slots regardless of how many pure-config-source
-          node types ASAREE grows. */}
-      <Handle
-        type="target"
-        id="llm"
-        position={Position.Bottom}
-        style={{ left: '14%' }}
-        title="LLM (required)"
-        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
-      />
-      <ConnectorHandleLabel left="14%">LLM</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="llm" left="14%" />
+      {/* Architectural Pattern sits on the TOP edge, on its own -- it's a
+          swap-only, never-zero connector (see its own comment below), a
+          different enough interaction from the other three that giving it
+          its own edge reads more clearly than crowding it into the bottom
+          row. Offset to the top-LEFT rather than dead-center: the hover
+          toolbar (NodeHoverToolbar) already claims the top-center span
+          (-top-8, appearing on :hover) and the run-status Badge already
+          claims the top-right corner, so top-left is the one open zone on
+          this edge left for a third occupant. n8n's own 3 bottom
+          sub-connectors (Chat Model/Memory/Tool):
+          required LLM (exactly one), optional max-1 Memory (visual
+          scaffolding only -- see MemoryNodeData), and optional repeatable
+          Tool. Dataset and Script are pure config sources too, but
+          deliberately do NOT get their own slot -- they wire into this same
+          Tool connector (n8n's own convention for a connector that accepts a
+          FAMILY of node types, matching agentic-core's own
+          _NODE_TYPE_TO_HANDLE): the Tool "+" panel's search just lists
+          mcp_tool/Dataset/Script side by side (see CONNECTOR_PANEL_INFO.tool's
+          allowedTypes in ProtocolCanvas.tsx), and which sub-kind a given
+          wired node actually is gets recovered from its own node `type`, not
+          from a dedicated handle. */}
       <Handle
         type="target"
         id="architectural_pattern"
-        position={Position.Bottom}
-        style={{ left: '38%' }}
+        position={Position.Top}
+        style={{ left: '15%' }}
         title="Architectural Pattern -- always exactly one; pick a node here to swap it"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="38%">Pattern</ConnectorHandleLabel>
+      <ConnectorHandleLabel left="15%" side="top">Pattern</ConnectorHandleLabel>
       {/* Never hides once connected (unlike LLM/Memory) -- an execution
           pattern must never go to zero (agentic-core silently falls back
           to reason_act if left unconnected, undoing the whole point of
@@ -120,27 +119,37 @@ export function AgentNode({
           addNode()'s own pendingConnectorAdd branch for the replace logic,
           and ProtocolCanvas.tsx's nodesWithRunStatus for why the connected
           pattern node itself can't be deleted directly either. */}
-      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="38%" alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="15%" side="top" alwaysVisible />
+      <Handle
+        type="target"
+        id="llm"
+        position={Position.Bottom}
+        style={{ left: '20%' }}
+        title="LLM (required)"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
+      <ConnectorHandleLabel left="20%">LLM</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="llm" left="20%" />
       <Handle
         type="target"
         id="memory"
         position={Position.Bottom}
-        style={{ left: '62%' }}
+        style={{ left: '50%' }}
         title="Memory (not yet functional)"
         className="!size-2 !border-2 !border-dashed !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="62%">Memory</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="memory" left="62%" />
+      <ConnectorHandleLabel left="50%">Memory</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="memory" left="50%" />
       <Handle
         type="target"
         id="tool"
         position={Position.Bottom}
-        style={{ left: '86%' }}
+        style={{ left: '80%' }}
         title="Tool -- MCP server, Dataset, or Script"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="86%">Tool</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="tool" left="86%" alwaysVisible />
+      <ConnectorHandleLabel left="80%">Tool</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="tool" left="80%" alwaysVisible />
       <Handle
         type="source"
         position={Position.Right}

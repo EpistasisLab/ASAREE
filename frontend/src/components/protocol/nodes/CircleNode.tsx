@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react'
 import { Handle, Position } from '@xyflow/react'
-import { TriangleAlert } from 'lucide-react'
+import { TriangleAlert, Variable } from 'lucide-react'
 import { cardAccent } from '@/lib/utils'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 
@@ -22,7 +22,9 @@ export function CircleNode({
   handleId,
   dashed,
   warning,
+  hasFactor,
   swap,
+  handlePosition = 'top',
 }: {
   id: string
   selected?: boolean
@@ -31,14 +33,26 @@ export function CircleNode({
   label: string
   placeholder: string
   handleId: string
-  // Dashed ring signals "not yet functional" scaffolding (Memory/
-  // Architectural Pattern) -- distinct from `warning`, which flags a
-  // genuinely missing required field (e.g. McpToolNode-as-Tool with no
-  // server/tool picked yet) rather than a permanent non-implementation.
+  // Dashed ring signals "not yet functional" scaffolding (Memory) --
+  // distinct from `warning`, which flags a genuinely missing required field
+  // (e.g. McpToolNode-as-Tool with no server/tool picked yet) rather than a
+  // permanent non-implementation.
   dashed?: boolean
   warning?: string
+  // Small "x" badge, opposite corner from `warning` -- this node has at
+  // least one field bound to an experimental factor (see AgentNode.tsx's
+  // own hasFactor for the matching convention on a rectangular node).
+  hasFactor?: boolean
   // Passed straight through to NodeHoverToolbar -- see its own comment.
   swap?: { label: string; onSwap: () => void }
+  // Which edge of the circle the connector handle sits on -- 'top' (default)
+  // for every source node positioned BELOW its target agent (LLM/Memory/
+  // Tool/Dataset/Script), so the edge exits upward into the agent's own
+  // bottom row. Architectural Pattern nodes are positioned ABOVE their
+  // agent instead (see agentDefaultPattern in ProtocolCanvas.tsx) and use
+  // 'bottom' here, so the edge runs straight down into the agent's own top
+  // connector rather than looping around.
+  handlePosition?: 'top' | 'bottom'
 }) {
   return (
     <div className="group relative flex flex-col items-center">
@@ -60,10 +74,18 @@ export function CircleNode({
             <TriangleAlert className="size-3 text-[color:var(--chart-4)]" />
           </div>
         )}
+        {hasFactor && (
+          <div
+            className="absolute -bottom-1 -left-1 flex size-4 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--card-accent)]/40"
+            title="One or more fields are bound to an experimental factor"
+          >
+            <Variable className="size-3 text-[color:var(--chart-2)]" />
+          </div>
+        )}
         <Handle
           type="source"
           id={handleId}
-          position={Position.Top}
+          position={handlePosition === 'bottom' ? Position.Bottom : Position.Top}
           className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
         />
       </div>

@@ -2,14 +2,15 @@ import { useNodeConnections, type NodeProps } from '@xyflow/react'
 import { ArrowRight } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { SingleAgentBaselinePatternNodeData } from '@/types/protocols'
+import { hasBoundFactor } from '../bindableFields'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
 
 // The other Architectural Pattern connector node type (see
 // SingleAgentBaselinePatternNodeData's own comment in types/protocols.ts).
-// Rendered as n8n's own small circle-with-icon (see CircleNode) -- the
-// dashed ring is the "not yet wired to a real run" signal (permanently
-// inert, not a missing-field warning).
+// Rendered as n8n's own small circle-with-icon (see CircleNode) -- see
+// ReasonActPatternNode.tsx's own comment for why this is NOT dashed and is
+// positioned above its agent with a bottom-facing connector.
 const ACCENT = hashToChartHue('pattern_single_agent_baseline')
 
 export function SingleAgentBaselinePatternNode({
@@ -33,7 +34,8 @@ export function SingleAgentBaselinePatternNode({
       label={data.label}
       placeholder="Single-Agent Baseline"
       handleId="architectural_pattern"
-      dashed
+      handlePosition="bottom"
+      hasFactor={hasBoundFactor(data)}
       swap={
         targetAgentId
           ? { label: 'Swap pattern', onSwap: () => requestConnectorAdd({ nodeId: targetAgentId, slot: 'architectural_pattern' }) }

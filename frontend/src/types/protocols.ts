@@ -367,13 +367,13 @@ export function defaultScriptNodeData(label = 'Script'): ScriptNodeData {
   return { label, config: { name: 'script', language: 'python', code: '' } }
 }
 
-// The Architectural Pattern connector's node family -- same deliberate
-// non-implementation as Memory (see MemoryNodeData's own comment): wiring
-// one into an Agent's Architectural Pattern connector has NO effect on
-// execution yet (services.protocol_execution accepts and validates the
-// connection, never resolves it into anything) -- porting the real
-// agentic-core pattern plugin behind each node is an explicit follow-up.
-// No n8n equivalent -- ASAREE's own addition alongside LLM/Tool/Memory.
+// The Architectural Pattern connector's node family -- UNLIKE Memory (see
+// MemoryNodeData's own comment), wiring one into an Agent's Architectural
+// Pattern connector has a real effect on execution:
+// services.protocol_execution's _resolve_pattern_config reads the wired
+// node's own config into a real agentic-core PatternConfig, passed straight
+// into create_agent/update_agent. No n8n equivalent -- ASAREE's own
+// addition alongside LLM/Tool/Memory.
 //
 // One node type per pattern (pattern_reason_act/pattern_single_agent_baseline),
 // not one generic node with a Pattern-name field -- same reasoning as the

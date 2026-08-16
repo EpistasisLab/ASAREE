@@ -2,14 +2,20 @@ import { useNodeConnections, type NodeProps } from '@xyflow/react'
 import { Repeat2 } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { ReasonActPatternNodeData } from '@/types/protocols'
+import { hasBoundFactor } from '../bindableFields'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
 
 // One of two Architectural Pattern connector node types (see
 // ReasonActPatternNodeData's own comment in types/protocols.ts). Rendered
-// as n8n's own small circle-with-icon (see CircleNode) -- the dashed ring
-// is the "not yet wired to a real run" signal (permanently inert, not a
-// missing-field warning).
+// as n8n's own small circle-with-icon (see CircleNode) -- NOT dashed, unlike
+// Memory: _resolve_pattern_config reads this node's own config into a real
+// agentic-core PatternConfig on every run (protocol_execution.py's
+// create_agent/update_agent calls), so it has a genuine runtime effect.
+// Positioned ABOVE its agent by default (agentDefaultPattern in
+// ProtocolCanvas.tsx) with its own connector on the BOTTOM edge
+// (handlePosition="bottom" below) so the edge runs straight down into the
+// agent's own top connector.
 const ACCENT = hashToChartHue('pattern_reason_act')
 
 export function ReasonActPatternNode({ id, data, selected }: NodeProps & { data: ReasonActPatternNodeData }) {
@@ -33,7 +39,8 @@ export function ReasonActPatternNode({ id, data, selected }: NodeProps & { data:
       label={data.label}
       placeholder="Reason + Act"
       handleId="architectural_pattern"
-      dashed
+      handlePosition="bottom"
+      hasFactor={hasBoundFactor(data)}
       swap={
         targetAgentId
           ? { label: 'Swap pattern', onSwap: () => requestConnectorAdd({ nodeId: targetAgentId, slot: 'architectural_pattern' }) }

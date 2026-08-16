@@ -2,6 +2,7 @@ import type { NodeProps } from '@xyflow/react'
 import { Atom, Cloud, Sparkles } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { LlmNodeData } from '@/types/protocols'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
 
 // One shared card renderer for all three LLM provider node types
@@ -27,6 +28,7 @@ export const PROVIDER_META: Record<string, { label: string; icon: typeof Sparkle
 export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData }) {
   const meta = PROVIDER_META[data.config?.provider] ?? { label: data.config?.provider || 'LLM', icon: Sparkles }
   const accent = hashToChartHue(data.config?.provider || 'llm')
+  const { requestMakeFactor } = useProtocolCanvasActions()
 
   return (
     <CircleNode
@@ -38,6 +40,7 @@ export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData 
       placeholder={meta.label}
       handleId="llm"
       warning={data.config?.model ? undefined : 'No model set'}
+      onMakeFactor={() => requestMakeFactor(id)}
     />
   )
 }

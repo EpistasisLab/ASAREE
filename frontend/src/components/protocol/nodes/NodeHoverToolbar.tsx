@@ -1,6 +1,6 @@
 import type { MouseEvent, ReactNode } from 'react'
 import { useReactFlow } from '@xyflow/react'
-import { Play, Power, PowerOff, Repeat, Trash2 } from 'lucide-react'
+import { Play, Power, PowerOff, Repeat, Trash2, Variable } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 function ToolbarIconButton({
@@ -48,6 +48,7 @@ export function NodeHoverToolbar({
   onToggleActive,
   runAlone,
   swap,
+  onMakeFactor,
 }: {
   nodeId: string
   // Absent for pure config-source nodes (llm/memory/pattern) -- "deactivate"
@@ -69,6 +70,13 @@ export function NodeHoverToolbar({
   // different node is. See ReasonActPatternNode.tsx's own comment for why
   // this is conditional on actually being connected to something.
   swap?: { label: string; onSwap: () => void }
+  // The last button on every node type -- opens a field picker (scoped to
+  // this node's own bindable fields) for turning one into an experimental
+  // factor, same entry point as DesignTab's "Add factor" but pre-filtered
+  // to save hunting through every node on the canvas. Always passed (every
+  // node type gets this), unlike the other optional buttons above which are
+  // conditional on node-type-specific capabilities.
+  onMakeFactor?: () => void
 }) {
   const { deleteElements } = useReactFlow()
 
@@ -102,6 +110,11 @@ export function NodeHoverToolbar({
       ) : (
         <ToolbarIconButton label="Delete" onClick={() => void deleteElements({ nodes: [{ id: nodeId }] })}>
           <Trash2 className="size-3" />
+        </ToolbarIconButton>
+      )}
+      {onMakeFactor && (
+        <ToolbarIconButton label="Make experimental factor" onClick={onMakeFactor}>
+          <Variable className="size-3" />
         </ToolbarIconButton>
       )}
     </div>

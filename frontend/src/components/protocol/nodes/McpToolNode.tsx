@@ -2,6 +2,7 @@ import type { NodeProps } from '@xyflow/react'
 import { Wrench } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { McpToolNodeData } from '@/types/protocols'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
 
 // A different hue from "agent" -- real category variety (CLAUDE.md's
@@ -18,6 +19,7 @@ const ACCENT = hashToChartHue('mcp_tool')
 export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolNodeData }) {
   const toolNames = data.config?.tool_names ?? []
   const summary = toolNames.length > 0 ? `${data.config.server_name ?? '?'}: ${toolNames.join(', ')}` : null
+  const { requestMakeFactor } = useProtocolCanvasActions()
 
   return (
     <CircleNode
@@ -29,6 +31,7 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
       placeholder="MCP Tool"
       handleId="tool"
       warning={summary ? undefined : 'Not configured -- pick a server and at least one tool'}
+      onMakeFactor={() => requestMakeFactor(id)}
     />
   )
 }

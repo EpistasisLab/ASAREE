@@ -290,21 +290,29 @@ export function FactorEditorDialog({
   factor,
   pickableFields,
   existingNames,
+  emptyPickerMessage,
   onSave,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   factor: DesignFactor
-  // Only passed by DesignTab's "Add factor" entry point -- every bindable
-  // field on the canvas that isn't already bound to something. Lives here
-  // (not a separate small popover before this dialog even opens) since a
-  // canvas can realistically have a large number of fields to search
-  // through, and this dialog already has the room a cramped popover
-  // wouldn't.
+  // Only passed by DesignTab's "Add factor" entry point or a node's own
+  // hover-toolbar "Make experimental factor" icon -- every bindable field
+  // (on the whole canvas, or scoped to just that one node) that isn't
+  // already bound to something. Lives here (not a separate small popover
+  // before this dialog even opens) since a canvas can realistically have a
+  // large number of fields to search through, and this dialog already has
+  // the room a cramped popover wouldn't.
   pickableFields?: UnboundField[]
   // Needed to dedupe the computed name once a field is picked -- only
   // meaningful alongside pickableFields.
   existingNames?: string[]
+  // Shown when pickableFields is an empty array -- defaults to the
+  // whole-canvas wording; a node-scoped picker (the hover-toolbar entry
+  // point) passes something node-specific instead, since "already a
+  // factor" isn't accurate for a node type with nothing bindable on it at
+  // all (e.g. a Pattern connector node).
+  emptyPickerMessage?: string
   // `field` is only present when this save came from picking one of
   // pickableFields -- the caller uses it to write the binding onto the
   // actual canvas node (this dialog has no way to do that itself).
@@ -398,7 +406,9 @@ export function FactorEditorDialog({
               <div className="max-h-96 space-y-0.5 overflow-y-auto rounded-lg border p-1.5">
                 {filteredFields.length === 0 && (
                   <p className="py-4 text-center text-sm text-muted-foreground">
-                    {pickableFields?.length === 0 ? 'Every bindable field on the canvas is already a factor.' : 'No matching fields.'}
+                    {pickableFields?.length === 0
+                      ? (emptyPickerMessage ?? 'Every bindable field on the canvas is already a factor.')
+                      : 'No matching fields.'}
                   </p>
                 )}
                 {filteredFields.map((field) => (

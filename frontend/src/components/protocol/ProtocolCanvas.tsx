@@ -18,7 +18,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { Play, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { ApiError, protocolsApi } from '@/api/client'
+import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { newNodeId } from '@/lib/nodeId'
 import { protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
@@ -44,13 +44,15 @@ import type {
   ReasonActPatternNodeData,
   SingleAgentBaselinePatternNodeData,
 } from '@/types/protocols'
+import type { DesignFactor } from '@/types/experiments'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
-import { agentTracedLabel } from './bindableFields'
+import { agentTracedLabel, unboundBindableFields, type UnboundField } from './bindableFields'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { DeleteNodeConfirmDialog } from './DeleteNodeConfirmDialog'
 import { DEFAULT_ZOOM } from './constants'
+import { FactorEditorDialog } from './FactorEditorDialog'
 import { findFreePosition } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
@@ -175,22 +177,29 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     queryClient.setQueryData(protocolGraphQueryKey(protocolId), { nodes, edges })
   }, [queryClient, protocolId, nodes, edges])
 
-  useImperativeHandle(
-    canvasHandleRef,
-    () => ({
-      bindFactor(nodeId, fieldPath, factorName) {
-        setNodes((nds) =>
-          nds.map((n) =>
-            n.id === nodeId
-              ? { ...n, data: { ...n.data, factor_bindings: { ...(n.data.factor_bindings as Record<string, string> | undefined), [fieldPath]: factorName } } }
-              : n,
-          ),
-        )
-      },
-    }),
+  // Shared by DesignTab's own bindFactor (via the imperative handle below)
+  // and this canvas's own per-node "Make experimental factor" hover-toolbar
+  // button (requestMakeFactor/factorPickerMutation below) -- both write the
+  // same node-side half of a binding, just from two different entry points.
+  const bindFactorOnNode = useCallback(
+    (nodeId: string, fieldPath: string, factorName: string) => {
+      setNodes((nds) =>
+        nds.map((n) =>
+          n.id === nodeId
+            ? { ...n, data: { ...n.data, factor_bindings: { ...(n.data.factor_bindings as Record<string, string> | undefined), [fieldPath]: factorName } } }
+            : n,
+        ),
+      )
+    },
     [setNodes],
   )
+
+  useImperativeHandle(canvasHandleRef, () => ({ bindFactor: bindFactorOnNode }), [bindFactorOnNode])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  // The node whose hover-toolbar "Make experimental factor" icon was just
+  // clicked -- opens FactorEditorDialog's field picker pre-filtered to just
+  // that node's own unbound fields (see requestMakeFactor below).
+  const [factorPickerNodeId, setFactorPickerNodeId] = useState<string | null>(null)
   const [addPanelOpen, setAddPanelOpen] = useState(false)
   // A pending node deletion awaiting user confirmation -- populated either
   // by onBeforeDelete (Backspace/Delete key, the hover toolbar's trash
@@ -395,10 +404,51 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
     [runNodeMutation],
   )
-  const canvasActions = useMemo(
-    () => ({ requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode }),
-    [requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode],
+  // The canvas's per-node "Make experimental factor" icon (NodeHoverToolbar,
+  // every node type) -- a no-op without a linked experiment, since there's
+  // nothing to attach a factor to (matches FactorBindableField's own
+  // disabled state for the same case).
+  const requestMakeFactor = useCallback(
+    (nodeId: string) => {
+      if (!experimentId) return
+      setSelectedNodeId(null)
+      setAddPanelOpen(false)
+      setFactorPickerNodeId(nodeId)
+    },
+    [experimentId],
   )
+  const canvasActions = useMemo(
+    () => ({ requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode, requestMakeFactor }),
+    [requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode, requestMakeFactor],
+  )
+
+  // Backing data for the per-node factor picker above -- fetched only while
+  // the picker is actually open, same "fetch on demand" convention
+  // FactorBindableField's own popover uses for the same query.
+  const factorPickerExperimentQuery = useQuery({
+    queryKey: ['experiments', experimentId],
+    queryFn: () => experimentsApi.get(experimentId!),
+    enabled: !!experimentId && !!factorPickerNodeId,
+  })
+  const factorPickerNode = nodes.find((n) => n.id === factorPickerNodeId) ?? null
+  const factorPickerFields: UnboundField[] = factorPickerNodeId
+    ? unboundBindableFields(nodes, edges).filter((f) => f.nodeId === factorPickerNodeId)
+    : []
+  const factorPickerExistingNames = factorPickerExperimentQuery.data?.design_spec?.factors?.map((f) => f.name) ?? []
+
+  const createFactorMutation = useMutation({
+    mutationFn: async ({ factor, field }: { factor: DesignFactor; field: UnboundField }) => {
+      const fresh = factorPickerExperimentQuery.data ?? (await experimentsApi.get(experimentId!))
+      const nextFactors = [...(fresh.design_spec?.factors ?? []), factor]
+      await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
+      return { factor, field }
+    },
+    onSuccess: ({ factor, field }) => {
+      bindFactorOnNode(field.nodeId, field.fieldPath, factor.name)
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+      setFactorPickerNodeId(null)
+    },
+  })
 
   // Every new Agent gets its own explicit default execution-pattern node
   // (agentic-core's own "reason_act" via _resolve_pattern_config) wired in
@@ -899,6 +949,21 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               deleteNode(pendingDelete.nodes[0].id)
             }
             setPendingDelete(null)
+          }}
+        />
+      )}
+      {factorPickerNodeId && (
+        <FactorEditorDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setFactorPickerNodeId(null)
+          }}
+          factor={{ name: '', levels: [], level_type: 'string' }}
+          pickableFields={factorPickerFields}
+          existingNames={factorPickerExistingNames}
+          emptyPickerMessage={`${(factorPickerNode?.data as { label?: string })?.label || 'This node'} has no fields that can be turned into a factor.`}
+          onSave={(factor, field) => {
+            if (field) createFactorMutation.mutate({ factor, field })
           }}
         />
       )}

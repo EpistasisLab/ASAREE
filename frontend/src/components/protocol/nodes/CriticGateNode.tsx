@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { cardAccent, hashToChartHue } from '@/lib/utils'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { CriticGateNodeData, NodeRunStatus } from '@/types/protocols'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
@@ -18,6 +19,7 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
   const summary = enabled ? `Up to ${data.config?.max_revisions ?? 1} revision(s)` : 'Gate disabled'
   const badge = nodeRunBadge(data.runStatus)
   const { updateNodeData } = useReactFlow()
+  const { requestMakeFactor } = useProtocolCanvasActions()
 
   return (
     <div
@@ -33,6 +35,7 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
         // CriticGateNodeConfig's own comment on this field).
         isActive={enabled}
         onToggleActive={() => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
+        onMakeFactor={() => requestMakeFactor(id)}
       />
       {badge && (
         <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>

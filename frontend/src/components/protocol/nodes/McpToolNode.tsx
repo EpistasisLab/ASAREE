@@ -1,4 +1,4 @@
-import type { NodeProps } from '@xyflow/react'
+import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { Wrench } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { McpToolNodeData } from '@/types/protocols'
@@ -13,12 +13,17 @@ const ACCENT = hashToChartHue('mcp_tool')
 // allow-listing a subset of its tools (McpToolNodeConfig.tool_names) --
 // never a standalone pipeline step. Matches n8n's own MCP Client Tool node,
 // which likewise only ever exists as a sub-node wired into an agent. No
-// run-status badge or "deactivate": same reasoning as LlmNode -- the
-// executor gives it an instant, inert placeholder node_run, never a real
-// execution.
+// run-status badge: same reasoning as LlmNode -- the executor gives it an
+// instant, inert placeholder node_run, never a real execution. The hover
+// toolbar's own power icon DOES apply here though (unlike LlmNode) --
+// toggles this same config.enabled _resolve_tool_config already skips a
+// disabled tool node's contribution for, same as the Switch in its own
+// inspector.
 export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolNodeData }) {
   const toolNames = data.config?.tool_names ?? []
   const summary = toolNames.length > 0 ? `${data.config.server_name ?? '?'}: ${toolNames.join(', ')}` : null
+  const { updateNodeData } = useReactFlow()
+  const enabled = data.config?.enabled ?? true
 
   return (
     <CircleNode
@@ -31,7 +36,9 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
       handleId="tool"
       warning={summary ? undefined : 'Not configured -- pick a server and at least one tool'}
       hasFactor={hasBoundFactor(data)}
-      dimmed={!(data.config?.enabled ?? true)}
+      dimmed={!enabled}
+      isActive={enabled}
+      onToggleActive={() => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
     />
   )
 }

@@ -24,6 +24,8 @@ export function CircleNode({
   warning,
   hasFactor,
   dimmed,
+  isActive,
+  onToggleActive,
   swap,
   handlePosition = 'top',
 }: {
@@ -49,6 +51,13 @@ export function CircleNode({
   // least one field bound to an experimental factor (see AgentNode.tsx's
   // own hasFactor for the matching convention on a rectangular node).
   hasFactor?: boolean
+  // The hover toolbar's own power icon -- toggles this same config.enabled
+  // `dimmed` is already reading, so a node can be switched off from the
+  // canvas directly, not only via its own inspector's Enabled switch.
+  // Passed straight through to NodeHoverToolbar; both or neither, same as
+  // AgentNode/CriticGateNode's own usage.
+  isActive?: boolean
+  onToggleActive?: () => void
   // Passed straight through to NodeHoverToolbar -- see its own comment.
   swap?: { label: string; onSwap: () => void }
   // Which edge of the circle the connector handle sits on -- 'top' (default)
@@ -62,7 +71,7 @@ export function CircleNode({
 }) {
   return (
     <div className={`group relative flex flex-col items-center ${dimmed ? 'opacity-50' : ''}`}>
-      <NodeHoverToolbar nodeId={id} swap={swap} />
+      <NodeHoverToolbar nodeId={id} isActive={isActive} onToggleActive={onToggleActive} swap={swap} />
       <div className="relative">
         <div
           style={cardAccent(accent)}

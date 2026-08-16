@@ -1,0 +1,459 @@
+{
+  "name": "Spinal Fusion Use Case",
+  "description": "Reconstruction of asaree-spinal-use-case/spinal_pipeline.ipynb as an ASAREE protocol: SF-DC -> SF-FTE -> SF-FS -> SF-MLM, each gated by a Critic Gate, all sharing one Azure Foundry LLM connector whose model/effort are experimental factors, plus a shared 'Critic enabled' factor gating all four stages at once. BEFORE running: (1) register the 6 asaree-sklearn-* MCP servers under your own account via the use case's register_servers.py -- this file's MCP Tool nodes have server_id left null (server ids are per-account) and will show 'Select a server...' until you manually reselect the matching server_name in each Tool node's inspector; reselecting currently resets that node's own tool allow-list to 'all tools' for that server, so re-narrow it back down using the tool_names noted in each Tool node's label; (2) register the dataset and attach it via PATCH /experiments/{id} (dataset_id isn't part of this file); (3) note that ASAREE's generic executor has no equivalent of the notebook's per-cell on-disk workspace versioning (v1_dc/v2_fte/v3_fs handoff) or its direct, non-agent scoring tool call on asaree-sklearn-model -- importing this file reproduces the DESIGN faithfully, but a 'Run all cells' will not reproduce a real end-to-end scored run without those two pieces being added or driven manually. See the chat summary for the full gap list.",
+  "graph": {
+    "nodes": [
+      {
+        "id": "llm-shared",
+        "type": "llm_azure_foundry",
+        "position": { "x": 700, "y": -280 },
+        "data": {
+          "label": "Azure Foundry (shared)",
+          "config": {
+            "provider": "azure_foundry",
+            "model": "claude-sonnet-5",
+            "temperature": null,
+            "effort": "medium",
+            "max_tokens": 128000
+          },
+          "factor_bindings": {
+            "config.model": "Azure Foundry:Model",
+            "config.effort": "Azure Foundry:Effort"
+          }
+        }
+      },
+
+      {
+        "id": "agent-dc",
+        "type": "agent",
+        "position": { "x": 0, "y": 0 },
+        "data": {
+          "label": "SF-DC",
+          "config": {
+            "prompt": "",
+            "goal": "Clean the training matrix; commit v1_dc.",
+            "description": "Inspects columns, applies domain coercions, drops/imputes for missingness, and commits the cleaned matrix as workspace version v1_dc.",
+            "system_prompt": "",
+            "output_contract": {
+              "name": "DCReport",
+              "fields": [
+                { "name": "n_rows", "type": "integer", "description": "Row count after cleaning" },
+                { "name": "n_cols_in", "type": "integer", "description": "Column count before cleaning" },
+                { "name": "n_cols_out", "type": "integer", "description": "Column count after cleaning" },
+                { "name": "domain_violations", "type": "array", "description": "Domain-rule violations found and corrected" },
+                { "name": "missingness_threshold", "type": "number", "description": "Threshold used to drop high-missingness columns" },
+                { "name": "dropped_for_missingness", "type": "array", "description": "Columns dropped for exceeding the missingness threshold" },
+                { "name": "outliers", "type": "object", "description": "Outlier handling summary per column" },
+                { "name": "imputation", "type": "object", "description": "Imputation strategy used per column" },
+                { "name": "notes_for_fte", "type": "string", "description": "Handoff notes for the SF-FTE stage" }
+              ]
+            },
+            "budget_limit_usd": 200.0,
+            "max_run_duration_seconds": 86400
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "gate-dc",
+        "type": "critic_gate",
+        "position": { "x": 260, "y": 0 },
+        "data": {
+          "label": "Critic (DC)",
+          "config": {
+            "name": "dc-critic",
+            "goal": "Review SF-DC's cleaning decisions for this stage only.",
+            "description": "Shared Critic reviewing the DC stage -- approves or requests revision with feedback and a partial/full rejection scope.",
+            "system_prompt": "",
+            "enabled": true,
+            "max_revisions": 1
+          },
+          "factor_bindings": {
+            "config.enabled": "Critic enabled"
+          }
+        }
+      },
+      {
+        "id": "pattern-dc",
+        "type": "pattern_reason_act",
+        "position": { "x": 0, "y": 220 },
+        "data": {
+          "label": "",
+          "config": {
+            "max_iterations": 12,
+            "include_scratchpad": true,
+            "scratchpad_window": 10,
+            "observation_format": "raw"
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "tool-workspace-dc",
+        "type": "mcp_tool",
+        "position": { "x": -180, "y": 380 },
+        "data": {
+          "label": "Workspace (open_workspace)",
+          "config": {
+            "server_id": null,
+            "server_name": "asaree-workspace",
+            "tool_names": ["open_workspace"],
+            "enabled": true
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "tool-eda-dc",
+        "type": "mcp_tool",
+        "position": { "x": 0, "y": 380 },
+        "data": {
+          "label": "EDA (get_data_dictionary)",
+          "config": {
+            "server_id": null,
+            "server_name": "asaree-sklearn-eda",
+            "tool_names": ["get_data_dictionary"],
+            "enabled": true
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "tool-dc",
+        "type": "mcp_tool",
+        "position": { "x": 180, "y": 380 },
+        "data": {
+          "label": "DC (inspect/coerce/impute)",
+          "config": {
+            "server_id": null,
+            "server_name": "asaree-sklearn-dc",
+            "tool_names": ["inspect_columns", "apply_coercions", "drop_and_impute"],
+            "enabled": true
+          },
+          "factor_bindings": {}
+        }
+      },
+
+      {
+        "id": "agent-fte",
+        "type": "agent",
+        "position": { "x": 460, "y": 0 },
+        "data": {
+          "label": "SF-FTE",
+          "config": {
+            "prompt": "",
+            "goal": "Engineer and encode features; commit v2_fte.",
+            "description": "Builds and fits feature-engineering/encoding transforms on top of v1_dc, commits the result as workspace version v2_fte.",
+            "system_prompt": "",
+            "output_contract": {
+              "name": "FTEReport",
+              "fields": [
+                { "name": "engineering_recipe", "type": "object", "description": "Feature-engineering steps applied" },
+                { "name": "encoding_map", "type": "object", "description": "Categorical encoding scheme per column" },
+                { "name": "n_features_out", "type": "integer", "description": "Feature count after engineering/encoding" },
+                { "name": "notes_for_fs", "type": "string", "description": "Handoff notes for the SF-FS stage" }
+              ]
+            },
+            "budget_limit_usd": 200.0,
+            "max_run_duration_seconds": 86400
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "gate-fte",
+        "type": "critic_gate",
+        "position": { "x": 720, "y": 0 },
+        "data": {
+          "label": "Critic (FTE)",
+          "config": {
+            "name": "fte-critic",
+            "goal": "Review SF-FTE's engineering/encoding decisions for this stage only.",
+            "description": "Shared Critic reviewing the FTE stage -- approves or requests revision with feedback and a partial/full rejection scope.",
+            "system_prompt": "",
+            "enabled": true,
+            "max_revisions": 1
+          },
+          "factor_bindings": {
+            "config.enabled": "Critic enabled"
+          }
+        }
+      },
+      {
+        "id": "pattern-fte",
+        "type": "pattern_reason_act",
+        "position": { "x": 460, "y": 220 },
+        "data": {
+          "label": "",
+          "config": {
+            "max_iterations": 12,
+            "include_scratchpad": true,
+            "scratchpad_window": 10,
+            "observation_format": "raw"
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "tool-workspace-fte",
+        "type": "mcp_tool",
+        "position": { "x": 280, "y": 380 },
+        "data": {
+          "label": "Workspace (open_workspace)",
+          "config": {
+            "server_id": null,
+            "server_name": "asaree-workspace",
+            "tool_names": ["open_workspace"],
+            "enabled": true
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "tool-eda-fte",
+        "type": "mcp_tool",
+        "position": { "x": 460, "y": 380 },
+        "data": {
+          "label": "EDA (dictionary + distributions)",
+          "config": {
+            "server_id": null,
+            "server_name": "asaree-sklearn-eda",
+            "tool_names": ["get_data_dictionary", "get_feature_distributions"],
+            "enabled": true
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "tool-fte",
+        "type": "mcp_tool",
+        "position": { "x": 640, "y": 380 },
+        "data": {
+          "label": "FTE (build/fit)",
+          "config": {
+            "server_id": null,
+            "server_name": "asaree-sklearn-fte",
+            "tool_names": ["build_features", "fit_preprocessor"],
+            "enabled": true
+          },
+          "factor_bindings": {}
+        }
+      },
+
+      {
+        "id": "agent-fs",
+        "type": "agent",
+        "position": { "x": 920, "y": 0 },
+        "data": {
+          "label": "SF-FS",
+          "config": {
+            "prompt": "",
+            "goal": "Prune the feature space; commit v3_fs.",
+            "description": "Filters by variance/correlation/supervised signal and checks class balance on top of v2_fte, commits the result as workspace version v3_fs.",
+            "system_prompt": "",
+            "output_contract": {
+              "name": "FSReport",
+              "fields": [
+                { "name": "n_features_in", "type": "integer", "description": "Feature count before selection" },
+                { "name": "n_features_out", "type": "integer", "description": "Feature count after selection" },
+                { "name": "variance_threshold", "type": "number", "description": "Variance filter threshold used" },
+                { "name": "correlation", "type": "object", "description": "Correlation-filtering summary" },
+                { "name": "supervised_filter", "type": "object", "description": "Supervised-signal filtering summary" },
+                { "name": "dropped_features", "type": "array", "description": "Features dropped during selection" },
+                { "name": "selected_features", "type": "array", "description": "Final selected feature set" },
+                { "name": "observed_class_distribution", "type": "object", "description": "Observed target class distribution" },
+                { "name": "class_balance_check", "type": "boolean", "description": "Whether class balance passed the configured check" },
+                { "name": "notes_for_mlm", "type": "string", "description": "Handoff notes for the SF-MLM stage" }
+              ]
+            },
+            "budget_limit_usd": 200.0,
+            "max_run_duration_seconds": 86400
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "gate-fs",
+        "type": "critic_gate",
+        "position": { "x": 1180, "y": 0 },
+        "data": {
+          "label": "Critic (FS)",
+          "config": {
+            "name": "fs-critic",
+            "goal": "Review SF-FS's feature-selection decisions for this stage only.",
+            "description": "Shared Critic reviewing the FS stage -- approves or requests revision with feedback and a partial/full rejection scope.",
+            "system_prompt": "",
+            "enabled": true,
+            "max_revisions": 1
+          },
+          "factor_bindings": {
+            "config.enabled": "Critic enabled"
+          }
+        }
+      },
+      {
+        "id": "pattern-fs",
+        "type": "pattern_reason_act",
+        "position": { "x": 920, "y": 220 },
+        "data": {
+          "label": "",
+          "config": {
+            "max_iterations": 12,
+            "include_scratchpad": true,
+            "scratchpad_window": 10,
+            "observation_format": "raw"
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "tool-workspace-fs",
+        "type": "mcp_tool",
+        "position": { "x": 740, "y": 380 },
+        "data": {
+          "label": "Workspace (open_workspace)",
+          "config": {
+            "server_id": null,
+            "server_name": "asaree-workspace",
+            "tool_names": ["open_workspace"],
+            "enabled": true
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "tool-eda-fs",
+        "type": "mcp_tool",
+        "position": { "x": 920, "y": 380 },
+        "data": {
+          "label": "EDA (get_feature_distributions)",
+          "config": {
+            "server_id": null,
+            "server_name": "asaree-sklearn-eda",
+            "tool_names": ["get_feature_distributions"],
+            "enabled": true
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "tool-fs",
+        "type": "mcp_tool",
+        "position": { "x": 1100, "y": 380 },
+        "data": {
+          "label": "FS (variance/corr/supervised/balance)",
+          "config": {
+            "server_id": null,
+            "server_name": "asaree-sklearn-fs",
+            "tool_names": ["variance_filter", "compute_correlations", "supervised_filter", "check_class_balance"],
+            "enabled": true
+          },
+          "factor_bindings": {}
+        }
+      },
+
+      {
+        "id": "agent-mlm",
+        "type": "agent",
+        "position": { "x": 1380, "y": 0 },
+        "data": {
+          "label": "SF-MLM",
+          "config": {
+            "prompt": "",
+            "goal": "Emit an XGBoost hyperparameter search payload only -- no tools, no code.",
+            "description": "Reads v3_fs's report and proposes a bounded hyperparameter search space plus fixed params for the deterministic downstream scoring script; never executes anything itself.",
+            "system_prompt": "",
+            "output_contract": {
+              "name": "MLMPayload",
+              "fields": [
+                { "name": "search_space", "type": "object", "description": "Hyperparameter search space proposal" },
+                { "name": "fixed_params", "type": "object", "description": "Fixed (non-searched) XGBoost params" },
+                { "name": "n_trials", "type": "integer", "description": "Proposed Optuna trial count" },
+                { "name": "rationale", "type": "string", "description": "Rationale for the proposed search space" }
+              ]
+            },
+            "budget_limit_usd": 200.0,
+            "max_run_duration_seconds": 86400
+          },
+          "factor_bindings": {}
+        }
+      },
+      {
+        "id": "gate-mlm",
+        "type": "critic_gate",
+        "position": { "x": 1640, "y": 0 },
+        "data": {
+          "label": "Critic (MLM)",
+          "config": {
+            "name": "mlm-critic",
+            "goal": "Review SF-MLM's proposed hyperparameter payload for this stage only.",
+            "description": "Shared Critic reviewing the MLM stage -- approves or requests revision with feedback and a partial/full rejection scope.",
+            "system_prompt": "",
+            "enabled": true,
+            "max_revisions": 1
+          },
+          "factor_bindings": {
+            "config.enabled": "Critic enabled"
+          }
+        }
+      },
+      {
+        "id": "pattern-mlm",
+        "type": "pattern_single_agent_baseline",
+        "position": { "x": 1380, "y": 220 },
+        "data": {
+          "label": "",
+          "config": {
+            "max_iterations": 10,
+            "stop_on_first_success": true
+          },
+          "factor_bindings": {}
+        }
+      }
+    ],
+    "edges": [
+      { "id": "e-dc-to-gatedc", "source": "agent-dc", "target": "gate-dc" },
+      { "id": "e-gatedc-to-fte", "source": "gate-dc", "target": "agent-fte" },
+      { "id": "e-fte-to-gatefte", "source": "agent-fte", "target": "gate-fte" },
+      { "id": "e-gatefte-to-fs", "source": "gate-fte", "target": "agent-fs" },
+      { "id": "e-fs-to-gatefs", "source": "agent-fs", "target": "gate-fs" },
+      { "id": "e-gatefs-to-mlm", "source": "gate-fs", "target": "agent-mlm" },
+      { "id": "e-mlm-to-gatemlm", "source": "agent-mlm", "target": "gate-mlm" },
+
+      { "id": "e-llm-dc", "source": "llm-shared", "target": "agent-dc", "sourceHandle": "llm", "targetHandle": "llm" },
+      { "id": "e-llm-fte", "source": "llm-shared", "target": "agent-fte", "sourceHandle": "llm", "targetHandle": "llm" },
+      { "id": "e-llm-fs", "source": "llm-shared", "target": "agent-fs", "sourceHandle": "llm", "targetHandle": "llm" },
+      { "id": "e-llm-mlm", "source": "llm-shared", "target": "agent-mlm", "sourceHandle": "llm", "targetHandle": "llm" },
+      { "id": "e-llm-gatedc", "source": "llm-shared", "target": "gate-dc", "sourceHandle": "llm", "targetHandle": "llm" },
+      { "id": "e-llm-gatefte", "source": "llm-shared", "target": "gate-fte", "sourceHandle": "llm", "targetHandle": "llm" },
+      { "id": "e-llm-gatefs", "source": "llm-shared", "target": "gate-fs", "sourceHandle": "llm", "targetHandle": "llm" },
+      { "id": "e-llm-gatemlm", "source": "llm-shared", "target": "gate-mlm", "sourceHandle": "llm", "targetHandle": "llm" },
+
+      { "id": "e-pattern-dc", "source": "pattern-dc", "target": "agent-dc", "sourceHandle": "architectural_pattern", "targetHandle": "architectural_pattern" },
+      { "id": "e-pattern-fte", "source": "pattern-fte", "target": "agent-fte", "sourceHandle": "architectural_pattern", "targetHandle": "architectural_pattern" },
+      { "id": "e-pattern-fs", "source": "pattern-fs", "target": "agent-fs", "sourceHandle": "architectural_pattern", "targetHandle": "architectural_pattern" },
+      { "id": "e-pattern-mlm", "source": "pattern-mlm", "target": "agent-mlm", "sourceHandle": "architectural_pattern", "targetHandle": "architectural_pattern" },
+
+      { "id": "e-tool-workspace-dc", "source": "tool-workspace-dc", "target": "agent-dc", "sourceHandle": "tool", "targetHandle": "tool" },
+      { "id": "e-tool-eda-dc", "source": "tool-eda-dc", "target": "agent-dc", "sourceHandle": "tool", "targetHandle": "tool" },
+      { "id": "e-tool-dc", "source": "tool-dc", "target": "agent-dc", "sourceHandle": "tool", "targetHandle": "tool" },
+
+      { "id": "e-tool-workspace-fte", "source": "tool-workspace-fte", "target": "agent-fte", "sourceHandle": "tool", "targetHandle": "tool" },
+      { "id": "e-tool-eda-fte", "source": "tool-eda-fte", "target": "agent-fte", "sourceHandle": "tool", "targetHandle": "tool" },
+      { "id": "e-tool-fte", "source": "tool-fte", "target": "agent-fte", "sourceHandle": "tool", "targetHandle": "tool" },
+
+      { "id": "e-tool-workspace-fs", "source": "tool-workspace-fs", "target": "agent-fs", "sourceHandle": "tool", "targetHandle": "tool" },
+      { "id": "e-tool-eda-fs", "source": "tool-eda-fs", "target": "agent-fs", "sourceHandle": "tool", "targetHandle": "tool" },
+      { "id": "e-tool-fs", "source": "tool-fs", "target": "agent-fs", "sourceHandle": "tool", "targetHandle": "tool" }
+    ]
+  },
+  "design_spec": {
+    "factors": [
+      { "name": "Azure Foundry:Model", "levels": ["claude-sonnet-5", "claude-opus-5"], "level_type": "string" },
+      { "name": "Azure Foundry:Effort", "levels": ["medium", "xhigh"], "level_type": "string" },
+      { "name": "Critic enabled", "levels": [true, false], "level_type": "boolean" }
+    ],
+    "replicates": 20,
+    "coordination_strategy": { "slug": "critic_gate" }
+  }
+}

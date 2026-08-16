@@ -1,17 +1,34 @@
+import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Database } from 'lucide-react'
+import { Database, Plus } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { datasetsApi, experimentsApi } from '@/api/client'
 import { hashToChartHue } from '@/lib/utils'
+import type { Dataset } from '@/types/datasets'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
+import { RegisterDatasetDialog } from './RegisterDatasetDialog'
 import type { DatasetNodeData, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = hashToChartHue('dataset')
+
+// dictionary_json is opaque to ASAREE (see RegisteredDataset's own comment)
+// -- this only pretty-prints it if it happens to parse as JSON, falling
+// back to the raw string rather than assuming/enforcing any particular
+// shape, since a domain MCP server (not this UI) is the one that actually
+// interprets it.
+function formatDictionaryJson(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2)
+  } catch {
+    return raw
+  }
+}
 
 // Same floating-dialog shell as McpToolNodeInspector -- "which registered
 // dataset" is the one real parameter, resolved from the caller's own
@@ -42,6 +59,7 @@ export function DatasetNodeInspector({
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
+  const [registerDialogOpen, setRegisterDialogOpen] = useState(false)
   const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: () => datasetsApi.list() })
   const syncExperimentDataset = useMutation({
     mutationFn: (datasetId: string) => experimentsApi.update(experimentId!, { dataset_id: datasetId }),
@@ -55,6 +73,15 @@ export function DatasetNodeInspector({
 
   function patchConfig(patch: Partial<DatasetNodeData['config']>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
+  }
+
+  // Shared by the Select's own onValueChange and RegisterDatasetDialog's
+  // onCreated -- picking an existing dataset and registering a brand new one
+  // both end the same way: this node's config AND the linked experiment's
+  // real dataset_id FK both point at it.
+  function selectDataset(dataset: Dataset) {
+    patchConfig({ dataset_id: dataset.id, dataset_name: dataset.name })
+    if (experimentId) syncExperimentDataset.mutate(dataset.id)
   }
 
   function bindFactor(fieldPath: string, factorName: string) {
@@ -111,39 +138,88 @@ export function DatasetNodeInspector({
         <Skeleton className="h-8 w-full" />
       ) : datasetsQuery.isError ? (
         <p className="text-sm text-destructive">Could not load your registered datasets.</p>
-      ) : !datasetsQuery.data || datasetsQuery.data.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No datasets registered yet. Register one via the API, then come back to pick it here.
-        </p>
       ) : (
         <div className="space-y-1.5">
           <Label>Dataset</Label>
-          <Select
-            value={config.dataset_id ?? '__none__'}
-            onValueChange={(value) => {
-              if (!value || value === '__none__') return
-              const dataset = datasetsQuery.data.find((d) => d.id === value)
-              if (!dataset) return
-              patchConfig({ dataset_id: dataset.id, dataset_name: dataset.name })
-              if (experimentId) syncExperimentDataset.mutate(dataset.id)
-            }}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue>{() => selectedDataset?.name ?? 'Select a dataset…'}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__" disabled>
-                Select a dataset…
-              </SelectItem>
-              {datasetsQuery.data.map((dataset) => (
-                <SelectItem key={dataset.id} value={dataset.id}>
-                  {dataset.name}
+          {!datasetsQuery.data || datasetsQuery.data.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No datasets registered yet.</p>
+          ) : (
+            <Select
+              value={config.dataset_id ?? '__none__'}
+              onValueChange={(value) => {
+                if (!value || value === '__none__') return
+                const dataset = datasetsQuery.data.find((d) => d.id === value)
+                if (dataset) selectDataset(dataset)
+              }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue>{() => selectedDataset?.name ?? 'Select a dataset…'}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__" disabled>
+                  Select a dataset…
                 </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+                {datasetsQuery.data.map((dataset) => (
+                  <SelectItem key={dataset.id} value={dataset.id}>
+                    {dataset.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Button variant="outline" size="sm" onClick={() => setRegisterDialogOpen(true)}>
+            <Plus className="size-3.5" /> Register new dataset
+          </Button>
         </div>
       )}
+
+      {selectedDataset && (
+        <div className="space-y-2 rounded-lg border px-3 py-2 text-sm">
+          <div className="flex items-center justify-between gap-2">
+            <p className="truncate font-medium" title={selectedDataset.name}>
+              {selectedDataset.name}
+            </p>
+            {selectedDataset.created_at && (
+              <span
+                className="shrink-0 text-xs text-muted-foreground"
+                title={new Date(selectedDataset.created_at).toLocaleString()}
+              >
+                {new Date(selectedDataset.created_at).toLocaleDateString()}
+              </span>
+            )}
+          </div>
+          {selectedDataset.description && <p className="text-xs text-muted-foreground">{selectedDataset.description}</p>}
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              <p className="text-muted-foreground">Target column</p>
+              <p className="truncate font-mono">{selectedDataset.target_column ?? '—'}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Train / test hash</p>
+              <p
+                className="truncate font-mono"
+                title={`train: ${selectedDataset.train_sha256}\ntest: ${selectedDataset.test_sha256}`}
+              >
+                {selectedDataset.train_sha256.slice(0, 10)}… / {selectedDataset.test_sha256.slice(0, 10)}…
+              </p>
+            </div>
+          </div>
+          {selectedDataset.dictionary_json && (
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">Data dictionary</p>
+              <pre className="max-h-40 overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-[0.65rem]">
+                {formatDictionaryJson(selectedDataset.dictionary_json)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      <RegisterDatasetDialog
+        open={registerDialogOpen}
+        onOpenChange={setRegisterDialogOpen}
+        onCreated={(dataset) => selectDataset(dataset)}
+      />
     </NodeInspectorDialog>
   )
 }

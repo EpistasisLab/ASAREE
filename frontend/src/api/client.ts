@@ -83,6 +83,11 @@ async function tryRefreshToken(): Promise<boolean> {
 }
 
 interface RequestOptions extends Omit<RequestInit, 'body'> {
+  /** A plain object is JSON-encoded (the common case); pass a `FormData`
+   * directly (e.g. datasetsApi.create's multipart upload) to send it
+   * as-is -- fetch sets its own `multipart/form-data; boundary=...`
+   * Content-Type for a FormData body, which a hardcoded `application/json`
+   * header here would otherwise stomp. */
   body?: unknown
   /** Skip the silent-refresh-and-retry dance — used by the refresh call
    * itself, so a failing refresh can't recurse into refreshing again. */
@@ -92,17 +97,18 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { body, skipAuthRetry, headers, ...rest } = options
   const token = getStoredAccessToken()
+  const isFormData = body instanceof FormData
 
   const doFetch = () =>
     fetch(`/api${path}`, {
       ...rest,
       credentials: 'include',
       headers: {
-        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(body !== undefined && !isFormData ? { 'Content-Type': 'application/json' } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...headers,
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: isFormData ? (body as FormData) : body !== undefined ? JSON.stringify(body) : undefined,
     })
 
   let res = await doFetch()
@@ -211,6 +217,28 @@ export const datasetsApi = {
   // Dataset node's own Server-select-style picker (DatasetNodeInspector).
   list: () => request<Dataset[]>('/datasets'),
   get: (id: string) => request<Dataset>(`/datasets/${id}`),
+  // POST /datasets is a multipart upload -- the split itself (group-aware
+  // GroupShuffleSplit when group_column is present, else a stratified
+  // train_test_split on target_column) happens server-side
+  // (services.datasets.create_dataset), so this only ever sends ONE CSV,
+  // never pre-split train/test files. 409s if `name` is already taken.
+  create: (data: {
+    name: string
+    file: File
+    targetColumn?: string
+    groupColumn?: string
+    description?: string
+    dictionaryJson?: string
+  }) => {
+    const form = new FormData()
+    form.set('name', data.name)
+    form.set('file', data.file)
+    if (data.targetColumn) form.set('target_column', data.targetColumn)
+    if (data.groupColumn) form.set('group_column', data.groupColumn)
+    if (data.description) form.set('description', data.description)
+    if (data.dictionaryJson) form.set('dictionary_json', data.dictionaryJson)
+    return request<Dataset>('/datasets', { method: 'POST', body: form })
+  },
 }
 
 export const agentsApi = {

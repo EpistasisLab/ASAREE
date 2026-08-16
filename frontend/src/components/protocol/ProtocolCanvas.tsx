@@ -173,6 +173,20 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
 // rather than exposing setNodes/setEdges wholesale.
 export interface ProtocolCanvasHandle {
   bindFactor: (nodeId: string, fieldPath: string, factorName: string) => void
+  // Sweeps EVERY node's factor_bindings, dropping any entry pointing at
+  // `factorName` -- called when a factor is deleted via the Design tab's
+  // FactorsEditor, so a canvas node never stays silently "bound" to a
+  // factor that no longer exists in design_spec.factors (without this, the
+  // node's own FactorBindableField keeps showing a "Factor: {name}" badge
+  // for a name that resolves to nothing, and the field can never be
+  // re-bound since unboundBindableFields treats any non-empty
+  // factor_bindings entry as still bound).
+  removeFactorBindings: (factorName: string) => void
+  // Same idea for a rename (FactorsEditor's Edit dialog can change a
+  // factor's own `name`) -- every node bound to `oldName` gets repointed to
+  // `newName` instead of being left referencing a name that no longer
+  // resolves.
+  renameFactorBindings: (oldName: string, newName: string) => void
 }
 
 export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
@@ -210,7 +224,42 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     [setNodes],
   )
 
-  useImperativeHandle(canvasHandleRef, () => ({ bindFactor: bindFactorOnNode }), [bindFactorOnNode])
+  // Both sweep every node's factor_bindings by VALUE (the factor name),
+  // not by any specific nodeId/fieldPath -- a factor can be bound from more
+  // than one node/field, and the caller (FactorsEditor) has no reason to
+  // know which ones without duplicating this same scan itself.
+  const removeFactorBindings = useCallback(
+    (factorName: string) => {
+      setNodes((nds) =>
+        nds.map((n) => {
+          const bindings = n.data.factor_bindings as Record<string, string> | undefined
+          if (!bindings || !Object.values(bindings).includes(factorName)) return n
+          const next = Object.fromEntries(Object.entries(bindings).filter(([, name]) => name !== factorName))
+          return { ...n, data: { ...n.data, factor_bindings: next } }
+        }),
+      )
+    },
+    [setNodes],
+  )
+  const renameFactorBindings = useCallback(
+    (oldName: string, newName: string) => {
+      setNodes((nds) =>
+        nds.map((n) => {
+          const bindings = n.data.factor_bindings as Record<string, string> | undefined
+          if (!bindings || !Object.values(bindings).includes(oldName)) return n
+          const next = Object.fromEntries(Object.entries(bindings).map(([path, name]) => [path, name === oldName ? newName : name]))
+          return { ...n, data: { ...n.data, factor_bindings: next } }
+        }),
+      )
+    },
+    [setNodes],
+  )
+
+  useImperativeHandle(
+    canvasHandleRef,
+    () => ({ bindFactor: bindFactorOnNode, removeFactorBindings, renameFactorBindings }),
+    [bindFactorOnNode, removeFactorBindings, renameFactorBindings],
+  )
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   // The node whose hover-toolbar "Make experimental factor" icon was just
   // clicked -- opens FactorEditorDialog's field picker pre-filtered to just
@@ -477,7 +526,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // unrestricted "+" toolbar and MainEdgeAddStub).
   function agentDefaultPattern(agentId: string, agentPosition: { x: number; y: number }, otherPositions: { x: number; y: number }[]) {
     const patternId = newNodeId()
-    const patternPosition = findFreePosition([...otherPositions, agentPosition], { x: agentPosition.x, y: agentPosition.y + 160 })
+    // Above the agent, not below -- its connector now sits on the agent's
+    // OWN top edge (AgentNode.tsx), so the pattern node's source handle
+    // faces down into it (CircleNode's own handlePosition="bottom" for this
+    // node type) for a short, direct edge instead of one looping around the
+    // whole card.
+    const patternPosition = findFreePosition([...otherPositions, agentPosition], { x: agentPosition.x, y: agentPosition.y - 160 })
     const patternNode: Node = {
       id: patternId,
       type: 'pattern_reason_act',
@@ -503,8 +557,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     if (pendingConnectorAdd) {
       const { nodeId: originId, slot } = pendingConnectorAdd
       const originNode = nodes.find((n) => n.id === originId)
+      // Architectural Pattern connects from above (its connector lives on
+      // the agent's own TOP edge -- see AgentNode.tsx), every other slot
+      // from below -- matches agentDefaultPattern's own placement, so a
+      // swapped-in replacement pattern node lands in the same spot the
+      // auto-created default one did.
       const desired = originNode
-        ? { x: originNode.position.x, y: originNode.position.y + 160 }
+        ? { x: originNode.position.x, y: originNode.position.y + (slot === 'architectural_pattern' ? -160 : 160) }
         : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
       const position = findFreePosition(nodes.map((n) => n.position), desired)
       const newId = newNodeId()

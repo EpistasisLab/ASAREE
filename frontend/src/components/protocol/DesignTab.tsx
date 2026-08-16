@@ -22,17 +22,24 @@ import {
   type Experiment,
 } from '@/types/experiments'
 
-// Creating a factor is the one action here that ISN'T staged into the local
-// draft + explicit "Save design" flow the rest of this tab uses -- it's a
-// two-sided write (design_spec.factors AND the canvas node's own
-// factor_bindings) that has to land atomically, so it mirrors
-// FactorBindableField's own existing immediate-save popover instead. The
-// canvas write goes through canvasRef (see ProtocolCanvas.tsx's own comment
-// on ProtocolCanvasHandle) since DesignTab is a sibling of ProtocolCanvas,
-// not a descendant, and has no other way to reach its live node state; the
-// list of what's bindable comes from the same shared query cache
-// (protocolGraphQueryKey) ProtocolCanvas mirrors its own nodes into on every
-// change, so this never lags behind the canvas waiting on autosave.
+// Creating, renaming, and deleting a factor (this function and
+// FactorsEditor's own edit/delete mutations below) are the one set of
+// actions here that ISN'T staged into the local draft + explicit "Save
+// design" flow the rest of this tab uses -- each is a two-sided write
+// (design_spec.factors AND every canvas node's own factor_bindings that
+// reference this factor by name) that has to land atomically, so all three
+// mirror FactorBindableField's own existing immediate-save popover instead.
+// Staging a rename/delete until "Save design" would leave a bound node
+// pointing at a factor name that no longer resolves in the meantime -- its
+// FactorBindableField badge keeps showing the stale name, and
+// unboundBindableFields still treats the field as bound, so it can't be
+// re-bound to anything else either. The canvas write goes through canvasRef
+// (see ProtocolCanvas.tsx's own comment on ProtocolCanvasHandle) since
+// DesignTab is a sibling of ProtocolCanvas, not a descendant, and has no
+// other way to reach its live node state; the list of what's bindable comes
+// from the same shared query cache (protocolGraphQueryKey) ProtocolCanvas
+// mirrors its own nodes into on every change, so this never lags behind the
+// canvas waiting on autosave.
 //
 // The field picker itself lives inside FactorEditorDialog (not a separate
 // popover before it) -- a canvas can realistically have a large number of
@@ -120,25 +127,59 @@ function AddFactorButton({
 // comma-separated text Input, which broke for any value containing a comma
 // and was unusable for a long-form level (e.g. a factor whose levels are
 // several different full system prompts).
+//
+// Rename and Delete are immediate, atomic two-sided writes, same as
+// AddFactorButton's own createMutation above -- NOT folded into this tab's
+// staged-draft-then-Save flow the way hypothesis/replicates/metrics are.
+// A factor can be bound from one or more canvas nodes' own factor_bindings
+// (by name, a plain string), so removing or renaming one has to also sweep
+// those bindings via canvasRef in the same action; staging the removal
+// until a later "Save design" click would leave every bound node silently
+// pointing at a factor name that no longer resolves in the meantime (its
+// FactorBindableField badge still reads "Factor: {name}," and
+// unboundBindableFields still treats the field as bound, so it can never be
+// re-bound to a different factor either) -- this is the exact desync this
+// component used to have.
 function FactorsEditor({
   experiment,
   protocolId,
   canvasRef,
   factors,
-  onChange,
 }: {
   experiment: Experiment
   protocolId: string | undefined
   canvasRef: RefObject<ProtocolCanvasHandle | null>
   factors: DesignFactor[]
-  onChange: (factors: DesignFactor[]) => void
 }) {
   const [editingFactor, setEditingFactor] = useState<{ index: number; draft: DesignFactor } | null>(null)
+  const queryClient = useQueryClient()
 
-  function save(next: DesignFactor) {
-    if (!editingFactor) return
-    onChange(factors.map((f, j) => (j === editingFactor.index ? next : f)))
-  }
+  const deleteMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const fresh = await experimentsApi.get(experiment.id)
+      const nextFactors = (fresh.design_spec?.factors ?? []).filter((f) => f.name !== name)
+      await experimentsApi.update(experiment.id, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
+      return name
+    },
+    onSuccess: (name) => {
+      canvasRef.current?.removeFactorBindings(name)
+      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id] })
+    },
+  })
+
+  const editMutation = useMutation({
+    mutationFn: async ({ oldName, next }: { oldName: string; next: DesignFactor }) => {
+      const fresh = await experimentsApi.get(experiment.id)
+      const nextFactors = (fresh.design_spec?.factors ?? []).map((f) => (f.name === oldName ? next : f))
+      await experimentsApi.update(experiment.id, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
+      return { oldName, next }
+    },
+    onSuccess: ({ oldName, next }) => {
+      if (next.name !== oldName) canvasRef.current?.renameFactorBindings(oldName, next.name)
+      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id] })
+      setEditingFactor(null)
+    },
+  })
 
   return (
     <div className="space-y-2">
@@ -165,7 +206,8 @@ function FactorsEditor({
             variant="ghost"
             size="icon-sm"
             aria-label="Remove factor"
-            onClick={() => onChange(factors.filter((_, j) => j !== i))}
+            disabled={deleteMutation.isPending}
+            onClick={() => deleteMutation.mutate(factor.name)}
           >
             <X className="size-3.5" />
           </Button>
@@ -180,7 +222,7 @@ function FactorsEditor({
             if (!open) setEditingFactor(null)
           }}
           factor={editingFactor.draft}
-          onSave={save}
+          onSave={(next) => editMutation.mutate({ oldName: editingFactor.draft.name, next })}
         />
       )}
     </div>
@@ -353,13 +395,7 @@ export function DesignTab({
 
       <div className="space-y-1.5">
         <Label>Experimental factors and levels</Label>
-        <FactorsEditor
-          experiment={experiment}
-          protocolId={protocolId}
-          canvasRef={canvasRef}
-          factors={factors}
-          onChange={setFactors}
-        />
+        <FactorsEditor experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} factors={factors} />
       </div>
 
       <div className="space-y-1.5">

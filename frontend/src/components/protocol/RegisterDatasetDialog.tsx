@@ -25,10 +25,14 @@ import type { Dataset } from '@/types/datasets'
 // dictionary_json is included (unlike test_size/seed) because there's
 // currently no PATCH /datasets/{id} -- once registered, this is the ONLY
 // chance to set it; adding it after the fact means deleting and
-// re-registering the whole dataset. It's opaque to ASAREE itself (a domain
-// MCP server like ares-sklearn-eda's get_data_dictionary is the one that
-// actually reads it), so this dialog doesn't validate its shape, just that
-// it's present.
+// re-registering the whole dataset. Uploaded as its own JSON file, not
+// pasted into a textarea -- matching the real workflow this mirrors (see
+// asaree-spinal-use-case's own data/spine_data_dictionary.json, authored
+// once by a data scientist and handed off as a file, not hand-typed at
+// registration time). It's opaque to ASAREE itself (a domain MCP server
+// like ares-sklearn-eda's get_data_dictionary is the one that actually
+// reads it), so this only checks that the file parses as JSON at all, not
+// any particular shape within it.
 export function RegisterDatasetDialog({
   open,
   onOpenChange,
@@ -45,7 +49,7 @@ export function RegisterDatasetDialog({
   const [targetColumn, setTargetColumn] = useState('')
   const [groupColumn, setGroupColumn] = useState('')
   const [description, setDescription] = useState('')
-  const [dictionaryJson, setDictionaryJson] = useState('')
+  const [dictionaryFile, setDictionaryFile] = useState<File | null>(null)
   const queryClient = useQueryClient()
 
   function reset() {
@@ -54,20 +58,30 @@ export function RegisterDatasetDialog({
     setTargetColumn('')
     setGroupColumn('')
     setDescription('')
-    setDictionaryJson('')
+    setDictionaryFile(null)
     createMutation.reset()
   }
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      datasetsApi.create({
+    mutationFn: async () => {
+      let dictionaryJson: string | undefined
+      if (dictionaryFile) {
+        dictionaryJson = await dictionaryFile.text()
+        try {
+          JSON.parse(dictionaryJson)
+        } catch {
+          throw new Error(`"${dictionaryFile.name}" isn't valid JSON.`)
+        }
+      }
+      return datasetsApi.create({
         name: name.trim(),
         file: file!,
         targetColumn: targetColumn.trim() || undefined,
         groupColumn: groupColumn.trim() || undefined,
         description: description.trim() || undefined,
-        dictionaryJson: dictionaryJson.trim() || undefined,
-      }),
+        dictionaryJson,
+      })
+    },
     onSuccess: (dataset) => {
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
       onCreated?.(dataset)
@@ -76,12 +90,13 @@ export function RegisterDatasetDialog({
     },
   })
 
-  const errorMessage =
-    createMutation.error instanceof ApiError && typeof createMutation.error.detail === 'string'
+  const errorMessage = !createMutation.isError
+    ? null
+    : createMutation.error instanceof ApiError && typeof createMutation.error.detail === 'string'
       ? createMutation.error.detail
-      : createMutation.isError
-        ? 'Could not register this dataset. Please try again.'
-        : null
+      : createMutation.error instanceof Error
+        ? createMutation.error.message
+        : 'Could not register this dataset. Please try again.'
 
   return (
     <Dialog
@@ -131,16 +146,10 @@ export function RegisterDatasetDialog({
 
           <div className="space-y-1.5">
             <Label htmlFor="dataset-dictionary">Data dictionary</Label>
-            <Textarea
-              id="dataset-dictionary"
-              rows={6}
-              className="font-mono text-xs"
-              value={dictionaryJson}
-              onChange={(e) => setDictionaryJson(e.target.value)}
-              placeholder="(optional) JSON, opaque to ASAREE -- read by a domain MCP server's own EDA tools"
-            />
+            <Input id="dataset-dictionary" type="file" accept=".json" onChange={(e) => setDictionaryFile(e.target.files?.[0] ?? null)} />
             <p className="text-xs text-muted-foreground">
-              There's no way to edit this after registering yet -- add it now if you already have one.
+              Optional JSON file, opaque to ASAREE itself -- read by a domain MCP server's own EDA tools. There's no way
+              to add or replace this after registering yet -- upload it now if you already have one.
             </p>
           </div>
 

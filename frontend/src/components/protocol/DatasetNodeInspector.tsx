@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Database, Plus } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -17,16 +18,31 @@ import type { DatasetNodeData, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = hashToChartHue('dataset')
 
-// dictionary_json is opaque to ASAREE (see RegisteredDataset's own comment)
-// -- this only pretty-prints it if it happens to parse as JSON, falling
-// back to the raw string rather than assuming/enforcing any particular
-// shape, since a domain MCP server (not this UI) is the one that actually
-// interprets it.
-function formatDictionaryJson(raw: string): string {
+interface DictionaryColumn {
+  name?: string
+  type?: string
+}
+
+interface ParsedDictionary {
+  n_rows?: number
+  target?: string
+  columns?: DictionaryColumn[]
+}
+
+// dictionary_json is opaque to ASAREE's own DB/API (see RegisteredDataset's
+// own comment) -- the shape read here (n_rows/target/columns[].type) is
+// ARES's own de facto contract (see asaree-spinal-use-case's
+// spine_data_dictionary.json), read best-effort for a nicer summary than a
+// raw JSON dump (row/column counts, target, a per-type breakdown -- ARES's
+// own dataset page showed the same, never the raw dictionary itself), never
+// enforced -- a dictionary missing `columns` (or not valid JSON at all)
+// just means this summary silently has less to show, not an error.
+function parseDictionary(raw: string): ParsedDictionary | null {
   try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
+    const parsed: unknown = JSON.parse(raw)
+    return parsed !== null && typeof parsed === 'object' ? (parsed as ParsedDictionary) : null
   } catch {
-    return raw
+    return null
   }
 }
 
@@ -204,14 +220,36 @@ export function DatasetNodeInspector({
               </p>
             </div>
           </div>
-          {selectedDataset.dictionary_json && (
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Data dictionary</p>
-              <pre className="max-h-40 overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-[0.65rem]">
-                {formatDictionaryJson(selectedDataset.dictionary_json)}
-              </pre>
-            </div>
-          )}
+          {selectedDataset.dictionary_json &&
+            (() => {
+              const dictionary = parseDictionary(selectedDataset.dictionary_json)
+              const columns = dictionary?.columns?.filter((c): c is DictionaryColumn => !!c && typeof c === 'object') ?? []
+              if (columns.length === 0) {
+                return <p className="text-xs text-muted-foreground">Data dictionary present, but not in a recognized format.</p>
+              }
+              const typeCounts = columns.reduce<Record<string, number>>((acc, c) => {
+                const type = c.type || 'Unknown'
+                acc[type] = (acc[type] ?? 0) + 1
+                return acc
+              }, {})
+              return (
+                <div className="space-y-1.5">
+                  <p className="text-xs text-muted-foreground">Data dictionary</p>
+                  <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs">
+                    {dictionary?.n_rows != null && <Badge variant="outline">{dictionary.n_rows.toLocaleString()} rows</Badge>}
+                    <Badge variant="outline">{columns.length} columns</Badge>
+                    {dictionary?.target && <Badge variant="outline">Target: {dictionary.target}</Badge>}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(typeCounts).map(([type, count]) => (
+                      <Badge key={type} variant="outline" className="font-mono text-xs">
+                        {type}: {count}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
         </div>
       )}
 

@@ -77,15 +77,20 @@ export function CriticGateNodeInspector({
           onBind={(name) => bindFactor('config.enabled', name)}
           onUnbind={() => unbindFactor('config.enabled')}
         >
-          <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
-            <div>
-              <Label htmlFor="gate-enabled">Enabled</Label>
-              <p className="text-xs text-muted-foreground">
-                Off: the upstream agent's output passes straight through, no review, no revisions.
-              </p>
+          {(trigger) => (
+            <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+              <div>
+                <Label htmlFor="gate-enabled" className="flex items-center gap-1.5">
+                  Enabled
+                  {trigger}
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Off: the upstream agent's output passes straight through, no review, no revisions.
+                </p>
+              </div>
+              <Switch id="gate-enabled" checked={config.enabled} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
             </div>
-            <Switch id="gate-enabled" checked={config.enabled} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
-          </div>
+          )}
         </FactorBindableField>
 
         <div className="space-y-1.5">

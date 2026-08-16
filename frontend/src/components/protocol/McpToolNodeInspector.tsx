@@ -97,13 +97,18 @@ export function McpToolNodeInspector({
         onBind={(name) => bindFactor('config.enabled', name)}
         onUnbind={() => unbindFactor('config.enabled')}
       >
-        <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
-          <div>
-            <Label htmlFor="tool-enabled">Enabled</Label>
-            <p className="text-xs text-muted-foreground">Off: this server's tools aren't offered to the agent at all.</p>
+        {(trigger) => (
+          <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+            <div>
+              <Label htmlFor="tool-enabled" className="flex items-center gap-1.5">
+                Enabled
+                {trigger}
+              </Label>
+              <p className="text-xs text-muted-foreground">Off: this server's tools aren't offered to the agent at all.</p>
+            </div>
+            <Switch id="tool-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
           </div>
-          <Switch id="tool-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
-        </div>
+        )}
       </FactorBindableField>
 
       {serversQuery.isLoading ? (
@@ -127,39 +132,44 @@ export function McpToolNodeInspector({
               onBind={(name) => bindFactor('config', name)}
               onUnbind={() => unbindFactor('config')}
             >
-              <div className="space-y-1.5">
-                <Label>Server</Label>
-                <Select
-                  value={config.server_id ?? '__none__'}
-                  onValueChange={(value) => {
-                    if (!value || value === '__none__') return
-                    const server = serversQuery.data.find((s) => s.id === value)
-                    // All tools allowed by default -- an allow-list that starts
-                    // empty just means every tool silently does nothing until
-                    // the user discovers they need to flip each one on; "All"
-                    // is also already one click away if they want to narrow it.
-                    patchConfig({
-                      server_id: value,
-                      server_name: server?.name ?? null,
-                      tool_names: server?.capabilities?.tools?.map((t) => t.name) ?? [],
-                    })
-                  }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue>{() => selectedServer?.name ?? 'Select a server…'}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__" disabled>
-                      Select a server…
-                    </SelectItem>
-                    {serversQuery.data.map((server) => (
-                      <SelectItem key={server.id} value={server.id}>
-                        {server.name}
+              {(trigger) => (
+                <div className="space-y-1.5">
+                  <Label className="flex items-center gap-1.5">
+                    Server
+                    {trigger}
+                  </Label>
+                  <Select
+                    value={config.server_id ?? '__none__'}
+                    onValueChange={(value) => {
+                      if (!value || value === '__none__') return
+                      const server = serversQuery.data.find((s) => s.id === value)
+                      // All tools allowed by default -- an allow-list that starts
+                      // empty just means every tool silently does nothing until
+                      // the user discovers they need to flip each one on; "All"
+                      // is also already one click away if they want to narrow it.
+                      patchConfig({
+                        server_id: value,
+                        server_name: server?.name ?? null,
+                        tool_names: server?.capabilities?.tools?.map((t) => t.name) ?? [],
+                      })
+                    }}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue>{() => selectedServer?.name ?? 'Select a server…'}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__" disabled>
+                        Select a server…
                       </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                      {serversQuery.data.map((server) => (
+                        <SelectItem key={server.id} value={server.id}>
+                          {server.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </FactorBindableField>
 
             <div className="space-y-1.5">

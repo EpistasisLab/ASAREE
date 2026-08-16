@@ -83,10 +83,15 @@ export function MemoryNodeInspector({
         onBind={(name) => bindFactor('config.enabled', name)}
         onUnbind={() => unbindFactor('config.enabled')}
       >
-        <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
-          <Label htmlFor="memory-enabled">Enabled</Label>
-          <Switch id="memory-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
-        </div>
+        {(trigger) => (
+          <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+            <Label htmlFor="memory-enabled" className="flex items-center gap-1.5">
+              Enabled
+              {trigger}
+            </Label>
+            <Switch id="memory-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
+          </div>
+        )}
       </FactorBindableField>
       <div className="space-y-1.5">
         <Label htmlFor="memory-name">Name</Label>

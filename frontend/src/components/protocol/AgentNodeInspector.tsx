@@ -140,21 +140,26 @@ export function AgentNodeInspector({
                 onBind={(name) => bindFactor('config.system_prompt', name)}
                 onUnbind={() => unbindFactor('config.system_prompt')}
               >
-                <div className="w-full space-y-1.5">
-                  <Label htmlFor="node-system-prompt">System prompt — Optional</Label>
-                  <Textarea
-                    id="node-system-prompt"
-                    rows={6}
-                    className="font-mono text-xs"
-                    value={config.system_prompt}
-                    onChange={(e) => patchConfig({ system_prompt: e.target.value })}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Behavioral instructions layered on top of the Reason + Act pattern's own built-in system
-                    prompt. Leave blank to run on that built-in behavior alone -- there's no bare, uninstructed
-                    mode to fall back to further than that.
-                  </p>
-                </div>
+                {(trigger) => (
+                  <div className="w-full space-y-1.5">
+                    <Label htmlFor="node-system-prompt" className="flex items-center gap-1.5">
+                      System prompt — Optional
+                      {trigger}
+                    </Label>
+                    <Textarea
+                      id="node-system-prompt"
+                      rows={6}
+                      className="font-mono text-xs"
+                      value={config.system_prompt}
+                      onChange={(e) => patchConfig({ system_prompt: e.target.value })}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Behavioral instructions layered on top of the Reason + Act pattern's own built-in system
+                      prompt. Leave blank to run on that built-in behavior alone -- there's no bare, uninstructed
+                      mode to fall back to further than that.
+                    </p>
+                  </div>
+                )}
               </FactorBindableField>
             </TabsContent>
 

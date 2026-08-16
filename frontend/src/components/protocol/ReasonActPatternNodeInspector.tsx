@@ -105,16 +105,21 @@ export function ReasonActPatternNodeInspector({
           onBind={(name) => bindFactor('config.max_iterations', name)}
           onUnbind={() => unbindFactor('config.max_iterations')}
         >
-          <div className="space-y-1.5">
-            <Label htmlFor="reason-act-max-iterations">Max iterations</Label>
-            <Input
-              id="reason-act-max-iterations"
-              type="number"
-              min="1"
-              value={config.max_iterations}
-              onChange={(e) => patchConfig({ max_iterations: Number(e.target.value) })}
-            />
-          </div>
+          {(trigger) => (
+            <div className="space-y-1.5">
+              <Label htmlFor="reason-act-max-iterations" className="flex items-center gap-1.5">
+                Max iterations
+                {trigger}
+              </Label>
+              <Input
+                id="reason-act-max-iterations"
+                type="number"
+                min="1"
+                value={config.max_iterations}
+                onChange={(e) => patchConfig({ max_iterations: Number(e.target.value) })}
+              />
+            </div>
+          )}
         </FactorBindableField>
         <FactorBindableField
           experimentId={experimentId}
@@ -128,21 +133,26 @@ export function ReasonActPatternNodeInspector({
           onBind={(name) => bindFactor('config.observation_format', name)}
           onUnbind={() => unbindFactor('config.observation_format')}
         >
-          <div className="space-y-1.5">
-            <Label>Observation format</Label>
-            <Select value={config.observation_format} onValueChange={(value) => patchConfig({ observation_format: value as 'raw' | 'summarized' })}>
-              <SelectTrigger className="w-full">
-                <SelectValue>{(value: string) => value}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {OBSERVATION_FORMATS.map((format) => (
-                  <SelectItem key={format} value={format}>
-                    {format}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          {(trigger) => (
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5">
+                Observation format
+                {trigger}
+              </Label>
+              <Select value={config.observation_format} onValueChange={(value) => patchConfig({ observation_format: value as 'raw' | 'summarized' })}>
+                <SelectTrigger className="w-full">
+                  <SelectValue>{(value: string) => value}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {OBSERVATION_FORMATS.map((format) => (
+                    <SelectItem key={format} value={format}>
+                      {format}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </FactorBindableField>
       </div>
 
@@ -156,17 +166,22 @@ export function ReasonActPatternNodeInspector({
         onBind={(name) => bindFactor('config.include_scratchpad', name)}
         onUnbind={() => unbindFactor('config.include_scratchpad')}
       >
-        <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
-          <div>
-            <Label htmlFor="reason-act-scratchpad">Include scratchpad</Label>
-            <p className="text-xs text-muted-foreground">Carries a running record of prior reasoning/observations into each iteration.</p>
+        {(trigger) => (
+          <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+            <div>
+              <Label htmlFor="reason-act-scratchpad" className="flex items-center gap-1.5">
+                Include scratchpad
+                {trigger}
+              </Label>
+              <p className="text-xs text-muted-foreground">Carries a running record of prior reasoning/observations into each iteration.</p>
+            </div>
+            <Switch
+              id="reason-act-scratchpad"
+              checked={config.include_scratchpad}
+              onCheckedChange={(checked) => patchConfig({ include_scratchpad: checked })}
+            />
           </div>
-          <Switch
-            id="reason-act-scratchpad"
-            checked={config.include_scratchpad}
-            onCheckedChange={(checked) => patchConfig({ include_scratchpad: checked })}
-          />
-        </div>
+        )}
       </FactorBindableField>
 
       {config.include_scratchpad && (
@@ -181,16 +196,21 @@ export function ReasonActPatternNodeInspector({
           onBind={(name) => bindFactor('config.scratchpad_window', name)}
           onUnbind={() => unbindFactor('config.scratchpad_window')}
         >
-          <div className="space-y-1.5">
-            <Label htmlFor="reason-act-scratchpad-window">Scratchpad window</Label>
-            <Input
-              id="reason-act-scratchpad-window"
-              type="number"
-              min="1"
-              value={config.scratchpad_window}
-              onChange={(e) => patchConfig({ scratchpad_window: Number(e.target.value) })}
-            />
-          </div>
+          {(trigger) => (
+            <div className="space-y-1.5">
+              <Label htmlFor="reason-act-scratchpad-window" className="flex items-center gap-1.5">
+                Scratchpad window
+                {trigger}
+              </Label>
+              <Input
+                id="reason-act-scratchpad-window"
+                type="number"
+                min="1"
+                value={config.scratchpad_window}
+                onChange={(e) => patchConfig({ scratchpad_window: Number(e.target.value) })}
+              />
+            </div>
+          )}
         </FactorBindableField>
       )}
     </NodeInspectorDialog>

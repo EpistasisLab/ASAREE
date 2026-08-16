@@ -99,16 +99,21 @@ export function SingleAgentBaselinePatternNodeInspector({
         onBind={(name) => bindFactor('config.max_iterations', name)}
         onUnbind={() => unbindFactor('config.max_iterations')}
       >
-        <div className="space-y-1.5">
-          <Label htmlFor="baseline-max-iterations">Max iterations</Label>
-          <Input
-            id="baseline-max-iterations"
-            type="number"
-            min="1"
-            value={config.max_iterations}
-            onChange={(e) => patchConfig({ max_iterations: Number(e.target.value) })}
-          />
-        </div>
+        {(trigger) => (
+          <div className="space-y-1.5">
+            <Label htmlFor="baseline-max-iterations" className="flex items-center gap-1.5">
+              Max iterations
+              {trigger}
+            </Label>
+            <Input
+              id="baseline-max-iterations"
+              type="number"
+              min="1"
+              value={config.max_iterations}
+              onChange={(e) => patchConfig({ max_iterations: Number(e.target.value) })}
+            />
+          </div>
+        )}
       </FactorBindableField>
 
       <FactorBindableField
@@ -121,17 +126,22 @@ export function SingleAgentBaselinePatternNodeInspector({
         onBind={(name) => bindFactor('config.stop_on_first_success', name)}
         onUnbind={() => unbindFactor('config.stop_on_first_success')}
       >
-        <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
-          <div>
-            <Label htmlFor="baseline-stop-on-first-success">Stop on first success</Label>
-            <p className="text-xs text-muted-foreground">Off: keeps looping for the full iteration budget even after a successful pass.</p>
+        {(trigger) => (
+          <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+            <div>
+              <Label htmlFor="baseline-stop-on-first-success" className="flex items-center gap-1.5">
+                Stop on first success
+                {trigger}
+              </Label>
+              <p className="text-xs text-muted-foreground">Off: keeps looping for the full iteration budget even after a successful pass.</p>
+            </div>
+            <Switch
+              id="baseline-stop-on-first-success"
+              checked={config.stop_on_first_success}
+              onCheckedChange={(checked) => patchConfig({ stop_on_first_success: checked })}
+            />
           </div>
-          <Switch
-            id="baseline-stop-on-first-success"
-            checked={config.stop_on_first_success}
-            onCheckedChange={(checked) => patchConfig({ stop_on_first_success: checked })}
-          />
-        </div>
+        )}
       </FactorBindableField>
     </NodeInspectorDialog>
   )

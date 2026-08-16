@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Variable, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -7,21 +7,28 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { experimentsApi } from '@/api/client'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import { computeFactorName, isStructuredLevelType, parseLevelValue, seedLevels, seedStructuredLevels, type LevelType } from './factorLevels'
 import type { DesignFactor } from '@/types/experiments'
 
-// Wraps a field's own Label+control (passed as children) with either a
-// "make experimental factor" trigger (unbound) or a "Factor: {name}" badge +
-// remove action (bound). The factor itself lives on the linked experiment's
-// design_spec.factors -- this component only owns the quick-create UI for
-// declaring/removing one, plus the node-side half of the binding
-// (factor_bindings[fieldPath]) via onBind/onUnbind, which the caller wires
-// into its own node.data update. The trigger is always the Variable icon
-// (lucide's "(x)" glyph) on an `outline` button -- a visible border/bg at
-// rest, not just on hover, so it reads as a real control rather than a
-// decoration next to the field.
+// Owns the "make experimental factor" trigger's state/mutation/dialog, but
+// NOT its layout -- `children` is a render prop that receives the trigger
+// element (a "make it a factor" button, a bound "Factor: {name}" badge, or a
+// disabled button) and decides where to put it. Callers place it inline
+// right next to their own field's Label text (see e.g. LlmNodeInspector's
+// "Model" Label) rather than trailing after the whole Label+control block --
+// a fixed trailing position reads as decoration bolted onto the end of a
+// row; sitting directly beside the text it labels reads as part of the
+// field itself.
+//
+// The trigger is always the Variable icon (lucide's "(x)" glyph) on an
+// `outline` button (a visible border/bg at rest, not just on hover) wrapped
+// in this app's own themed Tooltip -- explaining what it DOES ("vary this
+// across cells"), not just restating its name, and a real Tooltip rather
+// than the browser's native `title` (slow, inconsistent chrome -- see
+// CanvasControls.tsx's own reasoning for the same swap).
 //
 // 'text' levelType (a long-form value, e.g. a full system prompt) and the 3
 // structured "whole node as a factor" kinds (llm_config/tool_config/pattern
@@ -70,7 +77,9 @@ export function FactorBindableField({
   boundFactorName?: string
   onBind: (factorName: string) => void
   onUnbind: () => void
-  children: React.ReactNode
+  // Receives the trigger/badge element to place -- e.g.
+  // `(trigger) => (<Label className="flex items-center gap-1.5">Model{trigger}</Label>)`.
+  children: (trigger: ReactNode) => ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const [levels, setLevels] = useState<string[]>(() => seedLevels(currentValue))
@@ -106,46 +115,47 @@ export function FactorBindableField({
   })
 
   if (boundFactorName) {
-    return (
-      <div className="flex flex-wrap items-center gap-2">
-        {children}
-        <Badge variant="outline" className="gap-1">
-          Factor: {boundFactorName}
-          <button type="button" onClick={onUnbind} aria-label="Remove factor binding" className="cursor-pointer hover:text-destructive">
-            <X className="size-3" />
-          </button>
-        </Badge>
-      </div>
+    return children(
+      <Badge variant="outline" className="gap-1">
+        Factor: {boundFactorName}
+        <button type="button" onClick={onUnbind} aria-label="Remove factor binding" className="cursor-pointer hover:text-destructive">
+          <X className="size-3" />
+        </button>
+      </Badge>,
     )
   }
 
   if (!experimentId) {
-    return (
-      <div className="flex flex-wrap items-center gap-2">
-        {children}
-        <span title="This protocol has no linked experiment yet, so it has nothing to bind a factor to.">
-          <Button variant="outline" size="icon-sm" disabled aria-label="Make experimental factor">
+    return children(
+      <TooltipProvider delay={200}>
+        <Tooltip>
+          <TooltipTrigger render={<Button variant="outline" size="icon-sm" disabled aria-label="Make experimental factor" />}>
             <Variable className="size-3.5" />
-          </Button>
-        </span>
-      </div>
+          </TooltipTrigger>
+          <TooltipContent>This protocol has no linked experiment yet, so it has nothing to bind a factor to.</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>,
     )
   }
+
+  const tooltipText = isStructuredLevelType(levelType)
+    ? `Vary this node's whole configuration across this experiment's cells`
+    : "Vary this field across this experiment's cells"
 
   if (levelType === 'text' || isStructuredLevelType(levelType)) {
     const structured = isStructuredLevelType(levelType)
     return (
-      <div className="flex flex-wrap items-center gap-2">
-        {children}
-        <Button
-          variant="outline"
-          size="icon-sm"
-          aria-label="Make experimental factor"
-          title="Make experimental factor"
-          onClick={() => setOpen(true)}
-        >
-          <Variable className="size-3.5" />
-        </Button>
+      <>
+        {children(
+          <TooltipProvider delay={200}>
+            <Tooltip>
+              <TooltipTrigger render={<Button variant="outline" size="icon-sm" aria-label="Make experimental factor" onClick={() => setOpen(true)} />}>
+                <Variable className="size-3.5" />
+              </TooltipTrigger>
+              <TooltipContent>{tooltipText}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>,
+        )}
         <FactorEditorDialog
           open={open}
           onOpenChange={setOpen}
@@ -156,108 +166,106 @@ export function FactorBindableField({
           }}
           onSave={(next) => saveMutation.mutate(next)}
         />
-      </div>
+      </>
     )
   }
 
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {children}
-      <Popover
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next)
-          if (next) setLevels(seedLevels(currentValue))
-        }}
-      >
-        <PopoverTrigger
-          render={
-            <Button variant="outline" size="icon-sm" aria-label="Make experimental factor" title="Make experimental factor">
-              <Variable className="size-3.5" />
-            </Button>
-          }
-        />
-        <PopoverContent className="space-y-3">
+  return children(
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) setLevels(seedLevels(currentValue))
+      }}
+    >
+      <TooltipProvider delay={200}>
+        <Tooltip>
+          <TooltipTrigger render={<PopoverTrigger render={<Button variant="outline" size="icon-sm" aria-label="Make experimental factor" />} />}>
+            <Variable className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipContent>{tooltipText}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <PopoverContent className="space-y-3">
+        <div className="space-y-1.5">
+          <Label>Factor name</Label>
+          <p className="rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground">{factorName}</p>
+        </div>
+        {levelType === 'boolean' ? (
+          <p className="text-xs text-muted-foreground">Levels: true, false</p>
+        ) : (
           <div className="space-y-1.5">
-            <Label>Factor name</Label>
-            <p className="rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground">{factorName}</p>
-          </div>
-          {levelType === 'boolean' ? (
-            <p className="text-xs text-muted-foreground">Levels: true, false</p>
-          ) : (
-            <div className="space-y-1.5">
-              <Label>Levels</Label>
-              {levels.map((level, i) => (
-                <div key={i} className="flex items-center gap-1.5">
-                  {levelOptions && levelOptions.length > 0 ? (
-                    <Select
-                      value={level || '__none__'}
-                      onValueChange={(value) => {
-                        if (!value || value === '__none__') return
-                        setLevels((ls) => ls.map((l, j) => (j === i ? value : l)))
-                      }}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue>{() => levelOptions.find((o) => o.value === level)?.label ?? (level || 'Select…')}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__" disabled>
-                          Select…
-                        </SelectItem>
-                        {levelOptions.map((opt) => {
-                          // Grayed out, not removed -- picking the same value
-                          // for two levels of one factor is never meaningful
-                          // (it wouldn't vary anything between those cells),
-                          // but the option should still be visible so it's
-                          // clear why it's unavailable rather than silently
-                          // missing.
-                          const usedElsewhere = levels.some((l, j) => j !== i && l === opt.value)
-                          return (
-                            <SelectItem key={opt.value} value={opt.value} disabled={usedElsewhere}>
-                              {opt.label}
-                            </SelectItem>
-                          )
-                        })}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Input
-                      type={levelType === 'number' ? 'number' : 'text'}
-                      value={level}
-                      onChange={(e) => setLevels((ls) => ls.map((l, j) => (j === i ? e.target.value : l)))}
-                    />
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Remove level"
-                    onClick={() => setLevels((ls) => ls.filter((_, j) => j !== i))}
+            <Label>Levels</Label>
+            {levels.map((level, i) => (
+              <div key={i} className="flex items-center gap-1.5">
+                {levelOptions && levelOptions.length > 0 ? (
+                  <Select
+                    value={level || '__none__'}
+                    onValueChange={(value) => {
+                      if (!value || value === '__none__') return
+                      setLevels((ls) => ls.map((l, j) => (j === i ? value : l)))
+                    }}
                   >
-                    <X className="size-3.5" />
-                  </Button>
-                </div>
-              ))}
-              <Button variant="outline" size="sm" onClick={() => setLevels((ls) => [...ls, ''])}>
-                Add level
-              </Button>
-            </div>
-          )}
-          <Button
-            size="sm"
-            className="w-full"
-            disabled={saveMutation.isPending}
-            onClick={() => {
-              const parsedLevels =
-                levelType === 'boolean'
-                  ? [true, false]
-                  : levels.filter((l) => l.trim() !== '').map((l) => parseLevelValue(l, levelType))
-              saveMutation.mutate({ name: factorName, levels: parsedLevels, level_type: levelType })
-            }}
-          >
-            Save
-          </Button>
-        </PopoverContent>
-      </Popover>
-    </div>
+                    <SelectTrigger className="w-full">
+                      <SelectValue>{() => levelOptions.find((o) => o.value === level)?.label ?? (level || 'Select…')}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__" disabled>
+                        Select…
+                      </SelectItem>
+                      {levelOptions.map((opt) => {
+                        // Grayed out, not removed -- picking the same value
+                        // for two levels of one factor is never meaningful
+                        // (it wouldn't vary anything between those cells),
+                        // but the option should still be visible so it's
+                        // clear why it's unavailable rather than silently
+                        // missing.
+                        const usedElsewhere = levels.some((l, j) => j !== i && l === opt.value)
+                        return (
+                          <SelectItem key={opt.value} value={opt.value} disabled={usedElsewhere}>
+                            {opt.label}
+                          </SelectItem>
+                        )
+                      })}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    type={levelType === 'number' ? 'number' : 'text'}
+                    value={level}
+                    onChange={(e) => setLevels((ls) => ls.map((l, j) => (j === i ? e.target.value : l)))}
+                  />
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Remove level"
+                  onClick={() => setLevels((ls) => ls.filter((_, j) => j !== i))}
+                >
+                  <X className="size-3.5" />
+                </Button>
+              </div>
+            ))}
+            <Button variant="outline" size="sm" onClick={() => setLevels((ls) => [...ls, ''])}>
+              Add level
+            </Button>
+          </div>
+        )}
+        <Button
+          size="sm"
+          className="w-full"
+          disabled={saveMutation.isPending}
+          onClick={() => {
+            const parsedLevels =
+              levelType === 'boolean'
+                ? [true, false]
+                : levels.filter((l) => l.trim() !== '').map((l) => parseLevelValue(l, levelType))
+            saveMutation.mutate({ name: factorName, levels: parsedLevels, level_type: levelType })
+          }}
+        >
+          Save
+        </Button>
+      </PopoverContent>
+    </Popover>,
   )
 }

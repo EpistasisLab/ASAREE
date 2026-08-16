@@ -2,10 +2,10 @@ import { useRef, useState, type ChangeEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import type { Edge, Node } from '@xyflow/react'
-import { Archive, ArchiveRestore, Download, MoreVertical, Pencil, Text, Trash2, Upload } from 'lucide-react'
+import { Archive, ArchiveRestore, Download, MoreVertical, Pencil, Text, Upload } from 'lucide-react'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -140,45 +140,6 @@ function EditDescriptionDialog({
   )
 }
 
-function DeleteConfirmDialog({
-  open,
-  onOpenChange,
-  experimentId,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  experimentId: string
-}) {
-  const navigate = useNavigate()
-  const mutation = useMutation({
-    mutationFn: () => experimentsApi.remove(experimentId),
-    onSuccess: () => navigate('/experiments'),
-  })
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Delete this experiment?</DialogTitle>
-          <DialogDescription>
-            This permanently deletes the experiment, its protocol runs, and all cell results. This cannot be undone.
-            Consider Archive instead if you just want it out of your active list.
-          </DialogDescription>
-        </DialogHeader>
-        {mutation.isError && <p className="text-sm text-destructive">Could not delete this experiment.</p>}
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={mutation.isPending}>
-            Cancel
-          </Button>
-          <Button variant="destructive" onClick={() => mutation.mutate()} disabled={mutation.isPending}>
-            {mutation.isPending ? 'Deleting…' : 'Delete'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function sanitizeFilename(name: string): string {
   return name.trim().replace(/[^a-z0-9-_]+/gi, '-').replace(/^-+|-+$/g, '') || 'protocol'
 }
@@ -211,12 +172,17 @@ function mergeDesignSpec(current: DesignSpec | null | undefined, imported: Desig
 }
 
 // The canvas-level "⋮" menu, next to Run/+ -- acts on the EXPERIMENT for
-// identity/lifecycle (rename/description/archive/delete, matching this
-// app's own "experiments instead of workflows" framing), and on the
-// PROTOCOL's own graph for Download/Import, since that's the only part with
-// an actual JSON-able shape. Import only parses -- the actual merge-into-
-// canvas (id remapping, position offsetting) happens in ProtocolCanvas.tsx
-// itself via onImport, since that's where nodes/edges/findFreePosition live.
+// identity/lifecycle (rename/description/archive, matching this app's own
+// "experiments instead of workflows" framing), and on the PROTOCOL's own
+// graph for Download/Import, since that's the only part with an actual
+// JSON-able shape. Import only parses -- the actual merge-into-canvas (id
+// remapping, position offsetting) happens in ProtocolCanvas.tsx itself via
+// onImport, since that's where nodes/edges/findFreePosition live.
+// Deliberately no Delete here (or anywhere in the GUI) -- Archive is the
+// only lifecycle-destructive action end users get, so a misclick can't
+// silently lose an experiment's runs/cells. DELETE /experiments/{id} still
+// exists on the backend/SDK for scripted cleanup; experimentsApi.remove is
+// intentionally unused by any GUI surface.
 export function ProtocolCanvasMenu({
   protocolId,
   experimentId,
@@ -232,7 +198,6 @@ export function ProtocolCanvasMenu({
 }) {
   const [renameOpen, setRenameOpen] = useState(false)
   const [descriptionOpen, setDescriptionOpen] = useState(false)
-  const [deleteOpen, setDeleteOpen] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
@@ -346,10 +311,6 @@ export function ProtocolCanvasMenu({
             {isArchived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}
             {isArchived ? 'Unarchive' : 'Archive'}
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!experimentId} variant="destructive" onClick={() => setDeleteOpen(true)}>
-            <Trash2 className="size-4" />
-            Delete
-          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => void handleDownload()}>
             <Download className="size-4" />
@@ -381,7 +342,6 @@ export function ProtocolCanvasMenu({
             experimentId={experimentId}
             currentDescription={experiment.description}
           />
-          <DeleteConfirmDialog open={deleteOpen} onOpenChange={setDeleteOpen} experimentId={experimentId} />
         </>
       )}
     </>

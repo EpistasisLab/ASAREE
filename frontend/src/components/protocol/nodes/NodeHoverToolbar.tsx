@@ -62,7 +62,13 @@ export function NodeHoverToolbar({
   // entrypoint this executor doesn't have yet, same note "Execute step"
   // has always had here) -- shown disabled with an explanatory tooltip
   // rather than hidden, so a node where it doesn't apply doesn't read as
-  // "this feature isn't here."
+  // "this feature isn't here." Deliberately never substitutes a bound
+  // field's factor level (services.protocol_execution._run_single_node's
+  // own "no factor substitution" doc comment) -- this always runs the
+  // node's own literal, currently-typed configuration, the same as opening
+  // its inspector and reading the field verbatim. The tooltip below says so
+  // explicitly rather than leaving that distinction to be discovered the
+  // hard way.
   runAlone?: { canRun: boolean; onRun: () => void }
   // Replaces Delete with a Swap icon entirely -- for a node that must never
   // go to zero (today: the sole connected execution-pattern node on an
@@ -90,7 +96,7 @@ export function NodeHoverToolbar({
         // ProtocolCanvasPage.tsx).
         <span title={runAlone.canRun ? undefined : "Has upstream input -- can't run alone yet"}>
           <ToolbarIconButton
-            label="Run this agent"
+            label="Run this node's own configuration as currently set -- never a bound factor's level"
             disabled={!runAlone.canRun}
             onClick={() => runAlone.canRun && runAlone.onRun()}
           >

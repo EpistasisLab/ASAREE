@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Trash2, Wrench, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Wrench } from 'lucide-react'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -56,22 +55,15 @@ export function McpToolNodeInspector({
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-      header={
+      accent={ACCENT}
+      title={
         <>
-          <div className="flex items-center gap-2">
-            <Wrench className="size-5" style={{ color: ACCENT }} />
-            <EditableNodeTitle label={data.label} placeholder="MCP Tool" onCommit={(label) => onChange(node.id, { ...data, label })} />
-          </div>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>
-              <Trash2 className="size-4" />
-            </Button>
-            <Button variant="outline" size="icon" aria-label="Close" onClick={onClose}>
-              <X className="size-4" />
-            </Button>
-          </div>
+          <Wrench className="size-5" style={{ color: ACCENT }} />
+          <EditableNodeTitle label={data.label} placeholder="MCP Tool" onCommit={(label) => onChange(node.id, { ...data, label })} />
         </>
       }
+      onDelete={() => onDelete(node.id)}
+      onClose={onClose}
     >
       {serversQuery.isLoading ? (
           <Skeleton className="h-16 w-full" />

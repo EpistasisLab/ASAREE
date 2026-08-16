@@ -1,5 +1,4 @@
-import { Bot, Trash2, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Bot } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -69,22 +68,15 @@ export function AgentNodeInspector({
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-      header={
+      accent={ACCENT}
+      title={
         <>
-          <div className="flex items-center gap-2">
-            <Bot className="size-5" style={{ color: ACCENT }} />
-            <EditableNodeTitle label={data.label} placeholder="Agent" onCommit={(label) => onChange(node.id, { ...data, label })} />
-          </div>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>
-              <Trash2 className="size-4" />
-            </Button>
-            <Button variant="outline" size="icon" aria-label="Close" onClick={onClose}>
-              <X className="size-4" />
-            </Button>
-          </div>
+          <Bot className="size-5" style={{ color: ACCENT }} />
+          <EditableNodeTitle label={data.label} placeholder="Agent" onCommit={(label) => onChange(node.id, { ...data, label })} />
         </>
       }
+      onDelete={() => onDelete(node.id)}
+      onClose={onClose}
     >
       <div className="flex h-full gap-4">
         <div className="min-w-0 flex-1 overflow-y-auto">

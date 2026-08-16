@@ -1,5 +1,9 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Trash2, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { Slider } from '@/components/ui/slider'
+import { cardAccent, cn } from '@/lib/utils'
 
 // n8n's own Node Detail View (`.dialog` in NodeDetailsView.vue) is a large,
 // FIXED-size floating frame -- `width`/`height` are both
@@ -11,35 +15,96 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 // a constant ~2rem margin on every side, applied identically regardless of
 // node type or which tab/field count is showing.
 //
-// Shared by every node inspector (Agent/CriticGate/McpTool) so switching
-// between node types -- or between an inspector's own tabs -- never changes
-// the dialog's footprint. Don't tune this per inspector; adjust it once here.
+// Shared by every node inspector (Agent/CriticGate/McpTool/Memory/Llm/
+// ReasonActPattern/SingleAgentBaselinePattern) so switching between node
+// types -- or between an inspector's own tabs -- never changes the dialog's
+// footprint. Don't tune this per inspector; adjust it once here.
 export const NODE_INSPECTOR_CONTENT_CLASSNAME =
   'flex h-[calc(100vh-4rem)] w-[calc(100vw-4rem)] max-w-[calc(100vw-4rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[calc(100vw-4rem)]'
 
 /** Shared fixed-frame shell for node inspectors: a non-scrolling header row
- * up top (icon/title/Delete/Close, same across all three inspectors) and a
+ * up top (icon/title, a transparency slider, Delete/Close) and a
  * `flex-1 overflow-y-auto` body below it that absorbs all of a tab's or a
  * field set's overflow -- the outer frame itself never grows, shrinks, or
  * scrolls as a whole. This is the layout half of the n8n-NDV mirroring
  * described on `NODE_INSPECTOR_CONTENT_CLASSNAME` above; that constant is
  * exported separately in case a future inspector needs the sizing without
- * this exact two-slot structure. */
+ * this exact two-slot structure.
+ *
+ * Glows/rings/corner-brackets in the caller's own `accent` (same mechanism
+ * `Card` uses via `--card-accent`, see lib/utils.ts's `cardAccent()`) --
+ * `DialogContent`'s default styling (plain `bg-popover`, neutral
+ * `ring-foreground/10`) is otherwise the one HUD-themed surface in the app
+ * that never got the treatment every Card/Button already has.
+ *
+ * Delete/Close and the transparency slider are centralized here rather than
+ * duplicated in each of the 7 inspector components -- their markup was
+ * already byte-for-byte identical across every one of them. `onDelete` is
+ * optional: the two execution-pattern inspectors (ReasonAct/
+ * SingleAgentBaseline) have no Delete button at all, by deliberate design
+ * (an agent's execution pattern must never go to zero -- see those nodes'
+ * own comments), so omitting it just renders Close alone. */
 export function NodeInspectorDialog({
   open,
   onOpenChange,
-  header,
+  accent,
+  title,
+  onDelete,
+  onClose,
   children,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  header: ReactNode
+  accent: string
+  title: ReactNode
+  onDelete?: () => void
+  onClose: () => void
   children: ReactNode
 }) {
+  // A viewing convenience, not durable state -- resets to fully opaque every
+  // time the dialog opens (the same Dialog instance is reused as `open`
+  // toggles between different nodes, so this can't just be a one-time
+  // useState initializer).
+  const [opacity, setOpacity] = useState(100)
+  useEffect(() => {
+    if (open) setOpacity(100)
+  }, [open])
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className={NODE_INSPECTOR_CONTENT_CLASSNAME}>
-        <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">{header}</div>
+      <DialogContent
+        showCloseButton={false}
+        style={{
+          ...cardAccent(accent),
+          backgroundColor: `color-mix(in oklch, var(--popover) ${opacity}%, transparent)`,
+        }}
+        className={cn(
+          NODE_INSPECTOR_CONTENT_CLASSNAME,
+          "ring-1 ring-[color:var(--card-accent,var(--primary))]/15 shadow-[0_0_24px_-12px_var(--card-accent,var(--primary))] before:pointer-events-none before:absolute before:top-1 before:left-1 before:size-3 before:border-t-2 before:border-l-2 before:border-[color:var(--card-accent,var(--primary))]/60 before:content-[''] after:pointer-events-none after:absolute after:right-1 after:bottom-1 after:size-3 after:border-r-2 after:border-b-2 after:border-[color:var(--card-accent,var(--primary))]/60 after:content-['']",
+        )}
+      >
+        <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
+          <div className="flex items-center gap-2">{title}</div>
+          <div className="flex items-center gap-2">
+            <Slider
+              className="w-24"
+              min={20}
+              max={100}
+              step={5}
+              value={opacity}
+              onValueChange={(value) => setOpacity(value as number)}
+              aria-label="Dialog transparency"
+            />
+            {onDelete && (
+              <Button variant="ghost" size="icon" aria-label="Delete node" onClick={onDelete}>
+                <Trash2 className="size-4" />
+              </Button>
+            )}
+            <Button variant="outline" size="icon" aria-label="Close" onClick={onClose}>
+              <X className="size-4" />
+            </Button>
+          </div>
+        </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-4">{children}</div>
       </DialogContent>
     </Dialog>

@@ -1,5 +1,4 @@
-import { ShieldCheck, Trash2, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { ShieldCheck } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -58,22 +57,15 @@ export function CriticGateNodeInspector({
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-      header={
+      accent={ACCENT}
+      title={
         <>
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="size-5" style={{ color: ACCENT }} />
-            <EditableNodeTitle label={data.label} placeholder="Critic Gate" onCommit={(label) => onChange(node.id, { ...data, label })} />
-          </div>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>
-              <Trash2 className="size-4" />
-            </Button>
-            <Button variant="outline" size="icon" aria-label="Close" onClick={onClose}>
-              <X className="size-4" />
-            </Button>
-          </div>
+          <ShieldCheck className="size-5" style={{ color: ACCENT }} />
+          <EditableNodeTitle label={data.label} placeholder="Critic Gate" onCommit={(label) => onChange(node.id, { ...data, label })} />
         </>
       }
+      onDelete={() => onDelete(node.id)}
+      onClose={onClose}
     >
       <FactorBindableField
           experimentId={experimentId}

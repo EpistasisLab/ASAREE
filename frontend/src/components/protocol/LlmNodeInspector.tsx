@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Check, Sparkles, Trash2, X } from 'lucide-react'
+import { Check, Sparkles } from 'lucide-react'
 import { llmSettingsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
@@ -99,22 +99,15 @@ export function LlmNodeInspector({
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-      header={
+      accent={ACCENT}
+      title={
         <>
-          <div className="flex items-center gap-2">
-            <Icon className="size-5" style={{ color: ACCENT }} />
-            <h2 className="text-lg font-semibold">{data.label || meta.label}</h2>
-          </div>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>
-              <Trash2 className="size-4" />
-            </Button>
-            <Button variant="outline" size="icon" aria-label="Close" onClick={onClose}>
-              <X className="size-4" />
-            </Button>
-          </div>
+          <Icon className="size-5" style={{ color: ACCENT }} />
+          <h2 className="text-lg font-semibold">{data.label || meta.label}</h2>
         </>
       }
+      onDelete={() => onDelete(node.id)}
+      onClose={onClose}
     >
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">

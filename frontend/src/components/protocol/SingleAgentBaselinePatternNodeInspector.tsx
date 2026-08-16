@@ -1,5 +1,4 @@
-import { ArrowRight, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { ArrowRight } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -42,19 +41,14 @@ export function SingleAgentBaselinePatternNodeInspector({
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-      header={
+      accent={ACCENT}
+      title={
         <>
-          <div className="flex items-center gap-2">
-            <ArrowRight className="size-5" style={{ color: ACCENT }} />
-            <h2 className="text-lg font-semibold">{data.label || 'Single-Agent Baseline'}</h2>
-          </div>
-          <div className="flex items-center gap-1">
-            <Button variant="outline" size="icon" aria-label="Close" onClick={onClose}>
-              <X className="size-4" />
-            </Button>
-          </div>
+          <ArrowRight className="size-5" style={{ color: ACCENT }} />
+          <h2 className="text-lg font-semibold">{data.label || 'Single-Agent Baseline'}</h2>
         </>
       }
+      onClose={onClose}
     >
       <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
         Not yet wired up to agentic-core's real single_agent_baseline pattern -- connecting this to an agent declares

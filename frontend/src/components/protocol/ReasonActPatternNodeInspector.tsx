@@ -1,5 +1,4 @@
-import { Repeat2, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Repeat2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -43,19 +42,14 @@ export function ReasonActPatternNodeInspector({
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-      header={
+      accent={ACCENT}
+      title={
         <>
-          <div className="flex items-center gap-2">
-            <Repeat2 className="size-5" style={{ color: ACCENT }} />
-            <h2 className="text-lg font-semibold">{data.label || 'Reason + Act'}</h2>
-          </div>
-          <div className="flex items-center gap-1">
-            <Button variant="outline" size="icon" aria-label="Close" onClick={onClose}>
-              <X className="size-4" />
-            </Button>
-          </div>
+          <Repeat2 className="size-5" style={{ color: ACCENT }} />
+          <h2 className="text-lg font-semibold">{data.label || 'Reason + Act'}</h2>
         </>
       }
+      onClose={onClose}
     >
       <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
         Not yet wired up to agentic-core's real reason_act pattern -- connecting this to an agent declares intent for

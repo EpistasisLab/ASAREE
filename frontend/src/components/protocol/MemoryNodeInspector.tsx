@@ -1,5 +1,4 @@
-import { BrainCircuit, Trash2, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { BrainCircuit } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { hashToChartHue } from '@/lib/utils'
@@ -39,22 +38,15 @@ export function MemoryNodeInspector({
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-      header={
+      accent={ACCENT}
+      title={
         <>
-          <div className="flex items-center gap-2">
-            <BrainCircuit className="size-5" style={{ color: ACCENT }} />
-            <EditableNodeTitle label={data.label} placeholder="Memory" onCommit={(label) => onChange(node.id, { ...data, label })} />
-          </div>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" aria-label="Delete node" onClick={() => onDelete(node.id)}>
-              <Trash2 className="size-4" />
-            </Button>
-            <Button variant="outline" size="icon" aria-label="Close" onClick={onClose}>
-              <X className="size-4" />
-            </Button>
-          </div>
+          <BrainCircuit className="size-5" style={{ color: ACCENT }} />
+          <EditableNodeTitle label={data.label} placeholder="Memory" onCommit={(label) => onChange(node.id, { ...data, label })} />
         </>
       }
+      onDelete={() => onDelete(node.id)}
+      onClose={onClose}
     >
       <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
         Not yet wired up to real memory storage -- connecting this to an agent declares intent for a future phase,

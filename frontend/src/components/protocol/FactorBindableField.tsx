@@ -10,7 +10,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { experimentsApi } from '@/api/client'
 import { FactorEditorDialog } from './FactorEditorDialog'
-import { computeFactorName, isStructuredLevelType, parseLevelValue, seedLevels, seedStructuredLevels, type LevelType } from './factorLevels'
+import {
+  computeFactorName,
+  FACTOR_TRIGGER_CLASSNAME,
+  isStructuredLevelType,
+  parseLevelValue,
+  seedLevels,
+  seedStructuredLevels,
+  type LevelType,
+} from './factorLevels'
 import type { DesignFactor } from '@/types/experiments'
 
 // Owns the "make experimental factor" trigger's state/mutation/dialog, but
@@ -30,6 +38,26 @@ import type { DesignFactor } from '@/types/experiments'
 // than the browser's native `title` (slow, inconsistent chrome -- see
 // CanvasControls.tsx's own reasoning for the same swap).
 //
+// The Agent/Pattern inspectors' own title-row button (opens the per-node
+// field picker, rather than binding one specific field the way every
+// FactorBindableField instance below does) -- shares the exact same visual
+// identity (icon, text, violet accent, Tooltip) so every "this makes a
+// factor" control in the app reads as the same kind of thing regardless of
+// which of the two entry points it is.
+export function MakeNodeFactorButton({ onClick }: { onClick: () => void }) {
+  return (
+    <TooltipProvider delay={200}>
+      <Tooltip>
+        <TooltipTrigger render={<Button variant="outline" size="sm" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" onClick={onClick} />}>
+          <Variable className="size-3.5" />
+          Make factor
+        </TooltipTrigger>
+        <TooltipContent>Bind one of this node's fields to an experimental factor</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
 // 'text' levelType (a long-form value, e.g. a full system prompt) and the 3
 // structured "whole node as a factor" kinds (llm_config/tool_config/pattern
 // -- see factorLevels.ts) escalate straight to FactorEditorDialog instead of
@@ -129,8 +157,9 @@ export function FactorBindableField({
     return children(
       <TooltipProvider delay={200}>
         <Tooltip>
-          <TooltipTrigger render={<Button variant="outline" size="icon-sm" disabled aria-label="Make experimental factor" />}>
+          <TooltipTrigger render={<Button variant="outline" size="sm" disabled className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" />}>
             <Variable className="size-3.5" />
+            Make factor
           </TooltipTrigger>
           <TooltipContent>This protocol has no linked experiment yet, so it has nothing to bind a factor to.</TooltipContent>
         </Tooltip>
@@ -149,8 +178,11 @@ export function FactorBindableField({
         {children(
           <TooltipProvider delay={200}>
             <Tooltip>
-              <TooltipTrigger render={<Button variant="outline" size="icon-sm" aria-label="Make experimental factor" onClick={() => setOpen(true)} />}>
+              <TooltipTrigger
+                render={<Button variant="outline" size="sm" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" onClick={() => setOpen(true)} />}
+              >
                 <Variable className="size-3.5" />
+                Make factor
               </TooltipTrigger>
               <TooltipContent>{tooltipText}</TooltipContent>
             </Tooltip>
@@ -180,8 +212,11 @@ export function FactorBindableField({
     >
       <TooltipProvider delay={200}>
         <Tooltip>
-          <TooltipTrigger render={<PopoverTrigger render={<Button variant="outline" size="icon-sm" aria-label="Make experimental factor" />} />}>
+          <TooltipTrigger
+            render={<PopoverTrigger render={<Button variant="outline" size="sm" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" />} />}
+          >
             <Variable className="size-3.5" />
+            Make factor
           </TooltipTrigger>
           <TooltipContent>{tooltipText}</TooltipContent>
         </Tooltip>

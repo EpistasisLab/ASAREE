@@ -27,6 +27,18 @@ export function levelTypeOf(factor: DesignFactor): LevelType {
   return factor.level_type ?? 'string'
 }
 
+// Shared visual identity for every "make experimental factor" trigger --
+// FactorBindableField's own per-field triggers plus the Agent/Pattern
+// inspectors' title-row buttons (the one spot that opens the per-node
+// picker rather than binding a single field directly). A dedicated hue
+// (violet, --chart-2) not already claimed by another meaning elsewhere in
+// this app (chart-3 = fully scored, chart-4 = generated-but-unscored,
+// chart-5 ≈ destructive's own hue, primary = every other button) -- fixed,
+// not hashed, since this identifies a category of action, not a
+// per-instance thing the way e.g. AgentCard's model-hue tint does.
+export const FACTOR_TRIGGER_CLASSNAME =
+  'border-[color:var(--chart-2)] text-[color:var(--chart-2)] shadow-[0_0_16px_-4px_var(--chart-2)] hover:bg-[color-mix(in_oklch,var(--chart-2),transparent_90%)] hover:text-[color:var(--chart-2)] hover:shadow-[0_0_20px_-3px_var(--chart-2)]'
+
 export function parseLevelValue(raw: string, type: LevelType): unknown {
   return type === 'number' ? Number(raw) : raw
 }

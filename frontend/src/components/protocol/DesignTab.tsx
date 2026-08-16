@@ -352,7 +352,7 @@ export function DesignTab({
       </div>
 
       <div className="space-y-1.5">
-        <Label>Factors and levels</Label>
+        <Label>Experimental factors and levels</Label>
         <FactorsEditor
           experiment={experiment}
           protocolId={protocolId}

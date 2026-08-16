@@ -1,12 +1,11 @@
-import { Bot, Variable } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Bot } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
-import { FactorBindableField } from './FactorBindableField'
+import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { NodeRunOutputPanel } from './NodeRunOutputPanel'
 import { OutputContractEditor } from './OutputContractEditor'
@@ -77,15 +76,7 @@ export function AgentNodeInspector({
         <>
           <Bot className="size-5" style={{ color: ACCENT }} />
           <EditableNodeTitle label={data.label} placeholder="Agent" onCommit={(label) => onChange(node.id, { ...data, label })} />
-          <Button
-            variant="outline"
-            size="icon-sm"
-            aria-label="Make experimental factor"
-            title="Make experimental factor"
-            onClick={() => requestMakeFactor(node.id)}
-          >
-            <Variable className="size-4" />
-          </Button>
+          <MakeNodeFactorButton onClick={() => requestMakeFactor(node.id)} />
         </>
       }
       onDelete={() => onDelete(node.id)}

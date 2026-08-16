@@ -1,10 +1,9 @@
-import { ArrowRight, Variable } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { ArrowRight } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { hashToChartHue } from '@/lib/utils'
-import { FactorBindableField } from './FactorBindableField'
+import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import type { SingleAgentBaselinePatternConfig, SingleAgentBaselinePatternNodeData, ProtocolNode } from '@/types/protocols'
@@ -70,15 +69,7 @@ export function SingleAgentBaselinePatternNodeInspector({
         <>
           <ArrowRight className="size-5" style={{ color: ACCENT }} />
           <h2 className="text-lg font-semibold">{data.label || 'Single-Agent Baseline'}</h2>
-          <Button
-            variant="outline"
-            size="icon-sm"
-            aria-label="Make experimental factor"
-            title="Make experimental factor"
-            onClick={() => requestMakeFactor(node.id)}
-          >
-            <Variable className="size-4" />
-          </Button>
+          <MakeNodeFactorButton onClick={() => requestMakeFactor(node.id)} />
         </>
       }
       onClose={onClose}

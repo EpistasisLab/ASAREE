@@ -1,11 +1,10 @@
-import { Repeat2, Variable } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Repeat2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { hashToChartHue } from '@/lib/utils'
-import { FactorBindableField } from './FactorBindableField'
+import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import type { ReasonActPatternConfig, ReasonActPatternNodeData, ProtocolNode } from '@/types/protocols'
@@ -75,15 +74,7 @@ export function ReasonActPatternNodeInspector({
         <>
           <Repeat2 className="size-5" style={{ color: ACCENT }} />
           <h2 className="text-lg font-semibold">{data.label || 'Reason + Act'}</h2>
-          <Button
-            variant="outline"
-            size="icon-sm"
-            aria-label="Make experimental factor"
-            title="Make experimental factor"
-            onClick={() => requestMakeFactor(node.id)}
-          >
-            <Variable className="size-4" />
-          </Button>
+          <MakeNodeFactorButton onClick={() => requestMakeFactor(node.id)} />
         </>
       }
       onClose={onClose}

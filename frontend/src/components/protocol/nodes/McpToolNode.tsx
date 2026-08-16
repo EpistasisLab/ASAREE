@@ -31,6 +31,7 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
       handleId="tool"
       warning={summary ? undefined : 'Not configured -- pick a server and at least one tool'}
       hasFactor={hasBoundFactor(data)}
+      dimmed={!(data.config?.enabled ?? true)}
     />
   )
 }

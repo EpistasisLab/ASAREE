@@ -735,7 +735,12 @@ def _build_user_input(
 
     dataset_config = _resolve_dataset_config(graph, node["id"])
     dataset_name = dataset_config.get("dataset_name")
-    if dataset_name and experiment_id is not None and effective_cell_label is not None:
+    if (
+        dataset_name
+        and dataset_config.get("enabled", True)
+        and experiment_id is not None
+        and effective_cell_label is not None
+    ):
         parts.append(
             "Dataset context:\n"
             f'A dataset named "{dataset_name}" is registered for this run. Call open_workspace '

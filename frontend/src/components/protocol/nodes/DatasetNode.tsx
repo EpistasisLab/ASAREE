@@ -27,6 +27,7 @@ export function DatasetNode({ id, data, selected }: NodeProps & { data: DatasetN
       handleId="tool"
       warning={data.config?.dataset_id ? undefined : 'No dataset selected'}
       hasFactor={hasBoundFactor(data)}
+      dimmed={!(data.config?.enabled ?? true)}
     />
   )
 }

@@ -256,6 +256,20 @@ def test_build_user_input_appends_dataset_context_when_wired() -> None:
     assert 'cell_label="tier_a__rep_0"' in result
 
 
+def test_build_user_input_omits_dataset_context_when_disabled() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = {
+        "id": "dataset1",
+        "type": "dataset",
+        "data": {"label": "", "config": {"dataset_id": "d1", "dataset_name": "spinal-fusion-v1", "enabled": False}},
+    }
+    graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
+    result = pe._build_user_input(
+        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
+    )
+    assert "Dataset context" not in result
+
+
 def test_build_user_input_omits_dataset_context_when_unwired() -> None:
     node = _node("a", "agent", {"goal": "do the work"}, label="Worker")
     result = pe._build_user_input(

@@ -23,6 +23,7 @@ export function CircleNode({
   dashed,
   warning,
   hasFactor,
+  dimmed,
   swap,
   handlePosition = 'top',
 }: {
@@ -39,6 +40,11 @@ export function CircleNode({
   // permanent non-implementation.
   dashed?: boolean
   warning?: string
+  // This node's own config.enabled is false (Tool/Dataset) -- same
+  // opacity-50 dimming AgentNode/CriticGateNode already apply for their own
+  // active/enabled state, so "this doesn't currently do anything" reads the
+  // same way across every node type that can be switched off.
+  dimmed?: boolean
   // Small "x" badge, opposite corner from `warning` -- this node has at
   // least one field bound to an experimental factor (see AgentNode.tsx's
   // own hasFactor for the matching convention on a rectangular node).
@@ -55,7 +61,7 @@ export function CircleNode({
   handlePosition?: 'top' | 'bottom'
 }) {
   return (
-    <div className="group relative flex flex-col items-center">
+    <div className={`group relative flex flex-col items-center ${dimmed ? 'opacity-50' : ''}`}>
       <NodeHoverToolbar nodeId={id} swap={swap} />
       <div className="relative">
         <div

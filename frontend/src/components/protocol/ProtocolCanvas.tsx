@@ -48,6 +48,7 @@ import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
+import { DeleteNodeConfirmDialog } from './DeleteNodeConfirmDialog'
 import { DEFAULT_ZOOM } from './constants'
 import { findFreePosition } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
@@ -155,6 +156,18 @@ export function ProtocolCanvas({
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialGraph.edges as Edge[])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [addPanelOpen, setAddPanelOpen] = useState(false)
+  // A pending node deletion awaiting user confirmation -- populated either
+  // by onBeforeDelete (Backspace/Delete key, the hover toolbar's trash
+  // icon -- both go through xyflow's own deleteElements) or by
+  // requestDeleteNode (the node inspector's own Delete button, which calls
+  // deleteNode directly and never touches xyflow's delete pipeline at all).
+  // `resolve` is only set for the onBeforeDelete path -- xyflow is awaiting
+  // it to decide whether the deletion actually proceeds.
+  const [pendingDelete, setPendingDelete] = useState<{
+    nodes: Node[]
+    edges: Edge[]
+    resolve?: (result: boolean | { nodes: Node[]; edges: Edge[] }) => void
+  } | null>(null)
   // n8n-style dismissible error banner (own close button, no auto-hide) --
   // reset on every new Run click so a fresh attempt always gets a clean
   // slate even if the previous failure was never dismissed.
@@ -288,10 +301,17 @@ export function ProtocolCanvas({
   const onBeforeDelete = useCallback(
     async ({ nodes: deleting, edges: deletingEdges }: { nodes: Node[]; edges: Edge[] }) => {
       const deletedNodeIds = new Set(deleting.map((n) => n.id))
-      return {
-        nodes: deleting,
-        edges: deletingEdges.filter((e) => e.targetHandle !== 'architectural_pattern' || deletedNodeIds.has(e.target)),
+      const filteredEdges = deletingEdges.filter((e) => e.targetHandle !== 'architectural_pattern' || deletedNodeIds.has(e.target))
+      // An edge-only deletion (no nodes -- e.g. selecting a single edge and
+      // pressing Backspace) needs no confirmation, only removing a node
+      // does -- matches the user-facing ask ("confirm before deleting
+      // nodes") and keeps the low-friction edge-rewiring workflow intact.
+      if (deleting.length === 0) {
+        return { nodes: deleting, edges: filteredEdges }
       }
+      return new Promise<boolean | { nodes: Node[]; edges: Edge[] }>((resolve) => {
+        setPendingDelete({ nodes: deleting, edges: filteredEdges, resolve })
+      })
     },
     [],
   )
@@ -560,6 +580,18 @@ export function ProtocolCanvas({
     setSelectedNodeId(null)
   }
 
+  // The node inspector's own Delete button calls deleteNode directly --
+  // never through xyflow's deleteElements, so onBeforeDelete never sees it.
+  // Shows the same confirmation dialog either way (no `resolve`, since
+  // there's no pending xyflow deletion to approve/reject here -- just call
+  // deleteNode for real once the user confirms).
+  function requestDeleteNode(nodeId: string) {
+    const node = nodes.find((n) => n.id === nodeId)
+    if (!node) return
+    const relatedEdges = edges.filter((e) => e.source === nodeId || e.target === nodeId)
+    setPendingDelete({ nodes: [node], edges: relatedEdges })
+  }
+
   // "Import from file..." (ProtocolCanvasMenu) hands back the parsed
   // {nodes, edges} -- merges them in ALONGSIDE the current canvas (not a
   // replace, per the user's own read of n8n's import behavior): every
@@ -742,7 +774,7 @@ export function ProtocolCanvas({
           <McpToolNodeInspector
             node={{ id: selectedNode.id, type: 'mcp_tool', position: selectedNode.position, data: selectedNode.data as McpToolNodeData }}
             onChange={updateNodeData}
-            onDelete={deleteNode}
+            onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
           />
         ) : selectedNode?.type === 'critic_gate' ? (
@@ -750,7 +782,7 @@ export function ProtocolCanvas({
             node={{ id: selectedNode.id, type: 'critic_gate', position: selectedNode.position, data: selectedNode.data as CriticGateNodeData }}
             experimentId={experimentId}
             onChange={updateNodeData}
-            onDelete={deleteNode}
+            onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
           />
         ) : LLM_NODE_TYPES.includes(selectedNode?.type ?? '') ? (
@@ -758,14 +790,14 @@ export function ProtocolCanvas({
             node={{ id: selectedNode!.id, type: selectedNode!.type!, position: selectedNode!.position, data: selectedNode!.data as LlmNodeData }}
             experimentId={experimentId}
             onChange={updateNodeData}
-            onDelete={deleteNode}
+            onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
           />
         ) : selectedNode?.type === 'memory' ? (
           <MemoryNodeInspector
             node={{ id: selectedNode.id, type: 'memory', position: selectedNode.position, data: selectedNode.data as MemoryNodeData }}
             onChange={updateNodeData}
-            onDelete={deleteNode}
+            onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
           />
         ) : selectedNode?.type === 'pattern_reason_act' ? (
@@ -797,12 +829,31 @@ export function ProtocolCanvas({
               experimentId={experimentId}
               nodeRun={runQuery.data?.node_runs[selectedNode.id]}
               onChange={updateNodeData}
-              onDelete={deleteNode}
+              onDelete={requestDeleteNode}
               onClose={() => setSelectedNodeId(null)}
             />
           )
         )}
       </div>
+      {pendingDelete && (
+        <DeleteNodeConfirmDialog
+          nodes={pendingDelete.nodes}
+          onCancel={() => {
+            pendingDelete.resolve?.(false)
+            setPendingDelete(null)
+          }}
+          onConfirm={() => {
+            if (pendingDelete.resolve) {
+              pendingDelete.resolve({ nodes: pendingDelete.nodes, edges: pendingDelete.edges })
+            } else {
+              // requestDeleteNode's path -- no xyflow deletion pending, just
+              // remove the node for real now that the user confirmed.
+              deleteNode(pendingDelete.nodes[0].id)
+            }
+            setPendingDelete(null)
+          }}
+        />
+      )}
     </ProtocolCanvasActionsProvider>
   )
 }

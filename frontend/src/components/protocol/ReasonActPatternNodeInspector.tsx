@@ -76,7 +76,7 @@ export function ReasonActPatternNodeInspector({
           <Repeat2 className="size-5" style={{ color: ACCENT }} />
           <h2 className="text-lg font-semibold">{data.label || 'Reason + Act'}</h2>
           <Button
-            variant="ghost"
+            variant="outline"
             size="icon-sm"
             aria-label="Make experimental factor"
             title="Make experimental factor"

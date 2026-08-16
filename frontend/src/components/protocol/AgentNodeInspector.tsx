@@ -78,7 +78,7 @@ export function AgentNodeInspector({
           <Bot className="size-5" style={{ color: ACCENT }} />
           <EditableNodeTitle label={data.label} placeholder="Agent" onCommit={(label) => onChange(node.id, { ...data, label })} />
           <Button
-            variant="ghost"
+            variant="outline"
             size="icon-sm"
             aria-label="Make experimental factor"
             title="Make experimental factor"

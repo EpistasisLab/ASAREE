@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Variable, X } from 'lucide-react'
+import { Variable, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,12 +12,16 @@ import { FactorEditorDialog } from './FactorEditorDialog'
 import { computeFactorName, isStructuredLevelType, parseLevelValue, seedLevels, seedStructuredLevels, type LevelType } from './factorLevels'
 import type { DesignFactor } from '@/types/experiments'
 
-// Wraps a field's own Label+control (passed as children) with either a "+"
-// trigger (unbound) or a "Factor: {name}" badge + remove action (bound).
-// The factor itself lives on the linked experiment's design_spec.factors --
-// this component only owns the quick-create UI for declaring/removing one,
-// plus the node-side half of the binding (factor_bindings[fieldPath]) via
-// onBind/onUnbind, which the caller wires into its own node.data update.
+// Wraps a field's own Label+control (passed as children) with either a
+// "make experimental factor" trigger (unbound) or a "Factor: {name}" badge +
+// remove action (bound). The factor itself lives on the linked experiment's
+// design_spec.factors -- this component only owns the quick-create UI for
+// declaring/removing one, plus the node-side half of the binding
+// (factor_bindings[fieldPath]) via onBind/onUnbind, which the caller wires
+// into its own node.data update. The trigger is always the Variable icon
+// (lucide's "(x)" glyph) on an `outline` button -- a visible border/bg at
+// rest, not just on hover, so it reads as a real control rather than a
+// decoration next to the field.
 //
 // 'text' levelType (a long-form value, e.g. a full system prompt) and the 3
 // structured "whole node as a factor" kinds (llm_config/tool_config/pattern
@@ -25,9 +29,7 @@ import type { DesignFactor } from '@/types/experiments'
 // this popover's own one-line Input rows -- string/number/boolean keep the
 // popover, since it's already adequate for short values and a handful of
 // levels; rebuilding a UI that already works for the common case would be
-// disproportionate. The structured kinds also get the Variable icon instead
-// of Plus -- a visual cue that this binds the field's WHOLE value (an entire
-// node config), not one scalar the way every Plus-icon field here does.
+// disproportionate.
 export function FactorBindableField({
   experimentId,
   // No longer read internally (the removed "Factor name" Input used to key
@@ -122,8 +124,8 @@ export function FactorBindableField({
       <div className="flex flex-wrap items-center gap-2">
         {children}
         <span title="This protocol has no linked experiment yet, so it has nothing to bind a factor to.">
-          <Button variant="ghost" size="icon-sm" disabled aria-label="Make experimental factor">
-            {isStructuredLevelType(levelType) ? <Variable className="size-3.5" /> : <Plus className="size-3.5" />}
+          <Button variant="outline" size="icon-sm" disabled aria-label="Make experimental factor">
+            <Variable className="size-3.5" />
           </Button>
         </span>
       </div>
@@ -136,13 +138,13 @@ export function FactorBindableField({
       <div className="flex flex-wrap items-center gap-2">
         {children}
         <Button
-          variant="ghost"
+          variant="outline"
           size="icon-sm"
           aria-label="Make experimental factor"
           title="Make experimental factor"
           onClick={() => setOpen(true)}
         >
-          {structured ? <Variable className="size-3.5" /> : <Plus className="size-3.5" />}
+          <Variable className="size-3.5" />
         </Button>
         <FactorEditorDialog
           open={open}
@@ -170,8 +172,8 @@ export function FactorBindableField({
       >
         <PopoverTrigger
           render={
-            <Button variant="ghost" size="icon-sm" aria-label="Make experimental factor" title="Make experimental factor">
-              <Plus className="size-3.5" />
+            <Button variant="outline" size="icon-sm" aria-label="Make experimental factor" title="Make experimental factor">
+              <Variable className="size-3.5" />
             </Button>
           }
         />

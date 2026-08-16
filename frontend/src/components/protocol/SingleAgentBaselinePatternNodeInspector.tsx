@@ -71,7 +71,7 @@ export function SingleAgentBaselinePatternNodeInspector({
           <ArrowRight className="size-5" style={{ color: ACCENT }} />
           <h2 className="text-lg font-semibold">{data.label || 'Single-Agent Baseline'}</h2>
           <Button
-            variant="ghost"
+            variant="outline"
             size="icon-sm"
             aria-label="Make experimental factor"
             title="Make experimental factor"

@@ -6,7 +6,7 @@ import builtins
 import uuid
 from typing import Any
 
-from asaree_client.models import Protocol, ProtocolRun
+from asaree_client.models import CellRunBatch, Protocol, ProtocolRun
 
 ResourceId = uuid.UUID | str
 
@@ -75,6 +75,21 @@ class Protocols:
         payload = {"cell_label": cell_label} if cell_label is not None else {}
         data = self._client._post(f"/protocols/{protocol_id}/runs", json=payload)
         return ProtocolRun(**data)
+
+    def run_node(self, protocol_id: ResourceId, node_id: str) -> ProtocolRun:
+        """The canvas's per-node Play icon -- runs one Agent node in
+        isolation, no factor substitution. 422 if the node has upstream
+        input or isn't a runnable Agent (validate_single_node_runnable)."""
+        data = self._client._post(f"/protocols/{protocol_id}/nodes/{node_id}/run")
+        return ProtocolRun(**data)
+
+    def run_cells(self, protocol_id: ResourceId) -> CellRunBatch:
+        """"Run all cells" -- one ProtocolRun per not-yet-scored cell under
+        this protocol's linked experiment, each cell's own factor_values
+        substituted in. 422 if there's no linked experiment or the graph
+        doesn't have exactly one final node."""
+        data = self._client._post(f"/protocols/{protocol_id}/cell-runs")
+        return CellRunBatch(**data)
 
     def get_run(self, protocol_id: ResourceId, run_id: ResourceId) -> ProtocolRun:
         data = self._client._get(f"/protocols/{protocol_id}/runs/{run_id}")

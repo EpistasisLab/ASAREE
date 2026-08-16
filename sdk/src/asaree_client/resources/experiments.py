@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import builtins
 import uuid
+from datetime import datetime
 from typing import Any
 
 from asaree_client.models import Cell, Experiment, ExperimentArtifact
@@ -61,20 +62,39 @@ class Experiments:
         *,
         name: str | None = _UNSET,
         description: str | None = _UNSET,
+        hypothesis: str | None = _UNSET,
         dataset_id: ResourceId | None = _UNSET,
+        design_spec: dict[str, Any] | None = _UNSET,
+        archived_at: datetime | None = _UNSET,
     ) -> Experiment:
         """Only the fields actually passed are sent (omit one to leave it
         unchanged; pass ``None`` explicitly to clear/detach it) --
         ``dataset_id=None`` attaches nothing / detaches, same as before;
-        ``name``/``description`` are new, for renaming an experiment created
-        with a placeholder name straight from the GUI."""
+        ``name``/``description``/``hypothesis`` are for editing an
+        experiment's own identity/write-up straight from the SDK (matching
+        the GUI's Rename/Edit description/Design-tab hypothesis fields).
+        ``design_spec`` is a full replacement, not a merge -- the same
+        factors/replicates/randomization_seed/metrics/coordination_strategy
+        dict the Design tab renders; read the current value with ``get()``
+        first if you only want to change one key. ``archived_at`` archives
+        (pass a datetime) or unarchives (pass ``None`` explicitly) -- the
+        GUI's own Archive/Unarchive action, and the only way end users are
+        meant to remove an experiment from their active list (the GUI no
+        longer exposes ``delete()`` at all, to prevent accidental data
+        loss; it's still here for scripted cleanup)."""
         payload: dict[str, Any] = {}
         if name is not _UNSET:
             payload["name"] = name
         if description is not _UNSET:
             payload["description"] = description
+        if hypothesis is not _UNSET:
+            payload["hypothesis"] = hypothesis
         if dataset_id is not _UNSET:
             payload["dataset_id"] = str(dataset_id) if dataset_id else None
+        if design_spec is not _UNSET:
+            payload["design_spec"] = design_spec
+        if archived_at is not _UNSET:
+            payload["archived_at"] = archived_at.isoformat() if archived_at else None
         data = self._client._patch(f"/experiments/{experiment_id}", json=payload)
         return Experiment(**data)
 

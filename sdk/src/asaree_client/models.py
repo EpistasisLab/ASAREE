@@ -72,10 +72,12 @@ class Experiment(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
+    hypothesis: str | None = None
     design_type: str
     task_brief: dict[str, Any] | None
     design_spec: dict[str, Any] | None
     dataset_id: uuid.UUID | None = None
+    archived_at: datetime | None = None
     created_at: datetime
 
 
@@ -123,8 +125,21 @@ class ProtocolRun(BaseModel):
     status: str
     node_runs: dict[str, Any]
     error: str | None
+    cell_label: str | None = None
+    factor_values: dict[str, Any] | None = None
+    target_node_id: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class CellRunBatch(BaseModel):
+    """"Run all cells" fanout result -- one ProtocolRun id per not-yet-scored
+    cell; ``skipped`` is how many cells already had metric_values and were
+    left alone (resume semantics)."""
+
+    protocol_run_ids: list[uuid.UUID]
+    cell_labels: list[str]
+    skipped: int
 
 
 class RegisteredDataset(BaseModel):

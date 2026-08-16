@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, X } from 'lucide-react'
+import { Pencil, Plus, X } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { experimentsApi } from '@/api/client'
+import { FactorEditorDialog } from './FactorEditorDialog'
+import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
 import {
   COORDINATION_STRATEGY_CATALOG,
   type CoordinationStrategySlug,
@@ -15,45 +18,53 @@ import {
   type Experiment,
 } from '@/types/experiments'
 
-function parseLevel(raw: string): unknown {
-  const trimmed = raw.trim()
-  if (trimmed === '') return undefined
-  const n = Number(trimmed)
-  return Number.isFinite(n) && trimmed !== '' ? n : trimmed
-}
-
-function levelsToText(levels: unknown[]): string {
-  return levels.join(', ')
-}
-
-function textToLevels(text: string): unknown[] {
-  return text
-    .split(',')
-    .map(parseLevel)
-    .filter((v): v is unknown => v !== undefined)
-}
-
 // The Design tab's own factors editor -- the canonical place to view/edit
-// every declared factor at once. Distinct from FactorBindableField's own
-// per-inspector-field "+" popover (still used to create a NEW factor scoped
-// to binding one specific node field) -- both read/write the same
-// design_spec.factors array, they just serve different entry points.
+// every declared factor at once, regardless of how it was originally
+// created. Distinct from FactorBindableField's own per-inspector-field "+"
+// popover (still used to quick-create a factor scoped to binding one
+// specific node field) -- both read/write the same design_spec.factors
+// array, they just serve different entry points. Each row is a compact
+// summary (name, level type, level count) with an Edit button opening
+// FactorEditorDialog for real room -- levels used to be crammed into one
+// comma-separated text Input, which broke for any value containing a comma
+// and was unusable for a long-form level (e.g. a factor whose levels are
+// several different full system prompts).
 function FactorsEditor({ factors, onChange }: { factors: DesignFactor[]; onChange: (factors: DesignFactor[]) => void }) {
+  // index === null means "a new factor, not yet committed to factors[]" --
+  // Add factor opens the dialog directly instead of leaving a half-empty
+  // row in the list; Cancel just discards the draft with no mutation.
+  const [editingFactor, setEditingFactor] = useState<{ index: number | null; draft: DesignFactor } | null>(null)
+
+  function save(next: DesignFactor) {
+    if (!editingFactor) return
+    onChange(
+      editingFactor.index === null
+        ? [...factors, next]
+        : factors.map((f, j) => (j === editingFactor.index ? next : f)),
+    )
+  }
+
   return (
     <div className="space-y-2">
       {factors.map((factor, i) => (
-        <div key={i} className="flex items-start gap-1.5">
-          <Input
-            value={factor.name}
-            placeholder="Factor name"
-            className="w-28 shrink-0"
-            onChange={(e) => onChange(factors.map((f, j) => (j === i ? { ...f, name: e.target.value } : f)))}
-          />
-          <Input
-            value={levelsToText(factor.levels)}
-            placeholder="Levels (comma-separated)"
-            onChange={(e) => onChange(factors.map((f, j) => (j === i ? { ...f, levels: textToLevels(e.target.value) } : f)))}
-          />
+        <div key={i} className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium" title={factor.name}>
+              {factor.name || '(unnamed factor)'}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {factor.levels.length} level{factor.levels.length === 1 ? '' : 's'}
+            </p>
+          </div>
+          <Badge variant="outline">{LEVEL_TYPE_LABELS[levelTypeOf(factor)]}</Badge>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Edit factor"
+            onClick={() => setEditingFactor({ index: i, draft: factor })}
+          >
+            <Pencil className="size-3.5" />
+          </Button>
           <Button
             variant="ghost"
             size="icon-sm"
@@ -64,9 +75,24 @@ function FactorsEditor({ factors, onChange }: { factors: DesignFactor[]; onChang
           </Button>
         </div>
       ))}
-      <Button variant="outline" size="sm" onClick={() => onChange([...factors, { name: '', levels: [] }])}>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => setEditingFactor({ index: null, draft: { name: '', levels: [], level_type: 'string' } })}
+      >
         <Plus className="size-3.5" /> Add factor
       </Button>
+
+      {editingFactor && (
+        <FactorEditorDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setEditingFactor(null)
+          }}
+          factor={editingFactor.draft}
+          onSave={save}
+        />
+      )}
     </div>
   )
 }

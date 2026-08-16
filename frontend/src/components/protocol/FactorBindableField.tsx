@@ -7,20 +7,22 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { experimentsApi } from '@/api/client'
+import { FactorEditorDialog } from './FactorEditorDialog'
+import { parseLevelValue, type LevelType } from './factorLevels'
 import type { DesignFactor } from '@/types/experiments'
-
-type LevelType = 'number' | 'string' | 'boolean'
-
-function parseLevel(raw: string, type: LevelType): unknown {
-  return type === 'number' ? Number(raw) : raw
-}
 
 // Wraps a field's own Label+control (passed as children) with either a "+"
 // trigger (unbound) or a "Factor: {name}" badge + remove action (bound).
 // The factor itself lives on the linked experiment's design_spec.factors --
-// this component only owns the popover UI for declaring/removing one, plus
-// the node-side half of the binding (factor_bindings[fieldPath]) via
+// this component only owns the quick-create UI for declaring/removing one,
+// plus the node-side half of the binding (factor_bindings[fieldPath]) via
 // onBind/onUnbind, which the caller wires into its own node.data update.
+//
+// 'text' levelType (a long-form value, e.g. a full system prompt) escalates
+// straight to FactorEditorDialog instead of this popover's own one-line
+// Input rows -- string/number/boolean keep the popover, since it's already
+// adequate for short values and a handful of levels; rebuilding a UI that
+// already works for the common case would be disproportionate.
 export function FactorBindableField({
   experimentId,
   fieldPath,
@@ -52,19 +54,15 @@ export function FactorBindableField({
   })
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (next: DesignFactor) => {
       const experiment = experimentQuery.data ?? (await experimentsApi.get(experimentId!))
       const existingFactors = experiment.design_spec?.factors ?? []
-      const parsedLevels: unknown[] =
-        levelType === 'boolean' ? [true, false] : levels.filter((l) => l.trim() !== '').map((l) => parseLevel(l, levelType))
-      const nextFactors: DesignFactor[] = [
-        ...existingFactors.filter((f) => f.name !== factorName),
-        { name: factorName, levels: parsedLevels },
-      ]
+      const nextFactors: DesignFactor[] = [...existingFactors.filter((f) => f.name !== next.name), next]
       await experimentsApi.update(experimentId!, { design_spec: { ...experiment.design_spec, factors: nextFactors } })
+      return next
     },
-    onSuccess: () => {
-      onBind(factorName)
+    onSuccess: (next) => {
+      onBind(next.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
       setOpen(false)
     },
@@ -93,6 +91,29 @@ export function FactorBindableField({
             <Plus className="size-3.5" />
           </Button>
         </span>
+      </div>
+    )
+  }
+
+  if (levelType === 'text') {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        {children}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Make experimental factor"
+          title="Make experimental factor"
+          onClick={() => setOpen(true)}
+        >
+          <Plus className="size-3.5" />
+        </Button>
+        <FactorEditorDialog
+          open={open}
+          onOpenChange={setOpen}
+          factor={{ name: defaultLabel, levels: ['', ''], level_type: 'text' }}
+          onSave={(next) => saveMutation.mutate(next)}
+        />
       </div>
     )
   }
@@ -149,7 +170,18 @@ export function FactorBindableField({
               </Button>
             </div>
           )}
-          <Button size="sm" className="w-full" disabled={saveMutation.isPending || !factorName.trim()} onClick={() => saveMutation.mutate()}>
+          <Button
+            size="sm"
+            className="w-full"
+            disabled={saveMutation.isPending || !factorName.trim()}
+            onClick={() => {
+              const parsedLevels =
+                levelType === 'boolean'
+                  ? [true, false]
+                  : levels.filter((l) => l.trim() !== '').map((l) => parseLevelValue(l, levelType))
+              saveMutation.mutate({ name: factorName, levels: parsedLevels, level_type: levelType })
+            }}
+          >
             Save
           </Button>
         </PopoverContent>

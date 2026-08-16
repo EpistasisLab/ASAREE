@@ -1,6 +1,11 @@
 export interface DesignFactor {
   name: string
   levels: unknown[]
+  // Absent means 'string' -- factors created before this field existed keep
+  // working unchanged. Drives which control the factor editor renders per
+  // level (see components/protocol/factorLevels.ts); purely a frontend/UX
+  // concern, not enforced by the backend (design_spec is opaque JSONB).
+  level_type?: 'string' | 'text' | 'number' | 'boolean'
 }
 
 export interface DesignMetric {

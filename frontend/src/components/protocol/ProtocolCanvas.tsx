@@ -404,14 +404,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
     [runNodeMutation],
   )
-  // The canvas's per-node "Make experimental factor" icon (NodeHoverToolbar,
-  // every node type) -- a no-op without a linked experiment, since there's
-  // nothing to attach a factor to (matches FactorBindableField's own
-  // disabled state for the same case).
+  // The "Make experimental factor" icon inside Agent/Pattern's own inspector
+  // title (next to the node's name -- see those inspectors' own title prop)
+  // and Critic Gate's hover toolbar -- a no-op without a linked experiment,
+  // since there's nothing to attach a factor to (matches FactorBindableField's
+  // own disabled state for the same case). Deliberately does NOT clear
+  // selectedNodeId: the Agent/Pattern title button is called from WITHIN an
+  // already-open inspector for that same node, and closing it out from under
+  // the user just to open the factor picker on top would be a worse
+  // experience than the two dialogs simply stacking.
   const requestMakeFactor = useCallback(
     (nodeId: string) => {
       if (!experimentId) return
-      setSelectedNodeId(null)
       setAddPanelOpen(false)
       setFactorPickerNodeId(nodeId)
     },
@@ -906,6 +910,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               position: selectedNode.position,
               data: selectedNode.data as ReasonActPatternNodeData,
             }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onClose={() => setSelectedNodeId(null)}
           />
@@ -917,6 +923,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               position: selectedNode.position,
               data: selectedNode.data as SingleAgentBaselinePatternNodeData,
             }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onClose={() => setSelectedNodeId(null)}
           />

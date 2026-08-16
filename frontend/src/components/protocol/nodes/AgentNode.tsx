@@ -25,7 +25,7 @@ export function AgentNode({
 }) {
   const badge = nodeRunBadge(data.runStatus)
   const { updateNodeData } = useReactFlow()
-  const { requestRunNode, requestMakeFactor } = useProtocolCanvasActions()
+  const { requestRunNode } = useProtocolCanvasActions()
   const isActive = data.active ?? true
 
   return (
@@ -40,7 +40,6 @@ export function AgentNode({
         isActive={isActive}
         onToggleActive={() => updateNodeData(id, { active: !isActive })}
         runAlone={{ canRun: !!data.canRunAlone, onRun: () => requestRunNode(id) }}
-        onMakeFactor={() => requestMakeFactor(id)}
       />
       {badge && (
         <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>

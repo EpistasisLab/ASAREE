@@ -345,6 +345,7 @@ export interface ReasonActPatternConfig {
 export interface ReasonActPatternNodeData {
   label: string
   config: ReasonActPatternConfig
+  factor_bindings?: Record<string, string>
   [key: string]: unknown
 }
 
@@ -367,6 +368,7 @@ export interface SingleAgentBaselinePatternConfig {
 export interface SingleAgentBaselinePatternNodeData {
   label: string
   config: SingleAgentBaselinePatternConfig
+  factor_bindings?: Record<string, string>
   [key: string]: unknown
 }
 

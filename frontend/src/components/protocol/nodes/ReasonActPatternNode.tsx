@@ -21,7 +21,7 @@ export function ReasonActPatternNode({ id, data, selected }: NodeProps & { data:
   // toolbar instead. An unconnected/orphaned pattern node (dragged onto the
   // canvas but never wired) has nothing to swap, so it keeps plain Delete.
   const connections = useNodeConnections({ id, handleType: 'source', handleId: 'architectural_pattern' })
-  const { requestConnectorAdd, requestMakeFactor } = useProtocolCanvasActions()
+  const { requestConnectorAdd } = useProtocolCanvasActions()
   const targetAgentId = connections[0]?.target
 
   return (
@@ -39,7 +39,6 @@ export function ReasonActPatternNode({ id, data, selected }: NodeProps & { data:
           ? { label: 'Swap pattern', onSwap: () => requestConnectorAdd({ nodeId: targetAgentId, slot: 'architectural_pattern' }) }
           : undefined
       }
-      onMakeFactor={() => requestMakeFactor(id)}
     />
   )
 }

@@ -38,9 +38,12 @@ const LLM_NODE_TYPES = new Set(['llm_anthropic', 'llm_openai', 'llm_azure_foundr
 // LLM node's levels can be entirely different provider+model+credential
 // combinations, not just one scalar field varying inside an unchanging
 // node. These are additive to (and mutually exclusive with, see
-// unboundBindableFields) the ordinary per-field entries -- exposed only
-// through this Design-tab picker, not a new inline "+" on the node
-// inspectors themselves.
+// unboundBindableFields) the ordinary per-field entries. Each also has its
+// own inline "+" in its inspector (LlmNodeInspector's Credential row,
+// McpToolNodeInspector's Server row -- both via FactorBindableField, which
+// escalates straight to FactorEditorDialog for these 3 structured kinds),
+// same as every other field; the Design tab's picker is just the other
+// entry point onto the exact same binding.
 export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
   switch (node.type) {
     case 'agent':
@@ -87,6 +90,25 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       // ships as declared capability only, matching Memory's existing
       // status everywhere else in this codebase.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
+    // Each pattern node type's OWN config fields -- distinct from the
+    // agent's synthetic `pattern_override` above, which swaps the node TYPE
+    // entirely. These vary a single param while keeping the same pattern
+    // (e.g. how many iterations Reason+Act gets) -- already resolved
+    // correctly with zero backend changes, since _resolve_pattern_config
+    // reads the wired pattern node's own (already factor-patched) `data.config`
+    // verbatim.
+    case 'pattern_reason_act':
+      return [
+        { fieldPath: 'config.max_iterations', label: 'Max iterations', levelType: 'number' },
+        { fieldPath: 'config.include_scratchpad', label: 'Include scratchpad', levelType: 'boolean' },
+        { fieldPath: 'config.scratchpad_window', label: 'Scratchpad window', levelType: 'number' },
+        { fieldPath: 'config.observation_format', label: 'Observation format', levelType: 'string' },
+      ]
+    case 'pattern_single_agent_baseline':
+      return [
+        { fieldPath: 'config.max_iterations', label: 'Max iterations', levelType: 'number' },
+        { fieldPath: 'config.stop_on_first_success', label: 'Stop on first success', levelType: 'boolean' },
+      ]
     default:
       return []
   }

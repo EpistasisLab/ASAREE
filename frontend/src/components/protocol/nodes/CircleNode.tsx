@@ -23,7 +23,6 @@ export function CircleNode({
   dashed,
   warning,
   swap,
-  onMakeFactor,
 }: {
   id: string
   selected?: boolean
@@ -40,11 +39,10 @@ export function CircleNode({
   warning?: string
   // Passed straight through to NodeHoverToolbar -- see its own comment.
   swap?: { label: string; onSwap: () => void }
-  onMakeFactor?: () => void
 }) {
   return (
     <div className="group relative flex flex-col items-center">
-      <NodeHoverToolbar nodeId={id} swap={swap} onMakeFactor={onMakeFactor} />
+      <NodeHoverToolbar nodeId={id} swap={swap} />
       <div className="relative">
         <div
           style={cardAccent(accent)}

@@ -1,4 +1,5 @@
-import { Bot } from 'lucide-react'
+import { Bot, Variable } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -9,6 +10,7 @@ import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { NodeRunOutputPanel } from './NodeRunOutputPanel'
 import { OutputContractEditor } from './OutputContractEditor'
+import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import type { AgentNodeConfig, AgentNodeData, NodeRunState, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = hashToChartHue('agent')
@@ -43,6 +45,8 @@ export function AgentNodeInspector({
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
+  const { requestMakeFactor } = useProtocolCanvasActions()
+
   if (!node) return null
   const data = node.data
   const config = data.config
@@ -73,6 +77,15 @@ export function AgentNodeInspector({
         <>
           <Bot className="size-5" style={{ color: ACCENT }} />
           <EditableNodeTitle label={data.label} placeholder="Agent" onCommit={(label) => onChange(node.id, { ...data, label })} />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Make experimental factor"
+            title="Make experimental factor"
+            onClick={() => requestMakeFactor(node.id)}
+          >
+            <Variable className="size-4" />
+          </Button>
         </>
       }
       onDelete={() => onDelete(node.id)}

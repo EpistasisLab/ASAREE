@@ -21,7 +21,7 @@ export function SingleAgentBaselinePatternNode({
   // delete treatment, since an agent's execution pattern must never go to
   // zero.
   const connections = useNodeConnections({ id, handleType: 'source', handleId: 'architectural_pattern' })
-  const { requestConnectorAdd, requestMakeFactor } = useProtocolCanvasActions()
+  const { requestConnectorAdd } = useProtocolCanvasActions()
   const targetAgentId = connections[0]?.target
 
   return (
@@ -39,7 +39,6 @@ export function SingleAgentBaselinePatternNode({
           ? { label: 'Swap pattern', onSwap: () => requestConnectorAdd({ nodeId: targetAgentId, slot: 'architectural_pattern' }) }
           : undefined
       }
-      onMakeFactor={() => requestMakeFactor(id)}
     />
   )
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, X } from 'lucide-react'
+import { Plus, Variable, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,7 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { experimentsApi } from '@/api/client'
 import { FactorEditorDialog } from './FactorEditorDialog'
-import { computeFactorName, parseLevelValue, seedLevels, type LevelType } from './factorLevels'
+import { computeFactorName, isStructuredLevelType, parseLevelValue, seedLevels, seedStructuredLevels, type LevelType } from './factorLevels'
 import type { DesignFactor } from '@/types/experiments'
 
 // Wraps a field's own Label+control (passed as children) with either a "+"
@@ -19,11 +19,15 @@ import type { DesignFactor } from '@/types/experiments'
 // plus the node-side half of the binding (factor_bindings[fieldPath]) via
 // onBind/onUnbind, which the caller wires into its own node.data update.
 //
-// 'text' levelType (a long-form value, e.g. a full system prompt) escalates
-// straight to FactorEditorDialog instead of this popover's own one-line
-// Input rows -- string/number/boolean keep the popover, since it's already
-// adequate for short values and a handful of levels; rebuilding a UI that
-// already works for the common case would be disproportionate.
+// 'text' levelType (a long-form value, e.g. a full system prompt) and the 3
+// structured "whole node as a factor" kinds (llm_config/tool_config/pattern
+// -- see factorLevels.ts) escalate straight to FactorEditorDialog instead of
+// this popover's own one-line Input rows -- string/number/boolean keep the
+// popover, since it's already adequate for short values and a handful of
+// levels; rebuilding a UI that already works for the common case would be
+// disproportionate. The structured kinds also get the Variable icon instead
+// of Plus -- a visual cue that this binds the field's WHOLE value (an entire
+// node config), not one scalar the way every Plus-icon field here does.
 export function FactorBindableField({
   experimentId,
   // No longer read internally (the removed "Factor name" Input used to key
@@ -119,14 +123,15 @@ export function FactorBindableField({
         {children}
         <span title="This protocol has no linked experiment yet, so it has nothing to bind a factor to.">
           <Button variant="ghost" size="icon-sm" disabled aria-label="Make experimental factor">
-            <Plus className="size-3.5" />
+            {isStructuredLevelType(levelType) ? <Variable className="size-3.5" /> : <Plus className="size-3.5" />}
           </Button>
         </span>
       </div>
     )
   }
 
-  if (levelType === 'text') {
+  if (levelType === 'text' || isStructuredLevelType(levelType)) {
+    const structured = isStructuredLevelType(levelType)
     return (
       <div className="flex flex-wrap items-center gap-2">
         {children}
@@ -137,12 +142,16 @@ export function FactorBindableField({
           title="Make experimental factor"
           onClick={() => setOpen(true)}
         >
-          <Plus className="size-3.5" />
+          {structured ? <Variable className="size-3.5" /> : <Plus className="size-3.5" />}
         </Button>
         <FactorEditorDialog
           open={open}
           onOpenChange={setOpen}
-          factor={{ name: factorName, levels: seedLevels(currentValue), level_type: 'text' }}
+          factor={{
+            name: factorName,
+            levels: structured ? seedStructuredLevels(currentValue, levelType) : seedLevels(currentValue),
+            level_type: levelType,
+          }}
           onSave={(next) => saveMutation.mutate(next)}
         />
       </div>

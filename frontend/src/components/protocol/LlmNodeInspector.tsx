@@ -138,22 +138,34 @@ export function LlmNodeInspector({
       onClose={onClose}
     >
       <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1.5">
-          <Label>Credential</Label>
-          {credentialsQuery.isLoading ? (
-            <Skeleton className="h-8 w-full" />
-          ) : (
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full justify-between"
-              onClick={() => setCredentialDialogOpen(true)}
-            >
-              <span>{hasCredential ? `${meta.label} credential connected` : 'Set up credential'}</span>
-              {hasCredential && <Check className="size-4 text-[color:var(--chart-3)]" />}
-            </Button>
-          )}
-        </div>
+        <FactorBindableField
+          experimentId={experimentId}
+          fieldPath="config"
+          defaultLabel="Provider & model"
+          nodeLabel={factorNodeLabel}
+          levelType="llm_config"
+          currentValue={config}
+          boundFactorName={bindings.config}
+          onBind={(name) => bindFactor('config', name)}
+          onUnbind={() => unbindFactor('config')}
+        >
+          <div className="space-y-1.5">
+            <Label>Credential</Label>
+            {credentialsQuery.isLoading ? (
+              <Skeleton className="h-8 w-full" />
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full justify-between"
+                onClick={() => setCredentialDialogOpen(true)}
+              >
+                <span>{hasCredential ? `${meta.label} credential connected` : 'Set up credential'}</span>
+                {hasCredential && <Check className="size-4 text-[color:var(--chart-3)]" />}
+              </Button>
+            )}
+          </div>
+        </FactorBindableField>
         <FactorBindableField
           experimentId={experimentId}
           fieldPath="config.model"

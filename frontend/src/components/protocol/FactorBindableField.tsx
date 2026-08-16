@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { experimentsApi } from '@/api/client'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import { parseLevelValue, type LevelType } from './factorLevels'
@@ -41,6 +42,7 @@ export function FactorBindableField({
   defaultLabel,
   levelType,
   currentValue,
+  levelOptions,
   boundFactorName,
   onBind,
   onUnbind,
@@ -53,6 +55,15 @@ export function FactorBindableField({
   // The field's own current value, e.g. config.system_prompt -- omitted for
   // a boolean field, since its levels are always the fixed [true, false].
   currentValue?: unknown
+  // The field's own already-fetched choices (e.g. LlmNodeInspector's model/
+  // effort lists) -- when given, each level row renders as a Select over
+  // these exact values instead of a freeform Input, so a factor's levels
+  // can never drift from what the field itself actually accepts. Passed
+  // down from the caller's own already-cached query data; this component
+  // never fetches anything itself. Ignored when empty/omitted (falls back
+  // to the plain Input, e.g. Temperature, or Model before any credential
+  // exists to discover models from).
+  levelOptions?: { value: string; label: string }[]
   boundFactorName?: string
   onBind: (factorName: string) => void
   onUnbind: () => void
@@ -166,11 +177,44 @@ export function FactorBindableField({
               <Label>Levels</Label>
               {levels.map((level, i) => (
                 <div key={i} className="flex items-center gap-1.5">
-                  <Input
-                    type={levelType === 'number' ? 'number' : 'text'}
-                    value={level}
-                    onChange={(e) => setLevels((ls) => ls.map((l, j) => (j === i ? e.target.value : l)))}
-                  />
+                  {levelOptions && levelOptions.length > 0 ? (
+                    <Select
+                      value={level || '__none__'}
+                      onValueChange={(value) => {
+                        if (!value || value === '__none__') return
+                        setLevels((ls) => ls.map((l, j) => (j === i ? value : l)))
+                      }}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue>{() => levelOptions.find((o) => o.value === level)?.label ?? (level || 'Select…')}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__" disabled>
+                          Select…
+                        </SelectItem>
+                        {levelOptions.map((opt) => {
+                          // Grayed out, not removed -- picking the same value
+                          // for two levels of one factor is never meaningful
+                          // (it wouldn't vary anything between those cells),
+                          // but the option should still be visible so it's
+                          // clear why it's unavailable rather than silently
+                          // missing.
+                          const usedElsewhere = levels.some((l, j) => j !== i && l === opt.value)
+                          return (
+                            <SelectItem key={opt.value} value={opt.value} disabled={usedElsewhere}>
+                              {opt.label}
+                            </SelectItem>
+                          )
+                        })}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Input
+                      type={levelType === 'number' ? 'number' : 'text'}
+                      value={level}
+                      onChange={(e) => setLevels((ls) => ls.map((l, j) => (j === i ? e.target.value : l)))}
+                    />
+                  )}
                   <Button
                     variant="ghost"
                     size="icon-sm"

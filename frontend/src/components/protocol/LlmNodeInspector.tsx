@@ -132,6 +132,7 @@ export function LlmNodeInspector({
           defaultLabel="Model"
           levelType="string"
           currentValue={config.model}
+          levelOptions={models.length > 0 ? models.map((m) => ({ value: m.id, label: m.label ?? m.id })) : undefined}
           boundFactorName={bindings['config.model']}
           onBind={(name) => bindFactor('config.model', name)}
           onUnbind={() => unbindFactor('config.model')}
@@ -207,6 +208,7 @@ export function LlmNodeInspector({
             defaultLabel="Effort"
             levelType="string"
             currentValue={config.effort}
+            levelOptions={effortLevels.map((level) => ({ value: level, label: level }))}
             boundFactorName={bindings['config.effort']}
             onBind={(name) => bindFactor('config.effort', name)}
             onUnbind={() => unbindFactor('config.effort')}

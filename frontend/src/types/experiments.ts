@@ -45,7 +45,7 @@ export const COORDINATION_STRATEGY_CATALOG: {
   {
     slug: 'sequential',
     label: 'Sequential (default)',
-    description: "Today's pipeline handoff -- each agent's output becomes the next agent's input, in edge order.",
+    description: "Each agent's output becomes the next agent's input, following the canvas's own edges in order.",
     implemented: true,
   },
   {

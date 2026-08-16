@@ -48,8 +48,8 @@ export function MakeNodeFactorButton({ onClick }: { onClick: () => void }) {
   return (
     <TooltipProvider delay={200}>
       <Tooltip>
-        <TooltipTrigger render={<Button variant="outline" size="sm" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" onClick={onClick} />}>
-          <Variable className="size-3.5" />
+        <TooltipTrigger render={<Button variant="default" size="xs" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" onClick={onClick} />}>
+          <Variable className="size-3" />
           Make factor
         </TooltipTrigger>
         <TooltipContent>Bind one of this node's fields to an experimental factor</TooltipContent>
@@ -157,8 +157,8 @@ export function FactorBindableField({
     return children(
       <TooltipProvider delay={200}>
         <Tooltip>
-          <TooltipTrigger render={<Button variant="outline" size="sm" disabled className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" />}>
-            <Variable className="size-3.5" />
+          <TooltipTrigger render={<Button variant="default" size="xs" disabled className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" />}>
+            <Variable className="size-3" />
             Make factor
           </TooltipTrigger>
           <TooltipContent>This protocol has no linked experiment yet, so it has nothing to bind a factor to.</TooltipContent>
@@ -179,9 +179,9 @@ export function FactorBindableField({
           <TooltipProvider delay={200}>
             <Tooltip>
               <TooltipTrigger
-                render={<Button variant="outline" size="sm" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" onClick={() => setOpen(true)} />}
+                render={<Button variant="default" size="xs" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" onClick={() => setOpen(true)} />}
               >
-                <Variable className="size-3.5" />
+                <Variable className="size-3" />
                 Make factor
               </TooltipTrigger>
               <TooltipContent>{tooltipText}</TooltipContent>
@@ -213,9 +213,9 @@ export function FactorBindableField({
       <TooltipProvider delay={200}>
         <Tooltip>
           <TooltipTrigger
-            render={<PopoverTrigger render={<Button variant="outline" size="sm" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" />} />}
+            render={<PopoverTrigger render={<Button variant="default" size="xs" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" />} />}
           >
-            <Variable className="size-3.5" />
+            <Variable className="size-3" />
             Make factor
           </TooltipTrigger>
           <TooltipContent>{tooltipText}</TooltipContent>

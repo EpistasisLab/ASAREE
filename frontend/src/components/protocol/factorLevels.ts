@@ -35,9 +35,13 @@ export function levelTypeOf(factor: DesignFactor): LevelType {
 // this app (chart-3 = fully scored, chart-4 = generated-but-unscored,
 // chart-5 ≈ destructive's own hue, primary = every other button) -- fixed,
 // not hashed, since this identifies a category of action, not a
-// per-instance thing the way e.g. AgentCard's model-hue tint does.
-export const FACTOR_TRIGGER_CLASSNAME =
-  'border-[color:var(--chart-2)] text-[color:var(--chart-2)] shadow-[0_0_16px_-4px_var(--chart-2)] hover:bg-[color-mix(in_oklch,var(--chart-2),transparent_90%)] hover:text-[color:var(--chart-2)] hover:shadow-[0_0_20px_-3px_var(--chart-2)]'
+// per-instance thing the way e.g. AgentCard's model-hue tint does. Pairs
+// with the button's own `default` variant (bg-primary/text-primary-foreground/
+// border-transparent already come from that variant + the shared base
+// classes) -- this just overrides the background/glow color from primary
+// to chart-2, so it reads as solid and deliberate rather than a bordered
+// secondary action.
+export const FACTOR_TRIGGER_CLASSNAME = 'bg-chart-2 shadow-[0_0_16px_-4px_var(--chart-2)] hover:bg-chart-2/80 hover:shadow-[0_0_20px_-3px_var(--chart-2)]'
 
 export function parseLevelValue(raw: string, type: LevelType): unknown {
   return type === 'number' ? Number(raw) : raw

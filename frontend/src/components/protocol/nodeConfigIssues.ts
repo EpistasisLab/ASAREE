@@ -1,4 +1,6 @@
+import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
+import type { LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { DatasetNodeData, LlmNodeData, McpToolNodeData, ScriptNodeData } from '@/types/protocols'
 
 export interface NodeConfigIssue {
@@ -15,13 +17,18 @@ export interface NodeConfigIssue {
 // Mirrors the SAME cheap, synchronous presence checks each node's own
 // canvas card already computes for its own warning triangle (LlmNode.tsx/
 // McpToolNode.tsx/DatasetNode.tsx/ScriptNode.tsx) -- kept as a plain
-// duplicate rather than a shared import specifically because LlmNode's own
-// check is richer (it also validates the model against a live, query-
-// backed discovered list); this scan deliberately skips that part so
-// clicking Run never has to wait on a network round-trip first. A model
-// that's merely unset is still caught here, just not one that's set but
-// stale -- update both places together if these conditions ever change.
-export function findNodeConfigIssues(nodes: Node[], edges: Edge[]): NodeConfigIssue[] {
+// duplicate rather than a shared import specifically to avoid coupling this
+// module's shape to each node component's own render; update both places
+// together if these conditions ever change.
+//
+// `queryClient` lets the LLM check also catch a model that's SET but not
+// among the provider's own discovered list (LlmNode.tsx's own richer
+// check) -- read from cache only, via the exact same queryKey LlmNode.tsx
+// already populates by rendering on this same canvas, so this never fires
+// its own network request or makes clicking Run wait on one. A cache miss
+// (that query never ran, or hasn't resolved yet) just means "can't tell,"
+// same as LlmNode.tsx's own empty-list case -- not treated as an issue.
+export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: QueryClient): NodeConfigIssue[] {
   const agentIdsWithLlm = new Set(edges.filter((e) => e.targetHandle === 'llm').map((e) => e.target))
   const result: NodeConfigIssue[] = []
 
@@ -38,7 +45,15 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[]): NodeConfigIs
       case 'llm_openai':
       case 'llm_azure_foundry': {
         const config = (node.data as LlmNodeData).config
-        if (!config?.model) issues.push('No model set')
+        if (!config?.model) {
+          issues.push('No model set')
+        } else {
+          const cached = queryClient.getQueryData<LLMSettingModelsResponse>(['llm-settings', config.provider, 'models'])
+          const models = cached?.models ?? []
+          if (models.length > 0 && !models.some((m) => m.id === config.model)) {
+            issues.push(`"${config.model}" isn't a known model for this provider`)
+          }
+        }
         break
       }
       case 'mcp_tool': {

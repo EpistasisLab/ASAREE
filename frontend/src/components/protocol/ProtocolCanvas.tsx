@@ -335,7 +335,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // is a generic "one or more nodes failed" AFTER spending a real attempt.
   function requestRun() {
     setRunErrorDismissed(false)
-    const issues = findNodeConfigIssues(nodes, edges)
+    const issues = findNodeConfigIssues(nodes, edges, queryClient)
     if (issues.length > 0) {
       setPendingRunIssues(issues)
       return

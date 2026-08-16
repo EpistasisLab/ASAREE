@@ -21,6 +21,7 @@ from asaree.services.protocol_execution import (
     ProtocolValidationError,
     find_gated_pairs,
     plan_cell_runs,
+    plan_single_cell_run,
     topological_order,
     validate_coordination_strategy,
     validate_single_node_runnable,
@@ -85,6 +86,15 @@ class ProtocolRunResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class CreateProtocolRunRequest(BaseModel):
+    # Omitted/null -- today's ad-hoc, un-substituted whole-graph run. Set --
+    # runs that one already-generated cell for real, its own factor_values
+    # substituted in (see services.protocol_execution.plan_single_cell_run),
+    # the same as one entry of "Run all cells" but picked by name instead of
+    # running every not-yet-scored cell at once.
+    cell_label: str | None = None
 
 
 class CellRunBatchResponse(BaseModel):
@@ -172,17 +182,28 @@ async def delete_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db
 
 @router.post("/{protocol_id}/runs", response_model=ProtocolRunResponse, status_code=201)
 async def create_protocol_run_endpoint(
-    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession
+    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession, body: CreateProtocolRunRequest | None = None
 ) -> ProtocolRunResponse:
     protocol = await _get_owned_protocol(db, protocol_id, user)
+    cell_label = body.cell_label if body else None
     try:
-        topological_order(protocol.graph)
-        experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
-        design_spec = experiment.design_spec if experiment is not None else None
-        validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(protocol.graph)))
+        if cell_label:
+            run = await plan_single_cell_run(
+                db,
+                protocol_id=protocol_id,
+                experiment_id=protocol.experiment_id,
+                owner_id=user.id,
+                graph=protocol.graph,
+                cell_label=cell_label,
+            )
+        else:
+            topological_order(protocol.graph)
+            experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
+            design_spec = experiment.design_spec if experiment is not None else None
+            validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(protocol.graph)))
+            run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=user.id)
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=user.id)
     await enqueue_protocol_run(run.id)
     return ProtocolRunResponse.model_validate(run)
 

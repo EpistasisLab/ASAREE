@@ -66,11 +66,14 @@ class Protocols:
     def delete(self, protocol_id: ResourceId) -> None:
         self._client._delete(f"/protocols/{protocol_id}")
 
-    def run(self, protocol_id: ResourceId) -> ProtocolRun:
+    def run(self, protocol_id: ResourceId, *, cell_label: str | None = None) -> ProtocolRun:
         """Compile and run this protocol's current graph -- 422 if it's
         empty or has a cycle. Returns immediately with status "pending";
-        poll with get_run."""
-        data = self._client._post(f"/protocols/{protocol_id}/runs")
+        poll with get_run. ``cell_label`` runs that one already-generated
+        cell for real (its own factor_values substituted in) instead of
+        today's ad-hoc, un-substituted whole-graph run."""
+        payload = {"cell_label": cell_label} if cell_label is not None else {}
+        data = self._client._post(f"/protocols/{protocol_id}/runs", json=payload)
         return ProtocolRun(**data)
 
     def get_run(self, protocol_id: ResourceId, run_id: ResourceId) -> ProtocolRun:

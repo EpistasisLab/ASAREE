@@ -33,7 +33,7 @@ from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.experiments import get_experiment
-from asaree.services.factorial_cells import list_cells, upsert_cell
+from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
 from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, set_status, update_node_run
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
@@ -1153,6 +1153,49 @@ async def plan_cell_runs(
         for cell in pending
     ]
     return runs, len(cells) - len(pending)
+
+
+async def plan_single_cell_run(
+    db: AsyncSession,
+    *,
+    protocol_id: uuid.UUID,
+    experiment_id: uuid.UUID | None,
+    owner_id: uuid.UUID,
+    graph: dict[str, Any],
+    cell_label: str,
+) -> ProtocolRun:
+    """Run one already-generated cell for real, by name -- the single-cell
+    counterpart to plan_cell_runs's own "every not-yet-scored cell" batch.
+    The canvas's own Run button offers this alongside its existing ad-hoc
+    (no substitution) run once the linked experiment has generated cells,
+    for testing one specific factor combination without either running
+    everything or falling back to an un-substituted smoke test. Same
+    validation as plan_cell_runs (linked experiment, valid graph, exactly
+    one sink, coordination strategy) but does NOT skip an already-scored
+    cell -- picking one specific cell by name is a deliberate re-run, not a
+    batch resume, so there's nothing to protect it from."""
+    if experiment_id is None:
+        raise ProtocolValidationError("This protocol has no linked experiment to run a cell for.")
+    topological_order(graph)  # raises ProtocolValidationError on a cycle/empty graph
+    sinks = sink_node_ids(graph)
+    if len(sinks) != 1:
+        raise ProtocolValidationError(
+            f"This protocol must have exactly one final node to run per experimental cell (found {len(sinks)})."
+        )
+    experiment = await get_experiment(db, experiment_id)
+    design_spec = experiment.design_spec if experiment is not None else None
+    validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(graph)))
+
+    cell = await get_cell(db, experiment_id=experiment_id, cell_label=cell_label)
+    if cell is None:
+        raise ProtocolValidationError(f"No such cell: {cell_label!r}")
+    return await create_protocol_run(
+        db,
+        protocol_id=protocol_id,
+        owner_id=owner_id,
+        cell_label=cell.cell_label,
+        factor_values=cell.factor_values or {},
+    )
 
 
 def validate_single_node_runnable(graph: dict[str, Any], node_id: str) -> dict[str, Any]:

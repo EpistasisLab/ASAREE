@@ -20,6 +20,7 @@ from asaree.services.protocol_execution import (
     apply_factor_bindings,
     find_gated_pairs,
     plan_cell_runs,
+    plan_single_cell_run,
     sink_node_ids,
     topological_order,
     validate_coordination_strategy,
@@ -631,6 +632,99 @@ async def test_plan_cell_runs_creates_one_run_per_pending_cell_skips_scored(owne
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRuns
+            await delete_experiment(db, experiment_id)
+
+
+async def test_plan_single_cell_run_raises_without_experiment(owner_id: uuid.UUID) -> None:
+    graph = _graph(["a", "b"], [("a", "b")])
+    async with get_session() as db:
+        with pytest.raises(ProtocolValidationError, match="no linked experiment"):
+            await plan_single_cell_run(
+                db, protocol_id=uuid.uuid4(), experiment_id=None, owner_id=owner_id, graph=graph, cell_label="cell-1"
+            )
+
+
+async def test_plan_single_cell_run_raises_on_multi_sink_graph(owner_id: uuid.UUID) -> None:
+    graph = _graph(["a", "b", "c"], [("a", "b"), ("a", "c")])
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"single-cell-multisink-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+    try:
+        async with get_session() as db:
+            with pytest.raises(ProtocolValidationError, match="exactly one final node"):
+                await plan_single_cell_run(
+                    db,
+                    protocol_id=uuid.uuid4(),
+                    experiment_id=experiment_id,
+                    owner_id=owner_id,
+                    graph=graph,
+                    cell_label="cell-1",
+                )
+    finally:
+        async with get_session() as db:
+            await delete_experiment(db, experiment_id)
+
+
+async def test_plan_single_cell_run_raises_on_unknown_cell_label(owner_id: uuid.UUID) -> None:
+    graph = _graph(["a", "b"], [("a", "b")])
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"single-cell-unknown-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db, name=f"single-cell-unknown-protocol-{uuid.uuid4().hex}", owner_id=owner_id, experiment_id=experiment_id
+        )
+        protocol_id = protocol.id
+    try:
+        async with get_session() as db:
+            with pytest.raises(ProtocolValidationError, match="No such cell"):
+                await plan_single_cell_run(
+                    db,
+                    protocol_id=protocol_id,
+                    experiment_id=experiment_id,
+                    owner_id=owner_id,
+                    graph=graph,
+                    cell_label="does-not-exist",
+                )
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+            await delete_experiment(db, experiment_id)
+
+
+async def test_plan_single_cell_run_does_not_skip_an_already_scored_cell(owner_id: uuid.UUID) -> None:
+    graph = _graph(["a", "b"], [("a", "b")])
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"single-cell-scored-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db, name=f"single-cell-scored-protocol-{uuid.uuid4().hex}", owner_id=owner_id, experiment_id=experiment_id
+        )
+        protocol_id = protocol.id
+        # Already scored -- plan_cell_runs would skip this one; picking it by
+        # name is a deliberate re-run, so plan_single_cell_run must not.
+        await upsert_cell(
+            db,
+            experiment_id=experiment_id,
+            cell_label="cell-1",
+            fields={"factor_values": {"x": 1}, "metric_values": {"roc_auc": 0.9}},
+        )
+
+    try:
+        async with get_session() as db:
+            run = await plan_single_cell_run(
+                db,
+                protocol_id=protocol_id,
+                experiment_id=experiment_id,
+                owner_id=owner_id,
+                graph=graph,
+                cell_label="cell-1",
+            )
+        assert run.protocol_id == protocol_id
+        assert run.cell_label == "cell-1"
+        assert run.factor_values == {"x": 1}
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
             await delete_experiment(db, experiment_id)
 
 

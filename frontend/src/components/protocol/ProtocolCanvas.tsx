@@ -18,6 +18,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { Play, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { newNodeId } from '@/lib/nodeId'
 import { protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
@@ -303,6 +304,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // that's likely to just fail doesn't happen silently.
   const [pendingRunIssues, setPendingRunIssues] = useState<NodeConfigIssue[] | null>(null)
   const [runId, setRunId] = useState<string | null>(null)
+  // null -- today's ad-hoc, un-substituted whole-graph run (the only option
+  // before any cells exist). Set -- runs that one already-generated cell for
+  // real, its own factor_values substituted in (see
+  // services.protocol_execution.plan_single_cell_run), picked from the
+  // dropdown next to the Run button.
+  const [selectedCellLabel, setSelectedCellLabel] = useState<string | null>(null)
+  const cellsQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'cells'],
+    queryFn: () => experimentsApi.listCells(experimentId!),
+    enabled: !!experimentId,
+  })
+  const cellOptions = cellsQuery.data ?? []
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
 
@@ -323,7 +336,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const onConnect = useCallback((connection: Connection) => setEdges((eds) => addEdge(connection, eds)), [setEdges])
 
   const runMutation = useMutation({
-    mutationFn: () => protocolsApi.run(protocolId),
+    mutationFn: () => protocolsApi.run(protocolId, selectedCellLabel),
     onSuccess: (run) => setRunId(run.id),
   })
 
@@ -964,9 +977,27 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             )
           })()}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
+            {cellOptions.length > 0 && (
+              <Select
+                value={selectedCellLabel ?? '__adhoc__'}
+                onValueChange={(value) => setSelectedCellLabel(value === '__adhoc__' ? null : value)}
+              >
+                <SelectTrigger size="sm" className="w-40">
+                  <SelectValue>{(value: string) => (value === '__adhoc__' ? 'Ad-hoc run' : value)}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__adhoc__">Ad-hoc run</SelectItem>
+                  {cellOptions.map((cell) => (
+                    <SelectItem key={cell.cell_label} value={cell.cell_label}>
+                      {cell.cell_label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             <Button size="sm" disabled={isRunning} onClick={requestRun}>
               <Play className="size-4" />
-              {isRunning ? 'Running…' : 'Run'}
+              {isRunning ? 'Running…' : selectedCellLabel ? `Run cell: ${selectedCellLabel}` : 'Run'}
             </Button>
             <Button
               size="icon"

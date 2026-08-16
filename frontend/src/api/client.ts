@@ -198,8 +198,11 @@ export const protocolsApi = {
     request<Protocol>(`/protocols/${id}`, { method: 'PATCH', body: data }),
   remove: (id: string) => request<void>(`/protocols/${id}`, { method: 'DELETE' }),
   // 422 if the graph is empty or has a cycle -- returns immediately with
-  // status "pending"; poll getRun for progress.
-  run: (id: string) => request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST' }),
+  // status "pending"; poll getRun for progress. cellLabel runs that one
+  // already-generated cell for real (its own factor_values substituted in)
+  // instead of today's ad-hoc, un-substituted whole-graph run.
+  run: (id: string, cellLabel?: string | null) =>
+    request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST', body: { cell_label: cellLabel ?? null } }),
   // The per-node Play icon -- 422 if the node has upstream input or isn't a
   // runnable Agent (see validate_single_node_runnable). Same polling shape
   // as a plain run (getRun), just with node_runs carrying only this one key.

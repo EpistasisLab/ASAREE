@@ -321,8 +321,11 @@ export function LlmNodeInspector({
                 id="llm-max-tokens"
                 type="number"
                 min="1"
+                max="200000"
                 value={config.max_tokens}
-                onChange={(e) => patchConfig({ max_tokens: Number(e.target.value) })}
+                onChange={(e) =>
+                  patchConfig({ max_tokens: Math.min(200000, Math.max(1, Math.trunc(Number(e.target.value)) || 1)) })
+                }
               />
             </div>
           )}

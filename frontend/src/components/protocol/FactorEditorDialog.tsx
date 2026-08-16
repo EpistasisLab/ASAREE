@@ -132,8 +132,11 @@ function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChan
           className="h-8"
           type="number"
           min="1"
+          max="200000"
           value={(value.max_tokens as number | undefined) ?? ''}
-          onChange={(e) => patch({ max_tokens: Number(e.target.value) })}
+          onChange={(e) =>
+            patch({ max_tokens: Math.min(200000, Math.max(1, Math.trunc(Number(e.target.value)) || 1)) })
+          }
         />
       </div>
     </div>

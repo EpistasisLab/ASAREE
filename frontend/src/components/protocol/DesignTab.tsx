@@ -374,7 +374,14 @@ export function DesignTab({
       </div>
 
       <div className="space-y-1.5">
-        <Label>Coordination strategy</Label>
+        <Label className="flex items-center gap-1.5">
+          Coordination strategy
+          <InfoTooltip>
+            Declares how the agents in this protocol work together as a multi-agent system -- separate from the
+            canvas graph itself, which only wires connections. The graph must actually match whatever you pick here
+            (e.g. "Critic Gate" requires a real Critic Gate node wired in) or running the protocol is rejected.
+          </InfoTooltip>
+        </Label>
         <Select value={coordinationSlug} onValueChange={(value) => value && setCoordinationSlug(value as CoordinationStrategySlug)}>
           <SelectTrigger className="w-full">
             <SelectValue>{() => selectedStrategy?.label ?? coordinationSlug}</SelectValue>
@@ -470,13 +477,13 @@ export function DesignTab({
 
       <div className="space-y-1.5 rounded-md border bg-muted/30 px-3 py-2">
         <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
-          {validFactors.length} factor{validFactors.length === 1 ? '' : 's'} → {combinations} condition
+          {validFactors.length} factor{validFactors.length === 1 ? '' : 's'} → {combinations} cell
           {combinations === 1 ? '' : 's'} × {Math.max(replicates, 1)} replicate{replicates === 1 ? '' : 's'} = {totalTrials} total
           trial{totalTrials === 1 ? '' : 's'}
           <InfoTooltip>
-            A "condition" here is one specific combination of factor levels (e.g. Model=A × Effort=medium) -- the
-            same thing the Cells tab calls a cell, before replication. 2 factors with 2 levels each = 4 conditions;
-            × replicates = total trials.
+            A "cell" here is one specific combination of factor levels (e.g. Model=A × Effort=medium) -- same term
+            as the Cells tab, before replication. 2 factors with 2 levels each = 4 cells; × replicates = total
+            trials.
           </InfoTooltip>
         </p>
         <Button size="sm" variant="outline" disabled={generateMutation.isPending || isDirty || validFactors.length === 0} onClick={() => generateMutation.mutate()}>

@@ -273,6 +273,19 @@ def _node_display_name(node: dict[str, Any]) -> str:
     return node_id if isinstance(node_id, str) else "node"
 
 
+def _default_system_prompt(label: str | None, placeholder: str) -> str:
+    """ASAREE's own explicit default for a blank System Prompt field --
+    used in place of just passing agentic-core's own create_agent/
+    update_agent an empty string, which would otherwise fall back to
+    ``f"You are {name}. {description}"`` using `agent_name`, an internal
+    "protocol-{protocol_id}-{node_id}" bookkeeping id no user ever sees,
+    not this node's own canvas identity. `placeholder` matches whichever
+    fallback text the node's own canvas card already shows when unlabeled
+    (AgentNode.tsx's "Agent", CriticGateNode.tsx's "Critic Gate"), so an
+    unlabeled, unconfigured node's default prompt still reads sensibly."""
+    return f"You are {label or placeholder}."
+
+
 def _adjacency(
     graph: dict[str, Any],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, list[str]], dict[str, list[str]]]:
@@ -814,6 +827,11 @@ async def _run_agent_node(
     label = node.get("data", {}).get("label")
     if label:
         description = f"{description} (canvas label: {label})".strip()
+    # Explicit, ASAREE-owned default -- agentic-core's own fallback
+    # ("You are {name}. {description}") would use `agent_name` here, an
+    # internal "protocol-{protocol_id}-{node_id}" bookkeeping id no user
+    # ever sees, not this agent's actual canvas identity.
+    system_prompt = config.get("system_prompt") or _default_system_prompt(label, "Agent")
 
     existing = await get_agent_by_name(agent_name, owner_id=owner_id)
     if existing is not None:
@@ -821,7 +839,7 @@ async def _run_agent_node(
             existing.id,
             goal=config.get("goal") or "",
             description=description,
-            system_prompt=config.get("system_prompt") or "",
+            system_prompt=system_prompt,
             model_config=model_config,
             pattern_config=pattern_config,
             tool_config=tool_config,
@@ -834,7 +852,7 @@ async def _run_agent_node(
             name=agent_name,
             goal=config.get("goal") or "",
             description=description,
-            system_prompt=config.get("system_prompt") or "",
+            system_prompt=system_prompt,
             model_config=model_config,
             pattern_config=pattern_config,
             tool_config=tool_config,
@@ -903,6 +921,7 @@ async def _run_critic(
     label = gate.get("data", {}).get("label")
     if label:
         description = f"{description} (canvas label: {label})".strip()
+    system_prompt = config.get("system_prompt") or _default_system_prompt(label, "Critic Gate")
     tool_config: dict[str, list[str]] = {"server_names": [], "tool_names": []}
 
     existing = await get_agent_by_name(agent_name, owner_id=owner_id)
@@ -911,7 +930,7 @@ async def _run_critic(
             existing.id,
             goal=goal,
             description=description,
-            system_prompt=config.get("system_prompt") or "",
+            system_prompt=system_prompt,
             model_config=model_config,
             pattern_config=pattern_config,
             tool_config=tool_config,
@@ -922,7 +941,7 @@ async def _run_critic(
             name=agent_name,
             goal=goal,
             description=description,
-            system_prompt=config.get("system_prompt") or "",
+            system_prompt=system_prompt,
             model_config=model_config,
             pattern_config=pattern_config,
             tool_config=tool_config,

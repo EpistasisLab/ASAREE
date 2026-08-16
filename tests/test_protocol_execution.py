@@ -756,6 +756,17 @@ def test_compute_workspace_id_none_without_experiment_id() -> None:
     assert pe._compute_workspace_id(None, "some-cell", uuid.uuid4()) is None
 
 
+def test_default_system_prompt_uses_the_node_own_label() -> None:
+    # ASAREE's own explicit default -- never agentic-core's own fallback,
+    # which would use the internal "protocol-{id}-{id}" agent_name instead.
+    assert pe._default_system_prompt("SF-DC", "Agent") == "You are SF-DC."
+
+
+def test_default_system_prompt_falls_back_to_the_placeholder_when_unlabeled() -> None:
+    assert pe._default_system_prompt(None, "Agent") == "You are Agent."
+    assert pe._default_system_prompt("", "Critic Gate") == "You are Critic Gate."
+
+
 def test_is_node_active_defaults_true_when_absent() -> None:
     assert pe._is_node_active(_node("a", "agent")) is True
 

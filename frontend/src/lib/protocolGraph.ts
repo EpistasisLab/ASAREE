@@ -1,6 +1,17 @@
 import type { Edge, Node } from '@xyflow/react'
 import type { AgentNodeData, CriticGateNodeData, McpToolNodeData, ProtocolGraph } from '@/types/protocols'
 
+// The shared react-query key ProtocolCanvas.tsx mirrors its own live
+// nodes/edges into on every change (no debounce -- a pure in-memory cache
+// write, not a network call) and DesignTab.tsx reads from -- this is how
+// the Design tab's "Add factor" picker sees the canvas's current state
+// without waiting for the 800ms autosave round-trip, and without either
+// side needing to know about the other's internals. Kept in one place so
+// both sides can never drift onto different keys by accident.
+export function protocolGraphQueryKey(protocolId: string) {
+  return ['protocol-graph', protocolId] as const
+}
+
 // Only durable fields are persisted -- xyflow annotates nodes/edges with
 // ephemeral UI state (selected, dragging, measured dimensions) that has no
 // meaning once reloaded from the backend. Shared by ProtocolCanvas.tsx's own

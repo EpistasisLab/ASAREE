@@ -71,6 +71,7 @@ export function CriticGateNodeInspector({
           experimentId={experimentId}
           fieldPath="config.enabled"
           defaultLabel="Critic enabled"
+          nodeLabel={data.label || 'Critic Gate'}
           levelType="boolean"
           boundFactorName={bindings['config.enabled']}
           onBind={(name) => bindFactor('config.enabled', name)}

@@ -1,7 +1,9 @@
+import type { RefObject } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DesignTab } from './DesignTab'
+import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import { ResultsTab } from './ResultsTab'
 import { RunsTab } from './RunsTab'
 import type { Experiment } from '@/types/experiments'
@@ -15,10 +17,12 @@ import type { Experiment } from '@/types/experiments'
 export function ExperimentSidePanel({
   experiment,
   protocolId,
+  canvasRef,
   isLoading,
 }: {
   experiment: Experiment | undefined
   protocolId: string | undefined
+  canvasRef: RefObject<ProtocolCanvasHandle | null>
   isLoading: boolean
 }) {
   return (
@@ -43,7 +47,7 @@ export function ExperimentSidePanel({
               TabsContent (the one bounded box), not on a nested div inside
               it, so there's exactly one scroll container per tab. */}
           <TabsContent value="design" className="min-h-0 flex-1 overflow-y-auto">
-            <DesignTab experiment={experiment} />
+            <DesignTab experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} />
           </TabsContent>
 
           <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto">

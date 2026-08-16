@@ -150,6 +150,7 @@ export function LlmNodeInspector({
           experimentId={experimentId}
           fieldPath="config.model"
           defaultLabel="Model"
+          nodeLabel={data.label || meta.label}
           levelType="string"
           currentValue={config.model}
           levelOptions={models.length > 0 ? models.map((m) => ({ value: m.id, label: m.label ?? m.id })) : undefined}
@@ -201,6 +202,7 @@ export function LlmNodeInspector({
             experimentId={experimentId}
             fieldPath="config.temperature"
             defaultLabel="Temperature"
+            nodeLabel={data.label || meta.label}
             levelType="number"
             currentValue={config.temperature}
             boundFactorName={bindings['config.temperature']}
@@ -226,6 +228,7 @@ export function LlmNodeInspector({
             experimentId={experimentId}
             fieldPath="config.effort"
             defaultLabel="Effort"
+            nodeLabel={data.label || meta.label}
             levelType="string"
             currentValue={config.effort}
             levelOptions={effortLevels.map((level) => ({ value: level, label: level }))}
@@ -261,6 +264,7 @@ export function LlmNodeInspector({
           experimentId={experimentId}
           fieldPath="config.max_tokens"
           defaultLabel="Max tokens"
+          nodeLabel={data.label || meta.label}
           levelType="number"
           currentValue={config.max_tokens}
           boundFactorName={bindings['config.max_tokens']}

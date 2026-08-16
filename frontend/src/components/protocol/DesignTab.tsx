@@ -1,15 +1,20 @@
-import { useEffect, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState, type RefObject } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { Edge, Node } from '@xyflow/react'
 import { Pencil, Plus, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { experimentsApi } from '@/api/client'
+import { experimentsApi, protocolsApi } from '@/api/client'
+import { protocolGraphQueryKey } from '@/lib/protocolGraph'
+import { unboundBindableFields, type UnboundField } from './bindableFields'
+import { computeFactorName, defaultLevelsForType, LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
 import { FactorEditorDialog } from './FactorEditorDialog'
-import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
+import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import {
   COORDINATION_STRATEGY_CATALOG,
   type CoordinationStrategySlug,
@@ -17,6 +22,125 @@ import {
   type DesignMetric,
   type Experiment,
 } from '@/types/experiments'
+
+// Creating a factor is the one action here that ISN'T staged into the local
+// draft + explicit "Save design" flow the rest of this tab uses -- it's a
+// two-sided write (design_spec.factors AND the canvas node's own
+// factor_bindings) that has to land atomically, so it mirrors
+// FactorBindableField's own existing immediate-save popover instead. The
+// canvas write goes through canvasRef (see ProtocolCanvas.tsx's own comment
+// on ProtocolCanvasHandle) since DesignTab is a sibling of ProtocolCanvas,
+// not a descendant, and has no other way to reach its live node state; the
+// list of what's bindable comes from the same shared query cache
+// (protocolGraphQueryKey) ProtocolCanvas mirrors its own nodes into on every
+// change, so this never lags behind the canvas waiting on autosave.
+function AddFactorPopover({
+  experiment,
+  protocolId,
+  canvasRef,
+  existingNames,
+}: {
+  experiment: Experiment
+  protocolId: string | undefined
+  canvasRef: RefObject<ProtocolCanvasHandle | null>
+  existingNames: string[]
+}) {
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<{ field: UnboundField; factor: DesignFactor } | null>(null)
+  const queryClient = useQueryClient()
+
+  const graphQuery = useQuery({
+    queryKey: protocolGraphQueryKey(protocolId ?? 'none'),
+    queryFn: async () => {
+      if (!protocolId) return { nodes: [] as Node[], edges: [] as Edge[] }
+      const protocol = await protocolsApi.get(protocolId)
+      return { nodes: protocol.graph.nodes as Node[], edges: protocol.graph.edges as Edge[] }
+    },
+    enabled: !!protocolId && open,
+    // Only ever a fallback for before ProtocolCanvas has mounted and mirrored
+    // its own live state into this same key -- once it has, this key is only
+    // ever updated by that mirror (a pure in-memory write), never a real
+    // background refetch racing it with a stale server snapshot.
+    staleTime: Infinity,
+  })
+
+  const createMutation = useMutation({
+    mutationFn: async (next: DesignFactor) => {
+      // Fetched fresh (not the local staged draft) -- matches
+      // FactorBindableField's own existing save mutation exactly, including
+      // its same pre-existing risk of racing a concurrent unsaved edit
+      // elsewhere on this tab (see FactorEditorDialog.tsx's design notes).
+      const fresh = await experimentsApi.get(experiment.id)
+      const nextFactors = [...(fresh.design_spec?.factors ?? []), next]
+      await experimentsApi.update(experiment.id, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
+      return next
+    },
+    onSuccess: (next) => {
+      if (editing) canvasRef.current?.bindFactor(editing.field.nodeId, editing.field.fieldPath, next.name)
+      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id] })
+      setEditing(null)
+    },
+  })
+
+  const fields = unboundBindableFields(graphQuery.data?.nodes ?? [])
+
+  return (
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          render={
+            <Button variant="outline" size="sm">
+              <Plus className="size-3.5" /> Add factor
+            </Button>
+          }
+        />
+        <PopoverContent className="space-y-1.5">
+          <Label>Bind a field on the canvas</Label>
+          {graphQuery.isLoading ? (
+            <p className="text-xs text-muted-foreground">Loading canvas…</p>
+          ) : fields.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              Every bindable field on the canvas is already a factor -- or there's nothing bindable on it yet.
+            </p>
+          ) : (
+            <div className="max-h-64 space-y-0.5 overflow-y-auto">
+              {fields.map((field) => (
+                <button
+                  key={`${field.nodeId}.${field.fieldPath}`}
+                  type="button"
+                  className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
+                  onClick={() => {
+                    const name = computeFactorName(field.nodeLabel, field.fieldLabel, existingNames)
+                    setEditing({ field, factor: { name, levels: defaultLevelsForType(field.levelType), level_type: field.levelType } })
+                    setOpen(false)
+                  }}
+                >
+                  <span className="truncate">
+                    {field.nodeLabel}: {field.fieldLabel}
+                  </span>
+                  <Badge variant="outline" className="shrink-0">
+                    {LEVEL_TYPE_LABELS[field.levelType]}
+                  </Badge>
+                </button>
+              ))}
+            </div>
+          )}
+        </PopoverContent>
+      </Popover>
+
+      {editing && (
+        <FactorEditorDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setEditing(null)
+          }}
+          factor={editing.factor}
+          onSave={(next) => createMutation.mutate(next)}
+        />
+      )}
+    </>
+  )
+}
 
 // The Design tab's own factors editor -- the canonical place to view/edit
 // every declared factor at once, regardless of how it was originally
@@ -29,19 +153,24 @@ import {
 // comma-separated text Input, which broke for any value containing a comma
 // and was unusable for a long-form level (e.g. a factor whose levels are
 // several different full system prompts).
-function FactorsEditor({ factors, onChange }: { factors: DesignFactor[]; onChange: (factors: DesignFactor[]) => void }) {
-  // index === null means "a new factor, not yet committed to factors[]" --
-  // Add factor opens the dialog directly instead of leaving a half-empty
-  // row in the list; Cancel just discards the draft with no mutation.
-  const [editingFactor, setEditingFactor] = useState<{ index: number | null; draft: DesignFactor } | null>(null)
+function FactorsEditor({
+  experiment,
+  protocolId,
+  canvasRef,
+  factors,
+  onChange,
+}: {
+  experiment: Experiment
+  protocolId: string | undefined
+  canvasRef: RefObject<ProtocolCanvasHandle | null>
+  factors: DesignFactor[]
+  onChange: (factors: DesignFactor[]) => void
+}) {
+  const [editingFactor, setEditingFactor] = useState<{ index: number; draft: DesignFactor } | null>(null)
 
   function save(next: DesignFactor) {
     if (!editingFactor) return
-    onChange(
-      editingFactor.index === null
-        ? [...factors, next]
-        : factors.map((f, j) => (j === editingFactor.index ? next : f)),
-    )
+    onChange(factors.map((f, j) => (j === editingFactor.index ? next : f)))
   }
 
   return (
@@ -75,13 +204,7 @@ function FactorsEditor({ factors, onChange }: { factors: DesignFactor[]; onChang
           </Button>
         </div>
       ))}
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => setEditingFactor({ index: null, draft: { name: '', levels: [], level_type: 'string' } })}
-      >
-        <Plus className="size-3.5" /> Add factor
-      </Button>
+      <AddFactorPopover experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} existingNames={factors.map((f) => f.name)} />
 
       {editingFactor && (
         <FactorEditorDialog
@@ -153,7 +276,15 @@ function MetricsEditor({ metrics, onChange }: { metrics: DesignMetric[]; onChang
 // strategy). Edited as one local draft, persisted with a single explicit
 // Save (matching FactorBindableField's own explicit-Save convention) rather
 // than autosaving every keystroke across this many fields.
-export function DesignTab({ experiment }: { experiment: Experiment }) {
+export function DesignTab({
+  experiment,
+  protocolId,
+  canvasRef,
+}: {
+  experiment: Experiment
+  protocolId: string | undefined
+  canvasRef: RefObject<ProtocolCanvasHandle | null>
+}) {
   const queryClient = useQueryClient()
 
   const [hypothesis, setHypothesis] = useState(experiment.hypothesis ?? '')
@@ -255,7 +386,13 @@ export function DesignTab({ experiment }: { experiment: Experiment }) {
 
       <div className="space-y-1.5">
         <Label>Factors and levels</Label>
-        <FactorsEditor factors={factors} onChange={setFactors} />
+        <FactorsEditor
+          experiment={experiment}
+          protocolId={protocolId}
+          canvasRef={canvasRef}
+          factors={factors}
+          onChange={setFactors}
+        />
       </div>
 
       <div className="space-y-1.5">

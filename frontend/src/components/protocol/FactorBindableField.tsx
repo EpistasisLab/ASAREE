@@ -9,7 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { experimentsApi } from '@/api/client'
 import { FactorEditorDialog } from './FactorEditorDialog'
-import { parseLevelValue, type LevelType } from './factorLevels'
+import { computeFactorName, parseLevelValue, type LevelType } from './factorLevels'
 import type { DesignFactor } from '@/types/experiments'
 
 // Seeds a fresh factor's first level with the field's own current value --
@@ -38,8 +38,12 @@ function seedLevels(currentValue: unknown): string[] {
 // already works for the common case would be disproportionate.
 export function FactorBindableField({
   experimentId,
-  fieldPath,
+  // No longer read internally (the removed "Factor name" Input used to key
+  // its id off this) -- kept in the prop signature since every call site
+  // still passes it to document which field this instance guards.
+  fieldPath: _fieldPath,
   defaultLabel,
+  nodeLabel,
   levelType,
   currentValue,
   levelOptions,
@@ -51,6 +55,11 @@ export function FactorBindableField({
   experimentId: string | null
   fieldPath: string
   defaultLabel: string
+  // The owning node's own current display label (e.g. data.label || 'Agent')
+  // -- factor names are computed, not user-typed (see computeFactorName),
+  // specifically so the same field label on two different nodes (e.g. two
+  // Agents' own "System prompt") never collides into one shared factor.
+  nodeLabel: string
   levelType: LevelType
   // The field's own current value, e.g. config.system_prompt -- omitted for
   // a boolean field, since its levels are always the fixed [true, false].
@@ -70,7 +79,6 @@ export function FactorBindableField({
   children: React.ReactNode
 }) {
   const [open, setOpen] = useState(false)
-  const [factorName, setFactorName] = useState(defaultLabel)
   const [levels, setLevels] = useState<string[]>(() => seedLevels(currentValue))
   const queryClient = useQueryClient()
 
@@ -79,6 +87,14 @@ export function FactorBindableField({
     queryFn: () => experimentsApi.get(experimentId!),
     enabled: !!experimentId && open,
   })
+
+  // Computed, not user-typed -- existingNames only reflects the OTHER
+  // factors already declared (this field is always unbound here, see the
+  // `boundFactorName` early return above this component's own JSX below),
+  // so any collision here is genuinely a different node/field, never this
+  // one being re-saved under its own name.
+  const existingNames = experimentQuery.data?.design_spec?.factors?.map((f) => f.name) ?? []
+  const factorName = computeFactorName(nodeLabel, defaultLabel, existingNames)
 
   const saveMutation = useMutation({
     mutationFn: async (next: DesignFactor) => {
@@ -138,7 +154,7 @@ export function FactorBindableField({
         <FactorEditorDialog
           open={open}
           onOpenChange={setOpen}
-          factor={{ name: defaultLabel, levels: seedLevels(currentValue), level_type: 'text' }}
+          factor={{ name: factorName, levels: seedLevels(currentValue), level_type: 'text' }}
           onSave={(next) => saveMutation.mutate(next)}
         />
       </div>
@@ -152,10 +168,7 @@ export function FactorBindableField({
         open={open}
         onOpenChange={(next) => {
           setOpen(next)
-          if (next) {
-            setFactorName(defaultLabel)
-            setLevels(seedLevels(currentValue))
-          }
+          if (next) setLevels(seedLevels(currentValue))
         }}
       >
         <PopoverTrigger
@@ -167,8 +180,8 @@ export function FactorBindableField({
         />
         <PopoverContent className="space-y-3">
           <div className="space-y-1.5">
-            <Label htmlFor={`${fieldPath}-factor-name`}>Factor name</Label>
-            <Input id={`${fieldPath}-factor-name`} value={factorName} onChange={(e) => setFactorName(e.target.value)} />
+            <Label>Factor name</Label>
+            <p className="rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground">{factorName}</p>
           </div>
           {levelType === 'boolean' ? (
             <p className="text-xs text-muted-foreground">Levels: true, false</p>
@@ -233,7 +246,7 @@ export function FactorBindableField({
           <Button
             size="sm"
             className="w-full"
-            disabled={saveMutation.isPending || !factorName.trim()}
+            disabled={saveMutation.isPending}
             onClick={() => {
               const parsedLevels =
                 levelType === 'boolean'

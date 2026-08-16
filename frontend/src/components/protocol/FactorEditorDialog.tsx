@@ -35,7 +35,13 @@ export function FactorEditorDialog({
   factor: DesignFactor
   onSave: (factor: DesignFactor) => void
 }) {
-  const [name, setName] = useState(factor.name)
+  // Factor names are computed (see factorLevels.ts's computeFactorName), not
+  // user-typed -- standardized so the same field label on two different
+  // nodes (e.g. two Agents' own "System prompt") can never collide into one
+  // shared factor by accident. This dialog only ever edits levels/level
+  // type; the name shown is whatever was already computed when the factor
+  // was first bound to its field.
+  const name = factor.name
   const [levelType, setLevelType] = useState<LevelType>(levelTypeOf(factor))
   const [levels, setLevels] = useState<string[]>(factor.levels.map((l) => String(l)))
 
@@ -44,7 +50,6 @@ export function FactorEditorDialog({
   // FactorBindableField.tsx's popover already use.
   useEffect(() => {
     if (open) {
-      setName(factor.name)
       setLevelType(levelTypeOf(factor))
       setLevels(factor.levels.map((l) => String(l)))
     }
@@ -90,8 +95,8 @@ export function FactorEditorDialog({
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="factor-name">Factor name</Label>
-              <Input id="factor-name" value={name} onChange={(e) => setName(e.target.value)} />
+              <Label>Factor name</Label>
+              <p className="rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground">{name}</p>
             </div>
             <div className="space-y-1.5">
               <Label>Level type</Label>
@@ -169,7 +174,7 @@ export function FactorEditorDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button disabled={!name.trim()} onClick={save}>
+          <Button onClick={save}>
             Save
           </Button>
         </div>

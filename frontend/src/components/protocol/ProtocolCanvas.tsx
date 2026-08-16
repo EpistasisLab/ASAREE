@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   addEdge,
   Background,
@@ -20,7 +20,7 @@ import { Play, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, protocolsApi } from '@/api/client'
 import { newNodeId } from '@/lib/nodeId'
-import { toPersistedGraph } from '@/lib/protocolGraph'
+import { protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import {
   defaultAgentNodeData,
@@ -143,17 +143,52 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
 }
 
-export function ProtocolCanvas({
-  protocolId,
-  experimentId,
-  initialGraph,
-}: {
+// Imperative, not a prop -- DesignTab.tsx (a sibling of ProtocolCanvas, not
+// a descendant) needs to write a factor binding onto a specific canvas
+// node the moment the user picks it from the "Add factor" dropdown. This is
+// the one thing the shared protocol-graph query cache (see
+// protocolGraphQueryKey) can't do on its own: that cache is a read-only
+// mirror of ProtocolCanvas's own nodes/edges state, so writing into it
+// directly wouldn't flow back into the actual xyflow state driving the
+// canvas. A narrow, purpose-built handle (just this one method) is enough,
+// rather than exposing setNodes/setEdges wholesale.
+export interface ProtocolCanvasHandle {
+  bindFactor: (nodeId: string, fieldPath: string, factorName: string) => void
+}
+
+export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   protocolId: string
   experimentId: string | null
   initialGraph: ProtocolGraph
-}) {
+}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph }, canvasHandleRef) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialGraph.nodes as Node[])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialGraph.edges as Edge[])
+  const queryClient = useQueryClient()
+
+  // Mirrors the canvas's own live state into the shared query cache on
+  // every change -- immediate, not debounced like autosave below, since
+  // this is a pure in-memory write (no network round-trip to wait on).
+  // DesignTab's "Add factor" picker reads this same key to always see the
+  // canvas's current nodes, never the last-autosaved snapshot.
+  useEffect(() => {
+    queryClient.setQueryData(protocolGraphQueryKey(protocolId), { nodes, edges })
+  }, [queryClient, protocolId, nodes, edges])
+
+  useImperativeHandle(
+    canvasHandleRef,
+    () => ({
+      bindFactor(nodeId, fieldPath, factorName) {
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === nodeId
+              ? { ...n, data: { ...n.data, factor_bindings: { ...(n.data.factor_bindings as Record<string, string> | undefined), [fieldPath]: factorName } } }
+              : n,
+          ),
+        )
+      },
+    }),
+    [setNodes],
+  )
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [addPanelOpen, setAddPanelOpen] = useState(false)
   // A pending node deletion awaiting user confirmation -- populated either
@@ -856,4 +891,4 @@ export function ProtocolCanvas({
       )}
     </ProtocolCanvasActionsProvider>
   )
-}
+})

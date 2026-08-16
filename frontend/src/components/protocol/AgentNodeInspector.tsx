@@ -120,6 +120,7 @@ export function AgentNodeInspector({
                 experimentId={experimentId}
                 fieldPath="config.system_prompt"
                 defaultLabel="System prompt"
+                nodeLabel={data.label || 'Agent'}
                 levelType="text"
                 currentValue={config.system_prompt}
                 boundFactorName={bindings['config.system_prompt']}

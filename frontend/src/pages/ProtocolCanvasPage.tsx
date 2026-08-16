@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ReactFlowProvider } from '@xyflow/react'
 import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
-import { ProtocolCanvas } from '@/components/protocol/ProtocolCanvas'
+import { ProtocolCanvas, type ProtocolCanvasHandle } from '@/components/protocol/ProtocolCanvas'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -145,6 +145,11 @@ function RunAllCellsButton({ protocolId, experimentId, cellCount }: { protocolId
 // change this without a migration.
 export function ProtocolCanvasPage() {
   const { experimentId } = useParams<{ experimentId: string }>()
+  // Lets ExperimentSidePanel/DesignTab (a sibling of ProtocolCanvas, not a
+  // descendant) write a factor binding onto a live canvas node -- see
+  // ProtocolCanvas.tsx's own comment on ProtocolCanvasHandle for why this
+  // needs to be imperative rather than a plain prop.
+  const canvasRef = useRef<ProtocolCanvasHandle>(null)
 
   const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
@@ -205,6 +210,7 @@ export function ProtocolCanvasPage() {
           <ExperimentSidePanel
             experiment={experimentQuery.data}
             protocolId={protocolQuery.data?.id}
+            canvasRef={canvasRef}
             isLoading={experimentQuery.isLoading}
           />
 
@@ -217,6 +223,7 @@ export function ProtocolCanvasPage() {
               <ReactFlowProvider>
                 <ProtocolCanvas
                   key={protocolQuery.data.id}
+                  ref={canvasRef}
                   protocolId={protocolQuery.data.id}
                   experimentId={protocolQuery.data.experiment_id}
                   initialGraph={protocolQuery.data.graph}

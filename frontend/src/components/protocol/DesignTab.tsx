@@ -6,13 +6,12 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import { unboundBindableFields, type UnboundField } from './bindableFields'
-import { computeFactorName, defaultLevelsForType, LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
+import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import {
@@ -34,7 +33,12 @@ import {
 // list of what's bindable comes from the same shared query cache
 // (protocolGraphQueryKey) ProtocolCanvas mirrors its own nodes into on every
 // change, so this never lags behind the canvas waiting on autosave.
-function AddFactorPopover({
+//
+// The field picker itself lives inside FactorEditorDialog (not a separate
+// popover before it) -- a canvas can realistically have a large number of
+// bindable fields to search through, and the dialog already has the room a
+// cramped popover wouldn't.
+function AddFactorButton({
   experiment,
   protocolId,
   canvasRef,
@@ -45,8 +49,7 @@ function AddFactorPopover({
   canvasRef: RefObject<ProtocolCanvasHandle | null>
   existingNames: string[]
 }) {
-  const [open, setOpen] = useState(false)
-  const [editing, setEditing] = useState<{ field: UnboundField; factor: DesignFactor } | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const queryClient = useQueryClient()
 
   const graphQuery = useQuery({
@@ -56,7 +59,7 @@ function AddFactorPopover({
       const protocol = await protocolsApi.get(protocolId)
       return { nodes: protocol.graph.nodes as Node[], edges: protocol.graph.edges as Edge[] }
     },
-    enabled: !!protocolId && open,
+    enabled: !!protocolId,
     // Only ever a fallback for before ProtocolCanvas has mounted and mirrored
     // its own live state into this same key -- once it has, this key is only
     // ever updated by that mirror (a pure in-memory write), never a real
@@ -65,20 +68,20 @@ function AddFactorPopover({
   })
 
   const createMutation = useMutation({
-    mutationFn: async (next: DesignFactor) => {
+    mutationFn: async ({ factor, field }: { factor: DesignFactor; field: UnboundField }) => {
       // Fetched fresh (not the local staged draft) -- matches
       // FactorBindableField's own existing save mutation exactly, including
       // its same pre-existing risk of racing a concurrent unsaved edit
       // elsewhere on this tab (see FactorEditorDialog.tsx's design notes).
       const fresh = await experimentsApi.get(experiment.id)
-      const nextFactors = [...(fresh.design_spec?.factors ?? []), next]
+      const nextFactors = [...(fresh.design_spec?.factors ?? []), factor]
       await experimentsApi.update(experiment.id, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
-      return next
+      return { factor, field }
     },
-    onSuccess: (next) => {
-      if (editing) canvasRef.current?.bindFactor(editing.field.nodeId, editing.field.fieldPath, next.name)
+    onSuccess: ({ factor, field }) => {
+      canvasRef.current?.bindFactor(field.nodeId, field.fieldPath, factor.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id] })
-      setEditing(null)
+      setDialogOpen(false)
     },
   })
 
@@ -86,56 +89,20 @@ function AddFactorPopover({
 
   return (
     <>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          render={
-            <Button variant="outline" size="sm">
-              <Plus className="size-3.5" /> Add factor
-            </Button>
-          }
-        />
-        <PopoverContent className="space-y-1.5">
-          <Label>Bind a field on the canvas</Label>
-          {graphQuery.isLoading ? (
-            <p className="text-xs text-muted-foreground">Loading canvas…</p>
-          ) : fields.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              Every bindable field on the canvas is already a factor -- or there's nothing bindable on it yet.
-            </p>
-          ) : (
-            <div className="max-h-64 space-y-0.5 overflow-y-auto">
-              {fields.map((field) => (
-                <button
-                  key={`${field.nodeId}.${field.fieldPath}`}
-                  type="button"
-                  className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
-                  onClick={() => {
-                    const name = computeFactorName(field.nodeLabel, field.fieldLabel, existingNames)
-                    setEditing({ field, factor: { name, levels: defaultLevelsForType(field.levelType), level_type: field.levelType } })
-                    setOpen(false)
-                  }}
-                >
-                  <span className="truncate">
-                    {field.nodeLabel}: {field.fieldLabel}
-                  </span>
-                  <Badge variant="outline" className="shrink-0">
-                    {LEVEL_TYPE_LABELS[field.levelType]}
-                  </Badge>
-                </button>
-              ))}
-            </div>
-          )}
-        </PopoverContent>
-      </Popover>
+      <Button variant="outline" size="sm" onClick={() => setDialogOpen(true)}>
+        <Plus className="size-3.5" /> Add factor
+      </Button>
 
-      {editing && (
+      {dialogOpen && (
         <FactorEditorDialog
           open
-          onOpenChange={(open) => {
-            if (!open) setEditing(null)
+          onOpenChange={setDialogOpen}
+          factor={{ name: '', levels: [], level_type: 'string' }}
+          pickableFields={fields}
+          existingNames={existingNames}
+          onSave={(factor, field) => {
+            if (field) createMutation.mutate({ factor, field })
           }}
-          factor={editing.factor}
-          onSave={(next) => createMutation.mutate(next)}
         />
       )}
     </>
@@ -204,7 +171,7 @@ function FactorsEditor({
           </Button>
         </div>
       ))}
-      <AddFactorPopover experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} existingNames={factors.map((f) => f.name)} />
+      <AddFactorButton experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} existingNames={factors.map((f) => f.name)} />
 
       {editingFactor && (
         <FactorEditorDialog

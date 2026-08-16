@@ -26,6 +26,18 @@ export function defaultLevelsForType(type: LevelType): unknown[] {
   return type === 'boolean' ? [true, false] : ['', '']
 }
 
+// Seeds a fresh factor's first level with the field's own current value --
+// e.g. binding an agent's already-written system prompt starts that factor
+// at "the prompt you already have, plus whatever alternates you want to
+// try" rather than making you retype it just to get back to today's value.
+// Shared by FactorBindableField.tsx's own popover/dialog and
+// FactorEditorDialog.tsx's field-picker (DesignTab's "Add factor"), so
+// creating a factor seeds the same way regardless of entry point.
+export function seedLevels(currentValue: unknown): string[] {
+  const first = currentValue !== null && currentValue !== undefined && currentValue !== '' ? String(currentValue) : ''
+  return [first, '']
+}
+
 // A factor bound to "System prompt" on Agent A and a factor bound to
 // "System prompt" on Agent B are never the same thing -- they don't need to
 // share levels, and one node's field being bound must never silently

@@ -56,6 +56,21 @@ export interface UnboundField {
   fieldPath: string
   fieldLabel: string
   levelType: LevelType
+  // The field's own current value (e.g. an Agent's actual config.system_prompt
+  // text) -- lets FactorEditorDialog's field-picker seed the first level the
+  // same way FactorBindableField's own popover already does, matching
+  // services.protocol_execution's own apply_factor_bindings, which resolves
+  // a dotted path starting at the node's whole `data` object.
+  currentValue: unknown
+}
+
+function getPath(data: Record<string, unknown>, dottedPath: string): unknown {
+  let target: unknown = data
+  for (const part of dottedPath.split('.')) {
+    if (typeof target !== 'object' || target === null) return undefined
+    target = (target as Record<string, unknown>)[part]
+  }
+  return target
 }
 
 // Every bindable field across the canvas that ISN'T already bound to a
@@ -69,7 +84,14 @@ export function unboundBindableFields(nodes: Node[]): UnboundField[] {
     const label = (node.data as { label?: string })?.label || node.type || 'Node'
     for (const field of bindableFieldsForNode(node)) {
       if (!bindings[field.fieldPath]) {
-        result.push({ nodeId: node.id, nodeLabel: label, fieldPath: field.fieldPath, fieldLabel: field.label, levelType: field.levelType })
+        result.push({
+          nodeId: node.id,
+          nodeLabel: label,
+          fieldPath: field.fieldPath,
+          fieldLabel: field.label,
+          levelType: field.levelType,
+          currentValue: getPath(node.data as Record<string, unknown>, field.fieldPath),
+        })
       }
     }
   }

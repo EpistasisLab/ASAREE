@@ -9,20 +9,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { experimentsApi } from '@/api/client'
 import { FactorEditorDialog } from './FactorEditorDialog'
-import { computeFactorName, parseLevelValue, type LevelType } from './factorLevels'
+import { computeFactorName, parseLevelValue, seedLevels, type LevelType } from './factorLevels'
 import type { DesignFactor } from '@/types/experiments'
-
-// Seeds a fresh factor's first level with the field's own current value --
-// e.g. binding an agent's already-written system prompt starts that factor
-// at "the prompt you already have, plus whatever alternates you want to
-// try" rather than making you retype it just to get back to today's value.
-// Only matters at creation time: once bound, this component only ever shows
-// the badge (see the `boundFactorName` branch below), never the popover/
-// dialog again.
-function seedLevels(currentValue: unknown): string[] {
-  const first = currentValue !== null && currentValue !== undefined && currentValue !== '' ? String(currentValue) : ''
-  return [first, '']
-}
 
 // Wraps a field's own Label+control (passed as children) with either a "+"
 // trigger (unbound) or a "Factor: {name}" badge + remove action (bound).

@@ -101,7 +101,7 @@ class ProtocolValidationError(Exception):
 # a new "connection type" concept. A "main" edge (today's plain pipeline
 # data-flow) is any edge whose targetHandle is one of these -- everything
 # else. The type marker always lives on the target side of an edge.
-_CONNECTOR_HANDLES = frozenset({"llm", "tool", "memory", "architectural_pattern", "dataset", "script"})
+_CONNECTOR_HANDLES = frozenset({"llm", "tool", "memory", "architectural_pattern"})
 
 # Each connector slot accepts a FAMILY of node types, not one exact type --
 # mirrors how "tool" already accepts any mcp_tool node. LLM and Architectural
@@ -166,17 +166,24 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "llm" for t in _LLM_NODE_TYPES},
     **{t: "architectural_pattern" for t in _EXECUTION_PATTERN_NODE_TYPES},
     **{t: "memory" for t in _MEMORY_NODE_TYPES},
+    # Dataset/Script share the Tool connector rather than getting their own
+    # slot -- n8n's own convention for a connector that accepts a FAMILY of
+    # node types (see this dict's own docstring above _LLM_NODE_TYPES). All
+    # three are pure config sources an agent's Tool "+" panel can add
+    # (AddNodePanel filters its catalog by CONNECTOR_PANEL_INFO.tool's
+    # allowedTypes on the frontend); which one a given wired node actually IS
+    # is recovered by checking the source node's own `type`, not by which
+    # handle it's on (see _resolve_tool_config/_resolve_dataset_config/
+    # _resolve_script_config, and the per-agent validation block below).
     **{t: "tool" for t in _MCP_TOOL_NODE_TYPES},
-    **{t: "dataset" for t in _DATASET_NODE_TYPES},
-    **{t: "script" for t in _SCRIPT_NODE_TYPES},
+    **{t: "tool" for t in _DATASET_NODE_TYPES},
+    **{t: "tool" for t in _SCRIPT_NODE_TYPES},
 }
 _HANDLE_LABELS: dict[str, str] = {
     "llm": "LLM",
     "memory": "Memory",
     "architectural_pattern": "Architectural Pattern",
     "tool": "Tool",
-    "dataset": "Dataset",
-    "script": "Script",
 }
 
 # node type -> agentic-core PatternConfig slug, for _resolve_pattern_config.
@@ -353,13 +360,23 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
         tool_edges = _edges_with_handle(graph, nid, "tool", direction="incoming")
         memory_edges = _edges_with_handle(graph, nid, "memory", direction="incoming")
         pattern_edges = _edges_with_handle(graph, nid, "architectural_pattern", direction="incoming")
-        dataset_edges = _edges_with_handle(graph, nid, "dataset", direction="incoming")
-        script_edges = _edges_with_handle(graph, nid, "script", direction="incoming")
         if node_type == "agent":
+            # The Tool connector accepts a family of source types -- an
+            # mcp_tool node contributes a callable capability, while a
+            # Dataset/Script node contributes declarative config/context
+            # (see _resolve_tool_config/_resolve_dataset_config/
+            # _resolve_script_config) -- so which sub-kind a given edge is
+            # can only be recovered from its source node's own `type`, not
+            # the (now-shared) handle.
+            dataset_edges = [e for e in tool_edges if (nodes.get(e["source"]) or {}).get("type") in _DATASET_NODE_TYPES]
+            script_edges = [e for e in tool_edges if (nodes.get(e["source"]) or {}).get("type") in _SCRIPT_NODE_TYPES]
             for edge in tool_edges:
                 tool_source = nodes.get(edge["source"])
-                if tool_source is None or tool_source.get("type") != "mcp_tool":
-                    raise ProtocolValidationError(f"Node {name!r}'s Tool connection must come from an MCP Tool node.")
+                source_type = tool_source.get("type") if tool_source else None
+                if source_type not in (_MCP_TOOL_NODE_TYPES | _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES):
+                    raise ProtocolValidationError(
+                        f"Node {name!r}'s Tool connection must come from an MCP Tool, Dataset, or Script node."
+                    )
             if len(memory_edges) > 1:
                 raise ProtocolValidationError(
                     f"Node {name!r} can have at most one Memory connection (found {len(memory_edges)})."
@@ -372,18 +389,10 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 raise ProtocolValidationError(
                     f"Node {name!r} can have at most one Dataset connection (found {len(dataset_edges)})."
                 )
-            for edge in dataset_edges:
-                dataset_source = nodes.get(edge["source"])
-                if dataset_source is None or dataset_source.get("type") != "dataset":
-                    raise ProtocolValidationError(f"Node {name!r}'s Dataset connection must come from a Dataset node.")
             if len(script_edges) > 1:
                 raise ProtocolValidationError(
                     f"Node {name!r} can have at most one Script connection (found {len(script_edges)})."
                 )
-            for edge in script_edges:
-                script_source = nodes.get(edge["source"])
-                if script_source is None or script_source.get("type") != "script":
-                    raise ProtocolValidationError(f"Node {name!r}'s Script connection must come from a Script node.")
             # Capped at one, but scoped to the execution-pattern family
             # specifically (see _EXECUTION_PATTERN_NODE_TYPES's own comment)
             # -- a future non-execution pattern node type connected
@@ -404,10 +413,9 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                         f"Node {name!r}'s Architectural Pattern connection must come from an Architectural "
                         "Pattern node."
                     )
-        elif tool_edges or memory_edges or pattern_edges or dataset_edges or script_edges:
+        elif tool_edges or memory_edges or pattern_edges:
             raise ProtocolValidationError(
-                f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Dataset, or Script connection "
-                f"(node {name!r})."
+                f"Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection (node {name!r})."
             )
 
         if node_type in _NODE_TYPE_TO_HANDLE:
@@ -419,8 +427,18 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             ]
             if outgoing_wrong_handle:
                 handle_label = _HANDLE_LABELS[expected_handle]
+                # Dataset/Script share the Tool handle but aren't literally
+                # "Tool" nodes -- use their own display name as the leading
+                # noun (e.g. "Dataset node 'X' can only connect to a node's
+                # Tool slot") while every other family's leading noun still
+                # matches its handle label 1:1, unchanged.
+                leading_label = (
+                    _NODE_TYPE_DISPLAY_NAMES[node_type]
+                    if node_type in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES
+                    else handle_label
+                )
                 raise ProtocolValidationError(
-                    f"{handle_label} node {name!r} can only connect to a node's {handle_label} slot, not a "
+                    f"{leading_label} node {name!r} can only connect to a node's {handle_label} slot, not a "
                     "regular pipeline edge."
                 )
 
@@ -551,38 +569,40 @@ def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
 def _resolve_dataset_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """``{"dataset_id": ..., "dataset_name": ...}`` from the node's connected
     Dataset node, or ``{}`` if none is connected -- optional, like Memory
-    (``topological_order`` caps it at one, doesn't require it). Read by
-    ``_build_user_input`` to fold a "Dataset context" block into the wired
-    agent's own instruction; never resolved into any agentic-core config,
-    since a dataset isn't something agentic-core's own ModelConfig/
-    PatternConfig/ToolConfig has a slot for -- it's purely prompt context an
-    agent uses to call ``open_workspace`` itself."""
+    (``topological_order`` caps it at one, doesn't require it). Dataset
+    shares the Tool connector with mcp_tool/Script nodes (see
+    ``_NODE_TYPE_TO_HANDLE``), so this scans every incoming Tool-handle edge
+    for the one (if any) whose source is actually a Dataset node, rather than
+    querying a dedicated handle. Read by ``_build_user_input`` to fold a
+    "Dataset context" block into the wired agent's own instruction; never
+    resolved into any agentic-core config, since a dataset isn't something
+    agentic-core's own ModelConfig/PatternConfig/ToolConfig has a slot for --
+    it's purely prompt context an agent uses to call ``open_workspace``
+    itself."""
     nodes, _downstream, _upstream = _adjacency(graph)
-    edges = _edges_with_handle(graph, node_id, "dataset", direction="incoming")
-    if not edges:
-        return {}
-    source = nodes.get(edges[0]["source"])
-    if source is None:
-        return {}
-    return (source.get("data") or {}).get("config") or {}
+    for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is not None and source.get("type") in _DATASET_NODE_TYPES:
+            return (source.get("data") or {}).get("config") or {}
+    return {}
 
 
 def _resolve_script_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """``{"name": ..., "language": ..., "code": ...}`` from the node's
     connected Script node, or ``{}`` if none is connected -- optional, like
-    Dataset. Read by ``_build_user_input`` to fold the script's own code
-    verbatim into the wired agent's instruction, for it to pass as some
-    tool's own code-shaped argument (e.g. run_model_script's ``code``) --
-    ASAREE itself never executes this, the same "pure config source, no
-    execution turn" status as every other connector."""
+    Dataset, and likewise sharing the Tool connector rather than a dedicated
+    handle (see ``_resolve_dataset_config``'s own docstring). Read by
+    ``_build_user_input`` to fold the script's own code verbatim into the
+    wired agent's instruction, for it to pass as some tool's own code-shaped
+    argument (e.g. run_model_script's ``code``) -- ASAREE itself never
+    executes this, the same "pure config source, no execution turn" status
+    as every other connector."""
     nodes, _downstream, _upstream = _adjacency(graph)
-    edges = _edges_with_handle(graph, node_id, "script", direction="incoming")
-    if not edges:
-        return {}
-    source = nodes.get(edges[0]["source"])
-    if source is None:
-        return {}
-    return (source.get("data") or {}).get("config") or {}
+    for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is not None and source.get("type") in _SCRIPT_NODE_TYPES:
+            return (source.get("data") or {}).get("config") or {}
+    return {}
 
 
 def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
@@ -628,13 +648,17 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     (now-removed) ``tool_config`` field. Each ``mcp_tool`` node represents one
     MCP server connection and can allow-list *several* of that server's
     tools (``config.tool_names``, plural) -- n8n's own MCP Client Tool node
-    is likewise a per-server node with a tools filter, not a node per tool."""
+    is likewise a per-server node with a tools filter, not a node per tool.
+    The Tool connector also accepts Dataset/Script source nodes (see
+    ``_NODE_TYPE_TO_HANDLE``) -- those are skipped here entirely, since
+    they're read by ``_resolve_dataset_config``/``_resolve_script_config``
+    instead, not folded into this allow-list."""
     nodes, _downstream, _upstream = _adjacency(graph)
     server_names: list[str] = []
     tool_names: list[str] = []
     for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
         source = nodes.get(edge["source"])
-        if source is None:
+        if source is None or source.get("type") not in _MCP_TOOL_NODE_TYPES:
             continue
         tool_node_config = (source.get("data") or {}).get("config") or {}
         if not tool_node_config.get("enabled", True):

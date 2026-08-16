@@ -108,7 +108,10 @@ def _dataset_node(node_id: str = "dataset1", dataset_name: str = "spinal-fusion-
 
 
 def _dataset_edge(source: str, target: str) -> dict:
-    return {"id": f"{source}-{target}-dataset", "source": source, "target": target, "targetHandle": "dataset"}
+    # Dataset shares the Tool connector handle (see _NODE_TYPE_TO_HANDLE) --
+    # its source node's own `type` is what identifies it as a Dataset, not
+    # the handle.
+    return {"id": f"{source}-{target}-dataset", "source": source, "target": target, "targetHandle": "tool"}
 
 
 def _script_node(node_id: str = "script1", code: str = "print('hi')") -> dict:
@@ -120,7 +123,9 @@ def _script_node(node_id: str = "script1", code: str = "print('hi')") -> dict:
 
 
 def _script_edge(source: str, target: str) -> dict:
-    return {"id": f"{source}-{target}-script", "source": source, "target": target, "targetHandle": "script"}
+    # Script likewise shares the Tool connector handle -- see _dataset_edge's
+    # own comment above.
+    return {"id": f"{source}-{target}-script", "source": source, "target": target, "targetHandle": "tool"}
 
 
 def _agent_with_llm(node_id: str, llm_id: str = "llm") -> tuple[dict, dict]:
@@ -852,7 +857,7 @@ def test_tool_connection_from_non_mcp_tool_source_raises() -> None:
         "nodes": [llm, agent, _node("b", "agent")],
         "edges": [agent_llm_edge, _tool_edge("b", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="must come from an MCP Tool node"):
+    with pytest.raises(ProtocolValidationError, match="must come from an MCP Tool, Dataset, or Script node"):
         topological_order(graph)
 
 
@@ -872,7 +877,7 @@ def test_tool_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Dataset, or Script connection",
+        match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection",
     ):
         topological_order(graph)
 
@@ -958,7 +963,7 @@ def test_dataset_connection_from_non_dataset_source_raises() -> None:
         "nodes": [llm, agent, _node("b", "agent")],
         "edges": [agent_llm_edge, _dataset_edge("b", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="must come from a Dataset node"):
+    with pytest.raises(ProtocolValidationError, match="must come from an MCP Tool, Dataset, or Script node"):
         topological_order(graph)
 
 
@@ -978,7 +983,7 @@ def test_dataset_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Dataset, or Script connection",
+        match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection",
     ):
         topological_order(graph)
 
@@ -995,7 +1000,7 @@ def test_dataset_node_with_plain_outgoing_edge_raises() -> None:
             {"id": "dataset1-b", "source": "dataset1", "target": "b"},
         ],
     }
-    with pytest.raises(ProtocolValidationError, match="Dataset node .* can only connect to a node's Dataset slot"):
+    with pytest.raises(ProtocolValidationError, match="Dataset node .* can only connect to a node's Tool slot"):
         topological_order(graph)
 
 
@@ -1018,7 +1023,7 @@ def test_script_connection_from_non_script_source_raises() -> None:
         "nodes": [llm, agent, _node("b", "agent")],
         "edges": [agent_llm_edge, _script_edge("b", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="must come from a Script node"):
+    with pytest.raises(ProtocolValidationError, match="must come from an MCP Tool, Dataset, or Script node"):
         topological_order(graph)
 
 
@@ -1038,7 +1043,7 @@ def test_script_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Dataset, or Script connection",
+        match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection",
     ):
         topological_order(graph)
 
@@ -1055,7 +1060,7 @@ def test_script_node_with_plain_outgoing_edge_raises() -> None:
             {"id": "script1-b", "source": "script1", "target": "b"},
         ],
     }
-    with pytest.raises(ProtocolValidationError, match="Script node .* can only connect to a node's Script slot"):
+    with pytest.raises(ProtocolValidationError, match="Script node .* can only connect to a node's Tool slot"):
         topological_order(graph)
 
 
@@ -1100,7 +1105,7 @@ def test_architectural_pattern_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Dataset, or Script connection",
+        match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection",
     ):
         topological_order(graph)
 

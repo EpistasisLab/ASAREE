@@ -92,7 +92,7 @@ const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry']
 const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
 // Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
 // whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
-const CONNECTOR_HANDLES = new Set(['llm', 'tool', 'memory', 'architectural_pattern', 'dataset', 'script'])
+const CONNECTOR_HANDLES = new Set(['llm', 'tool', 'memory', 'architectural_pattern'])
 
 const NODE_TYPES = {
   agent: AgentNode,
@@ -150,14 +150,16 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
 // Mirrors isValidConnection's own per-slot source-type-family rule -- the
 // panel that opens for a connector "+" is pre-filtered to that slot's whole
 // family of node types (LLM_NODE_TYPES/PATTERN_NODE_TYPES above) rather than
-// the full catalog.
+// the full catalog. Tool's own family includes Dataset/Script alongside
+// mcp_tool (n8n's own convention for a connector that accepts several kinds
+// of node -- see AgentNode.tsx's own comment on its Tool handle) -- both are
+// pure config sources with no callable capability of their own, so they
+// share Tool's slot rather than getting a dedicated one.
 const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; title: string }> = {
   llm: { allowedTypes: LLM_NODE_TYPES, title: 'Add LLM' },
-  tool: { allowedTypes: ['mcp_tool'], title: 'Add Tool' },
+  tool: { allowedTypes: ['mcp_tool', 'dataset', 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
-  dataset: { allowedTypes: ['dataset'], title: 'Add Dataset' },
-  script: { allowedTypes: ['script'], title: 'Add Script' },
 }
 
 // Imperative, not a prop -- DesignTab.tsx (a sibling of ProtocolCanvas, not
@@ -666,15 +668,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             (targetNode.type === 'agent' || targetNode.type === 'critic_gate')
           )
         case 'tool':
-          return sourceNode.type === 'mcp_tool' && targetNode.type === 'agent'
+          return (
+            (sourceNode.type === 'mcp_tool' || sourceNode.type === 'dataset' || sourceNode.type === 'script') &&
+            targetNode.type === 'agent'
+          )
         case 'memory':
           return sourceNode.type === 'memory' && targetNode.type === 'agent'
         case 'architectural_pattern':
           return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
-        case 'dataset':
-          return sourceNode.type === 'dataset' && targetNode.type === 'agent'
-        case 'script':
-          return sourceNode.type === 'script' && targetNode.type === 'agent'
         default:
           // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool/
           // dataset/script nodes have no main handle to drag from in the

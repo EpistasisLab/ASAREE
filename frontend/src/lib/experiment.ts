@@ -5,6 +5,55 @@ export function factorCount(designSpec: Experiment['design_spec']): number | nul
   return Array.isArray(factors) ? factors.length : null
 }
 
+// A "whole node as a factor" level (LLM/Tool config, pattern override) is a
+// plain object, not a scalar -- JS's default `String({...})` collapses every
+// distinct object to the same "[object Object]", which would silently
+// conflate different LLM/Tool/Pattern configs wherever this codebase
+// compares/dedupes/sorts factor values by their string form (ExperimentDetailPage's
+// deriveFactors/cellsMatching). A canonical (recursively key-sorted) JSON
+// string is stable across separately-deserialized-but-content-identical
+// objects, which `new Set(...)`'s reference-based dedup and JS's own
+// `String()` both are not.
+function canonicalStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalStringify).join(',')}]`
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalStringify((value as Record<string, unknown>)[k])}`)
+    return `{${entries.join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+/** Stable equality/sort key for a factor level of ANY shape -- use this
+ * instead of `String(value)` wherever two factor values are compared or
+ * deduped (see canonicalStringify's own comment for why). */
+export function factorValueKey(value: unknown): string {
+  return value !== null && typeof value === 'object' ? canonicalStringify(value) : String(value)
+}
+
+// Mirrors services.design_generation.py's own _slugify priority-key
+// heuristic -- for a dict-valued level, show whichever of these a human
+// actually recognizes ("claude-sonnet-5") instead of "[object Object]",
+// same reasoning, same key order, so a cell's label and its Cells-table
+// column read consistently.
+const FACTOR_VALUE_DISPLAY_PRIORITY_KEYS = ['model', 'provider', 'execution_pattern', 'server_name', 'enabled']
+
+/** Human-readable rendering of a factor value for table/badge display --
+ * scalars render as-is; a dict-valued "whole node" level (LLM/Tool config,
+ * pattern override) picks its own most identifying field instead of
+ * JS's default object stringification. */
+export function displayFactorValue(value: unknown): string {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const v = value as Record<string, unknown>
+    for (const key of FACTOR_VALUE_DISPLAY_PRIORITY_KEYS) {
+      if (key in v && v[key] !== null && v[key] !== '') return String(v[key])
+    }
+    return canonicalStringify(value)
+  }
+  return String(value)
+}
+
 /** "chart-4" (amber, generated-but-unscored) / "chart-3" (emerald, fully scored) /
  * "primary" (cyan, partially scored) / "muted-foreground" (dim, no cells yet). */
 export function cellsStatusAccent(cells: Cell[] | undefined): string {

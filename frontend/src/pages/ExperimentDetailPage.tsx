@@ -25,7 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { formatDate, formatRelative } from '@/lib/format'
-import { cellsStatusAccent, factorCount } from '@/lib/experiment'
+import { cellsStatusAccent, displayFactorValue, factorCount, factorValueKey } from '@/lib/experiment'
 import { cardAccent, cn, hashToChartHue } from '@/lib/utils'
 import { agentsApi, datasetsApi, experimentsApi, runsApi } from '@/api/client'
 import type { Agent } from '@/types/agents'
@@ -188,17 +188,27 @@ function deriveFactors(cells: Cell[], designSpec: Experiment['design_spec']): Fa
       if (!NON_FACTOR_KEYS.has(k.toLowerCase()) && !keys.includes(k)) keys.push(k)
     }
   }
-  const factors = keys.map((name) => ({
-    name,
-    levels: Array.from(new Set(cells.map((c) => c.factor_values?.[name]).filter((v) => v !== undefined))).sort((a, b) =>
-      String(a).localeCompare(String(b)),
-    ),
-  }))
+  const factors = keys.map((name) => {
+    const values = cells.map((c) => c.factor_values?.[name]).filter((v) => v !== undefined)
+    // Dedup by content (factorValueKey), not by reference -- `new Set` would
+    // treat every separately-deserialized dict-valued level (e.g. two cells
+    // both bound to the same LLM config) as distinct, since object identity
+    // never survives a JSON round-trip.
+    const seen = new Map<string, unknown>()
+    for (const v of values) {
+      const key = factorValueKey(v)
+      if (!seen.has(key)) seen.set(key, v)
+    }
+    return {
+      name,
+      levels: Array.from(seen.values()).sort((a, b) => factorValueKey(a).localeCompare(factorValueKey(b))),
+    }
+  })
   return factors.length > 0 ? factors : null
 }
 
 function cellsMatching(cells: Cell[], match: Record<string, unknown>): Cell[] {
-  return cells.filter((c) => Object.entries(match).every(([k, v]) => String(c.factor_values?.[k]) === String(v)))
+  return cells.filter((c) => Object.entries(match).every(([k, v]) => factorValueKey(c.factor_values?.[k]) === factorValueKey(v)))
 }
 
 function meanMetric(cells: Cell[], metricKey: string): number | null {
@@ -301,7 +311,7 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
           <div key={fi} className="space-y-1.5">
             {facetFactor && (
               <p className="font-mono text-xs text-muted-foreground">
-                {facetFactor.name} = {String(facetLevel)}
+                {facetFactor.name} = {displayFactorValue(facetLevel)}
               </p>
             )}
             <div className="grid gap-1" style={{ gridTemplateColumns: `auto repeat(${colFactor.levels.length}, 1fr)` }}>
@@ -327,14 +337,14 @@ function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Ce
               {colFactor.name
                 ? colFactor.levels.map((colLevel, ci) => (
                     <div key={ci} className="truncate text-center font-mono text-xs text-muted-foreground">
-                      {String(colLevel)}
+                      {displayFactorValue(colLevel)}
                     </div>
                   ))
                 : <div />}
               {rowFactor.levels.map((rowLevel, ri) => (
                 <Fragment key={ri}>
                   <div className="flex items-center pr-2 font-mono text-xs text-muted-foreground">
-                    {String(rowLevel)}
+                    {displayFactorValue(rowLevel)}
                   </div>
                   {colFactor.levels.map((_, ci) => {
                     const cellData = grid[fi][ri][ci]
@@ -371,7 +381,7 @@ function cellSortValue(cell: Cell, key: string): string | number {
   if (key === 'cell_label') return cell.cell_label.toLowerCase()
   if (key === 'updated_at') return new Date(cell.updated_at).getTime()
   if (key === 'status') return cell.metric_values ? 1 : 0
-  if (key.startsWith('factor:')) return String(cell.factor_values?.[key.slice(7)] ?? '').toLowerCase()
+  if (key.startsWith('factor:')) return displayFactorValue(cell.factor_values?.[key.slice(7)] ?? '').toLowerCase()
   if (key.startsWith('metric:')) {
     const v = cell.metric_values?.[key.slice(7)]
     return typeof v === 'number' ? v : Number.NEGATIVE_INFINITY
@@ -456,7 +466,7 @@ function CellsTable({ experiment, cells }: { experiment: Experiment; cells: Cell
               <TableCell className="py-3.5 font-mono text-sm font-medium">{cell.cell_label}</TableCell>
               {factors.map((f) => (
                 <TableCell key={f.name} className="py-3.5 font-mono text-xs text-muted-foreground">
-                  {cell.factor_values && f.name in cell.factor_values ? String(cell.factor_values[f.name]) : '—'}
+                  {cell.factor_values && f.name in cell.factor_values ? displayFactorValue(cell.factor_values[f.name]) : '—'}
                 </TableCell>
               ))}
               {metricColumns.map((m) => (

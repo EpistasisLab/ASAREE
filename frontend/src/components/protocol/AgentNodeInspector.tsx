@@ -121,6 +121,7 @@ export function AgentNodeInspector({
                 fieldPath="config.system_prompt"
                 defaultLabel="System prompt"
                 levelType="text"
+                currentValue={config.system_prompt}
                 boundFactorName={bindings['config.system_prompt']}
                 onBind={(name) => bindFactor('config.system_prompt', name)}
                 onUnbind={() => unbindFactor('config.system_prompt')}

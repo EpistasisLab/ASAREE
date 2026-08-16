@@ -131,6 +131,7 @@ export function LlmNodeInspector({
           fieldPath="config.model"
           defaultLabel="Model"
           levelType="string"
+          currentValue={config.model}
           boundFactorName={bindings['config.model']}
           onBind={(name) => bindFactor('config.model', name)}
           onUnbind={() => unbindFactor('config.model')}
@@ -180,6 +181,7 @@ export function LlmNodeInspector({
             fieldPath="config.temperature"
             defaultLabel="Temperature"
             levelType="number"
+            currentValue={config.temperature}
             boundFactorName={bindings['config.temperature']}
             onBind={(name) => bindFactor('config.temperature', name)}
             onUnbind={() => unbindFactor('config.temperature')}
@@ -204,6 +206,7 @@ export function LlmNodeInspector({
             fieldPath="config.effort"
             defaultLabel="Effort"
             levelType="string"
+            currentValue={config.effort}
             boundFactorName={bindings['config.effort']}
             onBind={(name) => bindFactor('config.effort', name)}
             onUnbind={() => unbindFactor('config.effort')}

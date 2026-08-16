@@ -11,6 +11,18 @@ import { FactorEditorDialog } from './FactorEditorDialog'
 import { parseLevelValue, type LevelType } from './factorLevels'
 import type { DesignFactor } from '@/types/experiments'
 
+// Seeds a fresh factor's first level with the field's own current value --
+// e.g. binding an agent's already-written system prompt starts that factor
+// at "the prompt you already have, plus whatever alternates you want to
+// try" rather than making you retype it just to get back to today's value.
+// Only matters at creation time: once bound, this component only ever shows
+// the badge (see the `boundFactorName` branch below), never the popover/
+// dialog again.
+function seedLevels(currentValue: unknown): string[] {
+  const first = currentValue !== null && currentValue !== undefined && currentValue !== '' ? String(currentValue) : ''
+  return [first, '']
+}
+
 // Wraps a field's own Label+control (passed as children) with either a "+"
 // trigger (unbound) or a "Factor: {name}" badge + remove action (bound).
 // The factor itself lives on the linked experiment's design_spec.factors --
@@ -28,6 +40,7 @@ export function FactorBindableField({
   fieldPath,
   defaultLabel,
   levelType,
+  currentValue,
   boundFactorName,
   onBind,
   onUnbind,
@@ -37,6 +50,9 @@ export function FactorBindableField({
   fieldPath: string
   defaultLabel: string
   levelType: LevelType
+  // The field's own current value, e.g. config.system_prompt -- omitted for
+  // a boolean field, since its levels are always the fixed [true, false].
+  currentValue?: unknown
   boundFactorName?: string
   onBind: (factorName: string) => void
   onUnbind: () => void
@@ -44,7 +60,7 @@ export function FactorBindableField({
 }) {
   const [open, setOpen] = useState(false)
   const [factorName, setFactorName] = useState(defaultLabel)
-  const [levels, setLevels] = useState<string[]>(['', ''])
+  const [levels, setLevels] = useState<string[]>(() => seedLevels(currentValue))
   const queryClient = useQueryClient()
 
   const experimentQuery = useQuery({
@@ -111,7 +127,7 @@ export function FactorBindableField({
         <FactorEditorDialog
           open={open}
           onOpenChange={setOpen}
-          factor={{ name: defaultLabel, levels: ['', ''], level_type: 'text' }}
+          factor={{ name: defaultLabel, levels: seedLevels(currentValue), level_type: 'text' }}
           onSave={(next) => saveMutation.mutate(next)}
         />
       </div>
@@ -127,7 +143,7 @@ export function FactorBindableField({
           setOpen(next)
           if (next) {
             setFactorName(defaultLabel)
-            setLevels(['', ''])
+            setLevels(seedLevels(currentValue))
           }
         }}
       >

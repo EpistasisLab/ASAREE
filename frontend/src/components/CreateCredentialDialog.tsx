@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PasswordInput } from '@/components/ui/password-input'
+import { cn, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
 import { LLM_PROVIDER_CATALOG, type LLMProvider } from '@/types/llmSettings'
 import { PROVIDER_META } from '@/components/protocol/nodes/LlmNode'
 
@@ -99,7 +100,7 @@ export function CreateCredentialDialog({
         if (!next) reset()
       }}
     >
-      <DialogContent className="sm:max-w-md ring-1 ring-primary/15 shadow-[0_0_24px_-12px_var(--primary)] before:pointer-events-none before:absolute before:top-1 before:left-1 before:size-3 before:border-t-2 before:border-l-2 before:border-primary/60 before:content-[''] after:pointer-events-none after:absolute after:right-1 after:bottom-1 after:size-3 after:border-r-2 after:border-b-2 after:border-primary/60 after:content-['']">
+      <DialogContent className={cn('sm:max-w-md', HUD_ACCENT_RING_CLASSNAME)}>
         <DialogHeader>
           <DialogTitle>New credential</DialogTitle>
           <DialogDescription>

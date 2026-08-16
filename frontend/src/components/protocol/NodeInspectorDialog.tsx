@@ -4,13 +4,25 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
-import { cardAccent, cn } from '@/lib/utils'
+import { cardAccent, cn, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
 
-// Midpoint of the slider's own 20-100 range (see below) -- a visible,
-// legible starting point that still shows the transparency effect is there,
-// rather than opening fully opaque (indistinguishable from "no feature")
-// or at the 20 floor (harder to read by default).
+// Midpoint of the slider's own 20-100 range -- a visible, legible starting
+// point that still shows the transparency effect is there, rather than
+// opening fully opaque (indistinguishable from "no feature") or at the 20
+// floor (harder to read by default). Only ever used the very first time a
+// user opens ANY inspector, before anything's been stored yet.
 const DEFAULT_OPACITY = 60
+
+// One shared key across every inspector instance/node type -- "remember my
+// last transparency setting" means one global last-used value, not a
+// separately-remembered one per node type.
+const OPACITY_STORAGE_KEY = 'asaree:node-inspector-opacity'
+
+function readStoredOpacity(): number {
+  const raw = typeof window !== 'undefined' ? window.localStorage.getItem(OPACITY_STORAGE_KEY) : null
+  const parsed = raw !== null ? Number(raw) : NaN
+  return Number.isFinite(parsed) ? parsed : DEFAULT_OPACITY
+}
 
 // n8n's own Node Detail View (`.dialog` in NodeDetailsView.vue) is a large,
 // FIXED-size floating frame -- `width`/`height` are both
@@ -68,14 +80,20 @@ export function NodeInspectorDialog({
   onClose: () => void
   children: ReactNode
 }) {
-  // A viewing convenience, not durable state -- resets to DEFAULT_OPACITY
-  // every time the dialog opens (the same Dialog instance is reused as
-  // `open` toggles between different nodes, so this can't just be a
-  // one-time useState initializer).
-  const [opacity, setOpacity] = useState(DEFAULT_OPACITY)
+  // Persisted across every inspector (all node types share one
+  // localStorage key, see OPACITY_STORAGE_KEY) -- re-read on every open
+  // rather than a one-time useState initializer, since the same Dialog
+  // instance is reused as `open` toggles between different nodes and
+  // another inspector may have changed the stored value in between.
+  const [opacity, setOpacityState] = useState(readStoredOpacity)
   useEffect(() => {
-    if (open) setOpacity(DEFAULT_OPACITY)
+    if (open) setOpacityState(readStoredOpacity())
   }, [open])
+
+  function setOpacity(value: number) {
+    setOpacityState(value)
+    window.localStorage.setItem(OPACITY_STORAGE_KEY, String(value))
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -85,10 +103,7 @@ export function NodeInspectorDialog({
           ...cardAccent(accent),
           backgroundColor: `color-mix(in oklch, var(--popover) ${opacity}%, transparent)`,
         }}
-        className={cn(
-          NODE_INSPECTOR_CONTENT_CLASSNAME,
-          "ring-1 ring-[color:var(--card-accent,var(--primary))]/15 shadow-[0_0_24px_-12px_var(--card-accent,var(--primary))] before:pointer-events-none before:absolute before:top-1 before:left-1 before:size-3 before:border-t-2 before:border-l-2 before:border-[color:var(--card-accent,var(--primary))]/60 before:content-[''] after:pointer-events-none after:absolute after:right-1 after:bottom-1 after:size-3 after:border-r-2 after:border-b-2 after:border-[color:var(--card-accent,var(--primary))]/60 after:content-['']",
-        )}
+        className={cn(NODE_INSPECTOR_CONTENT_CLASSNAME, HUD_ACCENT_RING_CLASSNAME)}
       >
         <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
           <div className="flex items-center gap-2">{title}</div>

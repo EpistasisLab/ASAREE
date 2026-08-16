@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import { cn } from "@/lib/utils"
+import { cn, HUD_ACCENT_RING_CLASSNAME } from "@/lib/utils"
 
 function Card({
   className,
@@ -14,8 +14,9 @@ function Card({
       className={cn(
         // --card-accent lets a specific Card instance re-tint its glow/ring/corner
         // brackets (e.g. style={{ '--card-accent': 'var(--chart-3)' }}) without a
-        // one-off variant — every reference below falls back to --primary when unset.
-        "group/card relative flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground ring-1 ring-[color:var(--card-accent,var(--primary))]/15 shadow-[0_0_24px_-12px_var(--card-accent,var(--primary))] [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl before:pointer-events-none before:absolute before:top-1 before:left-1 before:size-3 before:border-t-2 before:border-l-2 before:border-[color:var(--card-accent,var(--primary))]/60 before:content-[''] after:pointer-events-none after:absolute after:right-1 after:bottom-1 after:size-3 after:border-r-2 after:border-b-2 after:border-[color:var(--card-accent,var(--primary))]/60 after:content-['']",
+        // one-off variant — HUD_ACCENT_RING_CLASSNAME falls back to --primary when unset.
+        "group/card relative flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        HUD_ACCENT_RING_CLASSNAME,
         className
       )}
       {...props}

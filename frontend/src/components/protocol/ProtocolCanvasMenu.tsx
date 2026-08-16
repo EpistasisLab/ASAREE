@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { toPersistedGraph } from '@/lib/protocolGraph'
 import type { ProtocolGraph } from '@/types/protocols'
+import type { DesignSpec } from '@/types/experiments'
 
 // Every menu item that opens a follow-up surface renders it as a SEPARATE
 // controlled Dialog (open/onOpenChange state), not nested inside
@@ -182,6 +183,33 @@ function sanitizeFilename(name: string): string {
   return name.trim().replace(/[^a-z0-9-_]+/gi, '-').replace(/^-+|-+$/g, '') || 'protocol'
 }
 
+// A non-destructive "fill gaps" merge, same spirit as the graph import's own
+// "merge alongside, never replace" behavior (ProtocolCanvas.tsx's
+// handleImport) -- an imported design shouldn't be able to silently clobber
+// factors/metrics/settings the CURRENT experiment already has. Factors and
+// metrics are appended by name (skipping anything the current design_spec
+// already declares under that name -- factor names are computed from node
+// labels via computeFactorName, so a re-import of the same protocol produces
+// the same names and is naturally idempotent); the singular settings
+// (replicates/randomization_seed/coordination_strategy) only ever fill in
+// when the current experiment hasn't set them at all.
+function mergeDesignSpec(current: DesignSpec | null | undefined, imported: DesignSpec | null | undefined): DesignSpec | undefined {
+  if (!imported) return current ?? undefined
+  const currentFactorNames = new Set((current?.factors ?? []).map((f) => f.name))
+  const mergedFactors = [...(current?.factors ?? []), ...(imported.factors ?? []).filter((f) => !currentFactorNames.has(f.name))]
+  const currentMetricNames = new Set((current?.metrics ?? []).map((m) => m.name))
+  const mergedMetrics = [...(current?.metrics ?? []), ...(imported.metrics ?? []).filter((m) => !currentMetricNames.has(m.name))]
+  return {
+    ...current,
+    ...imported,
+    factors: mergedFactors.length > 0 ? mergedFactors : undefined,
+    metrics: mergedMetrics.length > 0 ? mergedMetrics : undefined,
+    replicates: current?.replicates ?? imported.replicates,
+    randomization_seed: current?.randomization_seed ?? imported.randomization_seed,
+    coordination_strategy: current?.coordination_strategy ?? imported.coordination_strategy,
+  }
+}
+
 // The canvas-level "⋮" menu, next to Run/+ -- acts on the EXPERIMENT for
 // identity/lifecycle (rename/description/archive/delete, matching this
 // app's own "experiments instead of workflows" framing), and on the
@@ -239,7 +267,17 @@ export function ProtocolCanvasMenu({
     // Serializes the canvas's own LIVE nodes/edges (props passed down from
     // ProtocolCanvas.tsx), not protocolsApi.get's possibly-stale graph --
     // reuses that file's own toPersistedGraph, the same helper its autosave uses.
-    const payload = { name: displayName, description: protocol.description, graph: toPersistedGraph(nodes, edges) }
+    // design_spec travels alongside the graph -- a factor is meaningless
+    // without both halves of its binding (design_spec.factors' declaration
+    // AND the node's own factor_bindings, already inside the graph), so an
+    // export/import round-trip that dropped one would silently orphan the
+    // other.
+    const payload = {
+      name: displayName,
+      description: protocol.description,
+      graph: toPersistedGraph(nodes, edges),
+      design_spec: experiment?.design_spec ?? null,
+    }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -248,6 +286,16 @@ export function ProtocolCanvasMenu({
     a.click()
     URL.revokeObjectURL(url)
   }
+
+  const importDesignMutation = useMutation({
+    mutationFn: (designSpec: DesignSpec) => {
+      const merged = mergeDesignSpec(experiment?.design_spec, designSpec)
+      return experimentsApi.update(experimentId!, { design_spec: merged })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+    },
+  })
 
   function handleFileSelected(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -263,6 +311,12 @@ export function ProtocolCanvasMenu({
           return
         }
         onImport(parsed.graph as ProtocolGraph)
+        // Only when this canvas is actually linked to an experiment -- an
+        // unlinked protocol has nowhere to attach factors/metrics at all
+        // (same reasoning as FactorBindableField's own disabled state).
+        if (experimentId && parsed.design_spec && typeof parsed.design_spec === 'object') {
+          importDesignMutation.mutate(parsed.design_spec as DesignSpec)
+        }
       })
       .catch(() => setImportError('Could not read this file as JSON.'))
   }

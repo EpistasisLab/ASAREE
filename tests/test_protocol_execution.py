@@ -99,6 +99,30 @@ def _tool_edge(source: str, target: str) -> dict:
     return {"id": f"{source}-{target}-tool", "source": source, "target": target, "targetHandle": "tool"}
 
 
+def _dataset_node(node_id: str = "dataset1", dataset_name: str = "spinal-fusion-v1") -> dict:
+    return {
+        "id": node_id,
+        "type": "dataset",
+        "data": {"label": "", "config": {"dataset_id": "d1", "dataset_name": dataset_name}},
+    }
+
+
+def _dataset_edge(source: str, target: str) -> dict:
+    return {"id": f"{source}-{target}-dataset", "source": source, "target": target, "targetHandle": "dataset"}
+
+
+def _script_node(node_id: str = "script1", code: str = "print('hi')") -> dict:
+    return {
+        "id": node_id,
+        "type": "script",
+        "data": {"label": "", "config": {"name": "scoring-script", "language": "python", "code": code}},
+    }
+
+
+def _script_edge(source: str, target: str) -> dict:
+    return {"id": f"{source}-{target}-script", "source": source, "target": target, "targetHandle": "script"}
+
+
 def _agent_with_llm(node_id: str, llm_id: str = "llm") -> tuple[dict, dict]:
     """A minimal valid agent + its required LLM connector edge -- the
     boilerplate every connector-validation test below needs just to get
@@ -212,6 +236,53 @@ def test_build_user_input_appends_upstream_context_after_prompt() -> None:
     node_runs = {"u": {"output_text": "draft text here"}}
     result = pe._build_user_input(downstream, graph, node_runs)
     assert result == "Polish the draft\n\nUpstream context:\n[u]: draft text here"
+
+
+def test_build_user_input_appends_dataset_context_when_wired() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="spinal-fusion-v1")
+    graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
+    result = pe._build_user_input(
+        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
+    )
+    assert "Dataset context:" in result
+    assert 'name="spinal-fusion-v1"' in result
+    assert f'experiment_id="{uuid.UUID(int=1)}"' in result
+    assert 'cell_label="tier_a__rep_0"' in result
+
+
+def test_build_user_input_omits_dataset_context_when_unwired() -> None:
+    node = _node("a", "agent", {"goal": "do the work"}, label="Worker")
+    result = pe._build_user_input(
+        node, {"nodes": [node], "edges": []}, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="cell"
+    )
+    assert "Dataset context" not in result
+
+
+def test_build_user_input_omits_dataset_context_without_experiment_id() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="spinal-fusion-v1")
+    graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
+    # No experiment_id/effective_cell_label given -- nothing to build the
+    # open_workspace instruction from, so the block is silently omitted
+    # rather than emitting a malformed instruction.
+    result = pe._build_user_input(agent, graph, {})
+    assert "Dataset context" not in result
+
+
+def test_build_user_input_appends_script_block_when_wired() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hello')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+    result = pe._build_user_input(agent, graph, {})
+    assert "Script to pass verbatim" in result
+    assert "print('hello')" in result
+
+
+def test_build_user_input_omits_script_block_when_unwired() -> None:
+    node = _node("a", "agent", {"goal": "do the work"}, label="Worker")
+    result = pe._build_user_input(node, {"nodes": [node], "edges": []}, {})
+    assert "Script to pass verbatim" not in result
 
 
 # --- _run_gated_worker (mocked -- no real LLM calls) -------------------------
@@ -555,9 +626,11 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
     config lives on the connected `llm` node now, not the agent's own
     config -- the factor binding targets that node instead."""
     received_configs = []
+    received_workspace_ids = []
 
-    async def fake_run_agent_node(node, *, graph, **kwargs):
+    async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
         received_configs.append(pe._resolve_llm_config(graph, node["id"]))
+        received_workspace_ids.append(workspace_id)
         return f"output for {node['id']}", None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
@@ -602,12 +675,14 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
         await pe.run_protocol(run_id)
 
         assert received_configs[0]["temperature"] == 0.1
+        assert received_workspace_ids[0] == f"{experiment_id}/only-cell"
 
         async with get_session() as db:
             cell = await get_cell(db, experiment_id=experiment_id, cell_label="only-cell")
             assert cell is not None
             assert cell.run_id == run_id
             assert cell.factor_values == {"Temperature": 0.1}
+            assert cell.workspace_id == f"{experiment_id}/only-cell"
             assert cell.artifacts is not None
             assert cell.artifacts["output_text"] == "output for worker"
             assert cell.artifacts["protocol_run_id"] == str(run_id)
@@ -637,6 +712,29 @@ def test_upstream_output_text_joins_completed_upstream_nodes() -> None:
 def test_upstream_output_text_skips_upstream_with_no_output() -> None:
     graph = _graph(["a", "b"], [("a", "b")])
     assert pe._upstream_output_text(graph, "b", {"a": {"status": "failed", "output_text": None}}) == ""
+
+
+# --- workspace_id computation (pure) -----------------------------------------
+
+
+def test_compute_workspace_id_for_a_real_cell_run() -> None:
+    experiment_id = uuid.uuid4()
+    protocol_run_id = uuid.uuid4()
+    assert pe._compute_workspace_id(experiment_id, "tier_a__rep_0", protocol_run_id) == f"{experiment_id}/tier_a__rep_0"
+
+
+def test_compute_workspace_id_adhoc_when_no_cell_label() -> None:
+    # A manual "Run" click or single-node Play on an experiment-linked
+    # protocol -- still gets a stable, per-run workspace so accept/reset
+    # semantics still make sense outside the factorial grid.
+    experiment_id = uuid.uuid4()
+    protocol_run_id = uuid.uuid4()
+    assert pe._compute_workspace_id(experiment_id, None, protocol_run_id) == f"{experiment_id}/adhoc-{protocol_run_id}"
+
+
+def test_compute_workspace_id_none_without_experiment_id() -> None:
+    # An unlinked protocol has no dataset to seed a workspace from.
+    assert pe._compute_workspace_id(None, "some-cell", uuid.uuid4()) is None
 
 
 def test_is_node_active_defaults_true_when_absent() -> None:
@@ -773,7 +871,8 @@ def test_tool_connection_on_critic_gate_raises() -> None:
         ],
     }
     with pytest.raises(
-        ProtocolValidationError, match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection"
+        ProtocolValidationError,
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Dataset, or Script connection",
     ):
         topological_order(graph)
 
@@ -840,6 +939,126 @@ def test_memory_node_with_plain_outgoing_edge_raises() -> None:
         topological_order(graph)
 
 
+def test_multiple_dataset_connections_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    ds1, ds2 = _dataset_node("ds1"), _dataset_node("ds2")
+    graph = {
+        "nodes": [llm, agent, ds1, ds2],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="at most one Dataset connection"):
+        topological_order(graph)
+
+
+def test_dataset_connection_from_non_dataset_source_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _node("b", "agent")],
+        "edges": [agent_llm_edge, _dataset_edge("b", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="must come from a Dataset node"):
+        topological_order(graph)
+
+
+def test_dataset_connection_on_critic_gate_raises() -> None:
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    gate_llm_edge = _llm_edge("llm", "g1")
+    dataset = _dataset_node()
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate"), dataset],
+        "edges": [
+            worker_llm_edge,
+            gate_llm_edge,
+            {"id": "w1-g1", "source": "w1", "target": "g1"},
+            _dataset_edge("dataset1", "g1"),
+        ],
+    }
+    with pytest.raises(
+        ProtocolValidationError,
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Dataset, or Script connection",
+    ):
+        topological_order(graph)
+
+
+def test_dataset_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node()
+    graph = {
+        "nodes": [llm, agent, dataset, _node("b", "agent")],
+        "edges": [
+            agent_llm_edge,
+            _dataset_edge("dataset1", "a"),
+            {"id": "dataset1-b", "source": "dataset1", "target": "b"},
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="Dataset node .* can only connect to a node's Dataset slot"):
+        topological_order(graph)
+
+
+def test_multiple_script_connections_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    s1, s2 = _script_node("s1"), _script_node("s2")
+    graph = {
+        "nodes": [llm, agent, s1, s2],
+        "edges": [agent_llm_edge, _script_edge("s1", "a"), _script_edge("s2", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="at most one Script connection"):
+        topological_order(graph)
+
+
+def test_script_connection_from_non_script_source_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _node("b", "agent")],
+        "edges": [agent_llm_edge, _script_edge("b", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="must come from a Script node"):
+        topological_order(graph)
+
+
+def test_script_connection_on_critic_gate_raises() -> None:
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    gate_llm_edge = _llm_edge("llm", "g1")
+    script = _script_node()
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate"), script],
+        "edges": [
+            worker_llm_edge,
+            gate_llm_edge,
+            {"id": "w1-g1", "source": "w1", "target": "g1"},
+            _script_edge("script1", "g1"),
+        ],
+    }
+    with pytest.raises(
+        ProtocolValidationError,
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Dataset, or Script connection",
+    ):
+        topological_order(graph)
+
+
+def test_script_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node()
+    graph = {
+        "nodes": [llm, agent, script, _node("b", "agent")],
+        "edges": [
+            agent_llm_edge,
+            _script_edge("script1", "a"),
+            {"id": "script1-b", "source": "script1", "target": "b"},
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="Script node .* can only connect to a node's Script slot"):
+        topological_order(graph)
+
+
 def test_multiple_execution_pattern_connections_raises() -> None:
     # Capped at one -- execution_pattern is a single value, unlike Tool
     # (repeatable) or Memory (already max-1 for a different reason).
@@ -880,7 +1099,8 @@ def test_architectural_pattern_connection_on_critic_gate_raises() -> None:
         ],
     }
     with pytest.raises(
-        ProtocolValidationError, match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection"
+        ProtocolValidationError,
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Dataset, or Script connection",
     ):
         topological_order(graph)
 
@@ -958,6 +1178,34 @@ def test_resolve_llm_config_returns_connected_node_config() -> None:
 def test_resolve_llm_config_empty_when_unconnected() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
     assert pe._resolve_llm_config(graph, "a") == {}
+
+
+def test_resolve_dataset_config_returns_connected_node_config() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="spinal-fusion-v1")
+    graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
+    assert pe._resolve_dataset_config(graph, "a") == {"dataset_id": "d1", "dataset_name": "spinal-fusion-v1"}
+
+
+def test_resolve_dataset_config_empty_when_unconnected() -> None:
+    graph = {"nodes": [_node("a", "agent")], "edges": []}
+    assert pe._resolve_dataset_config(graph, "a") == {}
+
+
+def test_resolve_script_config_returns_connected_node_config() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hi')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+    assert pe._resolve_script_config(graph, "a") == {
+        "name": "scoring-script",
+        "language": "python",
+        "code": "print('hi')",
+    }
+
+
+def test_resolve_script_config_empty_when_unconnected() -> None:
+    graph = {"nodes": [_node("a", "agent")], "edges": []}
+    assert pe._resolve_script_config(graph, "a") == {}
 
 
 def test_resolve_tool_config_collects_all_connected_tool_nodes() -> None:
@@ -1262,6 +1510,46 @@ async def test_run_single_node_ignores_an_unrelated_broken_sibling_node(
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)
+
+
+async def test_run_single_node_computes_adhoc_workspace_id_when_experiment_linked(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single-node Play run never has a real cell_label, but still gets a
+    stable per-run workspace when its protocol is linked to an experiment
+    (see _compute_workspace_id's own "adhoc" fallback)."""
+    received_workspace_ids = []
+
+    async def fake_run_agent_node(node, *, workspace_id=None, **_kwargs):
+        received_workspace_ids.append(workspace_id)
+        return f"solo output for {node['id']}", None, None
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+
+    target, target_llm_edge = _agent_with_llm("target")
+    graph = {"nodes": [target, _llm_node()], "edges": [target_llm_edge]}
+
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"single-node-ws-e2e-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db,
+            name=f"single-node-ws-test-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment_id,
+            graph=graph,
+        )
+        protocol_id = protocol.id
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id, target_node_id="target")
+        run_id = run.id
+
+    try:
+        await pe.run_protocol(run_id)
+        assert received_workspace_ids == [f"{experiment_id}/adhoc-{run_id}"]
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+            await delete_experiment(db, experiment_id)
 
 
 async def test_run_single_node_with_upstream_input_fails_cleanly(owner_id: uuid.UUID) -> None:

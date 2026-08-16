@@ -101,7 +101,7 @@ class ProtocolValidationError(Exception):
 # a new "connection type" concept. A "main" edge (today's plain pipeline
 # data-flow) is any edge whose targetHandle is one of these -- everything
 # else. The type marker always lives on the target side of an edge.
-_CONNECTOR_HANDLES = frozenset({"llm", "tool", "memory", "architectural_pattern"})
+_CONNECTOR_HANDLES = frozenset({"llm", "tool", "memory", "architectural_pattern", "dataset", "script"})
 
 # Each connector slot accepts a FAMILY of node types, not one exact type --
 # mirrors how "tool" already accepts any mcp_tool node. LLM and Architectural
@@ -134,12 +134,28 @@ _MEMORY_NODE_TYPES = frozenset({"memory"})  # one today; kept as a set for symme
 # agent isn't supported (a real, deliberate feature removal -- see the
 # removed _run_mcp_tool_node).
 _MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool"})
+# One today each; kept as sets for symmetry with the other connector
+# families. Dataset declares which registered dataset an agent's workspace
+# tools operate on (_resolve_dataset_config, folded into _build_user_input's
+# own "Dataset context" block); Script carries a fixed piece of code an
+# agent passes verbatim as some tool's own code-shaped argument (e.g.
+# run_model_script's `code`) -- neither is executed by ASAREE itself, same
+# "pure config source" status as every other connector.
+_DATASET_NODE_TYPES = frozenset({"dataset"})
+_SCRIPT_NODE_TYPES = frozenset({"script"})
 
 # Every node type that's a pure config source -- never gets its own execution
 # turn, never a pipeline "final output" (see sink_node_ids/run_protocol's
 # main loop), and may only ever emit its own connector-typed edge (see the
 # "outgoing wrong handle" check in topological_order below).
-_PURE_CONFIG_SOURCE_TYPES = _LLM_NODE_TYPES | _EXECUTION_PATTERN_NODE_TYPES | _MEMORY_NODE_TYPES | _MCP_TOOL_NODE_TYPES
+_PURE_CONFIG_SOURCE_TYPES = (
+    _LLM_NODE_TYPES
+    | _EXECUTION_PATTERN_NODE_TYPES
+    | _MEMORY_NODE_TYPES
+    | _MCP_TOOL_NODE_TYPES
+    | _DATASET_NODE_TYPES
+    | _SCRIPT_NODE_TYPES
+)
 
 # Which connector handle each pure-config-source node type may exclusively
 # emit into, and the human-facing label for that handle -- both keyed off
@@ -151,12 +167,16 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "architectural_pattern" for t in _EXECUTION_PATTERN_NODE_TYPES},
     **{t: "memory" for t in _MEMORY_NODE_TYPES},
     **{t: "tool" for t in _MCP_TOOL_NODE_TYPES},
+    **{t: "dataset" for t in _DATASET_NODE_TYPES},
+    **{t: "script" for t in _SCRIPT_NODE_TYPES},
 }
 _HANDLE_LABELS: dict[str, str] = {
     "llm": "LLM",
     "memory": "Memory",
     "architectural_pattern": "Architectural Pattern",
     "tool": "Tool",
+    "dataset": "Dataset",
+    "script": "Script",
 }
 
 # node type -> agentic-core PatternConfig slug, for _resolve_pattern_config.
@@ -217,6 +237,8 @@ _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "critic_gate": "Critic Gate",
     "mcp_tool": "MCP Tool",
     "memory": "Memory",
+    "dataset": "Dataset",
+    "script": "Script",
     "pattern_reason_act": "Reason + Act",
     "pattern_single_agent_baseline": "Single-Agent Baseline",
     "llm_anthropic": "Anthropic",
@@ -331,6 +353,8 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
         tool_edges = _edges_with_handle(graph, nid, "tool", direction="incoming")
         memory_edges = _edges_with_handle(graph, nid, "memory", direction="incoming")
         pattern_edges = _edges_with_handle(graph, nid, "architectural_pattern", direction="incoming")
+        dataset_edges = _edges_with_handle(graph, nid, "dataset", direction="incoming")
+        script_edges = _edges_with_handle(graph, nid, "script", direction="incoming")
         if node_type == "agent":
             for edge in tool_edges:
                 tool_source = nodes.get(edge["source"])
@@ -344,6 +368,22 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 memory_source = nodes.get(edge["source"])
                 if memory_source is None or memory_source.get("type") != "memory":
                     raise ProtocolValidationError(f"Node {name!r}'s Memory connection must come from a Memory node.")
+            if len(dataset_edges) > 1:
+                raise ProtocolValidationError(
+                    f"Node {name!r} can have at most one Dataset connection (found {len(dataset_edges)})."
+                )
+            for edge in dataset_edges:
+                dataset_source = nodes.get(edge["source"])
+                if dataset_source is None or dataset_source.get("type") != "dataset":
+                    raise ProtocolValidationError(f"Node {name!r}'s Dataset connection must come from a Dataset node.")
+            if len(script_edges) > 1:
+                raise ProtocolValidationError(
+                    f"Node {name!r} can have at most one Script connection (found {len(script_edges)})."
+                )
+            for edge in script_edges:
+                script_source = nodes.get(edge["source"])
+                if script_source is None or script_source.get("type") != "script":
+                    raise ProtocolValidationError(f"Node {name!r}'s Script connection must come from a Script node.")
             # Capped at one, but scoped to the execution-pattern family
             # specifically (see _EXECUTION_PATTERN_NODE_TYPES's own comment)
             # -- a future non-execution pattern node type connected
@@ -364,9 +404,10 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                         f"Node {name!r}'s Architectural Pattern connection must come from an Architectural "
                         "Pattern node."
                     )
-        elif tool_edges or memory_edges or pattern_edges:
+        elif tool_edges or memory_edges or pattern_edges or dataset_edges or script_edges:
             raise ProtocolValidationError(
-                f"Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection (node {name!r})."
+                f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Dataset, or Script connection "
+                f"(node {name!r})."
             )
 
         if node_type in _NODE_TYPE_TO_HANDLE:
@@ -467,6 +508,31 @@ def _upstream_ids(graph: dict[str, Any], node_id: str) -> list[str]:
     ]
 
 
+def _effective_cell_label(cell_label: str | None, protocol_run_id: uuid.UUID) -> str:
+    """``cell_label`` for a real factorial-cell run, else a synthetic
+    per-run label -- shared by ``_compute_workspace_id`` and the Dataset
+    connector's own context block (``_build_user_input``) so the two
+    identities can never drift apart."""
+    return cell_label or f"adhoc-{protocol_run_id}"
+
+
+def _compute_workspace_id(
+    experiment_id: uuid.UUID | None, cell_label: str | None, protocol_run_id: uuid.UUID
+) -> str | None:
+    """``{experiment_id}/{cell_label}`` -- the same convention the
+    asaree-spinal-use-case notebook computes by hand, and what
+    ``asaree_workspace_core``'s own ``resolve_workspace_id`` expects. ``None``
+    when there's no experiment at all (an unlinked protocol run has no
+    dataset to seed a workspace from). Computed unconditionally whenever an
+    experiment IS linked -- regardless of whether any agent in this run has
+    a Dataset node wired -- since it's inert for an agent that never calls a
+    workspace-scoped tool, and lets one reach for workspace tools ambiently
+    through a plain Tool connector without an explicit Dataset connector."""
+    if experiment_id is None:
+        return None
+    return f"{experiment_id}/{_effective_cell_label(cell_label, protocol_run_id)}"
+
+
 def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """The node's connected ``llm`` node's own config -- agent/critic_gate
     nodes no longer carry ``model_config_data`` themselves, it's resolved
@@ -474,6 +540,43 @@ def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     validated it exists exactly once)."""
     nodes, _downstream, _upstream = _adjacency(graph)
     edges = _edges_with_handle(graph, node_id, "llm", direction="incoming")
+    if not edges:
+        return {}
+    source = nodes.get(edges[0]["source"])
+    if source is None:
+        return {}
+    return (source.get("data") or {}).get("config") or {}
+
+
+def _resolve_dataset_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """``{"dataset_id": ..., "dataset_name": ...}`` from the node's connected
+    Dataset node, or ``{}`` if none is connected -- optional, like Memory
+    (``topological_order`` caps it at one, doesn't require it). Read by
+    ``_build_user_input`` to fold a "Dataset context" block into the wired
+    agent's own instruction; never resolved into any agentic-core config,
+    since a dataset isn't something agentic-core's own ModelConfig/
+    PatternConfig/ToolConfig has a slot for -- it's purely prompt context an
+    agent uses to call ``open_workspace`` itself."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    edges = _edges_with_handle(graph, node_id, "dataset", direction="incoming")
+    if not edges:
+        return {}
+    source = nodes.get(edges[0]["source"])
+    if source is None:
+        return {}
+    return (source.get("data") or {}).get("config") or {}
+
+
+def _resolve_script_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """``{"name": ..., "language": ..., "code": ...}`` from the node's
+    connected Script node, or ``{}`` if none is connected -- optional, like
+    Dataset. Read by ``_build_user_input`` to fold the script's own code
+    verbatim into the wired agent's instruction, for it to pass as some
+    tool's own code-shaped argument (e.g. run_model_script's ``code``) --
+    ASAREE itself never executes this, the same "pure config source, no
+    execution turn" status as every other connector."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    edges = _edges_with_handle(graph, node_id, "script", direction="incoming")
     if not edges:
         return {}
     source = nodes.get(edges[0]["source"])
@@ -568,30 +671,63 @@ def _upstream_output_text(graph: dict[str, Any], node_id: str, node_runs: dict[s
     return "\n\n".join(parts)
 
 
-def _build_user_input(node: dict[str, Any], graph: dict[str, Any], node_runs: dict[str, Any]) -> str:
+def _build_user_input(
+    node: dict[str, Any],
+    graph: dict[str, Any],
+    node_runs: dict[str, Any],
+    *,
+    experiment_id: uuid.UUID | None = None,
+    effective_cell_label: str | None = None,
+) -> str:
     """The node's own prompt (falling back to its goal, then its canvas
     label), plus (flat, unstructured -- a deliberate V1 simplification) each
-    already-completed upstream node's output_text as context. `prompt` is
-    the one field meant to change per run (mirrors n8n's AI Agent node's own
-    "Prompt (User Message)"); `goal` is a persistent objective, only used
-    here as prompt's own fallback when the user hasn't set one. Real
-    structured handoff via output_contract.payload is a fast-follow, the
-    same way the source notebook's own stage-report-block pattern could
-    graduate to using it."""
+    already-completed upstream node's output_text as context, plus a
+    Dataset-context block when this node has a Dataset connector wired
+    (naming the registered dataset and this run's own experiment_id/
+    cell_label, so the agent can call ``open_workspace`` itself -- the one
+    workspace tool with no ambient ``_meta`` fallback, confirmed directly
+    against its real signature), plus a Script block (the wired Script
+    node's own code, verbatim, for the agent to pass as some tool's own
+    code-shaped argument) when one is wired. `prompt` is the one field meant
+    to change per run (mirrors n8n's AI Agent node's own "Prompt (User
+    Message)"); `goal` is a persistent objective, only used here as
+    prompt's own fallback when the user hasn't set one. Real structured
+    handoff via output_contract.payload is a fast-follow, the same way the
+    source notebook's own stage-report-block pattern could graduate to
+    using it."""
     data: dict[str, Any] = node.get("data") or {}
     config: dict[str, Any] = data.get("config", {})
     seed: str = config.get("prompt") or config.get("goal") or data.get("label", "")
+    parts = [seed]
+
     upstream_ids = _upstream_ids(graph, node["id"])
-    if not upstream_ids:
-        return seed
-    context = [
+    upstream_context = [
         f"[{uid}]: {node_runs[uid]['output_text']}"
         for uid in upstream_ids
         if node_runs.get(uid, {}).get("output_text")
     ]
-    if not context:
-        return seed
-    return f"{seed}\n\nUpstream context:\n" + "\n\n".join(context)
+    if upstream_context:
+        parts.append("Upstream context:\n" + "\n\n".join(upstream_context))
+
+    dataset_config = _resolve_dataset_config(graph, node["id"])
+    dataset_name = dataset_config.get("dataset_name")
+    if dataset_name and experiment_id is not None and effective_cell_label is not None:
+        parts.append(
+            "Dataset context:\n"
+            f'A dataset named "{dataset_name}" is registered for this run. Call open_workspace '
+            f'with experiment_id="{experiment_id}", cell_label="{effective_cell_label}", '
+            f'name="{dataset_name}" before doing any data work.'
+        )
+
+    script_config = _resolve_script_config(graph, node["id"])
+    script_code = script_config.get("code")
+    if script_code:
+        parts.append(
+            "Script to pass verbatim as the relevant tool's own code argument (e.g. run_model_script's "
+            f"`code`):\n```python\n{script_code}\n```"
+        )
+
+    return "\n\n".join(parts)
 
 
 def _build_revision_instruction(base_instruction: str, verdict: dict[str, Any], previous_output: str) -> str:
@@ -617,6 +753,7 @@ async def _run_agent_node(
     owner_id: uuid.UUID,
     user_input: str,
     graph: dict[str, Any],
+    workspace_id: str | None = None,
 ) -> tuple[str | None, str | None, uuid.UUID | None]:
     """Create-or-sync the real agent and run it to completion. Returns
     ``(output_text, error, run_id)`` -- exactly one of output_text/error is
@@ -683,7 +820,12 @@ async def _run_agent_node(
         agent_id=agent.id,
         user_input=user_input,
         owner_id=owner_id,
-        metadata={"protocol_id": str(protocol_id), "protocol_run_id": str(protocol_run_id), "node_id": node["id"]},
+        metadata={
+            "protocol_id": str(protocol_id),
+            "protocol_run_id": str(protocol_run_id),
+            "node_id": node["id"],
+            **({"workspace_id": workspace_id} if workspace_id else {}),
+        },
     )
     timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
     try:
@@ -798,6 +940,9 @@ async def _run_gated_worker(
     owner_id: uuid.UUID,
     graph: dict[str, Any],
     node_runs: dict[str, Any],
+    workspace_id: str | None = None,
+    experiment_id: uuid.UUID | None = None,
+    effective_cell_label: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Generalizes the notebook's ``run_stage`` revision loop (cell 19):
     run worker -> if the gate is enabled, run critic on its output -> on
@@ -812,7 +957,9 @@ async def _run_gated_worker(
     gate_config = gate["data"]["config"]
     max_revisions = max(int(gate_config.get("max_revisions") or 0), 0)
     enabled = bool(gate_config.get("enabled", True))
-    base_instruction = _build_user_input(worker, graph, node_runs)
+    base_instruction = _build_user_input(
+        worker, graph, node_runs, experiment_id=experiment_id, effective_cell_label=effective_cell_label
+    )
     instruction = base_instruction
 
     for attempt in range(max_revisions + 1):
@@ -823,6 +970,7 @@ async def _run_gated_worker(
             owner_id=owner_id,
             user_input=instruction,
             graph=graph,
+            workspace_id=workspace_id,
         )
         run_id_str = str(run_id) if run_id else None
         if error:
@@ -988,7 +1136,13 @@ def validate_single_node_runnable(graph: dict[str, Any], node_id: str) -> dict[s
 
 
 async def _run_single_node(
-    protocol_run_id: uuid.UUID, *, protocol_id: uuid.UUID, owner_id: uuid.UUID, graph: dict[str, Any], node_id: str
+    protocol_run_id: uuid.UUID,
+    *,
+    protocol_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    graph: dict[str, Any],
+    node_id: str,
+    experiment_id: uuid.UUID | None = None,
 ) -> None:
     """The canvas's per-node Play run: one Agent node, no upstream, no gated
     pair, no factor substitution, no coordination-strategy check -- none of
@@ -1006,7 +1160,13 @@ async def _run_single_node(
         await set_status(db, protocol_run_id, status="running")
         await update_node_run(db, protocol_run_id, node_id, {"status": "running"})
 
-    user_input = _build_user_input(node, graph, {})
+    # Never a real factorial cell -- a single-node Play click always gets a
+    # synthetic per-run label (see _effective_cell_label).
+    effective_cell_label = _effective_cell_label(None, protocol_run_id)
+    workspace_id = _compute_workspace_id(experiment_id, None, protocol_run_id)
+    user_input = _build_user_input(
+        node, graph, {}, experiment_id=experiment_id, effective_cell_label=effective_cell_label
+    )
     output_text, error, run_id = await _run_agent_node(
         node,
         protocol_id=protocol_id,
@@ -1014,6 +1174,7 @@ async def _run_single_node(
         owner_id=owner_id,
         user_input=user_input,
         graph=graph,
+        workspace_id=workspace_id,
     )
     node_run = {
         "status": "failed" if error else "completed",
@@ -1043,7 +1204,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
     if target_node_id:
         await _run_single_node(
-            protocol_run_id, protocol_id=protocol_id, owner_id=owner_id, graph=graph, node_id=target_node_id
+            protocol_run_id,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            graph=graph,
+            node_id=target_node_id,
+            experiment_id=experiment_id,
         )
         return
 
@@ -1064,17 +1230,22 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             await set_status(db, protocol_run_id, status="failed", error=str(e))
         return
 
+    effective_cell_label = _effective_cell_label(cell_label, protocol_run_id)
+    workspace_id = _compute_workspace_id(experiment_id, cell_label, protocol_run_id)
+
     async with get_session() as db:
         await set_status(db, protocol_run_id, status="running")
         if cell_label and experiment_id:
             # Pre-write, before any node executes: a crash/timeout mid-run
             # still leaves this cell's provenance recorded (mirrors the
-            # notebook's own pre-scoring upsert_cell call).
+            # notebook's own pre-scoring upsert_cell call). workspace_id is
+            # already computed above -- FactorialCellResult.workspace_id
+            # existed for this before anything ever populated it.
             await upsert_cell(
                 db,
                 experiment_id=experiment_id,
                 cell_label=cell_label,
-                fields={"run_id": protocol_run_id, "factor_values": factor_values or {}},
+                fields={"run_id": protocol_run_id, "factor_values": factor_values or {}, "workspace_id": workspace_id},
             )
 
     node_runs: dict[str, Any] = {}
@@ -1107,7 +1278,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             gate = gated_by[node_id]
             worker_run, gate_run = await _run_gated_worker(
                 node, gate, protocol_id=protocol_id, protocol_run_id=protocol_run_id, owner_id=owner_id,
-                graph=graph, node_runs=node_runs,
+                graph=graph, node_runs=node_runs, workspace_id=workspace_id, experiment_id=experiment_id,
+                effective_cell_label=effective_cell_label,
             )
             node_runs[node_id] = worker_run
             node_runs[gate["id"]] = gate_run
@@ -1131,7 +1303,9 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             # applies to a plain agent node.
             output_text, error, run_id = _upstream_output_text(graph, node_id, node_runs), None, None
         else:
-            user_input = _build_user_input(node, graph, node_runs)
+            user_input = _build_user_input(
+                node, graph, node_runs, experiment_id=experiment_id, effective_cell_label=effective_cell_label
+            )
             output_text, error, run_id = await _run_agent_node(
                 node,
                 protocol_id=protocol_id,
@@ -1139,6 +1313,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 owner_id=owner_id,
                 user_input=user_input,
                 graph=graph,
+                workspace_id=workspace_id,
             )
 
         node_runs[node_id] = {

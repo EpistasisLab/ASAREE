@@ -62,6 +62,7 @@ import { findFreePosition } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { MemoryNodeInspector } from './MemoryNodeInspector'
+import { findNodeConfigIssues, type NodeConfigIssue } from './nodeConfigIssues'
 import {
   ProtocolCanvasActionsProvider,
   type ConnectorAddRequest,
@@ -70,6 +71,7 @@ import {
   type MainEdgeAddRequest,
 } from './ProtocolCanvasContext'
 import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
+import { RunWithIssuesDialog } from './RunWithIssuesDialog'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
 import { InteractEdge } from './edges/InteractEdge'
@@ -295,6 +297,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // Same idea again, requested from an existing edge's own hover "+"
   // (InteractEdge) -- splits that edge into origin->newAgent->target.
   const [pendingEdgeInsert, setPendingEdgeInsert] = useState<EdgeInsertRequest | null>(null)
+  // Populated by the Run button's own pre-flight scan (findNodeConfigIssues)
+  // when it finds at least one obviously misconfigured node -- opens
+  // RunWithIssuesDialog instead of firing the run immediately, so a run
+  // that's likely to just fail doesn't happen silently.
+  const [pendingRunIssues, setPendingRunIssues] = useState<NodeConfigIssue[] | null>(null)
   const [runId, setRunId] = useState<string | null>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
@@ -319,6 +326,22 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     mutationFn: () => protocolsApi.run(protocolId),
     onSuccess: (run) => setRunId(run.id),
   })
+
+  // Run button's own entry point -- a pre-flight scan for obviously
+  // misconfigured nodes (no model, no dataset picked, no script code, an
+  // agent with nothing wired into its required LLM connector) runs first;
+  // finding any opens RunWithIssuesDialog instead of firing the run
+  // immediately, since today the only feedback a real run gives for these
+  // is a generic "one or more nodes failed" AFTER spending a real attempt.
+  function requestRun() {
+    setRunErrorDismissed(false)
+    const issues = findNodeConfigIssues(nodes, edges)
+    if (issues.length > 0) {
+      setPendingRunIssues(issues)
+      return
+    }
+    runMutation.mutate()
+  }
 
   // The canvas's per-node Play icon -- reuses the exact same runId/runQuery
   // polling state as the main Run button, since a node-scoped run's
@@ -941,7 +964,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             )
           })()}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
-            <Button size="sm" disabled={isRunning} onClick={() => { setRunErrorDismissed(false); runMutation.mutate() }}>
+            <Button size="sm" disabled={isRunning} onClick={requestRun}>
               <Play className="size-4" />
               {isRunning ? 'Running…' : 'Run'}
             </Button>
@@ -1095,6 +1118,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               deleteNode(pendingDelete.nodes[0].id)
             }
             setPendingDelete(null)
+          }}
+        />
+      )}
+      {pendingRunIssues && (
+        <RunWithIssuesDialog
+          issues={pendingRunIssues}
+          onCancel={() => setPendingRunIssues(null)}
+          onRunAnyway={() => {
+            setPendingRunIssues(null)
+            runMutation.mutate()
           }}
         />
       )}

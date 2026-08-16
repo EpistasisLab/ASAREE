@@ -40,8 +40,11 @@ export function levelTypeOf(factor: DesignFactor): LevelType {
 // border-transparent already come from that variant + the shared base
 // classes) -- this just overrides the background/glow color from primary
 // to chart-2, so it reads as solid and deliberate rather than a bordered
-// secondary action.
-export const FACTOR_TRIGGER_CLASSNAME = 'bg-chart-2 shadow-[0_0_16px_-4px_var(--chart-2)] hover:bg-chart-2/80 hover:shadow-[0_0_20px_-3px_var(--chart-2)]'
+// secondary action. text-[0.65rem] overrides the `xs` size's own text-xs
+// (12px) explicitly -- the "Make factor" text needs to read as a small
+// caption next to the field label it sits beside, not as body-sized text.
+export const FACTOR_TRIGGER_CLASSNAME =
+  'bg-chart-2 text-[0.65rem] shadow-[0_0_16px_-4px_var(--chart-2)] hover:bg-chart-2/80 hover:shadow-[0_0_20px_-3px_var(--chart-2)]'
 
 export function parseLevelValue(raw: string, type: LevelType): unknown {
   return type === 'number' ? Number(raw) : raw

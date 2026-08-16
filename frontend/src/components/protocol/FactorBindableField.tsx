@@ -31,12 +31,14 @@ import type { DesignFactor } from '@/types/experiments'
 // row; sitting directly beside the text it labels reads as part of the
 // field itself.
 //
-// The trigger is always the Variable icon (lucide's "(x)" glyph) on an
-// `outline` button (a visible border/bg at rest, not just on hover) wrapped
-// in this app's own themed Tooltip -- explaining what it DOES ("vary this
-// across cells"), not just restating its name, and a real Tooltip rather
-// than the browser's native `title` (slow, inconsistent chrome -- see
-// CanvasControls.tsx's own reasoning for the same swap).
+// The trigger is always the Variable icon (lucide's "(x)" glyph) plus a
+// "Make factor" label on a small, filled, violet button (FACTOR_TRIGGER_CLASSNAME
+// -- a dedicated hue so it reads as its own category of action, not just
+// another neutral control) wrapped in this app's own themed Tooltip --
+// explaining what it DOES ("vary this across cells"), not just restating
+// its name, and a real Tooltip rather than the browser's native `title`
+// (slow, inconsistent chrome -- see CanvasControls.tsx's own reasoning for
+// the same swap).
 //
 // The Agent/Pattern inspectors' own title-row button (opens the per-node
 // field picker, rather than binding one specific field the way every
@@ -49,7 +51,7 @@ export function MakeNodeFactorButton({ onClick }: { onClick: () => void }) {
     <TooltipProvider delay={200}>
       <Tooltip>
         <TooltipTrigger render={<Button variant="default" size="xs" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" onClick={onClick} />}>
-          <Variable className="size-3" />
+          <Variable className="size-3.5" />
           Make factor
         </TooltipTrigger>
         <TooltipContent>Bind one of this node's fields to an experimental factor</TooltipContent>
@@ -158,7 +160,7 @@ export function FactorBindableField({
       <TooltipProvider delay={200}>
         <Tooltip>
           <TooltipTrigger render={<Button variant="default" size="xs" disabled className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" />}>
-            <Variable className="size-3" />
+            <Variable className="size-3.5" />
             Make factor
           </TooltipTrigger>
           <TooltipContent>This protocol has no linked experiment yet, so it has nothing to bind a factor to.</TooltipContent>
@@ -181,7 +183,7 @@ export function FactorBindableField({
               <TooltipTrigger
                 render={<Button variant="default" size="xs" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" onClick={() => setOpen(true)} />}
               >
-                <Variable className="size-3" />
+                <Variable className="size-3.5" />
                 Make factor
               </TooltipTrigger>
               <TooltipContent>{tooltipText}</TooltipContent>
@@ -215,7 +217,7 @@ export function FactorBindableField({
           <TooltipTrigger
             render={<PopoverTrigger render={<Button variant="default" size="xs" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" />} />}
           >
-            <Variable className="size-3" />
+            <Variable className="size-3.5" />
             Make factor
           </TooltipTrigger>
           <TooltipContent>{tooltipText}</TooltipContent>

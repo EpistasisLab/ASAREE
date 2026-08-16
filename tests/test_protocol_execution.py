@@ -989,6 +989,19 @@ def test_resolve_tool_config_allows_multiple_tools_from_one_server() -> None:
 
 
 
+def test_resolve_tool_config_skips_disabled_tool_node() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    tool1 = _tool_node("tool1", server_name="srv-a", tool_names=["fn_a"])
+    tool1["data"]["config"]["enabled"] = False
+    tool2 = _tool_node("tool2", server_name="srv-b", tool_names=["fn_b"])
+    graph = {
+        "nodes": [agent, tool1, tool2],
+        "edges": [agent_llm_edge, _tool_edge("tool1", "a"), _tool_edge("tool2", "a")],
+    }
+    resolved = pe._resolve_tool_config(graph, "a")
+    assert resolved == {"server_names": ["srv-b"], "tool_names": ["fn_b"]}
+
+
 def test_resolve_pattern_config_returns_connected_node_config() -> None:
     agent, agent_llm_edge = _agent_with_llm("a")
     pattern = _pattern_node()
@@ -1020,6 +1033,35 @@ def test_resolve_pattern_config_empty_when_unconnected() -> None:
     # own "reason_act" default, not an ASAREE-side hardcoded one.
     graph = {"nodes": [_node("a", "agent")], "edges": []}
     assert pe._resolve_pattern_config(graph, "a") == {}
+
+
+def test_resolve_pattern_config_override_wins_over_wired_connector() -> None:
+    """A factor bound to the agent's own data.pattern_override (via a plain
+    _set_path top-level key, same as any other binding) switches the
+    resolved pattern entirely -- this is how a Pattern factor varies the
+    node type itself across cells, since the wired connector node alone
+    can't."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    agent["data"]["pattern_override"] = {
+        "execution_pattern": "single_agent_baseline",
+        "pattern_params": {"single_agent_baseline": {"max_iterations": 3}},
+    }
+    pattern = _pattern_node()
+    graph = {"nodes": [agent, pattern], "edges": [agent_llm_edge, _pattern_edge("pattern", "a")]}
+    assert pe._resolve_pattern_config(graph, "a") == {
+        "execution_pattern": "single_agent_baseline",
+        "pattern_params": {"single_agent_baseline": {"max_iterations": 3}},
+    }
+
+
+def test_resolve_pattern_config_override_wins_when_unconnected() -> None:
+    agent = {
+        "id": "a",
+        "type": "agent",
+        "data": {"label": "", "config": {}, "pattern_override": {"execution_pattern": "reason_act"}},
+    }
+    graph = {"nodes": [agent], "edges": []}
+    assert pe._resolve_pattern_config(graph, "a") == {"execution_pattern": "reason_act"}
 
 
 async def test_run_protocol_tool_source_node_never_gets_its_own_turn(

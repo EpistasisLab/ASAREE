@@ -74,6 +74,21 @@ def test_cell_label_for_replicate_two_gets_suffix() -> None:
     assert cell_label_for(combo, replicate=2) == f"{cell_label_for(combo)}__rep2"
 
 
+def test_cell_label_for_dict_valued_level_prefers_identifying_key() -> None:
+    """A whole-node factor (LLM/Tool config, pattern override) is a dict, not
+    a scalar -- the label should read as the thing a human recognizes
+    ("claude-sonnet-5"), not Python's own dict repr."""
+    combo = {"llm": {"provider": "anthropic", "model": "claude-sonnet-5", "temperature": 0.7}}
+    assert cell_label_for(combo) == "llm_claude-sonnet-5"
+
+
+def test_cell_label_for_dict_valued_level_falls_back_to_stable_hash() -> None:
+    combo = {"weird": {"foo": "bar", "baz": 1}}
+    label = cell_label_for(combo)
+    assert label.startswith("weird_cfg-")
+    assert label == cell_label_for(combo)  # deterministic across calls
+
+
 async def test_generate_design_cells_default_replicate_matches_today(owner_id: uuid.UUID) -> None:
     async with get_session() as db:
         experiment = await create_experiment(db, name=f"design-gen-{uuid.uuid4().hex}", owner_id=owner_id)

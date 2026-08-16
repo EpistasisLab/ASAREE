@@ -492,8 +492,19 @@ def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, An
     "reason_act" (``DEFAULT_EXECUTION_PATTERN``). ASAREE deliberately doesn't
     duplicate that default here -- see AgentNode's own auto-created "Reason +
     Act" node on the frontend for how the default stays visible instead of
-    silently applying."""
+    silently applying.
+
+    A factor bound to this agent's own ``data.pattern_override`` (a synthetic
+    field the frontend writes but never reads directly) wins over the wired
+    connector node entirely -- this is how a Pattern factor varies the
+    *node type* itself across cells, which no ordinary field-level binding
+    can do. Shaped identically to this function's own return value,
+    slug-keyed with the raw agentic-core slug."""
     nodes, _downstream, _upstream = _adjacency(graph)
+    node = nodes.get(node_id)
+    override = (node.get("data") or {}).get("pattern_override") if node else None
+    if override:
+        return dict(override)
     edges = _edges_with_handle(graph, node_id, "architectural_pattern", direction="incoming")
     if not edges:
         return {}
@@ -523,6 +534,8 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
         if source is None:
             continue
         tool_node_config = (source.get("data") or {}).get("config") or {}
+        if not tool_node_config.get("enabled", True):
+            continue
         server_name = tool_node_config.get("server_name")
         node_tool_names = tool_node_config.get("tool_names") or []
         if server_name:

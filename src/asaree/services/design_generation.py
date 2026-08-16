@@ -14,7 +14,9 @@ else).
 
 from __future__ import annotations
 
+import hashlib
 import itertools
+import json
 import random
 import re
 import uuid
@@ -57,7 +59,22 @@ def generate_design(factors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [dict(zip(names, values, strict=True)) for values in itertools.product(*levels_lists)]
 
 
+# Checked in order for a dict-valued level (e.g. a whole LLM/Tool node config
+# or a pattern-override payload bound as a single factor) -- whichever of
+# these identifying keys is present first names the slug, since one of them
+# is always the thing a human actually wants to see in a cell label
+# ("claude-sonnet-5", "reason_act", "search-mcp"). Falls back to a short
+# stable hash when none match, rather than Python's own unstable dict repr.
+_DICT_SLUG_PRIORITY_KEYS = ("model", "provider", "execution_pattern", "server_name", "enabled")
+
+
 def _slugify(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in _DICT_SLUG_PRIORITY_KEYS:
+            if key in value and value[key] not in (None, ""):
+                return _slugify(value[key])
+        digest = hashlib.sha1(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()[:8]
+        return f"cfg-{digest}"
     slug = re.sub(r"[^a-z0-9]+", "-", str(value).strip().lower()).strip("-")
     return slug or "x"
 

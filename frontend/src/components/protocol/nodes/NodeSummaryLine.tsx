@@ -1,4 +1,4 @@
-import { TriangleAlert } from 'lucide-react'
+import { WarningBadge } from './WarningBadge'
 
 // Every compact node card's second line: a truncated one-line summary of its
 // own config, or -- only when `warning` names a real reason this node can't
@@ -10,15 +10,10 @@ import { TriangleAlert } from 'lucide-react'
 // run (e.g. Goal, optional since agentic-core has never required it) is
 // exactly what `text` being null/empty already handles -- rendering
 // nothing, not a warning; a blank-but-fine field was previously
-// (incorrectly) conflated with "can't run" here. Reuses --chart-4 (amber),
-// the same "needs attention" hue cellsStatusAccent already uses elsewhere.
-export function NodeSummaryLine({ text, warning }: { text: string | null; warning?: string | null }) {
+// (incorrectly) conflated with "can't run" here.
+export function NodeSummaryLine({ text, warning }: { text: string | null; warning?: string | string[] | null }) {
   if (warning) {
-    return (
-      <div className="absolute right-1.5 bottom-1" title={warning}>
-        <TriangleAlert className="size-3 shrink-0 text-[color:var(--chart-4)]" />
-      </div>
-    )
+    return <WarningBadge issues={warning} className="absolute right-1.5 bottom-1" />
   }
   if (!text) return null
   return (

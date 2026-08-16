@@ -1,8 +1,9 @@
 import type { ComponentType } from 'react'
 import { Handle, Position } from '@xyflow/react'
-import { TriangleAlert, Variable } from 'lucide-react'
+import { Variable } from 'lucide-react'
 import { cardAccent } from '@/lib/utils'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
+import { WarningBadge } from './WarningBadge'
 
 // n8n's own rendering for an AI sub-connector's source node (Chat Model/
 // Memory/Tool): a small circle with just the icon inside, no label -- the
@@ -41,7 +42,9 @@ export function CircleNode({
   // (e.g. McpToolNode-as-Tool with no server/tool picked yet) rather than a
   // permanent non-implementation.
   dashed?: boolean
-  warning?: string
+  // One message, or several if this node has more than one real issue at
+  // once -- see WarningBadge's own comment for how these render.
+  warning?: string | string[]
   // This node's own config.enabled is false (Tool/Dataset) -- same
   // opacity-50 dimming AgentNode/CriticGateNode already apply for their own
   // active/enabled state, so "this doesn't currently do anything" reads the
@@ -82,12 +85,10 @@ export function CircleNode({
           <Icon className="size-6 text-[color:var(--card-accent)]" />
         </div>
         {warning && (
-          <div
+          <WarningBadge
+            issues={warning}
             className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--card-accent)]/40"
-            title={warning}
-          >
-            <TriangleAlert className="size-3 text-[color:var(--chart-4)]" />
-          </div>
+          />
         )}
         {hasFactor && (
           <div

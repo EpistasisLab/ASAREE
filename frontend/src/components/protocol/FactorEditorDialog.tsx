@@ -25,9 +25,10 @@ import {
 } from './factorLevels'
 import { NODE_INSPECTOR_CONTENT_CLASSNAME } from './NodeInspectorDialog'
 import { PROVIDER_META } from './nodes/LlmNode'
+import { PythonCodeEditor } from './PythonCodeEditor'
 import type { DesignFactor } from '@/types/experiments'
 
-const LEVEL_TYPES: LevelType[] = ['string', 'text', 'number', 'boolean', 'llm_config', 'tool_config', 'pattern']
+const LEVEL_TYPES: LevelType[] = ['string', 'text', 'number', 'boolean', 'llm_config', 'tool_config', 'pattern', 'script_config']
 const EFFORT_LEVELS_FALLBACK = ['low', 'medium', 'high', 'xhigh', 'max']
 const PATTERN_OPTIONS = [
   { slug: 'reason_act', label: 'Reason + Act' },
@@ -274,6 +275,36 @@ function PatternLevelRow({ value, onChange }: { value: StructuredLevel; onChange
   )
 }
 
+// One row of a "script_config" factor's levels -- mirrors ScriptNodeInspector's
+// own Name/Language/Code fields exactly, since a level here IS a whole
+// Script node's config (protocol_execution.py's _resolve_script_config
+// reads it verbatim, never the node's xyflow type). Python-only for v1,
+// same as ScriptNodeInspector's own fixed "Language: Python" label.
+function ScriptConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+  function patch(patch: StructuredLevel) {
+    onChange({ ...value, ...patch })
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border p-2">
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <Label className="text-xs">Name</Label>
+          <Input className="h-8" value={(value.name as string) ?? ''} onChange={(e) => patch({ name: e.target.value })} />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Language</Label>
+          <p className="rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">Python</p>
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Code</Label>
+        <PythonCodeEditor value={(value.code as string) ?? ''} onChange={(code) => patch({ code })} rows={10} />
+      </div>
+    </div>
+  )
+}
+
 // A per-factor editor with real room -- reuses the node inspector's own
 // fixed near-fullscreen frame sizing (NODE_INSPECTOR_CONTENT_CLASSNAME) and
 // HUD glow/ring/corner-brackets (HUD_ACCENT_RING_CLASSNAME), but is built
@@ -490,7 +521,7 @@ export function FactorEditorDialog({
                       <Plus className="size-3.5" /> Add level
                     </Button>
                   </div>
-                ) : levelType === 'llm_config' || levelType === 'tool_config' || levelType === 'pattern' ? (
+                ) : isStructuredLevelType(levelType) ? (
                   <div className="space-y-2">
                     {levels.map((level, i) => (
                       <div key={i} className="flex items-start gap-1.5">
@@ -505,8 +536,13 @@ export function FactorEditorDialog({
                               value={level as StructuredLevel}
                               onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
                             />
-                          ) : (
+                          ) : levelType === 'pattern' ? (
                             <PatternLevelRow
+                              value={level as StructuredLevel}
+                              onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
+                            />
+                          ) : (
+                            <ScriptConfigLevelRow
                               value={level as StructuredLevel}
                               onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
                             />

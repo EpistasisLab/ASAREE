@@ -1,11 +1,11 @@
 import { Code2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
+import { PythonCodeEditor } from './PythonCodeEditor'
 import type { ScriptNodeConfig, ScriptNodeData, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = hashToChartHue('script')
@@ -94,17 +94,11 @@ export function ScriptNodeInspector({
       >
         {(trigger) => (
           <div className="w-full space-y-1.5">
-            <Label htmlFor="script-code" className="flex items-center gap-1.5">
+            <Label className="flex items-center gap-1.5">
               Code
               {trigger}
             </Label>
-            <Textarea
-              id="script-code"
-              rows={16}
-              className="font-mono text-xs"
-              value={config.code}
-              onChange={(e) => patchConfig({ code: e.target.value })}
-            />
+            <PythonCodeEditor value={config.code} onChange={(code) => patchConfig({ code })} rows={16} />
           </div>
         )}
       </FactorBindableField>

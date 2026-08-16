@@ -2,8 +2,15 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
 import { cardAccent, cn } from '@/lib/utils'
+
+// Midpoint of the slider's own 20-100 range (see below) -- a visible,
+// legible starting point that still shows the transparency effect is there,
+// rather than opening fully opaque (indistinguishable from "no feature")
+// or at the 20 floor (harder to read by default).
+const DEFAULT_OPACITY = 60
 
 // n8n's own Node Detail View (`.dialog` in NodeDetailsView.vue) is a large,
 // FIXED-size floating frame -- `width`/`height` are both
@@ -61,13 +68,13 @@ export function NodeInspectorDialog({
   onClose: () => void
   children: ReactNode
 }) {
-  // A viewing convenience, not durable state -- resets to fully opaque every
-  // time the dialog opens (the same Dialog instance is reused as `open`
-  // toggles between different nodes, so this can't just be a one-time
-  // useState initializer).
-  const [opacity, setOpacity] = useState(100)
+  // A viewing convenience, not durable state -- resets to DEFAULT_OPACITY
+  // every time the dialog opens (the same Dialog instance is reused as
+  // `open` toggles between different nodes, so this can't just be a
+  // one-time useState initializer).
+  const [opacity, setOpacity] = useState(DEFAULT_OPACITY)
   useEffect(() => {
-    if (open) setOpacity(100)
+    if (open) setOpacity(DEFAULT_OPACITY)
   }, [open])
 
   return (
@@ -85,24 +92,32 @@ export function NodeInspectorDialog({
       >
         <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
           <div className="flex items-center gap-2">{title}</div>
-          <div className="flex items-center gap-2">
-            <Slider
-              className="w-24"
-              min={20}
-              max={100}
-              step={5}
-              value={opacity}
-              onValueChange={(value) => setOpacity(value as number)}
-              aria-label="Dialog transparency"
-            />
-            {onDelete && (
-              <Button variant="ghost" size="icon" aria-label="Delete node" onClick={onDelete}>
-                <Trash2 className="size-4" />
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="node-inspector-opacity" className="text-xs whitespace-nowrap text-muted-foreground">
+                Transparency
+              </Label>
+              <Slider
+                id="node-inspector-opacity"
+                className="w-24"
+                min={20}
+                max={100}
+                step={5}
+                value={opacity}
+                onValueChange={(value) => setOpacity(value as number)}
+                aria-label="Dialog transparency"
+              />
+            </div>
+            <div className="flex items-center gap-2 border-l pl-4">
+              {onDelete && (
+                <Button variant="ghost" size="icon" aria-label="Delete node" onClick={onDelete}>
+                  <Trash2 className="size-4" />
+                </Button>
+              )}
+              <Button variant="outline" size="icon" aria-label="Close" onClick={onClose}>
+                <X className="size-4" />
               </Button>
-            )}
-            <Button variant="outline" size="icon" aria-label="Close" onClick={onClose}>
-              <X className="size-4" />
-            </Button>
+            </div>
           </div>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-4">{children}</div>

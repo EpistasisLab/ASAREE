@@ -13,6 +13,7 @@ import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import { unboundBindableFields, type UnboundField } from './bindableFields'
 import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
 import { FactorEditorDialog } from './FactorEditorDialog'
+import { InfoTooltip } from './InfoTooltip'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import {
   COORDINATION_STRATEGY_CATALOG,
@@ -359,7 +360,10 @@ export function DesignTab({
   return (
     <div className="flex flex-col gap-5 p-3 text-sm">
       <div className="space-y-1.5">
-        <Label htmlFor="design-hypothesis">Hypothesis</Label>
+        <Label htmlFor="design-hypothesis" className="flex items-center gap-1.5">
+          Hypothesis
+          <InfoTooltip>Free-text notes on what you expect this experiment to show. Documentation only -- never read by any code.</InfoTooltip>
+        </Label>
         <Textarea
           id="design-hypothesis"
           value={hypothesis}
@@ -394,12 +398,25 @@ export function DesignTab({
       </div>
 
       <div className="space-y-1.5">
-        <Label>Experimental factors and levels</Label>
+        <Label className="flex items-center gap-1.5">
+          Experimental factors and levels
+          <InfoTooltip>
+            A factor is an independent variable you vary across cells (e.g. which model, whether a stage is enabled).
+            Its levels are the specific values it can take. Every combination of levels across all factors becomes
+            one cell.
+          </InfoTooltip>
+        </Label>
         <FactorsEditor experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} factors={factors} />
       </div>
 
       <div className="space-y-1.5">
-        <Label>Design type</Label>
+        <Label className="flex items-center gap-1.5">
+          Design type
+          <InfoTooltip>
+            How cells get generated -- "factorial" means every combination of every factor's levels becomes its own
+            cell. Set when the experiment was created, not editable here.
+          </InfoTooltip>
+        </Label>
         <p className="rounded-md border border-dashed px-2.5 py-1.5 text-xs text-muted-foreground capitalize">
           {experiment.design_type}
         </p>
@@ -407,7 +424,13 @@ export function DesignTab({
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
-          <Label htmlFor="design-replicates">Replicates</Label>
+          <Label htmlFor="design-replicates" className="flex items-center gap-1.5">
+            Replicates
+            <InfoTooltip>
+              How many times each combination of factor levels is independently repeated (e.g. re-run with a
+              different sample) to average out run-to-run noise.
+            </InfoTooltip>
+          </Label>
           <Input
             id="design-replicates"
             type="number"
@@ -417,7 +440,13 @@ export function DesignTab({
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="design-seed">Randomization seed</Label>
+          <Label htmlFor="design-seed" className="flex items-center gap-1.5">
+            Randomization seed
+            <InfoTooltip>
+              Only shuffles the ORDER cells are generated in -- never which combinations exist or their labels. Set
+              one to make that shuffle reproducible; leave blank to keep cells in their natural, unshuffled order.
+            </InfoTooltip>
+          </Label>
           <Input
             id="design-seed"
             type="number"
@@ -429,15 +458,26 @@ export function DesignTab({
       </div>
 
       <div className="space-y-1.5">
-        <Label>Metrics</Label>
+        <Label className="flex items-center gap-1.5">
+          Metrics
+          <InfoTooltip>
+            What this experiment scores each cell on. Primary marks the one used for the significance analysis;
+            Maximize/Minimize says which direction is better.
+          </InfoTooltip>
+        </Label>
         <MetricsEditor metrics={metrics} onChange={setMetrics} />
       </div>
 
       <div className="space-y-1.5 rounded-md border bg-muted/30 px-3 py-2">
-        <p className="font-mono text-xs text-muted-foreground">
+        <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
           {validFactors.length} factor{validFactors.length === 1 ? '' : 's'} → {combinations} condition
           {combinations === 1 ? '' : 's'} × {Math.max(replicates, 1)} replicate{replicates === 1 ? '' : 's'} = {totalTrials} total
           trial{totalTrials === 1 ? '' : 's'}
+          <InfoTooltip>
+            A "condition" here is one specific combination of factor levels (e.g. Model=A × Effort=medium) -- the
+            same thing the Cells tab calls a cell, before replication. 2 factors with 2 levels each = 4 conditions;
+            × replicates = total trials.
+          </InfoTooltip>
         </p>
         <Button size="sm" variant="outline" disabled={generateMutation.isPending || isDirty || validFactors.length === 0} onClick={() => generateMutation.mutate()}>
           {generateMutation.isPending ? 'Generating…' : 'Generate design'}

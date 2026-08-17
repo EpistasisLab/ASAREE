@@ -335,7 +335,7 @@ async def test_gated_worker_approved_first_attempt(monkeypatch: pytest.MonkeyPat
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(kwargs["worker_output"])
-        return {"approved": True, "feedback": "", "rejection_scope": ""}, None
+        return {"approved": True, "feedback": "", "rejection_scope": ""}, None, "critic-run-1"
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
     monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
@@ -350,6 +350,8 @@ async def test_gated_worker_approved_first_attempt(monkeypatch: pytest.MonkeyPat
     }
     assert gate_run["approved"] is True
     assert gate_run["revisions_used"] == 0
+    assert gate_run["feedback"] == ""
+    assert gate_run["run_id"] == "critic-run-1"
     assert critic_calls == ["worker output v1"]
 
 
@@ -364,8 +366,8 @@ async def test_gated_worker_rejected_then_approved_on_revision(monkeypatch: pyte
     async def fake_run_critic(gate, *, worker_output, **_kwargs):
         critic_calls.append(worker_output)
         if len(critic_calls) == 1:
-            return {"approved": False, "feedback": "fix the header", "rejection_scope": "partial"}, None
-        return {"approved": True, "feedback": "", "rejection_scope": ""}, None
+            return {"approved": False, "feedback": "fix the header", "rejection_scope": "partial"}, None, "critic-run-1"
+        return {"approved": True, "feedback": "", "rejection_scope": ""}, None, "critic-run-2"
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
     monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
@@ -384,6 +386,10 @@ async def test_gated_worker_rejected_then_approved_on_revision(monkeypatch: pyte
     }
     assert gate_run["approved"] is True
     assert gate_run["revisions_used"] == 1
+    # The persisted verdict is the one that actually approved it, not the
+    # earlier rejection that triggered the revision.
+    assert gate_run["feedback"] == ""
+    assert gate_run["run_id"] == "critic-run-2"
     assert len(critic_calls) == 2
     # The revised instruction carries the critic's feedback and the scope
     # framing forward -- not just a bare rerun of the original goal.
@@ -402,7 +408,7 @@ async def test_gated_worker_force_accepts_without_final_critic_call(monkeypatch:
 
     async def fake_run_critic(gate, *, worker_output, **_kwargs):
         critic_calls.append(worker_output)
-        return {"approved": False, "feedback": "still wrong", "rejection_scope": "full"}, None
+        return {"approved": False, "feedback": "still wrong", "rejection_scope": "full"}, None, "critic-run-1"
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
     monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
@@ -413,12 +419,18 @@ async def test_gated_worker_force_accepts_without_final_critic_call(monkeypatch:
     # second critic call on a verdict the pipeline would ignore anyway.
     assert worker_run["attempts"] == 2
     assert len(critic_calls) == 1
+    # The forced-accept branch still surfaces the *last* critic verdict
+    # (the rejection that forced this final attempt) instead of discarding
+    # it once it stops being used to build the next instruction.
     assert gate_run == {
         "status": "completed",
         "output_text": "worker output v2",
         "approved": None,
         "revisions_used": 1,
         "forced": True,
+        "feedback": "still wrong",
+        "rejection_scope": "full",
+        "run_id": "critic-run-1",
     }
 
 
@@ -430,7 +442,7 @@ async def test_gated_worker_disabled_skips_critic_entirely(monkeypatch: pytest.M
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(1)
-        return {"approved": True, "feedback": "", "rejection_scope": ""}, None
+        return {"approved": True, "feedback": "", "rejection_scope": ""}, None, "critic-run-1"
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
     monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
@@ -449,7 +461,7 @@ async def test_gated_worker_worker_failure_stops_immediately(monkeypatch: pytest
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(1)
-        return {"approved": True, "feedback": "", "rejection_scope": ""}, None
+        return {"approved": True, "feedback": "", "rejection_scope": ""}, None, "critic-run-1"
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
     monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
@@ -471,7 +483,7 @@ async def test_gated_worker_critic_failure_fails_the_pair(monkeypatch: pytest.Mo
         return "worker output", None, None
 
     async def fake_run_critic(gate, **kwargs):
-        return None, "critic run timed out"
+        return None, "critic run timed out", "critic-run-1"
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
     monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
@@ -479,7 +491,14 @@ async def test_gated_worker_critic_failure_fails_the_pair(monkeypatch: pytest.Mo
     worker_run, gate_run = await _run(*_worker_gate())
     assert worker_run["status"] == "failed"
     assert "critic failed" in worker_run["error"]
-    assert gate_run == {"status": "failed", "output_text": None, "error": "critic run timed out"}
+    # Even on failure, the critic's own run_id is surfaced -- lets a user
+    # drill into a timed-out/errored critic run for debugging.
+    assert gate_run == {
+        "status": "failed",
+        "output_text": None,
+        "error": "critic run timed out",
+        "run_id": "critic-run-1",
+    }
 
 
 # --- apply_factor_bindings / sink_node_ids (pure) ----------------------------

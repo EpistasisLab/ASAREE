@@ -1055,6 +1055,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           <CriticGateNodeInspector
             node={{ id: selectedNode.id, type: 'critic_gate', position: selectedNode.position, data: selectedNode.data as CriticGateNodeData }}
             experimentId={experimentId}
+            nodeRun={runQuery.data?.node_runs[selectedNode.id]}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}

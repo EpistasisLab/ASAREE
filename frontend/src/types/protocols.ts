@@ -44,6 +44,19 @@ export interface NodeRunState {
   run_id?: string | null
   output_text?: string | null
   error?: string | null
+  // Critic Gate only -- absent on a plain agent's NodeRunState. `run_id`
+  // above doubles as the CRITIC's own run (not the upstream worker's) for a
+  // gate, so its own Sense/Reason/Plan/Act steps are inspectable the same
+  // way an agent's are. `approved` is null when the gate is disabled
+  // (pass-through, no critic ever ran) or when `forced` is true (revisions
+  // exhausted, no verdict on the final attempt); `feedback`/`rejection_scope`
+  // carry the last verdict produced -- the one that approved it, or, when
+  // `forced`, the rejection that led to the forced final attempt.
+  approved?: boolean | null
+  revisions_used?: number | null
+  forced?: boolean
+  feedback?: string | null
+  rejection_scope?: string | null
 }
 
 export interface ProtocolRun {

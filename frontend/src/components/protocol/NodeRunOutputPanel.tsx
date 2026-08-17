@@ -94,10 +94,39 @@ export function NodeRunOutputPanel({ nodeRun }: { nodeRun: NodeRunState | undefi
     iterations.set(step.iteration, bucket)
   }
 
+  // Critic Gate only -- `approved` only exists at all on a gate's own
+  // NodeRunState (see the type comment), so its presence (even as `null`)
+  // is what distinguishes a gate's run from a plain agent's.
+  const isGateRun = nodeRun.approved !== undefined
+
   return (
     <div className="space-y-4">
       {badge && (
         <span className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${badge.className}`}>{badge.label}</span>
+      )}
+
+      {isGateRun && (
+        <div className="space-y-1.5">
+          <p className="text-sm font-medium">Verdict</p>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            {nodeRun.approved === true && <span className="font-medium text-[color:var(--chart-3)]">Approved</span>}
+            {nodeRun.approved === false && <span className="font-medium text-destructive">Rejected</span>}
+            {nodeRun.approved == null && nodeRun.forced && (
+              <span className="font-medium text-[color:var(--chart-4)]">Forced accept -- revisions exhausted</span>
+            )}
+            {nodeRun.approved == null && !nodeRun.forced && (
+              <span className="font-medium text-muted-foreground">Gate disabled -- passed through, no review</span>
+            )}
+            {typeof nodeRun.revisions_used === 'number' && (
+              <span className="text-muted-foreground">
+                {nodeRun.revisions_used} revision{nodeRun.revisions_used === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
+          {nodeRun.feedback && (
+            <p className="rounded-lg border bg-muted/30 p-3 text-sm whitespace-pre-wrap">{nodeRun.feedback}</p>
+          )}
+        </div>
       )}
 
       {nodeRun.error ? (
@@ -109,7 +138,10 @@ export function NodeRunOutputPanel({ nodeRun }: { nodeRun: NodeRunState | undefi
         </div>
       ) : nodeRun.output_text ? (
         <div className="space-y-1.5">
-          <p className="text-sm font-medium">Output</p>
+          {/* For a gate this is the upstream worker's approved output passed
+              through, not text the critic itself wrote -- the Verdict block
+              above is the critic's own contribution. */}
+          <p className="text-sm font-medium">{isGateRun ? 'Passed-through output' : 'Output'}</p>
           <p className="max-h-64 overflow-y-auto rounded-lg border bg-muted/30 p-3 text-sm whitespace-pre-wrap">{nodeRun.output_text}</p>
         </div>
       ) : (

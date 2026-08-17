@@ -903,10 +903,13 @@ async def _run_critic(
     owner_id: uuid.UUID,
     worker_output: str,
     graph: dict[str, Any],
-) -> tuple[dict[str, Any] | None, str | None]:
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
     """Create-or-sync the gate's own critic agent and run it once. Returns
-    ``(verdict, error)`` -- exactly one is ``None``. The critic never gets
-    tools and always runs single-pass (matches the notebook's own
+    ``(verdict, error, critic_run_id)`` -- exactly one of verdict/error is
+    ``None``. ``critic_run_id`` is populated as soon as the critic's own Run
+    is created, even on failure, so the caller can still surface it for
+    debugging (e.g. a timed-out or malformed-verdict critic run). The critic
+    never gets tools and always runs single-pass (matches the notebook's own
     ``CRITIC_TOOLS = []`` / ``SINGLE_PASS_PATTERN``), and its
     ``output_contract`` is always :data:`CRITIC_OUTPUT_CONTRACT` -- not
     whatever (if anything) is in the node's own config. Model is resolved
@@ -957,6 +960,7 @@ async def _run_critic(
         owner_id=owner_id,
         metadata={"protocol_id": str(protocol_id), "protocol_run_id": str(protocol_run_id), "node_id": gate["id"]},
     )
+    critic_run_id = str(run.id)
     timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
     try:
         await asyncio.wait_for(
@@ -964,19 +968,19 @@ async def _run_critic(
             timeout=timeout,
         )
     except TimeoutError:
-        return None, f"critic run exceeded its {timeout}s execution budget"
+        return None, f"critic run exceeded its {timeout}s execution budget", critic_run_id
     except Exception as e:  # noqa: BLE001
-        return None, f"{type(e).__name__}: {e}"
+        return None, f"{type(e).__name__}: {e}", critic_run_id
 
     finished = await get_run(run.id)
     if finished is None:
-        return None, "critic run vanished after execution"
+        return None, "critic run vanished after execution", critic_run_id
     if finished.error:
-        return None, finished.error
+        return None, finished.error, critic_run_id
     envelope = parse_envelope(finished.output)
     if envelope is None or envelope.payload is None:
-        return None, "critic did not return a structured verdict"
-    return envelope.payload, None
+        return None, "critic did not return a structured verdict", critic_run_id
+    return envelope.payload, None, critic_run_id
 
 
 async def _run_gated_worker(
@@ -1009,6 +1013,13 @@ async def _run_gated_worker(
         worker, graph, node_runs, experiment_id=experiment_id, effective_cell_label=effective_cell_label
     )
     instruction = base_instruction
+    # Tracks the most recent critic verdict/run across attempts so the
+    # forced-accept branch (which never calls the critic for its own final
+    # attempt) can still surface *why* a revision was needed last time,
+    # instead of silently discarding that context once it stops being used
+    # to build the next instruction.
+    last_verdict: dict[str, Any] | None = None
+    last_critic_run_id: str | None = None
 
     for attempt in range(max_revisions + 1):
         output_text, error, run_id = await _run_agent_node(
@@ -1061,10 +1072,15 @@ async def _run_gated_worker(
                     "approved": None,
                     "revisions_used": attempt,
                     "forced": True,
+                    # Last verdict is the rejection that forced this final attempt --
+                    # None only when max_revisions is 0 (no critic ever ran).
+                    "feedback": last_verdict.get("feedback") if last_verdict else None,
+                    "rejection_scope": last_verdict.get("rejection_scope") if last_verdict else None,
+                    "run_id": last_critic_run_id,
                 },
             )
 
-        verdict, verdict_error = await _run_critic(
+        verdict, verdict_error, critic_run_id = await _run_critic(
             gate,
             protocol_id=protocol_id,
             protocol_run_id=protocol_run_id,
@@ -1083,7 +1099,7 @@ async def _run_gated_worker(
                     "attempts": attempt + 1,
                     "run_id": run_id_str,
                 },
-                {"status": "failed", "output_text": None, "error": verdict_error},
+                {"status": "failed", "output_text": None, "error": verdict_error, "run_id": critic_run_id},
             )
         assert verdict is not None, "_run_critic guarantees verdict when verdict_error is falsy"
 
@@ -1096,9 +1112,19 @@ async def _run_gated_worker(
                     "attempts": attempt + 1,
                     "run_id": run_id_str,
                 },
-                {"status": "completed", "output_text": output_text, "approved": True, "revisions_used": attempt},
+                {
+                    "status": "completed",
+                    "output_text": output_text,
+                    "approved": True,
+                    "revisions_used": attempt,
+                    "feedback": verdict.get("feedback"),
+                    "rejection_scope": None,
+                    "run_id": critic_run_id,
+                },
             )
 
+        last_verdict = verdict
+        last_critic_run_id = critic_run_id
         instruction = _build_revision_instruction(base_instruction, verdict, output_text)
 
     raise AssertionError("_run_gated_worker fell through its attempt loop")  # unreachable

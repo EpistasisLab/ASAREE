@@ -20,6 +20,7 @@ from asaree.services.protocol_runs import (
     get_protocol_run,
     list_experiment_trials,
     list_protocol_runs,
+    request_protocol_run_cancellation,
     update_node_run,
 )
 from asaree.services.protocols import create_protocol, delete_protocol
@@ -109,6 +110,41 @@ async def test_fail_protocol_run_is_race_safe_against_terminal(owner_id: uuid.UU
         assert again is not None
         assert again.status == "failed"
         assert again.error == "boom"
+
+
+async def test_request_protocol_run_cancellation_flags_a_running_run(
+    owner_id: uuid.UUID, protocol_id: uuid.UUID
+) -> None:
+    async with get_session() as db:
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run_id = run.id
+        run.status = "running"
+        await db.flush()
+
+    async with get_session() as db:
+        flagged = await request_protocol_run_cancellation(db, run_id)
+        assert flagged is not None
+        assert flagged.cancel_requested_at is not None
+        # Only the flag is set -- run_protocol's own node loop is what
+        # transitions status, not this call.
+        assert flagged.status == "running"
+
+
+async def test_request_protocol_run_cancellation_is_a_noop_once_terminal(
+    owner_id: uuid.UUID, protocol_id: uuid.UUID
+) -> None:
+    async with get_session() as db:
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run_id = run.id
+
+    async with get_session() as db:
+        await fail_protocol_run(db, run_id, error="boom")
+
+    async with get_session() as db:
+        result = await request_protocol_run_cancellation(db, run_id)
+        assert result is not None
+        assert result.cancel_requested_at is None
+        assert result.status == "failed"
 
 
 async def test_list_protocol_runs_scoped_to_protocol(owner_id: uuid.UUID, protocol_id: uuid.UUID) -> None:

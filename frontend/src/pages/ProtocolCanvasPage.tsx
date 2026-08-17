@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ReactFlowProvider } from '@xyflow/react'
+import { Square } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
@@ -82,10 +83,14 @@ function EditableExperimentName({ experiment }: { experiment: Experiment }) {
 function RunAllCellsButton({ protocolId, experimentId, cellCount }: { protocolId: string; experimentId: string; cellCount: number }) {
   const queryClient = useQueryClient()
   const [triggeredIds, setTriggeredIds] = useState<string[] | null>(null)
+  const [stopRequested, setStopRequested] = useState(false)
 
   const triggerMutation = useMutation({
     mutationFn: () => protocolsApi.runCells(protocolId),
-    onSuccess: (batch) => setTriggeredIds(batch.protocol_run_ids),
+    onSuccess: (batch) => {
+      setTriggeredIds(batch.protocol_run_ids)
+      setStopRequested(false)
+    },
   })
 
   const runsQuery = useQuery({
@@ -108,12 +113,31 @@ function RunAllCellsButton({ protocolId, experimentId, cellCount }: { protocolId
   const triggered: ProtocolRun[] = triggeredIds ? (runsQuery.data ?? []).filter((r) => triggeredIds.includes(r.id)) : []
   const doneCount = triggered.filter((r) => TERMINAL_RUN_STATUSES.has(r.status)).length
   const failedCount = triggered.filter((r) => r.status === 'failed').length
+  const cancelledCount = triggered.filter((r) => r.status === 'cancelled').length
   const isRunning = triggerMutation.isPending || (!!triggeredIds && doneCount < triggeredIds.length)
+
+  // "Stop all" only raises cancel_requested_at on each still-running run in
+  // the batch (same fire-and-poll shape as the single-run Stop button in
+  // ProtocolCanvas.tsx) -- run_protocol's own node loop is what actually
+  // honors it, per run, between nodes. Already-terminal runs are left
+  // alone; there's nothing to cancel there.
+  const cancelAllMutation = useMutation({
+    mutationFn: async () => {
+      const stillRunning = triggered.filter((r) => !TERMINAL_RUN_STATUSES.has(r.status))
+      await Promise.all(stillRunning.map((r) => protocolsApi.cancelRun(protocolId, r.id)))
+    },
+    onSuccess: () => setStopRequested(true),
+  })
 
   let statusLabel: string | null = null
   if (triggerMutation.isPending) statusLabel = 'Starting…'
-  else if (triggeredIds && isRunning) statusLabel = `Running ${doneCount}/${triggeredIds.length} cells…`
-  else if (triggeredIds) statusLabel = `${triggeredIds.length - failedCount} done${failedCount ? `, ${failedCount} failed` : ''}`
+  else if (triggeredIds && isRunning) statusLabel = `${stopRequested ? 'Stopping' : 'Running'} ${doneCount}/${triggeredIds.length} cells…`
+  else if (triggeredIds) {
+    const parts = [`${triggeredIds.length - failedCount - cancelledCount} done`]
+    if (failedCount) parts.push(`${failedCount} failed`)
+    if (cancelledCount) parts.push(`${cancelledCount} cancelled`)
+    statusLabel = parts.join(', ')
+  }
 
   const errorMessage = triggerMutation.isError
     ? triggerMutation.error instanceof ApiError && typeof triggerMutation.error.detail === 'string'
@@ -129,6 +153,17 @@ function RunAllCellsButton({ protocolId, experimentId, cellCount }: { protocolId
         </span>
       )}
       {statusLabel && <span className="font-mono text-xs text-muted-foreground">{statusLabel}</span>}
+      {isRunning && !triggerMutation.isPending && (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={stopRequested || cancelAllMutation.isPending}
+          onClick={() => cancelAllMutation.mutate()}
+        >
+          <Square className="size-4" />
+          {stopRequested ? 'Stopping…' : 'Stop all'}
+        </Button>
+      )}
       <span title={cellCount === 0 ? 'Generate design first -- there are no cells to run yet.' : undefined}>
         <Button size="sm" variant="outline" disabled={isRunning || cellCount === 0} onClick={() => triggerMutation.mutate()}>
           {isRunning ? 'Running…' : 'Run all cells'}

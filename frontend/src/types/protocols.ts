@@ -37,7 +37,7 @@ export interface ProtocolEdge {
   targetHandle?: string | null
 }
 
-export type NodeRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+export type NodeRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled'
 
 export interface NodeRunState {
   status: NodeRunStatus
@@ -62,7 +62,7 @@ export interface NodeRunState {
 export interface ProtocolRun {
   id: string
   protocol_id: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
   node_runs: Record<string, NodeRunState>
   error: string | null
   // Both null for a plain graph run. Set together only for a run created by
@@ -75,6 +75,12 @@ export interface ProtocolRun {
   // Set only for a per-node "Play" run (POST /protocols/{id}/nodes/{nodeId}/run)
   // -- null for both a plain graph run and a "run all cells" run.
   target_node_id: string | null
+  // Set by the Stop button (POST /protocols/{id}/runs/{runId}/cancel) --
+  // present but status still "running" means the request has been raised
+  // but not yet honored (services.protocol_execution.run_protocol only
+  // polls this between nodes, so whatever's currently in flight finishes
+  // first). Once honored, status flips straight to "cancelled".
+  cancel_requested_at: string | null
   created_at: string
   updated_at: string
 }

@@ -3,6 +3,7 @@ _run_gated_worker (mocked -- never a real LLM call in an automated test)."""
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 
@@ -25,7 +26,7 @@ from asaree.services.protocol_execution import (
     topological_order,
     validate_coordination_strategy,
 )
-from asaree.services.protocol_runs import create_protocol_run
+from asaree.services.protocol_runs import create_protocol_run, request_protocol_run_cancellation
 from asaree.services.protocols import create_protocol, delete_protocol
 
 
@@ -501,6 +502,62 @@ async def test_gated_worker_critic_failure_fails_the_pair(monkeypatch: pytest.Mo
     }
 
 
+async def test_gated_worker_cancelled_mid_worker_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_AGENT_CANCELLED (agentic-core's own RunStatus.CANCELLED, detected in
+    _run_agent_node) must be distinguished from a plain error -- it needs to
+    surface as "cancelled", not "failed", so run_protocol's cancelled flag
+    (not its failed flag) is what fires. The critic is never called (there's
+    no output to review)."""
+    critic_calls = []
+
+    async def fake_run_agent_node(node, **kwargs):
+        return None, pe._AGENT_CANCELLED, "worker-run-1"
+
+    async def fake_run_critic(gate, **kwargs):
+        critic_calls.append(1)
+        return {"approved": True}, None, "critic-run-1"
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+    monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
+
+    worker_run, gate_run = await _run(*_worker_gate())
+    assert worker_run == {
+        "status": "cancelled",
+        "output_text": None,
+        "error": None,
+        "attempts": 1,
+        "run_id": "worker-run-1",
+    }
+    assert gate_run == {"status": "skipped"}
+    assert critic_calls == []
+
+
+async def test_gated_worker_cancelled_mid_critic_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cancellation caught while the CRITIC is reviewing is different from
+    one caught during the worker's own run: the worker already produced a
+    real, complete output, so its own node_run still reports "completed"
+    with that output -- only the gate's own node_run is "cancelled"."""
+
+    async def fake_run_agent_node(node, **kwargs):
+        return "real worker output", None, "worker-run-1"
+
+    async def fake_run_critic(gate, **kwargs):
+        return None, pe._AGENT_CANCELLED, "critic-run-1"
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+    monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
+
+    worker_run, gate_run = await _run(*_worker_gate())
+    assert worker_run == {
+        "status": "completed",
+        "output_text": "real worker output",
+        "error": None,
+        "attempts": 1,
+        "run_id": "worker-run-1",
+    }
+    assert gate_run == {"status": "cancelled", "output_text": None, "error": None, "run_id": "critic-run-1"}
+
+
 # --- apply_factor_bindings / sink_node_ids (pure) ----------------------------
 
 
@@ -944,6 +1001,140 @@ async def test_run_protocol_deactivated_node_passes_through(
             assert fetched.node_runs["b"]["status"] == "completed"
             assert fetched.node_runs["b"]["output_text"] == "real output from a"
             assert fetched.node_runs["c"]["output_text"] == "real output from c"
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
+
+
+async def test_run_protocol_honors_cancellation_between_nodes(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression/behavior test for Stop: cancellation is polled from the DB
+    once per node boundary, not mid-node -- the node that's already in
+    flight when cancel_requested_at gets set (here, "a") still runs to
+    completion; only the nodes after it ("b", "c") are skipped, and the
+    overall run lands on "cancelled" rather than "completed"."""
+    call_count = 0
+
+    async def fake_run_agent_node(node, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if node["id"] == "a":
+            # Simulates a concurrent Stop click landing while "a" is still
+            # running -- a genuinely separate request/transaction in real
+            # usage, modeled here as a second, independent session.
+            async with get_session() as db:
+                await request_protocol_run_cancellation(db, run_id)
+        return f"output from {node['id']}", None, None
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+
+    llm = _llm_node()
+    graph = {
+        "nodes": [llm, _node("a", "agent"), _node("b", "agent"), _node("c", "agent")],
+        "edges": _edges(("a", "b"), ("b", "c"))
+        + [_llm_edge(llm["id"], "a"), _llm_edge(llm["id"], "b"), _llm_edge(llm["id"], "c")],
+    }
+
+    async with get_session() as db:
+        protocol = await create_protocol(db, name=f"cancel-test-{uuid.uuid4().hex}", owner_id=owner_id, graph=graph)
+        protocol_id = protocol.id
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run_id = run.id
+
+    try:
+        await pe.run_protocol(run_id)
+
+        assert call_count == 1  # only "a" -- "b" and "c" are skipped once cancellation is seen
+
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+            assert fetched is not None
+            assert fetched.status == "cancelled"
+            assert fetched.node_runs["a"]["status"] == "completed"
+            assert fetched.node_runs["a"]["output_text"] == "output from a"
+            assert fetched.node_runs["b"] == {"status": "skipped"}
+            assert fetched.node_runs["c"] == {"status": "skipped"}
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
+
+
+async def test_run_protocol_honors_mid_node_cancellation(owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Distinct from the between-nodes test above: this simulates a Stop
+    click landing WHILE "a" is still executing (agentic-core's own
+    cancel_event interrupts it mid-phase, see _execute_run_cancellable),
+    represented here by _run_agent_node returning the _AGENT_CANCELLED
+    sentinel directly rather than a real output. "a" itself must be
+    recorded "cancelled" (not "completed" with blank output, and not
+    "failed"), and "b"/"c" are still skipped via the same cancelled flag."""
+    call_count = 0
+
+    async def fake_run_agent_node(node, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if node["id"] == "a":
+            return None, pe._AGENT_CANCELLED, uuid.uuid4()
+        return f"output from {node['id']}", None, None
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+
+    llm = _llm_node()
+    graph = {
+        "nodes": [llm, _node("a", "agent"), _node("b", "agent"), _node("c", "agent")],
+        "edges": _edges(("a", "b"), ("b", "c"))
+        + [_llm_edge(llm["id"], "a"), _llm_edge(llm["id"], "b"), _llm_edge(llm["id"], "c")],
+    }
+
+    async with get_session() as db:
+        protocol = await create_protocol(
+            db, name=f"mid-node-cancel-test-{uuid.uuid4().hex}", owner_id=owner_id, graph=graph
+        )
+        protocol_id = protocol.id
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run_id = run.id
+
+    try:
+        await pe.run_protocol(run_id)
+
+        assert call_count == 1  # only "a" -- interrupted mid-flight, "b"/"c" never start
+
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+            assert fetched is not None
+            assert fetched.status == "cancelled"
+            assert fetched.node_runs["a"]["status"] == "cancelled"
+            assert fetched.node_runs["a"]["output_text"] is None
+            assert fetched.node_runs["b"] == {"status": "skipped"}
+            assert fetched.node_runs["c"] == {"status": "skipped"}
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
+
+
+async def test_poll_cancel_flag_sets_event_once_cancellation_requested(owner_id: uuid.UUID) -> None:
+    """Isolated test of the poller itself, not the whole run_protocol path
+    -- confirms it actually notices a cancellation raised on the row (by a
+    separate request, modeled here as a separate session) and sets the
+    event. Uses a short interval so the test doesn't sleep the production
+    1.5s each time."""
+    async with get_session() as db:
+        protocol = await create_protocol(db, name=f"poll-test-{uuid.uuid4().hex}", owner_id=owner_id)
+        protocol_id = protocol.id
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run_id = run.id
+
+    try:
+        cancel_event = asyncio.Event()
+        poller = asyncio.create_task(pe._poll_cancel_flag(run_id, cancel_event, interval=0.05))
+        await asyncio.sleep(0.15)
+        assert not cancel_event.is_set()  # nothing requested yet -- poller shouldn't fire spuriously
+
+        async with get_session() as db:
+            await request_protocol_run_cancellation(db, run_id)
+
+        await asyncio.wait_for(poller, timeout=1.0)
+        assert cancel_event.is_set()
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun

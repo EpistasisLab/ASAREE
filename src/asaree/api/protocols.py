@@ -26,7 +26,12 @@ from asaree.services.protocol_execution import (
     validate_coordination_strategy,
     validate_single_node_runnable,
 )
-from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, list_protocol_runs
+from asaree.services.protocol_runs import (
+    create_protocol_run,
+    get_protocol_run,
+    list_protocol_runs,
+    request_protocol_run_cancellation,
+)
 from asaree.services.protocols import (
     create_protocol,
     delete_protocol,
@@ -81,6 +86,7 @@ class ProtocolRunResponse(BaseModel):
     cell_label: str | None
     factor_values: dict[str, Any] | None
     target_node_id: str | None
+    cancel_requested_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -272,4 +278,20 @@ async def get_protocol_run_endpoint(
     run = await get_protocol_run(db, run_id)
     if run is None or run.protocol_id != protocol_id:
         raise HTTPException(status_code=404, detail="No such protocol run")
+    return ProtocolRunResponse.model_validate(run)
+
+
+@router.post("/{protocol_id}/runs/{run_id}/cancel", response_model=ProtocolRunResponse)
+async def cancel_protocol_run_endpoint(
+    protocol_id: uuid.UUID, run_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> ProtocolRunResponse:
+    """Requests cancellation of a non-terminal run -- a no-op (200, unchanged
+    row) if it's already completed/failed/cancelled. Only raises the flag;
+    services.protocol_execution.run_protocol's node loop is what actually
+    honors it, between nodes, and transitions status to "cancelled" itself."""
+    await _get_owned_protocol(db, protocol_id, user)
+    run = await get_protocol_run(db, run_id)
+    if run is None or run.protocol_id != protocol_id:
+        raise HTTPException(status_code=404, detail="No such protocol run")
+    run = await request_protocol_run_cancellation(db, run_id)
     return ProtocolRunResponse.model_validate(run)

@@ -2,7 +2,7 @@ import type { NodeRunStatus, ProtocolRun } from '@/types/protocols'
 
 // Shared by ProtocolCanvas's own single-run polling and the "run all cells"
 // batch polling on ProtocolCanvasPage -- one definition of "done" for both.
-export const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>(['completed', 'failed'])
+export const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>(['completed', 'failed', 'cancelled'])
 
 // Same status-color language the app already uses for cell-scoring progress
 // (cellsStatusAccent in lib/experiment.ts): amber = in progress/queued, cyan
@@ -21,6 +21,8 @@ export function nodeRunBadge(status: NodeRunStatus | undefined): { label: string
       return { label: 'Failed', className: 'border-transparent bg-destructive/10 text-destructive' }
     case 'skipped':
       return { label: 'Skipped', className: 'border-transparent bg-muted text-muted-foreground' }
+    case 'cancelled':
+      return { label: 'Cancelled', className: 'border-transparent bg-muted text-muted-foreground' }
     default:
       return null
   }

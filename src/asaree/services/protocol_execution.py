@@ -18,11 +18,13 @@ graph structure.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import uuid
 from typing import Any
 
 from agentic_core.mcp.registry import get_registry
+from agentic_core.models.run import RunStatus
 from agentic_core.runner import create_agent, create_run, execute_run, get_agent_by_name, get_run, update_agent
 from agentic_core.schemas.agent import ModelConfig
 from agentic_core.schemas.output import parse_envelope
@@ -34,9 +36,24 @@ from asaree.models.database import get_session
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.experiments import get_experiment
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
-from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, set_status, update_node_run
+from asaree.services.protocol_runs import (
+    create_protocol_run,
+    get_cancel_requested_at,
+    get_protocol_run,
+    set_status,
+    update_node_run,
+)
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
+
+# Internal sentinel for _run_agent_node/_run_critic's `error` return slot --
+# never a real error message, so callers can check `error == _AGENT_CANCELLED`
+# unambiguously to record a node as "cancelled" rather than "failed". A
+# cancelled agentic-core run has finished.error == None (see
+# agentic_core.runner.execute_run's own write-back), so without this
+# sentinel a mid-run Stop would silently look identical to a normal
+# completion with an empty output -- this is what actually distinguishes it.
+_AGENT_CANCELLED = "__cancelled__"
 
 # Mirrors the notebook's CRITIC_CONTRACT exactly (spinal_pipeline.ipynb cell
 # 15) -- hardcoded, not user-editable/stored in the graph, so the executor
@@ -798,6 +815,52 @@ def _build_revision_instruction(base_instruction: str, verdict: dict[str, Any], 
     return "\n\n".join(parts)
 
 
+async def _poll_cancel_flag(protocol_run_id: uuid.UUID, cancel_event: asyncio.Event, interval: float = 1.5) -> None:
+    """Runs alongside one in-flight execute_run call, watching for a Stop
+    click (POST .../cancel) that a completely different request -- possibly
+    a different worker process entirely, since protocol runs execute in
+    arq's worker, not the API process -- raised on this run's own row.
+    Sets cancel_event the moment cancel_requested_at is seen populated;
+    agentic-core's own runtime checks that event before every Sense/Reason/
+    Plan/Act phase (agentic_core.engine.runtime.AgentRuntime._check_interrupt),
+    which is what actually lets a single agent's run wind down mid-loop
+    instead of only ever being caught at run_protocol's own between-nodes
+    check (which can't interrupt a node already in flight)."""
+    while True:
+        await asyncio.sleep(interval)
+        async with get_session() as db:
+            requested_at = await get_cancel_requested_at(db, protocol_run_id)
+        if requested_at is not None:
+            cancel_event.set()
+            return
+
+
+async def _execute_run_cancellable(
+    *, run_id: uuid.UUID, protocol_run_id: uuid.UUID, available_tools: list[dict[str, Any]], timeout: float
+) -> None:
+    """Wraps agentic-core's execute_run with the poller above, scoped to
+    exactly this one run's lifetime -- shared by _run_agent_node and
+    _run_critic rather than duplicating the poller's start/stop lifecycle in
+    both. Deliberately per-call, not per-protocol-run: once a Stop is
+    detected, run_protocol's own between-nodes check means no later node
+    ever starts, so nothing else would benefit from a longer-lived poller,
+    and tearing this one down between nodes avoids running it during gaps
+    where no agent is actually executing."""
+    cancel_event = asyncio.Event()
+    poller = asyncio.create_task(_poll_cancel_flag(protocol_run_id, cancel_event))
+    try:
+        await asyncio.wait_for(
+            execute_run(
+                run_id=run_id, registry=get_registry(), available_tools=available_tools, cancel_event=cancel_event
+            ),
+            timeout=timeout,
+        )
+    finally:
+        poller.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await poller
+
+
 async def _run_agent_node(
     node: dict[str, Any],
     *,
@@ -887,9 +950,8 @@ async def _run_agent_node(
     )
     timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
     try:
-        await asyncio.wait_for(
-            execute_run(run_id=run.id, registry=get_registry(), available_tools=gather_tools(agent)),
-            timeout=timeout,
+        await _execute_run_cancellable(
+            run_id=run.id, protocol_run_id=protocol_run_id, available_tools=gather_tools(agent), timeout=timeout
         )
     except TimeoutError:
         return None, f"run exceeded its {timeout}s execution budget", run.id
@@ -899,6 +961,12 @@ async def _run_agent_node(
     finished = await get_run(run.id)
     if finished is None:
         return None, "run vanished after execution", run.id
+    if finished.status == RunStatus.CANCELLED:
+        # finished.error is None on a clean cancellation (agentic-core's own
+        # runtime never sets error_msg on that path) -- without this check
+        # a mid-run Stop would silently fall through and look like a normal
+        # completion with an empty output.
+        return None, _AGENT_CANCELLED, run.id
     if finished.error:
         return None, finished.error, run.id
     envelope = parse_envelope(finished.output)
@@ -974,9 +1042,8 @@ async def _run_critic(
     critic_run_id = str(run.id)
     timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
     try:
-        await asyncio.wait_for(
-            execute_run(run_id=run.id, registry=get_registry(), available_tools=gather_tools(agent)),
-            timeout=timeout,
+        await _execute_run_cancellable(
+            run_id=run.id, protocol_run_id=protocol_run_id, available_tools=gather_tools(agent), timeout=timeout
         )
     except TimeoutError:
         return None, f"critic run exceeded its {timeout}s execution budget", critic_run_id
@@ -986,6 +1053,8 @@ async def _run_critic(
     finished = await get_run(run.id)
     if finished is None:
         return None, "critic run vanished after execution", critic_run_id
+    if finished.status == RunStatus.CANCELLED:
+        return None, _AGENT_CANCELLED, critic_run_id
     if finished.error:
         return None, finished.error, critic_run_id
     envelope = parse_envelope(finished.output)
@@ -1043,6 +1112,17 @@ async def _run_gated_worker(
             workspace_id=workspace_id,
         )
         run_id_str = str(run_id) if run_id else None
+        if error == _AGENT_CANCELLED:
+            return (
+                {
+                    "status": "cancelled",
+                    "output_text": None,
+                    "error": None,
+                    "attempts": attempt + 1,
+                    "run_id": run_id_str,
+                },
+                {"status": "skipped"},
+            )
         if error:
             return (
                 {
@@ -1099,6 +1179,21 @@ async def _run_gated_worker(
             worker_output=output_text,
             graph=graph,
         )
+        if verdict_error == _AGENT_CANCELLED:
+            # The worker's own output is real and already complete -- only
+            # the critic's review was interrupted, so the worker still
+            # reports "completed" with its real output_text; just the gate
+            # itself is "cancelled".
+            return (
+                {
+                    "status": "completed",
+                    "output_text": output_text,
+                    "error": None,
+                    "attempts": attempt + 1,
+                    "run_id": run_id_str,
+                },
+                {"status": "cancelled", "output_text": None, "error": None, "run_id": critic_run_id},
+            )
         if verdict_error:
             # The critic itself failed to run -- fail the whole gated pair
             # rather than silently treating an unchecked output as approved.
@@ -1378,11 +1473,26 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
     node_runs: dict[str, Any] = {}
     failed = False
+    cancelled = False
     for node in order:
         node_id = node["id"]
         if node_id in node_runs:
             continue  # already resolved -- a critic_gate node handled via its worker's turn below
-        if failed:
+        if not failed and not cancelled:
+            # Polled fresh from the DB, not a locally-cached flag -- a Stop
+            # click (cancel endpoint -> request_protocol_run_cancellation)
+            # is a different request, possibly handled by a different
+            # worker process entirely, so this loop only ever learns about
+            # it by re-reading the row between nodes. Checked once per node
+            # boundary, not mid-node: whatever's currently in flight (a
+            # single agent, or a gated pair's whole revision loop) always
+            # finishes -- see run_protocol's own module comment for why that
+            # granularity was chosen over interrupting agentic-core's own
+            # per-phase cancel_event mid-agent.
+            async with get_session() as db:
+                current = await get_protocol_run(db, protocol_run_id)
+            cancelled = current is not None and current.cancel_requested_at is not None
+        if failed or cancelled:
             node_runs[node_id] = {"status": "skipped"}
             async with get_session() as db:
                 await update_node_run(db, protocol_run_id, node_id, {"status": "skipped"})
@@ -1414,7 +1524,9 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             async with get_session() as db:
                 await update_node_run(db, protocol_run_id, node_id, worker_run)
                 await update_node_run(db, protocol_run_id, gate["id"], gate_run)
-            if worker_run["status"] == "failed" or gate_run["status"] == "failed":
+            if worker_run["status"] == "cancelled" or gate_run["status"] == "cancelled":
+                cancelled = True
+            elif worker_run["status"] == "failed" or gate_run["status"] == "failed":
                 failed = True
             continue
 
@@ -1444,19 +1556,30 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 workspace_id=workspace_id,
             )
 
-        node_runs[node_id] = {
-            "status": "failed" if error else "completed",
-            "output_text": output_text,
-            "error": error,
-            "run_id": str(run_id) if run_id else None,
-        }
+        if error == _AGENT_CANCELLED:
+            node_runs[node_id] = {
+                "status": "cancelled",
+                "output_text": None,
+                "error": None,
+                "run_id": str(run_id) if run_id else None,
+            }
+            cancelled = True
+        else:
+            node_runs[node_id] = {
+                "status": "failed" if error else "completed",
+                "output_text": output_text,
+                "error": error,
+                "run_id": str(run_id) if run_id else None,
+            }
+            if error:
+                failed = True
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, node_runs[node_id])
-        if error:
-            failed = True
 
     async with get_session() as db:
-        if failed:
+        if cancelled:
+            await set_status(db, protocol_run_id, status="cancelled")
+        elif failed:
             await set_status(db, protocol_run_id, status="failed", error="one or more nodes failed")
         else:
             await set_status(db, protocol_run_id, status="completed")

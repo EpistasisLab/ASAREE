@@ -208,6 +208,10 @@ export const protocolsApi = {
   // as a plain run (getRun), just with node_runs carrying only this one key.
   runNode: (id: string, nodeId: string) => request<ProtocolRun>(`/protocols/${id}/nodes/${nodeId}/run`, { method: 'POST' }),
   getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
+  // Only raises cancel_requested_at -- a no-op (200, unchanged row) once the
+  // run is already terminal. run_protocol's own node loop is what actually
+  // honors it (between nodes, not mid-node) and flips status to "cancelled".
+  cancelRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}/cancel`, { method: 'POST' }),
   listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
   // "Run all cells" -- 422 if there's no linked experiment or the graph
   // doesn't have exactly one final node; fans out one ProtocolRun per

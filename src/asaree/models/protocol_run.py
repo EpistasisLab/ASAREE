@@ -64,6 +64,13 @@ class ProtocolRun(Base, TimestampMixin):
     # protocol_execution.validate_single_node_runnable); absent, the
     # existing full topological walk, unchanged.
     target_node_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Set by services.protocol_runs.request_protocol_run_cancellation (the
+    # cancel endpoint), from a request outside the executor's own task/
+    # process -- run_protocol's node loop polls this between nodes (not
+    # mid-node) and, once seen, marks every remaining node "skipped" and
+    # sets status to "cancelled" itself. A raised flag alone never changes
+    # status -- only the executor can safely stop mid-walk.
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 __all__ = ["ProtocolRun"]

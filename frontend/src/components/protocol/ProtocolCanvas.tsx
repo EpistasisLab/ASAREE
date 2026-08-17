@@ -16,7 +16,7 @@ import {
   type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Play, Plus, X } from 'lucide-react'
+import { Play, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { newNodeId } from '@/lib/nodeId'
@@ -388,6 +388,17 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   })
 
   const isRunning = runMutation.isPending || (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
+
+  // Stop button -- only raises cancel_requested_at; run_protocol's own node
+  // loop (polled between nodes, not mid-node) is what actually honors it.
+  // onSuccess refetches immediately rather than waiting for the next poll
+  // tick, so cancel_requested_at (and the "Stopping…" label below) appears
+  // right away instead of up to RUN_POLL_MS late.
+  const cancelMutation = useMutation({
+    mutationFn: () => protocolsApi.cancelRun(protocolId, runId!),
+    onSuccess: () => runQuery.refetch(),
+  })
+  const cancelRequested = !!runQuery.data?.cancel_requested_at
 
   // A connected execution-pattern node must never be deletable directly
   // (Backspace/Delete key, NodeHoverToolbar's trash icon -- both go through
@@ -1010,6 +1021,17 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               <Play className="size-4" />
               {isRunning ? 'Running…' : selectedCellLabel ? `Run cell: ${selectedCellLabel}` : 'Run'}
             </Button>
+            {isRunning && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={cancelRequested || cancelMutation.isPending}
+                onClick={() => cancelMutation.mutate()}
+              >
+                <Square className="size-4" />
+                {cancelRequested ? 'Stopping…' : 'Stop'}
+              </Button>
+            )}
             <Button
               size="icon"
               className="rounded-full"

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from asaree.models.factorial_cell_result import FactorialCellResult
 from asaree.models.protocol_run import ProtocolRun
 
-_TERMINAL_STATUSES = frozenset({"completed", "failed"})
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 async def create_protocol_run(
@@ -56,6 +56,19 @@ async def create_protocol_run(
 async def get_protocol_run(db: AsyncSession, protocol_run_id: uuid.UUID) -> ProtocolRun | None:
     return (
         await db.execute(select(ProtocolRun).where(ProtocolRun.id == protocol_run_id))
+    ).scalar_one_or_none()
+
+
+async def get_cancel_requested_at(db: AsyncSession, protocol_run_id: uuid.UUID) -> datetime | None:
+    """Single-column read, not a full get_protocol_run -- this is polled
+    every ~1.5s for the duration of a live agent run (see
+    services.protocol_execution._poll_cancel_flag) to detect a Stop click
+    fast enough to interrupt mid-agent via agentic-core's own cancel_event,
+    not just at run_protocol's own between-nodes check. Fetching the whole
+    row (and deserializing node_runs' JSONB) on that cadence would be pure
+    waste -- this reads nothing else."""
+    return (
+        await db.execute(select(ProtocolRun.cancel_requested_at).where(ProtocolRun.id == protocol_run_id))
     ).scalar_one_or_none()
 
 
@@ -101,6 +114,23 @@ async def update_node_run(
     node_runs[node_id] = {**node_runs.get(node_id, {}), **patch}
     run.node_runs = node_runs
     run.last_heartbeat_at = datetime.now(UTC)
+    await db.flush()
+    await db.refresh(run)
+    return run
+
+
+async def request_protocol_run_cancellation(db: AsyncSession, protocol_run_id: uuid.UUID) -> ProtocolRun | None:
+    """Flags a non-terminal run for cancellation from outside the executor
+    -- a no-op if it's already terminal (mirrors fail_protocol_run's own
+    race-safety). Does NOT change status itself: the run's own node loop
+    (services.protocol_execution.run_protocol) polls cancel_requested_at
+    between nodes and is the only thing that safely transitions status to
+    "cancelled" -- setting it here instead would race a live executor that's
+    mid-node and about to write its own status."""
+    run = await get_protocol_run(db, protocol_run_id)
+    if run is None or run.status in _TERMINAL_STATUSES:
+        return run
+    run.cancel_requested_at = datetime.now(UTC)
     await db.flush()
     await db.refresh(run)
     return run

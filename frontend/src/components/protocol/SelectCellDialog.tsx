@@ -11,7 +11,7 @@ import type { Cell } from '@/types/experiments'
 // and base-ui's Select popup width is driven by its trigger, not its
 // content. A full dialog has room for the whole label and a per-factor
 // summary, plus a filter once a sweep has more than a handful of cells.
-// Matches RunWithIssuesDialog/DeleteNodeConfirmDialog's own shell.
+// Matches RunConfirmDialog/DeleteNodeConfirmDialog's own shell.
 export function SelectCellDialog({
   cells,
   selectedCellLabel,

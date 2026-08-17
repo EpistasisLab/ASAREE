@@ -62,7 +62,6 @@ import { findFreePosition } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { MemoryNodeInspector } from './MemoryNodeInspector'
-import { findNodeConfigIssues, type NodeConfigIssue } from './nodeConfigIssues'
 import {
   ProtocolCanvasActionsProvider,
   type ConnectorAddRequest,
@@ -71,7 +70,8 @@ import {
   type MainEdgeAddRequest,
 } from './ProtocolCanvasContext'
 import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
-import { RunWithIssuesDialog } from './RunWithIssuesDialog'
+import { RunConfirmDialog } from './RunConfirmDialog'
+import type { RunScope } from './runSummary'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
 import { SelectCellDialog } from './SelectCellDialog'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
@@ -298,11 +298,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // Same idea again, requested from an existing edge's own hover "+"
   // (InteractEdge) -- splits that edge into origin->newAgent->target.
   const [pendingEdgeInsert, setPendingEdgeInsert] = useState<EdgeInsertRequest | null>(null)
-  // Populated by the Run button's own pre-flight scan (findNodeConfigIssues)
-  // when it finds at least one obviously misconfigured node -- opens
-  // RunWithIssuesDialog instead of firing the run immediately, so a run
-  // that's likely to just fail doesn't happen silently.
-  const [pendingRunIssues, setPendingRunIssues] = useState<NodeConfigIssue[] | null>(null)
+  // Populated by the main Run button (whole graph or a picked cell) and by
+  // each node's own per-node Play icon (requestRunNode below) -- opens
+  // RunConfirmDialog instead of firing the run immediately, so a real
+  // (billable) run never fires without the user seeing what will actually
+  // execute first.
+  const [pendingRunConfirm, setPendingRunConfirm] = useState<RunScope | null>(null)
   const [runId, setRunId] = useState<string | null>(null)
   // null -- today's ad-hoc, un-substituted whole-graph run (the only option
   // before any cells exist). Set -- runs that one already-generated cell for
@@ -341,20 +342,26 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     onSuccess: (run) => setRunId(run.id),
   })
 
-  // Run button's own entry point -- a pre-flight scan for obviously
+  // Run button's own entry point -- always opens RunConfirmDialog first
+  // (whole graph, or the picked cell) rather than firing a real, billable
+  // run immediately. That dialog does its own pre-flight scan for obviously
   // misconfigured nodes (no model, no dataset picked, no script code, an
-  // agent with nothing wired into its required LLM connector) runs first;
-  // finding any opens RunWithIssuesDialog instead of firing the run
-  // immediately, since today the only feedback a real run gives for these
-  // is a generic "one or more nodes failed" AFTER spending a real attempt.
+  // agent with nothing wired into its required LLM connector) and surfaces
+  // them inline instead of only ever finding out via a generic "one or more
+  // nodes failed" AFTER spending a real attempt.
   function requestRun() {
     setRunErrorDismissed(false)
-    const issues = findNodeConfigIssues(nodes, edges, queryClient)
-    if (issues.length > 0) {
-      setPendingRunIssues(issues)
-      return
+    setPendingRunConfirm(selectedCellLabel ? { type: 'cell', label: selectedCellLabel } : { type: 'graph' })
+  }
+
+  function confirmPendingRun() {
+    if (!pendingRunConfirm) return
+    if (pendingRunConfirm.type === 'node') {
+      runNodeMutation.mutate(pendingRunConfirm.nodeId)
+    } else {
+      runMutation.mutate()
     }
-    runMutation.mutate()
+    setPendingRunConfirm(null)
   }
 
   // The canvas's per-node Play icon -- reuses the exact same runId/runQuery
@@ -496,15 +503,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     setPendingEdgeInsert(request)
     setAddPanelOpen(true)
   }, [])
-  // The canvas's per-node Play icon (NodeHoverToolbar) -- see
-  // runNodeMutation's own comment for why this reuses the main Run
-  // button's runId/runQuery polling state instead of a separate one.
+  // The canvas's per-node Play icon (NodeHoverToolbar) -- opens
+  // RunConfirmDialog scoped to just this node, same as the main Run button,
+  // rather than firing runNodeMutation immediately (see its own comment for
+  // why that mutation reuses the main Run button's runId/runQuery polling
+  // state instead of a separate one).
   const requestRunNode = useCallback(
     (nodeId: string) => {
       setRunErrorDismissed(false)
-      runNodeMutation.mutate(nodeId)
+      const label = (nodes.find((n) => n.id === nodeId)?.data as { label?: string } | undefined)?.label || 'this node'
+      setPendingRunConfirm({ type: 'node', nodeId, label })
     },
-    [runNodeMutation],
+    [nodes],
   )
   // The "Make experimental factor" icon inside Agent/Pattern's own inspector
   // title (next to the node's name -- see those inspectors' own title prop)
@@ -1154,14 +1164,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           }}
         />
       )}
-      {pendingRunIssues && (
-        <RunWithIssuesDialog
-          issues={pendingRunIssues}
-          onCancel={() => setPendingRunIssues(null)}
-          onRunAnyway={() => {
-            setPendingRunIssues(null)
-            runMutation.mutate()
-          }}
+      {pendingRunConfirm && (
+        <RunConfirmDialog
+          scope={pendingRunConfirm}
+          nodes={nodes}
+          edges={edges}
+          queryClient={queryClient}
+          onCancel={() => setPendingRunConfirm(null)}
+          onConfirm={confirmPendingRun}
         />
       )}
       {factorPickerNodeId && (

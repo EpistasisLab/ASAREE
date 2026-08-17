@@ -654,18 +654,29 @@ def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, An
 
 
 def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
-    """``{"server_names": [...], "tool_names": [...]}`` -- this IS
-    agentic-core's own allow-list shape (``RunContext.available_tools``,
-    matched by ``_tool_in_allowlist``), built from every ``mcp_tool`` node
-    wired into this agent's Tool connector -- replaces the agent's own
-    (now-removed) ``tool_config`` field. Each ``mcp_tool`` node represents one
-    MCP server connection and can allow-list *several* of that server's
-    tools (``config.tool_names``, plural) -- n8n's own MCP Client Tool node
-    is likewise a per-server node with a tools filter, not a node per tool.
-    The Tool connector also accepts Dataset/Script source nodes (see
-    ``_NODE_TYPE_TO_HANDLE``) -- those are skipped here entirely, since
-    they're read by ``_resolve_dataset_config``/``_resolve_script_config``
-    instead, not folded into this allow-list."""
+    """``{"server_names": [...], "tool_names": [...]}`` -- built from every
+    ``mcp_tool`` node wired into this agent's Tool connector -- replaces the
+    agent's own (now-removed) ``tool_config`` field. Each ``mcp_tool`` node
+    represents one MCP server connection and can allow-list *several* of
+    that server's tools (``config.tool_names``, plural) -- n8n's own MCP
+    Client Tool node is likewise a per-server node with a tools filter, not
+    a node per tool. The Tool connector also accepts Dataset/Script source
+    nodes (see ``_NODE_TYPE_TO_HANDLE``) -- those are skipped here entirely,
+    since they're read by ``_resolve_dataset_config``/``_resolve_script_config``
+    instead, not folded into this allow-list.
+
+    ``tool_names`` MUST be namespaced as ``"{server_name}.{tool_name}"`` --
+    that's the shape ``run_tools.gather_tools`` matches against
+    ``agentic_core``'s own tool registry (``MCPServerRegistry.get_all_tools``
+    namespaces every entry's ``name`` the same way). A node's own
+    ``config.tool_names`` is stored bare (just the tool, not its server --
+    see ``McpToolNodeInspector``'s ``toggleTool``), so it has to be prefixed
+    here; passing it through bare silently starves every agent down to zero
+    tools (``gather_tools`` finds no match and returns ``[]``), which the LLM
+    then sees as having only ``final_answer`` available -- no error, just an
+    agent that can't do anything and falls back to reporting the blocker in
+    its final answer. A node without a resolved ``server_name`` can't be
+    namespaced at all, so its tools are skipped rather than smuggled in bare."""
     nodes, _downstream, _upstream = _adjacency(graph)
     server_names: list[str] = []
     tool_names: list[str] = []
@@ -680,7 +691,7 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
         node_tool_names = tool_node_config.get("tool_names") or []
         if server_name:
             server_names.append(server_name)
-        tool_names.extend(node_tool_names)
+            tool_names.extend(f"{server_name}.{name}" for name in node_tool_names)
     return {"server_names": server_names, "tool_names": tool_names}
 
 

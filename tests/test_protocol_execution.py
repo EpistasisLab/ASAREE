@@ -1360,7 +1360,11 @@ def test_resolve_tool_config_collects_all_connected_tool_nodes() -> None:
         "edges": [agent_llm_edge, _tool_edge("tool1", "a"), _tool_edge("tool2", "a")],
     }
     resolved = pe._resolve_tool_config(graph, "a")
-    assert resolved == {"server_names": ["srv-a", "srv-b"], "tool_names": ["fn_a", "fn_b"]}
+    # tool_names must come back namespaced ("server.tool") -- that's the
+    # shape run_tools.gather_tools matches against agentic_core's registry;
+    # a bare name never matches and silently strands the agent with zero
+    # tools (see the regression test below).
+    assert resolved == {"server_names": ["srv-a", "srv-b"], "tool_names": ["srv-a.fn_a", "srv-b.fn_b"]}
 
 
 def test_resolve_tool_config_empty_when_no_tool_connections() -> None:
@@ -1375,7 +1379,7 @@ def test_resolve_tool_config_allows_multiple_tools_from_one_server() -> None:
     tool = _tool_node(server_name="srv-a", tool_names=["fn_a", "fn_b", "fn_c"])
     graph = {"nodes": [agent, tool], "edges": [agent_llm_edge, _tool_edge("tool1", "a")]}
     resolved = pe._resolve_tool_config(graph, "a")
-    assert resolved == {"server_names": ["srv-a"], "tool_names": ["fn_a", "fn_b", "fn_c"]}
+    assert resolved == {"server_names": ["srv-a"], "tool_names": ["srv-a.fn_a", "srv-a.fn_b", "srv-a.fn_c"]}
 
 
 
@@ -1390,7 +1394,32 @@ def test_resolve_tool_config_skips_disabled_tool_node() -> None:
         "edges": [agent_llm_edge, _tool_edge("tool1", "a"), _tool_edge("tool2", "a")],
     }
     resolved = pe._resolve_tool_config(graph, "a")
-    assert resolved == {"server_names": ["srv-b"], "tool_names": ["fn_b"]}
+    assert resolved == {"server_names": ["srv-b"], "tool_names": ["srv-b.fn_b"]}
+
+
+def test_resolve_tool_config_namespaces_tool_names_for_gather_tools() -> None:
+    """Regression test for the bug where every canvas-run agent silently got
+    zero MCP tools: run_tools.gather_tools matches tool_names against
+    agentic_core's registry, whose entries are namespaced "server.tool"
+    (MCPServerRegistry.get_all_tools). A bare tool_name never matches that,
+    so the agent's LLM would see no tools at all -- no error, it just falls
+    back to reporting the blocker as its final answer."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    tool = _tool_node(server_name="asaree-workspace", tool_names=["open_workspace", "accept_stage"])
+    graph = {"nodes": [agent, tool], "edges": [agent_llm_edge, _tool_edge("tool1", "a")]}
+    resolved = pe._resolve_tool_config(graph, "a")
+    assert resolved["tool_names"] == ["asaree-workspace.open_workspace", "asaree-workspace.accept_stage"]
+
+
+def test_resolve_tool_config_skips_tools_from_node_with_no_server_name() -> None:
+    """A tool_names value can't be namespaced without a server_name to
+    prefix it with, so those tools are dropped rather than smuggled through
+    bare (which would silently fail the same way as the bug above)."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    tool = _tool_node(server_name=None, tool_names=["fn_a"])
+    graph = {"nodes": [agent, tool], "edges": [agent_llm_edge, _tool_edge("tool1", "a")]}
+    resolved = pe._resolve_tool_config(graph, "a")
+    assert resolved == {"server_names": [], "tool_names": []}
 
 
 def test_resolve_pattern_config_returns_connected_node_config() -> None:

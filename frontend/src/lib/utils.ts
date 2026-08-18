@@ -6,6 +6,13 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/** A browser-safe download filename derived from free text (an experiment/
+ * protocol name, which can carry spaces, punctuation, anything) — used
+ * wherever a Blob download needs an `a.download` value. */
+export function sanitizeFilename(name: string, fallback = 'download'): string {
+  return name.trim().replace(/[^a-z0-9-_]+/gi, '-').replace(/^-+|-+$/g, '') || fallback
+}
+
 /** A `style` prop re-tinting a `Card`'s glow/ring/corner-brackets — pass a
  * color, e.g. `cardAccent('var(--chart-3)')`. React's CSSProperties has no
  * slot for arbitrary custom properties, hence the cast. */

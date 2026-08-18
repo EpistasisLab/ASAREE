@@ -94,7 +94,10 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
   skipAuthRetry?: boolean
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+/** The shared fetch/auth/retry/error-mapping dance -- `request` (JSON) and
+ * `requestBlob` (a file download) both build on this, differing only in how
+ * they read the (already ok) response body. */
+async function authedFetch(path: string, options: RequestOptions = {}): Promise<Response> {
   const { body, skipAuthRetry, headers, ...rest } = options
   const token = getStoredAccessToken()
   const isFormData = body instanceof FormData
@@ -131,8 +134,21 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw new ApiError(res.status, detail)
   }
 
+  return res
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const res = await authedFetch(path, options)
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
+}
+
+/** Same auth/retry/error handling as `request`, but for a non-JSON download
+ * (e.g. a CSV export) -- returns the raw `Blob` for the caller to hand to
+ * `URL.createObjectURL`. */
+async function requestBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
+  const res = await authedFetch(path, options)
+  return res.blob()
 }
 
 export const authApi = {
@@ -173,6 +189,10 @@ export const experimentsApi = {
   ) => request<Experiment>(`/experiments/${id}`, { method: 'PATCH', body: data }),
   remove: (id: string) => request<void>(`/experiments/${id}`, { method: 'DELETE' }),
   listCells: (id: string) => request<Cell[]>(`/experiments/${id}/cells`),
+  // One row per cell, one column per factor_values/metric_values key seen
+  // anywhere in the experiment (see services.csv_export.cells_to_csv) --
+  // a Blob, not JSON, so callers hand it straight to URL.createObjectURL.
+  downloadCellsCsv: (id: string) => requestBlob(`/experiments/${id}/cells.csv`),
   // Materializes one FactorialCellResult per combination of the experiment's
   // declared factors -- safe to call again after widening a factor's levels,
   // existing cells are untouched (see services.design_generation).

@@ -8,6 +8,7 @@ import {
   ChevronRight,
   ChevronsUpDown,
   Database,
+  Download,
   FlaskConical,
   Layers,
   Maximize2,
@@ -26,7 +27,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { formatDate, formatRelative } from '@/lib/format'
 import { cellsStatusAccent, displayFactorValue, factorCount, factorValueKey } from '@/lib/experiment'
-import { cardAccent, cn, hashToChartHue } from '@/lib/utils'
+import { cardAccent, cn, hashToChartHue, sanitizeFilename } from '@/lib/utils'
 import { agentsApi, datasetsApi, experimentsApi, runsApi } from '@/api/client'
 import type { Agent } from '@/types/agents'
 import type { Cell, Experiment } from '@/types/experiments'
@@ -554,6 +555,16 @@ function CellsSection({
 
   const canExpand = !isLoading && !!cells && cells.length > 0
 
+  async function handleDownloadCsv() {
+    const blob = await experimentsApi.downloadCellsCsv(experiment.id)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${sanitizeFilename(experiment.name, 'experiment')}-cells.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const table = isLoading ? (
     <div className="space-y-2">
       <Skeleton className="h-8 w-full" />
@@ -578,7 +589,11 @@ function CellsSection({
         <CardContent>
           {cells && <CellsHeatmap experiment={experiment} cells={cells} />}
           {canExpand && (
-            <div className="mb-2 flex justify-end">
+            <div className="mb-2 flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => void handleDownloadCsv()}>
+                <Download className="size-4" />
+                Download CSV
+              </Button>
               <Button variant="outline" size="icon-sm" onClick={() => setFullscreen(true)} aria-label="View table full screen">
                 <Maximize2 className="size-4" />
               </Button>

@@ -8,14 +8,16 @@ fields, merged onto the same row (see ``services.factorial_cells.upsert_cell``).
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
+from asaree.services.csv_export import cells_to_csv
 from asaree.services.datasets import get_dataset
 from asaree.services.design_generation import DesignValidationError, generate_design_cells
 from asaree.services.experiment_artifacts import create_artifact, delete_artifact, get_artifact, list_artifacts
@@ -30,6 +32,10 @@ from asaree.services.experiments import (
 from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_experiment_design, analyze_factorial
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
 from asaree.services.protocol_runs import list_experiment_trials
+
+# For a Content-Disposition filename only -- never touches the experiment's
+# own stored name, just what the browser offers to save the download as.
+_UNSAFE_FILENAME_CHAR = re.compile(r"[^A-Za-z0-9._-]")
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
 
@@ -336,6 +342,21 @@ async def list_cells_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: D
     await _get_owned_experiment(db, experiment_id, user)
     cells = await list_cells(db, experiment_id=experiment_id)
     return [CellResponse.model_validate(c) for c in cells]
+
+
+@router.get("/{experiment_id}/cells.csv")
+async def export_cells_csv_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> Response:
+    """One row per cell, one column per factor_values/metric_values key seen
+    across the whole experiment -- see services.csv_export.cells_to_csv."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    cells = await list_cells(db, experiment_id=experiment_id)
+    csv_text = cells_to_csv(cells)
+    filename = _UNSAFE_FILENAME_CHAR.sub("_", experiment.name.strip()) or "experiment"
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}-cells.csv"'},
+    )
 
 
 class CreateArtifactRequest(BaseModel):

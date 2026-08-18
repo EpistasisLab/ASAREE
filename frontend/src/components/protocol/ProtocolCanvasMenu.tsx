@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { toPersistedGraph } from '@/lib/protocolGraph'
+import { sanitizeFilename } from '@/lib/utils'
 import type { ProtocolGraph } from '@/types/protocols'
 import type { DesignSpec } from '@/types/experiments'
 
@@ -140,10 +141,6 @@ function EditDescriptionDialog({
   )
 }
 
-function sanitizeFilename(name: string): string {
-  return name.trim().replace(/[^a-z0-9-_]+/gi, '-').replace(/^-+|-+$/g, '') || 'protocol'
-}
-
 // A non-destructive "fill gaps" merge, same spirit as the graph import's own
 // "merge alongside, never replace" behavior (ProtocolCanvas.tsx's
 // handleImport) -- an imported design shouldn't be able to silently clobber
@@ -247,7 +244,7 @@ export function ProtocolCanvasMenu({
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${sanitizeFilename(displayName)}.json`
+    a.download = `${sanitizeFilename(displayName, 'protocol')}.json`
     a.click()
     URL.revokeObjectURL(url)
   }

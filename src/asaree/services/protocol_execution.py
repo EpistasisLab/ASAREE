@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import re
 import uuid
 from typing import Any
 
@@ -556,12 +557,37 @@ def _upstream_ids(graph: dict[str, Any], node_id: str) -> list[str]:
     ]
 
 
+# design_spec factor names (e.g. "Azure Foundry:Model", "Critic enabled") are
+# free text, joined into a real cell_label like "Azure Foundry:Effort_medium__
+# Azure Foundry:Model_claude-sonnet-5__Critic enabled_false" -- a string
+# asaree_workspace_core's own _SAFE_COMPONENT regex rejects outright (spaces,
+# colons). Sanitized here, once, rather than left for each agent to guess a
+# safe cell_label on its own before calling open_workspace: an LLM asked to
+# pass that raw string verbatim (see _build_user_input's Dataset-context
+# block below) may improvise ITS OWN sanitization -- inconsistently across
+# agents/attempts -- while run_model_script (and every other tool that falls
+# back to the ambient _meta workspace_id instead of an explicit cell_label
+# arg) always gets this function's raw, unsanitized output. That mismatch
+# left run_model_script looking for a workspace directory that was never
+# created under that exact raw name, failing every Score stage with a
+# "workspace not initialized" error even after DC/FTE/FS/MLM completed
+# cleanly. Sanitizing centrally, here, keeps what's shown to the agent and
+# what's used ambiently byte-for-byte identical, matching this function's own
+# existing contract to keep those two identities from drifting apart.
+_UNSAFE_WORKSPACE_LABEL_CHAR = re.compile(r"[^A-Za-z0-9._=,-]")
+
+
 def _effective_cell_label(cell_label: str | None, protocol_run_id: uuid.UUID) -> str:
     """``cell_label`` for a real factorial-cell run, else a synthetic
     per-run label -- shared by ``_compute_workspace_id`` and the Dataset
     connector's own context block (``_build_user_input``) so the two
-    identities can never drift apart."""
-    return cell_label or f"adhoc-{protocol_run_id}"
+    identities can never drift apart. Sanitized to a filesystem-safe token
+    (see ``_UNSAFE_WORKSPACE_LABEL_CHAR`` above) since a real cell_label is
+    built from free-text factor names -- the DB's own stored ``cell_label``
+    column (display, matching, uniqueness) is untouched; only this
+    execution-time copy changes."""
+    label = cell_label or f"adhoc-{protocol_run_id}"
+    return _UNSAFE_WORKSPACE_LABEL_CHAR.sub("_", label)
 
 
 def _compute_workspace_id(

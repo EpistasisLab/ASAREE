@@ -926,6 +926,24 @@ def test_compute_workspace_id_none_without_experiment_id() -> None:
     assert pe._compute_workspace_id(None, "some-cell", uuid.uuid4()) is None
 
 
+def test_compute_workspace_id_sanitizes_a_real_cell_label() -> None:
+    # Regression test: a real cell_label is built from free-text design_spec
+    # factor names (e.g. "Azure Foundry:Model", "Critic enabled") and can
+    # contain spaces/colons that asaree_workspace_core's own _SAFE_COMPONENT
+    # regex rejects. Before this fix, _compute_workspace_id passed the raw
+    # label through unsanitized, so run_model_script (which resolves
+    # workspace_id purely from ambient _meta) looked for a workspace
+    # directory that was never created under that exact raw name -- DC/FTE/
+    # FS/MLM completed fine (their agents improvised their own sanitized
+    # cell_label when calling open_workspace), but every Score stage failed
+    # with "workspace not initialized".
+    experiment_id = uuid.uuid4()
+    protocol_run_id = uuid.uuid4()
+    raw_label = "Azure Foundry:Effort_medium__Azure Foundry:Model_claude-sonnet-5__Critic enabled_false"
+    expected = "Azure_Foundry_Effort_medium__Azure_Foundry_Model_claude-sonnet-5__Critic_enabled_false"
+    assert pe._compute_workspace_id(experiment_id, raw_label, protocol_run_id) == f"{experiment_id}/{expected}"
+
+
 def test_default_system_prompt_uses_the_node_own_label() -> None:
     # ASAREE's own explicit default -- never agentic-core's own fallback,
     # which would use the internal "protocol-{id}-{id}" agent_name instead.

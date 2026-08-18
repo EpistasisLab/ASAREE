@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import logging
 import re
 import uuid
 from typing import Any
@@ -37,6 +38,7 @@ from asaree.models.database import get_session
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.experiments import get_experiment
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
+from asaree.services.metric_promotion import promote_cell_score_metrics
 from asaree.services.protocol_runs import (
     create_protocol_run,
     get_cancel_requested_at,
@@ -46,6 +48,8 @@ from asaree.services.protocol_runs import (
 )
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
+
+logger = logging.getLogger(__name__)
 
 # Internal sentinel for _run_agent_node/_run_critic's `error` return slot --
 # never a real error message, so callers can check `error == _AGENT_CANCELLED`
@@ -1612,12 +1616,15 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             if cell_label and experiment_id:
                 # Post-write, success only: fold the graph's single designated
                 # output (the sink node's raw output_text) into this cell's
-                # artifacts. metric_values is deliberately NOT auto-populated
-                # here -- there's no concept yet of "which output_contract
-                # field is the metric" (a real, documented limitation, not an
-                # oversight); a user promotes artifacts into metric_values
-                # manually via PUT /experiments/{id}/cells/{cell_label}, the
-                # same manual step the notebook's own score_payload is today.
+                # artifacts. There's still no generic notion of "which
+                # output_contract field is the metric" for an arbitrary graph
+                # -- that's what the best-effort promote_cell_score_metrics
+                # call below is for for the one recognizable pipeline shape
+                # (a Score agent wired to a single run_model_script call)
+                # this doesn't cover, a user still promotes artifacts into
+                # metric_values manually via PUT /experiments/{id}/cells/
+                # {cell_label}, the same manual step the notebook's own
+                # score_payload is today.
                 sinks = sink_node_ids(graph)
                 if len(sinks) == 1 and node_runs.get(sinks[0], {}).get("status") == "completed":
                     await upsert_cell(
@@ -1630,4 +1637,18 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                                 "protocol_run_id": str(protocol_run_id),
                             }
                         },
+                    )
+                # Best-effort: matches the Score/run_model_script shape ->
+                # writes metric_values; doesn't match (or anything else goes
+                # wrong reading agentic-core's own run_steps) -> logs and
+                # moves on. Never lets a promotion failure fail an otherwise-
+                # successful run.
+                try:
+                    await promote_cell_score_metrics(
+                        db, experiment_id=experiment_id, cell_label=cell_label, protocol_run_id=protocol_run_id
+                    )
+                except Exception:
+                    logger.exception(
+                        "score_metric_promotion_failed",
+                        extra={"experiment_id": str(experiment_id), "cell_label": cell_label},
                     )

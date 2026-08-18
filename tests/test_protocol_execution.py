@@ -26,7 +26,7 @@ from asaree.services.protocol_execution import (
     topological_order,
     validate_coordination_strategy,
 )
-from asaree.services.protocol_runs import create_protocol_run, request_protocol_run_cancellation
+from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, request_protocol_run_cancellation
 from asaree.services.protocols import create_protocol, delete_protocol
 
 
@@ -878,6 +878,99 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
+            await delete_experiment(db, experiment_id)
+
+
+async def _run_single_cell_protocol(owner_id: uuid.UUID) -> tuple[uuid.UUID, str, uuid.UUID, uuid.UUID]:
+    """Shared setup for the two promote_cell_score_metrics wiring tests below
+    -- a minimal one-agent, one-cell protocol run, ready for pe.run_protocol.
+    Returns (experiment_id, cell_label, protocol_id, run_id)."""
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"score-promote-wiring-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db,
+            name=f"score-promote-wiring-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment_id,
+            graph={
+                "nodes": [
+                    {"id": "llm1", "type": "llm_anthropic", "data": {"config": {}}},
+                    {"id": "worker", "type": "agent", "data": {"config": {}}},
+                ],
+                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "llm"}],
+            },
+        )
+        protocol_id = protocol.id
+        await upsert_cell(db, experiment_id=experiment_id, cell_label="only-cell", fields={"factor_values": {}})
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id, cell_label="only-cell")
+        run_id = run.id
+    return experiment_id, "only-cell", protocol_id, run_id
+
+
+async def test_run_protocol_calls_score_metric_promotion_on_cell_completion(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wiring test for the auto-promotion added to run_protocol's post-write
+    block: a completed cell run calls promote_cell_score_metrics with this
+    run's own experiment_id/cell_label/protocol_run_id. The extraction logic
+    itself (flattening a run_model_script result into metric_values) is
+    covered separately, purely, in test_metric_promotion.py -- this only
+    proves run_protocol actually reaches for it."""
+
+    async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
+        return "worker output", None, None
+
+    calls = []
+
+    async def fake_promote(db, *, experiment_id, cell_label, protocol_run_id):
+        calls.append((experiment_id, cell_label, protocol_run_id))
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+    monkeypatch.setattr(pe, "promote_cell_score_metrics", fake_promote)
+
+    experiment_id, cell_label, protocol_id, run_id = await _run_single_cell_protocol(owner_id)
+    try:
+        await pe.run_protocol(run_id)
+        assert calls == [(experiment_id, cell_label, run_id)]
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+            await delete_experiment(db, experiment_id)
+
+
+async def test_run_protocol_survives_score_metric_promotion_failure(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Best-effort means best-effort: a real exception out of
+    promote_cell_score_metrics (e.g. agentic-core's run_steps table is
+    unreachable) must not fail an otherwise-successful cell run, and the
+    cell's own artifacts write must still land."""
+
+    async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
+        return "worker output", None, None
+
+    async def fake_promote(db, *, experiment_id, cell_label, protocol_run_id):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+    monkeypatch.setattr(pe, "promote_cell_score_metrics", fake_promote)
+
+    experiment_id, cell_label, protocol_id, run_id = await _run_single_cell_protocol(owner_id)
+    try:
+        await pe.run_protocol(run_id)  # must not raise
+
+        async with get_session() as db:
+            run = await get_protocol_run(db, run_id)
+            assert run is not None
+            assert run.status == "completed"
+            cell = await get_cell(db, experiment_id=experiment_id, cell_label=cell_label)
+            assert cell is not None
+            assert cell.artifacts is not None
+            assert cell.artifacts["output_text"] == "worker output"
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
             await delete_experiment(db, experiment_id)
 
 

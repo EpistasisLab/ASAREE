@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus, Variable, X } from 'lucide-react'
+import { Plus, Split, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -425,7 +425,7 @@ export function FactorEditorDialog({
       >
         <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
           <div className="flex items-center gap-2">
-            <Variable className="size-5" style={{ color: accent }} />
+            <Split className="size-5" style={{ color: accent }} />
             <h2 className="text-lg font-semibold">{name || 'New factor'}</h2>
           </div>
           <Button variant="outline" size="icon" aria-label="Close" onClick={() => onOpenChange(false)}>

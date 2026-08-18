@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { cardAccent, hashToChartHue } from '@/lib/utils'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { AgentNodeData, NodeRunStatus } from '@/types/protocols'
-import { hasBoundFactor } from '../bindableFields'
+import { boundFactorCount, hasBoundFactor } from '../bindableFields'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
@@ -43,14 +43,23 @@ export function AgentNode({
         onToggleActive={() => updateNodeData(id, { active: !isActive })}
         runAlone={{ canRun: !!data.canRunAlone, onRun: () => requestRunNode(id) }}
       />
+      {/* Steps left to `right-6` when the factor badge is also showing: that
+          badge straddles this same corner (-right-3, size-7, so 12px out to
+          16px in) and this Badge straddles the top border (-top-2.5, h-5), so
+          at the default right-1.5 the two would sit on top of each other. */}
       {badge && (
-        <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
+        <Badge className={`absolute -top-2.5 ${hasBoundFactor(data) ? 'right-6' : 'right-1.5'} ${badge.className}`}>
+          {badge.label}
+        </Badge>
       )}
-      {/* Top-left corner is the one free spot inside the card: top-right is
-          the run-status Badge, top-center (on hover) is NodeHoverToolbar,
-          and the Architectural Pattern connector's own label/stub live
-          OUTSIDE the card (negative offsets), not in this corner. */}
-      {hasBoundFactor(data) && <NodeFactorBadge className="top-1.5 left-1.5" />}
+      {/* Top-RIGHT, matching every other node shape (CircleNode hangs the same
+          badge off its own top-right). Hung ON the corner rather than tucked
+          inside it: at size-7 an inset badge would blanket most of the icon/
+          label row, and half-overlapping the border reads as "attached to this
+          node" anyway. Top-center (on hover) is NodeHoverToolbar, and the
+          Architectural Pattern connector's own label/stub live OUTSIDE the
+          card on the left of this edge, so neither competes for this corner. */}
+      {hasBoundFactor(data) && <NodeFactorBadge count={boundFactorCount(data)} className="-top-3 -right-3" />}
       {/* Main flow is left-to-right (n8n's own convention) -- the 4
           sub-connectors below stay on the bottom edge regardless, same as
           n8n's own AI sub-connectors (Chat Model/Memory/Tool) always hang

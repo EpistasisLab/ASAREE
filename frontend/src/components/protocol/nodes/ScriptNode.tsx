@@ -2,7 +2,7 @@ import type { NodeProps } from '@xyflow/react'
 import { Code2 } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { ScriptNodeData } from '@/types/protocols'
-import { hasBoundFactor } from '../bindableFields'
+import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
 
 // Carries a fixed piece of code an Agent passes verbatim as some tool's own
@@ -25,7 +25,7 @@ export function ScriptNode({ id, data, selected }: NodeProps & { data: ScriptNod
       placeholder="Script"
       handleId="tool"
       warning={data.config?.code ? undefined : 'No code set'}
-      hasFactor={hasBoundFactor(data)}
+      factorCount={boundFactorCount(data)}
     />
   )
 }

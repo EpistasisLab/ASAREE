@@ -1,7 +1,7 @@
 import type { ComponentType } from 'react'
 import { Handle, Position } from '@xyflow/react'
-import { Variable } from 'lucide-react'
 import { cardAccent } from '@/lib/utils'
+import { NodeFactorBadge } from './NodeFactorBadge'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 import { WarningBadge } from './WarningBadge'
 
@@ -23,7 +23,7 @@ export function CircleNode({
   handleId,
   dashed,
   warning,
-  hasFactor,
+  factorCount = 0,
   dimmed,
   isActive,
   onToggleActive,
@@ -50,10 +50,11 @@ export function CircleNode({
   // active/enabled state, so "this doesn't currently do anything" reads the
   // same way across every node type that can be switched off.
   dimmed?: boolean
-  // Small "x" badge, opposite corner from `warning` -- this node has at
-  // least one field bound to an experimental factor (see AgentNode.tsx's
-  // own hasFactor for the matching convention on a rectangular node).
-  hasFactor?: boolean
+  // How many of this node's fields are bound to an experimental factor -- 0
+  // (the default) hides the top-right NodeFactorBadge entirely, anything
+  // higher is printed in its caption. Same component and same corner the
+  // rectangular nodes use; see AgentNode.tsx's own call for that side.
+  factorCount?: number
   // The hover toolbar's own power icon -- toggles this same config.enabled
   // `dimmed` is already reading, so a node can be switched off from the
   // canvas directly, not only via its own inspector's Enabled switch.
@@ -90,14 +91,14 @@ export function CircleNode({
             className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--card-accent)]/40"
           />
         )}
-        {hasFactor && (
-          <div
-            className="absolute -bottom-1 -left-1 flex size-4 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--card-accent)]/40"
-            title="One or more fields are bound to an experimental factor"
-          >
-            <Variable className="size-3 text-[color:var(--chart-2)]" />
-          </div>
-        )}
+        {/* Top-right, hung off the ring -- same corner the rectangular nodes
+            put it on, so "this node varies" is always the same glyph in the
+            same place whatever shape the node is. Pushed a little further out
+            than the warning badge below it (-2 vs -1): the factor badge is
+            size-7 to that one's size-4, and clearing the ring rather than
+            covering the node's own icon matters more at that size. Still clear
+            of the top-CENTER source handle. */}
+        {factorCount > 0 && <NodeFactorBadge count={factorCount} className="-top-2 -right-2" />}
         <Handle
           type="source"
           id={handleId}

@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { cardAccent, hashToChartHue } from '@/lib/utils'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { CriticGateNodeData, NodeRunStatus } from '@/types/protocols'
-import { hasBoundFactor } from '../bindableFields'
+import { boundFactorCount, hasBoundFactor } from '../bindableFields'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
@@ -39,10 +39,14 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
         onToggleActive={() => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
         onMakeFactor={() => requestMakeFactor(id)}
       />
+      {/* Steps left when the factor badge shares this corner -- same reasoning
+          as AgentNode's own run-status Badge. */}
       {badge && (
-        <Badge className={`absolute -top-2.5 right-1.5 ${badge.className}`}>{badge.label}</Badge>
+        <Badge className={`absolute -top-2.5 ${hasBoundFactor(data) ? 'right-6' : 'right-1.5'} ${badge.className}`}>
+          {badge.label}
+        </Badge>
       )}
-      {hasBoundFactor(data) && <NodeFactorBadge className="top-1 left-1.5" />}
+      {hasBoundFactor(data) && <NodeFactorBadge count={boundFactorCount(data)} className="-top-3 -right-3" />}
       {/* Main pipeline flow is left-to-right -- input on the left, output on
           the right, same convention as AgentNode. The LLM sub-connector
           stays on the bottom edge regardless. */}

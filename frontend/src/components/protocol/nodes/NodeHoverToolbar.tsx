@@ -1,6 +1,6 @@
 import type { MouseEvent, ReactNode } from 'react'
 import { useReactFlow } from '@xyflow/react'
-import { Play, Power, PowerOff, Repeat, Trash2, Variable } from 'lucide-react'
+import { Play, Power, PowerOff, Repeat, Split, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 function ToolbarIconButton({
@@ -120,7 +120,7 @@ export function NodeHoverToolbar({
       )}
       {onMakeFactor && (
         <ToolbarIconButton label="Make experimental factor" onClick={onMakeFactor}>
-          <Variable className="size-3" />
+          <Split className="size-3" />
         </ToolbarIconButton>
       )}
     </div>

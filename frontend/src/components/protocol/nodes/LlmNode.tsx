@@ -4,7 +4,7 @@ import { Atom, Cloud, Sparkles } from 'lucide-react'
 import { llmSettingsApi } from '@/api/client'
 import { hashToChartHue } from '@/lib/utils'
 import type { LlmNodeData } from '@/types/protocols'
-import { hasBoundFactor } from '../bindableFields'
+import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
 
 // One shared card renderer for all three LLM provider node types
@@ -71,7 +71,7 @@ export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData 
       placeholder={meta.label}
       handleId="llm"
       warning={warning}
-      hasFactor={hasBoundFactor(data)}
+      factorCount={boundFactorCount(data)}
     />
   )
 }

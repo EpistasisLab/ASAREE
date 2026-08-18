@@ -2,7 +2,7 @@ import { useNodeConnections, type NodeProps } from '@xyflow/react'
 import { ArrowRight } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { SingleAgentBaselinePatternNodeData } from '@/types/protocols'
-import { hasBoundFactor } from '../bindableFields'
+import { boundFactorCount } from '../bindableFields'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
 
@@ -35,7 +35,7 @@ export function SingleAgentBaselinePatternNode({
       placeholder="Single-Agent Baseline"
       handleId="architectural_pattern"
       handlePosition="bottom"
-      hasFactor={hasBoundFactor(data)}
+      factorCount={boundFactorCount(data)}
       swap={
         targetAgentId
           ? { label: 'Swap pattern', onSwap: () => requestConnectorAdd({ nodeId: targetAgentId, slot: 'architectural_pattern' }) }

@@ -2,7 +2,7 @@ import { useNodeConnections, type NodeProps } from '@xyflow/react'
 import { Repeat2 } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { ReasonActPatternNodeData } from '@/types/protocols'
-import { hasBoundFactor } from '../bindableFields'
+import { boundFactorCount } from '../bindableFields'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
 
@@ -40,7 +40,7 @@ export function ReasonActPatternNode({ id, data, selected }: NodeProps & { data:
       placeholder="Reason + Act"
       handleId="architectural_pattern"
       handlePosition="bottom"
-      hasFactor={hasBoundFactor(data)}
+      factorCount={boundFactorCount(data)}
       swap={
         targetAgentId
           ? { label: 'Swap pattern', onSwap: () => requestConnectorAdd({ nodeId: targetAgentId, slot: 'architectural_pattern' }) }

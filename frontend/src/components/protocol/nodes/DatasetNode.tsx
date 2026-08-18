@@ -2,7 +2,7 @@ import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { Database } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { DatasetNodeData } from '@/types/protocols'
-import { hasBoundFactor } from '../bindableFields'
+import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
 
 // Declares which registered dataset an Agent's workspace tools operate on --
@@ -32,7 +32,7 @@ export function DatasetNode({ id, data, selected }: NodeProps & { data: DatasetN
       placeholder="Dataset"
       handleId="tool"
       warning={data.config?.dataset_id ? undefined : 'No dataset selected'}
-      hasFactor={hasBoundFactor(data)}
+      factorCount={boundFactorCount(data)}
       dimmed={!enabled}
       isActive={enabled}
       onToggleActive={() => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}

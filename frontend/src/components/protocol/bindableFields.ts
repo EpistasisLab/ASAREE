@@ -30,7 +30,15 @@ export function pickToolNamesForServer(previousToolNames: string[], availableToo
 // Every node component reads this straight off its own `data.factor_bindings`
 // rather than needing anything threaded in from ProtocolCanvas.tsx.
 export function hasBoundFactor(data: { factor_bindings?: Record<string, string> }): boolean {
-  return Object.keys(data.factor_bindings ?? {}).length > 0
+  return boundFactorCount(data) > 0
+}
+
+// How many of them -- what NodeFactorBadge prints under its own glyph
+// ("1 factor" / "3 factors"), so a node states outright how much of it varies
+// across the design instead of only that something does. Same source of truth
+// as hasBoundFactor above, which is now just this being non-zero.
+export function boundFactorCount(data: { factor_bindings?: Record<string, string> }): number {
+  return Object.keys(data.factor_bindings ?? {}).length
 }
 
 // The connector-type node families whose whole `config` (or, for Pattern, a

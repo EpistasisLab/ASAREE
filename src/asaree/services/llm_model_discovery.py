@@ -52,7 +52,11 @@ _DEPLOYMENTS_API_VERSION = "2024-10-21"
 _PROJECT_DEPLOYMENTS_API_VERSION = "v1"
 _REQUEST_TIMEOUT_SECONDS = 10.0
 
-_NO_LISTING_API_NOTE = (
+# Public because llm_connection_check matches on it: "this resource has no
+# listing API" is the one discovery failure that says nothing about whether
+# the credential itself is good, so a connection check must report it as
+# inconclusive rather than as a rejected key.
+NO_LISTING_API_NOTE = (
     "This Azure resource has no deployment-listing API available -- enter your deployment's name directly in "
     "the Model field below, or add a Project endpoint to this credential to enable listing (expected for a "
     "Foundry resource hosting Claude models)."
@@ -143,7 +147,7 @@ async def _discover_azure_classic(setting: UserLLMSetting) -> tuple[list[ModelIn
         data = response.json().get("data") or []
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
-            return [], "error", _NO_LISTING_API_NOTE
+            return [], "error", NO_LISTING_API_NOTE
         message = str(e).replace(api_key, "***")
         logger.warning("azure_foundry_model_discovery_failed", extra={"error": message})
         return [], "error", f"Could not reach Azure Foundry to list models: {message}"

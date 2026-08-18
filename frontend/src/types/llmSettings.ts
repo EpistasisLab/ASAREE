@@ -47,6 +47,30 @@ export interface LLMModelInfo {
   effort_levels: string[]
 }
 
+// Matches src/asaree/api/llm_settings.py's LLMConnectionCheckResponse --
+// GET /llm-settings/{provider}/connection, a zero-token liveness check
+// (every provider has a free authenticated list endpoint; see
+// services/llm_connection_check.py).
+//
+// Three states, not two, and the distinction is load-bearing: "unknown"
+// covers an Azure resource that exposes no deployment-listing API at all
+// (the normal case for Claude-on-Foundry) and a provider that answered 429.
+// Neither says the credential is bad, and rendering either as a failure
+// would send people rotating a key that works. `ok` also deliberately does
+// NOT mean "ready to run" -- quota, billing and per-project model
+// permissions are only enforced at inference time, so the UI label stays
+// "Key valid".
+export type LLMConnectionStatus = 'ok' | 'failed' | 'unknown'
+
+export interface LLMConnectionCheck {
+  provider: LLMProvider
+  status: LLMConnectionStatus
+  detail: string
+  // The URL actually contacted, so a failure is debuggable without guessing
+  // which base the credential resolved to. Never contains the key.
+  endpoint: string | null
+}
+
 export interface LLMSettingModelsResponse {
   models: LLMModelInfo[]
   // "static" -- Anthropic/OpenAI's curated, provider-wide catalog, no

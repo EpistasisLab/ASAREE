@@ -1,6 +1,16 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pencil, ShieldCheck, TriangleAlert, Trash2 } from 'lucide-react'
+import {
+  CircleCheck,
+  CircleHelp,
+  CircleX,
+  LoaderCircle,
+  Pencil,
+  PlugZap,
+  ShieldCheck,
+  TriangleAlert,
+  Trash2,
+} from 'lucide-react'
 import { llmSettingsApi } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -18,7 +28,77 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
 import { PROVIDER_META } from '@/components/protocol/nodes/LlmNode'
-import { LLM_PROVIDER_LABELS, type LLMProvider, type LLMSetting } from '@/types/llmSettings'
+import {
+  LLM_PROVIDER_LABELS,
+  type LLMConnectionStatus,
+  type LLMProvider,
+  type LLMSetting,
+} from '@/types/llmSettings'
+
+// The three outcomes of a connection check, in the same color language the
+// rest of the app uses for status (see the root CLAUDE.md): emerald for
+// done/good, amber for indeterminate, destructive for broken. "unknown" is
+// deliberately amber and not red -- an Azure resource with no listing API,
+// or a provider that answered 429, tells us nothing bad about the key.
+const STATUS_META: Record<LLMConnectionStatus, { label: string; color: string; Icon: typeof CircleCheck }> = {
+  // Not "Ready" or "Connected": a free list call proves the key, the network
+  // and the org, but quota/billing/per-project model access are only
+  // enforced at inference time. Don't promise more than was tested.
+  ok: { label: 'Key valid', color: 'var(--chart-3)', Icon: CircleCheck },
+  failed: { label: 'Failed', color: 'var(--destructive)', Icon: CircleX },
+  unknown: { label: 'Inconclusive', color: 'var(--chart-4)', Icon: CircleHelp },
+}
+
+/** On-demand, zero-token credential check: a free authenticated list call
+ * per provider, never an inference request. A button rather than something
+ * that fires on render -- it costs no tokens, but it's still one outbound
+ * request per saved provider against a rate-limited endpoint every time
+ * this page mounts. Result is intentionally NOT cached in react-query:
+ * "is my key working right now" is a question you ask, and a stale green
+ * dot from ten minutes ago is worse than no dot. */
+function ConnectionCheckCell({ provider }: { provider: LLMProvider }) {
+  const check = useMutation({ mutationFn: () => llmSettingsApi.testConnection(provider) })
+  const meta = check.data ? STATUS_META[check.data.status] : null
+
+  return (
+    <div className="flex flex-col items-start gap-1.5">
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => check.mutate()}
+          disabled={check.isPending}
+          aria-label={`Test the ${LLM_PROVIDER_LABELS[provider]} connection`}
+        >
+          {check.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <PlugZap className="size-3.5" />}
+          {check.isPending ? 'Testing…' : 'Test'}
+        </Button>
+        {meta && (
+          <span className="flex items-center gap-1.5 text-xs font-medium" style={{ color: meta.color }}>
+            <meta.Icon className="size-3.5 shrink-0" />
+            {meta.label}
+          </span>
+        )}
+      </div>
+      {check.isError && (
+        <p className="max-w-72 text-xs text-destructive">
+          Could not run the check — the server may be unreachable, or you may have run too many checks in a
+          minute.
+        </p>
+      )}
+      {check.data && (
+        <p className="max-w-72 text-xs text-muted-foreground">
+          {check.data.detail}
+          {check.data.endpoint && (
+            <span className="mt-0.5 block truncate font-mono" title={check.data.endpoint}>
+              {check.data.endpoint}
+            </span>
+          )}
+        </p>
+      )}
+    </div>
+  )
+}
 
 function DeleteCredentialDialog({ setting }: { setting: LLMSetting }) {
   const [open, setOpen] = useState(false)
@@ -123,6 +203,7 @@ export function LlmCredentialsSection() {
               <TableRow>
                 <TableHead>Provider</TableHead>
                 <TableHead>Project endpoint</TableHead>
+                <TableHead>Connection</TableHead>
                 <TableHead className="w-20" />
               </TableRow>
             </TableHeader>
@@ -143,6 +224,9 @@ export function LlmCredentialsSection() {
                       title={setting.azure_project_endpoint ?? undefined}
                     >
                       {setting.azure_project_endpoint ?? '—'}
+                    </TableCell>
+                    <TableCell className="align-top">
+                      <ConnectionCheckCell provider={setting.provider} />
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">

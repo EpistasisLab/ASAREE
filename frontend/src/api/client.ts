@@ -13,7 +13,7 @@ import type {
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
 import type { Cell, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
-import type { LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
+import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
@@ -316,6 +316,12 @@ export const llmSettingsApi = {
   // works for anthropic/openai too (no credential needed, see
   // llm_model_discovery.py's static catalog path).
   listModels: (provider: string) => request<LLMSettingModelsResponse>(`/llm-settings/${provider}/models`),
+  // Zero-token liveness check against the stored credential -- a free
+  // authenticated GET per provider, never an inference call. On demand only
+  // (a button, not an on-render fetch): it's free in tokens but it's still
+  // one outbound request per provider against a rate-limited endpoint.
+  // 404s when no credential is saved for the provider.
+  testConnection: (provider: LLMProvider) => request<LLMConnectionCheck>(`/llm-settings/${provider}/connection`),
 }
 
 export { tryRefreshToken }

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.credential_resolver import SUPPORTED_PROVIDERS
+from asaree.services.llm_connection_check import check_connection
 from asaree.services.llm_model_discovery import discover_models
 from asaree.services.rate_limit import check_rate_limit, record_attempt
 from asaree.services.user_llm_settings import delete_setting, get_setting, list_settings, upsert_setting
@@ -24,6 +25,13 @@ router = APIRouter(prefix="/llm-settings", tags=["llm-settings"])
 # already takes for the same call.
 _DISCOVERY_MAX_ATTEMPTS = 10
 _DISCOVERY_WINDOW_SECONDS = 60
+
+# The connection check ALWAYS makes an outbound call with the user's key --
+# free in tokens, but still a request against a rate-limited provider
+# endpoint, and a button a frustrated user will mash. Same cap, its own
+# bucket so it can't exhaust discovery's.
+_CONNECTION_CHECK_MAX_ATTEMPTS = 10
+_CONNECTION_CHECK_WINDOW_SECONDS = 60
 
 
 class UpsertLLMSettingRequest(BaseModel):
@@ -53,6 +61,15 @@ class LLMSettingModelsResponse(BaseModel):
     models: list[LLMModelInfoResponse]
     source: str
     note: str | None
+
+
+class LLMConnectionCheckResponse(BaseModel):
+    provider: str
+    # "ok" | "failed" | "unknown" -- see llm_connection_check for why an
+    # inconclusive state is a real outcome and not a cop-out.
+    status: str
+    detail: str
+    endpoint: str | None
 
 
 @router.put("", response_model=LLMSettingResponse, status_code=201)
@@ -90,6 +107,42 @@ async def delete_llm_setting_endpoint(provider: str, user: CurrentUser, db: DbSe
     deleted = await delete_setting(db, user_id=user.id, provider=provider)
     if not deleted:
         raise HTTPException(status_code=404, detail="No credential saved for this provider.")
+
+
+@router.get("/{provider}/connection", response_model=LLMConnectionCheckResponse)
+async def check_connection_endpoint(provider: str, user: CurrentUser, db: DbSession) -> LLMConnectionCheckResponse:
+    """Zero-token liveness check for the caller's saved credential.
+
+    Deliberately on demand rather than folded into GET /llm-settings: it's
+    free in tokens but it's still one outbound request per provider, and a
+    credentials page that silently calls three providers on every render is
+    a worse citizen than a button.
+    """
+    if provider not in SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=422, detail=f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}")
+
+    key = f"connection-check:{user.id}:{provider}"
+    allowed, retry_after = await check_rate_limit(
+        key, limit=_CONNECTION_CHECK_MAX_ATTEMPTS, window_seconds=_CONNECTION_CHECK_WINDOW_SECONDS
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": f"Too many connection checks. Please wait {retry_after} seconds.",
+                "retry_after_seconds": retry_after,
+            },
+        )
+    await record_attempt(key, window_seconds=_CONNECTION_CHECK_WINDOW_SECONDS)
+
+    setting = await get_setting(db, user_id=user.id, provider=provider)
+    if setting is None:
+        raise HTTPException(status_code=404, detail="No credential saved for this provider.")
+
+    result = await check_connection(provider=provider, setting=setting)
+    return LLMConnectionCheckResponse(
+        provider=provider, status=result.status, detail=result.detail, endpoint=result.endpoint
+    )
 
 
 @router.get("/{provider}/models", response_model=LLMSettingModelsResponse)

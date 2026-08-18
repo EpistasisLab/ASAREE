@@ -30,7 +30,7 @@
         "type": "dataset",
         "position": {
           "x": 560,
-          "y": -200
+          "y": 200
         },
         "data": {
           "label": "Spinal Fusion Dataset",
@@ -139,7 +139,7 @@
         "type": "pattern_reason_act",
         "position": {
           "x": 0,
-          "y": 260
+          "y": -260
         },
         "data": {
           "label": "",
@@ -287,7 +287,7 @@
         "type": "pattern_reason_act",
         "position": {
           "x": 560,
-          "y": 260
+          "y": -260
         },
         "data": {
           "label": "",
@@ -465,7 +465,7 @@
         "type": "pattern_reason_act",
         "position": {
           "x": 1120,
-          "y": 260
+          "y": -260
         },
         "data": {
           "label": "",
@@ -614,7 +614,7 @@
         "type": "pattern_single_agent_baseline",
         "position": {
           "x": 1680,
-          "y": 260
+          "y": -260
         },
         "data": {
           "label": "",
@@ -675,7 +675,7 @@
         "type": "pattern_reason_act",
         "position": {
           "x": 2240,
-          "y": 260
+          "y": -260
         },
         "data": {
           "label": "",

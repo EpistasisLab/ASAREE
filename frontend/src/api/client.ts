@@ -170,7 +170,11 @@ export const experimentsApi = {
   list: (opts?: { includeArchived?: boolean }) =>
     request<Experiment[]>(opts?.includeArchived ? '/experiments?include_archived=true' : '/experiments'),
   get: (id: string) => request<Experiment>(`/experiments/${id}`),
-  create: (data: { name: string; description?: string | null }) =>
+  // Omit `name` and the server allocates the next free "Untitled Experiment N"
+  // atomically -- the one-click create in AppHeader relies on that, since a
+  // name this client picks from a GET is a guess that another session (or an
+  // archived experiment it can't see) can invalidate before the POST lands.
+  create: (data: { name?: string; description?: string | null }) =>
     request<Experiment>('/experiments', { method: 'POST', body: data }),
   update: (
     id: string,

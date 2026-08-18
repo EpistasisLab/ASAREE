@@ -13,9 +13,16 @@ import pytest
 import pytest_asyncio
 
 import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for the FK
+import asaree.services.experiments as experiments_service
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.user import User
-from asaree.services.experiments import create_experiment, get_experiment, list_experiments, update_experiment
+from asaree.services.experiments import (
+    create_experiment,
+    create_untitled_experiment,
+    get_experiment,
+    list_experiments,
+    update_experiment,
+)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -130,6 +137,76 @@ async def test_list_experiments_excludes_archived_by_default(owner_id: uuid.UUID
     finally:
         async with get_session() as db:
             for eid in (active_id, archived_id):
+                e = await get_experiment(db, eid)
+                if e is not None:
+                    await db.delete(e)
+
+
+async def test_untitled_names_are_numbered_and_skip_reserved_ones(owner_id: uuid.UUID) -> None:
+    """The GUI's one-click create: the server picks the name, counting archived
+    experiments (whose names the unique index still reserves) and a legacy
+    un-numbered "Untitled Experiment" as taken."""
+    created: list[uuid.UUID] = []
+    try:
+        async with get_session() as db:
+            # A bare legacy name counts as 1; an archived one still holds its
+            # name; a merely prefixed name is not ours to number.
+            legacy = await create_experiment(db, name="Untitled Experiment", owner_id=owner_id)
+            archived = await create_experiment(db, name="Untitled Experiment 2", owner_id=owner_id)
+            await update_experiment(db, archived.id, fields={"archived_at": datetime.now(UTC)})
+            unrelated = await create_experiment(db, name="Untitled Experiment Old", owner_id=owner_id)
+            created += [legacy.id, archived.id, unrelated.id]
+
+            first = await create_untitled_experiment(db, owner_id=owner_id)
+            assert first.name == "Untitled Experiment 3"
+            second = await create_untitled_experiment(db, owner_id=owner_id)
+            assert second.name == "Untitled Experiment 4"
+            created += [first.id, second.id]
+    finally:
+        async with get_session() as db:
+            for eid in created:
+                e = await get_experiment(db, eid)
+                if e is not None:
+                    await db.delete(e)
+
+
+async def test_untitled_allocation_retries_when_it_loses_the_name_race(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Losing the insert race is the whole reason this lives server-side, so
+    prove the retry: force the allocator to pick a name that is already taken
+    (what a concurrent create would cause) and it must roll back just that
+    insert, re-read, and land on a free name -- with the caller's earlier work
+    in the same transaction still intact."""
+    created: list[uuid.UUID] = []
+    try:
+        async with get_session() as db:
+            taken = await create_experiment(db, name="Untitled Experiment 1", owner_id=owner_id)
+            created.append(taken.id)
+
+            real_next_number = experiments_service._next_untitled_number
+            attempts = 0
+
+            async def _collide_once(session: object, owner: uuid.UUID) -> int:
+                nonlocal attempts
+                attempts += 1
+                return 1 if attempts == 1 else await real_next_number(session, owner)  # type: ignore[arg-type]
+
+            monkeypatch.setattr(experiments_service, "_next_untitled_number", _collide_once)
+
+            allocated = await create_untitled_experiment(db, owner_id=owner_id)
+            created.append(allocated.id)
+            assert attempts == 2, "should have retried exactly once after the violation"
+            assert allocated.name == "Untitled Experiment 2"
+
+        # The savepoint rollback must not have taken the pre-existing row or the
+        # freshly allocated one down with it -- both survive the commit.
+        async with get_session() as db:
+            names = {e.name for e in await list_experiments(db, owner_id=owner_id)}
+            assert {"Untitled Experiment 1", "Untitled Experiment 2"} <= names
+    finally:
+        async with get_session() as db:
+            for eid in created:
                 e = await get_experiment(db, eid)
                 if e is not None:
                     await db.delete(e)

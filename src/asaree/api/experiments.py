@@ -23,6 +23,7 @@ from asaree.services.design_generation import DesignValidationError, generate_de
 from asaree.services.experiment_artifacts import create_artifact, delete_artifact, get_artifact, list_artifacts
 from asaree.services.experiments import (
     create_experiment,
+    create_untitled_experiment,
     delete_experiment,
     get_experiment,
     get_experiment_by_name,
@@ -46,7 +47,13 @@ class FactorSpec(BaseModel):
 
 
 class CreateExperimentRequest(BaseModel):
-    name: str
+    # Optional on purpose: omit it (or send blank/whitespace) and the server
+    # allocates the next free "Untitled Experiment N" itself, atomically. That
+    # is what the GUI's one-click create does -- a client cannot pick this name
+    # safely, because reading the name list and inserting are two round trips
+    # against a namespace other sessions are also writing to. See
+    # services.experiments.create_untitled_experiment.
+    name: str | None = None
     description: str | None = None
     design_type: str = "factorial"
     task_brief: dict[str, Any] | None = None
@@ -162,18 +169,24 @@ async def _get_owned_experiment(db: DbSession, experiment_id: uuid.UUID, user: C
 async def create_experiment_endpoint(
     body: CreateExperimentRequest, user: CurrentUser, db: DbSession
 ) -> ExperimentResponse:
-    if await get_experiment_by_name(db, body.name, owner_id=user.id) is not None:
+    name = (body.name or "").strip()
+    if name and await get_experiment_by_name(db, name, owner_id=user.id) is not None:
         raise HTTPException(status_code=409, detail="An experiment with this name already exists")
     dataset_id = await _validated_dataset_id(body.dataset_id, db, user)
-    experiment = await create_experiment(
-        db,
-        name=body.name,
-        owner_id=user.id,
-        description=body.description,
-        design_type=body.design_type,
-        task_brief=body.task_brief,
-        design_spec={"factors": [f.model_dump() for f in body.factors]} if body.factors else None,
-        dataset_id=dataset_id,
+    fields: dict[str, Any] = {
+        "description": body.description,
+        "design_type": body.design_type,
+        "task_brief": body.task_brief,
+        "design_spec": {"factors": [f.model_dump() for f in body.factors]} if body.factors else None,
+        "dataset_id": dataset_id,
+    }
+    # No name given -> the server names it, and the 409 above is unreachable:
+    # allocation and insert share this request's transaction, so there is no
+    # window for another session to take the name in between.
+    experiment = (
+        await create_untitled_experiment(db, owner_id=user.id, **fields)
+        if not name
+        else await create_experiment(db, name=name, owner_id=user.id, **fields)
     )
     return _experiment_response(experiment)
 

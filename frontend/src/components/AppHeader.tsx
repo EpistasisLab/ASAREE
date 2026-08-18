@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, KeyRound, SquarePlus, UserRound } from 'lucide-react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { experimentsApi } from '@/api/client'
@@ -7,7 +7,6 @@ import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useAuth } from '@/hooks/useAuth'
-import { nextUntitledName } from '@/lib/experiment'
 import { cn } from '@/lib/utils'
 
 const NAV_LINKS = [{ to: '/experiments', label: 'Experiments' }]
@@ -20,9 +19,15 @@ export function AppHeader() {
 
   // Global, n8n-style "+" menu (not page-local) so creating an experiment
   // doesn't require first navigating to the Experiments list.
-  const { data: experiments } = useQuery({ queryKey: ['experiments'], queryFn: () => experimentsApi.list() })
+  //
+  // No name is sent: the server allocates the placeholder "Untitled Experiment
+  // N" inside the insert's own transaction. This used to compute the name here
+  // from a GET /experiments, which cannot be made correct from the browser --
+  // the list omitted archived experiments whose names are still reserved, and
+  // even a perfect list goes stale between the GET and the POST. Both showed up
+  // as a silent 409.
   const createExperimentMutation = useMutation({
-    mutationFn: () => experimentsApi.create({ name: nextUntitledName(experiments) }),
+    mutationFn: () => experimentsApi.create({}),
     onSuccess: (experiment) => {
       queryClient.invalidateQueries({ queryKey: ['experiments'] })
       navigate(`/experiments/${experiment.id}/protocol`)
@@ -78,6 +83,15 @@ export function AppHeader() {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+          {/* Without this the mutation failed silently -- the name-conflict 409
+              only ever reached the browser console, so the button just looked
+              dead. That specific failure is gone now the server names the
+              experiment, but a create can still fail (network, session expiry),
+              and none of those should be invisible either. Clears on the next
+              mutate() call. */}
+          {createExperimentMutation.isError && (
+            <p className="text-sm text-destructive">Could not create the experiment. Please try again.</p>
+          )}
           <nav className="flex items-center gap-4">
             {NAV_LINKS.map((link) => (
               <NavLink

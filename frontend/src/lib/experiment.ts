@@ -68,8 +68,16 @@ function getFactors(designSpec: Experiment['design_spec']): FactorSpec[] | null 
  * factor worth an axis -- excluded when deriving factors from observed data. */
 const NON_FACTOR_KEYS = new Set(['replicate', 'seed', 'rep', 'trial', 'iteration'])
 
-/** An explicit design_spec.factors declaration wins when present (more
- * authoritative -- it can order levels deliberately); otherwise derive
+/** The CELLS decide which factors exist; design_spec.factors only refines the
+ * level ordering of names that actually appear on them. It used to win
+ * outright, which broke the heatmap silently and completely: a real
+ * experiment here declared factors named "Azure Foundry:Model"/"Azure
+ * Foundry:Effort"/"Critic enabled" while its cells were keyed
+ * tier/effort/critic, so every cellsMatching() lookup against a declared name
+ * matched zero cells, every square came out null, and the grid vanished with
+ * no error anywhere. Declared names are human-authored labels for canvas
+ * nodes; cell keys come from the design generator -- there is nothing keeping
+ * the two in sync, so nothing may assume they are. Derive
  * factors straight from what's actually on the cells, so this works with
  * zero setup for the common case where nothing was ever declared. Shared by
  * the Cells table/heatmap (components/protocol/cells/) and the Run button's
@@ -77,7 +85,6 @@ const NON_FACTOR_KEYS = new Set(['replicate', 'seed', 'rep', 'trial', 'iteration
  * levels exist across these cells" answer. */
 export function deriveFactors(cells: Cell[], designSpec: Experiment['design_spec']): FactorSpec[] | null {
   const declared = getFactors(designSpec)
-  if (declared && declared.length > 0) return declared
 
   const keys: string[] = []
   for (const c of cells) {
@@ -85,6 +92,13 @@ export function deriveFactors(cells: Cell[], designSpec: Experiment['design_spec
       if (!NON_FACTOR_KEYS.has(k.toLowerCase()) && !keys.includes(k)) keys.push(k)
     }
   }
+
+  // Nothing observed to go on (no cells yet, or none carrying factor_values) --
+  // a declared spec is then the only description of the design there is.
+  if (keys.length === 0) return declared && declared.length > 0 ? declared : null
+
+  const declaredByName = new Map((declared ?? []).map((f) => [f.name, f]))
+
   const factors = keys.map((name) => {
     const values = cells.map((c) => c.factor_values?.[name]).filter((v) => v !== undefined)
     // Dedup by content (factorValueKey), not by reference -- `new Set` would
@@ -96,10 +110,20 @@ export function deriveFactors(cells: Cell[], designSpec: Experiment['design_spec
       const key = factorValueKey(v)
       if (!seen.has(key)) seen.set(key, v)
     }
-    return {
-      name,
-      levels: Array.from(seen.values()).sort((a, b) => factorValueKey(a).localeCompare(factorValueKey(b))),
-    }
+
+    // Declared levels first, in their declared order, then anything observed
+    // that wasn't declared. This keeps both halves of what a declaration is
+    // good for: deliberate level ORDER, and levels that are planned but have
+    // no cell yet (an empty column is informative -- it's the run you haven't
+    // done). It just no longer decides which factors EXIST.
+    const declaredLevels = declaredByName.get(name)?.levels ?? []
+    const declaredKeys = new Set(declaredLevels.map(factorValueKey))
+    const extras = Array.from(seen.entries())
+      .filter(([key]) => !declaredKeys.has(key))
+      .map(([, v]) => v)
+      .sort((a, b) => factorValueKey(a).localeCompare(factorValueKey(b)))
+
+    return { name, levels: [...declaredLevels, ...extras] }
   })
   return factors.length > 0 ? factors : null
 }

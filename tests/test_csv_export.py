@@ -4,7 +4,7 @@ import csv
 import io
 from types import SimpleNamespace
 
-from asaree.services.csv_export import cells_to_csv
+from asaree.services.csv_export import cells_that_ran, cells_to_csv
 
 
 def _cell(
@@ -86,3 +86,30 @@ def test_cells_to_csv_column_order_is_scalars_then_sorted_factors_then_sorted_me
     text = cells_to_csv(cells)
     header = text.splitlines()[0].split(",")
     assert header == ["cell_label", "run_id", "workspace_id", "alpha", "zeta", "alpha_metric", "zeta_metric"]
+
+
+# --- cells_that_ran -----------------------------------------------------
+
+
+def test_cells_that_ran_excludes_untouched_queued_cells() -> None:
+    # generate_design_cells materializes one row per combination up front,
+    # for the whole factorial grid, long before any of them run.
+    queued = _cell("cell-queued")
+    ran = _cell("cell-ran", run_id="11111111-1111-1111-1111-111111111111")
+    assert cells_that_ran([queued, ran]) == [ran]
+
+
+def test_cells_that_ran_includes_a_cell_with_metric_values_but_no_run_id() -> None:
+    # A cell scored directly (e.g. upserted by a notebook), never through a
+    # ProtocolRun at all, still counts as "ran" -- same rule
+    # list_experiment_trials uses to call this "completed" rather than "queued".
+    scored_externally = _cell("cell-scored", metric_values={"accuracy": 0.9})
+    assert cells_that_ran([scored_externally]) == [scored_externally]
+
+
+def test_cells_that_ran_includes_a_failed_run_with_no_metrics_yet() -> None:
+    # A cell whose run_id is set but never produced metrics (e.g. it failed
+    # before scoring) still "ran" -- excluding it would silently drop a real
+    # attempt, not just an unstarted placeholder.
+    failed = _cell("cell-failed", run_id="11111111-1111-1111-1111-111111111111", metric_values=None)
+    assert cells_that_ran([failed]) == [failed]

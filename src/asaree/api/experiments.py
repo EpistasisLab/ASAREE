@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
-from asaree.services.csv_export import cells_to_csv
+from asaree.services.csv_export import cells_that_ran, cells_to_csv
 from asaree.services.datasets import get_dataset
 from asaree.services.design_generation import DesignValidationError, generate_design_cells
 from asaree.services.experiment_artifacts import create_artifact, delete_artifact, get_artifact, list_artifacts
@@ -346,11 +346,12 @@ async def list_cells_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: D
 
 @router.get("/{experiment_id}/cells.csv")
 async def export_cells_csv_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> Response:
-    """One row per cell, one column per factor_values/metric_values key seen
-    across the whole experiment -- see services.csv_export.cells_to_csv."""
+    """One row per cell that's actually run, one column per factor_values/
+    metric_values key seen across them -- see services.csv_export
+    (cells_that_ran / cells_to_csv)."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
     cells = await list_cells(db, experiment_id=experiment_id)
-    csv_text = cells_to_csv(cells)
+    csv_text = cells_to_csv(cells_that_ran(cells))
     filename = _UNSAFE_FILENAME_CHAR.sub("_", experiment.name.strip()) or "experiment"
     return Response(
         content=csv_text,

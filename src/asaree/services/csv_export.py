@@ -14,6 +14,16 @@ from collections.abc import Sequence
 from typing import Any
 
 
+def cells_that_ran(cells: Sequence[Any]) -> list[Any]:
+    """Cells nothing has touched yet -- no run_id, no metric_values -- are
+    the "queued" placeholders generate_design_cells materializes up front for
+    the whole factorial grid before any of them have actually run (same "has
+    this cell run" rule list_experiment_trials' own status derivation uses).
+    Excluded from the CSV export: a queued cell is an all-blank row past the
+    factor columns, not a result."""
+    return [c for c in cells if c.run_id is not None or c.metric_values]
+
+
 def cells_to_csv(cells: Sequence[Any]) -> str:
     """*cells* -- anything with ``cell_label``/``run_id``/``workspace_id``/
     ``factor_values``/``metric_values`` attributes (a ``FactorialCellResult``
@@ -52,4 +62,4 @@ def cells_to_csv(cells: Sequence[Any]) -> str:
     return buf.getvalue()
 
 
-__all__ = ["cells_to_csv"]
+__all__ = ["cells_that_ran", "cells_to_csv"]

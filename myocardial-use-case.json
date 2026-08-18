@@ -7,8 +7,8 @@
         "id": "llm-shared",
         "type": "llm_azure_foundry",
         "position": {
-          "x": 700,
-          "y": -280
+          "x": 1120,
+          "y": -420
         },
         "data": {
           "label": "Azure Foundry (shared)",
@@ -29,8 +29,8 @@
         "id": "dataset-mi",
         "type": "dataset",
         "position": {
-          "x": -420,
-          "y": 0
+          "x": 560,
+          "y": -200
         },
         "data": {
           "label": "Myocardial Infarction Dataset",
@@ -116,7 +116,7 @@
         "id": "gate-dc",
         "type": "critic_gate",
         "position": {
-          "x": 260,
+          "x": 300,
           "y": 0
         },
         "data": {
@@ -139,7 +139,7 @@
         "type": "pattern_reason_act",
         "position": {
           "x": 0,
-          "y": 220
+          "y": 260
         },
         "data": {
           "label": "",
@@ -156,8 +156,8 @@
         "id": "tool-workspace-dc",
         "type": "mcp_tool",
         "position": {
-          "x": -180,
-          "y": 380
+          "x": -220,
+          "y": 440
         },
         "data": {
           "label": "Workspace (open_workspace, accept_stage)",
@@ -178,7 +178,7 @@
         "type": "mcp_tool",
         "position": {
           "x": 0,
-          "y": 380
+          "y": 440
         },
         "data": {
           "label": "EDA (get_data_dictionary)",
@@ -197,8 +197,8 @@
         "id": "tool-dc",
         "type": "mcp_tool",
         "position": {
-          "x": 180,
-          "y": 380
+          "x": 220,
+          "y": 440
         },
         "data": {
           "label": "DC (inspect/coerce/impute)",
@@ -219,7 +219,7 @@
         "id": "agent-fte",
         "type": "agent",
         "position": {
-          "x": 460,
+          "x": 560,
           "y": 0
         },
         "data": {
@@ -264,7 +264,7 @@
         "id": "gate-fte",
         "type": "critic_gate",
         "position": {
-          "x": 720,
+          "x": 860,
           "y": 0
         },
         "data": {
@@ -286,8 +286,8 @@
         "id": "pattern-fte",
         "type": "pattern_reason_act",
         "position": {
-          "x": 460,
-          "y": 220
+          "x": 560,
+          "y": 260
         },
         "data": {
           "label": "",
@@ -304,8 +304,8 @@
         "id": "tool-workspace-fte",
         "type": "mcp_tool",
         "position": {
-          "x": 280,
-          "y": 380
+          "x": 340,
+          "y": 440
         },
         "data": {
           "label": "Workspace (open_workspace, accept_stage)",
@@ -325,8 +325,8 @@
         "id": "tool-eda-fte",
         "type": "mcp_tool",
         "position": {
-          "x": 460,
-          "y": 380
+          "x": 560,
+          "y": 440
         },
         "data": {
           "label": "EDA (dictionary + distributions)",
@@ -346,8 +346,8 @@
         "id": "tool-fte",
         "type": "mcp_tool",
         "position": {
-          "x": 640,
-          "y": 380
+          "x": 780,
+          "y": 440
         },
         "data": {
           "label": "FTE (build/fit)",
@@ -367,7 +367,7 @@
         "id": "agent-fs",
         "type": "agent",
         "position": {
-          "x": 920,
+          "x": 1120,
           "y": 0
         },
         "data": {
@@ -442,7 +442,7 @@
         "id": "gate-fs",
         "type": "critic_gate",
         "position": {
-          "x": 1180,
+          "x": 1420,
           "y": 0
         },
         "data": {
@@ -464,8 +464,8 @@
         "id": "pattern-fs",
         "type": "pattern_reason_act",
         "position": {
-          "x": 920,
-          "y": 220
+          "x": 1120,
+          "y": 260
         },
         "data": {
           "label": "",
@@ -482,8 +482,8 @@
         "id": "tool-workspace-fs",
         "type": "mcp_tool",
         "position": {
-          "x": 740,
-          "y": 380
+          "x": 900,
+          "y": 440
         },
         "data": {
           "label": "Workspace (open_workspace, accept_stage)",
@@ -503,8 +503,8 @@
         "id": "tool-eda-fs",
         "type": "mcp_tool",
         "position": {
-          "x": 920,
-          "y": 380
+          "x": 1120,
+          "y": 440
         },
         "data": {
           "label": "EDA (get_feature_distributions)",
@@ -523,8 +523,8 @@
         "id": "tool-fs",
         "type": "mcp_tool",
         "position": {
-          "x": 1100,
-          "y": 380
+          "x": 1340,
+          "y": 440
         },
         "data": {
           "label": "FS (variance/corr/supervised/balance)",
@@ -546,7 +546,7 @@
         "id": "agent-mlm",
         "type": "agent",
         "position": {
-          "x": 1380,
+          "x": 1680,
           "y": 0
         },
         "data": {
@@ -591,7 +591,7 @@
         "id": "gate-mlm",
         "type": "critic_gate",
         "position": {
-          "x": 1640,
+          "x": 1980,
           "y": 0
         },
         "data": {
@@ -613,8 +613,8 @@
         "id": "pattern-mlm",
         "type": "pattern_single_agent_baseline",
         "position": {
-          "x": 1380,
-          "y": 220
+          "x": 1680,
+          "y": 260
         },
         "data": {
           "label": "",
@@ -629,7 +629,7 @@
         "id": "agent-score",
         "type": "agent",
         "position": {
-          "x": 1900,
+          "x": 2240,
           "y": 0
         },
         "data": {
@@ -674,8 +674,8 @@
         "id": "pattern-score",
         "type": "pattern_reason_act",
         "position": {
-          "x": 1900,
-          "y": 220
+          "x": 2240,
+          "y": 260
         },
         "data": {
           "label": "",
@@ -692,8 +692,8 @@
         "id": "tool-model-score",
         "type": "mcp_tool",
         "position": {
-          "x": 2080,
-          "y": 380
+          "x": 2240,
+          "y": 440
         },
         "data": {
           "label": "Model (run_model_script)",
@@ -712,8 +712,8 @@
         "id": "script-model",
         "type": "script",
         "position": {
-          "x": 1900,
-          "y": 540
+          "x": 2240,
+          "y": 620
         },
         "data": {
           "label": "Fixed Model Script",

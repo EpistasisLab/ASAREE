@@ -117,7 +117,7 @@ function TrialDetailDialog({
 // a user's run history ever gets long.
 //
 // A compact list, not the card grid the old detail page used: this is a
-// footnote to the trial table above it, in a ~384px column. The per-agent
+// footnote to the trial table above it, in a column that starts at 384px. The per-agent
 // model tint survives the shrink on the icon (CLAUDE.md's hash-driven tint --
 // agents sharing an LLM visually match) since that's the one thing the colour
 // was actually encoding.

@@ -27,20 +27,16 @@ import type { Cell, Experiment } from '@/types/experiments'
  * can't show anything the table doesn't already say better. Replicate cells
  * sharing one combination are averaged, not just the first one picked.
  *
- * `compact` is the side-panel rendering (a ~384px column): same grid, same
- * data, just a stacked header and smaller squares, since the panel can't
- * afford the title and the metric selector side by side. The maximized
- * overlay renders the non-compact form.
+ * Sized by CONTAINER query (`@lg`/`@2xl`), not by a compact/roomy prop or the
+ * viewport: this renders both inside the drag-resizable side panel and in the
+ * maximize overlay, so "how much room do I have" is a question about the box
+ * it's in, which is exactly what a container query answers. Dragging the
+ * panel wider un-stacks the header, widens the metric select, grows the
+ * squares and eventually pairs up the facets, with no width plumbed through
+ * three components to make that happen. The parent marks the container --
+ * see CellsTab's own `@container`.
  */
-export function CellsHeatmap({
-  experiment,
-  cells,
-  compact = false,
-}: {
-  experiment: Experiment
-  cells: Cell[]
-  compact?: boolean
-}) {
+export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Cell[] }) {
   const availableMetrics = useMemo(() => availableMetricKeys(cells), [cells])
   const defaultMetric = useMemo(() => pickDefaultMetric(experiment, cells), [experiment, cells])
   const [metricKey, setMetricKey] = useState<string | null>(defaultMetric)
@@ -72,8 +68,8 @@ export function CellsHeatmap({
   const max = Math.max(...allValues)
 
   return (
-    <div className={cn('space-y-3', !compact && 'space-y-4')}>
-      <div className={cn('gap-2', compact ? 'flex flex-col' : 'flex items-center justify-between')}>
+    <div className="space-y-3 @lg:space-y-4">
+      <div className="flex flex-col gap-2 @lg:flex-row @lg:items-center @lg:justify-between">
         <span className="text-sm font-semibold text-foreground">
           {rowFactor.name}
           {colFactor.name ? ` × ${colFactor.name}` : ''}
@@ -81,7 +77,7 @@ export function CellsHeatmap({
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {availableMetrics.length > 1 && (
             <Select value={activeMetric} onValueChange={(v) => v !== null && setMetricKey(v)}>
-              <SelectTrigger size="sm" className={compact ? 'min-w-0 flex-1' : 'w-64'}>
+              <SelectTrigger size="sm" className="min-w-0 flex-1 @lg:w-64 @lg:flex-none">
                 <SelectValue>{(v: string) => formatMetricLabel(v)}</SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -110,9 +106,9 @@ export function CellsHeatmap({
           </span>
         </div>
       </div>
-      {/* Facets stack in the panel (no room for two side by side) and pair up
-          once there's real width to spend. */}
-      <div className={cn('grid gap-4', !compact && facetLevels.length > 1 && 'sm:grid-cols-2')}>
+      {/* Facets stack while the box is narrow and pair up once there's real
+          width to spend on them. */}
+      <div className={cn('grid gap-4', facetLevels.length > 1 && '@2xl:grid-cols-2')}>
         {facetLevels.map((facetLevel, fi) => (
           <div key={fi} className="space-y-1.5">
             {facetFactor && (
@@ -157,10 +153,7 @@ export function CellsHeatmap({
                     return (
                       <div
                         key={ci}
-                        className={cn(
-                          'flex aspect-square items-center justify-center rounded-md border border-border/50 font-mono',
-                          compact ? 'min-h-8 text-[0.65rem]' : 'min-h-12 text-xs',
-                        )}
+                        className="flex aspect-square min-h-8 items-center justify-center rounded-md border border-border/50 font-mono text-[0.65rem] @lg:min-h-12 @lg:text-xs"
                         style={cellData.value !== null ? { background: heatColor(cellData.value, min, max) } : undefined}
                         title={cellData.count > 0 ? `n=${cellData.count}` : 'no cell for this combination'}
                       >

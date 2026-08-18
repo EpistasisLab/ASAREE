@@ -3,7 +3,8 @@
 Scoped detail for the Cells tab of the protocol canvas's `ExperimentSidePanel` — this only
 loads when you're working in this directory. These rules came from the (now-deleted) static
 `ExperimentDetailPage`; they survived the move into the canvas unchanged in substance, only
-re-sized for a ~384px panel column. See the root `CLAUDE.md`'s "Tables vs. cards is a
+re-sized for the panel column (384px by default, drag-resizable from 320px up). See the root
+`CLAUDE.md`'s "Tables vs. cards is a
 zoom-level decision" principle for the general rule this implements: you're *inside* one
 experiment here, comparing dense multi-attribute records, which is exactly where a real table
 earns its place.
@@ -27,8 +28,12 @@ earns its place.
   into one grid per level of the third. Replicate cells sharing one factor combination are
   averaged, not just the first one picked. Color is `color-mix(in oklch, var(--muted),
   var(--primary) N%)` (`heatColor` in `lib/experiment.ts`) — low values dim, high values glow
-  in the theme's own accent, not an unrelated rainbow scale. The `compact` prop is only a
-  layout switch for the panel (stacked header, smaller squares); same data, same rules.
+  in the theme's own accent, not an unrelated rainbow scale. Its layout is driven by
+  **container queries** (`@lg`/`@2xl`, with `CellsTab`'s `CellsBody` marking the `@container`),
+  not by the viewport and not by a compact/roomy prop — it renders both inside the
+  drag-resizable panel and in the full-viewport overlay, so "how much room is there" is a
+  question about the box, and dragging the panel wider has to pay off without a width threaded
+  through three components. Keep it that way if you add more responsive behaviour here.
   - **Both axes (factors) and color (metric) are derived from the cells' own data, with
     zero setup required** (`deriveFactors`/`availableMetricKeys`/`pickDefaultMetric` in
     `lib/experiment.ts`) — NOT from `design_spec.factors`/`task_brief.selection_metric`.

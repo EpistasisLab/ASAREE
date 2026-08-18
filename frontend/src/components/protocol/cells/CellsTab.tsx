@@ -9,16 +9,20 @@ import type { Cell, Experiment } from '@/types/experiments'
 import { CellsHeatmap } from './CellsHeatmap'
 import { CellsTable } from './CellsTable'
 
-function CellsBody({ experiment, cells, compact }: { experiment: Experiment; cells: Cell[]; compact: boolean }) {
+// `@container` so the heatmap inside sizes itself against THIS box rather
+// than the viewport -- the same component renders in a drag-resizable ~320-
+// 1100px panel column and in a full-viewport overlay, and dragging the panel
+// wider has to visibly pay off without a width prop threaded through here.
+function CellsBody({ experiment, cells }: { experiment: Experiment; cells: Cell[] }) {
   return (
-    <div className="space-y-4">
-      <CellsHeatmap experiment={experiment} cells={cells} compact={compact} />
+    <div className="@container space-y-4">
+      <CellsHeatmap experiment={experiment} cells={cells} />
       {/* The one horizontally-scrolling box in this view. The column set is
           dynamic (one per derived factor + up to 4 metrics), so even maximized
-          it can outgrow the viewport -- and in the side panel's ~384px column
-          it always does. Scrolling the table sideways inside its own border is
-          the honest answer; the Maximize button next to it is how you stop
-          having to. */}
+          it can outgrow the viewport -- and at the panel's narrower widths it
+          always does. Scrolling the table sideways inside its own border is
+          the honest answer; dragging the panel wider and the Maximize button
+          are how you stop having to. */}
       <div className="overflow-x-auto">
         <CellsTable experiment={experiment} cells={cells} />
       </div>
@@ -139,7 +143,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
           </div>
         </div>
         <div className="flex-1 overflow-y-auto text-sm">
-          <CellsBody experiment={experiment} cells={cells} compact={false} />
+          <CellsBody experiment={experiment} cells={cells} />
         </div>
       </div>
     )
@@ -160,7 +164,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
           </Button>
         </div>
       </div>
-      <CellsBody experiment={experiment} cells={cells} compact />
+      <CellsBody experiment={experiment} cells={cells} />
     </div>
   )
 }

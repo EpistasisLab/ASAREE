@@ -39,7 +39,9 @@ or introduce a different aesthetic without being asked.
   static `ExperimentDetailPage` now lives in that canvas's `ExperimentSidePanel` tabs
   (Design/Cells/Runs/Results) or its top bar. `/experiments/{id}` is kept only as a redirect
   for old bookmarks. Don't reintroduce a static detail page; a new per-experiment view is a
-  new tab in that panel.
+  new tab in that panel. The panel is drag-resizable by its right edge (320px–1100px, always
+  leaving the canvas ≥420px) and remembers its width in `localStorage` — so a new tab in it
+  should be width-responsive via container queries, not built for one fixed column width.
 
 # Git commit conventions
 

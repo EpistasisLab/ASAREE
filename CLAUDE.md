@@ -16,7 +16,8 @@ or introduce a different aesthetic without being asked.
   shared primitives, not per-page overrides — a new page gets them for free by using
   `Card`/`Button`/`AppHeader`, so build on those rather than hand-rolling styles.
 - **Monospace for technical readouts**: IDs, hashes, token prefixes, cell labels, and
-  key=value data dumps use `font-mono` (see `ExperimentDetailPage.tsx`, `ApiTokensSection.tsx`)
+  key=value data dumps use `font-mono` (see `components/protocol/cells/CellsTable.tsx`,
+  `ApiTokensSection.tsx`)
   to read like a real data/terminal output, not prose.
 - **Every button glows uniformly, by explicit choice**: an earlier pass reserved the glow for
   one "primary" action per section (`default` variant only), with `outline`/`ghost` left
@@ -29,10 +30,16 @@ or introduce a different aesthetic without being asked.
   at dense, precise, multi-attribute records to compare (e.g. an experiment's Cells, with
   their metrics/hyperparameters). Don't reach for a table just because a list exists — check
   which zoom level you're actually building first.
-  - Detail on tile grids, the Cells table/heatmap, and the Agents grid — including which
-    components implement each and the exact styling rules — lives in
-    `frontend/src/pages/CLAUDE.md`. Read it before touching `ExperimentsPage.tsx` or
-    `ExperimentDetailPage.tsx`.
+  - Detail on the Experiments tile grid lives in `frontend/src/pages/CLAUDE.md`; detail on
+    the Cells heatmap/table (and the per-agent run tally that replaced the old Agents grid)
+    lives in `frontend/src/components/protocol/cells/CLAUDE.md`. Read the relevant one before
+    touching `ExperimentsPage.tsx` or anything under `components/protocol/cells/`.
+- **There is no separate experiment detail page** — clicking an Experiments tile lands on
+  `/experiments/{id}/protocol`, the protocol canvas, and everything that used to be on a
+  static `ExperimentDetailPage` now lives in that canvas's `ExperimentSidePanel` tabs
+  (Design/Cells/Runs/Results) or its top bar. `/experiments/{id}` is kept only as a redirect
+  for old bookmarks. Don't reintroduce a static detail page; a new per-experiment view is a
+  new tab in that panel.
 
 # Git commit conventions
 
@@ -76,8 +83,8 @@ rather than doing it silently as a routine part of coding:
 - **Agents are deliberately NOT a stored relationship** — there's no `experiment_agents` join
   table, and none is planned. Agents are reusable per-user templates, not something an
   experiment "owns"; asking "which agents ran in this experiment" is answered by scanning the
-  user's `Run`s for `run_metadata.experiment_id` matches (see `AgentsSection` in
-  `ExperimentDetailPage.tsx`) and cross-referencing `GET /agents`, not by a new backend
+  user's `Run`s for `run_metadata.experiment_id` matches (see `ExperimentAgents` in
+  `components/protocol/RunsTab.tsx`) and cross-referencing `GET /agents`, not by a new backend
   association. `GET /runs` has no server-side `experiment_id` filter (only `agent_id`) — this
   fetches every run for the user and filters client-side, which is fine at today's scale but
   is the place to add a real filter if a user's run history grows large enough to matter.

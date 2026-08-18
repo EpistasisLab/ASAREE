@@ -162,7 +162,7 @@ export function ExperimentsPage() {
                     key={experiment.id}
                     style={{ animationDelay: `${i * 40}ms`, ...cardAccent(accent) }}
                     className="animate-in fade-in slide-in-from-bottom-2 fill-mode-backwards cursor-pointer duration-300 transition-[transform,box-shadow] hover:scale-[1.02] hover:shadow-[0_0_32px_-8px_var(--card-accent,var(--primary))] active:scale-[0.99]"
-                    onClick={() => navigate(`/experiments/${experiment.id}`)}
+                    onClick={() => navigate(`/experiments/${experiment.id}/protocol`)}
                   >
                     {/* Retrofuturist top accent strip, tinted by completion status */}
                     <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-[color:var(--card-accent,var(--primary))]/0 via-[color:var(--card-accent,var(--primary))] to-[color:var(--card-accent,var(--primary))]/0" />

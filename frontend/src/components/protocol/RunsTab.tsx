@@ -1,12 +1,16 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Bot } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { experimentsApi, protocolsApi } from '@/api/client'
+import { agentsApi, experimentsApi, protocolsApi, runsApi } from '@/api/client'
+import { formatRelative } from '@/lib/format'
 import { nodeRunBadge } from '@/lib/protocolRun'
+import { hashToChartHue } from '@/lib/utils'
+import type { Agent } from '@/types/agents'
 import type { Trial } from '@/types/experiments'
 
 const PAGE_SIZE = 20
@@ -104,6 +108,74 @@ function TrialDetailDialog({
   )
 }
 
+// Which agents have actually done work in this experiment, and how much.
+// Deliberately NOT a stored relationship (see the root CLAUDE.md): there's no
+// experiment_agents join table, so this is answered by scanning the user's own
+// Runs for run_metadata.experiment_id and cross-referencing GET /agents.
+// GET /runs has no server-side experiment_id filter, so the filtering is
+// client-side -- fine at today's scale, and the place to add a real filter if
+// a user's run history ever gets long.
+//
+// A compact list, not the card grid the old detail page used: this is a
+// footnote to the trial table above it, in a ~384px column. The per-agent
+// model tint survives the shrink on the icon (CLAUDE.md's hash-driven tint --
+// agents sharing an LLM visually match) since that's the one thing the colour
+// was actually encoding.
+function ExperimentAgents({ experimentId }: { experimentId: string }) {
+  const runsQuery = useQuery({ queryKey: ['runs'], queryFn: () => runsApi.list() })
+  const agentsQuery = useQuery({ queryKey: ['agents'], queryFn: () => agentsApi.list() })
+
+  const experimentAgents = useMemo(() => {
+    if (!runsQuery.data || !agentsQuery.data) return null
+    const agentsById = new Map(agentsQuery.data.map((a) => [a.id, a]))
+    const stats = new Map<string, { count: number; lastUsed: string }>()
+    for (const run of runsQuery.data) {
+      if (run.run_metadata?.experiment_id !== experimentId) continue
+      const existing = stats.get(run.agent_id)
+      if (existing) {
+        existing.count += 1
+        if (run.created_at > existing.lastUsed) existing.lastUsed = run.created_at
+      } else {
+        stats.set(run.agent_id, { count: 1, lastUsed: run.created_at })
+      }
+    }
+    return Array.from(stats, ([agentId, s]) => ({ agent: agentsById.get(agentId), ...s }))
+      .filter((x): x is { agent: Agent; count: number; lastUsed: string } => !!x.agent)
+      .sort((a, b) => b.count - a.count)
+  }, [runsQuery.data, agentsQuery.data, experimentId])
+
+  if (runsQuery.isLoading || agentsQuery.isLoading) return <Skeleton className="h-16 w-full" />
+  if (!experimentAgents || experimentAgents.length === 0) return null
+
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium text-muted-foreground">Agents that have run in this experiment</p>
+      <div className="divide-y overflow-hidden rounded-md border">
+        {experimentAgents.map(({ agent, count, lastUsed }) => {
+          const accent = agent.model_config.model ? hashToChartHue(agent.model_config.model) : 'var(--primary)'
+          return (
+            <div key={agent.id} className="flex items-center gap-2 px-2 py-1.5">
+              <Bot className="size-3.5 shrink-0" style={{ color: accent }} />
+              <span className="min-w-0 flex-1 truncate text-xs font-medium" title={agent.goal || agent.description || agent.name}>
+                {agent.name}
+              </span>
+              {agent.model_config.model && (
+                <Badge variant="outline" className="shrink-0 font-mono font-normal" style={{ color: accent }}>
+                  {agent.model_config.model}
+                </Badge>
+              )}
+              <span className="shrink-0 font-mono text-xs text-muted-foreground">×{count}</span>
+              <span className="shrink-0 font-mono text-xs text-muted-foreground" title={new Date(lastUsed).toLocaleString()}>
+                {formatRelative(lastUsed)}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function RunsTab({ experimentId, protocolId }: { experimentId: string; protocolId: string }) {
   const [statusFilter, setStatusFilter] = useState<Trial['status'] | 'all'>('all')
   const [factorFilter, setFactorFilter] = useState<string>('__none__')
@@ -154,6 +226,10 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
     setPage(0)
   }
 
+  // The trial table and the agent tally are independent: an agent can have
+  // run (a single node run from the canvas) with no generated design behind
+  // it, so the "no trials yet" case still renders the agents below rather
+  // than returning early out of the whole tab.
   if (trialsQuery.isLoading) {
     return (
       <div className="space-y-3 p-3">
@@ -165,10 +241,11 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
 
   if (trials.length === 0) {
     return (
-      <div className="p-3">
+      <div className="flex flex-col gap-3 p-3 text-sm">
         <p className="text-sm text-muted-foreground">
           No trials yet -- generate a design and run cells from the Design tab first.
         </p>
+        <ExperimentAgents experimentId={experimentId} />
       </div>
     )
   }
@@ -319,6 +396,8 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
           </Button>
         </div>
       )}
+
+      <ExperimentAgents experimentId={experimentId} />
 
       <TrialDetailDialog trial={selectedTrial} protocolId={protocolId} onClose={() => setSelectedTrial(null)} />
     </div>

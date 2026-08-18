@@ -2,6 +2,7 @@ import type { RefObject } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { CellsTab } from './cells/CellsTab'
 import { DesignTab } from './DesignTab'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import { ResultsTab } from './ResultsTab'
@@ -9,8 +10,10 @@ import { RunsTab } from './RunsTab'
 import type { Experiment } from '@/types/experiments'
 
 // A fixed left panel on the protocol canvas -- the primary place to build
-// and monitor an experiment (Design/Runs/Results), replacing the previous
-// edge-to-edge canvas with no persistent experiment context. First
+// and monitor an experiment (Design/Cells/Runs/Results), replacing the
+// previous edge-to-edge canvas with no persistent experiment context, and
+// now also the only home for what used to be a separate static experiment
+// detail page (the cells heatmap/table, the per-agent run tally). First
 // page-level use of components/ui/tabs.tsx (previously only inside one
 // node's own inspector, AgentNodeInspector.tsx) -- same tab-group idiom,
 // just at the page layout level instead of a floating dialog.
@@ -36,6 +39,12 @@ export function ExperimentSidePanel({
         <Tabs defaultValue="design" className="flex h-full min-h-0 flex-col">
           <TabsList className="mx-3 mt-3 shrink-0">
             <TabsTrigger value="design">Design</TabsTrigger>
+            {/* Between Design and Runs, in the order the work actually happens:
+                declare the design, look at the cells it produced, watch them
+                run, then read the analysis. Deliberately NOT folded into
+                Results -- that tab is the statistical analysis OF these
+                numbers (effects, CIs, non-inferiority), not the raw grid. */}
+            <TabsTrigger value="cells">Cells</TabsTrigger>
             <TabsTrigger value="runs">Runs</TabsTrigger>
             <TabsTrigger value="results">Results</TabsTrigger>
           </TabsList>
@@ -48,6 +57,10 @@ export function ExperimentSidePanel({
               it, so there's exactly one scroll container per tab. */}
           <TabsContent value="design" className="min-h-0 flex-1 overflow-y-auto">
             <DesignTab experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} />
+          </TabsContent>
+
+          <TabsContent value="cells" className="min-h-0 flex-1 overflow-y-auto">
+            <CellsTab experiment={experiment} />
           </TabsContent>
 
           <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto">

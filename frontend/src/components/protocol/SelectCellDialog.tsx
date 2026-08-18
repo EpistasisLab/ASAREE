@@ -67,7 +67,10 @@ export function SelectCellDialog({
   // of this exact combination" without typing the whole cell_label.
   const [checkedLevels, setCheckedLevels] = useState<Record<string, Set<string>>>({})
 
-  const factors = useMemo(() => deriveFactors(cells, designSpec) ?? [], [cells, designSpec])
+  // `?? null` because this prop is optional here but deriveFactors takes
+  // `DesignSpec | null` -- an absent spec and an explicitly null one mean the
+  // same thing to it (derive the factors from the cells instead).
+  const factors = useMemo(() => deriveFactors(cells, designSpec ?? null) ?? [], [cells, designSpec])
 
   function toggleLevel(factorName: string, levelKey: string) {
     setCheckedLevels((prev) => {

@@ -9,7 +9,7 @@ export function factorCount(designSpec: Experiment['design_spec']): number | nul
 // plain object, not a scalar -- JS's default `String({...})` collapses every
 // distinct object to the same "[object Object]", which would silently
 // conflate different LLM/Tool/Pattern configs wherever this codebase
-// compares/dedupes/sorts factor values by their string form (ExperimentDetailPage's
+// compares/dedupes/sorts factor values by their string form (this module's own
 // deriveFactors/cellsMatching). A canonical (recursively key-sorted) JSON
 // string is stable across separately-deserialized-but-content-identical
 // objects, which `new Set(...)`'s reference-based dedup and JS's own
@@ -72,7 +72,7 @@ const NON_FACTOR_KEYS = new Set(['replicate', 'seed', 'rep', 'trial', 'iteration
  * authoritative -- it can order levels deliberately); otherwise derive
  * factors straight from what's actually on the cells, so this works with
  * zero setup for the common case where nothing was ever declared. Shared by
- * the Cells table/heatmap (ExperimentDetailPage.tsx) and the Run button's
+ * the Cells table/heatmap (components/protocol/cells/) and the Run button's
  * cell picker (SelectCellDialog.tsx) -- both need the same "what factors/
  * levels exist across these cells" answer. */
 export function deriveFactors(cells: Cell[], designSpec: Experiment['design_spec']): FactorSpec[] | null {
@@ -102,6 +102,134 @@ export function deriveFactors(cells: Cell[], designSpec: Experiment['design_spec
     }
   })
   return factors.length > 0 ? factors : null
+}
+
+/** task_brief.selection_metric, when present, is only ever a HINT for which
+ * of the observed metric keys to default to below — never a requirement.
+ * Most experiments won't have this persisted (it's a notebook-local variable
+ * embedded straight into agent prompts, not something every user thinks to
+ * also send to the experiment record), so nothing here may depend on it. */
+function selectionMetricHint(experiment: Experiment | undefined): string | undefined {
+  return (experiment?.task_brief as { selection_metric?: string } | undefined)?.selection_metric
+}
+
+/** Every top-level numeric key actually observed across scored cells --
+ * what a metric "Color by" selector can offer, with zero setup required. */
+export function availableMetricKeys(cells: Cell[]): string[] {
+  const keys = new Set<string>()
+  for (const c of cells) {
+    for (const [k, v] of Object.entries(c.metric_values ?? {})) {
+      if (typeof v === 'number') keys.add(k)
+    }
+  }
+  return Array.from(keys).sort()
+}
+
+const PREFERRED_METRICS = ['average_precision', 'roc_auc', 'accuracy', 'f1']
+
+/** Unit suffixes baked into a metric key's own name (cost_usd, duration_s)
+ * read better as "cost (USD)"/"duration (minutes)" than a literal underscore
+ * swap -- everything else still falls back to that. */
+const METRIC_LABEL_OVERRIDES: Record<string, string> = {
+  cost_usd: 'cost (USD)',
+  duration_s: 'duration (minutes)',
+  n_features_created: 'n eng. feat.',
+  n_created_selected: 'n eng. feat. selected',
+  frac_created_selected: '% eng. feat. selected',
+}
+
+export function formatMetricLabel(key: string): string {
+  return METRIC_LABEL_OVERRIDES[key] ?? key.replace(/_/g, ' ')
+}
+
+/** duration_s (seconds -> minutes) and frac_created_selected (a 0-1 fraction
+ * -> a 0-100 number, paired with the "%" suffix below) are stored/averaged/
+ * sorted in their raw units -- this only rescales what's displayed. Sort
+ * order is unaffected either way (a positive linear scale), so
+ * cellSortValue/meanMetric stay on the raw values untouched. */
+export function scaledMetricValue(key: string, value: number): number {
+  if (key === 'duration_s') return value / 60
+  if (key === 'frac_created_selected') return value * 100
+  return value
+}
+
+/** Appended after the scaled, formatted number -- kept separate from
+ * scaledMetricValue so a metric can add a unit suffix without needing its
+ * own numeric rescale (or vice versa). */
+const METRIC_VALUE_SUFFIXES: Record<string, string> = {
+  frac_created_selected: '%',
+}
+
+export function metricValueSuffix(key: string): string {
+  return METRIC_VALUE_SUFFIXES[key] ?? ''
+}
+
+export function pickDefaultMetric(experiment: Experiment | undefined, cells: Cell[]): string | null {
+  const available = availableMetricKeys(cells)
+  const hint = selectionMetricHint(experiment)
+  if (hint && available.includes(hint)) return hint
+  for (const p of PREFERRED_METRICS) if (available.includes(p)) return p
+  return available[0] ?? null
+}
+
+/** Up to `max` metric columns for the Cells table -- NOT every numeric key
+ * observed (a real scored cell can easily have 6-7: roc_auc, average_precision,
+ * brier_score, n_pos_test, ...), which would make the table unreadably wide.
+ * Same preference order as pickDefaultMetric (hint, then PREFERRED_METRICS),
+ * filled out alphabetically so the table still has *some* metric columns
+ * when nothing on the preferred list is present. */
+export function pickMetricColumns(experiment: Experiment | undefined, cells: Cell[], max = 4): string[] {
+  const available = availableMetricKeys(cells)
+  const hint = selectionMetricHint(experiment)
+  const ordered: string[] = []
+  if (hint && available.includes(hint)) ordered.push(hint)
+  for (const p of PREFERRED_METRICS) if (available.includes(p) && !ordered.includes(p)) ordered.push(p)
+  for (const k of available) if (!ordered.includes(k)) ordered.push(k)
+  return ordered.slice(0, max)
+}
+
+/** The single headline number for an experiment -- the best observed value of
+ * whichever metric pickDefaultMetric settles on. Drives the canvas top bar's
+ * own "best metric" readout. */
+export function bestMetric(experiment: Experiment | undefined, cells: Cell[] | undefined): { key: string; value: number } | null {
+  if (!cells) return null
+  const key = pickDefaultMetric(experiment, cells)
+  if (!key) return null
+  const values = cells.map((c) => c.metric_values?.[key]).filter((v): v is number => typeof v === 'number')
+  if (values.length === 0) return null
+  return { key, value: Math.max(...values) }
+}
+
+/** Formatted for display: scaled into its display unit, trailing zeros
+ * trimmed, unit suffix appended, non-numbers rendered as an em dash. */
+export function formatMetricValue(key: string, value: unknown): string {
+  if (typeof value !== 'number') return '—'
+  const formatted = scaledMetricValue(key, value).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+  return `${formatted}${metricValueSuffix(key)}`
+}
+
+/** Every cell whose factor_values match `match` on all of its keys -- i.e. one
+ * combination's replicates. Compared via factorValueKey so dict-valued levels
+ * match by content, not by reference. */
+export function cellsMatching(cells: Cell[], match: Record<string, unknown>): Cell[] {
+  return cells.filter((c) => Object.entries(match).every(([k, v]) => factorValueKey(c.factor_values?.[k]) === factorValueKey(v)))
+}
+
+/** Replicates sharing one factor combination are AVERAGED for the heatmap,
+ * not "first one wins" -- see the heatmap's own comment. */
+export function meanMetric(cells: Cell[], metricKey: string): number | null {
+  const values = cells.map((c) => c.metric_values?.[metricKey]).filter((v): v is number => typeof v === 'number')
+  if (values.length === 0) return null
+  return values.reduce((a, b) => a + b, 0) / values.length
+}
+
+/** Low values read as a dim, muted box; high values glow in the theme's own
+ * accent — keeps the heatmap inside the same limited cyan-forward palette
+ * rather than introducing an unrelated rainbow scale. */
+export function heatColor(value: number, min: number, max: number): string {
+  const t = max > min ? (value - min) / (max - min) : 0.5
+  const pct = Math.round(10 + t * 80)
+  return `color-mix(in oklch, var(--muted) 100%, var(--primary) ${pct}%)`
 }
 
 /** "chart-4" (amber, generated-but-unscored) / "chart-3" (emerald, fully scored) /

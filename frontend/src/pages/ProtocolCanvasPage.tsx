@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ReactFlowProvider } from '@xyflow/react'
-import { Square } from 'lucide-react'
+import { Square, Target, Trophy, type LucideIcon } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
@@ -11,8 +11,9 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
+import { bestMetric, cellsStatusAccent, formatMetricLabel, metricValueSuffix, scaledMetricValue } from '@/lib/experiment'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
-import type { Experiment } from '@/types/experiments'
+import type { Cell, Experiment } from '@/types/experiments'
 import type { ProtocolRun } from '@/types/protocols'
 
 const RUN_POLL_MS = 2000
@@ -70,6 +71,58 @@ function EditableExperimentName({ experiment }: { experiment: Experiment }) {
     >
       {experiment.name}
     </button>
+  )
+}
+
+// The two aggregates that belong on the top bar rather than inside a tab:
+// "how far along is this experiment" and "how good is the best result so
+// far". They're the only numbers you want without clicking anything, and
+// they're what the (now-deleted) static detail page's stat cards were for.
+// Design type deliberately doesn't get one -- the Design tab states it
+// directly, so a readout here would just repeat it.
+//
+// Inline chips, not Cards: the top bar shares a single row with the name and
+// the run controls, and a stat CARD in a 40px-tall row isn't a card, it's a
+// bordered word. Tint carries the same meaning it does everywhere else --
+// cellsStatusAccent for progress (amber unscored / cyan partial / emerald
+// done), --chart-3 for a best result.
+function TopBarStat({ icon: Icon, value, title, accent }: { icon: LucideIcon; value: string; title: string; accent: string }) {
+  return (
+    <span
+      title={title}
+      className="flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-xs text-muted-foreground"
+      style={{ borderColor: `color-mix(in oklch, ${accent}, transparent 70%)` }}
+    >
+      <Icon className="size-3.5 shrink-0" style={{ color: accent }} />
+      {value}
+    </span>
+  )
+}
+
+// Same design_type gate the Cells tab uses -- cells/metric_values are a
+// factorial concept, so a future non-factorial experiment gets no chips
+// rather than a nonsensical "0/0 scored".
+function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Cell[] | undefined }) {
+  if (experiment.design_type !== 'factorial' || !cells) return null
+  const scored = cells.filter((c) => c.metric_values).length
+  const best = bestMetric(experiment, cells)
+  return (
+    <>
+      <TopBarStat
+        icon={Target}
+        value={`${scored}/${cells.length} scored`}
+        title="Cells with a recorded metric, out of every cell in this design"
+        accent={cellsStatusAccent(cells)}
+      />
+      {best && (
+        <TopBarStat
+          icon={Trophy}
+          value={`${scaledMetricValue(best.key, best.value).toFixed(4)}${metricValueSuffix(best.key)}`}
+          title={`Best ${formatMetricLabel(best.key)} across this experiment's scored cells`}
+          accent="var(--chart-3)"
+        />
+      )}
+    </>
   )
 }
 
@@ -227,10 +280,13 @@ export function ProtocolCanvasPage() {
 
       <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-6 py-6">
         <div className="flex shrink-0 items-center gap-3">
-          <Link to={`/experiments/${experimentId}`} className="text-sm text-muted-foreground hover:underline">
-            ← Experiment
+          {/* Straight back to the list -- this canvas IS the experiment view
+              now, so there's no intermediate detail page left to go up to. */}
+          <Link to="/experiments" className="text-sm text-muted-foreground hover:underline">
+            ← Experiments
           </Link>
           {experimentQuery.data && <EditableExperimentName experiment={experimentQuery.data} />}
+          {experimentQuery.data && <TopBarStats experiment={experimentQuery.data} cells={cellsQuery.data} />}
           <div className="flex-1" />
           {protocolQuery.data && experimentId && (
             <RunAllCellsButton

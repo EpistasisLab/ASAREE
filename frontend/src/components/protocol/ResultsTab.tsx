@@ -148,7 +148,7 @@ function ResultsContent({ analysis, bestCondition }: { analysis: ExperimentAnaly
 
 // A "maximize" toggle for the whole Results content -- CLAUDE.md's
 // established convention for a wide/dense view that can outgrow the side
-// panel's own column (see ExperimentDetailPage.tsx's CellsSection): a fixed
+// panel's own column (see cells/CellsTab.tsx for the other one): a fixed
 // inset-0 overlay with an Escape handler and body-scroll lock, not the
 // browser Fullscreen API. This is the "link into a larger/full-screen
 // analysis view" the Results tab asks for.

@@ -1,0 +1,166 @@
+import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Download, Maximize2, Minimize2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import { experimentsApi } from '@/api/client'
+import { sanitizeFilename } from '@/lib/utils'
+import type { Cell, Experiment } from '@/types/experiments'
+import { CellsHeatmap } from './CellsHeatmap'
+import { CellsTable } from './CellsTable'
+
+function CellsBody({ experiment, cells, compact }: { experiment: Experiment; cells: Cell[]; compact: boolean }) {
+  return (
+    <div className="space-y-4">
+      <CellsHeatmap experiment={experiment} cells={cells} compact={compact} />
+      {/* The one horizontally-scrolling box in this view. The column set is
+          dynamic (one per derived factor + up to 4 metrics), so even maximized
+          it can outgrow the viewport -- and in the side panel's ~384px column
+          it always does. Scrolling the table sideways inside its own border is
+          the honest answer; the Maximize button next to it is how you stop
+          having to. */}
+      <div className="overflow-x-auto">
+        <CellsTable experiment={experiment} cells={cells} />
+      </div>
+    </div>
+  )
+}
+
+/** The experiment's raw design points, in the canvas side panel: the
+ * factor-combination heatmap over the precise per-cell table. This is the
+ * "what did each configuration score" view -- distinct from the Results tab,
+ * which is the statistical analysis (effects, CIs, non-inferiority) computed
+ * ON these numbers.
+ *
+ * Cells/factor_values/metric_values are a FactorialCellResult concept -- the
+ * only experiment type ASAREE's backend actually implements today
+ * (ab_experiments/discoveries/etc. are explicitly out of scope on the model
+ * itself), but design_type is a plain string specifically so another type
+ * COULD exist later. Gate on it rather than silently assuming every
+ * experiment has cells, so a future non-factorial type gets an explicit
+ * "not available" line instead of an empty, broken-looking grid.
+ *
+ * Maximize is CLAUDE.md's established convention for a dense view that
+ * outgrows the panel's column (same as ResultsTab): a fixed inset-0 overlay
+ * with an Escape handler and a body-scroll lock, never the browser Fullscreen
+ * API. The table is mounted in exactly one of the two places at a time, so
+ * there's never a second copy carrying its own divergent sort/page state.
+ */
+export function CellsTab({ experiment }: { experiment: Experiment }) {
+  const [fullscreen, setFullscreen] = useState(false)
+
+  // Same query key the canvas page itself uses, so this shares one cache
+  // entry with the top bar's cells readout and DesignTab's own invalidation
+  // after generating a design -- no second fetch, no chance of the two
+  // disagreeing about how many cells exist.
+  const cellsQuery = useQuery({
+    queryKey: ['experiments', experiment.id, 'cells'],
+    queryFn: () => experimentsApi.listCells(experiment.id),
+  })
+
+  useEffect(() => {
+    if (!fullscreen) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFullscreen(false)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = previousOverflow
+    }
+  }, [fullscreen])
+
+  async function handleDownloadCsv() {
+    const blob = await experimentsApi.downloadCellsCsv(experiment.id)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${sanitizeFilename(experiment.name, 'experiment')}-cells.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  if (experiment.design_type !== 'factorial') {
+    return (
+      <div className="p-3">
+        <p className="text-sm text-muted-foreground">
+          Cell-based results aren't available for &ldquo;{experiment.design_type}&rdquo; experiments.
+        </p>
+      </div>
+    )
+  }
+
+  if (cellsQuery.isLoading) {
+    return (
+      <div className="space-y-3 p-3">
+        <Skeleton className="h-8 w-full" />
+        <Skeleton className="h-32 w-full" />
+      </div>
+    )
+  }
+
+  const cells = cellsQuery.data
+  if (cellsQuery.isError || !cells) {
+    return (
+      <div className="p-3">
+        <p className="text-sm text-muted-foreground">Could not load this experiment's cells.</p>
+      </div>
+    )
+  }
+
+  if (cells.length === 0) {
+    return (
+      <div className="p-3">
+        <p className="text-sm text-muted-foreground">
+          No cells yet — generate this experiment's design from the Design tab first.
+        </p>
+      </div>
+    )
+  }
+
+  const scored = cells.filter((c) => c.metric_values).length
+
+  if (fullscreen) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col bg-background p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-sm font-semibold">
+            Cells — <span className="font-mono text-muted-foreground">{scored}/{cells.length} scored</span>
+          </p>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => void handleDownloadCsv()}>
+              <Download className="size-3.5" /> Download CSV
+            </Button>
+            <Button variant="outline" size="icon-sm" aria-label="Exit fullscreen" onClick={() => setFullscreen(false)}>
+              <Minimize2 className="size-4" />
+            </Button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto text-sm">
+          <CellsBody experiment={experiment} cells={cells} compact={false} />
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-3 p-3 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono text-xs text-muted-foreground">
+          {scored}/{cells.length} scored
+        </span>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="icon-sm" aria-label="Download cells CSV" onClick={() => void handleDownloadCsv()}>
+            <Download className="size-3.5" />
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setFullscreen(true)}>
+            <Maximize2 className="size-3.5" /> Maximize
+          </Button>
+        </div>
+      </div>
+      <CellsBody experiment={experiment} cells={cells} compact />
+    </div>
+  )
+}

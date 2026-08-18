@@ -60,6 +60,10 @@ RUN --mount=type=secret,id=gh_token \
     uv sync --frozen --no-dev --no-install-project
 
 COPY src/ ./src/
+# One-off operational scripts (e.g. promote_score_metrics.py) -- run via
+# `docker exec asaree-app python scripts/<name>.py ...`, not imported by the
+# app itself, but still needs to actually be in the image to be runnable.
+COPY scripts/ ./scripts/
 
 # Fast: every dependency is already installed above from cache; this just
 # links the local `asaree` package itself (editable install -- reads src/

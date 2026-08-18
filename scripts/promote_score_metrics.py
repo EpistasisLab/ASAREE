@@ -20,6 +20,8 @@ import uuid
 
 from agentic_core.config import configure
 
+import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for research_experiments' FK
+import asaree.models.experiment  # noqa: F401 -- registers research_experiments for factorial_cell_results' FK
 from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.services.metric_promotion import promote_experiment_score_metrics

@@ -318,6 +318,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     enabled: !!experimentId,
   })
   const cellOptions = cellsQuery.data ?? []
+  // design_spec for SelectCellDialog's own factor-checkbox filter -- fetched
+  // only while that dialog is actually open, same "on demand" convention
+  // factorPickerExperimentQuery below uses for the same query.
+  const cellPickerExperimentQuery = useQuery({
+    queryKey: ['experiments', experimentId],
+    queryFn: () => experimentsApi.get(experimentId!),
+    enabled: !!experimentId && cellPickerOpen,
+  })
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
 
@@ -1009,6 +1017,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             {cellPickerOpen && (
               <SelectCellDialog
                 cells={cellOptions}
+                designSpec={cellPickerExperimentQuery.data?.design_spec}
                 selectedCellLabel={selectedCellLabel}
                 onCancel={() => setCellPickerOpen(false)}
                 onSelect={(cellLabel) => {

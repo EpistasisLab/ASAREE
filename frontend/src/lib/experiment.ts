@@ -54,6 +54,56 @@ export function displayFactorValue(value: unknown): string {
   return String(value)
 }
 
+export interface FactorSpec {
+  name: string
+  levels: unknown[]
+}
+
+function getFactors(designSpec: Experiment['design_spec']): FactorSpec[] | null {
+  const factors = (designSpec as { factors?: unknown } | null)?.factors
+  return Array.isArray(factors) ? (factors as FactorSpec[]) : null
+}
+
+/** Bookkeeping keys that ride along on factor_values but aren't themselves a
+ * factor worth an axis -- excluded when deriving factors from observed data. */
+const NON_FACTOR_KEYS = new Set(['replicate', 'seed', 'rep', 'trial', 'iteration'])
+
+/** An explicit design_spec.factors declaration wins when present (more
+ * authoritative -- it can order levels deliberately); otherwise derive
+ * factors straight from what's actually on the cells, so this works with
+ * zero setup for the common case where nothing was ever declared. Shared by
+ * the Cells table/heatmap (ExperimentDetailPage.tsx) and the Run button's
+ * cell picker (SelectCellDialog.tsx) -- both need the same "what factors/
+ * levels exist across these cells" answer. */
+export function deriveFactors(cells: Cell[], designSpec: Experiment['design_spec']): FactorSpec[] | null {
+  const declared = getFactors(designSpec)
+  if (declared && declared.length > 0) return declared
+
+  const keys: string[] = []
+  for (const c of cells) {
+    for (const k of Object.keys(c.factor_values ?? {})) {
+      if (!NON_FACTOR_KEYS.has(k.toLowerCase()) && !keys.includes(k)) keys.push(k)
+    }
+  }
+  const factors = keys.map((name) => {
+    const values = cells.map((c) => c.factor_values?.[name]).filter((v) => v !== undefined)
+    // Dedup by content (factorValueKey), not by reference -- `new Set` would
+    // treat every separately-deserialized dict-valued level (e.g. two cells
+    // both bound to the same LLM config) as distinct, since object identity
+    // never survives a JSON round-trip.
+    const seen = new Map<string, unknown>()
+    for (const v of values) {
+      const key = factorValueKey(v)
+      if (!seen.has(key)) seen.set(key, v)
+    }
+    return {
+      name,
+      levels: Array.from(seen.values()).sort((a, b) => factorValueKey(a).localeCompare(factorValueKey(b))),
+    }
+  })
+  return factors.length > 0 ? factors : null
+}
+
 /** "chart-4" (amber, generated-but-unscored) / "chart-3" (emerald, fully scored) /
  * "primary" (cyan, partially scored) / "muted-foreground" (dim, no cells yet). */
 export function cellsStatusAccent(cells: Cell[] | undefined): string {

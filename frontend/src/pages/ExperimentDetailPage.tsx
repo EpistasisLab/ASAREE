@@ -26,7 +26,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { formatDate, formatRelative } from '@/lib/format'
-import { cellsStatusAccent, displayFactorValue, factorCount, factorValueKey } from '@/lib/experiment'
+import { cellsStatusAccent, deriveFactors, displayFactorValue, factorCount, factorValueKey, type FactorSpec } from '@/lib/experiment'
 import { cardAccent, cn, hashToChartHue, sanitizeFilename } from '@/lib/utils'
 import { agentsApi, datasetsApi, experimentsApi, runsApi } from '@/api/client'
 import type { Agent } from '@/types/agents'
@@ -161,52 +161,6 @@ function bestMetric(experiment: Experiment | undefined, cells: Cell[] | undefine
   return { key, value: Math.max(...values) }
 }
 
-interface FactorSpec {
-  name: string
-  levels: unknown[]
-}
-
-function getFactors(designSpec: Experiment['design_spec']): FactorSpec[] | null {
-  const factors = (designSpec as { factors?: unknown } | null)?.factors
-  return Array.isArray(factors) ? (factors as FactorSpec[]) : null
-}
-
-/** Bookkeeping keys that ride along on factor_values but aren't themselves a
- * factor worth an axis -- excluded when deriving factors from observed data. */
-const NON_FACTOR_KEYS = new Set(['replicate', 'seed', 'rep', 'trial', 'iteration'])
-
-/** An explicit design_spec.factors declaration wins when present (more
- * authoritative -- it can order levels deliberately); otherwise derive
- * factors straight from what's actually on the cells, so this works with
- * zero setup for the common case where nothing was ever declared. */
-function deriveFactors(cells: Cell[], designSpec: Experiment['design_spec']): FactorSpec[] | null {
-  const declared = getFactors(designSpec)
-  if (declared && declared.length > 0) return declared
-
-  const keys: string[] = []
-  for (const c of cells) {
-    for (const k of Object.keys(c.factor_values ?? {})) {
-      if (!NON_FACTOR_KEYS.has(k.toLowerCase()) && !keys.includes(k)) keys.push(k)
-    }
-  }
-  const factors = keys.map((name) => {
-    const values = cells.map((c) => c.factor_values?.[name]).filter((v) => v !== undefined)
-    // Dedup by content (factorValueKey), not by reference -- `new Set` would
-    // treat every separately-deserialized dict-valued level (e.g. two cells
-    // both bound to the same LLM config) as distinct, since object identity
-    // never survives a JSON round-trip.
-    const seen = new Map<string, unknown>()
-    for (const v of values) {
-      const key = factorValueKey(v)
-      if (!seen.has(key)) seen.set(key, v)
-    }
-    return {
-      name,
-      levels: Array.from(seen.values()).sort((a, b) => factorValueKey(a).localeCompare(factorValueKey(b))),
-    }
-  })
-  return factors.length > 0 ? factors : null
-}
 
 function cellsMatching(cells: Cell[], match: Record<string, unknown>): Cell[] {
   return cells.filter((c) => Object.entries(match).every(([k, v]) => factorValueKey(c.factor_values?.[k]) === factorValueKey(v)))

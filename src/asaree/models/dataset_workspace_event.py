@@ -9,7 +9,7 @@ files (``workspace.py``/``staging.py``, unchanged) report each commit/accept
 here immediately afterward — this table never writes bytes itself, only
 records that a write happened and what its hash was.
 
-``dataset_id`` is a real FK, not an opaque UUID (contrast with agentic-core's
+``dataset_id`` is a real FK, not an opaque UUID (contrast with Motoro's
 ``owner_id`` pattern) — ASAREE owns both tables, so nothing stops it from
 being enforced, and enforcing it is the entire point: this is what makes a
 dataset delete actually cascade, which is the gap that motivated this table.

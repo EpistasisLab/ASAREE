@@ -2,7 +2,7 @@
 
 Uses the plain Alembic default version table (``alembic_version``) since this
 chain owns its database outright — no second chain to collide with, unlike
-agentic-core's ``alembic_version_agentic_core``.
+Motoro's ``alembic_version_motoro``.
 """
 
 from __future__ import annotations

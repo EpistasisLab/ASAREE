@@ -1,10 +1,10 @@
-"""Agents — a thin layer over agentic_core.runner.
+"""Agents — a thin layer over motoro.runner.
 
 Request schema is ASAREE's own, scoped to exactly what
 ``runner.create_agent``/``update_agent`` accept today: name, goal,
 description, system_prompt, model/pattern/tool/memory config,
 output_contract, budget_limit_usd, max_run_duration_seconds.
-``agentic_core.schemas.agent.AgentCreate`` also advertises ``auto_eval_enabled``
+``motoro.schemas.agent.AgentCreate`` also advertises ``auto_eval_enabled``
 etc., which the runner still doesn't take — reusing it here would silently
 drop those. The *response* schema is core's own ``AgentResponse`` — safe to
 reuse since it just reflects whatever's on the row, defaults included.
@@ -15,11 +15,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from agentic_core.engine.patterns.catalog import PatternConfigError
-from agentic_core.runner import create_agent, get_agent, get_agent_by_name, list_agents, update_agent
-from agentic_core.schemas.agent import AgentResponse, MemoryConfig, ModelConfig
-from agentic_core.schemas.pattern import PatternConfig
 from fastapi import APIRouter, HTTPException
+from motoro.engine.patterns.catalog import PatternConfigError
+from motoro.runner import create_agent, get_agent, get_agent_by_name, list_agents, update_agent
+from motoro.schemas.agent import AgentResponse, MemoryConfig, ModelConfig
+from motoro.schemas.pattern import PatternConfig
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser
@@ -37,7 +37,7 @@ class CreateAgentRequest(BaseModel):
     tool_config: dict[str, object] | None = None
     memory_config: MemoryConfig | None = None
     # Given, execute_run runs one extraction pass per completed run coercing
-    # its free-text output into these fields (agentic_core.services.output_contract),
+    # its free-text output into these fields (motoro.services.output_contract),
     # exposed as the run output envelope's payload.
     output_contract: dict[str, Any] | None = None
     budget_limit_usd: float | None = None
@@ -46,7 +46,7 @@ class CreateAgentRequest(BaseModel):
 
 class UpdateAgentRequest(BaseModel):
     """All fields optional; ``None`` means "leave unchanged" — same convention
-    ``agentic_core.runner.update_agent`` itself uses."""
+    ``motoro.runner.update_agent`` itself uses."""
 
     name: str | None = None
     goal: str | None = None

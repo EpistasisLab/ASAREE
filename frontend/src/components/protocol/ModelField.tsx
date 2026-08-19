@@ -18,16 +18,16 @@ const CUSTOM_VALUE = '__custom__'
 // (that provider's own API, per credential), so there "Custom model..." only
 // matters for something created after this list was fetched. OpenAI has no
 // capability endpoint at all, so its response is a curated static catalog
-// living in agentic-core -- see llm_model_discovery.py's docstring for the
+// living in Motoro -- see llm_model_discovery.py's docstring for the
 // per-provider findings -- which necessarily lags any model released after
-// the pinned agentic-core version. With a dropdown alone, a brand-new OpenAI
+// the pinned Motoro version. With a dropdown alone, a brand-new OpenAI
 // model would be unreachable until someone tags a release in another repo.
 // The same fallback applies to Anthropic whenever its listing call fails.
 //
 // An off-catalog id is a real, supported choice, not an error state: the
 // backend never validates `model` against the catalog (it's passed straight
 // through to the provider), and capability lookup already falls back to
-// agentic-core's DEFAULT_CAPABILITIES for anything it doesn't recognize.
+// Motoro's DEFAULT_CAPABILITIES for anything it doesn't recognize.
 export function ModelField({
   id,
   value,

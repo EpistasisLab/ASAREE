@@ -61,7 +61,7 @@ class ResearchExperiment(Base, TimestampMixin):
     #     event_driven_reactivity, multi_agent_planning) are named
     #     placeholders -- selectable and saveable, but
     #     services.protocol_execution rejects a run attempted with one of
-    #     these active until the ARES->agentic-core pattern migration lands
+    #     these active until the ARES->Motoro pattern migration lands
     #     (see COORDINATION_STRATEGIES).
     design_spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # RESTRICT, not CASCADE: deleting a user shouldn't silently discard the

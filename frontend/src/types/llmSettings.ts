@@ -35,7 +35,7 @@ export const LLM_PROVIDER_LABELS: Record<LLMProvider, string> = Object.fromEntri
 // Matches src/asaree/api/llm_settings.py's LLMModelInfoResponse/
 // LLMSettingModelsResponse -- GET /llm-settings/{provider}/models.
 // supports_temperature/supports_effort/effort_levels come straight from
-// agentic-core's own model_capabilities registry (some newer models 400 on
+// Motoro's own model_capabilities registry (some newer models 400 on
 // an explicit temperature and take an `effort` dial instead), so the same
 // response tells the Inspector both which models to list AND which control
 // to show for whichever one is selected.

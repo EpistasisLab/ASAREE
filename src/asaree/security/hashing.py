@@ -1,4 +1,4 @@
-"""Content hashing for files ASAREE stores — the same guarantee agentic-core's
+"""Content hashing for files ASAREE stores — the same guarantee Motoro's
 semantic memory and the workspace mechanism already rely on: a hash proves
 what a file actually contains, not just that a path exists.
 """

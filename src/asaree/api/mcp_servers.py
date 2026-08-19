@@ -1,4 +1,4 @@
-"""MCP server registration — a thin layer over agentic_core.services.mcp_service.
+"""MCP server registration — a thin layer over motoro.services.mcp_service.
 
 The mechanism (spawn/dial, tool discovery, encrypted headers, the stdio
 allowlist, the SSRF guard) is fully built in core already — see design doc
@@ -20,8 +20,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from agentic_core.services import mcp_service
 from fastapi import APIRouter, HTTPException
+from motoro.services import mcp_service
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser

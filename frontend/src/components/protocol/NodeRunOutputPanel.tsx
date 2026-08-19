@@ -63,7 +63,7 @@ function StepRow({ step }: { step: RunStep }) {
 // The one piece of ARES's Run Detail page worth reusing here: real
 // observability into what an agent actually did (its Sense/Reason/Plan/Act
 // loop), not a wholesale port of that page. Zero new backend work --
-// agentic-core already persists this per-run (RunStep), and ASAREE's own
+// Motoro already persists this per-run (RunStep), and ASAREE's own
 // GET /runs/{id}/steps already exposes it; this is purely a new frontend
 // view over data that already exists. Steps are fetched lazily (only once
 // expanded), since most inspector opens just want the final output/error,

@@ -503,7 +503,7 @@ async def test_gated_worker_critic_failure_fails_the_pair(monkeypatch: pytest.Mo
 
 
 async def test_gated_worker_cancelled_mid_worker_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_AGENT_CANCELLED (agentic-core's own RunStatus.CANCELLED, detected in
+    """_AGENT_CANCELLED (Motoro's own RunStatus.CANCELLED, detected in
     _run_agent_node) must be distinguished from a plain error -- it needs to
     surface as "cancelled", not "failed", so run_protocol's cancelled flag
     (not its failed flag) is what fires. The critic is never called (there's
@@ -943,7 +943,7 @@ async def test_run_protocol_survives_score_metric_promotion_failure(
     owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Best-effort means best-effort: a real exception out of
-    promote_cell_score_metrics (e.g. agentic-core's run_steps table is
+    promote_cell_score_metrics (e.g. Motoro's run_steps table is
     unreachable) must not fail an otherwise-successful cell run, and the
     cell's own artifacts write must still land."""
 
@@ -1038,7 +1038,7 @@ def test_compute_workspace_id_sanitizes_a_real_cell_label() -> None:
 
 
 def test_default_system_prompt_uses_the_node_own_label() -> None:
-    # ASAREE's own explicit default -- never agentic-core's own fallback,
+    # ASAREE's own explicit default -- never Motoro's own fallback,
     # which would use the internal "protocol-{id}-{id}" agent_name instead.
     assert pe._default_system_prompt("SF-DC", "Agent") == "You are SF-DC."
 
@@ -1173,7 +1173,7 @@ async def test_run_protocol_honors_cancellation_between_nodes(
 
 async def test_run_protocol_honors_mid_node_cancellation(owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch) -> None:
     """Distinct from the between-nodes test above: this simulates a Stop
-    click landing WHILE "a" is still executing (agentic-core's own
+    click landing WHILE "a" is still executing (Motoro's own
     cancel_event interrupts it mid-phase, see _execute_run_cancellable),
     represented here by _run_agent_node returning the _AGENT_CANCELLED
     sentinel directly rather than a real output. "a" itself must be
@@ -1663,7 +1663,7 @@ def test_resolve_tool_config_collects_all_connected_tool_nodes() -> None:
     }
     resolved = pe._resolve_tool_config(graph, "a")
     # tool_names must come back namespaced ("server.tool") -- that's the
-    # shape run_tools.gather_tools matches against agentic_core's registry;
+    # shape run_tools.gather_tools matches against Motoro's registry;
     # a bare name never matches and silently strands the agent with zero
     # tools (see the regression test below).
     assert resolved == {"server_names": ["srv-a", "srv-b"], "tool_names": ["srv-a.fn_a", "srv-b.fn_b"]}
@@ -1702,7 +1702,7 @@ def test_resolve_tool_config_skips_disabled_tool_node() -> None:
 def test_resolve_tool_config_namespaces_tool_names_for_gather_tools() -> None:
     """Regression test for the bug where every canvas-run agent silently got
     zero MCP tools: run_tools.gather_tools matches tool_names against
-    agentic_core's registry, whose entries are namespaced "server.tool"
+    Motoro's registry, whose entries are namespaced "server.tool"
     (MCPServerRegistry.get_all_tools). A bare tool_name never matches that,
     so the agent's LLM would see no tools at all -- no error, it just falls
     back to reporting the blocker as its final answer."""
@@ -1751,7 +1751,7 @@ def test_resolve_pattern_config_maps_baseline_slug() -> None:
 
 def test_resolve_pattern_config_empty_when_unconnected() -> None:
     # Optional connector -- an unconnected agent resolves to {}, letting
-    # PatternConfig(execution_pattern=None) fall through to agentic-core's
+    # PatternConfig(execution_pattern=None) fall through to Motoro's
     # own "reason_act" default, not an ASAREE-side hardcoded one.
     graph = {"nodes": [_node("a", "agent")], "edges": []}
     assert pe._resolve_pattern_config(graph, "a") == {}

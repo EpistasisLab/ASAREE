@@ -188,7 +188,7 @@ async def test_discover_models_azure_project_endpoint_failure_scrubs_api_key(mon
 #
 # Response shapes below are verbatim from a live GET /v1/models (trimmed to the
 # fields this module reads). The capability tree is the whole reason Anthropic
-# doesn't go through agentic-core's _REGISTRY.
+# doesn't go through Motoro's _REGISTRY.
 
 
 def _anthropic_setting(api_base: str | None = None) -> UserLLMSetting:

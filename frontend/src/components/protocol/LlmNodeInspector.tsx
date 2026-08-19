@@ -101,7 +101,7 @@ export function LlmNodeInspector({
 
   // Unrecognized model (list still loading, discovery failed, or a
   // hand-typed value not in the catalog) -- default to temperature-only,
-  // the same safe fallback agentic-core's own DEFAULT_CAPABILITIES uses.
+  // the same safe fallback Motoro's own DEFAULT_CAPABILITIES uses.
   const showTemperature = selectedModelInfo?.supports_temperature ?? true
 
   // Deliberately off-catalog: a model id set here that the fetched list

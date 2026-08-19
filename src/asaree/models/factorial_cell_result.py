@@ -53,7 +53,7 @@ class FactorialCellResult(Base, TimestampMixin):
     )
     cell_label: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    # Opaque, no FK — the agentic-core run that produced this cell, in core's
+    # Opaque, no FK — the Motoro run that produced this cell, in core's
     # own database. Postgres cannot check a cross-database reference.
     run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     # Same reasoning, one level further removed: the on-disk workspace this

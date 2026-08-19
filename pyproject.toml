@@ -1,20 +1,20 @@
 [project]
 name = "asaree"
 version = "0.0.1"
-description = "ASAREE — the product built on agentic-core."
+description = "ASAREE — the product built on Motoro."
 readme = "README.md"
 requires-python = ">=3.12"
 
 dependencies = [
-    # Pinned to a tagged release of agentic-core (see [tool.uv.sources] below —
-    # agentic-core's own README documents its semver-tag convention), bumped
+    # Pinned to a tagged release of Motoro (see [tool.uv.sources] below —
+    # Motoro's own README documents its semver-tag convention), bumped
     # only as a deliberate, reviewed action — never left floating to that
     # repo's main. See project_plan/core_asaree_use_case.md in the ARES repo.
-    "agentic-core",
+    "motoro",
     # The on-disk versioned dataset workspace (see [tool.uv.sources] below) —
     # its own package because domain-specific MCP servers (asaree-spinal-use-
     # case/mcp-servers) depend on the same on-disk format externally, the same
-    # way ASAREE itself depends on agentic-core.
+    # way ASAREE itself depends on Motoro.
     "asaree-workspace-core",
     "fastapi>=0.121.0",
     "uvicorn[standard]>=0.38.0",
@@ -24,14 +24,14 @@ dependencies = [
     "asyncpg>=0.30.0",
     "alembic>=1.18.4",
     # Password hashing, JWT session tokens, and email validation for the user
-    # model. Deliberately not agentic-core's concern (auth is explicitly a
+    # model. Deliberately not Motoro's concern (auth is explicitly a
     # product decision — see CoreSettings' docstring) so they're declared
     # here, not inherited.
     "bcrypt>=4.2.0",
     "pyjwt>=2.10.0",
     "email-validator>=2.2.0",
     # ASAREE's OWN Redis connection (login/registration rate limiting, the
-    # JWT deny list) — separate from agentic-core's internal use of the same
+    # JWT deny list) — separate from Motoro's internal use of the same
     # ASAREE_REDIS_URL for working memory; core owns that connection
     # privately, so this product-level use needs its own client.
     "redis>=5.2.0,<6",
@@ -46,8 +46,8 @@ dependencies = [
     # (services.factorial_analysis).
     "scipy>=1.14.0",
     # The run worker (asaree.worker) — executes runs enqueued by POST /runs
-    # instead of inline, on the same Redis agentic-core and the rate-limiter
-    # already depend on. agentic-core's own pyproject.toml earmarks this as
+    # instead of inline, on the same Redis Motoro and the rate-limiter
+    # already depend on. Motoro's own pyproject.toml earmarks this as
     # "arrives with the worker slice" — this is that slice, on ASAREE's side.
     "arq>=0.26.0",
 ]
@@ -64,7 +64,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-agentic-core = { git = "https://github.com/EpistasisLab/agentic-core.git", tag = "v0.1.2" }
+motoro = { git = "https://github.com/EpistasisLab/motoro.git", tag = "v0.2.0" }
 asaree-workspace-core = { path = "workspace-core", editable = true }
 
 [build-system]
@@ -84,7 +84,7 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "SIM"]
 [tool.ruff.lint.per-file-ignores]
 # Alembic revisions are generated. Reformatting them makes a diff against
 # what autogenerate produced unreadable, which is the one thing a migration
-# should be. Matches agentic-core's own convention.
+# should be. Matches Motoro's own convention.
 "src/asaree/migrations/versions/*.py" = ["E501", "I001", "W291"]
 # X_train/X_test are scikit-learn's own capitalization convention (X = a
 # feature matrix, y = a target vector) -- renaming to x_train would read as

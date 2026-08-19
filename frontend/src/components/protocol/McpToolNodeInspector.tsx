@@ -19,7 +19,7 @@ const ACCENT = hashToChartHue('mcp_tool')
 // resolved from the caller's own registered MCP servers (GET /mcp-servers),
 // not hand-typed. Tools render as a toggle list, not a single-select --
 // this node is a per-SERVER connection with an allow-list (matching
-// agentic-core's real allow-list primitive,
+// Motoro's real allow-list primitive,
 // see McpToolNodeConfig's own comment), not a node per individual tool. No
 // Settings tab yet: there's nothing execution-constraint-shaped for a tool
 // node the way budget/duration are for an agent.

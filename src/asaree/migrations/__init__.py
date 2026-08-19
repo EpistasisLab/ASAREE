@@ -1,8 +1,8 @@
 """ASAREE's own schema, and its own migration chain.
 
-Separate from agentic-core's chain in every respect: own database
+Separate from Motoro's chain in every respect: own database
 (``settings.product_database_url``, the ``asaree`` database — a different
-database from core's ``agentic_core``, though both currently live on the same
+database from core's ``motoro``, though both currently live on the same
 Postgres server), own version table (the plain Alembic default,
 ``alembic_version`` — no collision risk since it's not sharing a database with
 another chain), own ``Base.metadata``. No ``include_object`` filter is needed
@@ -10,7 +10,7 @@ here the way core's chain needs one: ASAREE owns its whole metadata outright,
 nothing else writes to this database.
 
 Ordering when standing up an environment: core's chain first
-(``python -m agentic_core.migrations upgrade``), then this one. Product tables
+(``python -m motoro.migrations upgrade``), then this one. Product tables
 routinely carry an opaque UUID referencing a core row; the reverse is
 forbidden, and core's chain has no idea ASAREE exists.
 """
@@ -50,7 +50,7 @@ async def _ensure_database_exists(url: str) -> None:
     """Create the target database if it doesn't exist yet.
 
     Postgres never does this on its own, and nothing in this project's setup
-    does either — unlike ``agentic_core``, which core's own docker-compose
+    does either — unlike ``motoro``, which core's own docker-compose
     creates via ``POSTGRES_DB`` on first boot, ``asaree`` has no equivalent
     anywhere. Whoever hits this first has always had to create it by hand,
     silently, which is exactly the gap this closes.

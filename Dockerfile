@@ -1,7 +1,7 @@
 # ASAREE's application image.
 #
 # uv is used to install (it's the only thing that understands
-# [tool.uv.sources] -- agentic-core is a pinned git dependency and
+# [tool.uv.sources] -- Motoro is a pinned git dependency and
 # asaree-workspace-core an editable local path, neither of which a bare
 # `pip install .` can resolve), but the app itself is launched with the
 # venv's own uvicorn directly -- not `uv run` -- so a running container never
@@ -9,14 +9,14 @@
 #
 # uv stays in the final image deliberately (unlike a slimmed multi-stage
 # build): app.py spawns its bundled MCP servers (asaree-workspace,
-# agentic-core-okf) via `uv run --directory <repo root> python -m ...`, the
+# motoro-okf) via `uv run --directory <repo root> python -m ...`, the
 # same subprocess convention used in every dev environment so far. Removing
 # uv here would just move the same "no uv at runtime" problem one level down.
 FROM python:3.13-slim
 
 WORKDIR /app
 
-# git: needed by uv to resolve agentic-core's pinned git dependency below.
+# git: needed by uv to resolve Motoro's pinned git dependency below.
 RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
@@ -30,15 +30,15 @@ COPY workspace-core/ ./workspace-core/
 
 # Dependencies only, deliberately BEFORE `COPY src/` below -- src/ changes on
 # nearly every commit, and this project's own `asaree` package doesn't need
-# to be installed yet to resolve/build every third-party + agentic-core
+# to be installed yet to resolve/build every third-party + Motoro
 # dependency. Splitting this out means an ordinary code change reuses this
 # entire layer from cache instead of re-fetching pandas/scipy/sklearn/
-# pyarrow/agentic-core (a multi-GB re-download+rebuild) on every rebuild --
+# pyarrow/Motoro (a multi-GB re-download+rebuild) on every rebuild --
 # without this split, that used to happen on every single build and left a
 # fresh several-GB orphaned layer in the build cache each time, since nothing
 # prunes superseded layers automatically.
 #
-# agentic-core is a private repo (pinned git dependency, see pyproject.toml)
+# Motoro is a private repo (pinned git dependency, see pyproject.toml)
 # -- uv needs a credential to fetch it that the host's `gh`-backed git
 # credential helper doesn't carry into an isolated build. Passed as a
 # BuildKit secret (compose.yml's `secrets:`), injected via one-shot

@@ -9,7 +9,7 @@ getting their own row -- forcing a fresh-per-run title suffix just to work
 around the collision.
 
 owner_id here is a real NOT NULL FK (ResearchExperiment.owner_id), unlike
-agentic-core's opaque owner_id tag, so there's no NULL-owner edge case to
+Motoro's opaque owner_id tag, so there's no NULL-owner edge case to
 reason about the way there is for Agent/MCPServerConfig.
 
 Revision ID: cf66556232af

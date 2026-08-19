@@ -10,7 +10,7 @@ import type { SingleAgentBaselinePatternConfig, SingleAgentBaselinePatternNodeDa
 
 const ACCENT = hashToChartHue('pattern_single_agent_baseline')
 
-// Fields mirror agentic-core's own SingleAgentBaselinePattern.configuration_schema
+// Fields mirror Motoro's own SingleAgentBaselinePattern.configuration_schema
 // (engine/patterns/builtin/single_agent_baseline.py) exactly, and ARE wired
 // to a real run -- see ReasonActPatternNodeInspector's own comment for how
 // _resolve_pattern_config/PatternConfig thread this node's config into

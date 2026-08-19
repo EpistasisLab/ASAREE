@@ -2,7 +2,7 @@
 
 Startup mirrors app.py's lifespan (configure -> set_credential_resolver ->
 hydrate_registry) for the same reason app.py's own docstring gives:
-agentic_core.mcp.registry.get_registry() is a per-process singleton, and the
+motoro.mcp.registry.get_registry() is a per-process singleton, and the
 worker is a different OS process from the API -- it starts with an empty
 registry and has to hydrate its own.
 
@@ -19,11 +19,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agentic_core.config import configure
-from agentic_core.services.credentials import set_credential_resolver
-from agentic_core.services.mcp_service import hydrate_registry
 from arq.connections import RedisSettings
 from arq.cron import cron
+from motoro.config import configure
+from motoro.services.credentials import set_credential_resolver
+from motoro.services.mcp_service import hydrate_registry
 
 from asaree.config import get_settings
 from asaree.models.database import dispose_engine

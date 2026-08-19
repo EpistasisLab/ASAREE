@@ -1,5 +1,5 @@
 """Unit tests for services.credential_resolver.resolve -- the resolver installed
-via agentic_core.services.credentials.set_credential_resolver. Same
+via motoro.services.credentials.set_credential_resolver. Same
 real-Postgres, throwaway-user fixture as tests/test_experiments.py."""
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
-from agentic_core.schemas.agent import ModelConfig
+from motoro.schemas.agent import ModelConfig
 
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.user import User

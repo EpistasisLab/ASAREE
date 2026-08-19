@@ -12,7 +12,7 @@ const ACCENT = hashToChartHue('memory')
 
 // Deliberately minimal -- there's nothing real to configure yet. Connecting
 // this node into an agent declares intent for a future phase (porting
-// agentic-core's existing episodic-memory service into ASAREE's execution
+// Motoro's existing episodic-memory service into ASAREE's execution
 // path), but has NO effect on execution today; see MemoryNodeData's own
 // comment in types/protocols.ts. The Enabled factor below ships for the
 // same reason -- declared capability only, no runtime effect yet.

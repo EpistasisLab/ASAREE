@@ -106,7 +106,7 @@ export interface AgentModelConfigData {
   max_tokens: number
 }
 
-// Mirrors agentic-core's output_contract field-spec exactly: {"name":str,
+// Mirrors Motoro's output_contract field-spec exactly: {"name":str,
 // "fields":[{"name","type","description"?,"default"?}]}. `type`/`default`
 // are free-form strings here (not a closed enum) -- the field-builder UI
 // offers a curated set of common JSON-ish types, but round-trips whatever a
@@ -180,7 +180,7 @@ export function defaultAgentNodeData(label = 'Agent'): AgentNodeData {
 
 // An "MCP Tool" node represents one connection to a registered MCP server,
 // with an allow-list of that server's tools (tool_names, plural) -- one node
-// per server with a tools filter inside it, matching agentic-core's real
+// per server with a tools filter inside it, matching Motoro's real
 // allow-list primitive (RunContext.available_tools/_tool_in_allowlist), not
 // "one node per tool." Always an Agent's Tool-
 // connector source -- never a standalone pipeline step (there's no single
@@ -281,10 +281,10 @@ export interface LlmNodeData {
   [key: string]: unknown
 }
 
-// 128000 (not agentic-core's own smaller schema default) matches
+// 128000 (not Motoro's own smaller schema default) matches
 // WORKER_MAX_TOKENS in the real spinal-fusion notebook
 // (asaree-spinal-use-case/spinal_pipeline.ipynb) -- used uniformly across
-// every one of its agents/critics, well under agentic-core's own
+// every one of its agents/critics, well under Motoro's own
 // ModelConfig cap of 200000.
 export function defaultAnthropicLlmNodeData(label = 'Anthropic'): LlmNodeData {
   return { label, config: { provider: 'anthropic', model: 'claude-sonnet-5', temperature: 0.7, max_tokens: 128000 } }
@@ -301,7 +301,7 @@ export function defaultAzureFoundryLlmNodeData(label = 'Azure AI Foundry'): LlmN
 // A "Memory" node -- visual/validation scaffolding only for now. Wiring one
 // into an Agent's Memory connector is accepted by the graph (validated the
 // same way LLM/Tool connectors are) but has NO effect on execution yet --
-// porting agentic-core's actual episodic-memory service (already built,
+// porting Motoro's actual episodic-memory service (already built,
 // Postgres+pgvector-backed, just not yet invoked anywhere in ASAREE's own
 // execution path) is an explicit, deliberate follow-up, not this phase.
 export interface MemoryNodeConfig {
@@ -388,23 +388,23 @@ export function defaultScriptNodeData(label = 'Script'): ScriptNodeData {
 // MemoryNodeData's own comment), wiring one into an Agent's Architectural
 // Pattern connector has a real effect on execution:
 // services.protocol_execution's _resolve_pattern_config reads the wired
-// node's own config into a real agentic-core PatternConfig, passed straight
+// node's own config into a real Motoro PatternConfig, passed straight
 // into create_agent/update_agent. ASAREE-specific, alongside
 // LLM/Tool/Memory.
 //
 // One node type per pattern (pattern_reason_act/pattern_single_agent_baseline),
 // not one generic node with a Pattern-name field -- same reasoning as the
 // LLM node family above, and unlike that family these genuinely have
-// different config shapes (agentic-core's own `pattern_params` schema per
+// different config shapes (Motoro's own `pattern_params` schema per
 // plugin, see engine/patterns/builtin/*.py), so each gets its own dedicated
-// inspector rather than sharing one. `PatternConfig` (agentic-core) already
+// inspector rather than sharing one. `PatternConfig` (Motoro) already
 // has unused slots for safety_patterns/coordination_pattern/
 // knowledge_patterns/quality_patterns/routing_pattern/resolution_patterns --
 // no builtin plugins exist for those yet, but that's exactly where more
-// node types land as agentic-core grows them, same connector, same
+// node types land as Motoro grows them, same connector, same
 // per-pattern-node convention.
 
-// Mirrors agentic-core's ReasonActPattern.configuration_schema
+// Mirrors Motoro's ReasonActPattern.configuration_schema
 // (engine/patterns/builtin/reason_act.py) -- a native tool-calling loop:
 // each iteration either calls a tool or calls `final_answer`, repeating
 // until `final_answer` fires or max_iterations is hit.
@@ -429,10 +429,10 @@ export function defaultReasonActPatternNodeData(label = 'Reason + Act'): ReasonA
   }
 }
 
-// Mirrors agentic-core's SingleAgentBaselinePattern.configuration_schema
+// Mirrors Motoro's SingleAgentBaselinePattern.configuration_schema
 // (engine/patterns/builtin/single_agent_baseline.py) -- the plain,
 // unmodified Sense->Reason->Plan->Act loop with no tool-call interleaving;
-// agentic-core's own default/fallback when no pattern_config is set at all.
+// Motoro's own default/fallback when no pattern_config is set at all.
 export interface SingleAgentBaselinePatternConfig {
   max_iterations: number
   stop_on_first_success: boolean

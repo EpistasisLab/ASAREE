@@ -586,7 +586,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   })
 
   // Every new Agent gets its own explicit default execution-pattern node
-  // (agentic-core's own "reason_act" via _resolve_pattern_config) wired in
+  // (Motoro's own "reason_act" via _resolve_pattern_config) wired in
   // immediately -- delete it (or swap it for Single-Agent Baseline) to opt
   // out/change it. Shared by both add paths that create a bare Agent (the
   // unrestricted "+" toolbar and MainEdgeAddStub).

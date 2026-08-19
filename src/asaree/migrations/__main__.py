@@ -5,7 +5,7 @@
     python -m asaree.migrations stamp    # adopt an existing schema
     python -m asaree.migrations downgrade --revision base
 
-Run agentic-core's own chain first (``python -m agentic_core.migrations
+Run Motoro's own chain first (``python -m motoro.migrations
 upgrade``) — this one does not know or care about that one, but product tables
 routinely reference a core row by opaque UUID, so core's schema should exist
 first as a matter of sequencing the deploy, not a coded dependency.

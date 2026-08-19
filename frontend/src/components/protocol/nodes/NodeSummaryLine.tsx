@@ -7,7 +7,7 @@ import { WarningBadge } from './WarningBadge'
 // `relative`, same as the run-status Badge pinned to the top-right corner).
 // `warning` takes priority over `text`: a run-blocking problem is more
 // urgent than a config preview. An unset/blank field that DOESN'T block a
-// run (e.g. Goal, optional since agentic-core has never required it) is
+// run (e.g. Goal, optional since Motoro has never required it) is
 // exactly what `text` being null/empty already handles -- rendering
 // nothing, not a warning; a blank-but-fine field was previously
 // (incorrectly) conflated with "can't run" here.

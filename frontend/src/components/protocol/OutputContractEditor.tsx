@@ -12,7 +12,7 @@ function emptyField(): OutputContractField {
   return { name: '', type: 'string', description: '' }
 }
 
-// Structured editor for agentic-core's output_contract field-spec -- this is
+// Structured editor for Motoro's output_contract field-spec -- this is
 // the mechanism a later execution phase uses to extract a typed payload
 // from an agent's free-text output and hand it to the next node, exactly
 // how the source notebook's stage handoffs and critic verdicts already work.

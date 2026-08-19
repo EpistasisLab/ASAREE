@@ -1,6 +1,6 @@
 """ProtocolRun creation, lookup, and progress updates.
 
-Mirrors agentic-core's AgentRun lifecycle helpers (create_run/fail_run) --
+Mirrors Motoro's AgentRun lifecycle helpers (create_run/fail_run) --
 the same "force-fail from outside, race-safe against a live executor's own
 commit" idiom, since ProtocolRun has no other precedent to follow in this
 codebase.
@@ -63,7 +63,7 @@ async def get_cancel_requested_at(db: AsyncSession, protocol_run_id: uuid.UUID) 
     """Single-column read, not a full get_protocol_run -- this is polled
     every ~1.5s for the duration of a live agent run (see
     services.protocol_execution._poll_cancel_flag) to detect a Stop click
-    fast enough to interrupt mid-agent via agentic-core's own cancel_event,
+    fast enough to interrupt mid-agent via Motoro's own cancel_event,
     not just at run_protocol's own between-nodes check. Fetching the whole
     row (and deserializing node_runs' JSONB) on that cadence would be pure
     waste -- this reads nothing else."""
@@ -139,7 +139,7 @@ async def request_protocol_run_cancellation(db: AsyncSession, protocol_run_id: u
 async def fail_protocol_run(db: AsyncSession, protocol_run_id: uuid.UUID, *, error: str) -> ProtocolRun | None:
     """Force-fail a non-terminal run from outside the executor -- a no-op if
     already terminal, race-safe against a slow-but-live executor's own
-    completion commit (mirrors agentic-core's ``fail_run``)."""
+    completion commit (mirrors Motoro's ``fail_run``)."""
     run = await get_protocol_run(db, protocol_run_id)
     if run is None or run.status in _TERMINAL_STATUSES:
         return run

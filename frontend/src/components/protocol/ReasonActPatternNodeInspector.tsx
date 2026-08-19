@@ -12,11 +12,11 @@ import type { ReasonActPatternConfig, ReasonActPatternNodeData, ProtocolNode } f
 const OBSERVATION_FORMATS = ['raw', 'summarized'] as const
 const ACCENT = hashToChartHue('pattern_reason_act')
 
-// Fields mirror agentic-core's own ReasonActPattern.configuration_schema
+// Fields mirror Motoro's own ReasonActPattern.configuration_schema
 // (engine/patterns/builtin/reason_act.py) exactly, and ARE wired to a real
 // run: protocol_execution.py's _resolve_pattern_config reads this wired
 // pattern node's own (already factor-patched) data.config into a real
-// agentic-core PatternConfig, passed straight into create_agent/update_agent
+// Motoro PatternConfig, passed straight into create_agent/update_agent
 // -- editing max_iterations/observation_format/etc. here changes execution.
 // Each field is also factor-bindable, so varying e.g. max_iterations across
 // cells works the same way any other field-level binding does.

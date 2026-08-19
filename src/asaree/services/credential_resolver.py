@@ -1,4 +1,4 @@
-"""The resolver installed with agentic_core.services.credentials.set_credential_resolver.
+"""The resolver installed with motoro.services.credentials.set_credential_resolver.
 
 Per the module's own docstring, this is called with the run's ``owner_id`` as
 ``principal_id`` (``execute_run`` defaults to it when no override is given) —
@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from agentic_core.services.credentials import foundry_api_base
+from motoro.services.credentials import foundry_api_base
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from asaree.models.database import get_engine
@@ -30,7 +30,7 @@ class LLMCredentialNotConfiguredError(RuntimeError):
 
     ASAREE deliberately has no server-environment fallback for these three
     providers (matching ARES's own M112 decision) -- returning ``None`` here
-    would let ``agentic_core.services.credentials.resolve`` fall through to
+    would let ``motoro.services.credentials.resolve`` fall through to
     ``config.api_key`` (always unset for ASAREE's flow), which litellm itself
     would then try to satisfy by reading ANTHROPIC_API_KEY/OPENAI_API_KEY
     straight from the process environment. That's a silently-shared server

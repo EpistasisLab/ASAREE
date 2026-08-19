@@ -1,10 +1,10 @@
 """Promote every completed cell's Score-stage metrics into metric_values.
 
 Runs services.metric_promotion.promote_experiment_score_metrics for one
-experiment. Needs agentic_core configured first (its own DB engine is set up
+experiment. Needs Motoro configured first (its own DB engine is set up
 by asaree.app's lifespan when the server runs; a bare script has to do the
-same thing by hand -- see agentic_core.config.configure's own docstring on
-why this must happen before anything else in agentic_core runs).
+same thing by hand -- see motoro.config.configure's own docstring on
+why this must happen before anything else in Motoro runs).
 
 Usage (inside the asaree-app container, so DATABASE_URL/etc. are the real
 ones -- see compose.yml):
@@ -18,7 +18,7 @@ import asyncio
 import sys
 import uuid
 
-from agentic_core.config import configure
+from motoro.config import configure
 
 import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for research_experiments' FK
 import asaree.models.experiment  # noqa: F401 -- registers research_experiments for factorial_cell_results' FK

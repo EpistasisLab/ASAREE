@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agentic_core.mcp.registry import get_registry
+from motoro.mcp.registry import get_registry
 
 
 def gather_tools(agent: Any) -> list[dict[str, Any]]:
@@ -18,7 +18,7 @@ def gather_tools(agent: Any) -> list[dict[str, Any]]:
     ``execute_run`` never reads ``Agent.tool_config_data`` itself (see its
     ``available_tools`` param) -- the caller is responsible for turning it
     into the resolved catalog entries the orchestrator enforces as an
-    allow-list (``agentic_core.mcp.adapters._tool_in_allowlist``).
+    allow-list (``motoro.mcp.adapters._tool_in_allowlist``).
 
     ``tool_config`` here is ``{"server_names": [...], "tool_names":
     ["server.tool", ...]}`` (asaree.api.agents.CreateAgentRequest / the

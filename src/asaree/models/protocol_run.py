@@ -1,6 +1,6 @@
 """A protocol run -- one execution of a Protocol's graph.
 
-Mirrors agentic-core's AgentRun/RunStatus pattern (the only lifecycle/
+Mirrors Motoro's AgentRun/RunStatus pattern (the only lifecycle/
 state-machine precedent in this codebase) rather than inventing a new one:
 a plain string status ("pending"/"running"/"completed"/"failed" -- not a DB
 enum, same reasoning as ResearchExperiment.design_type) plus a heartbeat

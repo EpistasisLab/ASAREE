@@ -2,7 +2,7 @@
 
 ``model_config`` can't be a field name on a pydantic ``BaseModel`` (it's the
 reserved settings attribute), so ``Agent`` follows the same workaround
-``agentic_core.schemas.agent.AgentResponse`` uses on the server side: the
+``motoro.schemas.agent.AgentResponse`` uses on the server side: the
 field is named ``model_config_data`` and populated from the wire key
 ``model_config`` via an alias.
 """

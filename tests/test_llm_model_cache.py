@@ -7,7 +7,7 @@ import json
 import uuid
 
 import pytest
-from agentic_core.services.model_capabilities import ModelCapabilities
+from motoro.services.model_capabilities import ModelCapabilities
 
 from asaree.services import llm_model_cache as cache
 from asaree.services.llm_model_discovery import ModelInfo

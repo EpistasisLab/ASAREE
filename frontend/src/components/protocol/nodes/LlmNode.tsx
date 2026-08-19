@@ -49,7 +49,7 @@ export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData 
   // with this credential. `source: 'static'` is the curated catalog (OpenAI
   // always, and either provider after a failed discovery call), which is
   // knowingly incomplete -- it can only ever name models that existed when
-  // the pinned agentic-core version was tagged -- and the inspector offers
+  // the pinned Motoro version was tagged -- and the inspector offers
   // "Custom model..." specifically so you can go past it. Flagging that
   // deliberate choice as a problem would make the escape hatch look broken.
   // The cost is that a typo'd model on a static-catalog provider is no

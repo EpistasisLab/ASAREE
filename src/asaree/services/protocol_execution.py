@@ -3,7 +3,7 @@
 ``topological_order`` is pure (no DB, no network) -- validated by unit tests
 alone. ``run_protocol`` is the orchestrator, meant to run inside the arq
 worker (see ``asaree.worker.tasks.execute_protocol_run_task``), calling
-agentic-core's runner functions directly -- the same "direct call, not a
+Motoro's runner functions directly -- the same "direct call, not a
 nested enqueue" approach ``execute_run_task`` already uses for one agent run.
 
 A ``critic_gate`` node is never run on its own turn in the main loop -- its
@@ -25,12 +25,12 @@ import re
 import uuid
 from typing import Any
 
-from agentic_core.mcp.registry import get_registry
-from agentic_core.models.run import RunStatus
-from agentic_core.runner import create_agent, create_run, execute_run, get_agent_by_name, get_run, update_agent
-from agentic_core.schemas.agent import ModelConfig
-from agentic_core.schemas.output import parse_envelope
-from agentic_core.schemas.pattern import PatternConfig
+from motoro.mcp.registry import get_registry
+from motoro.models.run import RunStatus
+from motoro.runner import create_agent, create_run, execute_run, get_agent_by_name, get_run, update_agent
+from motoro.schemas.agent import ModelConfig
+from motoro.schemas.output import parse_envelope
+from motoro.schemas.pattern import PatternConfig
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.config import get_settings
@@ -54,8 +54,8 @@ logger = logging.getLogger(__name__)
 # Internal sentinel for _run_agent_node/_run_critic's `error` return slot --
 # never a real error message, so callers can check `error == _AGENT_CANCELLED`
 # unambiguously to record a node as "cancelled" rather than "failed". A
-# cancelled agentic-core run has finished.error == None (see
-# agentic_core.runner.execute_run's own write-back), so without this
+# cancelled Motoro run has finished.error == None (see
+# motoro.runner.execute_run's own write-back), so without this
 # sentinel a mid-run Stop would silently look identical to a normal
 # completion with an empty output -- this is what actually distinguishes it.
 _AGENT_CANCELLED = "__cancelled__"
@@ -134,7 +134,7 @@ _CONNECTOR_HANDLES = frozenset({"llm", "tool", "memory", "architectural_pattern"
 # each pattern's own NodeConfig on the frontend), so the LLM family shares
 # one inspector while each pattern gets its own.
 _LLM_NODE_TYPES = frozenset({"llm_anthropic", "llm_openai", "llm_azure_foundry"})
-# Only two builtin execution patterns exist in agentic-core today
+# Only two builtin execution patterns exist in Motoro today
 # (engine/patterns/builtin/) -- PatternConfig already has unused slots for
 # safety_patterns/coordination_pattern/knowledge_patterns/quality_patterns/
 # routing_pattern/resolution_patterns, which are *lists* (several active at
@@ -206,7 +206,7 @@ _HANDLE_LABELS: dict[str, str] = {
     "tool": "Tool",
 }
 
-# node type -> agentic-core PatternConfig slug, for _resolve_pattern_config.
+# node type -> Motoro PatternConfig slug, for _resolve_pattern_config.
 _EXECUTION_PATTERN_SLUGS: dict[str, str] = {
     "pattern_reason_act": "reason_act",
     "pattern_single_agent_baseline": "single_agent_baseline",
@@ -223,7 +223,7 @@ _EXECUTION_PATTERN_SLUGS: dict[str, str] = {
 # actually contain a gated pair, or the declared intent doesn't match
 # reality. The rest mirror ARES's own coordination-category patterns
 # (supervisor/swarm/task-bidding/supervision-tree/event-driven/multi-agent-
-# planning) -- named placeholders pending a later ARES -> agentic-core
+# planning) -- named placeholders pending a later ARES -> Motoro
 # migration (the user's own call), matching this codebase's "declares
 # intent, no runtime effect yet" posture for Memory nodes -- except a
 # placeholder coordination strategy is REJECTED at run time rather than
@@ -295,7 +295,7 @@ def _node_display_name(node: dict[str, Any]) -> str:
 
 def _default_system_prompt(label: str | None, placeholder: str) -> str:
     """ASAREE's own explicit default for a blank System Prompt field --
-    used in place of just passing agentic-core's own create_agent/
+    used in place of just passing Motoro's own create_agent/
     update_agent an empty string, which would otherwise fall back to
     ``f"You are {name}. {description}"`` using `agent_name`, an internal
     "protocol-{protocol_id}-{node_id}" bookkeeping id no user ever sees,
@@ -633,8 +633,8 @@ def _resolve_dataset_config(graph: dict[str, Any], node_id: str) -> dict[str, An
     for the one (if any) whose source is actually a Dataset node, rather than
     querying a dedicated handle. Read by ``_build_user_input`` to fold a
     "Dataset context" block into the wired agent's own instruction; never
-    resolved into any agentic-core config, since a dataset isn't something
-    agentic-core's own ModelConfig/PatternConfig/ToolConfig has a slot for --
+    resolved into any Motoro config, since a dataset isn't something
+    Motoro's own ModelConfig/PatternConfig/ToolConfig has a slot for --
     it's purely prompt context an agent uses to call ``open_workspace``
     itself."""
     nodes, _downstream, _upstream = _adjacency(graph)
@@ -669,7 +669,7 @@ def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, An
     connected -- unlike LLM, this connector is optional (``topological_order``
     caps it at one, but doesn't require it): an agent with nothing connected
     gets ``execution_pattern=None`` passed to ``PatternConfig``, and
-    agentic-core's own ``PatternOrchestrator`` already defaults that to
+    Motoro's own ``PatternOrchestrator`` already defaults that to
     "reason_act" (``DEFAULT_EXECUTION_PATTERN``). ASAREE deliberately doesn't
     duplicate that default here -- see AgentNode's own auto-created "Reason +
     Act" node on the frontend for how the default stays visible instead of
@@ -680,7 +680,7 @@ def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, An
     connector node entirely -- this is how a Pattern factor varies the
     *node type* itself across cells, which no ordinary field-level binding
     can do. Shaped identically to this function's own return value,
-    slug-keyed with the raw agentic-core slug."""
+    slug-keyed with the raw Motoro slug."""
     nodes, _downstream, _upstream = _adjacency(graph)
     node = nodes.get(node_id)
     override = (node.get("data") or {}).get("pattern_override") if node else None
@@ -712,7 +712,7 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
 
     ``tool_names`` MUST be namespaced as ``"{server_name}.{tool_name}"`` --
     that's the shape ``run_tools.gather_tools`` matches against
-    ``agentic_core``'s own tool registry (``MCPServerRegistry.get_all_tools``
+    ``motoro``'s own tool registry (``MCPServerRegistry.get_all_tools``
     namespaces every entry's ``name`` the same way). A node's own
     ``config.tool_names`` is stored bare (just the tool, not its server --
     see ``McpToolNodeInspector``'s ``toggleTool``), so it has to be prefixed
@@ -849,8 +849,8 @@ async def _poll_cancel_flag(protocol_run_id: uuid.UUID, cancel_event: asyncio.Ev
     a different worker process entirely, since protocol runs execute in
     arq's worker, not the API process -- raised on this run's own row.
     Sets cancel_event the moment cancel_requested_at is seen populated;
-    agentic-core's own runtime checks that event before every Sense/Reason/
-    Plan/Act phase (agentic_core.engine.runtime.AgentRuntime._check_interrupt),
+    Motoro's own runtime checks that event before every Sense/Reason/
+    Plan/Act phase (motoro.engine.runtime.AgentRuntime._check_interrupt),
     which is what actually lets a single agent's run wind down mid-loop
     instead of only ever being caught at run_protocol's own between-nodes
     check (which can't interrupt a node already in flight)."""
@@ -866,7 +866,7 @@ async def _poll_cancel_flag(protocol_run_id: uuid.UUID, cancel_event: asyncio.Ev
 async def _execute_run_cancellable(
     *, run_id: uuid.UUID, protocol_run_id: uuid.UUID, available_tools: list[dict[str, Any]], timeout: float
 ) -> None:
-    """Wraps agentic-core's execute_run with the poller above, scoped to
+    """Wraps Motoro's execute_run with the poller above, scoped to
     exactly this one run's lifetime -- shared by _run_agent_node and
     _run_critic rather than duplicating the poller's start/stop lifecycle in
     both. Deliberately per-call, not per-protocol-run: once a Stop is
@@ -901,7 +901,7 @@ async def _run_agent_node(
 ) -> tuple[str | None, str | None, uuid.UUID | None]:
     """Create-or-sync the real agent and run it to completion. Returns
     ``(output_text, error, run_id)`` -- exactly one of output_text/error is
-    ``None``. ``run_id`` is the underlying agentic-core AgentRun id -- always
+    ``None``. ``run_id`` is the underlying Motoro AgentRun id -- always
     populated once ``create_run`` succeeds (even on a later timeout/error),
     since that's what the canvas's Output tab uses to fetch this node's own
     step trace (``GET /runs/{run_id}/steps``); only ``None`` if agent
@@ -929,7 +929,7 @@ async def _run_agent_node(
     label = node.get("data", {}).get("label")
     if label:
         description = f"{description} (canvas label: {label})".strip()
-    # Explicit, ASAREE-owned default -- agentic-core's own fallback
+    # Explicit, ASAREE-owned default -- Motoro's own fallback
     # ("You are {name}. {description}") would use `agent_name` here, an
     # internal "protocol-{protocol_id}-{node_id}" bookkeeping id no user
     # ever sees, not this agent's actual canvas identity.
@@ -990,7 +990,7 @@ async def _run_agent_node(
     if finished is None:
         return None, "run vanished after execution", run.id
     if finished.status == RunStatus.CANCELLED:
-        # finished.error is None on a clean cancellation (agentic-core's own
+        # finished.error is None on a clean cancellation (Motoro's own
         # runtime never sets error_msg on that path) -- without this check
         # a mid-run Stop would silently fall through and look like a normal
         # completion with an empty output.
@@ -1515,7 +1515,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             # boundary, not mid-node: whatever's currently in flight (a
             # single agent, or a gated pair's whole revision loop) always
             # finishes -- see run_protocol's own module comment for why that
-            # granularity was chosen over interrupting agentic-core's own
+            # granularity was chosen over interrupting Motoro's own
             # per-phase cancel_event mid-agent.
             async with get_session() as db:
                 current = await get_protocol_run(db, protocol_run_id)
@@ -1638,7 +1638,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                     )
                 # Best-effort: matches the Score/run_model_script shape ->
                 # writes metric_values; doesn't match (or anything else goes
-                # wrong reading agentic-core's own run_steps) -> logs and
+                # wrong reading Motoro's own run_steps) -> logs and
                 # moves on. Never lets a promotion failure fail an otherwise-
                 # successful run.
                 try:

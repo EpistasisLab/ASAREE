@@ -16,9 +16,9 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from agentic_core.mcp.registry import get_registry
-from agentic_core.models.run import RunStatus
-from agentic_core.runner import execute_run, fail_run, get_agent, get_run, list_runs
+from motoro.mcp.registry import get_registry
+from motoro.models.run import RunStatus
+from motoro.runner import execute_run, fail_run, get_agent, get_run, list_runs
 
 # The worker process never imports asaree.api.*/asaree.deps (unlike the API
 # process, where every router module transitively imports these already) --
@@ -117,7 +117,7 @@ async def check_stale_runs(ctx: dict[str, Any]) -> None:
     Keyed on ``last_heartbeat_at`` (written every phase of every iteration by
     the orchestrator), falling back to ``created_at`` for a run that died
     before its first heartbeat -- ``started_at`` is never populated anywhere
-    in agentic-core, so it is not a usable fallback.
+    in Motoro, so it is not a usable fallback.
     """
     threshold_s = get_settings().run_heartbeat_stale_seconds
     cutoff = datetime.now(tz=UTC) - timedelta(seconds=threshold_s)

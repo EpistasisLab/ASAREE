@@ -1,5 +1,5 @@
 """Symmetric encryption for ASAREE's own secrets at rest — per-user LLM API
-keys, specifically. Mirrors agentic-core's ``services.encryption`` shape, but
+keys, specifically. Mirrors Motoro's ``services.encryption`` shape, but
 keyed off ``AsareeSettings.encryption_key``, ASAREE's own secret: core's
 version is explicitly a single server-side key with no user in the picture,
 which is the wrong shape for what this needs to protect.

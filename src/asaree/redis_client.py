@@ -1,4 +1,4 @@
-"""ASAREE's own Redis connection — separate from agentic-core's internal use
+"""ASAREE's own Redis connection — separate from Motoro's internal use
 of the same URL for working memory. Different key prefixes (``ratelimit:``,
 ``token:deny:``, see services/auth_service.py and api/auth.py) keep the two
 uses from ever colliding on the same instance.

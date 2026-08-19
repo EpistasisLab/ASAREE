@@ -1,4 +1,4 @@
-"""Per-user LLM provider credentials — the thing agentic-core's credentials
+"""Per-user LLM provider credentials — the thing Motoro's credentials
 module explicitly leaves to the product: "core has no users, and with a
 separate product database it could not have a foreign key to one." ASAREE
 does have a real users table, so this one's FK is enforced.
@@ -26,7 +26,7 @@ class UserLLMSetting(Base, TimestampMixin):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    # A string, not agentic_core.schemas.agent.LLMProvider directly — this
+    # A string, not motoro.schemas.agent.LLMProvider directly — this
     # table shouldn't need a migration if core adds a provider core doesn't
     # know about yet is exactly the failure mode a shared enum would risk.
     provider: Mapped[str] = mapped_column(String(32), nullable=False)

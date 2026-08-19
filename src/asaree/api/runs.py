@@ -1,4 +1,4 @@
-"""Runs — a thin layer over agentic_core.runner, executed by the worker.
+"""Runs — a thin layer over motoro.runner, executed by the worker.
 
 ``POST /runs`` creates the run and hands it to asaree.worker (arq) via
 ``enqueue_run`` — it does not execute inline, and returns as soon as the run
@@ -21,10 +21,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from agentic_core.models.run import RunStatus
-from agentic_core.runner import create_run, get_agent, get_run, get_run_steps, list_runs
-from agentic_core.schemas.output import parse_envelope
 from fastapi import APIRouter, HTTPException
+from motoro.models.run import RunStatus
+from motoro.runner import create_run, get_agent, get_run, get_run_steps, list_runs
+from motoro.schemas.output import parse_envelope
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser
@@ -38,7 +38,7 @@ class CreateRunRequest(BaseModel):
     user_input: str
     pattern_overrides: dict[str, Any] | None = None
     # e.g. {"workspace_id": "..."} — the orchestrator lifts workspace_id out of
-    # this into every MCP tool call's ambient _meta (agentic-core runner.py
+    # this into every MCP tool call's ambient _meta (Motoro runner.py
     # docstring). Anything else here is just carried, not interpreted.
     metadata: dict[str, Any] | None = None
     # Shallow-merged onto the agent's own model_config_data at execute time —
@@ -51,7 +51,7 @@ class CreateRunRequest(BaseModel):
 class RunResponse(BaseModel):
     id: uuid.UUID
     agent_id: uuid.UUID
-    # A plain string, not agentic_core.models.run.RunStatus — that's a models
+    # A plain string, not motoro.models.run.RunStatus — that's a models
     # import, off-limits the same way UserLLMSetting.provider avoids
     # LLMProvider. .value below turns the enum into exactly this before it
     # ever reaches pydantic.

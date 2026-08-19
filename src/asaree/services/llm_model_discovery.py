@@ -7,7 +7,7 @@ probed live, and all three answer differently:
   (``effort.supported`` plus a per-level ``supported`` flag, ``thinking``,
   ``image_input``, ``structured_outputs``, ...) alongside ``max_input_tokens``
   / ``max_tokens``. Authoritative and self-updating, so it's used directly and
-  agentic-core's _REGISTRY is bypassed for this provider.
+  Motoro's _REGISTRY is bypassed for this provider.
 * **Azure Foundry** -- the deployments listing has a ``capabilities`` field,
   but it only ever contains ``{"chat_completion": "true"}``: a modality, not a
   sampling contract. Capability lookup there still has to go through
@@ -52,7 +52,7 @@ import logging
 from typing import Any
 
 import httpx
-from agentic_core.services.model_capabilities import (
+from motoro.services.model_capabilities import (
     CATALOG,
     DEFAULT_EFFORT,
     EFFORT_LEVELS_FULL,
@@ -149,7 +149,7 @@ def _capabilities_from_anthropic(caps: dict[str, Any]) -> ModelCapabilities:
         "effort": {"supported": true,
                    "low": {"supported": true}, ..., "max": {"supported": true}}
 
-    This is strictly better than agentic-core's hand-maintained _REGISTRY for
+    This is strictly better than Motoro's hand-maintained _REGISTRY for
     this provider: the registry gives every entry one hardcoded effort ladder,
     whereas the real ladders differ per model (opus-4-5 stops at high,
     sonnet-4-6/opus-4-6 have no xhigh, the 5-series has the full set) and
@@ -181,7 +181,7 @@ async def _discover_anthropic(setting: UserLLMSetting) -> tuple[list[ModelInfo],
     org can be gated to a subset (Project Glasswing models, previews) and
     because the response is the only authoritative source for the
     capabilities above. A newly released model appears here the day it ships,
-    with no agentic-core release needed.
+    with no Motoro release needed.
 
     Failure falls back to the curated catalog rather than surfacing an error:
     the catalog is stale, not wrong, and an empty dropdown is a worse answer

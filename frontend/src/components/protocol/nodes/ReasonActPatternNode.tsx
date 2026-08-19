@@ -10,7 +10,7 @@ import { CircleNode } from './CircleNode'
 // ReasonActPatternNodeData's own comment in types/protocols.ts). Rendered
 // as a small circle-with-icon (see CircleNode) -- NOT dashed, unlike
 // Memory: _resolve_pattern_config reads this node's own config into a real
-// agentic-core PatternConfig on every run (protocol_execution.py's
+// Motoro PatternConfig on every run (protocol_execution.py's
 // create_agent/update_agent calls), so it has a genuine runtime effect.
 // Positioned ABOVE its agent by default (agentDefaultPattern in
 // ProtocolCanvas.tsx) with its own connector on the BOTTOM edge

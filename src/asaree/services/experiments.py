@@ -160,7 +160,7 @@ async def get_experiment_by_name(db: AsyncSession, name: str, *, owner_id: uuid.
 
     Names are unique per owner (uq_research_experiments_owner_name), not per
     installation, so this always scopes to the caller — there is no
-    any-owner variant, unlike agentic-core's Agent/MCPServerConfig lookups,
+    any-owner variant, unlike Motoro's Agent/MCPServerConfig lookups,
     since every call site here is a per-owner conflict pre-check."""
     return (
         await db.execute(

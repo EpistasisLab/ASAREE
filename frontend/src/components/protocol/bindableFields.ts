@@ -187,7 +187,7 @@ function getPath(data: Record<string, unknown>, dottedPath: string): unknown {
 }
 
 // Mirrors protocol_execution.py's _EXECUTION_PATTERN_SLUGS -- the raw
-// agentic-core slug each pattern node type resolves to.
+// Motoro slug each pattern node type resolves to.
 const PATTERN_SLUGS: Record<string, string> = {
   pattern_reason_act: 'reason_act',
   pattern_single_agent_baseline: 'single_agent_baseline',

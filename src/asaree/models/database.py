@@ -1,6 +1,6 @@
 """Async engine and session for ASAREE's own database.
 
-Mirrors agentic-core's own ``models/database.py`` shape, but reads
+Mirrors Motoro's own ``models/database.py`` shape, but reads
 ``settings.product_database_url`` — ASAREE's database, not core's. ASAREE is
 the product, so unlike core it's free to hand a session straight to a FastAPI
 route via ``Depends(get_db)``.

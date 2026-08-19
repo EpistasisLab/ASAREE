@@ -1,6 +1,6 @@
 """Tests for services.protocols, against the real dev-stack Postgres --
 JSONB has no sqlite equivalent, and this codebase's own conventions never
-mock the database (see agentic-core's own test suite for the same choice).
+mock the database (see Motoro's own test suite for the same choice).
 
 First test file in this repo, so it also owns the one bit of test
 infrastructure needed: a throwaway ``User`` row per test, cleaned up

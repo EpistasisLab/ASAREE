@@ -1,6 +1,6 @@
 """ASAREE's declarative base — its own metadata, its own migration chain.
 
-Deliberately not agentic-core's ``Base``. Two databases, two schemas, two
+Deliberately not Motoro's ``Base``. Two databases, two schemas, two
 Alembic chains — nothing here is ever created in core's database, and core's
 tables never appear in ASAREE's ``Base.metadata``.
 """

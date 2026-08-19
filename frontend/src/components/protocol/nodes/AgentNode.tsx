@@ -103,7 +103,7 @@ export function AgentNode({
           Tool. Dataset and Script are pure config sources too, but
           deliberately do NOT get their own slot -- they wire into this same
           Tool connector (one connector accepting a FAMILY of node types,
-          matching agentic-core's own
+          matching Motoro's own
           _NODE_TYPE_TO_HANDLE): the Tool "+" panel's search just lists
           mcp_tool/Dataset/Script side by side (see CONNECTOR_PANEL_INFO.tool's
           allowedTypes in ProtocolCanvas.tsx), and which sub-kind a given
@@ -119,7 +119,7 @@ export function AgentNode({
       />
       <ConnectorHandleLabel left="15%" side="top">Pattern</ConnectorHandleLabel>
       {/* Never hides once connected (unlike LLM/Memory) -- an execution
-          pattern must never go to zero (agentic-core silently falls back
+          pattern must never go to zero (Motoro silently falls back
           to reason_act if left unconnected, undoing the whole point of
           making the default explicit), so the only way to change it is to
           replace it via this same stub, never a bare delete. See

@@ -18,7 +18,7 @@ export interface DesignMetric {
 // today's exact existing DAG-handoff behavior) and "critic_gate" (promotes
 // the existing gated-pair mechanism to an explicit declaration) are real.
 // The rest are named placeholders for ARES's own coordination-category
-// patterns, pending a later ARES -> agentic-core migration -- selectable and
+// patterns, pending a later ARES -> Motoro migration -- selectable and
 // saveable, but services.protocol_execution rejects a run attempted with one
 // of these active. See COORDINATION_STRATEGY_CATALOG for display metadata.
 export type CoordinationStrategySlug =

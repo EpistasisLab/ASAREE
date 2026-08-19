@@ -6,8 +6,8 @@ export interface Run {
   created_at: string
 }
 
-// GET /runs/{id}/steps -- agentic-core's own Sense/Reason/Plan/Act(/HITL)
-// loop trace, persisted per-run (agentic_core.models.run.RunStep), not
+// GET /runs/{id}/steps -- Motoro's own Sense/Reason/Plan/Act(/HITL)
+// loop trace, persisted per-run (motoro.models.run.RunStep), not
 // reconstructed from logs. One row per pattern-loop step.
 export interface RunStep {
   id: string

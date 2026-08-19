@@ -36,7 +36,7 @@ import logging
 import time
 import uuid
 
-from agentic_core.services.model_capabilities import ModelCapabilities
+from motoro.services.model_capabilities import ModelCapabilities
 
 from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.redis_client import get_redis

@@ -1,7 +1,7 @@
 """Dataset registration and workspace lineage endpoints.
 
 Every route requires auth (``CurrentUser``) — datasets have a real owner now,
-unlike agentic-core's opaque, unenforced ``owner_id``, and every route below
+unlike Motoro's opaque, unenforced ``owner_id``, and every route below
 enforces it: a dataset (or its workspace events) not owned by the caller is
 a 404, the same convention ``experiments.py``'s ``_get_owned_experiment``
 already uses, not just "authenticated is enough."

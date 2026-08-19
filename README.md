@@ -1,6 +1,6 @@
 # ASAREE
 
-The product built on [`agentic-core`](https://github.com/EpistasisLab/agentic-core).
+The product built on [`motoro`](https://github.com/EpistasisLab/motoro).
 Core ships no HTTP layer, no auth, no UI — ASAREE provides those, and depends
 on core as a pinned library dependency (in-process, not a service call).
 
@@ -13,23 +13,23 @@ bottom, how that compares to what's actually built so far.
 ## Resetting your dev environment
 
 ASAREE has no database of its own to reset in isolation. `docker compose up -d`
-in the `agentic-core` repo (where `compose.yml` lives) brings up a single
-Postgres server that hosts *two* databases side by side — `agentic_core`
+in the `motoro` repo (where `compose.yml` lives) brings up a single
+Postgres server that hosts *two* databases side by side — `motoro`
 (core's own schema) and `asaree` (this repo's) — both in the same named
 volume. Wiping it wipes both at once: every user, agent, experiment, dataset,
 MCP server registration, and LLM credential.
 
-(This is the host-based dev flow, running agentic-core's compose file
+(This is the host-based dev flow, running Motoro's compose file
 standalone. If you're using the [Docker flow](#running-with-docker) below —
-where ASAREE's own `compose.yml` brings agentic-core up itself — reset from
+where ASAREE's own `compose.yml` brings Motoro up itself — reset from
 the ASAREE repo instead: `docker compose down -v` there tears down both.)
 
 ```bash
-# from the agentic-core repo
-cd path/to/agentic-core
+# from the Motoro repo
+cd path/to/Motoro
 docker compose down -v          # destroys both databases + redis
 docker compose up -d            # fresh containers; core's own schema is
-                                 # applied automatically (agentic-core-migrate)
+                                 # applied automatically (motoro-migrate)
 
 # core's compose only applies core's schema -- ASAREE's own still needs migrating
 cd path/to/ASAREE
@@ -45,20 +45,20 @@ working state:
 3. Re-run a use case notebook's early setup cells (experiment, dataset, agent
    creation, and the LLM credential cell if the account needs its own).
 
-ASAREE's own bundled servers (`asaree-workspace`, `agentic-core-okf`) don't need
+ASAREE's own bundled servers (`asaree-workspace`, `motoro-okf`) don't need
 a manual step — they auto-register the next time the app starts (`app.py`'s
 lifespan), the same as they did the very first time.
 
 ## Running with Docker
 
-`compose.yml` `include`s agentic-core's own `compose.yml`, so this stack is
+`compose.yml` `include`s Motoro's own `compose.yml`, so this stack is
 self-sufficient — one `docker compose up` brings up
-`agentic-core-postgres`/`agentic-core-redis`/`agentic-core-migrate` alongside
+`motoro-postgres`/`motoro-redis`/`motoro-migrate` alongside
 ASAREE's own services, with real `depends_on: condition: service_healthy`
-between them. It assumes a sibling checkout at `../agentic-core`; point
-`AGENTIC_CORE_DIR` at yours if it lives elsewhere. Don't also run
+between them. It assumes a sibling checkout at `../Motoro`; point
+`MOTORO_DIR` at yours if it lives elsewhere. Don't also run
 `docker compose up` directly inside that checkout while this is up — same
-`container_name`s and ports, so the two collide. `agentic-core` is a private
+`container_name`s and ports, so the two collide. `motoro` is a private
 git dependency ([`pyproject.toml`](pyproject.toml)), so building needs a
 GitHub token with read access to it, passed as a build secret rather than
 baked into the image:
@@ -68,17 +68,17 @@ cp .env.example .env    # fill in provider credentials as usual
 GH_TOKEN=$(gh auth token) docker compose up -d --build
 ```
 
-This brings up agentic-core's Postgres/Redis (and applies core's own schema
-via `agentic-core-migrate`), then runs `asaree-migrate` (applies ASAREE's own
+This brings up Motoro's Postgres/Redis (and applies core's own schema
+via `motoro-migrate`), then runs `asaree-migrate` (applies ASAREE's own
 schema, creating the database first if needed — see `src/asaree/migrations`)
 to completion, then starts `asaree-app` on `:8000`. Everything shares one
 compose-managed network to reach Postgres/Redis by container name — the
 host-side URLs in `.env` (`localhost:...`) are overridden inside
-`compose.yml` for exactly this reason, the same pattern as `agentic-core`'s
+`compose.yml` for exactly this reason, the same pattern as `motoro`'s
 own `docker/Dockerfile.migrate`.
 
 One gotcha if you've also run ASAREE directly on the host against the same
-Postgres instance: `asaree-workspace`/`agentic-core-okf`'s persisted
+Postgres instance: `asaree-workspace`/`motoro-okf`'s persisted
 `command` column holds whichever filesystem path registered them first. A
 row registered from the host (`uv run --directory /path/on/host ...`) fails
 to reconnect inside the container (that path doesn't exist there) — delete

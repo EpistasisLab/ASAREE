@@ -65,7 +65,7 @@ class RegisteredDataset(Base, TimestampMixin):
     # entirely downstream by a domain MCP server (e.g. ares-sklearn-eda's
     # get_data_dictionary), not structured data ASAREE's own code interprets.
     dictionary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Opaque attribution — same pattern as agentic-core's Agent.owner_id, but
+    # Opaque attribution — same pattern as Motoro's Agent.owner_id, but
     # ASAREE has a real users table, so this one is an enforced FK.
     owner_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True

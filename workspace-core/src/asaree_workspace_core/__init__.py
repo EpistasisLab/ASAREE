@@ -5,7 +5,7 @@ provenance.py (see spinal-surgery-sklearn-servers). Owned by ASAREE because the
 workspace and the registered dataset it seeds from are both ASAREE concepts;
 depended on externally by any domain-specific MCP server (e.g.
 ares-sklearn-core's dc/fte/fs/eda/model) that reads/writes staged data through
-the same on-disk format, the same way ASAREE itself depends on agentic-core.
+the same on-disk format, the same way ASAREE itself depends on Motoro.
 """
 
 from __future__ import annotations

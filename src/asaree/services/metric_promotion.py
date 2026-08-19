@@ -13,11 +13,11 @@ This module is the deterministic, testable version of that manual step for
 one specific, common pipeline shape (a Score agent wired to a single
 ``run_model_script`` tool call) -- both ``spinal-use-case.json`` and
 ``myocardial-use-case.json`` are this shape. It reads the Score stage's raw
-tool-call result straight from agentic-core's own ``run_steps`` (the actual
+tool-call result straight from Motoro's own ``run_steps`` (the actual
 JSON ``run_model_script`` returned), not the agent's own free-text report --
 the agent is only ever instructed to report those numbers verbatim, never to
 recompute them, but parsing prose is still strictly less reliable than
-reading the tool call agentic-core already durably recorded.
+reading the tool call Motoro already durably recorded.
 
 ``average_precision``/``roc_auc`` are top-level keys in that result's
 ``test_metrics``; ``f1``/``balanced_accuracy``/``accuracy`` are
@@ -35,7 +35,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from agentic_core.runner import get_run_steps
+from motoro.runner import get_run_steps
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.services.factorial_cells import upsert_cell

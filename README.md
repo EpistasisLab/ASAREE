@@ -66,11 +66,3 @@ docker compose up -d            # fresh containers, core's schema applied
 cd path/to/ASAREE
 uv run python -m asaree.migrations upgrade
 ```
-
-## Gotcha: stale MCP server paths
-
-`asaree-workspace`/`motoro-okf`'s persisted `command` column holds whichever
-filesystem path registered them first, so a row registered from the host
-(`uv run --directory /path/on/host ...`) can't reconnect inside the container —
-that path doesn't exist there. Delete both rows from `mcp_server_configs` and
-restart to re-register with the container's own path.

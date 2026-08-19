@@ -17,7 +17,7 @@ export function AppHeader() {
   const queryClient = useQueryClient()
   const [credentialDialogOpen, setCredentialDialogOpen] = useState(false)
 
-  // Global, n8n-style "+" menu (not page-local) so creating an experiment
+  // Global "+" menu (not page-local) so creating an experiment
   // doesn't require first navigating to the Experiments list.
   //
   // No name is sent: the server allocates the placeholder "Untitled Experiment
@@ -49,7 +49,7 @@ export function AppHeader() {
             </div>
             <span className="font-semibold tracking-wide">ASAREE</span>
           </Link>
-          {/* n8n-style split button: the main segment is the primary,
+          {/* Split button: the main segment is the primary,
               one-click action; the chevron segment opens a menu for
               secondary create actions -- replaces the old icon-only "+"
               that put both behind an equal-weight menu. */}

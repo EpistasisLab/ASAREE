@@ -18,9 +18,9 @@ import type { ProtocolRun } from '@/types/protocols'
 
 const RUN_POLL_MS = 2000
 
-// Click-to-rename, n8n's own pattern for a workflow created with a
-// placeholder name: no gate before creating, edit the name in place once
-// you're looking at what you're naming.
+// Click-to-rename, the pattern for anything created with a placeholder name:
+// no gate before creating, edit the name in place once you're looking at what
+// you're naming.
 function EditableExperimentName({ experiment }: { experiment: Experiment }) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(experiment.name)

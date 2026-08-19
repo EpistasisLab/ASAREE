@@ -11,8 +11,8 @@ const ACCENT = hashToChartHue('mcp_tool')
 
 // Always an Agent's Tool-connector source -- one MCP server connection,
 // allow-listing a subset of its tools (McpToolNodeConfig.tool_names) --
-// never a standalone pipeline step. Matches n8n's own MCP Client Tool node,
-// which likewise only ever exists as a sub-node wired into an agent. No
+// never a standalone pipeline step: it only ever exists as a sub-node wired
+// into an agent. No
 // run-status badge: same reasoning as LlmNode -- the executor gives it an
 // instant, inert placeholder node_run, never a real execution. The hover
 // toolbar's own power icon DOES apply here though (unlike LlmNode) --

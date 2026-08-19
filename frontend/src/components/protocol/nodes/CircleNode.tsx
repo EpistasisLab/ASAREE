@@ -5,13 +5,13 @@ import { NodeFactorBadge } from './NodeFactorBadge'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 import { WarningBadge } from './WarningBadge'
 
-// n8n's own rendering for an AI sub-connector's source node (Chat Model/
-// Memory/Tool): a small circle with just the icon inside, no label -- the
+// The rendering for a sub-connector's source node: a small circle with just
+// the icon inside, no label -- the
 // label sits below the circle instead. Shared by every node whose only job
 // is to feed a connector slot (LLM/Memory/Architectural Pattern, and
 // McpToolNode when it's currently playing its Tool-connector role -- see
-// that file) rather than n8n's own "rounded rectangle, icon+label both
-// inside" for a real pipeline step. One source handle, top-center, feeding
+// that file), as opposed to the "rounded rectangle, icon+label both
+// inside" a real pipeline step gets. One source handle, top-center, feeding
 // up into whichever agent/critic_gate row it's wired into.
 export function CircleNode({
   id,

@@ -154,10 +154,10 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
 // panel that opens for a connector "+" is pre-filtered to that slot's whole
 // family of node types (LLM_NODE_TYPES/PATTERN_NODE_TYPES above) rather than
 // the full catalog. Tool's own family includes Dataset/Script alongside
-// mcp_tool (n8n's own convention for a connector that accepts several kinds
-// of node -- see AgentNode.tsx's own comment on its Tool handle) -- both are
-// pure config sources with no callable capability of their own, so they
-// share Tool's slot rather than getting a dedicated one.
+// mcp_tool (one connector accepting several kinds of node -- see AgentNode.tsx's
+// own comment on its Tool handle) -- both are pure config sources with no
+// callable capability of their own, so they share Tool's slot rather than
+// getting a dedicated one.
 const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; title: string }> = {
   llm: { allowedTypes: LLM_NODE_TYPES, title: 'Add LLM' },
   tool: { allowedTypes: ['mcp_tool', 'dataset', 'script'], title: 'Add Tool' },
@@ -281,7 +281,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     edges: Edge[]
     resolve?: (result: boolean | { nodes: Node[]; edges: Edge[] }) => void
   } | null>(null)
-  // n8n-style dismissible error banner (own close button, no auto-hide) --
+  // Dismissible error banner (own close button, no auto-hide) --
   // reset on every new Run click so a fresh attempt always gets a clean
   // slate even if the previous failure was never dismissed.
   const [runErrorDismissed, setRunErrorDismissed] = useState(false)
@@ -437,7 +437,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // the typed connector slots) -- running a node mid-pipeline against real
   // upstream output needs a bounded/partial-run entrypoint this executor
   // doesn't have yet (see NodeHoverToolbar.tsx's own long-standing note on
-  // n8n's "Execute step").
+  // running a single step).
   const agentIdsWithUpstream = useMemo(
     () => new Set(edges.filter((e) => !CONNECTOR_HANDLES.has(e.targetHandle ?? '')).map((e) => e.target)),
     [edges],
@@ -614,8 +614,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     return { patternNode, patternEdge }
   }
 
-  // n8n's own pattern: a "+" on the canvas opens a searchable node-type
-  // panel on the right, rather than a static always-visible drag palette.
+  // A "+" on the canvas opens a searchable node-type panel on the right,
+  // rather than a static always-visible drag palette.
   // New nodes land near the pane's current center, nudged away from any
   // node already there (findFreePosition) so a fresh node never lands on
   // top of an existing one.
@@ -651,9 +651,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       )
       setPendingConnectorAdd(null)
       setAddPanelOpen(false)
-      // Mirrors n8n's own flow: picking a node from the connector panel
-      // goes straight into that node's Inspector to set it up, rather than
-      // leaving the user to double-click it themselves.
+      // Picking a node from the connector panel goes straight into that
+      // node's Inspector to set it up, rather than leaving the user to
+      // double-click it themselves.
       setSelectedNodeId(newId)
       return
     }
@@ -877,7 +877,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   // "Import from file..." (ProtocolCanvasMenu) hands back the parsed
   // {nodes, edges} -- merges them in ALONGSIDE the current canvas (not a
-  // replace, per the user's own read of n8n's import behavior): every
+  // replace, per the user's own choice for import behavior): every
   // imported node gets a fresh id (newNodeId is collision-safe by
   // construction) and every edge's source/target is rewritten to match;
   // the whole imported cluster is translated so its bounding-box center
@@ -953,7 +953,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             // xyflow's default is zoomOnScroll -- a two-finger trackpad
             // scroll and a real pinch are both plain wheel events, and
             // without panOnScroll xyflow can't tell them apart, so scrolling
-            // zoomed instead of panning. Flipping this pair (matching n8n/
+            // zoomed instead of panning. Flipping this pair (matching
             // Figma/Miro) makes two-finger scroll pan; pinch still zooms,
             // since xyflow's own wheel handler checks the event's ctrlKey
             // (a real pinch gesture sets it, a plain scroll doesn't).
@@ -984,11 +984,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 : null)
             if (!runErrorText || runErrorDismissed) return null
             return (
-              // A full-text, wrapping, dismissible banner -- n8n's own
-              // convention for a run failure (a toast with the complete
-              // message and a close button) rather than this app's usual
-              // single-line truncate+title-tooltip idiom, which hides
-              // exactly the detail (e.g. "No anthropic credential
+              // A full-text, wrapping, dismissible banner for a run failure
+              // (the complete message plus a close button) rather than this
+              // app's usual single-line truncate+title-tooltip idiom, which
+              // hides exactly the detail (e.g. "No anthropic credential
               // configured...") a failed run needs to actually show.
               <div
                 role="alert"

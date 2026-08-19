@@ -30,8 +30,8 @@ function ControlIconButton({
 export function CanvasControls() {
   const { zoomIn, zoomOut, fitView, zoomTo } = useReactFlow()
   const { zoom } = useViewport()
-  // n8n's own pattern: a "reset zoom" button that only appears once the
-  // user has actually zoomed away from the canvas's default level.
+  // A "reset zoom" button that only appears once the user has actually
+  // zoomed away from the canvas's default level.
   const isDefaultZoom = Math.abs(zoom - DEFAULT_ZOOM) < 0.01
 
   return (

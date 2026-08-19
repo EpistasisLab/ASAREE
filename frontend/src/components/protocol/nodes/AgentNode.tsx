@@ -60,10 +60,9 @@ export function AgentNode({
           Architectural Pattern connector's own label/stub live OUTSIDE the
           card on the left of this edge, so neither competes for this corner. */}
       {hasBoundFactor(data) && <NodeFactorBadge count={boundFactorCount(data)} className="-top-3 -right-3" />}
-      {/* Main flow is left-to-right (n8n's own convention) -- the 4
-          sub-connectors below stay on the bottom edge regardless, same as
-          n8n's own AI sub-connectors (Chat Model/Memory/Tool) always hang
-          below a node no matter which way the main flow runs.
+      {/* Main flow is left-to-right -- the 4 sub-connectors below stay on the
+          bottom edge regardless, since a config source hangs below a node no
+          matter which way the main flow runs.
 
           Left/right no longer mean strict sequential handoff -- they mean
           "this agent can interact with that one" (which coordination
@@ -98,14 +97,13 @@ export function AgentNode({
           toolbar (NodeHoverToolbar) already claims the top-center span
           (-top-8, appearing on :hover) and the run-status Badge already
           claims the top-right corner, so top-left is the one open zone on
-          this edge left for a third occupant. n8n's own 3 bottom
-          sub-connectors (Chat Model/Memory/Tool):
+          this edge left for a third occupant. The 3 bottom sub-connectors:
           required LLM (exactly one), optional max-1 Memory (visual
           scaffolding only -- see MemoryNodeData), and optional repeatable
           Tool. Dataset and Script are pure config sources too, but
           deliberately do NOT get their own slot -- they wire into this same
-          Tool connector (n8n's own convention for a connector that accepts a
-          FAMILY of node types, matching agentic-core's own
+          Tool connector (one connector accepting a FAMILY of node types,
+          matching agentic-core's own
           _NODE_TYPE_TO_HANDLE): the Tool "+" panel's search just lists
           mcp_tool/Dataset/Script side by side (see CONNECTOR_PANEL_INFO.tool's
           allowedTypes in ProtocolCanvas.tsx), and which sub-kind a given

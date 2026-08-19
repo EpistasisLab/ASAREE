@@ -1,15 +1,15 @@
 import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 
-// n8n's own rename mechanism for a node: click the title in its Node Detail
-// View header to edit it in place -- same click-to-rename pattern
+// A node's rename mechanism: click the title in its Inspector header to edit
+// it in place -- same click-to-rename pattern
 // ProtocolCanvasPage.tsx's EditableExperimentName already uses for the
 // experiment name, reused here instead of a second bespoke mechanism.
 // Replaces the earlier double-click-the-label-on-the-canvas-card approach
 // (removed entirely, not kept alongside this) -- a canvas card is small and
 // mostly taken up by other content, so renaming from the Inspector's own
-// title, which is always full-width and unambiguous, is both more
-// discoverable and more n8n-faithful.
+// title, which is always full-width and unambiguous, is the more
+// discoverable of the two.
 export function EditableNodeTitle({
   label,
   placeholder,

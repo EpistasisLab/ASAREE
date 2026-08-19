@@ -125,10 +125,10 @@ export interface OutputContract {
 
 export interface AgentNodeConfig {
   // The task/message for a specific run -- optional; falls back to `goal`
-  // (services.protocol_execution's _build_user_input) when blank. Mirrors
-  // n8n's AI Agent node's own "Prompt (User Message)" field -- the one
-  // thing meant to change between runs, distinct from `goal` (a persistent
-  // objective) and `system_prompt` (persistent behavioral instructions).
+  // (services.protocol_execution's _build_user_input) when blank. This is the
+  // per-invocation user message -- the one thing meant to change between runs,
+  // distinct from `goal` (a persistent objective) and `system_prompt`
+  // (persistent behavioral instructions).
   prompt: string
   goal: string
   description: string
@@ -138,8 +138,8 @@ export interface AgentNodeConfig {
   // connector(s), and optional Architectural Pattern connector instead (see
   // LlmNodeData/McpToolNodeData/ReasonActPatternNodeData and
   // services.protocol_execution's _resolve_llm_config/_resolve_tool_config/
-  // _resolve_pattern_config), matching n8n's own choice to keep these out
-  // of a node's own settings.
+  // _resolve_pattern_config) -- deliberately kept out of a node's own
+  // settings.
   output_contract: OutputContract | null
   budget_limit_usd: number | null
   max_run_duration_seconds: number | null
@@ -179,10 +179,10 @@ export function defaultAgentNodeData(label = 'Agent'): AgentNodeData {
 }
 
 // An "MCP Tool" node represents one connection to a registered MCP server,
-// with an allow-list of that server's tools (tool_names, plural) -- matches
-// n8n's own MCP Client Tool node (one node per server, a tools filter inside
-// it) and agentic-core's real allow-list primitive (RunContext.available_tools/
-// _tool_in_allowlist), not "one node per tool." Always an Agent's Tool-
+// with an allow-list of that server's tools (tool_names, plural) -- one node
+// per server with a tools filter inside it, matching agentic-core's real
+// allow-list primitive (RunContext.available_tools/_tool_in_allowlist), not
+// "one node per tool." Always an Agent's Tool-
 // connector source -- never a standalone pipeline step (there's no single
 // well-defined action for "run all of these tools" with no agent). Rendered
 // via CircleNode, same as Llm/Memory/pattern nodes -- a pure config source,
@@ -258,14 +258,12 @@ export function defaultCriticGateNodeData(label = 'Critic Gate'): CriticGateNode
   }
 }
 
-// The LLM connector's node family -- ASAREE's own name for n8n's "Chat
-// Model" connector (matches this app's existing LLMProvider/LLMSetting
-// vocabulary instead of copying n8n's term). One node type per provider
+// The LLM connector's node family -- named to match this app's existing
+// LLMProvider/LLMSetting vocabulary. One node type per provider
 // (llm_anthropic/llm_openai/llm_azure_foundry), not one generic node with a
-// Provider field -- mirrors n8n's own convention of a dedicated node per
-// capability (see e.g. its separate HTTP Request Tool/Code Tool/MCP Client
-// Tool nodes) rather than one node with an internal picker. Config shape is
-// identical across all three (provider is baked into which node type you
+// Provider field -- a dedicated node per capability rather than one node with
+// an internal picker. Config shape is identical across all three (provider is
+// baked into which node type you
 // picked, not user-editable), so they share this one config/data shape and
 // -- see LlmNodeInspector.tsx -- one inspector component, varying only the
 // hardcoded `provider` each default-data factory below sets. Supplies
@@ -391,8 +389,8 @@ export function defaultScriptNodeData(label = 'Script'): ScriptNodeData {
 // Pattern connector has a real effect on execution:
 // services.protocol_execution's _resolve_pattern_config reads the wired
 // node's own config into a real agentic-core PatternConfig, passed straight
-// into create_agent/update_agent. No n8n equivalent -- ASAREE's own
-// addition alongside LLM/Tool/Memory.
+// into create_agent/update_agent. ASAREE-specific, alongside
+// LLM/Tool/Memory.
 //
 // One node type per pattern (pattern_reason_act/pattern_single_agent_baseline),
 // not one generic node with a Pattern-name field -- same reasoning as the

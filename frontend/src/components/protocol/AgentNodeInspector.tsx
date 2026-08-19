@@ -15,19 +15,19 @@ import type { AgentNodeConfig, AgentNodeData, NodeRunState, ProtocolNode } from 
 
 const ACCENT = hashToChartHue('agent')
 
-// n8n opens a node's setup as a large centered floating window over the
-// dimmed canvas (its Node Detail View), not a sidebar or an edge-to-edge
-// takeover. Built on this app's own Dialog primitives (base-ui) rather than
+// A node's setup opens as a large centered floating window over the dimmed
+// canvas, not a sidebar or an edge-to-edge takeover.
+// Built on this app's own Dialog primitives (base-ui) rather than
 // a hand-rolled overlay -- Escape-to-close, backdrop-click-to-close, focus
 // trapping, and body scroll lock all come for free from `modal` (default
 // true), instead of reimplementing them. Sizing (fixed, near-fullscreen,
 // unaffected by which Parameters/Settings tab is active) is shared with the
 // other node inspectors via `NodeInspectorDialog` -- see that file for why.
 //
-// Parameters/Settings (left, tabbed) mirrors n8n's own NDV split -- what
-// defines the agent's behavior/identity vs. what constrains its execution.
-// Output (right, always visible, not a third tab) mirrors n8n's own
-// INPUT/OUTPUT side panes instead -- run results are something you check
+// Parameters/Settings (left, tabbed) splits what defines the agent's
+// behavior/identity from what constrains its execution. Output is a
+// right-hand side pane (always visible, not a third tab) instead -- run
+// results are something you check
 // *while* adjusting Parameters, not a destination you tab away to and lose
 // your editing context to get to. See NodeRunOutputPanel.
 export function AgentNodeInspector({

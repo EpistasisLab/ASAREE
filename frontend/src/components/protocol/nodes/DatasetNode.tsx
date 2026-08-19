@@ -8,7 +8,7 @@ import { CircleNode } from './CircleNode'
 // Declares which registered dataset an Agent's workspace tools operate on --
 // a real runtime effect once wired (see DatasetNodeData's own comment in
 // types/protocols.ts), unlike Memory's own "declares intent, no effect yet"
-// status, so NOT dashed. Rendered as n8n's own small circle-with-icon (see
+// status, so NOT dashed. Rendered as a small circle-with-icon (see
 // CircleNode), same as every other connector source. Wires into the Agent's
 // shared Tool connector (handleId="tool", matching CONNECTOR_PANEL_INFO.tool
 // in ProtocolCanvas.tsx and _NODE_TYPE_TO_HANDLE in protocol_execution.py),

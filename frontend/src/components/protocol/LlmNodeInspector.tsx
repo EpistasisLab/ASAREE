@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Check, Sparkles } from 'lucide-react'
+import { Check, LoaderCircle, PlugZap, Sparkles } from 'lucide-react'
 import { llmSettingsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
+import { ConnectionStatusBadge, useConnectionCheck } from '@/components/LlmConnectionCheck'
 import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -26,8 +27,8 @@ const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 // ONLY place that config lives, resolved at execution time via the agent/
 // critic_gate's required LLM connector (services.protocol_execution's
 // _resolve_llm_config). The free-text "Provider" field is gone entirely --
-// n8n-style, provider is fixed by which node type you picked from the "+"
-// panel, not a field you fill in.
+// provider is fixed by which node type you picked from the "+" panel, not a
+// field you fill in.
 export function LlmNodeInspector({
   node,
   experimentId,
@@ -59,6 +60,12 @@ export function LlmNodeInspector({
     enabled: !!provider,
   })
   const hasCredential = (credentialsQuery.data ?? []).some((c) => c.provider === provider)
+  // Credential health belongs where you *pick* the credential, not only in a
+  // settings screen -- this is the canvas-side entry point. Click-driven
+  // rather than firing when the inspector opens: opening a node is a
+  // navigation action, and a check per open would spend a rate-limited
+  // request every time someone glances at a node.
+  const credentialCheck = useConnectionCheck(provider as LLMProvider | undefined)
   // GET /llm-settings/{provider}/models -- static, credential-free catalog
   // for anthropic/openai; a live Azure Foundry deployment discovery once a
   // credential exists (see llm_model_discovery.py for why Azure can't use a
@@ -158,15 +165,53 @@ export function LlmNodeInspector({
               {credentialsQuery.isLoading ? (
                 <Skeleton className="h-8 w-full" />
               ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full justify-between"
-                  onClick={() => setCredentialDialogOpen(true)}
-                >
-                  <span>{hasCredential ? `${meta.label} credential connected` : 'Set up credential'}</span>
-                  {hasCredential && <Check className="size-4 text-[color:var(--chart-3)]" />}
-                </Button>
+                <>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="min-w-0 flex-1 justify-between"
+                      onClick={() => setCredentialDialogOpen(true)}
+                    >
+                      {/* "saved", not "connected" -- a stored credential has
+                          never been contacted, and claiming otherwise next to
+                          a red "Failed" badge would contradict itself. The
+                          badge below is the only thing that reports health. */}
+                      <span className="truncate">
+                        {hasCredential ? `${meta.label} credential saved` : 'Set up credential'}
+                      </span>
+                      {hasCredential && <Check className="size-4 shrink-0 text-muted-foreground" />}
+                    </Button>
+                    {hasCredential && (
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="outline"
+                        aria-label={`Test the ${meta.label} connection`}
+                        title="Test connection (free, no tokens)"
+                        onClick={() => credentialCheck.mutate()}
+                        disabled={credentialCheck.isPending}
+                      >
+                        {credentialCheck.isPending ? (
+                          <LoaderCircle className="size-3.5 animate-spin" />
+                        ) : (
+                          <PlugZap className="size-3.5" />
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                  {credentialCheck.data && (
+                    <>
+                      <ConnectionStatusBadge status={credentialCheck.data.status} />
+                      {credentialCheck.data.status !== 'ok' && (
+                        <p className="line-clamp-3 text-xs text-muted-foreground">{credentialCheck.data.detail}</p>
+                      )}
+                    </>
+                  )}
+                  {credentialCheck.isError && (
+                    <p className="text-xs text-destructive">Could not run the check.</p>
+                  )}
+                </>
               )}
             </div>
           )}

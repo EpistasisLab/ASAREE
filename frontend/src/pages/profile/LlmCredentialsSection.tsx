@@ -1,16 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  CircleCheck,
-  CircleHelp,
-  CircleX,
-  LoaderCircle,
-  Pencil,
-  PlugZap,
-  ShieldCheck,
-  TriangleAlert,
-  Trash2,
-} from 'lucide-react'
+import { LoaderCircle, Pencil, PlugZap, ShieldCheck, TriangleAlert, Trash2 } from 'lucide-react'
 import { llmSettingsApi } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -27,39 +17,17 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
+import { ConnectionStatusBadge, useConnectionCheck } from '@/components/LlmConnectionCheck'
 import { PROVIDER_META } from '@/components/protocol/nodes/LlmNode'
-import {
-  LLM_PROVIDER_LABELS,
-  type LLMConnectionStatus,
-  type LLMProvider,
-  type LLMSetting,
-} from '@/types/llmSettings'
+import { LLM_PROVIDER_LABELS, type LLMProvider, type LLMSetting } from '@/types/llmSettings'
 
-// The three outcomes of a connection check, in the same color language the
-// rest of the app uses for status (see the root CLAUDE.md): emerald for
-// done/good, amber for indeterminate, destructive for broken. "unknown" is
-// deliberately amber and not red -- an Azure credential with no project
-// endpoint to list, or a provider that answered 429, tells us nothing bad
-// about the key.
-const STATUS_META: Record<LLMConnectionStatus, { label: string; color: string; Icon: typeof CircleCheck }> = {
-  // Not "Ready" or "Connected": a free list call proves the key, the network
-  // and the org, but quota/billing/per-project model access are only
-  // enforced at inference time. Don't promise more than was tested.
-  ok: { label: 'Key valid', color: 'var(--chart-3)', Icon: CircleCheck },
-  failed: { label: 'Failed', color: 'var(--destructive)', Icon: CircleX },
-  unknown: { label: 'Inconclusive', color: 'var(--chart-4)', Icon: CircleHelp },
-}
-
-/** On-demand, zero-token credential check: a free authenticated list call
- * per provider, never an inference request. A button rather than something
- * that fires on render -- it costs no tokens, but it's still one outbound
- * request per saved provider against a rate-limited endpoint every time
- * this page mounts. Result is intentionally NOT cached in react-query:
- * "is my key working right now" is a question you ask, and a stale green
- * dot from ten minutes ago is worse than no dot. */
+/** On-demand, zero-token credential check -- a button rather than something
+ * that fires on render (see useConnectionCheck for why the result isn't
+ * cached). The same check also runs automatically right after a save in
+ * CreateCredentialDialog, at the moment the user is still looking at the field
+ * they typed; this is the "check it again later" entry point. */
 function ConnectionCheckCell({ provider }: { provider: LLMProvider }) {
-  const check = useMutation({ mutationFn: () => llmSettingsApi.testConnection(provider) })
-  const meta = check.data ? STATUS_META[check.data.status] : null
+  const check = useConnectionCheck(provider)
 
   return (
     <div className="flex flex-col items-start gap-1.5">
@@ -74,12 +42,7 @@ function ConnectionCheckCell({ provider }: { provider: LLMProvider }) {
           {check.isPending ? <LoaderCircle className="size-3.5 animate-spin" /> : <PlugZap className="size-3.5" />}
           {check.isPending ? 'Testing…' : 'Test'}
         </Button>
-        {meta && (
-          <span className="flex items-center gap-1.5 text-xs font-medium" style={{ color: meta.color }}>
-            <meta.Icon className="size-3.5 shrink-0" />
-            {meta.label}
-          </span>
-        )}
+        {check.data && <ConnectionStatusBadge status={check.data.status} />}
       </div>
       {check.isError && (
         <p className="max-w-72 text-xs text-destructive">

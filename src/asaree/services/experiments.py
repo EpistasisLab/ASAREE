@@ -15,7 +15,7 @@ from asaree.models.experiment import ResearchExperiment
 
 _SETTABLE_FIELDS = frozenset({"name", "description", "hypothesis", "dataset_id", "design_spec", "archived_at"})
 
-# Placeholder-name allocation for the GUI's one-click create (n8n-style: no
+# Placeholder-name allocation for the GUI's one-click create (no
 # name/description gate, you rename on the canvas). The browser used to pick
 # this name itself by scanning GET /experiments, which is unfixable from the
 # client: the list it reads and the POST it then sends are two round trips, so

@@ -41,7 +41,7 @@ function edgeStyle(isMainEdge: boolean, hovered: boolean): CSSProperties {
 }
 
 // Every edge in this app renders through here (edgeTypes={{ default:
-// InteractEdge }} on <ReactFlow>) -- n8n's own hover affordance: a small
+// InteractEdge }} on <ReactFlow>) -- the hover affordance is a small
 // floating button group at the edge's midpoint, hidden until hovered.
 // EdgeToolbar renders via a fixed-position portal (like NodeToolbar), so
 // (unlike NodeHoverToolbar's CSS-only group-hover) this needs real hover

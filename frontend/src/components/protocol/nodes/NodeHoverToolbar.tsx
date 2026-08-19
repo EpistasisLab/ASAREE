@@ -31,7 +31,7 @@ function ToolbarIconButton({
   )
 }
 
-// n8n's own per-node hover toolbar, minus "Execute step" (deferred --
+// Per-node hover toolbar, minus a "run just this step" action (deferred --
 // running one node against the last run's upstream output needs a bounded/
 // partial-run entrypoint this executor doesn't have yet). Pure CSS show/hide
 // (opacity-0 group-hover:opacity-100 on the parent node card, no JS state)

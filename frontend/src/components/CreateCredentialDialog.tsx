@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Cloud, X } from 'lucide-react'
+import { Cloud, LoaderCircle, X } from 'lucide-react'
 import { llmSettingsApi } from '@/api/client'
+import { ConnectionStatusBadge, useConnectionCheck } from '@/components/LlmConnectionCheck'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -66,6 +67,14 @@ export function CreateCredentialDialog({
     if (open) selectProvider(defaultProvider)
   }, [open, defaultProvider, settingsQuery.data])
 
+  // Saving stores the key without validating it (upsert_setting only
+  // encrypts), so a typo'd key used to sit there silently until a real run
+  // failed. Right after a successful save is the moment for this -- it's the
+  // one point where the user is looking at the field they just filled in, so a
+  // failure is attributable to what they typed. Cheap enough to be automatic:
+  // one free list call, no tokens.
+  const check = useConnectionCheck(provider)
+
   const saveMutation = useMutation({
     mutationFn: () =>
       llmSettingsApi.upsert({
@@ -77,8 +86,10 @@ export function CreateCredentialDialog({
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['llm-settings'] })
-      reset()
-      onOpenChange(false)
+      // Deliberately NOT closing the dialog here any more: the check reads
+      // the credential back from the server, so it can only run once the
+      // save has landed, and its result needs somewhere to be seen.
+      check.mutate()
     },
   })
 
@@ -88,6 +99,17 @@ export function CreateCredentialDialog({
     setApiKey('')
     setAzureProjectEndpoint('')
     saveMutation.reset()
+    check.reset()
+  }
+
+  // Editing any field after a save invalidates the result on screen -- a
+  // green "Key valid" sitting above a key that's since been retyped is the
+  // stale-indicator problem this feature exists to avoid.
+  function clearResultOnEdit() {
+    if (saveMutation.isSuccess || saveMutation.isError) {
+      saveMutation.reset()
+      check.reset()
+    }
   }
 
   const filtered = PROVIDER_CATALOG.filter((p) => p.label.toLowerCase().includes(query.trim().toLowerCase()))
@@ -150,7 +172,14 @@ export function CreateCredentialDialog({
 
             <div className="space-y-1.5">
               <Label htmlFor="credential-api-key">API key</Label>
-              <PasswordInput id="credential-api-key" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+              <PasswordInput
+                id="credential-api-key"
+                value={apiKey}
+                onChange={(e) => {
+                  setApiKey(e.target.value)
+                  clearResultOnEdit()
+                }}
+              />
               <p className="text-xs text-muted-foreground">
                 Encrypted at rest before storage -- only decrypted at the moment a run needs it, never logged.
               </p>
@@ -163,7 +192,10 @@ export function CreateCredentialDialog({
                   id="credential-azure-project-endpoint"
                   placeholder="https://my-resource.services.ai.azure.com/api/projects/my-project"
                   value={azureProjectEndpoint}
-                  onChange={(e) => setAzureProjectEndpoint(e.target.value)}
+                  onChange={(e) => {
+                    setAzureProjectEndpoint(e.target.value)
+                    clearResultOnEdit()
+                  }}
                 />
                 <p className="text-xs text-muted-foreground">
                   Copy this from the Foundry portal's connection info -- used to both run agents and list your
@@ -174,13 +206,56 @@ export function CreateCredentialDialog({
 
             {saveMutation.isError && <p className="text-sm text-destructive">Could not save this credential. Please try again.</p>}
 
+            {saveMutation.isSuccess && (
+              <div className="space-y-1.5 rounded-lg border bg-muted/30 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">Credential saved</span>
+                  {check.isPending && (
+                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <LoaderCircle className="size-3.5 animate-spin" />
+                      Testing connection…
+                    </span>
+                  )}
+                  {check.data && <ConnectionStatusBadge status={check.data.status} />}
+                </div>
+                {check.data && (
+                  <p className="text-xs text-muted-foreground">
+                    {check.data.detail}
+                    {check.data.endpoint && (
+                      <span className="mt-0.5 block truncate font-mono" title={check.data.endpoint}>
+                        {check.data.endpoint}
+                      </span>
+                    )}
+                  </p>
+                )}
+                {check.isError && (
+                  // The credential itself did save -- only the follow-up check
+                  // couldn't run. Say so, or this reads as a failed save.
+                  <p className="text-xs text-muted-foreground">
+                    Saved, but the connection check couldn&apos;t run. Test it from Profile → LLM credentials.
+                  </p>
+                )}
+              </div>
+            )}
+
             <DialogFooter>
-              <Button
-                onClick={() => saveMutation.mutate()}
-                disabled={!apiKey.trim() || (requiresProjectEndpoint && !azureProjectEndpoint.trim()) || saveMutation.isPending}
-              >
-                {saveMutation.isPending ? 'Saving…' : 'Save credential'}
-              </Button>
+              {saveMutation.isSuccess ? (
+                <Button
+                  onClick={() => {
+                    reset()
+                    onOpenChange(false)
+                  }}
+                >
+                  Done
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => saveMutation.mutate()}
+                  disabled={!apiKey.trim() || (requiresProjectEndpoint && !azureProjectEndpoint.trim()) || saveMutation.isPending}
+                >
+                  {saveMutation.isPending ? 'Saving…' : 'Save credential'}
+                </Button>
+              )}
             </DialogFooter>
           </div>
         )}

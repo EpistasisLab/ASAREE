@@ -8,7 +8,7 @@ import { CircleNode } from './CircleNode'
 
 // One of two Architectural Pattern connector node types (see
 // ReasonActPatternNodeData's own comment in types/protocols.ts). Rendered
-// as n8n's own small circle-with-icon (see CircleNode) -- NOT dashed, unlike
+// as a small circle-with-icon (see CircleNode) -- NOT dashed, unlike
 // Memory: _resolve_pattern_config reads this node's own config into a real
 // agentic-core PatternConfig on every run (protocol_execution.py's
 // create_agent/update_agent calls), so it has a genuine runtime effect.

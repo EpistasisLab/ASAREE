@@ -113,10 +113,9 @@ class ProtocolValidationError(Exception):
     """The graph can't be run as-is (empty, a cycle, or a malformed critic-gate topology)."""
 
 
-# The connector-typed slots on an agent/critic_gate node. llm/tool/memory
-# were confirmed against n8n's own closed enum (ai_languageModel/ai_memory/
-# ai_tool); architectural_pattern is ASAREE's own addition (no n8n
-# equivalent) for ARES's pluggable architectural patterns -- visual/
+# The connector-typed slots on an agent/critic_gate node. llm/tool/memory are
+# a deliberately closed set; architectural_pattern is ASAREE-specific, added
+# for ARES's pluggable architectural patterns -- visual/
 # validation scaffolding only for now, same deliberate non-implementation as
 # "memory" (see ArchitecturalPatternNodeData on the frontend). Reuses
 # ProtocolEdge's existing sourceHandle/targetHandle fields rather than adding
@@ -127,10 +126,9 @@ _CONNECTOR_HANDLES = frozenset({"llm", "tool", "memory", "architectural_pattern"
 
 # Each connector slot accepts a FAMILY of node types, not one exact type --
 # mirrors how "tool" already accepts any mcp_tool node. LLM and Architectural
-# Pattern are each split one-node-per-provider/pattern (matches n8n's own
-# convention of a dedicated node per capability, e.g. per tool service,
-# rather than one generic node with an internal picker) instead of a single
-# generic node with a Provider/kind field -- config shape is identical
+# Pattern are each split one-node-per-provider/pattern -- a dedicated node per
+# capability rather than one generic node with an internal picker -- instead of
+# a single generic node with a Provider/kind field -- config shape is identical
 # across LLM providers (provider is baked into the node type instead of a
 # user-editable field), but genuinely differs per architectural pattern (see
 # each pattern's own NodeConfig on the frontend), so the LLM family shares
@@ -189,8 +187,8 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "architectural_pattern" for t in _EXECUTION_PATTERN_NODE_TYPES},
     **{t: "memory" for t in _MEMORY_NODE_TYPES},
     # Dataset/Script share the Tool connector rather than getting their own
-    # slot -- n8n's own convention for a connector that accepts a FAMILY of
-    # node types (see this dict's own docstring above _LLM_NODE_TYPES). All
+    # slot -- one connector accepting a FAMILY of node types (see this dict's
+    # own docstring above _LLM_NODE_TYPES). All
     # three are pure config sources an agent's Tool "+" panel can add
     # (AddNodePanel filters its catalog by CONNECTOR_PANEL_INFO.tool's
     # allowedTypes on the frontend); which one a given wired node actually IS
@@ -705,9 +703,9 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     ``mcp_tool`` node wired into this agent's Tool connector -- replaces the
     agent's own (now-removed) ``tool_config`` field. Each ``mcp_tool`` node
     represents one MCP server connection and can allow-list *several* of
-    that server's tools (``config.tool_names``, plural) -- n8n's own MCP
-    Client Tool node is likewise a per-server node with a tools filter, not
-    a node per tool. The Tool connector also accepts Dataset/Script source
+    that server's tools (``config.tool_names``, plural) -- a per-server node
+    with a tools filter, deliberately not a node per tool. The Tool
+    connector also accepts Dataset/Script source
     nodes (see ``_NODE_TYPE_TO_HANDLE``) -- those are skipped here entirely,
     since they're read by ``_resolve_dataset_config``/``_resolve_script_config``
     instead, not folded into this allow-list.
@@ -745,7 +743,7 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
 def _is_node_active(node: dict[str, Any]) -> bool:
     """Whether this node's own logic actually runs -- a deactivated node
     passes its upstream input straight through as its own output instead
-    (see ``_upstream_output_text``), matching n8n's node-disable semantic.
+    (see ``_upstream_output_text``), the standard node-disable semantic.
     Absent ``data.active`` means active, so every graph saved before this
     field existed is unaffected. ``critic_gate`` nodes have no separate
     ``active`` flag of their own: their existing ``config.enabled`` already
@@ -759,7 +757,7 @@ def _is_node_active(node: dict[str, Any]) -> bool:
 def _upstream_output_text(graph: dict[str, Any], node_id: str, node_runs: dict[str, Any]) -> str:
     """What a deactivated node's own output becomes: its upstream context,
     verbatim, with no goal/prompt mixed in -- the literal "pass the input
-    straight through unchanged" semantic a disabled node has in n8n. Empty
+    straight through unchanged" semantic of a disabled node. Empty
     string for a start node (nothing upstream to pass through)."""
     upstream_ids = _upstream_ids(graph, node_id)
     parts = [node_runs[uid]["output_text"] for uid in upstream_ids if node_runs.get(uid, {}).get("output_text")]
@@ -784,8 +782,8 @@ def _build_user_input(
     against its real signature), plus a Script block (the wired Script
     node's own code, verbatim, for the agent to pass as some tool's own
     code-shaped argument) when one is wired. `prompt` is the one field meant
-    to change per run (mirrors n8n's AI Agent node's own "Prompt (User
-    Message)"); `goal` is a persistent objective, only used here as
+    to change per run (the per-invocation user message); `goal` is a
+    persistent objective, only used here as
     prompt's own fallback when the user hasn't set one. Real structured
     handoff via output_contract.payload is a fast-follow, the same way the
     source notebook's own stage-report-block pattern could graduate to
@@ -1566,7 +1564,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         if not _is_node_active(node):
             # Deactivated: skip this node's own logic entirely -- its
             # upstream input passes straight through as its output
-            # unchanged, matching n8n's node-disable semantic. Gated
+            # unchanged (the standard node-disable semantic). Gated
             # workers can't reach here (topological_order already rejects
             # that combination), and pure config sources (including
             # mcp_tool) never reach this point at all, so this only ever

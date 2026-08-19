@@ -16,10 +16,10 @@ import { CircleNode } from './CircleNode'
 // distinct hue (CLAUDE.md's hash-driven tint rule: real category variety,
 // not a uniform "LLM" hue for three actually-different things).
 //
-// Rendered as n8n's own small circle-with-icon (see CircleNode) -- a pure
+// Rendered as a small circle-with-icon (see CircleNode) -- a pure
 // config source, no target handle at all, model/temperature/etc. only show
-// in the Inspector (n8n's own Chat Model nodes don't surface their model on
-// canvas either). No run-status badge or "deactivate": the executor gives
+// in the Inspector rather than on the canvas.
+// No run-status badge or "deactivate": the executor gives
 // it an instant, inert placeholder node_run (never a real execution).
 export const PROVIDER_META: Record<string, { label: string; icon: typeof Sparkles }> = {
   anthropic: { label: 'Anthropic', icon: Sparkles },

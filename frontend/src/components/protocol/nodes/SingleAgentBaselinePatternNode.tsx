@@ -8,7 +8,7 @@ import { CircleNode } from './CircleNode'
 
 // The other Architectural Pattern connector node type (see
 // SingleAgentBaselinePatternNodeData's own comment in types/protocols.ts).
-// Rendered as n8n's own small circle-with-icon (see CircleNode) -- see
+// Rendered as a small circle-with-icon (see CircleNode) -- see
 // ReasonActPatternNode.tsx's own comment for why this is NOT dashed and is
 // positioned above its agent with a bottom-facing connector.
 const ACCENT = hashToChartHue('pattern_single_agent_baseline')

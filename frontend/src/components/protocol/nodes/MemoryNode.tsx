@@ -6,7 +6,7 @@ import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
 
 // Visual/validation scaffolding only -- see MemoryNodeData's own comment in
-// types/protocols.ts. Rendered as n8n's own small circle-with-icon (see
+// types/protocols.ts. Rendered as a small circle-with-icon (see
 // CircleNode); the dashed ring is the "not yet functional" signal here
 // (permanently inert, not a missing-field warning), so no separate warning
 // badge on top of it. config.enabled still gets the same dimmed/hover-

@@ -2,7 +2,7 @@ import type { MouseEvent } from 'react'
 import { Plus } from 'lucide-react'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 
-// The main pipeline handle's own n8n-style "+" affordance -- always visible
+// The main pipeline handle's own "+" affordance -- always visible
 // (unlike ConnectorAddStub, which hides once a named slot has its one
 // connection): agent<->agent wiring means "these two can interact," and
 // fan-out/fan-in are both unrestricted (any number of edges), so there's

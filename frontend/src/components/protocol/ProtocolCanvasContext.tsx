@@ -30,7 +30,7 @@ export interface EdgeInsertRequest {
 interface ProtocolCanvasActions {
   // Opens the "+" side panel filtered to whatever node type(s) fill this
   // slot (today always exactly one per slot, but the panel-based flow
-  // still matches n8n's own picker rather than instant-creating, so this
+  // is deliberately a picker rather than instant-creating, so this
   // generalizes for free once a slot ever offers more than one kind of
   // node). Selecting one creates it near the requesting node, wires the
   // edge into the right handle, and opens its Inspector immediately.

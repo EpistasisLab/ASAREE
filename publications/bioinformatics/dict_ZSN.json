@@ -1,0 +1,1708 @@
+{
+  "dataset": "ZSN",
+  "columns": [
+    {
+      "name": "ID",
+      "type": "integer",
+      "role": "id",
+      "description": "Unique record identifier. Reference only, not a feature.",
+      "stats": {
+        "n_present": "1700",
+        "n_missing": "0",
+        "pct_missing": "0.00%",
+        "n_unique": "1700",
+        "min": "1",
+        "max": "1700"
+      }
+    },
+    {
+      "name": "AGE",
+      "type": "integer",
+      "role": "feature",
+      "description": "Age of patient",
+      "units": "years",
+      "stats": {
+        "n_present": "1692",
+        "n_missing": "8",
+        "pct_missing": "0.47%",
+        "n_unique": "62",
+        "min": "26",
+        "max": "92"
+      }
+    },
+    {
+      "name": "SEX",
+      "type": "binary",
+      "role": "feature",
+      "description": "Sex",
+      "codes": "0=female; 1=male",
+      "stats": {
+        "n_present": "1700",
+        "n_missing": "0",
+        "pct_missing": "0.00%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "INF_ANAM",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Quantity of myocardial infarctions in the anamnesis",
+      "codes": "0=zero; 1=one; 2=two; 3=three or more",
+      "stats": {
+        "n_present": "1696",
+        "n_missing": "4",
+        "pct_missing": "0.24%",
+        "n_unique": "4",
+        "min": "0",
+        "max": "3"
+      }
+    },
+    {
+      "name": "STENOK_AN",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Exertional angina pectoris in the anamnesis",
+      "codes": "0=never; 1=during the last year; 2=one year ago; 3=two years ago; 4=three years ago; 5=4-5 years ago; 6=more than 6 years",
+      "stats": {
+        "n_present": "1594",
+        "n_missing": "106",
+        "pct_missing": "6.24%",
+        "n_unique": "7",
+        "min": "0",
+        "max": "6"
+      }
+    },
+    {
+      "name": "FK_STENOK",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Functional class of angina pectoris in the last year",
+      "codes": "0=no angina; 1=I FC; 2=II FC; 3=III FC; 4=IV FC",
+      "stats": {
+        "n_present": "1627",
+        "n_missing": "73",
+        "pct_missing": "4.29%",
+        "n_unique": "5",
+        "min": "0",
+        "max": "4"
+      }
+    },
+    {
+      "name": "IBS_POST",
+      "type": "categorical",
+      "role": "feature",
+      "description": "Coronary heart disease in recent weeks/days before admission",
+      "codes": "0=none; 1=exertional angina; 2=unstable angina",
+      "stats": {
+        "n_present": "1649",
+        "n_missing": "51",
+        "pct_missing": "3.00%",
+        "n_unique": "3",
+        "min": "0",
+        "max": "2"
+      }
+    },
+    {
+      "name": "IBS_NASL",
+      "type": "binary",
+      "role": "feature",
+      "description": "Heredity on coronary heart disease",
+      "codes": "0=not burdened; 1=burdened",
+      "stats": {
+        "n_present": "72",
+        "n_missing": "1628",
+        "pct_missing": "95.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "GB",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Presence of essential hypertension",
+      "codes": "0=none; 1=Stage 1; 2=Stage 2; 3=Stage 3",
+      "stats": {
+        "n_present": "1691",
+        "n_missing": "9",
+        "pct_missing": "0.53%",
+        "n_unique": "4",
+        "min": "0",
+        "max": "3"
+      }
+    },
+    {
+      "name": "SIM_GIPERT",
+      "type": "binary",
+      "role": "feature",
+      "description": "Symptomatic hypertension",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1692",
+        "n_missing": "8",
+        "pct_missing": "0.47%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "DLIT_AG",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Duration of arterial hypertension",
+      "codes": "0=none; 1=one year; 2=two years; 3=three years; 4=four years; 5=five years; 6=6-10 years; 7=more than 10 years",
+      "stats": {
+        "n_present": "1452",
+        "n_missing": "248",
+        "pct_missing": "14.59%",
+        "n_unique": "8",
+        "min": "0",
+        "max": "7"
+      }
+    },
+    {
+      "name": "ZSN_A",
+      "type": "categorical",
+      "role": "feature",
+      "description": "Presence of chronic heart failure in the anamnesis",
+      "codes": "0=none; 1=I stage; 2=II A stage (invalid); 3=II B stage; 4=II B stage (left and right ventricular)",
+      "stats": {
+        "n_present": "1646",
+        "n_missing": "54",
+        "pct_missing": "3.18%",
+        "n_unique": "5",
+        "min": "0",
+        "max": "4"
+      }
+    },
+    {
+      "name": "nr11",
+      "type": "binary",
+      "role": "feature",
+      "description": "Observing of arrhythmia in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1679",
+        "n_missing": "21",
+        "pct_missing": "1.24%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "nr01",
+      "type": "binary",
+      "role": "feature",
+      "description": "Premature atrial contractions in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1679",
+        "n_missing": "21",
+        "pct_missing": "1.24%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "nr02",
+      "type": "binary",
+      "role": "feature",
+      "description": "Premature ventricular contractions in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1679",
+        "n_missing": "21",
+        "pct_missing": "1.24%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "nr03",
+      "type": "binary",
+      "role": "feature",
+      "description": "Paroxysms of atrial fibrillation in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1679",
+        "n_missing": "21",
+        "pct_missing": "1.24%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "nr04",
+      "type": "binary",
+      "role": "feature",
+      "description": "Persistent form of atrial fibrillation in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1679",
+        "n_missing": "21",
+        "pct_missing": "1.24%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "nr07",
+      "type": "binary",
+      "role": "feature",
+      "description": "Ventricular fibrillation in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1679",
+        "n_missing": "21",
+        "pct_missing": "1.24%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "nr08",
+      "type": "binary",
+      "role": "feature",
+      "description": "Ventricular paroxysmal tachycardia in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1679",
+        "n_missing": "21",
+        "pct_missing": "1.24%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "np01",
+      "type": "binary",
+      "role": "feature",
+      "description": "First-degree AV block in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1682",
+        "n_missing": "18",
+        "pct_missing": "1.06%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "np04",
+      "type": "binary",
+      "role": "feature",
+      "description": "Third-degree AV block in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1682",
+        "n_missing": "18",
+        "pct_missing": "1.06%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "np05",
+      "type": "binary",
+      "role": "feature",
+      "description": "LBBB (anterior branch) in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1682",
+        "n_missing": "18",
+        "pct_missing": "1.06%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "np07",
+      "type": "binary",
+      "role": "feature",
+      "description": "Incomplete LBBB in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1682",
+        "n_missing": "18",
+        "pct_missing": "1.06%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "np08",
+      "type": "binary",
+      "role": "feature",
+      "description": "Complete LBBB in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1682",
+        "n_missing": "18",
+        "pct_missing": "1.06%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "np09",
+      "type": "binary",
+      "role": "feature",
+      "description": "Incomplete RBBB in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1682",
+        "n_missing": "18",
+        "pct_missing": "1.06%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "np10",
+      "type": "binary",
+      "role": "feature",
+      "description": "Complete RBBB in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1682",
+        "n_missing": "18",
+        "pct_missing": "1.06%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "endocr_01",
+      "type": "binary",
+      "role": "feature",
+      "description": "Diabetes mellitus in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1689",
+        "n_missing": "11",
+        "pct_missing": "0.65%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "endocr_02",
+      "type": "binary",
+      "role": "feature",
+      "description": "Obesity in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1690",
+        "n_missing": "10",
+        "pct_missing": "0.59%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "endocr_03",
+      "type": "binary",
+      "role": "feature",
+      "description": "Thyrotoxicosis in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1690",
+        "n_missing": "10",
+        "pct_missing": "0.59%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "zab_leg_01",
+      "type": "binary",
+      "role": "feature",
+      "description": "Chronic bronchitis in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1693",
+        "n_missing": "7",
+        "pct_missing": "0.41%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "zab_leg_02",
+      "type": "binary",
+      "role": "feature",
+      "description": "Obstructive chronic bronchitis in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1693",
+        "n_missing": "7",
+        "pct_missing": "0.41%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "zab_leg_03",
+      "type": "binary",
+      "role": "feature",
+      "description": "Bronchial asthma in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1693",
+        "n_missing": "7",
+        "pct_missing": "0.41%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "zab_leg_04",
+      "type": "binary",
+      "role": "feature",
+      "description": "Chronic pneumonia in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1693",
+        "n_missing": "7",
+        "pct_missing": "0.41%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "zab_leg_06",
+      "type": "binary",
+      "role": "feature",
+      "description": "Pulmonary tuberculosis in the anamnesis",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1693",
+        "n_missing": "7",
+        "pct_missing": "0.41%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "S_AD_KBRIG",
+      "type": "real",
+      "role": "feature",
+      "description": "Systolic blood pressure recorded by the Emergency Cardiology Team",
+      "units": "mmHg",
+      "stats": {
+        "n_present": "624",
+        "n_missing": "1076",
+        "pct_missing": "63.29%",
+        "n_unique": "30",
+        "min": "0",
+        "max": "260"
+      }
+    },
+    {
+      "name": "D_AD_KBRIG",
+      "type": "real",
+      "role": "feature",
+      "description": "Diastolic blood pressure recorded by the Emergency Cardiology Team",
+      "units": "mmHg",
+      "stats": {
+        "n_present": "624",
+        "n_missing": "1076",
+        "pct_missing": "63.29%",
+        "n_unique": "21",
+        "min": "0",
+        "max": "190"
+      }
+    },
+    {
+      "name": "S_AD_ORIT",
+      "type": "real",
+      "role": "feature",
+      "description": "Systolic blood pressure recorded in the ICU",
+      "units": "mmHg",
+      "stats": {
+        "n_present": "1433",
+        "n_missing": "267",
+        "pct_missing": "15.71%",
+        "n_unique": "32",
+        "min": "0",
+        "max": "260"
+      }
+    },
+    {
+      "name": "D_AD_ORIT",
+      "type": "real",
+      "role": "feature",
+      "description": "Diastolic blood pressure recorded in the ICU",
+      "units": "mmHg",
+      "stats": {
+        "n_present": "1433",
+        "n_missing": "267",
+        "pct_missing": "15.71%",
+        "n_unique": "20",
+        "min": "0",
+        "max": "190"
+      }
+    },
+    {
+      "name": "O_L_POST",
+      "type": "binary",
+      "role": "feature",
+      "description": "Pulmonary edema at the time of admission to the ICU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1688",
+        "n_missing": "12",
+        "pct_missing": "0.71%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "K_SH_POST",
+      "type": "binary",
+      "role": "feature",
+      "description": "Cardiogenic shock at the time of admission to the ICU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1685",
+        "n_missing": "15",
+        "pct_missing": "0.88%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "MP_TP_POST",
+      "type": "binary",
+      "role": "feature",
+      "description": "Paroxysms of atrial fibrillation at admission to ICU or pre-hospital stage",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1686",
+        "n_missing": "14",
+        "pct_missing": "0.82%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "SVT_POST",
+      "type": "binary",
+      "role": "feature",
+      "description": "Paroxysms of supraventricular tachycardia at admission to ICU or pre-hospital stage",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1688",
+        "n_missing": "12",
+        "pct_missing": "0.71%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "GT_POST",
+      "type": "binary",
+      "role": "feature",
+      "description": "Paroxysms of ventricular tachycardia at admission to ICU or pre-hospital stage",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1688",
+        "n_missing": "12",
+        "pct_missing": "0.71%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "FIB_G_POST",
+      "type": "binary",
+      "role": "feature",
+      "description": "Ventricular fibrillation at admission to ICU or pre-hospital stage",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1688",
+        "n_missing": "12",
+        "pct_missing": "0.71%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "ant_im",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Presence of an anterior myocardial infarction (left ventricular; ECG changes in leads V1-V4)",
+      "codes": "0=no infarct; 1=QRS has no changes; 2=QRS is like QR-complex; 3=QRS is like Qr-complex; 4=QRS is like QS-complex",
+      "stats": {
+        "n_present": "1617",
+        "n_missing": "83",
+        "pct_missing": "4.88%",
+        "n_unique": "5",
+        "min": "0",
+        "max": "4"
+      }
+    },
+    {
+      "name": "lat_im",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Presence of a lateral myocardial infarction (left ventricular; ECG changes in leads V5, V6, I, AVL)",
+      "codes": "0=no infarct; 1=QRS has no changes; 2=QRS is like QR-complex; 3=QRS is like Qr-complex; 4=QRS is like QS-complex",
+      "stats": {
+        "n_present": "1620",
+        "n_missing": "80",
+        "pct_missing": "4.71%",
+        "n_unique": "5",
+        "min": "0",
+        "max": "4"
+      }
+    },
+    {
+      "name": "inf_im",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Presence of an inferior myocardial infarction (left ventricular; ECG changes in leads III, AVF, II)",
+      "codes": "0=no infarct; 1=QRS has no changes; 2=QRS is like QR-complex; 3=QRS is like Qr-complex; 4=QRS is like QS-complex",
+      "stats": {
+        "n_present": "1620",
+        "n_missing": "80",
+        "pct_missing": "4.71%",
+        "n_unique": "5",
+        "min": "0",
+        "max": "4"
+      }
+    },
+    {
+      "name": "post_im",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Presence of a posterior myocardial infarction (left ventricular; ECG changes in V7-V9, reciprocal changes in V1-V3)",
+      "codes": "0=no infarct; 1=QRS has no changes; 2=QRS is like QR-complex; 3=QRS is like Qr-complex; 4=QRS is like QS-complex",
+      "stats": {
+        "n_present": "1628",
+        "n_missing": "72",
+        "pct_missing": "4.24%",
+        "n_unique": "5",
+        "min": "0",
+        "max": "4"
+      }
+    },
+    {
+      "name": "IM_PG_P",
+      "type": "binary",
+      "role": "feature",
+      "description": "Presence of a right ventricular myocardial infarction",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1699",
+        "n_missing": "1",
+        "pct_missing": "0.06%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "ritm_ecg_p_01",
+      "type": "binary",
+      "role": "feature",
+      "description": "ECG rhythm at admission: sinus, heart rate 60-90",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1548",
+        "n_missing": "152",
+        "pct_missing": "8.94%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "ritm_ecg_p_02",
+      "type": "binary",
+      "role": "feature",
+      "description": "ECG rhythm at admission: atrial fibrillation",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1548",
+        "n_missing": "152",
+        "pct_missing": "8.94%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "ritm_ecg_p_04",
+      "type": "binary",
+      "role": "feature",
+      "description": "ECG rhythm at admission: atrial",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1548",
+        "n_missing": "152",
+        "pct_missing": "8.94%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "ritm_ecg_p_06",
+      "type": "binary",
+      "role": "feature",
+      "description": "ECG rhythm at admission: idioventricular",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1548",
+        "n_missing": "152",
+        "pct_missing": "8.94%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "ritm_ecg_p_07",
+      "type": "binary",
+      "role": "feature",
+      "description": "ECG rhythm at admission: sinus with heart rate above 90 (tachycardia)",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1548",
+        "n_missing": "152",
+        "pct_missing": "8.94%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "ritm_ecg_p_08",
+      "type": "binary",
+      "role": "feature",
+      "description": "ECG rhythm at admission: sinus with heart rate below 60 (bradycardia)",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1548",
+        "n_missing": "152",
+        "pct_missing": "8.94%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_r_ecg_p_01",
+      "type": "binary",
+      "role": "feature",
+      "description": "Premature atrial contractions on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_r_ecg_p_02",
+      "type": "binary",
+      "role": "feature",
+      "description": "Frequent premature atrial contractions on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_r_ecg_p_03",
+      "type": "binary",
+      "role": "feature",
+      "description": "Premature ventricular contractions on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_r_ecg_p_04",
+      "type": "binary",
+      "role": "feature",
+      "description": "Frequent premature ventricular contractions on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_r_ecg_p_05",
+      "type": "binary",
+      "role": "feature",
+      "description": "Paroxysms of atrial fibrillation on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_r_ecg_p_06",
+      "type": "binary",
+      "role": "feature",
+      "description": "Persistent form of atrial fibrillation on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_r_ecg_p_08",
+      "type": "binary",
+      "role": "feature",
+      "description": "Paroxysms of supraventricular tachycardia on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_r_ecg_p_09",
+      "type": "binary",
+      "role": "feature",
+      "description": "Paroxysms of ventricular tachycardia on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_r_ecg_p_10",
+      "type": "binary",
+      "role": "feature",
+      "description": "Ventricular fibrillation on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_p_ecg_p_01",
+      "type": "binary",
+      "role": "feature",
+      "description": "Sinoatrial block on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_p_ecg_p_03",
+      "type": "binary",
+      "role": "feature",
+      "description": "First-degree AV block on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_p_ecg_p_04",
+      "type": "binary",
+      "role": "feature",
+      "description": "Type 1 second-degree AV block (Mobitz I / Wenckebach) on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_p_ecg_p_05",
+      "type": "binary",
+      "role": "feature",
+      "description": "Type 2 second-degree AV block (Mobitz II / Hay) on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_p_ecg_p_06",
+      "type": "binary",
+      "role": "feature",
+      "description": "Third-degree AV block on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_p_ecg_p_07",
+      "type": "binary",
+      "role": "feature",
+      "description": "LBBB (anterior branch) on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_p_ecg_p_08",
+      "type": "binary",
+      "role": "feature",
+      "description": "LBBB (posterior branch) on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_p_ecg_p_09",
+      "type": "binary",
+      "role": "feature",
+      "description": "Incomplete LBBB on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_p_ecg_p_10",
+      "type": "binary",
+      "role": "feature",
+      "description": "Complete LBBB on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_p_ecg_p_11",
+      "type": "binary",
+      "role": "feature",
+      "description": "Incomplete RBBB on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "n_p_ecg_p_12",
+      "type": "binary",
+      "role": "feature",
+      "description": "Complete RBBB on ECG at admission",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1585",
+        "n_missing": "115",
+        "pct_missing": "6.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "fibr_ter_01",
+      "type": "binary",
+      "role": "feature",
+      "description": "Fibrinolytic therapy by Celiasum 750k IU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1690",
+        "n_missing": "10",
+        "pct_missing": "0.59%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "fibr_ter_02",
+      "type": "binary",
+      "role": "feature",
+      "description": "Fibrinolytic therapy by Celiasum 1m IU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1690",
+        "n_missing": "10",
+        "pct_missing": "0.59%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "fibr_ter_03",
+      "type": "binary",
+      "role": "feature",
+      "description": "Fibrinolytic therapy by Celiasum 3m IU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1690",
+        "n_missing": "10",
+        "pct_missing": "0.59%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "fibr_ter_05",
+      "type": "binary",
+      "role": "feature",
+      "description": "Fibrinolytic therapy by Streptase",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1690",
+        "n_missing": "10",
+        "pct_missing": "0.59%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "fibr_ter_06",
+      "type": "binary",
+      "role": "feature",
+      "description": "Fibrinolytic therapy by Celiasum 500k IU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1690",
+        "n_missing": "10",
+        "pct_missing": "0.59%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "fibr_ter_07",
+      "type": "binary",
+      "role": "feature",
+      "description": "Fibrinolytic therapy by Celiasum 250k IU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1690",
+        "n_missing": "10",
+        "pct_missing": "0.59%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "fibr_ter_08",
+      "type": "binary",
+      "role": "feature",
+      "description": "Fibrinolytic therapy by Streptodecase 1.5m IU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1690",
+        "n_missing": "10",
+        "pct_missing": "0.59%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "GIPO_K",
+      "type": "binary",
+      "role": "feature",
+      "description": "Hypokalemia (serum potassium < 4 mmol/L)",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1331",
+        "n_missing": "369",
+        "pct_missing": "21.71%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "K_BLOOD",
+      "type": "real",
+      "role": "feature",
+      "description": "Serum potassium content",
+      "units": "mmol/L",
+      "stats": {
+        "n_present": "1329",
+        "n_missing": "371",
+        "pct_missing": "21.82%",
+        "n_unique": "51",
+        "min": "2.3",
+        "max": "8.2"
+      }
+    },
+    {
+      "name": "GIPER_Na",
+      "type": "binary",
+      "role": "feature",
+      "description": "Increase of sodium in serum (more than 150 mmol/L)",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1325",
+        "n_missing": "375",
+        "pct_missing": "22.06%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "Na_BLOOD",
+      "type": "real",
+      "role": "feature",
+      "description": "Serum sodium content",
+      "units": "mmol/L",
+      "stats": {
+        "n_present": "1325",
+        "n_missing": "375",
+        "pct_missing": "22.06%",
+        "n_unique": "40",
+        "min": "117",
+        "max": "169"
+      }
+    },
+    {
+      "name": "ALT_BLOOD",
+      "type": "real",
+      "role": "feature",
+      "description": "Serum AlAT (ALT) content",
+      "units": "IU/L",
+      "stats": {
+        "n_present": "1416",
+        "n_missing": "284",
+        "pct_missing": "16.71%",
+        "n_unique": "69",
+        "min": "0.03",
+        "max": "3"
+      }
+    },
+    {
+      "name": "AST_BLOOD",
+      "type": "real",
+      "role": "feature",
+      "description": "Serum AsAT (AST) content",
+      "units": "IU/L",
+      "stats": {
+        "n_present": "1415",
+        "n_missing": "285",
+        "pct_missing": "16.76%",
+        "n_unique": "58",
+        "min": "0.04",
+        "max": "2.15"
+      }
+    },
+    {
+      "name": "KFK_BLOOD",
+      "type": "real",
+      "role": "feature",
+      "description": "Serum CPK (creatine phosphokinase) content",
+      "units": "IU/L",
+      "stats": {
+        "n_present": "4",
+        "n_missing": "1696",
+        "pct_missing": "99.76%",
+        "n_unique": "4",
+        "min": "1.2",
+        "max": "3.6"
+      }
+    },
+    {
+      "name": "L_BLOOD",
+      "type": "real",
+      "role": "feature",
+      "description": "White blood cell count",
+      "units": "10^9/L",
+      "stats": {
+        "n_present": "1575",
+        "n_missing": "125",
+        "pct_missing": "7.35%",
+        "n_unique": "174",
+        "min": "2",
+        "max": "27.9"
+      }
+    },
+    {
+      "name": "ROE",
+      "type": "real",
+      "role": "feature",
+      "description": "ESR (erythrocyte sedimentation rate)",
+      "units": "mm/h",
+      "stats": {
+        "n_present": "1497",
+        "n_missing": "203",
+        "pct_missing": "11.94%",
+        "n_unique": "58",
+        "min": "1",
+        "max": "140"
+      }
+    },
+    {
+      "name": "TIME_B_S",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Time elapsed from the beginning of the attack of coronary heart disease to the hospital",
+      "codes": "1=less than 2 hours; 2=2-4 hours; 3=4-6 hours; 4=6-8 hours; 5=8-12 hours; 6=12-24 hours; 7=more than 1 day; 8=more than 2 days; 9=more than 3 days",
+      "stats": {
+        "n_present": "1574",
+        "n_missing": "126",
+        "pct_missing": "7.41%",
+        "n_unique": "9",
+        "min": "1",
+        "max": "9"
+      }
+    },
+    {
+      "name": "R_AB_1_n",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Relapse of the pain in the first hours of the hospital period",
+      "units": "cases",
+      "codes": "0=there is no relapse; 1=only one; 2=2 times; 3=3 or more times",
+      "stats": {
+        "n_present": "1684",
+        "n_missing": "16",
+        "pct_missing": "0.94%",
+        "n_unique": "4",
+        "min": "0",
+        "max": "3"
+      }
+    },
+    {
+      "name": "R_AB_2_n",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Relapse of the pain in the second day of the hospital period",
+      "units": "cases",
+      "codes": "0=there is no relapse; 1=only one; 2=2 times; 3=3 or more times",
+      "stats": {
+        "n_present": "1592",
+        "n_missing": "108",
+        "pct_missing": "6.35%",
+        "n_unique": "4",
+        "min": "0",
+        "max": "3"
+      }
+    },
+    {
+      "name": "R_AB_3_n",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Relapse of the pain in the third day of the hospital period",
+      "units": "cases",
+      "codes": "0=there is no relapse; 1=only one; 2=2 times; 3=3 or more times",
+      "stats": {
+        "n_present": "1572",
+        "n_missing": "128",
+        "pct_missing": "7.53%",
+        "n_unique": "4",
+        "min": "0",
+        "max": "3"
+      }
+    },
+    {
+      "name": "NA_KB",
+      "type": "binary",
+      "role": "feature",
+      "description": "Use of opioid drugs by the Emergency Cardiology Team",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1043",
+        "n_missing": "657",
+        "pct_missing": "38.65%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "NOT_NA_KB",
+      "type": "binary",
+      "role": "feature",
+      "description": "Use of NSAIDs by the Emergency Cardiology Team",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1014",
+        "n_missing": "686",
+        "pct_missing": "40.35%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "LID_KB",
+      "type": "binary",
+      "role": "feature",
+      "description": "Use of lidocaine by the Emergency Cardiology Team",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1023",
+        "n_missing": "677",
+        "pct_missing": "39.82%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "NITR_S",
+      "type": "binary",
+      "role": "feature",
+      "description": "Use of liquid (intravenous) nitrates in the ICU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1691",
+        "n_missing": "9",
+        "pct_missing": "0.53%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "NA_R_1_n",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Use of opioid drugs in the ICU in the first hours of the hospital period",
+      "units": "cases",
+      "codes": "0=no; 1=once; 2=twice; 3=three times; 4=four or more times",
+      "stats": {
+        "n_present": "1695",
+        "n_missing": "5",
+        "pct_missing": "0.29%",
+        "n_unique": "5",
+        "min": "0",
+        "max": "4"
+      }
+    },
+    {
+      "name": "NA_R_2_n",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Use of opioid drugs in the ICU in the second day of the hospital period",
+      "units": "cases",
+      "codes": "0=no; 1=once; 2=twice; 3=three times; 4=four or more times",
+      "stats": {
+        "n_present": "1592",
+        "n_missing": "108",
+        "pct_missing": "6.35%",
+        "n_unique": "4",
+        "min": "0",
+        "max": "3"
+      }
+    },
+    {
+      "name": "NA_R_3_n",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Use of opioid drugs in the ICU in the third day of the hospital period",
+      "units": "cases",
+      "codes": "0=no; 1=once; 2=twice; 3=three times",
+      "stats": {
+        "n_present": "1569",
+        "n_missing": "131",
+        "pct_missing": "7.71%",
+        "n_unique": "3",
+        "min": "0",
+        "max": "2"
+      }
+    },
+    {
+      "name": "NOT_NA_1_n",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Use of NSAIDs in the ICU in the first hours of the hospital period",
+      "units": "cases",
+      "codes": "0=no; 1=once; 2=twice; 3=three times; 4=four or more times",
+      "stats": {
+        "n_present": "1690",
+        "n_missing": "10",
+        "pct_missing": "0.59%",
+        "n_unique": "5",
+        "min": "0",
+        "max": "4"
+      }
+    },
+    {
+      "name": "NOT_NA_2_n",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Use of NSAIDs in the ICU in the second day of the hospital period",
+      "units": "cases",
+      "codes": "0=no; 1=once; 2=twice; 3=three times",
+      "stats": {
+        "n_present": "1590",
+        "n_missing": "110",
+        "pct_missing": "6.47%",
+        "n_unique": "4",
+        "min": "0",
+        "max": "3"
+      }
+    },
+    {
+      "name": "NOT_NA_3_n",
+      "type": "ordinal",
+      "role": "feature",
+      "description": "Use of NSAIDs in the ICU in the third day of the hospital period",
+      "units": "cases",
+      "codes": "0=no; 1=once; 2=twice",
+      "stats": {
+        "n_present": "1569",
+        "n_missing": "131",
+        "pct_missing": "7.71%",
+        "n_unique": "3",
+        "min": "0",
+        "max": "2"
+      }
+    },
+    {
+      "name": "LID_S_n",
+      "type": "binary",
+      "role": "feature",
+      "description": "Use of lidocaine in the ICU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1690",
+        "n_missing": "10",
+        "pct_missing": "0.59%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "B_BLOK_S_n",
+      "type": "binary",
+      "role": "feature",
+      "description": "Use of beta-blockers in the ICU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1689",
+        "n_missing": "11",
+        "pct_missing": "0.65%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "ANT_CA_S_n",
+      "type": "binary",
+      "role": "feature",
+      "description": "Use of calcium channel blockers in the ICU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1687",
+        "n_missing": "13",
+        "pct_missing": "0.76%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "GEPAR_S_n",
+      "type": "binary",
+      "role": "feature",
+      "description": "Use of anticoagulants (heparin) in the ICU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1683",
+        "n_missing": "17",
+        "pct_missing": "1.00%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "ASP_S_n",
+      "type": "binary",
+      "role": "feature",
+      "description": "Use of acetylsalicylic acid in the ICU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1683",
+        "n_missing": "17",
+        "pct_missing": "1.00%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "TIKL_S_n",
+      "type": "binary",
+      "role": "feature",
+      "description": "Use of Ticlid (ticlopidine) in the ICU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1684",
+        "n_missing": "16",
+        "pct_missing": "0.94%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "TRENT_S_n",
+      "type": "binary",
+      "role": "feature",
+      "description": "Use of Trental (pentoxifylline) in the ICU",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1684",
+        "n_missing": "16",
+        "pct_missing": "0.94%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    },
+    {
+      "name": "mi_ZSN",
+      "type": "binary",
+      "role": "target",
+      "description": "Complication: chronic heart failure",
+      "codes": "0=no; 1=yes",
+      "stats": {
+        "n_present": "1700",
+        "n_missing": "0",
+        "pct_missing": "0.00%",
+        "n_unique": "2",
+        "min": "0",
+        "max": "1"
+      }
+    }
+  ]
+}

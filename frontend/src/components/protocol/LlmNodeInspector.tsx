@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { Check, LoaderCircle, PlugZap, Sparkles } from 'lucide-react'
-import { llmSettingsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { ConnectionStatusBadge, useConnectionCheck } from '@/components/LlmConnectionCheck'
 import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
@@ -14,6 +12,7 @@ import { FactorBindableField } from './FactorBindableField'
 import { ModelField } from './ModelField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { PROVIDER_META } from './nodes/LlmNode'
+import { useProviderModels } from './useProviderModels'
 import type { LlmNodeConfig, LlmNodeData, ProtocolNode } from '@/types/protocols'
 import type { LLMProvider } from '@/types/llmSettings'
 
@@ -55,31 +54,20 @@ export function LlmNodeInspector({
   // Every provider now has a real per-user credential (credential_resolver.py's
   // SUPPORTED_PROVIDERS) -- no more "informational, nothing to set up" branch.
   const provider = node?.data.config?.provider
-  const credentialsQuery = useQuery({
-    queryKey: ['llm-settings'],
-    queryFn: () => llmSettingsApi.list(),
-    enabled: !!provider,
-  })
-  const hasCredential = (credentialsQuery.data ?? []).some((c) => c.provider === provider)
+  // GET /llm-settings/{provider}/models -- static, credential-free catalog
+  // for anthropic/openai; a live Azure Foundry deployment discovery once a
+  // credential exists (see llm_model_discovery.py for why Azure can't use a
+  // static catalog the way the other two do). Shared with the canvas node
+  // cards via useProviderModels, so opening this inspector reads the list
+  // those cards already fetched rather than issuing its own request.
+  const { credentialsQuery, hasCredential, modelsQuery, models } = useProviderModels(provider)
   // Credential health belongs where you *pick* the credential, not only in a
   // settings screen -- this is the canvas-side entry point. Click-driven
   // rather than firing when the inspector opens: opening a node is a
   // navigation action, and a check per open would spend a rate-limited
   // request every time someone glances at a node.
   const credentialCheck = useConnectionCheck(provider as LLMProvider | undefined)
-  // GET /llm-settings/{provider}/models -- static, credential-free catalog
-  // for anthropic/openai; a live Azure Foundry deployment discovery once a
-  // credential exists (see llm_model_discovery.py for why Azure can't use a
-  // static catalog the way the other two do). Not fetched for Azure until a
-  // credential exists -- nothing to discover without one.
-  const modelsQuery = useQuery({
-    queryKey: ['llm-settings', provider, 'models'],
-    queryFn: () => llmSettingsApi.listModels(provider!),
-    enabled: !!provider && (provider !== 'azure_foundry' || hasCredential),
-  })
-
   const configForEffort = node?.data.config
-  const models = modelsQuery.data?.models ?? []
   const selectedModelInfo = models.find((m) => m.id === configForEffort?.model)
   const showEffort = selectedModelInfo?.supports_effort ?? false
   const effortLevels = selectedModelInfo?.effort_levels.length ? selectedModelInfo.effort_levels : EFFORT_LEVELS

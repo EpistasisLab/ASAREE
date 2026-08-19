@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.credential_resolver import SUPPORTED_PROVIDERS
 from asaree.services.llm_connection_check import check_connection
-from asaree.services.llm_model_discovery import discover_models
+from asaree.services.llm_model_cache import discover_models_cached, invalidate_models_cache
 from asaree.services.rate_limit import check_rate_limit, record_attempt
 from asaree.services.user_llm_settings import delete_setting, get_setting, list_settings, upsert_setting
 
@@ -86,6 +86,11 @@ async def upsert_llm_setting_endpoint(
         api_base=body.api_base,
         azure_project_endpoint=body.azure_project_endpoint,
     )
+    # A new key can reach a different set of models than the old one, and a
+    # changed Azure project endpoint points at an entirely different set of
+    # deployments -- either way the cached list is now about a credential
+    # that no longer exists.
+    await invalidate_models_cache(user_id=user.id, provider=body.provider)
     return LLMSettingResponse(
         provider=setting.provider, api_base=setting.api_base, azure_project_endpoint=setting.azure_project_endpoint
     )
@@ -107,6 +112,7 @@ async def delete_llm_setting_endpoint(provider: str, user: CurrentUser, db: DbSe
     deleted = await delete_setting(db, user_id=user.id, provider=provider)
     if not deleted:
         raise HTTPException(status_code=404, detail="No credential saved for this provider.")
+    await invalidate_models_cache(user_id=user.id, provider=provider)
 
 
 @router.get("/{provider}/connection", response_model=LLMConnectionCheckResponse)
@@ -165,7 +171,7 @@ async def list_models_endpoint(provider: str, user: CurrentUser, db: DbSession) 
     await record_attempt(key, window_seconds=_DISCOVERY_WINDOW_SECONDS)
 
     setting = await get_setting(db, user_id=user.id, provider=provider)
-    models, source, note = await discover_models(provider=provider, setting=setting)
+    models, source, note = await discover_models_cached(user_id=user.id, provider=provider, setting=setting)
     return LLMSettingModelsResponse(
         models=[
             LLMModelInfoResponse(

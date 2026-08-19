@@ -1,10 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
 import type { NodeProps } from '@xyflow/react'
 import { Atom, Cloud, Sparkles } from 'lucide-react'
-import { llmSettingsApi } from '@/api/client'
 import { hashToChartHue } from '@/lib/utils'
 import type { LlmNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
+import { useProviderModels } from '../useProviderModels'
 import { CircleNode } from './CircleNode'
 
 // One shared card renderer for all three LLM provider node types
@@ -32,24 +31,13 @@ export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData 
   const accent = hashToChartHue(data.config?.provider || 'llm')
   const provider = data.config?.provider
 
-  // Same two queries LlmNodeInspector.tsx already runs (identical queryKeys,
-  // so this shares its cache rather than duplicating requests when both are
-  // mounted) -- "model is set" alone can't catch a stale/invalid model id
-  // (every default LLM node config ships with a real-looking model string,
-  // so that check can basically never fire in practice); this instead
-  // validates against the provider's own actually-discovered model list.
-  const credentialsQuery = useQuery({
-    queryKey: ['llm-settings'],
-    queryFn: () => llmSettingsApi.list(),
-    enabled: !!provider,
-  })
-  const hasCredential = (credentialsQuery.data ?? []).some((c) => c.provider === provider)
-  const modelsQuery = useQuery({
-    queryKey: ['llm-settings', provider, 'models'],
-    queryFn: () => llmSettingsApi.listModels(provider!),
-    enabled: !!provider && (provider !== 'azure_foundry' || hasCredential),
-  })
-  const models = modelsQuery.data?.models ?? []
+  // Shared with LlmNodeInspector via useProviderModels -- one cache entry per
+  // provider, so N nodes of the same provider on a canvas cost one request,
+  // not N. "model is set" alone can't catch a stale/invalid model id (every
+  // default LLM node config ships with a real-looking model string, so that
+  // check can basically never fire in practice); this instead validates
+  // against the provider's own actually-discovered model list.
+  const { modelsQuery, models } = useProviderModels(provider)
   // An empty list (still loading, discovery failed, or Azure with no
   // credential yet) means "can't tell," not "invalid" -- only warn once
   // there's an actual list to check against, same as the Inspector's own

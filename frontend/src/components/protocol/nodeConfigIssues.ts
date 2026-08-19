@@ -2,6 +2,7 @@ import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import type { LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { DatasetNodeData, LlmNodeData, McpToolNodeData, ScriptNodeData } from '@/types/protocols'
+import { providerModelsKey } from './useProviderModels'
 
 export interface NodeConfigIssue {
   nodeId: string
@@ -48,7 +49,7 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
         if (!config?.model) {
           issues.push('No model set')
         } else {
-          const cached = queryClient.getQueryData<LLMSettingModelsResponse>(['llm-settings', config.provider, 'models'])
+          const cached = queryClient.getQueryData<LLMSettingModelsResponse>(providerModelsKey(config.provider))
           const models = cached?.models ?? []
           // Only a live Azure deployment listing (`source: 'api'`) is
           // authoritative enough to call an id wrong -- the static

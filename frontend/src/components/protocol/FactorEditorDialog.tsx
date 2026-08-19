@@ -9,9 +9,10 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { llmSettingsApi, mcpServersApi } from '@/api/client'
+import { mcpServersApi } from '@/api/client'
 import { cardAccent, cn, hashToChartHue, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
 import { pickToolNamesForServer, type UnboundField } from './bindableFields'
+import { useProviderModels } from './useProviderModels'
 import {
   computeFactorName,
   emptyStructuredLevel,
@@ -44,12 +45,7 @@ type StructuredLevel = Record<string, unknown>
 // _resolve_llm_config reads it verbatim, never the node's xyflow type).
 function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
   const provider = (value.provider as string) || 'anthropic'
-  const modelsQuery = useQuery({
-    queryKey: ['llm-settings', provider, 'models'],
-    queryFn: () => llmSettingsApi.listModels(provider),
-    enabled: !!provider,
-  })
-  const models = modelsQuery.data?.models ?? []
+  const { modelsQuery, models } = useProviderModels(provider)
   const selectedModelInfo = models.find((m) => m.id === value.model)
   const showEffort = selectedModelInfo?.supports_effort ?? false
   const effortLevels = selectedModelInfo?.effort_levels.length ? selectedModelInfo.effort_levels : EFFORT_LEVELS_FALLBACK

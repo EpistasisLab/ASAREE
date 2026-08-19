@@ -1,86 +1,76 @@
 # ASAREE
 
-The product built on [`motoro`](https://github.com/EpistasisLab/motoro).
-Core ships no HTTP layer, no auth, no UI — ASAREE provides those, and depends
-on core as a pinned library dependency (in-process, not a service call).
+The product built on [`motoro`](https://github.com/EpistasisLab/motoro). Core
+ships no HTTP layer, no auth, no UI — ASAREE provides those, and depends on core
+as a pinned library dependency (in-process, not a service call).
 
-See `project_plan/core_asaree_use_case.md` in the ARES repo for the design
-record: repo topology, what's already decided, and why.
+- [`vision.md`](vision.md) — what ASAREE is meant to be, and at the bottom, how
+  that compares to what's actually built so far.
+- `project_plan/core_asaree_use_case.md` in the ARES repo — the design record:
+  repo topology, what's already decided, and why.
 
-See [`vision.md`](vision.md) for what ASAREE is meant to be — and, at the
-bottom, how that compares to what's actually built so far.
-
-## Resetting your dev environment
-
-ASAREE has no database of its own to reset in isolation. `docker compose up -d`
-in the `motoro` repo (where `compose.yml` lives) brings up a single
-Postgres server that hosts *two* databases side by side — `motoro`
-(core's own schema) and `asaree` (this repo's) — both in the same named
-volume. Wiping it wipes both at once: every user, agent, experiment, dataset,
-MCP server registration, and LLM credential.
-
-(This is the host-based dev flow, running Motoro's compose file
-standalone. If you're using the [Docker flow](#running-with-docker) below —
-where ASAREE's own `compose.yml` brings Motoro up itself — reset from
-the ASAREE repo instead: `docker compose down -v` there tears down both.)
-
-```bash
-# from the Motoro repo
-cd path/to/Motoro
-docker compose down -v          # destroys both databases + redis
-docker compose up -d            # fresh containers; core's own schema is
-                                 # applied automatically (motoro-migrate)
-
-# core's compose only applies core's schema -- ASAREE's own still needs migrating
-cd path/to/ASAREE
-uv run python -m asaree.migrations upgrade
-```
-
-You're now at true zero: no users, nothing registered. To get back to a
-working state:
-
-1. Create a user and issue a token (see the SDK's [Auth bootstrap](sdk/README.md#auth-bootstrap)).
-2. Register any use-case-specific MCP servers, e.g. from `asaree-spinal-use-case`:
-   `uv run python register_servers.py`.
-3. Re-run a use case notebook's early setup cells (experiment, dataset, agent
-   creation, and the LLM credential cell if the account needs its own).
-
-ASAREE's own bundled servers (`asaree-workspace`, `motoro-okf`) don't need
-a manual step — they auto-register the next time the app starts (`app.py`'s
-lifespan), the same as they did the very first time.
-
-## Running with Docker
-
-`compose.yml` `include`s Motoro's own `compose.yml`, so this stack is
-self-sufficient — one `docker compose up` brings up
-`motoro-postgres`/`motoro-redis`/`motoro-migrate` alongside
-ASAREE's own services, with real `depends_on: condition: service_healthy`
-between them. It assumes a sibling checkout at `../Motoro`; point
-`MOTORO_DIR` at yours if it lives elsewhere. Don't also run
-`docker compose up` directly inside that checkout while this is up — same
-`container_name`s and ports, so the two collide. `motoro` is a private
-git dependency ([`pyproject.toml`](pyproject.toml)), so building needs a
-GitHub token with read access to it, passed as a build secret rather than
-baked into the image:
+## Quick start
 
 ```bash
 cp .env.example .env    # fill in provider credentials as usual
 GH_TOKEN=$(gh auth token) docker compose up -d --build
 ```
 
-This brings up Motoro's Postgres/Redis (and applies core's own schema
-via `motoro-migrate`), then runs `asaree-migrate` (applies ASAREE's own
-schema, creating the database first if needed — see `src/asaree/migrations`)
-to completion, then starts `asaree-app` on `:8000`. Everything shares one
-compose-managed network to reach Postgres/Redis by container name — the
-host-side URLs in `.env` (`localhost:...`) are overridden inside
-`compose.yml` for exactly this reason, the same pattern as `motoro`'s
-own `docker/Dockerfile.migrate`.
+API on `:8000`, frontend on `:5173`.
 
-One gotcha if you've also run ASAREE directly on the host against the same
-Postgres instance: `asaree-workspace`/`motoro-okf`'s persisted
-`command` column holds whichever filesystem path registered them first. A
-row registered from the host (`uv run --directory /path/on/host ...`) fails
-to reconnect inside the container (that path doesn't exist there) — delete
-the two rows from `mcp_server_configs` and restart to have them
-re-register fresh with the container's own path.
+`compose.yml` `include`s Motoro's own compose file, so that one command also
+brings up `motoro-postgres`/`motoro-redis`/`motoro-migrate`, and both schemas are
+applied before `asaree-app` starts — core's by `motoro-migrate`, ASAREE's by
+`asaree-migrate`.
+
+- Assumes a sibling checkout at `../Motoro`; set `MOTORO_DIR` if yours is
+  elsewhere.
+- Don't also run `docker compose up` inside that checkout while this is up — same
+  `container_name`s and ports, so the two collide.
+- `GH_TOKEN` is only needed for `--build`, and only while Motoro is private. It
+  stays harmless once that repo is public, so the command above always works.
+
+## Resetting your dev environment
+
+One Postgres server hosts two databases in a single volume — `motoro` (core's
+schema) and `asaree` (this repo's). Wiping it wipes both at once: every user,
+agent, experiment, dataset, MCP server registration, and LLM credential.
+
+```bash
+docker compose down -v
+GH_TOKEN=$(gh auth token) docker compose up -d --build
+```
+
+You're now at true zero. To get back to a working state:
+
+1. Create a user and issue a token (see the SDK's
+   [Auth bootstrap](sdk/README.md#auth-bootstrap)).
+2. Register any use-case-specific MCP servers, e.g. from
+   `asaree-spinal-use-case`: `uv run python register_servers.py`.
+3. Re-run a use case notebook's early setup cells (experiment, dataset, agent
+   creation, and the LLM credential cell if the account needs its own).
+
+ASAREE's own bundled servers (`asaree-workspace`, `motoro-okf`) need no manual
+step — they auto-register the next time the app starts (`app.py`'s lifespan).
+
+### If you run Motoro's compose standalone
+
+Host-based dev flow: reset from the Motoro repo, then migrate ASAREE yourself,
+because core's compose only applies core's schema.
+
+```bash
+cd path/to/Motoro
+docker compose down -v          # destroys both databases + redis
+docker compose up -d            # fresh containers, core's schema applied
+
+cd path/to/ASAREE
+uv run python -m asaree.migrations upgrade
+```
+
+## Gotcha: stale MCP server paths
+
+`asaree-workspace`/`motoro-okf`'s persisted `command` column holds whichever
+filesystem path registered them first, so a row registered from the host
+(`uv run --directory /path/on/host ...`) can't reconnect inside the container —
+that path doesn't exist there. Delete both rows from `mcp_server_configs` and
+restart to re-register with the container's own path.

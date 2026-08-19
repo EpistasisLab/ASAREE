@@ -38,12 +38,19 @@ COPY workspace-core/ ./workspace-core/
 # fresh several-GB orphaned layer in the build cache each time, since nothing
 # prunes superseded layers automatically.
 #
-# Motoro is a private repo (pinned git dependency, see pyproject.toml)
-# -- uv needs a credential to fetch it that the host's `gh`-backed git
+# Motoro is a pinned git dependency (see pyproject.toml). While that repo is
+# private, uv needs a credential to fetch it that the host's `gh`-backed git
 # credential helper doesn't carry into an isolated build. Passed as a
 # BuildKit secret (compose.yml's `secrets:`), injected via one-shot
 # git config env vars so the token touches only this RUN's environment --
 # never a file, never a committed layer.
+#
+# The secret is optional, and this layer needs no change once Motoro goes
+# public: an unset GH_TOKEN just makes the rewrite below expand to
+# `https://oauth2:@github.com/`, and GitHub ignores an empty password on a
+# public repo and serves it anonymously. So there is nothing here to remember
+# to undo -- only the `GH_TOKEN=...` prefix on the build command becomes
+# unnecessary.
 #
 # The cache mount (uv's own download/wheel cache) is separate from this
 # layer's own history -- it's updated in place across builds rather than

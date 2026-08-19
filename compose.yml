@@ -12,11 +12,17 @@
 # that checkout while this is up -- same container_names/ports, so the two
 # would collide.
 #
-# Motoro is a private git dependency (see pyproject.toml); building
-# needs a GitHub token with read access to it, passed as a build secret --
-# GH_TOKEN=$(gh auth token) works if you're logged in via the gh CLI.
+# Motoro is a pinned git dependency (see pyproject.toml). While that repo is
+# private, building needs a GitHub token with read access to it, passed as a
+# build secret -- GH_TOKEN=$(gh auth token) works if you're logged in via the
+# gh CLI:
 #
 #   GH_TOKEN=$(gh auth token) docker compose up -d --build
+#
+# Only `--build` needs it; plain `docker compose up -d` against existing
+# images does not. Once Motoro is public the prefix becomes unnecessary (an
+# empty secret still fetches a public repo fine -- see Dockerfile), but it
+# stays harmless, so this remains the one command that always works.
 
 include:
   - path: ${MOTORO_DIR:-../Motoro}/compose.yml

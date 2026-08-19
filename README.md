@@ -13,7 +13,7 @@ as a pinned library dependency (in-process, not a service call).
 
 ```bash
 cp .env.example .env    # fill in provider credentials as usual
-GH_TOKEN=$(gh auth token) docker compose up -d --build
+docker compose up -d --build
 ```
 
 API on `:8000`, frontend on `:5173`.
@@ -27,8 +27,6 @@ applied before `asaree-app` starts — core's by `motoro-migrate`, ASAREE's by
   elsewhere.
 - Don't also run `docker compose up` inside that checkout while this is up — same
   `container_name`s and ports, so the two collide.
-- `GH_TOKEN` is only needed for `--build`, and only while Motoro is private. It
-  stays harmless once that repo is public, so the command above always works.
 
 ## Resetting your dev environment
 
@@ -38,7 +36,7 @@ agent, experiment, dataset, MCP server registration, and LLM credential.
 
 ```bash
 docker compose down -v
-GH_TOKEN=$(gh auth token) docker compose up -d --build
+docker compose up -d --build
 ```
 
 You're now at true zero. To get back to a working state:

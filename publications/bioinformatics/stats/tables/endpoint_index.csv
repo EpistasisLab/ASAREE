@@ -1,0 +1,12 @@
+endpoint,key,family,tier,label,unit,note,optimizer,letters_method,pearson_dispersion
+pr_auc,pr_auc,beta,primary,PR-AUC,AUPRC,"Primary endpoint. Bounded in (0,1); observed 0.517-0.557.",bfgs,"Mann-Whitney U, Holm-adjusted over 28 pairs",
+roc_auc,roc_auc,beta,requested,ROC-AUC,ROC-AUC,Second view of the same discrimination construct as PR-AUC.,bfgs,"Mann-Whitney U, Holm-adjusted over 28 pairs",
+usd,usd,gamma,requested,Cost per run,USD,Gamma log-link: ratio of ARITHMETIC mean cost. Model-factor effect is partly fixed by the price schedule.,irls/ml,"Mann-Whitney U, Holm-adjusted over 28 pairs",
+wallclock_min,wallclock_min,gamma,requested,Wall-clock time,minutes,Seconds/60. A pure rescaling: every ratio and every p-value is identical to the analysis in seconds.,irls/ml,"Mann-Whitney U, Holm-adjusted over 28 pairs",
+n_engineered_features,n_engineered_features,poisson,requested,Engineered features created,features,Output of the feature-engineering (FTE) agent.,irls/ml,"Mann-Whitney U, Holm-adjusted over 28 pairs",0.2857819254422446
+n_features_after_fs,n_features_after_fs,poisson,requested,Features surviving selection,features,Features reaching the modeling step.,irls/ml,"Mann-Whitney U, Holm-adjusted over 28 pairs",3.321265316767522
+n_engineered_features_selected,n_engineered_features_selected,poisson,requested,Engineered features selected,features,Nested inside both of the two counts above.,irls/ml,"Mann-Whitney U, Holm-adjusted over 28 pairs",0.6165318972620278
+prop_engineered_selected,prop_engineered_selected,beta,requested,Engineered share of selected features,proportion,ALGEBRAICALLY n_engineered_features_selected / n_features_after_fs -- not an independent endpoint.,bfgs,"Mann-Whitney U, Holm-adjusted over 28 pairs",
+total_tokens,total_tokens,negbin,extra,Total tokens,tokens,Added because it is what separates a PRICE effect from a BEHAVIOR effect in the cost result. PLAN.md is explicit that token counts are NOT structural: resource use is an observed outcome.,irls/ml,"Mann-Whitney U, Holm-adjusted over 28 pairs",
+n_turns_total,n_turns_total,negbin,extra,Agent turns,turns,Added as a price-free measure of how much work the workflow actually did.,irls/ml,"Mann-Whitney U, Holm-adjusted over 28 pairs",
+inner_cv_score,inner_cv_score,beta,extra,Inner-CV score (Optuna best),score,Added to test the optimism gap: does the score the modeling agent optimizes track held-out PR-AUC?,lbfgs-fallback,"Mann-Whitney U, Holm-adjusted over 28 pairs",

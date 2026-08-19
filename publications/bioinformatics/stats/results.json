@@ -1,0 +1,3906 @@
+{
+ "alpha": 0.05,
+ "expected_n": 10,
+ "seed": 20260812,
+ "environment": {
+  "python": "3.12.3",
+  "statsmodels": "0.14.6",
+  "numpy": "2.4.4",
+  "scipy": "1.17.1",
+  "pandas": "3.0.2",
+  "matplotlib": "3.10.8"
+ },
+ "level_names": {
+  "A": [
+   "sonnet",
+   "opus"
+  ],
+  "B": [
+   "medium",
+   "xhigh"
+  ],
+  "C": [
+   "off",
+   "on"
+  ]
+ },
+ "factor_labels": {
+  "A": "model",
+  "B": "effort",
+  "C": "critic"
+ },
+ "sign_order": [
+  "---",
+  "-+-",
+  "--+",
+  "-++",
+  "+--",
+  "++-",
+  "+-+",
+  "+++"
+ ],
+ "endpoints": [
+  {
+   "key": "pr_auc",
+   "family": "beta",
+   "tier": "primary",
+   "label": "PR-AUC",
+   "unit": "AUPRC",
+   "log_ok": false,
+   "note": "Primary endpoint. Bounded in (0,1); observed 0.517-0.557."
+  },
+  {
+   "key": "roc_auc",
+   "family": "beta",
+   "tier": "requested",
+   "label": "ROC-AUC",
+   "unit": "ROC-AUC",
+   "log_ok": false,
+   "note": "Second view of the same discrimination construct as PR-AUC."
+  },
+  {
+   "key": "usd",
+   "family": "gamma",
+   "tier": "requested",
+   "label": "Cost per run",
+   "unit": "USD",
+   "log_ok": true,
+   "note": "Gamma log-link: ratio of ARITHMETIC mean cost. Model-factor effect is partly fixed by the price schedule.",
+   "structural": [
+    "A"
+   ]
+  },
+  {
+   "key": "wallclock_min",
+   "family": "gamma",
+   "tier": "requested",
+   "label": "Wall-clock time",
+   "unit": "minutes",
+   "log_ok": true,
+   "note": "Seconds/60. A pure rescaling: every ratio and every p-value is identical to the analysis in seconds."
+  },
+  {
+   "key": "n_engineered_features",
+   "family": "poisson",
+   "tier": "requested",
+   "label": "Engineered features created",
+   "unit": "features",
+   "log_ok": true,
+   "note": "Output of the feature-engineering (FTE) agent."
+  },
+  {
+   "key": "n_features_after_fs",
+   "family": "poisson",
+   "tier": "requested",
+   "label": "Features surviving selection",
+   "unit": "features",
+   "log_ok": true,
+   "note": "Features reaching the modeling step."
+  },
+  {
+   "key": "n_engineered_features_selected",
+   "family": "poisson",
+   "tier": "requested",
+   "label": "Engineered features selected",
+   "unit": "features",
+   "log_ok": true,
+   "note": "Nested inside both of the two counts above."
+  },
+  {
+   "key": "prop_engineered_selected",
+   "family": "beta",
+   "tier": "requested",
+   "label": "Engineered share of selected features",
+   "unit": "proportion",
+   "log_ok": false,
+   "note": "ALGEBRAICALLY n_engineered_features_selected / n_features_after_fs -- not an independent endpoint."
+  },
+  {
+   "key": "total_tokens",
+   "family": "negbin",
+   "tier": "extra",
+   "label": "Total tokens",
+   "unit": "tokens",
+   "log_ok": true,
+   "note": "Added because it is what separates a PRICE effect from a BEHAVIOR effect in the cost result. PLAN.md is explicit that token counts are NOT structural: resource use is an observed outcome."
+  },
+  {
+   "key": "n_turns_total",
+   "family": "negbin",
+   "tier": "extra",
+   "label": "Agent turns",
+   "unit": "turns",
+   "log_ok": true,
+   "note": "Added as a price-free measure of how much work the workflow actually did."
+  },
+  {
+   "key": "inner_cv_score",
+   "family": "beta",
+   "tier": "extra",
+   "label": "Inner-CV score (Optuna best)",
+   "unit": "score",
+   "log_ok": false,
+   "note": "Added to test the optimism gap: does the score the modeling agent optimizes track held-out PR-AUC?"
+  }
+ ],
+ "results": {
+  "pr_auc": {
+   "key": "pr_auc",
+   "family": "beta",
+   "tier": "primary",
+   "label": "PR-AUC",
+   "unit": "AUPRC",
+   "note": "Primary endpoint. Bounded in (0,1); observed 0.517-0.557.",
+   "validation": {
+    "outcome": "pr_auc",
+    "family": "beta",
+    "n_analysed": 80,
+    "n_dropped_nonfinite": 0,
+    "cells": 8,
+    "rank": 8,
+    "min_cell": 10,
+    "max_cell": 10,
+    "boundary_transform": false
+   },
+   "cell_table": [
+    {
+     "cell": "opus/medium/off",
+     "count": 10,
+     "mean": 0.53529,
+     "std": 0.010205,
+     "min": 0.5177,
+     "max": 0.5513
+    },
+    {
+     "cell": "opus/medium/on",
+     "count": 10,
+     "mean": 0.53715,
+     "std": 0.006932,
+     "min": 0.5279,
+     "max": 0.5491
+    },
+    {
+     "cell": "opus/xhigh/off",
+     "count": 10,
+     "mean": 0.53504,
+     "std": 0.009181,
+     "min": 0.5168,
+     "max": 0.5473
+    },
+    {
+     "cell": "opus/xhigh/on",
+     "count": 10,
+     "mean": 0.53196,
+     "std": 0.008779,
+     "min": 0.518,
+     "max": 0.5437
+    },
+    {
+     "cell": "sonnet/medium/off",
+     "count": 10,
+     "mean": 0.54253,
+     "std": 0.007684,
+     "min": 0.5336,
+     "max": 0.5569
+    },
+    {
+     "cell": "sonnet/medium/on",
+     "count": 10,
+     "mean": 0.54234,
+     "std": 0.009302,
+     "min": 0.5264,
+     "max": 0.5557
+    },
+    {
+     "cell": "sonnet/xhigh/off",
+     "count": 10,
+     "mean": 0.5375,
+     "std": 0.004295,
+     "min": 0.5312,
+     "max": 0.5443
+    },
+    {
+     "cell": "sonnet/xhigh/on",
+     "count": 10,
+     "mean": 0.53663,
+     "std": 0.008726,
+     "min": 0.5217,
+     "max": 0.5484
+    }
+   ],
+   "optimizer": "bfgs",
+   "effects": [
+    {
+     "term": "A",
+     "coef": -0.009831856686016821,
+     "se": 0.003548998484739065,
+     "z": -2.7703186485693,
+     "p_link": 0.005600147615442509,
+     "effect": -0.0048878335212143575,
+     "eff_se": 0.001764539713850416,
+     "eff_lo": -0.008346267809651786,
+     "eff_hi": -0.0014293992327769288,
+     "p_response": 0.0056050585781388315,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.0056050585781388315,
+     "endpoint": "pr_auc",
+     "family": "beta",
+     "label": "model",
+     "structural": false,
+     "tier": "primary",
+     "alpha_thresh": 0.05,
+     "significant": true,
+     "p_holm": NaN
+    },
+    {
+     "term": "B",
+     "coef": -0.008140691109193906,
+     "se": 0.003548998477879024,
+     "z": -2.2937995493475105,
+     "p_link": 0.02180201533138754,
+     "effect": -0.004046694712231957,
+     "eff_se": 0.0017645397105133067,
+     "eff_lo": -0.007505128994128772,
+     "eff_hi": -0.0005882604303351427,
+     "p_response": 0.021828268103690433,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.021828268103690433,
+     "endpoint": "pr_auc",
+     "family": "beta",
+     "label": "effort",
+     "structural": false,
+     "tier": "secondary",
+     "alpha_thresh": 0.025,
+     "significant": true,
+     "p_holm": 0.043656536207380865
+    },
+    {
+     "term": "C",
+     "coef": -0.0011433375653520483,
+     "se": 0.0035489984632002965,
+     "z": -0.3221578079583184,
+     "p_link": 0.7473331462621211,
+     "effect": -0.000569108414426367,
+     "eff_se": 0.001764539703386947,
+     "eff_lo": -0.004027542682355774,
+     "eff_hi": 0.00288932585350304,
+     "p_response": 0.7470548956669667,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.7470548956669667,
+     "endpoint": "pr_auc",
+     "family": "beta",
+     "label": "critic",
+     "structural": false,
+     "tier": "secondary",
+     "alpha_thresh": 0.05,
+     "significant": false,
+     "p_holm": 0.7470548956669667
+    },
+    {
+     "term": "AB",
+     "coef": 0.00267539585549586,
+     "se": 0.0035489984645386075,
+     "z": 0.7538453121995584,
+     "p_link": 0.4509421119172241,
+     "effect": 0.0013271435401911447,
+     "eff_se": 0.0017645397040258208,
+     "eff_lo": -0.0021312907289904315,
+     "eff_hi": 0.004785577809372721,
+     "p_response": 0.45197960021817196,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.45197960021817196,
+     "endpoint": "pr_auc",
+     "family": "beta",
+     "label": "model:effort",
+     "structural": false,
+     "tier": "exploratory",
+     "alpha_thresh": NaN,
+     "significant": null,
+     "p_holm": NaN
+    },
+    {
+     "term": "AC",
+     "coef": -8.846647654223352e-05,
+     "se": 0.0035489984629086986,
+     "z": -0.024927166767417505,
+     "p_link": 0.9801130580168308,
+     "effect": -4.4731158422184336e-05,
+     "eff_se": 0.0017645397032443003,
+     "eff_lo": -0.0035031654260720083,
+     "eff_hi": 0.0034137031092276397,
+     "p_response": 0.9797757577137397,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.9797757577137397,
+     "endpoint": "pr_auc",
+     "family": "beta",
+     "label": "model:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "alpha_thresh": NaN,
+     "significant": null,
+     "p_holm": NaN
+    },
+    {
+     "term": "BC",
+     "coef": -0.00281855773430098,
+     "se": 0.0035489984646939307,
+     "z": -0.7941839824222227,
+     "p_link": 0.42708833190077666,
+     "effect": -0.0014025052386142933,
+     "eff_se": 0.0017645397041163172,
+     "eff_lo": -0.00486093950797324,
+     "eff_hi": 0.0020559290307446527,
+     "p_response": 0.4267136683119642,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.4267136683119642,
+     "endpoint": "pr_auc",
+     "family": "beta",
+     "label": "effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "alpha_thresh": NaN,
+     "significant": null,
+     "p_holm": NaN
+    },
+    {
+     "term": "ABC",
+     "coef": -0.002138860221246499,
+     "se": 0.003548998463936622,
+     "z": -0.6026658627724598,
+     "p_link": 0.5467309956185371,
+     "effect": -0.0010643635526048634,
+     "eff_se": 0.0017645397037465774,
+     "eff_lo": -0.0045227978212391325,
+     "eff_hi": 0.002394070716029406,
+     "p_response": 0.5463782098088077,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.5463782098088077,
+     "endpoint": "pr_auc",
+     "family": "beta",
+     "label": "model:effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "alpha_thresh": NaN,
+     "significant": null,
+     "p_holm": NaN
+    }
+   ],
+   "permutation": [
+    {
+     "term": "A",
+     "outcome": "pr_auc",
+     "statistic": -0.004890000000000061,
+     "p_perm": 0.010149492525373732,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "model",
+     "p_model": 0.0056050585781388315
+    },
+    {
+     "term": "B",
+     "outcome": "pr_auc",
+     "statistic": -0.004045000000000187,
+     "p_perm": 0.03204839758012099,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "effort",
+     "p_model": 0.021828268103690433
+    },
+    {
+     "term": "C",
+     "outcome": "pr_auc",
+     "statistic": -0.0005700000000000705,
+     "p_perm": 0.7584620768961552,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "critic",
+     "p_model": 0.7470548956669667
+    }
+   ],
+   "diagnostics": [
+    {
+     "endpoint": "pr_auc",
+     "scale": "raw",
+     "shapiro_p": 0.259081314797324,
+     "skew": -0.06890164379221378,
+     "excess_kurtosis": -0.8405406445252641,
+     "levene_p": 0.599469149555975,
+     "sd_ratio": 2.375642436104921
+    }
+   ],
+   "kruskal": {
+    "H": 9.674580642136247,
+    "p": 0.20777680711792218,
+    "df": 7,
+    "n": 80,
+    "epsilon_sq": 0.12246304610299047,
+    "eta_sq_H": 0.03714695336300343
+   },
+   "letters": {
+    "cell": {
+     "---": "a",
+     "-+-": "a",
+     "--+": "a",
+     "-++": "a",
+     "+--": "a",
+     "++-": "a",
+     "+-+": "a",
+     "+++": "a"
+    },
+    "A": {
+     "sonnet": "a",
+     "opus": "b"
+    },
+    "A_p": 0.0056050585781388315,
+    "B": {
+     "medium": "a",
+     "xhigh": "b"
+    },
+    "B_p": 0.043656536207380865,
+    "C": {
+     "off": "a",
+     "on": "a"
+    },
+    "C_p": 0.7470548956669667
+   },
+   "letters_method": "Mann-Whitney U, Holm-adjusted over 28 pairs",
+   "dispersion_lrt": {
+    "stat": 1.4403550222962167,
+    "df": 3.0,
+    "p": 0.6961031461921217,
+    "llf_const": 273.84492018767173,
+    "llf_var": 274.56509769881984
+   },
+   "bootstrap": [
+    {
+     "term": "A",
+     "contrast": -0.0048878335212143575,
+     "boot_lo": -0.00822393932914628,
+     "boot_hi": -0.0013772811970539623,
+     "boot_se": 0.0017854045171211308,
+     "label": "model",
+     "delta_se": 0.001764539713850416
+    },
+    {
+     "term": "B",
+     "contrast": -0.004046694712231957,
+     "boot_lo": -0.007613966139466155,
+     "boot_hi": -0.0004023268207856147,
+     "boot_se": 0.0018299252015166482,
+     "label": "effort",
+     "delta_se": 0.0017645397105133067
+    },
+    {
+     "term": "C",
+     "contrast": -0.000569108414426367,
+     "boot_lo": -0.004146749361339674,
+     "boot_hi": 0.0027340691030475423,
+     "boot_se": 0.0017909174179644952,
+     "label": "critic",
+     "delta_se": 0.001764539703386947
+    },
+    {
+     "term": "AB",
+     "contrast": 0.0013271435401911447,
+     "boot_lo": -0.0020769314798582236,
+     "boot_hi": 0.004915353576477343,
+     "boot_se": 0.0017500212331266218,
+     "label": "model:effort",
+     "delta_se": 0.0017645397040258208
+    },
+    {
+     "term": "AC",
+     "contrast": -4.4731158422184336e-05,
+     "boot_lo": -0.0033814939870451585,
+     "boot_hi": 0.0034420544940277765,
+     "boot_se": 0.0017639807021220873,
+     "label": "model:critic",
+     "delta_se": 0.0017645397032443003
+    },
+    {
+     "term": "BC",
+     "contrast": -0.0014025052386142933,
+     "boot_lo": -0.00481324183026458,
+     "boot_hi": 0.0019763935073887177,
+     "boot_se": 0.0017592868241252954,
+     "label": "effort:critic",
+     "delta_se": 0.0017645397041163172
+    },
+    {
+     "term": "ABC",
+     "contrast": -0.0010643635526048634,
+     "boot_lo": -0.004575340897178037,
+     "boot_hi": 0.002464157804441319,
+     "boot_se": 0.0017961034813842663,
+     "label": "model:effort:critic",
+     "delta_se": 0.0017645397037465774
+    }
+   ],
+   "bootstrap_meta": {
+    "n_boot_ok": 1997,
+    "n_boot_failed": 3,
+    "success_rate": 0.9985,
+    "n_fallback": 564
+   },
+   "permutation_refit": {
+    "term": "A",
+    "outcome": "pr_auc",
+    "family": "beta",
+    "observed": 0.0048878335212143575,
+    "p_perm": 0.013458162668227034,
+    "n_perm": 1708,
+    "mc_se": 0.0027880894768298717,
+    "n_perm_attempted": 2000
+   }
+  },
+  "roc_auc": {
+   "key": "roc_auc",
+   "family": "beta",
+   "tier": "requested",
+   "label": "ROC-AUC",
+   "unit": "ROC-AUC",
+   "note": "Second view of the same discrimination construct as PR-AUC.",
+   "validation": {
+    "outcome": "roc_auc",
+    "family": "beta",
+    "n_analysed": 80,
+    "n_dropped_nonfinite": 0,
+    "cells": 8,
+    "rank": 8,
+    "min_cell": 10,
+    "max_cell": 10,
+    "boundary_transform": false
+   },
+   "cell_table": [
+    {
+     "cell": "opus/medium/off",
+     "count": 10,
+     "mean": 0.75421,
+     "std": 0.003897,
+     "min": 0.7483,
+     "max": 0.7598
+    },
+    {
+     "cell": "opus/medium/on",
+     "count": 10,
+     "mean": 0.75773,
+     "std": 0.003528,
+     "min": 0.7513,
+     "max": 0.7639
+    },
+    {
+     "cell": "opus/xhigh/off",
+     "count": 10,
+     "mean": 0.75677,
+     "std": 0.004498,
+     "min": 0.7494,
+     "max": 0.7623
+    },
+    {
+     "cell": "opus/xhigh/on",
+     "count": 10,
+     "mean": 0.75818,
+     "std": 0.002503,
+     "min": 0.7546,
+     "max": 0.7614
+    },
+    {
+     "cell": "sonnet/medium/off",
+     "count": 10,
+     "mean": 0.75603,
+     "std": 0.002921,
+     "min": 0.7514,
+     "max": 0.7603
+    },
+    {
+     "cell": "sonnet/medium/on",
+     "count": 10,
+     "mean": 0.75508,
+     "std": 0.005414,
+     "min": 0.7456,
+     "max": 0.7625
+    },
+    {
+     "cell": "sonnet/xhigh/off",
+     "count": 10,
+     "mean": 0.75508,
+     "std": 0.002219,
+     "min": 0.7517,
+     "max": 0.7578
+    },
+    {
+     "cell": "sonnet/xhigh/on",
+     "count": 10,
+     "mean": 0.75415,
+     "std": 0.004062,
+     "min": 0.7487,
+     "max": 0.7624
+    }
+   ],
+   "optimizer": "bfgs",
+   "effects": [
+    {
+     "term": "A",
+     "coef": 0.004440328288868188,
+     "se": 0.002162327468345775,
+     "z": 2.053494835481663,
+     "p_link": 0.04002461011032409,
+     "effect": 0.0016359186176234664,
+     "eff_se": 0.0007979410096539695,
+     "eff_lo": 7.198297691415824e-05,
+     "eff_hi": 0.0031998542583327747,
+     "p_response": 0.040347367895849896,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.040347367895849896,
+     "endpoint": "roc_auc",
+     "family": "beta",
+     "label": "model",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.1210421036875497,
+     "significant": false
+    },
+    {
+     "term": "B",
+     "coef": 0.0007536221138506837,
+     "se": 0.002162327466795413,
+     "z": 0.34852358184561094,
+     "p_link": 0.7274470068997779,
+     "effect": 0.0002771268521781778,
+     "eff_se": 0.0007979410094597895,
+     "eff_lo": -0.0012868087881505446,
+     "eff_hi": 0.0018410624925069001,
+     "p_response": 0.728364124839771,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.728364124839771,
+     "endpoint": "roc_auc",
+     "family": "beta",
+     "label": "effort",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.728364124839771,
+     "significant": false
+    },
+    {
+     "term": "C",
+     "coef": 0.0020868299801812935,
+     "se": 0.0021623274671047437,
+     "z": 0.965085081666868,
+     "p_link": 0.3345021984714841,
+     "effect": 0.0007673600379378698,
+     "eff_se": 0.0007979410094982104,
+     "eff_lo": -0.0007965756024661563,
+     "eff_hi": 0.002331295678341896,
+     "p_response": 0.3362128101273255,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.3362128101273255,
+     "endpoint": "roc_auc",
+     "family": "beta",
+     "label": "critic",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.672425620254651,
+     "significant": false
+    },
+    {
+     "term": "AB",
+     "coef": 0.0033222629330975357,
+     "se": 0.002162327467636745,
+     "z": 1.536429140739034,
+     "p_link": 0.12443316428267423,
+     "effect": 0.0012271615923098445,
+     "eff_se": 0.0007979410095667761,
+     "eff_lo": -0.0003367740482285678,
+     "eff_hi": 0.0027910972328482565,
+     "p_response": 0.12407058073762044,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.12407058073762044,
+     "endpoint": "roc_auc",
+     "family": "beta",
+     "label": "model:effort",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "AC",
+     "coef": 0.004574151897078491,
+     "se": 0.002162327468434004,
+     "z": 2.115383522548124,
+     "p_link": 0.03439727300986478,
+     "effect": 0.0016873177800365013,
+     "eff_se": 0.0007979410096661158,
+     "eff_lo": 0.00012338213930338676,
+     "eff_hi": 0.003251253420769616,
+     "p_response": 0.03446493872530325,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.03446493872530325,
+     "endpoint": "roc_auc",
+     "family": "beta",
+     "label": "model:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "BC",
+     "coef": -0.0014277493575148676,
+     "se": 0.002162327466910605,
+     "z": -0.6602835968942041,
+     "p_link": 0.5090718544197015,
+     "effect": -0.0005288296943888326,
+     "eff_se": 0.000797941009474762,
+     "eff_lo": -0.0020927653347469007,
+     "eff_hi": 0.0010351059459692354,
+     "p_response": 0.5074952647138005,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.5074952647138005,
+     "endpoint": "roc_auc",
+     "family": "beta",
+     "label": "effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "ABC",
+     "coef": -0.0014430511397717104,
+     "se": 0.0021623274669147563,
+     "z": -0.6673601301613575,
+     "p_link": 0.5045421264662455,
+     "effect": -0.0005332836703552113,
+     "eff_se": 0.0007979410094749981,
+     "eff_lo": -0.002097219310713742,
+     "eff_hi": 0.0010306519700033193,
+     "p_response": 0.5039263622706149,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.5039263622706149,
+     "endpoint": "roc_auc",
+     "family": "beta",
+     "label": "model:effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    }
+   ],
+   "permutation": [
+    {
+     "term": "A",
+     "outcome": "roc_auc",
+     "statistic": 0.0016374999999999584,
+     "p_perm": 0.059147042647867604,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "model",
+     "p_model": 0.040347367895849896
+    },
+    {
+     "term": "B",
+     "outcome": "roc_auc",
+     "statistic": 0.00028249999999996334,
+     "p_perm": 0.7408129593520324,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "effort",
+     "p_model": 0.728364124839771
+    },
+    {
+     "term": "C",
+     "outcome": "roc_auc",
+     "statistic": 0.0007624999999998883,
+     "p_perm": 0.3778311084445778,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "critic",
+     "p_model": 0.3362128101273255
+    }
+   ],
+   "diagnostics": [
+    {
+     "endpoint": "roc_auc",
+     "scale": "raw",
+     "shapiro_p": 0.09667441949192754,
+     "skew": -0.12122588833152242,
+     "excess_kurtosis": -0.899209640326398,
+     "levene_p": 0.3879917773448223,
+     "sd_ratio": 2.4398902344140216
+    }
+   ],
+   "kruskal": {
+    "H": 11.571879249706996,
+    "p": 0.11554627314996294,
+    "df": 7,
+    "n": 80,
+    "epsilon_sq": 0.14647948417350629,
+    "eta_sq_H": 0.06349832291259716
+   },
+   "letters": {
+    "cell": {
+     "---": "a",
+     "-+-": "a",
+     "--+": "a",
+     "-++": "a",
+     "+--": "a",
+     "++-": "a",
+     "+-+": "a",
+     "+++": "a"
+    },
+    "A": {
+     "sonnet": "a",
+     "opus": "a"
+    },
+    "A_p": 0.1210421036875497,
+    "B": {
+     "medium": "a",
+     "xhigh": "a"
+    },
+    "B_p": 0.728364124839771,
+    "C": {
+     "off": "a",
+     "on": "a"
+    },
+    "C_p": 0.672425620254651
+   },
+   "letters_method": "Mann-Whitney U, Holm-adjusted over 28 pairs",
+   "dispersion_lrt": {
+    "stat": 1.520815639058128,
+    "df": 3.0,
+    "p": 0.6774744919246484,
+    "llf_const": 337.33467074219243,
+    "llf_var": 338.0950785617215
+   }
+  },
+  "usd": {
+   "key": "usd",
+   "family": "gamma",
+   "tier": "requested",
+   "label": "Cost per run",
+   "unit": "USD",
+   "note": "Gamma log-link: ratio of ARITHMETIC mean cost. Model-factor effect is partly fixed by the price schedule.",
+   "validation": {
+    "outcome": "usd",
+    "family": "gamma",
+    "n_analysed": 80,
+    "n_dropped_nonfinite": 0,
+    "cells": 8,
+    "rank": 8,
+    "min_cell": 10,
+    "max_cell": 10,
+    "boundary_transform": false
+   },
+   "cell_table": [
+    {
+     "cell": "opus/medium/off",
+     "count": 10,
+     "mean": 3.006441,
+     "std": 0.215145,
+     "min": 2.775828,
+     "max": 3.447732
+    },
+    {
+     "cell": "opus/medium/on",
+     "count": 10,
+     "mean": 12.434492,
+     "std": 2.88653,
+     "min": 9.769988,
+     "max": 19.663572
+    },
+    {
+     "cell": "opus/xhigh/off",
+     "count": 10,
+     "mean": 4.738561,
+     "std": 0.29604,
+     "min": 4.366202,
+     "max": 5.351072
+    },
+    {
+     "cell": "opus/xhigh/on",
+     "count": 10,
+     "mean": 16.533974,
+     "std": 5.317578,
+     "min": 10.799656,
+     "max": 29.819053
+    },
+    {
+     "cell": "sonnet/medium/off",
+     "count": 10,
+     "mean": 1.066591,
+     "std": 0.095514,
+     "min": 0.978432,
+     "max": 1.300258
+    },
+    {
+     "cell": "sonnet/medium/on",
+     "count": 10,
+     "mean": 2.801128,
+     "std": 0.776209,
+     "min": 2.242613,
+     "max": 4.945496
+    },
+    {
+     "cell": "sonnet/xhigh/off",
+     "count": 10,
+     "mean": 1.640674,
+     "std": 0.397102,
+     "min": 1.429563,
+     "max": 2.754025
+    },
+    {
+     "cell": "sonnet/xhigh/on",
+     "count": 10,
+     "mean": 4.401465,
+     "std": 0.628441,
+     "min": 3.28935,
+     "max": 5.348116
+    }
+   ],
+   "optimizer": "irls/ml",
+   "effects": [
+    {
+     "term": "A",
+     "coef": 0.6138558879267461,
+     "se": 0.02271162306673423,
+     "z": 27.02827033202494,
+     "p_link": 6.878925486627801e-161,
+     "effect": 3.7047417324504837,
+     "eff_se": 0.1929084567431771,
+     "eff_lo": 3.345301661221483,
+     "eff_hi": 4.1028022863411095,
+     "p_response": 1.3889955710663797e-139,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 1.3889955710663797e-139,
+     "endpoint": "usd",
+     "family": "gamma",
+     "label": "model",
+     "structural": true,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 4.1669867131991394e-139,
+     "significant": true
+    },
+    {
+     "term": "B",
+     "coef": 0.20280931304731162,
+     "se": 0.02271162306673423,
+     "z": 8.929758672526004,
+     "p_link": 4.2693910730091593e-19,
+     "effect": 1.4146339785915654,
+     "eff_se": 0.08568812920179143,
+     "eff_lo": 1.256274521633751,
+     "eff_hi": 1.592955408172498,
+     "p_response": 1.0250836941129387e-08,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 1.0250836941129387e-08,
+     "endpoint": "usd",
+     "family": "gamma",
+     "label": "effort",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 1.0250836941129387e-08,
+     "significant": true
+    },
+    {
+     "term": "C",
+     "coef": 0.5777231351263703,
+     "se": 0.022711623066734223,
+     "z": 25.437333713615693,
+     "p_link": 9.748820076347612e-143,
+     "effect": 3.460594099740164,
+     "eff_se": 0.1821306653914194,
+     "eff_lo": 3.1214186771024135,
+     "eff_hi": 3.836624548640616,
+     "p_response": 5.1029627282730726e-123,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 5.1029627282730726e-123,
+     "endpoint": "usd",
+     "family": "gamma",
+     "label": "critic",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 1.0205925456546145e-122,
+     "significant": true
+    },
+    {
+     "term": "AB",
+     "coef": -0.01782940396169507,
+     "se": 0.02271162306673423,
+     "z": -0.7850343372336891,
+     "p_link": 0.43243343654730504,
+     "effect": 1.1702355183587658,
+     "eff_se": 0.07070642043719175,
+     "eff_lo": 1.0395445437419606,
+     "eff_hi": 1.317356891219795,
+     "p_response": 0.009272467112415906,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.009272467112415906,
+     "endpoint": "usd",
+     "family": "gamma",
+     "label": "model:effort",
+     "structural": true,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "AC",
+     "coef": 0.0896270761034738,
+     "se": 0.02271162306673423,
+     "z": 3.946308717792644,
+     "p_link": 7.936527086278151e-05,
+     "effect": 2.119118829257603,
+     "eff_se": 0.11333450444704309,
+     "eff_lo": 1.9082331374108545,
+     "eff_hi": 2.3533102556887657,
+     "p_response": 8.607349137667025e-45,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 8.607349137667025e-45,
+     "endpoint": "usd",
+     "family": "gamma",
+     "label": "model:critic",
+     "structural": true,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "BC",
+     "coef": -0.018594690821053122,
+     "se": 0.022711623066734233,
+     "z": -0.8187301614867327,
+     "p_link": 0.4129403842861089,
+     "effect": 1.157003900923639,
+     "eff_se": 0.06995541406561118,
+     "eff_lo": 1.0277062591442896,
+     "eff_hi": 1.3025687202364025,
+     "p_response": 0.01586662537607935,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.01586662537607935,
+     "endpoint": "usd",
+     "family": "gamma",
+     "label": "effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "ABC",
+     "coef": -0.023913667018383253,
+     "se": 0.02271162306673423,
+     "z": -1.0529263781860514,
+     "p_link": 0.2923747354596258,
+     "effect": 1.0592333069257642,
+     "eff_se": 0.0643640072301554,
+     "eff_lo": 0.9403047099610935,
+     "eff_hi": 1.1932038483007426,
+     "p_response": 0.3436289805304962,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.3436289805304962,
+     "endpoint": "usd",
+     "family": "gamma",
+     "label": "model:effort:critic",
+     "structural": true,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    }
+   ],
+   "permutation": [
+    {
+     "term": "A",
+     "outcome": "usd",
+     "statistic": 1.30961354847772,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "model",
+     "p_model": 1.3889955710663797e-139
+    },
+    {
+     "term": "B",
+     "outcome": "usd",
+     "statistic": 0.3468708252602805,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "effort",
+     "p_model": 1.0250836941129387e-08
+    },
+    {
+     "term": "C",
+     "outcome": "usd",
+     "statistic": 1.2414402794572108,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "critic",
+     "p_model": 5.1029627282730726e-123
+    }
+   ],
+   "diagnostics": [
+    {
+     "endpoint": "usd",
+     "scale": "raw",
+     "shapiro_p": 1.915350235038253e-07,
+     "skew": 1.4155239157220645,
+     "excess_kurtosis": 1.734879735951238,
+     "levene_p": 0.0001365586004553568,
+     "sd_ratio": 55.673082065087804
+    },
+    {
+     "endpoint": "usd",
+     "scale": "log",
+     "shapiro_p": 1.4347854724704547e-05,
+     "skew": 1.1405293769753768,
+     "excess_kurtosis": 1.2225896389832274,
+     "levene_p": 0.16818360947643532,
+     "sd_ratio": 4.582624792372171
+    }
+   ],
+   "kruskal": {
+    "H": 74.31370370370371,
+    "p": 1.9765288233440018e-13,
+    "df": 7,
+    "n": 80,
+    "epsilon_sq": 0.9406797937177684,
+    "eta_sq_H": 0.9349125514403293
+   },
+   "letters": {
+    "cell": {
+     "---": "a",
+     "-+-": "b",
+     "--+": "c",
+     "-++": "d",
+     "+--": "e",
+     "++-": "d",
+     "+-+": "f",
+     "+++": "f"
+    },
+    "A": {
+     "sonnet": "a",
+     "opus": "b"
+    },
+    "A_p": 4.1669867131991394e-139,
+    "B": {
+     "medium": "a",
+     "xhigh": "b"
+    },
+    "B_p": 1.0250836941129387e-08,
+    "C": {
+     "off": "a",
+     "on": "b"
+    },
+    "C_p": 1.0205925456546145e-122
+   },
+   "letters_method": "Mann-Whitney U, Holm-adjusted over 28 pairs"
+  },
+  "wallclock_min": {
+   "key": "wallclock_min",
+   "family": "gamma",
+   "tier": "requested",
+   "label": "Wall-clock time",
+   "unit": "minutes",
+   "note": "Seconds/60. A pure rescaling: every ratio and every p-value is identical to the analysis in seconds.",
+   "validation": {
+    "outcome": "wallclock_min",
+    "family": "gamma",
+    "n_analysed": 80,
+    "n_dropped_nonfinite": 0,
+    "cells": 8,
+    "rank": 8,
+    "min_cell": 10,
+    "max_cell": 10,
+    "boundary_transform": false
+   },
+   "cell_table": [
+    {
+     "cell": "opus/medium/off",
+     "count": 10,
+     "mean": 7.6049,
+     "std": 0.609107,
+     "min": 6.9645,
+     "max": 8.9665
+    },
+    {
+     "cell": "opus/medium/on",
+     "count": 10,
+     "mean": 42.4846,
+     "std": 10.795013,
+     "min": 31.613667,
+     "max": 70.666333
+    },
+    {
+     "cell": "opus/xhigh/off",
+     "count": 10,
+     "mean": 20.361483,
+     "std": 1.669966,
+     "min": 18.291333,
+     "max": 24.014167
+    },
+    {
+     "cell": "opus/xhigh/on",
+     "count": 10,
+     "mean": 79.692767,
+     "std": 23.604062,
+     "min": 56.551833,
+     "max": 140.748833
+    },
+    {
+     "cell": "sonnet/medium/off",
+     "count": 10,
+     "mean": 6.066033,
+     "std": 0.599515,
+     "min": 5.172333,
+     "max": 6.997167
+    },
+    {
+     "cell": "sonnet/medium/on",
+     "count": 10,
+     "mean": 18.647583,
+     "std": 4.621124,
+     "min": 15.6515,
+     "max": 30.6555
+    },
+    {
+     "cell": "sonnet/xhigh/off",
+     "count": 10,
+     "mean": 13.169667,
+     "std": 3.121253,
+     "min": 10.725833,
+     "max": 21.486167
+    },
+    {
+     "cell": "sonnet/xhigh/on",
+     "count": 10,
+     "mean": 43.453917,
+     "std": 6.761308,
+     "min": 35.2305,
+     "max": 53.0325
+    }
+   ],
+   "optimizer": "irls/ml",
+   "effects": [
+    {
+     "term": "A",
+     "coef": 0.2614649557054206,
+     "se": 0.02225534684510206,
+     "z": 11.74841073137279,
+     "p_link": 7.195947359012313e-32,
+     "effect": 1.8459419552185212,
+     "eff_se": 0.10079787844609228,
+     "eff_lo": 1.6585863235493654,
+     "eff_hi": 2.0544614733973825,
+     "p_response": 3.0439256554108094e-29,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 3.0439256554108094e-29,
+     "endpoint": "wallclock_min",
+     "family": "gamma",
+     "label": "model",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 3.0439256554108094e-29,
+     "significant": true
+    },
+    {
+     "term": "B",
+     "coef": 0.40438564601963417,
+     "se": 0.02225534684510206,
+     "z": 18.170269321533,
+     "p_link": 8.876159445136226e-74,
+     "effect": 2.0945361679448746,
+     "eff_se": 0.11503276559698915,
+     "eff_lo": 1.8807866533372717,
+     "eff_hi": 2.332578100256482,
+     "p_response": 2.621415743344491e-41,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 2.621415743344491e-41,
+     "endpoint": "wallclock_min",
+     "family": "gamma",
+     "label": "effort",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 5.242831486688982e-41,
+     "significant": true
+    },
+    {
+     "term": "C",
+     "coef": 0.6752098873566117,
+     "se": 0.02225534684510206,
+     "z": 30.339221044546935,
+     "p_link": 3.485828919129731e-202,
+     "effect": 3.9040409586441216,
+     "eff_se": 0.19231581735878356,
+     "eff_lo": 3.5447333856348355,
+     "eff_hi": 4.299769305228372,
+     "p_response": 2.864502032406156e-168,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 2.864502032406156e-168,
+     "endpoint": "wallclock_min",
+     "family": "gamma",
+     "label": "critic",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 8.593506097218468e-168,
+     "significant": true
+    },
+    {
+     "term": "AB",
+     "coef": -0.000913287202644858,
+     "se": 0.02225534684510206,
+     "z": -0.041036754403396485,
+     "p_link": 0.9672665947525446,
+     "effect": 1.1691899696772567,
+     "eff_se": 0.06598935000775222,
+     "eff_lo": 1.0467502436441944,
+     "eff_hi": 1.3059516283796246,
+     "p_response": 0.005614252542927447,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.005614252542927447,
+     "endpoint": "wallclock_min",
+     "family": "gamma",
+     "label": "model:effort",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "AC",
+     "coef": 0.09601077797198841,
+     "se": 0.022255346845102067,
+     "z": 4.31405444454434,
+     "p_link": 1.6028744504664668e-05,
+     "effect": 1.5700720549111733,
+     "eff_se": 0.08571794680730473,
+     "eff_lo": 1.4107443183722719,
+     "eff_hi": 1.7473940709945774,
+     "p_response": 1.4197450291719732e-16,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 1.4197450291719732e-16,
+     "endpoint": "wallclock_min",
+     "family": "gamma",
+     "label": "model:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "BC",
+     "coef": -0.0356302462167532,
+     "se": 0.02225534684510206,
+     "z": -1.600974654079349,
+     "p_link": 0.10938253304859358,
+     "effect": 1.4453074051903225,
+     "eff_se": 0.07884484491655483,
+     "eff_lo": 1.298748996077084,
+     "eff_hi": 1.6084043197012032,
+     "p_response": 1.4609943975642974e-11,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 1.4609943975642974e-11,
+     "endpoint": "wallclock_min",
+     "family": "gamma",
+     "label": "effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "ABC",
+     "coef": -0.05332352892595503,
+     "se": 0.022255346845102063,
+     "z": -2.39598732372443,
+     "p_link": 0.016575663558090994,
+     "effect": 1.0600615963127638,
+     "eff_se": 0.060302581846617055,
+     "eff_lo": 0.9482213207911651,
+     "eff_hi": 1.185093145806467,
+     "p_response": 0.3052060687507142,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.3052060687507142,
+     "endpoint": "wallclock_min",
+     "family": "gamma",
+     "label": "model:effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    }
+   ],
+   "permutation": [
+    {
+     "term": "A",
+     "outcome": "wallclock_min",
+     "statistic": 0.6129896920427063,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "model",
+     "p_model": 3.0439256554108094e-29
+    },
+    {
+     "term": "B",
+     "outcome": "wallclock_min",
+     "statistic": 0.7393321293126165,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "effort",
+     "p_model": 2.621415743344491e-41
+    },
+    {
+     "term": "C",
+     "outcome": "wallclock_min",
+     "statistic": 1.3620121599517863,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "critic",
+     "p_model": 2.864502032406156e-168
+    }
+   ],
+   "diagnostics": [
+    {
+     "endpoint": "wallclock_min",
+     "scale": "raw",
+     "shapiro_p": 2.7846459722082345e-06,
+     "skew": 1.2560105189098618,
+     "excess_kurtosis": 1.231171635265322,
+     "levene_p": 0.0045743818203728085,
+     "sd_ratio": 39.37193472666646
+    },
+    {
+     "endpoint": "wallclock_min",
+     "scale": "log",
+     "shapiro_p": 0.00012032285141325906,
+     "skew": 0.9931006900497111,
+     "excess_kurtosis": 0.6446346160348759,
+     "levene_p": 0.47264263523366057,
+     "sd_ratio": 3.2400215246836113
+    }
+   ],
+   "kruskal": {
+    "H": 75.15481481481481,
+    "p": 1.3339734373705316e-13,
+    "df": 7,
+    "n": 80,
+    "epsilon_sq": 0.9513267698077824,
+    "eta_sq_H": 0.9465946502057613
+   },
+   "letters": {
+    "cell": {
+     "---": "a",
+     "-+-": "b",
+     "--+": "c",
+     "-++": "d",
+     "+--": "e",
+     "++-": "c",
+     "+-+": "d",
+     "+++": "f"
+    },
+    "A": {
+     "sonnet": "a",
+     "opus": "b"
+    },
+    "A_p": 3.0439256554108094e-29,
+    "B": {
+     "medium": "a",
+     "xhigh": "b"
+    },
+    "B_p": 5.242831486688982e-41,
+    "C": {
+     "off": "a",
+     "on": "b"
+    },
+    "C_p": 8.593506097218468e-168
+   },
+   "letters_method": "Mann-Whitney U, Holm-adjusted over 28 pairs"
+  },
+  "n_engineered_features": {
+   "key": "n_engineered_features",
+   "family": "poisson",
+   "tier": "requested",
+   "label": "Engineered features created",
+   "unit": "features",
+   "note": "Output of the feature-engineering (FTE) agent.",
+   "validation": {
+    "outcome": "n_engineered_features",
+    "family": "poisson",
+    "n_analysed": 80,
+    "n_dropped_nonfinite": 0,
+    "cells": 8,
+    "rank": 8,
+    "min_cell": 10,
+    "max_cell": 10,
+    "boundary_transform": false
+   },
+   "cell_table": [
+    {
+     "cell": "opus/medium/off",
+     "count": 10,
+     "mean": 21.4,
+     "std": 1.837873,
+     "min": 20,
+     "max": 24
+    },
+    {
+     "cell": "opus/medium/on",
+     "count": 10,
+     "mean": 22.3,
+     "std": 3.020302,
+     "min": 18,
+     "max": 26
+    },
+    {
+     "cell": "opus/xhigh/off",
+     "count": 10,
+     "mean": 25.8,
+     "std": 2.898275,
+     "min": 21,
+     "max": 29
+    },
+    {
+     "cell": "opus/xhigh/on",
+     "count": 10,
+     "mean": 24.3,
+     "std": 4.001389,
+     "min": 21,
+     "max": 34
+    },
+    {
+     "cell": "sonnet/medium/off",
+     "count": 10,
+     "mean": 11.6,
+     "std": 1.646545,
+     "min": 10,
+     "max": 15
+    },
+    {
+     "cell": "sonnet/medium/on",
+     "count": 10,
+     "mean": 10.6,
+     "std": 0.966092,
+     "min": 9,
+     "max": 12
+    },
+    {
+     "cell": "sonnet/xhigh/off",
+     "count": 10,
+     "mean": 15.0,
+     "std": 1.490712,
+     "min": 13,
+     "max": 17
+    },
+    {
+     "cell": "sonnet/xhigh/on",
+     "count": 10,
+     "mean": 14.3,
+     "std": 1.946507,
+     "min": 12,
+     "max": 18
+    }
+   ],
+   "pearson_dispersion": 0.2857819254422446,
+   "optimizer": "irls/ml",
+   "effects": [
+    {
+     "term": "A",
+     "coef": 0.3035824506461818,
+     "se": 0.013115010104632197,
+     "z": 23.147710007402665,
+     "p_link": 1.5330462812077925e-118,
+     "effect": 1.8213592233009384,
+     "eff_se": 0.04836774579753622,
+     "eff_lo": 1.728985006749581,
+     "eff_hi": 1.9186687029402727,
+     "p_response": 7.099853563957944e-113,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 7.099853563957944e-113,
+     "endpoint": "n_engineered_features",
+     "family": "poisson",
+     "label": "model",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 2.129956069187383e-112,
+     "significant": true
+    },
+    {
+     "term": "B",
+     "coef": 0.10366548511473077,
+     "se": 0.013115010104632192,
+     "z": 7.904338943522152,
+     "p_link": 2.6935918907604316e-15,
+     "effect": 1.204855842185114,
+     "eff_se": 0.03340903853051868,
+     "eff_lo": 1.1411228695604219,
+     "eff_hi": 1.272148371723379,
+     "p_response": 1.8067827623553814e-11,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 1.8067827623553814e-11,
+     "endpoint": "n_engineered_features",
+     "family": "poisson",
+     "label": "effort",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 3.613565524710763e-11,
+     "significant": true
+    },
+    {
+     "term": "C",
+     "coef": -0.019580518246671008,
+     "se": 0.013115010104632192,
+     "z": -1.4929853725202402,
+     "p_link": 0.13544101587564977,
+     "effect": 0.9688346883468941,
+     "eff_se": 0.027432635151035712,
+     "eff_lo": 0.9165324316685532,
+     "eff_hi": 1.024121592331896,
+     "p_response": 0.26349130399148024,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.26349130399148024,
+     "endpoint": "n_engineered_features",
+     "family": "poisson",
+     "label": "critic",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.26349130399148024,
+     "significant": false
+    },
+    {
+     "term": "AB",
+     "coef": -0.035447174669680497,
+     "se": 0.013115010104632192,
+     "z": -2.7027943087257427,
+     "p_link": 0.006875928206330629,
+     "effect": 0.9904109589041238,
+     "eff_se": 0.027937154706839742,
+     "eff_lo": 0.9371412431519608,
+     "eff_hi": 1.0467086735167062,
+     "p_response": 0.73266307657114,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.73266307657114,
+     "endpoint": "n_engineered_features",
+     "family": "poisson",
+     "label": "model:effort",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "AC",
+     "coef": 0.014904921960970017,
+     "se": 0.013115010104632192,
+     "z": 1.1364781149276912,
+     "p_link": 0.25575651973310154,
+     "effect": 1.0152565880721092,
+     "eff_se": 0.028548048418210493,
+     "eff_lo": 0.9608173561820356,
+     "eff_hi": 1.0727803083404504,
+     "p_response": 0.5902498357989386,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.5902498357989386,
+     "endpoint": "n_engineered_features",
+     "family": "poisson",
+     "label": "model:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "BC",
+     "coef": -0.007341683107684082,
+     "se": 0.013115010104632193,
+     "z": -0.5597924095453816,
+     "p_link": 0.5756210416282672,
+     "effect": 0.9715061058344516,
+     "eff_se": 0.027428746556420098,
+     "eff_lo": 0.9192071063229602,
+     "eff_hi": 1.0267806973872668,
+     "p_response": 0.30588702299508685,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.30588702299508685,
+     "endpoint": "n_engineered_features",
+     "family": "poisson",
+     "label": "effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "ABC",
+     "coef": -0.01793179139714998,
+     "se": 0.013115010104632192,
+     "z": -1.3672724042215194,
+     "p_link": 0.1715399380478616,
+     "effect": 0.9635135135135258,
+     "eff_se": 0.027148748283027532,
+     "eff_lo": 0.9117455581205391,
+     "eff_hi": 1.0182207990537244,
+     "p_response": 0.18712713528438774,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.18712713528438774,
+     "endpoint": "n_engineered_features",
+     "family": "poisson",
+     "label": "model:effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    }
+   ],
+   "permutation": [
+    {
+     "term": "A",
+     "outcome": "n_engineered_features",
+     "statistic": 0.5995830483424884,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "model",
+     "p_model": 7.099853563957944e-113
+    },
+    {
+     "term": "B",
+     "outcome": "n_engineered_features",
+     "statistic": 0.1863599267446285,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "effort",
+     "p_model": 1.8067827623553814e-11
+    },
+    {
+     "term": "C",
+     "outcome": "n_engineered_features",
+     "statistic": -0.03166128190646485,
+     "p_perm": 0.31268436578171094,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "critic",
+     "p_model": 0.26349130399148024
+    }
+   ],
+   "diagnostics": [
+    {
+     "endpoint": "n_engineered_features",
+     "scale": "raw",
+     "shapiro_p": 0.011070743794570797,
+     "skew": 0.41263989925005085,
+     "excess_kurtosis": -0.7321127953692614,
+     "levene_p": 0.12359121624404493,
+     "sd_ratio": 4.1418307431330295
+    },
+    {
+     "endpoint": "n_engineered_features",
+     "scale": "log",
+     "shapiro_p": 0.03283861382870834,
+     "skew": 0.2809450004994165,
+     "excess_kurtosis": -0.8460643322962116,
+     "levene_p": 0.8582473055178541,
+     "sd_ratio": 1.7876694481199056
+    }
+   ],
+   "kruskal": {
+    "H": 68.39426463840746,
+    "p": 3.1169444684546656e-12,
+    "df": 7,
+    "n": 80,
+    "epsilon_sq": 0.865750185296297,
+    "eta_sq_H": 0.8526981199778815
+   },
+   "letters": {
+    "cell": {
+     "---": "a",
+     "-+-": "b",
+     "--+": "a",
+     "-++": "b",
+     "+--": "c",
+     "++-": "d",
+     "+-+": "cd",
+     "+++": "cd"
+    },
+    "A": {
+     "sonnet": "a",
+     "opus": "b"
+    },
+    "A_p": 2.129956069187383e-112,
+    "B": {
+     "medium": "a",
+     "xhigh": "b"
+    },
+    "B_p": 3.613565524710763e-11,
+    "C": {
+     "off": "a",
+     "on": "a"
+    },
+    "C_p": 0.26349130399148024
+   },
+   "letters_method": "Mann-Whitney U, Holm-adjusted over 28 pairs"
+  },
+  "n_features_after_fs": {
+   "key": "n_features_after_fs",
+   "family": "poisson",
+   "tier": "requested",
+   "label": "Features surviving selection",
+   "unit": "features",
+   "note": "Features reaching the modeling step.",
+   "validation": {
+    "outcome": "n_features_after_fs",
+    "family": "poisson",
+    "n_analysed": 80,
+    "n_dropped_nonfinite": 0,
+    "cells": 8,
+    "rank": 8,
+    "min_cell": 10,
+    "max_cell": 10,
+    "boundary_transform": false
+   },
+   "cell_table": [
+    {
+     "cell": "opus/medium/off",
+     "count": 10,
+     "mean": 52.0,
+     "std": 7.888106,
+     "min": 40,
+     "max": 60
+    },
+    {
+     "cell": "opus/medium/on",
+     "count": 10,
+     "mean": 75.9,
+     "std": 20.744209,
+     "min": 50,
+     "max": 110
+    },
+    {
+     "cell": "opus/xhigh/off",
+     "count": 10,
+     "mean": 75.0,
+     "std": 16.996732,
+     "min": 50,
+     "max": 100
+    },
+    {
+     "cell": "opus/xhigh/on",
+     "count": 10,
+     "mean": 101.5,
+     "std": 22.470969,
+     "min": 70,
+     "max": 134
+    },
+    {
+     "cell": "sonnet/medium/off",
+     "count": 10,
+     "mean": 37.0,
+     "std": 4.830459,
+     "min": 30,
+     "max": 40
+    },
+    {
+     "cell": "sonnet/medium/on",
+     "count": 10,
+     "mean": 37.5,
+     "std": 5.400617,
+     "min": 30,
+     "max": 45
+    },
+    {
+     "cell": "sonnet/xhigh/off",
+     "count": 10,
+     "mean": 45.5,
+     "std": 9.559754,
+     "min": 40,
+     "max": 70
+    },
+    {
+     "cell": "sonnet/xhigh/on",
+     "count": 10,
+     "mean": 49.0,
+     "std": 19.119507,
+     "min": 40,
+     "max": 100
+    }
+   ],
+   "pearson_dispersion": 3.321265316767522,
+   "optimizer": "irls/ml",
+   "effects": [
+    {
+     "term": "A",
+     "coef": 0.2841769806641343,
+     "se": 0.0246549459027907,
+     "z": 11.526165248327244,
+     "p_link": 9.738564051936624e-31,
+     "effect": 1.801183431952684,
+     "eff_se": 0.09623772426937378,
+     "eff_lo": 1.622101447388594,
+     "eff_hi": 2.00003628673395,
+     "p_response": 3.2968286858689773e-28,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 3.2968286858689773e-28,
+     "endpoint": "n_features_after_fs",
+     "family": "poisson",
+     "label": "model",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 9.890486057606931e-28,
+     "significant": true
+    },
+    {
+     "term": "B",
+     "coef": 0.1413950359352647,
+     "se": 0.0246549459027907,
+     "z": 5.734956243374282,
+     "p_link": 9.753752385554773e-09,
+     "effect": 1.3389328063241315,
+     "eff_se": 0.06996143731296796,
+     "eff_lo": 1.2085986494787522,
+     "eff_hi": 1.4833220777006435,
+     "p_response": 2.324817838637212e-08,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 2.324817838637212e-08,
+     "endpoint": "n_features_after_fs",
+     "family": "poisson",
+     "label": "effort",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 4.649635677274424e-08,
+     "significant": true
+    },
+    {
+     "term": "C",
+     "coef": 0.09603433040644899,
+     "se": 0.0246549459027907,
+     "z": 3.8951345010081257,
+     "p_link": 9.81442537205769e-05,
+     "effect": 1.2596658711217394,
+     "eff_se": 0.0651378776547888,
+     "eff_lo": 1.1382544471662457,
+     "eff_hi": 1.3940275927049723,
+     "p_response": 8.036299796000995e-06,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 8.036299796000995e-06,
+     "endpoint": "n_features_after_fs",
+     "family": "poisson",
+     "label": "critic",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 8.036299796000995e-06,
+     "significant": true
+    },
+    {
+     "term": "AB",
+     "coef": 0.022826591323531303,
+     "se": 0.024654945902790715,
+     "z": 0.9258422798221407,
+     "p_link": 0.354527951297266,
+     "effect": 1.1285971223021805,
+     "eff_se": 0.06116024459268672,
+     "eff_lo": 1.0148717074759743,
+     "eff_hi": 1.255066482872582,
+     "p_response": 0.02559033872518032,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.02559033872518032,
+     "endpoint": "n_features_after_fs",
+     "family": "poisson",
+     "label": "model:effort",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "AC",
+     "coef": 0.07415158228498474,
+     "se": 0.02465494590279071,
+     "z": 3.00757432514145,
+     "p_link": 0.002633417198620006,
+     "effect": 1.217330210772857,
+     "eff_se": 0.06523348593028692,
+     "eff_lo": 1.0959601799659298,
+     "eff_hi": 1.3521411353707726,
+     "p_response": 0.00024264650920380592,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.00024264650920380592,
+     "endpoint": "n_features_after_fs",
+     "family": "poisson",
+     "label": "model:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "BC",
+     "coef": -0.0018646661316230953,
+     "se": 0.024654945902790704,
+     "z": -0.07563050995832982,
+     "p_link": 0.9397130625356624,
+     "effect": 1.0239418554938242,
+     "eff_se": 0.05496525423272655,
+     "eff_lo": 0.9216854911303787,
+     "eff_hi": 1.1375430486014066,
+     "p_response": 0.6593904958934479,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.6593904958934479,
+     "endpoint": "n_features_after_fs",
+     "family": "poisson",
+     "label": "effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "ABC",
+     "coef": -0.017035904087019105,
+     "se": 0.024654945902790708,
+     "z": -0.6909730872737709,
+     "p_link": 0.48958245394845523,
+     "effect": 0.9983115238497481,
+     "eff_se": 0.05360870300384729,
+     "eff_lo": 0.8985807178829941,
+     "eff_hi": 1.1091111558672224,
+     "p_response": 0.9748949550197548,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.9748949550197548,
+     "endpoint": "n_features_after_fs",
+     "family": "poisson",
+     "label": "model:effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    }
+   ],
+   "permutation": [
+    {
+     "term": "A",
+     "outcome": "n_features_after_fs",
+     "statistic": 0.5884439110644571,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "model",
+     "p_model": 3.2968286858689773e-28
+    },
+    {
+     "term": "B",
+     "outcome": "n_features_after_fs",
+     "statistic": 0.29187288346639034,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "effort",
+     "p_model": 2.324817838637212e-08
+    },
+    {
+     "term": "C",
+     "outcome": "n_features_after_fs",
+     "statistic": 0.23084650414708593,
+     "p_perm": 0.00014999250037498125,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "critic",
+     "p_model": 8.036299796000995e-06
+    }
+   ],
+   "diagnostics": [
+    {
+     "endpoint": "n_features_after_fs",
+     "scale": "raw",
+     "shapiro_p": 0.02840140016149775,
+     "skew": 0.37553280574247716,
+     "excess_kurtosis": -0.1883339841869507,
+     "levene_p": 0.003067074674964811,
+     "sd_ratio": 4.651932522132731
+    },
+    {
+     "endpoint": "n_features_after_fs",
+     "scale": "log",
+     "shapiro_p": 0.034809692370064364,
+     "skew": 0.1806753091566109,
+     "excess_kurtosis": -0.4136524644641777,
+     "levene_p": 0.45811173994232635,
+     "sd_ratio": 2.165640051970373
+    }
+   ],
+   "kruskal": {
+    "H": 59.65766197009784,
+    "p": 1.766789296817162e-10,
+    "df": 7,
+    "n": 80,
+    "epsilon_sq": 0.7551602781025043,
+    "eta_sq_H": 0.7313564162513589
+   },
+   "letters": {
+    "cell": {
+     "---": "a",
+     "-+-": "ab",
+     "--+": "a",
+     "-++": "ab",
+     "+--": "bc",
+     "++-": "d",
+     "+-+": "cd",
+     "+++": "d"
+    },
+    "A": {
+     "sonnet": "a",
+     "opus": "b"
+    },
+    "A_p": 9.890486057606931e-28,
+    "B": {
+     "medium": "a",
+     "xhigh": "b"
+    },
+    "B_p": 4.649635677274424e-08,
+    "C": {
+     "off": "a",
+     "on": "b"
+    },
+    "C_p": 8.036299796000995e-06
+   },
+   "letters_method": "Mann-Whitney U, Holm-adjusted over 28 pairs"
+  },
+  "n_engineered_features_selected": {
+   "key": "n_engineered_features_selected",
+   "family": "poisson",
+   "tier": "requested",
+   "label": "Engineered features selected",
+   "unit": "features",
+   "note": "Nested inside both of the two counts above.",
+   "validation": {
+    "outcome": "n_engineered_features_selected",
+    "family": "poisson",
+    "n_analysed": 80,
+    "n_dropped_nonfinite": 0,
+    "cells": 8,
+    "rank": 8,
+    "min_cell": 10,
+    "max_cell": 10,
+    "boundary_transform": false
+   },
+   "cell_table": [
+    {
+     "cell": "opus/medium/off",
+     "count": 10,
+     "mean": 12.0,
+     "std": 2.357023,
+     "min": 8,
+     "max": 16
+    },
+    {
+     "cell": "opus/medium/on",
+     "count": 10,
+     "mean": 15.5,
+     "std": 2.27303,
+     "min": 13,
+     "max": 18
+    },
+    {
+     "cell": "opus/xhigh/off",
+     "count": 10,
+     "mean": 17.3,
+     "std": 3.945462,
+     "min": 11,
+     "max": 23
+    },
+    {
+     "cell": "opus/xhigh/on",
+     "count": 10,
+     "mean": 19.6,
+     "std": 4.452215,
+     "min": 13,
+     "max": 30
+    },
+    {
+     "cell": "sonnet/medium/off",
+     "count": 10,
+     "mean": 4.6,
+     "std": 1.429841,
+     "min": 1,
+     "max": 6
+    },
+    {
+     "cell": "sonnet/medium/on",
+     "count": 10,
+     "mean": 5.3,
+     "std": 0.948683,
+     "min": 4,
+     "max": 7
+    },
+    {
+     "cell": "sonnet/xhigh/off",
+     "count": 10,
+     "mean": 7.4,
+     "std": 2.366432,
+     "min": 5,
+     "max": 13
+    },
+    {
+     "cell": "sonnet/xhigh/on",
+     "count": 10,
+     "mean": 7.6,
+     "std": 2.54733,
+     "min": 5,
+     "max": 12
+    }
+   ],
+   "pearson_dispersion": 0.6165318972620278,
+   "optimizer": "irls/ml",
+   "effects": [
+    {
+     "term": "A",
+     "coef": 0.4785739212372331,
+     "se": 0.02670045803039001,
+     "z": 17.92380942276452,
+     "p_link": 7.687874983767564e-72,
+     "effect": 2.5863453815260993,
+     "eff_se": 0.1459134239770364,
+     "eff_lo": 2.3156046987468675,
+     "eff_hi": 2.8887410861453855,
+     "p_response": 1.1749264105338358e-63,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 1.1749264105338358e-63,
+     "endpoint": "n_engineered_features_selected",
+     "family": "poisson",
+     "label": "model",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 3.5247792316015075e-63,
+     "significant": true
+    },
+    {
+     "term": "B",
+     "coef": 0.1795443146845357,
+     "se": 0.02670045803039001,
+     "z": 6.72439081307824,
+     "p_link": 1.7632858311745758e-11,
+     "effect": 1.3877005347593563,
+     "eff_se": 0.06890736281827695,
+     "eff_lo": 1.2590085305532392,
+     "eff_hi": 1.5295470423263913,
+     "p_response": 4.156560502512271e-11,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 4.156560502512271e-11,
+     "endpoint": "n_engineered_features_selected",
+     "family": "poisson",
+     "label": "effort",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 8.313121005024542e-11,
+     "significant": true
+    },
+    {
+     "term": "C",
+     "coef": 0.06863440037689045,
+     "se": 0.02670045803039001,
+     "z": 2.570532696434343,
+     "p_link": 0.010154224096422915,
+     "effect": 1.1622276029055676,
+     "eff_se": 0.0613081147215983,
+     "eff_lo": 1.0480689590002663,
+     "eff_hi": 1.288820730120754,
+     "p_response": 0.004372048412266361,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.004372048412266361,
+     "endpoint": "n_engineered_features_selected",
+     "family": "poisson",
+     "label": "critic",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.004372048412266361,
+     "significant": true
+    },
+    {
+     "term": "AB",
+     "coef": -0.02942196617778573,
+     "se": 0.02670045803039001,
+     "z": -1.101927395563707,
+     "p_link": 0.27049323736182473,
+     "effect": 1.1011764705882328,
+     "eff_se": 0.057343481517701356,
+     "eff_lo": 0.9943306383707904,
+     "eff_hi": 1.219503425303261,
+     "p_response": 0.06420056149506481,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.06420056149506481,
+     "endpoint": "n_engineered_features_selected",
+     "family": "poisson",
+     "label": "model:effort",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "AC",
+     "coef": 0.026554709340593886,
+     "se": 0.026700458030390003,
+     "z": 0.9945413412148125,
+     "p_link": 0.3199593890603455,
+     "effect": 1.1161137440758284,
+     "eff_se": 0.05868693596174337,
+     "eff_lo": 1.0068180696730535,
+     "eff_hi": 1.2372740689084833,
+     "p_response": 0.03669056526447347,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.03669056526447347,
+     "endpoint": "n_engineered_features_selected",
+     "family": "poisson",
+     "label": "model:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "BC",
+     "coef": -0.030761572423166378,
+     "se": 0.026700458030390006,
+     "z": -1.152099053437738,
+     "p_link": 0.24928037206777065,
+     "effect": 0.9626373626373617,
+     "eff_se": 0.050708159195423236,
+     "eff_lo": 0.8682095918182002,
+     "eff_hi": 1.06733523872362,
+     "p_response": 0.4697550544915645,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.4697550544915645,
+     "endpoint": "n_engineered_features_selected",
+     "family": "poisson",
+     "label": "effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "ABC",
+     "coef": -0.0020160049279500797,
+     "se": 0.02670045803039001,
+     "z": -0.0755045072880584,
+     "p_link": 0.9398133114786008,
+     "effect": 0.984444444444443,
+     "eff_se": 0.05174338722607743,
+     "eff_lo": 0.8880781925006581,
+     "eff_hi": 1.0912674946658032,
+     "p_response": 0.7654906756962097,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.7654906756962097,
+     "endpoint": "n_engineered_features_selected",
+     "family": "poisson",
+     "label": "model:effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    }
+   ],
+   "permutation": [
+    {
+     "term": "A",
+     "outcome": "n_engineered_features_selected",
+     "statistic": 0.9502458296396461,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "model",
+     "p_model": 1.1749264105338358e-63
+    },
+    {
+     "term": "B",
+     "outcome": "n_engineered_features_selected",
+     "statistic": 0.3276480857513567,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "effort",
+     "p_model": 4.156560502512271e-11
+    },
+    {
+     "term": "C",
+     "outcome": "n_engineered_features_selected",
+     "statistic": 0.15033851094090397,
+     "p_perm": 0.008249587520623968,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "critic",
+     "p_model": 0.004372048412266361
+    }
+   ],
+   "diagnostics": [
+    {
+     "endpoint": "n_engineered_features_selected",
+     "scale": "raw",
+     "shapiro_p": 0.8670367020873934,
+     "skew": 0.1663977046266875,
+     "excess_kurtosis": -0.07092839130629347,
+     "levene_p": 0.05034869628950301,
+     "sd_ratio": 4.6930471293206395
+    },
+    {
+     "endpoint": "n_engineered_features_selected",
+     "scale": "log",
+     "shapiro_p": 0.7632075494905401,
+     "skew": -0.25395462678107866,
+     "excess_kurtosis": -0.06799589369758774,
+     "levene_p": 0.8208977502753042,
+     "sd_ratio": 3.5437208102200457
+    }
+   ],
+   "kruskal": {
+    "H": 65.76344082211202,
+    "p": 1.0560957997966576e-11,
+    "df": 7,
+    "n": 80,
+    "epsilon_sq": 0.8324486180014179,
+    "eta_sq_H": 0.8161589003071114
+   },
+   "letters": {
+    "cell": {
+     "---": "a",
+     "-+-": "b",
+     "--+": "ab",
+     "-++": "b",
+     "+--": "c",
+     "++-": "cd",
+     "+-+": "cd",
+     "+++": "d"
+    },
+    "A": {
+     "sonnet": "a",
+     "opus": "b"
+    },
+    "A_p": 3.5247792316015075e-63,
+    "B": {
+     "medium": "a",
+     "xhigh": "b"
+    },
+    "B_p": 8.313121005024542e-11,
+    "C": {
+     "off": "a",
+     "on": "b"
+    },
+    "C_p": 0.004372048412266361
+   },
+   "letters_method": "Mann-Whitney U, Holm-adjusted over 28 pairs"
+  },
+  "prop_engineered_selected": {
+   "key": "prop_engineered_selected",
+   "family": "beta",
+   "tier": "requested",
+   "label": "Engineered share of selected features",
+   "unit": "proportion",
+   "note": "ALGEBRAICALLY n_engineered_features_selected / n_features_after_fs -- not an independent endpoint.",
+   "validation": {
+    "outcome": "prop_engineered_selected",
+    "family": "beta",
+    "n_analysed": 80,
+    "n_dropped_nonfinite": 0,
+    "cells": 8,
+    "rank": 8,
+    "min_cell": 10,
+    "max_cell": 10,
+    "boundary_transform": false
+   },
+   "cell_table": [
+    {
+     "cell": "opus/medium/off",
+     "count": 10,
+     "mean": 0.23,
+     "std": 0.021202,
+     "min": 0.2,
+     "max": 0.2667
+    },
+    {
+     "cell": "opus/medium/on",
+     "count": 10,
+     "mean": 0.21223,
+     "std": 0.039172,
+     "min": 0.1636,
+     "max": 0.2833
+    },
+    {
+     "cell": "opus/xhigh/off",
+     "count": 10,
+     "mean": 0.23207,
+     "std": 0.033055,
+     "min": 0.2,
+     "max": 0.3143
+    },
+    {
+     "cell": "opus/xhigh/on",
+     "count": 10,
+     "mean": 0.19583,
+     "std": 0.033396,
+     "min": 0.1567,
+     "max": 0.2381
+    },
+    {
+     "cell": "sonnet/medium/off",
+     "count": 10,
+     "mean": 0.12333,
+     "std": 0.036612,
+     "min": 0.0333,
+     "max": 0.1667
+    },
+    {
+     "cell": "sonnet/medium/on",
+     "count": 10,
+     "mean": 0.1425,
+     "std": 0.0234,
+     "min": 0.1,
+     "max": 0.175
+    },
+    {
+     "cell": "sonnet/xhigh/off",
+     "count": 10,
+     "mean": 0.16035,
+     "std": 0.022301,
+     "min": 0.125,
+     "max": 0.1857
+    },
+    {
+     "cell": "sonnet/xhigh/on",
+     "count": 10,
+     "mean": 0.15783,
+     "std": 0.030315,
+     "min": 0.12,
+     "max": 0.2
+    }
+   ],
+   "optimizer": "bfgs",
+   "effects": [
+    {
+     "term": "A",
+     "coef": 0.24906080191852006,
+     "se": 0.0240678380400239,
+     "z": 10.348283111442807,
+     "p_link": 4.260574658885327e-25,
+     "effect": 0.07252490825902541,
+     "eff_se": 0.00696969760997306,
+     "eff_lo": 0.05886455196034332,
+     "eff_hi": 0.0861852645577075,
+     "p_response": 2.334187300453171e-25,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 2.334187300453171e-25,
+     "endpoint": "prop_engineered_selected",
+     "family": "beta",
+     "label": "model",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 7.002561901359514e-25,
+     "significant": true
+    },
+    {
+     "term": "B",
+     "coef": 0.04769399993752222,
+     "se": 0.02405959445555618,
+     "z": 1.9823276749582972,
+     "p_link": 0.04744257852892437,
+     "effect": 0.010714475238660703,
+     "eff_se": 0.006969293725790209,
+     "eff_lo": -0.002945089461569076,
+     "eff_hi": 0.024374039938890483,
+     "p_response": 0.12419949271891675,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.12419949271891675,
+     "endpoint": "prop_engineered_selected",
+     "family": "beta",
+     "label": "effort",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.2483989854378335,
+     "significant": false
+    },
+    {
+     "term": "C",
+     "coef": -0.017233075285151715,
+     "se": 0.02405900231960299,
+     "z": -0.7162838698057903,
+     "p_link": 0.4738160846855306,
+     "effect": -0.008662722662780065,
+     "eff_se": 0.006969291155636315,
+     "eff_lo": -0.022322282325600778,
+     "eff_hi": 0.0049968370000406485,
+     "p_response": 0.21387345112739553,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.21387345112739553,
+     "endpoint": "prop_engineered_selected",
+     "family": "beta",
+     "label": "critic",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.2483989854378335,
+     "significant": false
+    },
+    {
+     "term": "AB",
+     "coef": -0.07027170694964861,
+     "se": 0.024059998790692125,
+     "z": -2.9206862211827707,
+     "p_link": 0.003492613961116377,
+     "effect": -0.01797968642149267,
+     "eff_se": 0.006969309977362813,
+     "eff_lo": -0.031639282974219446,
+     "eff_hi": -0.0043200898687658935,
+     "p_response": 0.009884684965877131,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.009884684965877131,
+     "endpoint": "prop_engineered_selected",
+     "family": "beta",
+     "label": "model:effort",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "AC",
+     "coef": -0.06531267289628638,
+     "se": 0.024059626899386392,
+     "z": -2.7146170291590055,
+     "p_link": 0.006635245192292995,
+     "effect": -0.019319781414952497,
+     "eff_se": 0.006969314298169416,
+     "eff_lo": -0.0329793864363046,
+     "eff_hi": -0.005660176393600395,
+     "p_response": 0.0055692357701062015,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.0055692357701062015,
+     "endpoint": "prop_engineered_selected",
+     "family": "beta",
+     "label": "model:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "BC",
+     "coef": -0.04363047090127583,
+     "se": 0.02405938236853749,
+     "z": -1.8134493326949033,
+     "p_link": 0.06976254657575645,
+     "effect": -0.01135998546464373,
+     "eff_se": 0.006969294986079642,
+     "eff_lo": -0.02501955263499541,
+     "eff_hi": 0.0022995817057079506,
+     "p_response": 0.10310044657850008,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.10310044657850008,
+     "endpoint": "prop_engineered_selected",
+     "family": "beta",
+     "label": "effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "ABC",
+     "coef": 0.017166926145653176,
+     "se": 0.024059127493651657,
+     "z": 0.7135307026484196,
+     "p_link": 0.4755174213606198,
+     "effect": 0.0027105425878944933,
+     "eff_se": 0.006969285526421902,
+     "eff_lo": -0.010949006041868709,
+     "eff_hi": 0.016370091217657694,
+     "p_response": 0.6973302252777487,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.6973302252777487,
+     "endpoint": "prop_engineered_selected",
+     "family": "beta",
+     "label": "model:effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    }
+   ],
+   "permutation": [
+    {
+     "term": "A",
+     "outcome": "prop_engineered_selected",
+     "statistic": 0.07152999999999998,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "model",
+     "p_model": 2.334187300453171e-25
+    },
+    {
+     "term": "B",
+     "outcome": "prop_engineered_selected",
+     "statistic": 0.009504999999999986,
+     "p_perm": 0.18369081545922702,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "effort",
+     "p_model": 0.12419949271891675
+    },
+    {
+     "term": "C",
+     "outcome": "prop_engineered_selected",
+     "statistic": -0.009339999999999987,
+     "p_perm": 0.19429028548572572,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "critic",
+     "p_model": 0.21387345112739553
+    }
+   ],
+   "diagnostics": [
+    {
+     "endpoint": "prop_engineered_selected",
+     "scale": "raw",
+     "shapiro_p": 0.9822091512516679,
+     "skew": 0.008246396777509248,
+     "excess_kurtosis": -0.3295928481685979,
+     "levene_p": 0.7445939252072944,
+     "sd_ratio": 1.8476102460618673
+    }
+   ],
+   "kruskal": {
+    "H": 53.37286455819865,
+    "p": 3.1289204743921692e-09,
+    "df": 7,
+    "n": 80,
+    "epsilon_sq": 0.6756058804835272,
+    "eta_sq_H": 0.6440675633083146
+   },
+   "letters": {
+    "cell": {
+     "---": "a",
+     "-+-": "abc",
+     "--+": "ac",
+     "-++": "abc",
+     "+--": "d",
+     "++-": "d",
+     "+-+": "bd",
+     "+++": "bcd"
+    },
+    "A": {
+     "sonnet": "a",
+     "opus": "b"
+    },
+    "A_p": 7.002561901359514e-25,
+    "B": {
+     "medium": "a",
+     "xhigh": "a"
+    },
+    "B_p": 0.2483989854378335,
+    "C": {
+     "off": "a",
+     "on": "a"
+    },
+    "C_p": 0.2483989854378335
+   },
+   "letters_method": "Mann-Whitney U, Holm-adjusted over 28 pairs",
+   "dispersion_lrt": {
+    "stat": 2.657149606140706,
+    "df": 3.0,
+    "p": 0.447558452568953,
+    "llf_const": 164.75601626679455,
+    "llf_var": 166.0845910698649
+   },
+   "binomial_sensitivity": [
+    {
+     "term": "A",
+     "coef": 0.23644833559783193,
+     "se": 0.04169975827322301,
+     "z": 5.670256744621571,
+     "p_link": 1.4258368378986035e-08,
+     "effect": 0.06883958959542583,
+     "eff_se": 0.011538581894540972,
+     "eff_lo": 0.04622438464945958,
+     "eff_hi": 0.09145479454139208,
+     "p_response": 2.4308736736480207e-09,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 2.4308736736480207e-09,
+     "label": "model",
+     "beta_model_effect": 0.07252490825902541,
+     "beta_model_p": 2.334187300453171e-25
+    },
+    {
+     "term": "B",
+     "coef": 0.044012078067829516,
+     "se": 0.04169975827322297,
+     "z": 1.0554516354616708,
+     "p_link": 0.29121881796676063,
+     "effect": 0.01021663904700948,
+     "eff_se": 0.011538581894540958,
+     "eff_lo": -0.012398565898956746,
+     "eff_hi": 0.0328318439929757,
+     "p_response": 0.37592324044737757,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.37592324044737757,
+     "label": "effort",
+     "beta_model_effect": 0.010714475238660703,
+     "beta_model_p": 0.12419949271891675
+    },
+    {
+     "term": "C",
+     "coef": -0.036268861700920786,
+     "se": 0.041699758273222975,
+     "z": -0.8697619171622494,
+     "p_link": 0.3844305273010339,
+     "effect": -0.013660672047692696,
+     "eff_se": 0.011538581894540961,
+     "eff_lo": -0.03627587699365893,
+     "eff_hi": 0.008954532898273537,
+     "p_response": 0.23644767713090764,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.23644767713090764,
+     "label": "critic",
+     "beta_model_effect": -0.008662722662780065,
+     "beta_model_p": 0.21387345112739553
+    },
+    {
+     "term": "AB",
+     "coef": -0.06161163089067186,
+     "se": 0.04169975827322298,
+     "z": -1.477505708473976,
+     "p_link": 0.13954012922995448,
+     "effect": -0.015824233851006148,
+     "eff_se": 0.011538581894540961,
+     "eff_lo": -0.03843943879697238,
+     "eff_hi": 0.006790971094960085,
+     "p_response": 0.17024428588236995,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.17024428588236995,
+     "label": "model:effort",
+     "beta_model_effect": -0.01797968642149267,
+     "beta_model_p": 0.009884684965877131
+    },
+    {
+     "term": "AC",
+     "coef": -0.059129895624545056,
+     "se": 0.04169975827322297,
+     "z": -1.4179913283217915,
+     "p_link": 0.15619329653282857,
+     "effect": -0.018397515641679296,
+     "eff_se": 0.011538581894540956,
+     "eff_lo": -0.04101272058764552,
+     "eff_hi": 0.004217689304286926,
+     "p_response": 0.11083870014589378,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.11083870014589378,
+     "label": "model:critic",
+     "beta_model_effect": -0.019319781414952497,
+     "beta_model_p": 0.0055692357701062015
+    },
+    {
+     "term": "BC",
+     "coef": -0.034185414356250075,
+     "se": 0.04169975827322296,
+     "z": -0.8197988614768988,
+     "p_link": 0.41233078021166425,
+     "effect": -0.008888598058227587,
+     "eff_se": 0.011538581894540956,
+     "eff_lo": -0.03150380300419381,
+     "eff_hi": 0.013726606887738635,
+     "p_response": 0.44109993680190773,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.44109993680190773,
+     "label": "effort:critic",
+     "beta_model_effect": -0.01135998546464373,
+     "beta_model_p": 0.10310044657850008
+    },
+    {
+     "term": "ABC",
+     "coef": 0.016874795375600306,
+     "se": 0.04169975827322296,
+     "z": 0.40467369774745837,
+     "p_link": 0.6857173783556005,
+     "effect": 0.0033835673567950697,
+     "eff_se": 0.011538581894540954,
+     "eff_lo": -0.01923163758917115,
+     "eff_hi": 0.025998772302761288,
+     "p_response": 0.7693391354399283,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.7693391354399283,
+     "label": "model:effort:critic",
+     "beta_model_effect": 0.0027105425878944933,
+     "beta_model_p": 0.6973302252777487
+    }
+   ]
+  },
+  "total_tokens": {
+   "key": "total_tokens",
+   "family": "negbin",
+   "tier": "extra",
+   "label": "Total tokens",
+   "unit": "tokens",
+   "note": "Added because it is what separates a PRICE effect from a BEHAVIOR effect in the cost result. PLAN.md is explicit that token counts are NOT structural: resource use is an observed outcome.",
+   "validation": {
+    "outcome": "total_tokens",
+    "family": "negbin",
+    "n_analysed": 80,
+    "n_dropped_nonfinite": 0,
+    "cells": 8,
+    "rank": 8,
+    "min_cell": 10,
+    "max_cell": 10,
+    "boundary_transform": false
+   },
+   "cell_table": [
+    {
+     "cell": "opus/medium/off",
+     "count": 10,
+     "mean": 509519.5,
+     "std": 36350.046878,
+     "min": 473187,
+     "max": 573095
+    },
+    {
+     "cell": "opus/medium/on",
+     "count": 10,
+     "mean": 1831611.2,
+     "std": 424237.056264,
+     "min": 1426044,
+     "max": 2845248
+    },
+    {
+     "cell": "opus/xhigh/off",
+     "count": 10,
+     "mean": 619576.9,
+     "std": 32562.428098,
+     "min": 585033,
+     "max": 678879
+    },
+    {
+     "cell": "opus/xhigh/on",
+     "count": 10,
+     "mean": 1885288.3,
+     "std": 632093.920977,
+     "min": 1161634,
+     "max": 3412495
+    },
+    {
+     "cell": "sonnet/medium/off",
+     "count": 10,
+     "mean": 438675.5,
+     "std": 37145.625079,
+     "min": 397904,
+     "max": 532319
+    },
+    {
+     "cell": "sonnet/medium/on",
+     "count": 10,
+     "mean": 1111796.8,
+     "std": 333804.966986,
+     "min": 859947,
+     "max": 2036675
+    },
+    {
+     "cell": "sonnet/xhigh/off",
+     "count": 10,
+     "mean": 570775.2,
+     "std": 140827.142779,
+     "min": 494700,
+     "max": 961636
+    },
+    {
+     "cell": "sonnet/xhigh/on",
+     "count": 10,
+     "mean": 1281218.6,
+     "std": 202441.812326,
+     "min": 888187,
+     "max": 1545273
+    }
+   ],
+   "optimizer": "irls/ml",
+   "effects": [
+    {
+     "term": "A",
+     "coef": 0.13965465264366494,
+     "se": 0.02033346976481131,
+     "z": 6.868215521452637,
+     "p_link": 6.500995632487836e-12,
+     "effect": 1.424259862666293,
+     "eff_se": 0.06423321597216311,
+     "eff_lo": 1.3037688066305937,
+     "eff_hi": 1.5558864010902527,
+     "p_response": 4.4475501126752224e-15,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 4.4475501126752224e-15,
+     "endpoint": "total_tokens",
+     "family": "negbin",
+     "label": "model",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 8.895100225350445e-15,
+     "significant": true
+    },
+    {
+     "term": "B",
+     "coef": 0.07869039015220776,
+     "se": 0.020333469764811315,
+     "z": 3.869993221146532,
+     "p_link": 0.0001088383795500734,
+     "effect": 1.1195538174628483,
+     "eff_se": 0.05167401487533406,
+     "eff_lo": 1.0227205940187656,
+     "eff_hi": 1.2255554034268703,
+     "p_response": 0.014416570400169665,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.014416570400169665,
+     "endpoint": "total_tokens",
+     "family": "negbin",
+     "label": "effort",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.014416570400169665,
+     "significant": true
+    },
+    {
+     "term": "C",
+     "coef": 0.5163533300787458,
+     "se": 0.020333469764811304,
+     "z": 25.39425568047105,
+     "p_link": 2.9186271091331946e-142,
+     "effect": 2.8570401375579406,
+     "eff_se": 0.11805131298105602,
+     "eff_lo": 2.6347849027608294,
+     "eff_hi": 3.098043540125012,
+     "p_response": 2.1326156935221412e-142,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 2.1326156935221412e-142,
+     "endpoint": "total_tokens",
+     "family": "negbin",
+     "label": "critic",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 6.397847080566424e-142,
+     "significant": true
+    },
+    {
+     "term": "AB",
+     "coef": -0.022577031276509056,
+     "se": 0.020333469764811304,
+     "z": -1.1103383503970587,
+     "p_link": 0.26685325315478814,
+     "effect": 0.9671397782914138,
+     "eff_se": 0.04462872219677159,
+     "eff_lo": 0.8835080291050326,
+     "eff_hi": 1.058688002757662,
+     "p_response": 0.4690228588313763,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.4690228588313763,
+     "endpoint": "total_tokens",
+     "family": "negbin",
+     "label": "model:effort",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "AC",
+     "coef": 0.08171726469796432,
+     "se": 0.020333469764811325,
+     "z": 4.01885490490081,
+     "p_link": 5.848166894654219e-05,
+     "effect": 1.3419080572240973,
+     "eff_se": 0.06058748950826494,
+     "eff_lo": 1.2282613746583009,
+     "eff_hi": 1.466070065537888,
+     "p_response": 7.335090910830296e-11,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 7.335090910830296e-11,
+     "endpoint": "total_tokens",
+     "family": "negbin",
+     "label": "model:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "BC",
+     "coef": -0.03601065384789441,
+     "se": 0.02033346976481132,
+     "z": -1.7710038800270922,
+     "p_link": 0.0765600565093001,
+     "effect": 0.9953896205057845,
+     "eff_se": 0.04593188868428083,
+     "eff_lo": 0.9093157742261918,
+     "eff_hi": 1.0896110291870826,
+     "p_response": 0.9202311746986418,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.9202311746986418,
+     "endpoint": "total_tokens",
+     "family": "negbin",
+     "label": "effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "ABC",
+     "coef": -0.005660337186544842,
+     "se": 0.020333469764811308,
+     "z": -0.27837537085483105,
+     "p_link": 0.7807242238073638,
+     "effect": 0.9775352305271036,
+     "eff_se": 0.0451038561349682,
+     "eff_lo": 0.8930127257377497,
+     "eff_hi": 1.0700576815769818,
+     "p_response": 0.6224148689784654,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.6224148689784654,
+     "endpoint": "total_tokens",
+     "family": "negbin",
+     "label": "model:effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    }
+   ],
+   "permutation": [
+    {
+     "term": "A",
+     "outcome": "total_tokens",
+     "statistic": 0.3536522841038278,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "model",
+     "p_model": 4.4475501126752224e-15
+    },
+    {
+     "term": "B",
+     "outcome": "total_tokens",
+     "statistic": 0.11293022988488717,
+     "p_perm": 0.0847457627118644,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "effort",
+     "p_model": 0.014416570400169665
+    },
+    {
+     "term": "C",
+     "outcome": "total_tokens",
+     "statistic": 1.0497861718735908,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "critic",
+     "p_model": 2.1326156935221412e-142
+    }
+   ],
+   "diagnostics": [
+    {
+     "endpoint": "total_tokens",
+     "scale": "raw",
+     "shapiro_p": 2.716127536506574e-06,
+     "skew": 1.2513047323238662,
+     "excess_kurtosis": 1.4240578797284895,
+     "levene_p": 0.0014787969264574016,
+     "sd_ratio": 19.41175636747251
+    },
+    {
+     "endpoint": "total_tokens",
+     "scale": "log",
+     "shapiro_p": 0.00021080117131207877,
+     "skew": 0.9781638950144437,
+     "excess_kurtosis": 0.9711387246454843,
+     "levene_p": 0.07763871948900085,
+     "sd_ratio": 5.801198793365209
+    }
+   ],
+   "kruskal": {
+    "H": 71.37703703703698,
+    "p": 7.780948031423209e-13,
+    "df": 7,
+    "n": 80,
+    "epsilon_sq": 0.903506797937177,
+    "eta_sq_H": 0.8941255144032915
+   },
+   "letters": {
+    "cell": {
+     "---": "a",
+     "-+-": "b",
+     "--+": "c",
+     "-++": "c",
+     "+--": "b",
+     "++-": "d",
+     "+-+": "e",
+     "+++": "e"
+    },
+    "A": {
+     "sonnet": "a",
+     "opus": "b"
+    },
+    "A_p": 8.895100225350445e-15,
+    "B": {
+     "medium": "a",
+     "xhigh": "b"
+    },
+    "B_p": 0.014416570400169665,
+    "C": {
+     "off": "a",
+     "on": "b"
+    },
+    "C_p": 6.397847080566424e-142
+   },
+   "letters_method": "Mann-Whitney U, Holm-adjusted over 28 pairs"
+  },
+  "n_turns_total": {
+   "key": "n_turns_total",
+   "family": "negbin",
+   "tier": "extra",
+   "label": "Agent turns",
+   "unit": "turns",
+   "note": "Added as a price-free measure of how much work the workflow actually did.",
+   "validation": {
+    "outcome": "n_turns_total",
+    "family": "negbin",
+    "n_analysed": 80,
+    "n_dropped_nonfinite": 0,
+    "cells": 8,
+    "rank": 8,
+    "min_cell": 10,
+    "max_cell": 10,
+    "boundary_transform": false
+   },
+   "cell_table": [
+    {
+     "cell": "opus/medium/off",
+     "count": 10,
+     "mean": 16.8,
+     "std": 0.788811,
+     "min": 16,
+     "max": 18
+    },
+    {
+     "cell": "opus/medium/on",
+     "count": 10,
+     "mean": 40.7,
+     "std": 10.853059,
+     "min": 33,
+     "max": 70
+    },
+    {
+     "cell": "opus/xhigh/off",
+     "count": 10,
+     "mean": 16.9,
+     "std": 0.737865,
+     "min": 16,
+     "max": 18
+    },
+    {
+     "cell": "opus/xhigh/on",
+     "count": 10,
+     "mean": 33.8,
+     "std": 11.203174,
+     "min": 21,
+     "max": 62
+    },
+    {
+     "cell": "sonnet/medium/off",
+     "count": 10,
+     "mean": 15.0,
+     "std": 0.942809,
+     "min": 14,
+     "max": 17
+    },
+    {
+     "cell": "sonnet/medium/on",
+     "count": 10,
+     "mean": 31.6,
+     "std": 9.24001,
+     "min": 25,
+     "max": 57
+    },
+    {
+     "cell": "sonnet/xhigh/off",
+     "count": 10,
+     "mean": 17.9,
+     "std": 4.629615,
+     "min": 16,
+     "max": 31
+    },
+    {
+     "cell": "sonnet/xhigh/on",
+     "count": 10,
+     "mean": 29.1,
+     "std": 4.45845,
+     "min": 20,
+     "max": 37
+    }
+   ],
+   "optimizer": "irls/ml",
+   "effects": [
+    {
+     "term": "A",
+     "coef": 0.05732940267848852,
+     "se": 0.026961044036624665,
+     "z": 2.126379178811124,
+     "p_link": 0.033471700008676074,
+     "effect": 1.1559829152640027,
+     "eff_se": 0.060288127829283854,
+     "eff_lo": 1.0436589225123565,
+     "eff_hi": 1.280395799391483,
+     "p_response": 0.005447041469247624,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.005447041469247624,
+     "endpoint": "n_turns_total",
+     "family": "negbin",
+     "label": "model",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.010894082938495248,
+     "significant": true
+    },
+    {
+     "term": "B",
+     "coef": -0.010687619864375546,
+     "se": 0.02696104403662464,
+     "z": -0.3964097180308441,
+     "p_link": 0.6918027981096788,
+     "effect": 0.9385206628608955,
+     "eff_se": 0.04890859088972282,
+     "eff_lo": 0.8473945356334752,
+     "eff_hi": 1.0394462054896203,
+     "p_response": 0.22338831946626947,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.22338831946626947,
+     "endpoint": "n_turns_total",
+     "family": "negbin",
+     "label": "effort",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.22338831946626947,
+     "significant": false
+    },
+    {
+     "term": "C",
+     "coef": 0.351130095617901,
+     "se": 0.026961044036624623,
+     "z": 13.023608994552147,
+     "p_link": 8.982305730627585e-39,
+     "effect": 2.030030028860717,
+     "eff_se": 0.10925633049348787,
+     "eff_lo": 1.8267989242271774,
+     "eff_hi": 2.2558705632146303,
+     "p_response": 1.5742491884021132e-39,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 1.5742491884021132e-39,
+     "endpoint": "n_turns_total",
+     "family": "negbin",
+     "label": "critic",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 4.7227475652063395e-39,
+     "significant": true
+    },
+    {
+     "term": "AB",
+     "coef": -0.034270513756944045,
+     "se": 0.026961044036624648,
+     "z": -1.271112265177491,
+     "p_link": 0.20368871253279375,
+     "effect": 0.9311004815284332,
+     "eff_se": 0.04853594728964951,
+     "eff_lo": 0.8406699746865818,
+     "eff_hi": 1.0312585590150227,
+     "p_response": 0.17084628592115925,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.17084628592115925,
+     "endpoint": "n_turns_total",
+     "family": "negbin",
+     "label": "model:effort",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "AC",
+     "coef": 0.043369003313451664,
+     "se": 0.02696104403662466,
+     "z": 1.6085802632323123,
+     "p_link": 0.10770815276011407,
+     "effect": 1.1377118723007262,
+     "eff_se": 0.05931534922553061,
+     "eff_lo": 1.0271984216503594,
+     "eff_hi": 1.2601151608998593,
+     "p_response": 0.013335515227339327,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.013335515227339327,
+     "endpoint": "n_turns_total",
+     "family": "negbin",
+     "label": "model:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "BC",
+     "coef": -0.05635893144297617,
+     "se": 0.026961044036624658,
+     "z": -2.0903838651951525,
+     "p_link": 0.03658333109702814,
+     "effect": 0.8842203642024009,
+     "eff_se": 0.04611440155836398,
+     "eff_lo": 0.7983036757916719,
+     "eff_hi": 0.9793837560560846,
+     "p_response": 0.01830442466495713,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.01830442466495713,
+     "endpoint": "n_turns_total",
+     "family": "negbin",
+     "label": "effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "ABC",
+     "coef": 0.008433429562669442,
+     "se": 0.026961044036624655,
+     "z": 0.31280055591368155,
+     "p_link": 0.7544321930070116,
+     "effect": 0.9842674555488434,
+     "eff_se": 0.0512934788242629,
+     "eff_lo": 0.8886979078966701,
+     "eff_hi": 1.0901144420891737,
+     "p_response": 0.7609063519245001,
+     "scale": "ratio of marginal means (eight cells)",
+     "p": 0.7609063519245001,
+     "endpoint": "n_turns_total",
+     "family": "negbin",
+     "label": "model:effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    }
+   ],
+   "permutation": [
+    {
+     "term": "A",
+     "outcome": "n_turns_total",
+     "statistic": 0.14495098292883488,
+     "p_perm": 0.01719914004299785,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "model",
+     "p_model": 0.005447041469247624
+    },
+    {
+     "term": "B",
+     "outcome": "n_turns_total",
+     "statistic": -0.06345041657218603,
+     "p_perm": 0.3222838858057097,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "effort",
+     "p_model": 0.22338831946626947
+    },
+    {
+     "term": "C",
+     "outcome": "n_turns_total",
+     "statistic": 0.7080505860625202,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "log ratio",
+     "label": "critic",
+     "p_model": 1.5742491884021132e-39
+    }
+   ],
+   "diagnostics": [
+    {
+     "endpoint": "n_turns_total",
+     "scale": "raw",
+     "shapiro_p": 1.4094720920239136e-06,
+     "skew": 1.217600306307904,
+     "excess_kurtosis": 1.680773997922584,
+     "levene_p": 0.0890158235630126,
+     "sd_ratio": 15.183234577813057
+    },
+    {
+     "endpoint": "n_turns_total",
+     "scale": "log",
+     "shapiro_p": 5.3936581095821804e-05,
+     "skew": 0.9400909880909303,
+     "excess_kurtosis": 1.2800767330802385,
+     "levene_p": 0.16995361506053663,
+     "sd_ratio": 6.6208668569256455
+    }
+   ],
+   "kruskal": {
+    "H": 65.2255257604856,
+    "p": 1.3547792108297825e-11,
+    "df": 7,
+    "n": 80,
+    "epsilon_sq": 0.8256395665884253,
+    "eta_sq_H": 0.8086878577845221
+   },
+   "letters": {
+    "cell": {
+     "---": "a",
+     "-+-": "b",
+     "--+": "c",
+     "-++": "c",
+     "+--": "b",
+     "++-": "b",
+     "+-+": "d",
+     "+++": "cd"
+    },
+    "A": {
+     "sonnet": "a",
+     "opus": "b"
+    },
+    "A_p": 0.010894082938495248,
+    "B": {
+     "medium": "a",
+     "xhigh": "a"
+    },
+    "B_p": 0.22338831946626947,
+    "C": {
+     "off": "a",
+     "on": "b"
+    },
+    "C_p": 4.7227475652063395e-39
+   },
+   "letters_method": "Mann-Whitney U, Holm-adjusted over 28 pairs"
+  },
+  "inner_cv_score": {
+   "key": "inner_cv_score",
+   "family": "beta",
+   "tier": "extra",
+   "label": "Inner-CV score (Optuna best)",
+   "unit": "score",
+   "note": "Added to test the optimism gap: does the score the modeling agent optimizes track held-out PR-AUC?",
+   "validation": {
+    "outcome": "inner_cv_score",
+    "family": "beta",
+    "n_analysed": 80,
+    "n_dropped_nonfinite": 0,
+    "cells": 8,
+    "rank": 8,
+    "min_cell": 10,
+    "max_cell": 10,
+    "boundary_transform": false
+   },
+   "cell_table": [
+    {
+     "cell": "opus/medium/off",
+     "count": 10,
+     "mean": 0.586461,
+     "std": 0.006741,
+     "min": 0.577596,
+     "max": 0.593756
+    },
+    {
+     "cell": "opus/medium/on",
+     "count": 10,
+     "mean": 0.59315,
+     "std": 0.003331,
+     "min": 0.587076,
+     "max": 0.596916
+    },
+    {
+     "cell": "opus/xhigh/off",
+     "count": 10,
+     "mean": 0.592325,
+     "std": 0.003406,
+     "min": 0.587913,
+     "max": 0.597913
+    },
+    {
+     "cell": "opus/xhigh/on",
+     "count": 10,
+     "mean": 0.594376,
+     "std": 0.002873,
+     "min": 0.589943,
+     "max": 0.59945
+    },
+    {
+     "cell": "sonnet/medium/off",
+     "count": 10,
+     "mean": 0.58616,
+     "std": 0.002877,
+     "min": 0.581559,
+     "max": 0.590918
+    },
+    {
+     "cell": "sonnet/medium/on",
+     "count": 10,
+     "mean": 0.58618,
+     "std": 0.001481,
+     "min": 0.583737,
+     "max": 0.588574
+    },
+    {
+     "cell": "sonnet/xhigh/off",
+     "count": 10,
+     "mean": 0.588312,
+     "std": 0.004791,
+     "min": 0.58192,
+     "max": 0.595841
+    },
+    {
+     "cell": "sonnet/xhigh/on",
+     "count": 10,
+     "mean": 0.588222,
+     "std": 0.004824,
+     "min": 0.580271,
+     "max": 0.594254
+    }
+   ],
+   "optimizer": "lbfgs-fallback",
+   "effects": [
+    {
+     "term": "A",
+     "coef": 0.009016213765119392,
+     "se": 0.0017870451814471888,
+     "z": 5.045319423775208,
+     "p_link": 4.527643253300856e-07,
+     "effect": 0.004360893444502523,
+     "eff_se": 0.0008649204168720763,
+     "eff_lo": 0.002665680577939883,
+     "eff_hi": 0.006056106311065162,
+     "p_response": 4.607895728230295e-07,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 4.607895728230295e-07,
+     "endpoint": "inner_cv_score",
+     "family": "beta",
+     "label": "model",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 1.3823687184690885e-06,
+     "significant": true
+    },
+    {
+     "term": "B",
+     "coef": 0.00582636333010643,
+     "se": 0.001787045180007343,
+     "z": 3.2603335356538046,
+     "p_link": 0.0011128126781224702,
+     "effect": 0.002820687650946674,
+     "eff_se": 0.000864920416264141,
+     "eff_lo": 0.0011254747855755655,
+     "eff_hi": 0.004515900516317782,
+     "p_response": 0.0011093760181024683,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.0011093760181024683,
+     "endpoint": "inner_cv_score",
+     "family": "beta",
+     "label": "effort",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.0022187520362049367,
+     "significant": true
+    },
+    {
+     "term": "C",
+     "coef": 0.004475213388716256,
+     "se": 0.0017870451795836582,
+     "z": 2.5042530764436974,
+     "p_link": 0.012271022550349243,
+     "effect": 0.002163994632954247,
+     "eff_se": 0.0008649204160815808,
+     "eff_lo": 0.0004687817679409501,
+     "eff_hi": 0.003859207497967544,
+     "p_response": 0.012350854425917233,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.012350854425917233,
+     "endpoint": "inner_cv_score",
+     "family": "beta",
+     "label": "critic",
+     "structural": false,
+     "tier": "main (Holm within endpoint)",
+     "p_holm": 0.012350854425917233,
+     "significant": true
+    },
+    {
+     "term": "AB",
+     "coef": 0.0014893599724748862,
+     "se": 0.0017870451790421066,
+     "z": 0.8334204361152269,
+     "p_link": 0.40460765309247393,
+     "effect": 0.0007181730522454188,
+     "eff_se": 0.000864920415851844,
+     "eff_lo": -0.0009770398123176021,
+     "eff_hi": 0.0024133859168084396,
+     "p_response": 0.406349823748579,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.406349823748579,
+     "endpoint": "inner_cv_score",
+     "family": "beta",
+     "label": "model:effort",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "AC",
+     "coef": 0.004549613383374188,
+     "se": 0.0017870451796040874,
+     "z": 2.545886044348435,
+     "p_link": 0.01090007650232268,
+     "effect": 0.0022000214395021533,
+     "eff_se": 0.0008649204160902669,
+     "eff_lo": 0.0005048085744718321,
+     "eff_hi": 0.0038952343045324748,
+     "p_response": 0.010971306295739884,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.010971306295739884,
+     "endpoint": "inner_cv_score",
+     "family": "beta",
+     "label": "model:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "BC",
+     "coef": -0.0024438909146572334,
+     "se": 0.0017870451791565625,
+     "z": -1.3675596695382288,
+     "p_link": 0.17144994777559408,
+     "effect": -0.0011839085412260753,
+     "eff_se": 0.0008649204159016583,
+     "eff_lo": -0.0028791214058867306,
+     "eff_hi": 0.0005113043234345801,
+     "p_response": 0.17105982133677766,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.17105982133677766,
+     "endpoint": "inner_cv_score",
+     "family": "beta",
+     "label": "effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    },
+    {
+     "term": "ABC",
+     "coef": -0.0023317951281261766,
+     "se": 0.0017870451791402661,
+     "z": -1.3048327794644707,
+     "p_link": 0.19194979466033568,
+     "effect": -0.0011295935972958082,
+     "eff_se": 0.0008649204158946769,
+     "eff_lo": -0.00282480646194278,
+     "eff_hi": 0.0005656192673511638,
+     "p_response": 0.19154959532776272,
+     "scale": "difference of marginal means (eight cells)",
+     "p": 0.19154959532776272,
+     "endpoint": "inner_cv_score",
+     "family": "beta",
+     "label": "model:effort:critic",
+     "structural": false,
+     "tier": "exploratory",
+     "p_holm": NaN,
+     "significant": null
+    }
+   ],
+   "permutation": [
+    {
+     "term": "A",
+     "outcome": "inner_cv_score",
+     "statistic": 0.004359467406713002,
+     "p_perm": 4.999750012499375e-05,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "model",
+     "p_model": 4.607895728230295e-07
+    },
+    {
+     "term": "B",
+     "outcome": "inner_cv_score",
+     "statistic": 0.0028207698505313683,
+     "p_perm": 0.0030498475076246186,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "effort",
+     "p_model": 0.0011093760181024683
+    },
+    {
+     "term": "C",
+     "outcome": "inner_cv_score",
+     "statistic": 0.0021675641562979298,
+     "p_perm": 0.024898755062246886,
+     "n_perm": 20000,
+     "scale": "difference",
+     "label": "critic",
+     "p_model": 0.012350854425917233
+    }
+   ],
+   "diagnostics": [
+    {
+     "endpoint": "inner_cv_score",
+     "scale": "raw",
+     "shapiro_p": 0.04272948984665718,
+     "skew": -0.03505649020229621,
+     "excess_kurtosis": -1.0621844211703495,
+     "levene_p": 1.186623796283432e-05,
+     "sd_ratio": 4.552186850839581
+    }
+   ],
+   "kruskal": {
+    "H": 32.635555555555584,
+    "p": 3.095212488927907e-05,
+    "df": 7,
+    "n": 80,
+    "epsilon_sq": 0.41310829817158967,
+    "eta_sq_H": 0.3560493827160498
+   },
+   "letters": {
+    "cell": {
+     "---": "a",
+     "-+-": "ab",
+     "--+": "a",
+     "-++": "ab",
+     "+--": "ab",
+     "++-": "b",
+     "+-+": "b",
+     "+++": "b"
+    },
+    "A": {
+     "sonnet": "a",
+     "opus": "b"
+    },
+    "A_p": 1.3823687184690885e-06,
+    "B": {
+     "medium": "a",
+     "xhigh": "b"
+    },
+    "B_p": 0.0022187520362049367,
+    "C": {
+     "off": "a",
+     "on": "b"
+    },
+    "C_p": 0.012350854425917233
+   },
+   "letters_method": "Mann-Whitney U, Holm-adjusted over 28 pairs"
+  },
+  "_optimism": {
+   "pearson_r": -0.1125981916009604,
+   "pearson_p": 0.32001588705236694,
+   "spearman_r": -0.15972665875457487,
+   "spearman_p": 0.15699279208238123,
+   "gap_mean": 0.052093364531687045,
+   "gap_sd": 0.010467946925150344
+  }
+ }
+}

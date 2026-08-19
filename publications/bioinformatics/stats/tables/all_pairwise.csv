@@ -1,0 +1,309 @@
+endpoint,endpoint_label,unit,method,group1,group2,letter1,letter2,letters_share,estimate,ci_lo,ci_hi,p_raw,p_adj,significant
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+++,++-,a,a,True,,,,0.4273553138978077,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+++,+-+,a,a,True,,,,0.2897370628221378,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+++,+--,a,a,True,,,,0.4495213257670259,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+++,-++,a,a,True,,,,0.2730363397511883,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+++,-+-,a,a,True,,,,0.1404650481583549,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+++,--+,a,a,True,,,,0.025748080821108,0.6951981821699177,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+++,---,a,a,True,,,,0.0172574560831197,0.4832087703273534,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,++-,+-+,a,a,True,,,,0.8205295061094116,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,++-,+--,a,a,True,,,,0.9698499769931556,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,++-,-++,a,a,True,,,,0.7911833481406884,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,++-,-+-,a,a,True,,,,0.4273553138978077,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,++-,--+,a,a,True,,,,0.1619724104801261,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,++-,---,a,a,True,,,,0.1304253772126348,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+-+,+--,a,a,True,,,,0.7913367801006604,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+-+,-++,a,a,True,,,,0.9698499769931556,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+-+,-+-,a,a,True,,,,0.7337299956962472,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+-+,--+,a,a,True,,,,0.1858767323658757,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+-+,---,a,a,True,,,,0.15077333785344,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+--,-++,a,a,True,,,,0.7337299956962472,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+--,-+-,a,a,True,,,,0.7337299956962472,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+--,--+,a,a,True,,,,0.1858767323658757,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,+--,---,a,a,True,,,,0.1616567402704087,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,-++,-+-,a,a,True,,,,1.0,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,-++,--+,a,a,True,,,,0.2122938361923315,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,-++,---,a,a,True,,,,0.24132159301718,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,-+-,--+,a,a,True,,,,0.1858767323658757,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,-+-,---,a,a,True,,,,0.1734555737123916,1.0,False
+pr_auc,PR-AUC,AUPRC,Mann-Whitney U + Holm,--+,---,a,a,True,,,,0.8205295061094116,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+++,++-,a,a,True,,,,0.520209005780562,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+++,+-+,a,a,True,,,,0.6497786137862427,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+++,+--,a,a,True,,,,0.0283060432283233,0.7359571239364083,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+++,-++,a,a,True,,,,0.025748080821108,0.6951981821699177,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+++,-+-,a,a,True,,,,0.0172155374626158,0.4820350489532424,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+++,--+,a,a,True,,,,0.2122938361923315,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+++,---,a,a,True,,,,0.0961785469058333,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,++-,+-+,a,a,True,,,,0.8499952484876381,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,++-,+--,a,a,True,,,,0.1401665724324623,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,++-,-++,a,a,True,,,,0.2409675511172134,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,++-,-+-,a,a,True,,,,0.2117778010581715,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,++-,--+,a,a,True,,,,0.6229147020941013,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,++-,---,a,a,True,,,,0.596286621572947,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+-+,+--,a,a,True,,,,0.0492807602200551,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+-+,-++,a,a,True,,,,0.0640221012830268,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+-+,-+-,a,a,True,,,,0.0538123660121454,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+-+,--+,a,a,True,,,,0.24132159301718,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+-+,---,a,a,True,,,,0.4055023001299908,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+--,-++,a,a,True,,,,0.8501067391385259,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+--,-+-,a,a,True,,,,0.8500510248972775,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+--,--+,a,a,True,,,,0.6773559458061944,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,+--,---,a,a,True,,,,0.3074894566186813,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,-++,-+-,a,a,True,,,,0.4053255515634538,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,-++,--+,a,a,True,,,,0.5451985101800713,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,-++,---,a,a,True,,,,0.1985957586332152,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,-+-,--+,a,a,True,,,,0.8499394097939112,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,-+-,---,a,a,True,,,,0.472509068324386,1.0,False
+roc_auc,ROC-AUC,ROC-AUC,Mann-Whitney U + Holm,--+,---,a,a,True,,,,0.939720366947744,1.0,False
+usd,Cost per run,USD,Mann-Whitney U + Holm,+++,++-,f,d,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+++,+-+,f,f,True,,,,0.025748080821108,0.0514961616422161,False
+usd,Cost per run,USD,Mann-Whitney U + Holm,+++,+--,f,e,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+++,-++,f,d,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+++,-+-,f,b,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+++,--+,f,c,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+++,---,f,a,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,++-,+-+,d,f,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,++-,+--,d,e,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,++-,-++,d,d,True,,,,0.075661572143887,0.075661572143887,False
+usd,Cost per run,USD,Mann-Whitney U + Holm,++-,-+-,d,b,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,++-,--+,d,c,False,,,,0.0017062493689195,0.0102374962135175,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,++-,---,d,a,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+-+,+--,f,e,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+-+,-++,f,d,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+-+,-+-,f,b,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+-+,--+,f,c,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+-+,---,f,a,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+--,-++,e,d,False,,,,0.0002461281279052,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+--,-+-,e,b,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+--,--+,e,c,False,,,,0.0057953585443347,0.0173860756330041,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,+--,---,e,a,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,-++,-+-,d,b,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,-++,--+,d,c,False,,,,0.0017062493689195,0.0102374962135175,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,-++,---,d,a,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,-+-,--+,b,c,False,,,,0.0017062493689195,0.0102374962135175,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,-+-,---,b,a,False,,,,0.0001826717911095,0.0051148101510674,True
+usd,Cost per run,USD,Mann-Whitney U + Holm,--+,---,c,a,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+++,++-,f,c,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+++,+-+,f,d,False,,,,0.0007685389131627,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+++,+--,f,e,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+++,-++,f,d,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+++,-+-,f,b,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+++,--+,f,c,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+++,---,f,a,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,++-,+-+,c,d,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,++-,+--,c,e,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,++-,-++,c,d,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,++-,-+-,c,b,False,,,,0.0017062493689195,0.0068249974756783,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,++-,--+,c,c,True,,,,0.025748080821108,0.0514961616422161,False
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,++-,---,c,a,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+-+,+--,d,e,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+-+,-++,d,d,True,,,,0.4726755935115871,0.4726755935115871,False
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+-+,-+-,d,b,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+-+,--+,d,c,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+-+,---,d,a,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+--,-++,e,d,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+--,-+-,e,b,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+--,--+,e,c,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,+--,---,e,a,False,,,,0.0002461281279052,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,-++,-+-,d,b,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,-++,--+,d,c,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,-++,---,d,a,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,-+-,--+,b,c,False,,,,0.0017062493689195,0.0068249974756783,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,-+-,---,b,a,False,,,,0.0001826717911095,0.0051148101510674,True
+wallclock_min,Wall-clock time,minutes,Mann-Whitney U + Holm,--+,---,c,a,False,,,,0.0001826717911095,0.0051148101510674,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+++,++-,cd,d,True,,,,0.147225394854793,0.7361269742739653,False
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+++,+-+,cd,cd,True,,,,0.492526426877894,1.0,False
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+++,+--,cd,c,True,,,,0.0314893033109963,0.2204251231769743,False
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+++,-++,cd,b,False,,,,0.0001756155310459,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+++,-+-,cd,b,False,,,,0.0001746242085521,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+++,--+,cd,a,False,,,,0.0001649374219546,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+++,---,cd,a,False,,,,0.0001707002945198,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,++-,+-+,d,cd,True,,,,0.0318856070166572,0.2204251231769743,False
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,++-,+--,d,c,False,,,,0.0024877051246692,0.0223893461220235,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,++-,-++,d,b,False,,,,0.0001726539968822,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,++-,-+-,d,b,False,,,,0.0001716750871712,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,++-,--+,d,a,False,,,,0.000162110734474,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,++-,---,d,a,False,,,,0.0001678005162581,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+-+,+--,cd,c,True,,,,0.6443607734396007,1.0,False
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+-+,-++,cd,b,False,,,,0.0001996451951554,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+-+,-+-,cd,b,False,,,,0.0001716750871712,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+-+,--+,cd,a,False,,,,0.000162110734474,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+-+,---,cd,a,False,,,,0.0001678005162581,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+--,-++,c,b,False,,,,0.0001547487832067,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+--,-+-,c,b,False,,,,0.0001538463426057,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+--,--+,c,a,False,,,,0.0001450359623072,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,+--,---,c,a,False,,,,0.0001502756988579,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,-++,-+-,b,b,True,,,,0.3380803756286665,1.0,False
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,-++,--+,b,a,False,,,,0.000285986542128,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,-++,---,b,a,False,,,,0.0060090514453144,0.0480724115625159,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,-+-,--+,b,a,False,,,,0.0001630489355365,0.0040610069446033,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,-+-,---,b,a,False,,,,0.001181433605251,0.0118143360525101,True
+n_engineered_features,Engineered features created,features,Mann-Whitney U + Holm,--+,---,a,a,True,,,,0.1821612679834846,0.7361269742739653,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+++,++-,d,d,True,,,,0.0089009845629928,0.0979108301929211,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+++,+-+,d,cd,True,,,,0.0249729653194957,0.1997837225559658,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+++,+--,d,bc,False,,,,0.0001611765478272,0.0035458840521992,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+++,-++,d,ab,False,,,,0.0004387008283447,0.0087740165668943,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+++,-+-,d,ab,False,,,,0.0001711890038361,0.0035949690805591,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+++,--+,d,a,False,,,,0.0001450359623072,0.0034358374362662,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+++,---,d,a,False,,,,0.0001277652863073,0.0033866111511869,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,++-,+-+,d,cd,True,,,,1.0,1.0,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,++-,+--,d,bc,False,,,,0.0022548366031125,0.0338225490466875,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,++-,-++,d,ab,False,,,,0.0032010938049804,0.0448153132697266,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,++-,-+-,d,ab,False,,,,0.0006179522015113,0.0117410918287165,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,++-,--+,d,a,False,,,,0.0001424677981854,0.0034358374362662,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,++-,---,d,a,False,,,,0.0001254300426365,0.0033866111511869,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+-+,+--,cd,bc,True,,,,0.0051708551750402,0.062050262100483,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+-+,-++,cd,ab,False,,,,0.0034812458678301,0.0452561962817917,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+-+,-+-,cd,ab,False,,,,0.0008063915033872,0.0137086555575827,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+-+,--+,cd,a,False,,,,0.0001374334974506,0.0034358374362662,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+-+,---,cd,a,False,,,,0.0001208558037907,0.0033839625061423,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+--,-++,bc,ab,True,,,,0.0984898259967435,0.3939593039869741,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+--,-+-,bc,ab,True,,,,0.0615666362267847,0.336037552074634,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+--,--+,bc,a,False,,,,0.0010648829991651,0.0170381279866418,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,+--,---,bc,a,False,,,,0.0006685807679286,0.0120344538227152,True
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,-++,-+-,ab,ab,True,,,,0.8939366174962716,1.0,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,-++,--+,ab,a,True,,,,0.0560062586791056,0.336037552074634,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,-++,---,ab,a,True,,,,0.0195291442970376,0.1757622986733391,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,-+-,--+,ab,a,True,,,,0.0324207748892297,0.2269454242246083,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,-+-,---,ab,a,True,,,,0.0112612303572238,0.1126123035722382,False
+n_features_after_fs,Features surviving selection,features,Mann-Whitney U + Holm,--+,---,a,a,True,,,,0.7863507532043057,1.0,False
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+++,++-,d,cd,True,,,,0.3228233890194294,1.0,False
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+++,+-+,d,cd,True,,,,0.0145291959214806,0.1017043714503648,False
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+++,+--,d,c,False,,,,0.0005474211321582,0.0076638958502155,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+++,-++,d,b,False,,,,0.0001697296086614,0.0042574900898991,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+++,-+-,d,b,False,,,,0.0001974255420586,0.0042574900898991,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+++,--+,d,ab,False,,,,0.0001602463653358,0.0042574900898991,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+++,---,d,a,False,,,,0.0001538463426057,0.0042574900898991,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,++-,+-+,cd,cd,True,,,,0.2864499596828914,1.0,False
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,++-,+--,cd,c,True,,,,0.0056492127774921,0.0508429149974297,False
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,++-,-++,cd,b,False,,,,0.0003180347981768,0.0050885567708299,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,++-,-+-,cd,b,False,,,,0.0003230556926118,0.0050885567708299,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,++-,--+,cd,ab,False,,,,0.0001678005162581,0.0042574900898991,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,++-,---,cd,a,False,,,,0.0001611765478272,0.0042574900898991,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+-+,+--,cd,c,True,,,,0.007517118328599,0.060136946628792,False
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+-+,-++,cd,b,False,,,,0.0001678005162581,0.0042574900898991,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+-+,-+-,cd,b,False,,,,0.0002561292392215,0.0043541970667659,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+-+,--+,cd,ab,False,,,,0.0001583979717831,0.0042574900898991,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+-+,---,cd,a,False,,,,0.0001520532174963,0.0042574900898991,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+--,-++,c,b,False,,,,0.003411591393725,0.037527505330975,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+--,-+-,c,b,False,,,,0.0018569523509148,0.0241403805618925,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+--,--+,c,ab,False,,,,0.0001649374219546,0.0042574900898991,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,+--,---,c,a,False,,,,0.0001583979717831,0.0042574900898991,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,-++,-+-,b,b,True,,,,1.0,1.0,False
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,-++,--+,b,ab,True,,,,0.0218527360676304,0.1092636803381522,False
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,-++,---,b,a,False,,,,0.0034943009145723,0.037527505330975,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,-+-,--+,b,ab,True,,,,0.0147795936418206,0.1017043714503648,False
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,-+-,---,b,a,False,,,,0.0027999259650244,0.0335991115802932,True
+n_engineered_features_selected,Engineered features selected,features,Mann-Whitney U + Holm,--+,---,ab,a,True,,,,0.315777430418978,1.0,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+++,++-,bcd,d,True,,,,0.0491953535114038,0.4919535351140386,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+++,+-+,bcd,bd,True,,,,0.3844942826161789,1.0,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+++,+--,bcd,d,True,,,,0.025581296157479,0.330393506753369,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+++,-++,bcd,abc,True,,,,0.0254148851348745,0.330393506753369,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+++,-+-,bcd,abc,True,,,,0.0310188046663847,0.3412068513302325,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+++,--+,bcd,ac,True,,,,0.0045254313891847,0.0724069022269556,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+++,---,bcd,a,False,,,,0.0005527697927464,0.0105026260621832,True
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,++-,+-+,d,bd,True,,,,0.2409675511172134,1.0,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,++-,+--,d,d,True,,,,0.7320776563029536,1.0,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,++-,-++,d,abc,False,,,,0.0003049204773101,0.0063357794803611,True
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,++-,-+-,d,abc,False,,,,0.0001786144883736,0.0047253645412271,True
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,++-,--+,d,ac,False,,,,0.0001776106606889,0.0047253645412271,True
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,++-,---,d,a,False,,,,0.0001707002945198,0.0047253645412271,True
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+-+,+--,bd,d,True,,,,0.160391584542345,1.0,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+-+,-++,bd,abc,True,,,,0.0056673692030444,0.0850105380456674,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+-+,-+-,bd,abc,True,,,,0.004002752246609,0.0680467881923541,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+-+,--+,bd,ac,False,,,,0.0007407182079819,0.0133329277436748,True
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+-+,---,bd,a,False,,,,0.0002660194841709,0.0058524286517615,True
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+--,-++,d,abc,False,,,,0.0003017037847791,0.0063357794803611,True
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+--,-+-,d,abc,False,,,,0.0001766110116689,0.0047253645412271,True
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+--,--+,d,ac,False,,,,0.0001756155310459,0.0047253645412271,True
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,+--,---,d,a,False,,,,0.0001687630193295,0.0047253645412271,True
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,-++,-+-,abc,abc,True,,,,0.7886018451717189,1.0,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,-++,--+,abc,ac,True,,,,0.3581287433935188,1.0,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,-++,---,abc,a,True,,,,0.0695153582733783,0.6256382244604053,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,-+-,--+,abc,ac,True,,,,0.1007206577232605,0.8057652617860844,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,-+-,---,abc,a,True,,,,0.0124056870322769,0.1736796184518767,False
+prop_engineered_selected,Engineered share of selected features,proportion,Mann-Whitney U + Holm,--+,---,ac,a,True,,,,0.1895236559720871,1.0,False
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+++,++-,e,d,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+++,+-+,e,e,True,,,,1.0,1.0,False
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+++,+--,e,b,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+++,-++,e,c,False,,,,0.0072845570094796,0.0364227850473983,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+++,-+-,e,b,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+++,--+,e,c,False,,,,0.0013149446697132,0.0131494466971321,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+++,---,e,a,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,++-,+-+,d,e,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,++-,+--,d,b,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,++-,-++,d,c,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,++-,-+-,d,b,False,,,,0.0072845570094796,0.0364227850473983,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,++-,--+,d,c,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,++-,---,d,a,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+-+,+--,e,b,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+-+,-++,e,c,False,,,,0.0013149446697132,0.0131494466971321,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+-+,-+-,e,b,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+-+,--+,e,c,False,,,,0.0017062493689195,0.0131494466971321,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+-+,---,e,a,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+--,-++,b,c,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+--,-+-,b,b,True,,,,0.1858767323658757,0.3717534647317515,False
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+--,--+,b,c,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,+--,---,b,a,False,,,,0.0017062493689195,0.0131494466971321,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,-++,-+-,c,b,False,,,,0.0002461281279052,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,-++,--+,c,c,True,,,,0.025748080821108,0.0772442424633241,False
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,-++,---,c,a,False,,,,0.0001826717911095,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,-+-,--+,b,c,False,,,,0.0003298385207779,0.0051148101510674,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,-+-,---,b,a,False,,,,0.0013149446697132,0.0131494466971321,True
+total_tokens,Total tokens,tokens,Mann-Whitney U + Holm,--+,---,c,a,False,,,,0.0001826717911095,0.0051148101510674,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+++,++-,cd,b,False,,,,0.0001574797402064,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+++,+-+,cd,d,True,,,,0.0250831925419178,0.1755823477934252,False
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+++,+--,cd,b,False,,,,0.0001611765478272,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+++,-++,cd,c,True,,,,0.2381195567399286,1.0,False
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+++,-+-,cd,b,False,,,,0.0005745418290318,0.0086181274354774,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+++,--+,cd,c,True,,,,0.3228233890194294,1.0,False
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+++,---,cd,a,False,,,,0.0001583979717831,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,++-,+-+,b,d,False,,,,0.0001574797402064,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,++-,+--,b,b,True,,,,0.7754344134642237,1.0,False
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,++-,-++,b,c,False,,,,0.0001485137047299,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,++-,-+-,b,b,True,,,,0.4111213667120816,1.0,False
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,++-,--+,b,c,False,,,,0.0001529478241186,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,++-,---,b,a,False,,,,0.000964324523949,0.0125362188113382,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+-+,+--,d,b,False,,,,0.0001611765478272,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+-+,-++,d,c,False,,,,0.0008190475434259,0.011466665607963,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+-+,-+-,d,b,False,,,,0.0001529478241186,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+-+,--+,d,c,False,,,,0.0027246447498234,0.0217971579985879,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+-+,---,d,a,False,,,,0.0001583979717831,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+--,-++,b,c,False,,,,0.0001520532174963,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+--,-+-,b,b,True,,,,0.6512279005843444,1.0,False
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+--,--+,b,c,False,,,,0.0001565654717543,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,+--,---,b,a,False,,,,0.0012967722571736,0.0155612670860833,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,-++,-+-,c,b,False,,,,0.0014395249147146,0.0158347740618616,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,-++,--+,c,c,True,,,,0.8770452992307489,1.0,False
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,-++,---,c,a,False,,,,0.0001493927663515,0.0041583837324383,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,-+-,--+,b,c,False,,,,0.0014704955150756,0.0158347740618616,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,-+-,---,b,a,False,,,,0.0018225132038584,0.0164026188347263,True
+n_turns_total,Agent turns,turns,Mann-Whitney U + Holm,--+,---,c,a,False,,,,0.0001538463426057,0.0041583837324383,True
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+++,++-,b,b,True,,,,0.2122938361923315,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+++,+-+,b,b,True,,,,0.6775849579524755,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+++,+--,b,ab,True,,,,0.0072845570094796,0.1602602542085525,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+++,-++,b,ab,True,,,,0.0072845570094796,0.1602602542085525,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+++,-+-,b,ab,True,,,,0.0172574560831197,0.3278916655792755,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+++,--+,b,a,False,,,,0.0001826717911095,0.0051148101510674,True
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+++,---,b,a,False,,,,0.0002461281279052,0.0066454594534412,True
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,++-,+-+,b,b,True,,,,0.5205228832757727,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,++-,+--,b,ab,True,,,,0.075661572143887,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,++-,-++,b,ab,True,,,,0.075661572143887,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,++-,-+-,b,ab,True,,,,0.1041098896602268,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,++-,--+,b,a,False,,,,0.0003298385207779,0.0085758015402278,True
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,++-,---,b,a,False,,,,0.0017062493689195,0.0392437354851507,True
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+-+,+--,b,ab,True,,,,0.0140192771139599,0.280385542279199,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+-+,-++,b,ab,True,,,,0.0172574560831197,0.3278916655792755,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+-+,-+-,b,ab,True,,,,0.025748080821108,0.4377173739588371,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+-+,--+,b,a,False,,,,0.0005828399431792,0.0145709985794818,True
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+-+,---,b,a,False,,,,0.0013149446697132,0.0315586720731171,True
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+--,-++,ab,ab,True,,,,0.6775849579524755,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+--,-+-,ab,ab,True,,,,0.3447042220069576,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+--,--+,ab,a,True,,,,1.0,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,+--,---,ab,a,True,,,,0.9698499769931556,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,-++,-+-,ab,ab,True,,,,0.9097218891455552,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,-++,--+,ab,a,True,,,,0.24132159301718,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,-++,---,ab,a,True,,,,0.3074894566186813,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,-+-,--+,ab,a,True,,,,0.4726755935115871,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,-+-,---,ab,a,True,,,,0.4726755935115871,1.0,False
+inner_cv_score,Inner-CV score (Optuna best),score,Mann-Whitney U + Holm,--+,---,a,a,True,,,,0.9097218891455552,1.0,False

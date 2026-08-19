@@ -1,0 +1,78 @@
+endpoint,term,label,order,tier,p_raw,p_scale,p_holm_prespecified,p_holm_global_interaction,status
+wallclock_min,C,critic,main,exploratory,2.864502032406156e-168,response,8.593506097218468e-168,,significant (prespecified)
+total_tokens,C,critic,main,exploratory,2.1326156935221412e-142,response,6.397847080566424e-142,,significant (prespecified)
+usd,A,model,main,exploratory,1.3889955710663797e-139,response,4.1669867131991394e-139,,significant (prespecified)
+usd,C,critic,main,exploratory,5.1029627282730726e-123,response,1.0205925456546145e-122,,significant (prespecified)
+n_engineered_features,A,model,main,exploratory,7.099853563957944e-113,response,2.129956069187383e-112,,significant (prespecified)
+n_engineered_features_selected,A,model,main,exploratory,1.1749264105338358e-63,response,3.5247792316015075e-63,,significant (prespecified)
+wallclock_min,B,effort,main,exploratory,2.621415743344491e-41,response,5.242831486688982e-41,,significant (prespecified)
+n_turns_total,C,critic,main,exploratory,1.5742491884021132e-39,response,4.7227475652063395e-39,,significant (prespecified)
+wallclock_min,A,model,main,exploratory,3.0439256554108094e-29,response,3.0439256554108094e-29,,significant (prespecified)
+n_features_after_fs,A,model,main,exploratory,3.2968286858689773e-28,response,9.890486057606931e-28,,significant (prespecified)
+prop_engineered_selected,A,model,main,exploratory,2.334187300453171e-25,response,7.002561901359514e-25,,significant (prespecified)
+total_tokens,A,model,main,exploratory,4.4475501126752224e-15,response,8.895100225350445e-15,,significant (prespecified)
+n_engineered_features,B,effort,main,exploratory,1.8067827623553814e-11,response,3.613565524710763e-11,,significant (prespecified)
+n_engineered_features_selected,B,effort,main,exploratory,4.156560502512271e-11,response,8.313121005024542e-11,,significant (prespecified)
+usd,B,effort,main,exploratory,1.0250836941129387e-08,response,1.0250836941129387e-08,,significant (prespecified)
+n_features_after_fs,B,effort,main,exploratory,2.324817838637212e-08,response,4.649635677274424e-08,,significant (prespecified)
+inner_cv_score,A,model,main,exploratory,4.607895728230295e-07,response,1.3823687184690885e-06,,significant (prespecified)
+n_features_after_fs,C,critic,main,exploratory,8.036299796000995e-06,response,8.036299796000995e-06,,significant (prespecified)
+wallclock_min,AC,model:critic,two-way,interaction,1.6028744504664668e-05,link,,0.0007052647582052454,survives global interaction sensitivity (not a decision rule)
+total_tokens,AC,model:critic,two-way,interaction,5.848166894654219e-05,link,,0.002514711764701314,survives global interaction sensitivity (not a decision rule)
+usd,AC,model:critic,two-way,interaction,7.936527086278151e-05,link,,0.0033333413762368235,survives global interaction sensitivity (not a decision rule)
+inner_cv_score,B,effort,main,exploratory,0.0011093760181024683,response,0.0022187520362049367,,significant (prespecified)
+n_features_after_fs,AC,model:critic,two-way,interaction,0.002633417198620006,link,,0.10797010514342026,does not survive global interaction sensitivity
+prop_engineered_selected,AB,model:effort,two-way,interaction,0.003492613961116377,link,,0.13970455844465507,does not survive global interaction sensitivity
+n_engineered_features_selected,C,critic,main,exploratory,0.004372048412266361,response,0.004372048412266361,,significant (prespecified)
+n_turns_total,A,model,main,exploratory,0.005447041469247624,response,0.010894082938495248,,significant (prespecified)
+pr_auc,A,model,main,primary,0.0056050585781388315,response,,,significant (prespecified)
+prop_engineered_selected,AC,model:critic,two-way,interaction,0.006635245192292995,link,,0.25877456249942676,does not survive global interaction sensitivity
+n_engineered_features,AB,model:effort,two-way,interaction,0.006875928206330629,link,,0.2612852718405639,does not survive global interaction sensitivity
+inner_cv_score,AC,model:critic,two-way,interaction,0.01090007650232268,link,,0.40330283058593913,does not survive global interaction sensitivity
+inner_cv_score,C,critic,main,exploratory,0.012350854425917233,response,0.012350854425917233,,significant (prespecified)
+total_tokens,B,effort,main,exploratory,0.014416570400169665,response,0.014416570400169665,,significant (prespecified)
+wallclock_min,ABC,model:effort:critic,three-way,interaction,0.016575663558090994,link,,0.5967238880912757,does not survive global interaction sensitivity
+pr_auc,B,effort,main,secondary,0.021828268103690433,response,0.043656536207380865,,significant (prespecified)
+roc_auc,AC,model:critic,two-way,interaction,0.03439727300986478,link,,1.0,does not survive global interaction sensitivity
+n_turns_total,BC,effort:critic,two-way,interaction,0.03658333109702814,link,,1.0,does not survive global interaction sensitivity
+roc_auc,A,model,main,exploratory,0.040347367895849896,response,0.1210421036875497,,not significant (prespecified)
+prop_engineered_selected,BC,effort:critic,two-way,interaction,0.06976254657575645,link,,1.0,does not survive global interaction sensitivity
+total_tokens,BC,effort:critic,two-way,interaction,0.0765600565093001,link,,1.0,does not survive global interaction sensitivity
+n_turns_total,AC,model:critic,two-way,interaction,0.10770815276011407,link,,1.0,does not survive global interaction sensitivity
+wallclock_min,BC,effort:critic,two-way,interaction,0.10938253304859358,link,,1.0,does not survive global interaction sensitivity
+prop_engineered_selected,B,effort,main,exploratory,0.12419949271891675,response,0.2483989854378335,,not significant (prespecified)
+roc_auc,AB,model:effort,two-way,interaction,0.12443316428267423,link,,1.0,does not survive global interaction sensitivity
+inner_cv_score,BC,effort:critic,two-way,interaction,0.17144994777559408,link,,1.0,does not survive global interaction sensitivity
+n_engineered_features,ABC,model:effort:critic,three-way,interaction,0.1715399380478616,link,,1.0,does not survive global interaction sensitivity
+inner_cv_score,ABC,model:effort:critic,three-way,interaction,0.19194979466033568,link,,1.0,does not survive global interaction sensitivity
+n_turns_total,AB,model:effort,two-way,interaction,0.20368871253279375,link,,1.0,does not survive global interaction sensitivity
+prop_engineered_selected,C,critic,main,exploratory,0.21387345112739553,response,0.2483989854378335,,not significant (prespecified)
+n_turns_total,B,effort,main,exploratory,0.22338831946626947,response,0.22338831946626947,,not significant (prespecified)
+n_engineered_features_selected,BC,effort:critic,two-way,interaction,0.24928037206777065,link,,1.0,does not survive global interaction sensitivity
+n_engineered_features,AC,model:critic,two-way,interaction,0.25575651973310154,link,,1.0,does not survive global interaction sensitivity
+n_engineered_features,C,critic,main,exploratory,0.26349130399148024,response,0.26349130399148024,,not significant (prespecified)
+total_tokens,AB,model:effort,two-way,interaction,0.26685325315478814,link,,1.0,does not survive global interaction sensitivity
+n_engineered_features_selected,AB,model:effort,two-way,interaction,0.27049323736182473,link,,1.0,does not survive global interaction sensitivity
+usd,ABC,model:effort:critic,three-way,interaction,0.2923747354596258,link,,1.0,does not survive global interaction sensitivity
+n_engineered_features_selected,AC,model:critic,two-way,interaction,0.3199593890603455,link,,1.0,does not survive global interaction sensitivity
+roc_auc,C,critic,main,exploratory,0.3362128101273255,response,0.672425620254651,,not significant (prespecified)
+n_features_after_fs,AB,model:effort,two-way,interaction,0.354527951297266,link,,1.0,does not survive global interaction sensitivity
+inner_cv_score,AB,model:effort,two-way,interaction,0.40460765309247393,link,,1.0,does not survive global interaction sensitivity
+usd,BC,effort:critic,two-way,interaction,0.4129403842861089,link,,1.0,does not survive global interaction sensitivity
+pr_auc,BC,effort:critic,two-way,interaction,0.42708833190077666,link,,1.0,does not survive global interaction sensitivity
+usd,AB,model:effort,two-way,interaction,0.43243343654730504,link,,1.0,does not survive global interaction sensitivity
+pr_auc,AB,model:effort,two-way,interaction,0.4509421119172241,link,,1.0,does not survive global interaction sensitivity
+prop_engineered_selected,ABC,model:effort:critic,three-way,interaction,0.4755174213606198,link,,1.0,does not survive global interaction sensitivity
+n_features_after_fs,ABC,model:effort:critic,three-way,interaction,0.48958245394845523,link,,1.0,does not survive global interaction sensitivity
+roc_auc,ABC,model:effort:critic,three-way,interaction,0.5045421264662455,link,,1.0,does not survive global interaction sensitivity
+roc_auc,BC,effort:critic,two-way,interaction,0.5090718544197015,link,,1.0,does not survive global interaction sensitivity
+pr_auc,ABC,model:effort:critic,three-way,interaction,0.5467309956185371,link,,1.0,does not survive global interaction sensitivity
+n_engineered_features,BC,effort:critic,two-way,interaction,0.5756210416282672,link,,1.0,does not survive global interaction sensitivity
+roc_auc,B,effort,main,exploratory,0.728364124839771,response,0.728364124839771,,not significant (prespecified)
+pr_auc,C,critic,main,secondary,0.7470548956669667,response,0.7470548956669667,,not significant (prespecified)
+n_turns_total,ABC,model:effort:critic,three-way,interaction,0.7544321930070116,link,,1.0,does not survive global interaction sensitivity
+total_tokens,ABC,model:effort:critic,three-way,interaction,0.7807242238073638,link,,1.0,does not survive global interaction sensitivity
+n_features_after_fs,BC,effort:critic,two-way,interaction,0.9397130625356624,link,,1.0,does not survive global interaction sensitivity
+n_engineered_features_selected,ABC,model:effort:critic,three-way,interaction,0.9398133114786008,link,,1.0,does not survive global interaction sensitivity
+wallclock_min,AB,model:effort,two-way,interaction,0.9672665947525446,link,,1.0,does not survive global interaction sensitivity
+pr_auc,AC,model:critic,two-way,interaction,0.9801130580168308,link,,1.0,does not survive global interaction sensitivity

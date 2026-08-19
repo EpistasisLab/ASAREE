@@ -1,0 +1,671 @@
+
+==============================================================================
+ENVIRONMENT
+==============================================================================
+  python 3.12.3, statsmodels 0.14.6, numpy 2.4.4, scipy 1.17.1, pandas 3.0.2, matplotlib 3.10.8
+  matches environment.lock: True   (seed=20260812)
+  betafx test suite: 131 passed (run separately with pytest)
+
+==============================================================================
+DESIGN
+==============================================================================
+  factors: A=model (sonnet vs opus), B=effort (medium vs xhigh), C=critic (off vs on)
+  level map (explicit, never inferred): {'A': {'sonnet': -1, 'opus': 1}, 'B': {'medium': -1, 'xhigh': 1}, 'C': {'off': -1, 'on': 1}}
+             cell  A  B  C  n
+sonnet/medium/off -1 -1 -1 10
+ sonnet/medium/on -1 -1  1 10
+ sonnet/xhigh/off -1  1 -1 10
+  sonnet/xhigh/on -1  1  1 10
+  opus/medium/off  1 -1 -1 10
+   opus/medium/on  1 -1  1 10
+   opus/xhigh/off  1  1 -1 10
+    opus/xhigh/on  1  1  1 10
+  8/8 cells present, model-matrix rank 8, 80 runs, no failures (0 flagged)
+
+==============================================================================
+ENDPOINT STRUCTURE AND MULTIPLICITY
+==============================================================================
+
+  The eight requested endpoints are NOT eight independent questions. They fall
+  into four constructs, and two of the dependencies are algebraic:
+
+    1. discrimination        pr_auc, roc_auc
+    2. resource use          usd, wallclock_min      (+ total_tokens, n_turns_total)
+    3. feature production    n_engineered_features
+    4. feature selection     n_features_after_fs, n_engineered_features_selected,
+                             prop_engineered_selected
+       where  prop_engineered_selected == n_engineered_features_selected
+                                          / n_features_after_fs   EXACTLY,
+       and n_engineered_features_selected is nested inside both of the counts
+       above it.
+
+  Testing plan, fixed before reading any p-value (PLAN.md note 3):
+
+    PRIMARY      model (A) on PR-AUC, response-scale marginal estimand,
+                 unadjusted alpha = 0.05.
+    SECONDARY    effort (B) and critic (C) on PR-AUC, Holm within that family.
+    EXPLORATORY  every other endpoint: Holm across its own three main effects.
+                 Interactions everywhere: confidence intervals only, read on
+                 the LINK scale, no significance verdict. The design is
+                 powered for main effects; a non-significant interaction is
+                 not evidence of additivity.
+
+  A global Holm across all 24 requested-endpoint main-effect tests is also
+  reported at the end as a deliberately over-conservative sensitivity. It is
+  NOT the primary decision rule: Holm assumes nothing about dependence, so it
+  stays valid under these correlations, but it becomes very conservative when
+  endpoints are near-duplicates, and several of these are.
+
+
+==============================================================================
+ENDPOINT CORRELATIONS (why the above matters)
+==============================================================================
+                                pr_auc  roc_auc   usd  wallclock_min  n_engineered_features  n_features_after_fs  n_engineered_features_selected  prop_engineered_selected  total_tokens  n_turns_total  inner_cv_score
+pr_auc                            1.00     0.57 -0.27          -0.28                  -0.28                -0.35                           -0.35                     -0.19         -0.15          -0.03           -0.11
+roc_auc                           0.57     1.00  0.23           0.15                   0.22                 0.36                            0.30                      0.06          0.15           0.09            0.47
+usd                              -0.27     0.23  1.00           0.91                   0.56                 0.73                            0.67                      0.30          0.89           0.74            0.48
+wallclock_min                    -0.28     0.15  0.91           1.00                   0.38                 0.64                            0.53                      0.13          0.89           0.72            0.42
+n_engineered_features            -0.28     0.22  0.56           0.38                   1.00                 0.68                            0.89                      0.80          0.27           0.13            0.50
+n_features_after_fs              -0.35     0.36  0.73           0.64                   0.68                 1.00                            0.90                      0.33          0.52           0.30            0.72
+n_engineered_features_selected   -0.35     0.30  0.67           0.53                   0.89                 0.90                            1.00                      0.69          0.41           0.23            0.70
+prop_engineered_selected         -0.19     0.06  0.30           0.13                   0.80                 0.33                            0.69                      1.00          0.08           0.05            0.33
+total_tokens                     -0.15     0.15  0.89           0.89                   0.27                 0.52                            0.41                      0.08          1.00           0.94            0.35
+n_turns_total                    -0.03     0.09  0.74           0.72                   0.13                 0.30                            0.23                      0.05          0.94           1.00            0.23
+inner_cv_score                   -0.11     0.47  0.48           0.42                   0.50                 0.72                            0.70                      0.33          0.35           0.23            1.00
+
+==============================================================================
+PR-AUC  [pr_auc]   family = beta   tier = primary
+==============================================================================
+  Primary endpoint. Bounded in (0,1); observed 0.517-0.557.
+  validation: n=80, dropped 0 non-finite, 8/8 cells, rank 8, cell counts 10-10
+
+--- factorial effects (effect = eight-cell marginal effect, response scale) --
+term               label        tier       coef       se  p_link     effect    eff_lo     eff_hi  p_response  p_holm significant  structural
+   A               model     primary  -0.009832 0.003549  0.0056  -0.004888 -0.008346  -0.001429    0.005605     NaN        True       False
+   B              effort   secondary  -0.008141 0.003549  0.0218  -0.004047 -0.007505 -0.0005883     0.02183 0.04366        True       False
+   C              critic   secondary  -0.001143 0.003549  0.7473 -0.0005691 -0.004028   0.002889      0.7471  0.7471       False       False
+  AB        model:effort exploratory   0.002675 0.003549  0.4509   0.001327 -0.002131   0.004786       0.452     NaN        <NA>       False
+  AC        model:critic exploratory -8.847e-05 0.003549  0.9801 -4.473e-05 -0.003503   0.003414      0.9798     NaN        <NA>       False
+  BC       effort:critic exploratory  -0.002819 0.003549  0.4271  -0.001403 -0.004861   0.002056      0.4267     NaN        <NA>       False
+ ABC model:effort:critic exploratory  -0.002139 0.003549  0.5467  -0.001064 -0.004523   0.002394      0.5464     NaN        <NA>       False
+  scale: difference of marginal means (eight cells)
+
+--- stratified randomization test (model-free) vs the model p-value ----------
+term  label  statistic      scale  p_perm  p_model
+   A  model   -0.00489 difference 0.01015 0.005605
+   B effort  -0.004045 difference 0.03205  0.02183
+   C critic   -0.00057 difference  0.7585   0.7471
+
+--- within-cell residual diagnostics (DESCRIPTIVE -- nothing routes on these) 
+endpoint scale  shapiro_p    skew  excess_kurtosis  levene_p  sd_ratio
+  pr_auc   raw     0.2591 -0.0689          -0.8405    0.5995     2.376
+
+--- distribution-free comparison of the 8 configurations (letter source) -----
+  Kruskal-Wallis omnibus: H = 9.67, p = 0.208, df = 7
+  rank effect size: epsilon^2 = 0.122, eta^2_H = 0.037 (share of rank variation explained by configuration)
+  Mann-Whitney U + Holm over 28 pairs: 0/28 differ
+
+  letter display (Mann-Whitney U, Holm-adjusted over 28 pairs); shared letter = not significantly different
+    {'---': 'a', '-+-': 'a', '--+': 'a', '-++': 'a', '+--': 'a', '++-': 'a', '+-+': 'a', '+++': 'a'}
+
+==============================================================================
+ROC-AUC  [roc_auc]   family = beta   tier = requested
+==============================================================================
+  Second view of the same discrimination construct as PR-AUC.
+  validation: n=80, dropped 0 non-finite, 8/8 cells, rank 8, cell counts 10-10
+
+--- factorial effects (effect = eight-cell marginal effect, response scale) --
+term               label                        tier      coef       se  p_link     effect     eff_lo   eff_hi  p_response  p_holm significant  structural
+   A               model main (Holm within endpoint)   0.00444 0.002162 0.04002   0.001636  7.198e-05   0.0032     0.04035   0.121       False       False
+   B              effort main (Holm within endpoint) 0.0007536 0.002162  0.7274  0.0002771  -0.001287 0.001841      0.7284  0.7284       False       False
+   C              critic main (Holm within endpoint)  0.002087 0.002162  0.3345  0.0007674 -0.0007966 0.002331      0.3362  0.6724       False       False
+  AB        model:effort                 exploratory  0.003322 0.002162  0.1244   0.001227 -0.0003368 0.002791      0.1241     NaN        <NA>       False
+  AC        model:critic                 exploratory  0.004574 0.002162  0.0344   0.001687  0.0001234 0.003251     0.03446     NaN        <NA>       False
+  BC       effort:critic                 exploratory -0.001428 0.002162  0.5091 -0.0005288  -0.002093 0.001035      0.5075     NaN        <NA>       False
+ ABC model:effort:critic                 exploratory -0.001443 0.002162  0.5045 -0.0005333  -0.002097 0.001031      0.5039     NaN        <NA>       False
+  scale: difference of marginal means (eight cells)
+
+--- stratified randomization test (model-free) vs the model p-value ----------
+term  label  statistic      scale  p_perm  p_model
+   A  model   0.001637 difference 0.05915  0.04035
+   B effort  0.0002825 difference  0.7408   0.7284
+   C critic  0.0007625 difference  0.3778   0.3362
+
+--- within-cell residual diagnostics (DESCRIPTIVE -- nothing routes on these) 
+endpoint scale  shapiro_p    skew  excess_kurtosis  levene_p  sd_ratio
+ roc_auc   raw    0.09667 -0.1212          -0.8992     0.388      2.44
+
+--- distribution-free comparison of the 8 configurations (letter source) -----
+  Kruskal-Wallis omnibus: H = 11.57, p = 0.116, df = 7
+  rank effect size: epsilon^2 = 0.146, eta^2_H = 0.063 (share of rank variation explained by configuration)
+  Mann-Whitney U + Holm over 28 pairs: 0/28 differ
+
+  letter display (Mann-Whitney U, Holm-adjusted over 28 pairs); shared letter = not significantly different
+    {'---': 'a', '-+-': 'a', '--+': 'a', '-++': 'a', '+--': 'a', '++-': 'a', '+-+': 'a', '+++': 'a'}
+
+==============================================================================
+Cost per run  [usd]   family = gamma   tier = requested
+==============================================================================
+  Gamma log-link: ratio of ARITHMETIC mean cost. Model-factor effect is partly fixed by the price schedule.
+  validation: n=80, dropped 0 non-finite, 8/8 cells, rank 8, cell counts 10-10
+
+--- factorial effects (effect = eight-cell marginal effect, response scale) --
+term               label                        tier     coef      se     p_link  effect  eff_lo  eff_hi  p_response     p_holm significant  structural
+   A               model main (Holm within endpoint)   0.6139 0.02271 6.879e-161   3.705   3.345   4.103  1.389e-139 4.167e-139        True        True
+   B              effort main (Holm within endpoint)   0.2028 0.02271  4.269e-19   1.415   1.256   1.593   1.025e-08  1.025e-08        True       False
+   C              critic main (Holm within endpoint)   0.5777 0.02271 9.749e-143   3.461   3.121   3.837  5.103e-123 1.021e-122        True       False
+  AB        model:effort                 exploratory -0.01783 0.02271     0.4324    1.17    1.04   1.317    0.009272        NaN        <NA>        True
+  AC        model:critic                 exploratory  0.08963 0.02271  7.937e-05   2.119   1.908   2.353   8.607e-45        NaN        <NA>        True
+  BC       effort:critic                 exploratory -0.01859 0.02271     0.4129   1.157   1.028   1.303     0.01587        NaN        <NA>       False
+ ABC model:effort:critic                 exploratory -0.02391 0.02271     0.2924   1.059  0.9403   1.193      0.3436        NaN        <NA>        True
+  scale: ratio of marginal means (eight cells)
+
+--- stratified randomization test (model-free) vs the model p-value ----------
+term  label  statistic     scale  p_perm    p_model
+   A  model       1.31 log ratio   5e-05 1.389e-139
+   B effort     0.3469 log ratio   5e-05  1.025e-08
+   C critic      1.241 log ratio   5e-05 5.103e-123
+
+--- within-cell residual diagnostics (DESCRIPTIVE -- nothing routes on these) 
+endpoint scale  shapiro_p  skew  excess_kurtosis  levene_p  sd_ratio
+     usd   raw  1.915e-07 1.416            1.735 0.0001366     55.67
+     usd   log  1.435e-05 1.141            1.223    0.1682     4.583
+
+--- distribution-free comparison of the 8 configurations (letter source) -----
+  Kruskal-Wallis omnibus: H = 74.31, p = 1.98e-13, df = 7
+  rank effect size: epsilon^2 = 0.941, eta^2_H = 0.935 (share of rank variation explained by configuration)
+  Mann-Whitney U + Holm over 28 pairs: 26/28 differ
+
+  letter display (Mann-Whitney U, Holm-adjusted over 28 pairs); shared letter = not significantly different
+    {'---': 'a', '-+-': 'b', '--+': 'c', '-++': 'd', '+--': 'e', '++-': 'd', '+-+': 'f', '+++': 'f'}
+
+==============================================================================
+Wall-clock time  [wallclock_min]   family = gamma   tier = requested
+==============================================================================
+  Seconds/60. A pure rescaling: every ratio and every p-value is identical to the analysis in seconds.
+  validation: n=80, dropped 0 non-finite, 8/8 cells, rank 8, cell counts 10-10
+
+--- factorial effects (effect = eight-cell marginal effect, response scale) --
+term               label                        tier       coef      se     p_link  effect  eff_lo  eff_hi  p_response     p_holm significant  structural
+   A               model main (Holm within endpoint)     0.2615 0.02226  7.196e-32   1.846   1.659   2.054   3.044e-29  3.044e-29        True       False
+   B              effort main (Holm within endpoint)     0.4044 0.02226  8.876e-74   2.095   1.881   2.333   2.621e-41  5.243e-41        True       False
+   C              critic main (Holm within endpoint)     0.6752 0.02226 3.486e-202   3.904   3.545     4.3  2.865e-168 8.594e-168        True       False
+  AB        model:effort                 exploratory -0.0009133 0.02226     0.9673   1.169   1.047   1.306    0.005614        NaN        <NA>       False
+  AC        model:critic                 exploratory    0.09601 0.02226  1.603e-05    1.57   1.411   1.747    1.42e-16        NaN        <NA>       False
+  BC       effort:critic                 exploratory   -0.03563 0.02226     0.1094   1.445   1.299   1.608   1.461e-11        NaN        <NA>       False
+ ABC model:effort:critic                 exploratory   -0.05332 0.02226    0.01658    1.06  0.9482   1.185      0.3052        NaN        <NA>       False
+  scale: ratio of marginal means (eight cells)
+
+--- stratified randomization test (model-free) vs the model p-value ----------
+term  label  statistic     scale  p_perm    p_model
+   A  model      0.613 log ratio   5e-05  3.044e-29
+   B effort     0.7393 log ratio   5e-05  2.621e-41
+   C critic      1.362 log ratio   5e-05 2.865e-168
+
+--- within-cell residual diagnostics (DESCRIPTIVE -- nothing routes on these) 
+     endpoint scale  shapiro_p   skew  excess_kurtosis  levene_p  sd_ratio
+wallclock_min   raw  2.785e-06  1.256            1.231  0.004574     39.37
+wallclock_min   log  0.0001203 0.9931           0.6446    0.4726      3.24
+
+--- distribution-free comparison of the 8 configurations (letter source) -----
+  Kruskal-Wallis omnibus: H = 75.15, p = 1.33e-13, df = 7
+  rank effect size: epsilon^2 = 0.951, eta^2_H = 0.947 (share of rank variation explained by configuration)
+  Mann-Whitney U + Holm over 28 pairs: 26/28 differ
+
+  letter display (Mann-Whitney U, Holm-adjusted over 28 pairs); shared letter = not significantly different
+    {'---': 'a', '-+-': 'b', '--+': 'c', '-++': 'd', '+--': 'e', '++-': 'c', '+-+': 'd', '+++': 'f'}
+
+==============================================================================
+Engineered features created  [n_engineered_features]   family = poisson   tier = requested
+==============================================================================
+  Output of the feature-engineering (FTE) agent.
+  validation: n=80, dropped 0 non-finite, 8/8 cells, rank 8, cell counts 10-10
+  Pearson dispersion 0.29 (under-dispersed; HC0 robust SEs are valid either way)
+
+--- factorial effects (effect = eight-cell marginal effect, response scale) --
+term               label                        tier      coef      se     p_link  effect  eff_lo  eff_hi  p_response    p_holm significant  structural
+   A               model main (Holm within endpoint)    0.3036 0.01312 1.533e-118   1.821   1.729   1.919    7.1e-113 2.13e-112        True       False
+   B              effort main (Holm within endpoint)    0.1037 0.01312  2.694e-15   1.205   1.141   1.272   1.807e-11 3.614e-11        True       False
+   C              critic main (Holm within endpoint)  -0.01958 0.01312     0.1354  0.9688  0.9165   1.024      0.2635    0.2635       False       False
+  AB        model:effort                 exploratory  -0.03545 0.01312   0.006876  0.9904  0.9371   1.047      0.7327       NaN        <NA>       False
+  AC        model:critic                 exploratory    0.0149 0.01312     0.2558   1.015  0.9608   1.073      0.5902       NaN        <NA>       False
+  BC       effort:critic                 exploratory -0.007342 0.01312     0.5756  0.9715  0.9192   1.027      0.3059       NaN        <NA>       False
+ ABC model:effort:critic                 exploratory  -0.01793 0.01312     0.1715  0.9635  0.9117   1.018      0.1871       NaN        <NA>       False
+  scale: ratio of marginal means (eight cells)
+
+--- stratified randomization test (model-free) vs the model p-value ----------
+term  label  statistic     scale  p_perm   p_model
+   A  model     0.5996 log ratio   5e-05  7.1e-113
+   B effort     0.1864 log ratio   5e-05 1.807e-11
+   C critic   -0.03166 log ratio  0.3127    0.2635
+
+--- within-cell residual diagnostics (DESCRIPTIVE -- nothing routes on these) 
+             endpoint scale  shapiro_p   skew  excess_kurtosis  levene_p  sd_ratio
+n_engineered_features   raw    0.01107 0.4126          -0.7321    0.1236     4.142
+n_engineered_features   log    0.03284 0.2809          -0.8461    0.8582     1.788
+
+--- distribution-free comparison of the 8 configurations (letter source) -----
+  Kruskal-Wallis omnibus: H = 68.39, p = 3.12e-12, df = 7
+  rank effect size: epsilon^2 = 0.866, eta^2_H = 0.853 (share of rank variation explained by configuration)
+  Mann-Whitney U + Holm over 28 pairs: 21/28 differ
+
+  letter display (Mann-Whitney U, Holm-adjusted over 28 pairs); shared letter = not significantly different
+    {'---': 'a', '-+-': 'b', '--+': 'a', '-++': 'b', '+--': 'c', '++-': 'd', '+-+': 'cd', '+++': 'cd'}
+
+==============================================================================
+Features surviving selection  [n_features_after_fs]   family = poisson   tier = requested
+==============================================================================
+  Features reaching the modeling step.
+  validation: n=80, dropped 0 non-finite, 8/8 cells, rank 8, cell counts 10-10
+  Pearson dispersion 3.32 (over-dispersed; HC0 robust SEs are valid either way)
+
+--- factorial effects (effect = eight-cell marginal effect, response scale) --
+term               label                        tier      coef      se    p_link  effect  eff_lo  eff_hi  p_response    p_holm significant  structural
+   A               model main (Holm within endpoint)    0.2842 0.02465 9.739e-31   1.801   1.622       2   3.297e-28  9.89e-28        True       False
+   B              effort main (Holm within endpoint)    0.1414 0.02465 9.754e-09   1.339   1.209   1.483   2.325e-08  4.65e-08        True       False
+   C              critic main (Holm within endpoint)   0.09603 0.02465 9.814e-05    1.26   1.138   1.394   8.036e-06 8.036e-06        True       False
+  AB        model:effort                 exploratory   0.02283 0.02465    0.3545   1.129   1.015   1.255     0.02559       NaN        <NA>       False
+  AC        model:critic                 exploratory   0.07415 0.02465  0.002633   1.217   1.096   1.352   0.0002426       NaN        <NA>       False
+  BC       effort:critic                 exploratory -0.001865 0.02465    0.9397   1.024  0.9217   1.138      0.6594       NaN        <NA>       False
+ ABC model:effort:critic                 exploratory  -0.01704 0.02465    0.4896  0.9983  0.8986   1.109      0.9749       NaN        <NA>       False
+  scale: ratio of marginal means (eight cells)
+
+--- stratified randomization test (model-free) vs the model p-value ----------
+term  label  statistic     scale  p_perm   p_model
+   A  model     0.5884 log ratio   5e-05 3.297e-28
+   B effort     0.2919 log ratio   5e-05 2.325e-08
+   C critic     0.2308 log ratio 0.00015 8.036e-06
+
+--- within-cell residual diagnostics (DESCRIPTIVE -- nothing routes on these) 
+           endpoint scale  shapiro_p   skew  excess_kurtosis  levene_p  sd_ratio
+n_features_after_fs   raw     0.0284 0.3755          -0.1883  0.003067     4.652
+n_features_after_fs   log    0.03481 0.1807          -0.4137    0.4581     2.166
+
+--- distribution-free comparison of the 8 configurations (letter source) -----
+  Kruskal-Wallis omnibus: H = 59.66, p = 1.77e-10, df = 7
+  rank effect size: epsilon^2 = 0.755, eta^2_H = 0.731 (share of rank variation explained by configuration)
+  Mann-Whitney U + Holm over 28 pairs: 16/28 differ
+
+  letter display (Mann-Whitney U, Holm-adjusted over 28 pairs); shared letter = not significantly different
+    {'---': 'a', '-+-': 'ab', '--+': 'a', '-++': 'ab', '+--': 'bc', '++-': 'd', '+-+': 'cd', '+++': 'd'}
+
+==============================================================================
+Engineered features selected  [n_engineered_features_selected]   family = poisson   tier = requested
+==============================================================================
+  Nested inside both of the two counts above.
+  validation: n=80, dropped 0 non-finite, 8/8 cells, rank 8, cell counts 10-10
+  Pearson dispersion 0.62 (under-dispersed; HC0 robust SEs are valid either way)
+
+--- factorial effects (effect = eight-cell marginal effect, response scale) --
+term               label                        tier      coef     se    p_link  effect  eff_lo  eff_hi  p_response    p_holm significant  structural
+   A               model main (Holm within endpoint)    0.4786 0.0267 7.688e-72   2.586   2.316   2.889   1.175e-63 3.525e-63        True       False
+   B              effort main (Holm within endpoint)    0.1795 0.0267 1.763e-11   1.388   1.259    1.53   4.157e-11 8.313e-11        True       False
+   C              critic main (Holm within endpoint)   0.06863 0.0267   0.01015   1.162   1.048   1.289    0.004372  0.004372        True       False
+  AB        model:effort                 exploratory  -0.02942 0.0267    0.2705   1.101  0.9943    1.22      0.0642       NaN        <NA>       False
+  AC        model:critic                 exploratory   0.02655 0.0267      0.32   1.116   1.007   1.237     0.03669       NaN        <NA>       False
+  BC       effort:critic                 exploratory  -0.03076 0.0267    0.2493  0.9626  0.8682   1.067      0.4698       NaN        <NA>       False
+ ABC model:effort:critic                 exploratory -0.002016 0.0267    0.9398  0.9844  0.8881   1.091      0.7655       NaN        <NA>       False
+  scale: ratio of marginal means (eight cells)
+
+--- stratified randomization test (model-free) vs the model p-value ----------
+term  label  statistic     scale  p_perm   p_model
+   A  model     0.9502 log ratio   5e-05 1.175e-63
+   B effort     0.3276 log ratio   5e-05 4.157e-11
+   C critic     0.1503 log ratio 0.00825  0.004372
+
+--- within-cell residual diagnostics (DESCRIPTIVE -- nothing routes on these) 
+                      endpoint scale  shapiro_p   skew  excess_kurtosis  levene_p  sd_ratio
+n_engineered_features_selected   raw      0.867 0.1664         -0.07093   0.05035     4.693
+n_engineered_features_selected   log     0.7632 -0.254           -0.068    0.8209     3.544
+
+--- distribution-free comparison of the 8 configurations (letter source) -----
+  Kruskal-Wallis omnibus: H = 65.76, p = 1.06e-11, df = 7
+  rank effect size: epsilon^2 = 0.832, eta^2_H = 0.816 (share of rank variation explained by configuration)
+  Mann-Whitney U + Holm over 28 pairs: 19/28 differ
+
+  letter display (Mann-Whitney U, Holm-adjusted over 28 pairs); shared letter = not significantly different
+    {'---': 'a', '-+-': 'b', '--+': 'ab', '-++': 'b', '+--': 'c', '++-': 'cd', '+-+': 'cd', '+++': 'd'}
+
+==============================================================================
+Engineered share of selected features  [prop_engineered_selected]   family = beta   tier = requested
+==============================================================================
+  ALGEBRAICALLY n_engineered_features_selected / n_features_after_fs -- not an independent endpoint.
+  validation: n=80, dropped 0 non-finite, 8/8 cells, rank 8, cell counts 10-10
+
+--- factorial effects (effect = eight-cell marginal effect, response scale) --
+term               label                        tier     coef      se    p_link    effect    eff_lo   eff_hi  p_response    p_holm significant  structural
+   A               model main (Holm within endpoint)   0.2491 0.02407 4.261e-25   0.07252   0.05886  0.08619   2.334e-25 7.003e-25        True       False
+   B              effort main (Holm within endpoint)  0.04769 0.02406   0.04744   0.01071 -0.002945  0.02437      0.1242    0.2484       False       False
+   C              critic main (Holm within endpoint) -0.01723 0.02406    0.4738 -0.008663  -0.02232 0.004997      0.2139    0.2484       False       False
+  AB        model:effort                 exploratory -0.07027 0.02406  0.003493  -0.01798  -0.03164 -0.00432    0.009885       NaN        <NA>       False
+  AC        model:critic                 exploratory -0.06531 0.02406  0.006635  -0.01932  -0.03298 -0.00566    0.005569       NaN        <NA>       False
+  BC       effort:critic                 exploratory -0.04363 0.02406   0.06976  -0.01136  -0.02502   0.0023      0.1031       NaN        <NA>       False
+ ABC model:effort:critic                 exploratory  0.01717 0.02406    0.4755  0.002711  -0.01095  0.01637      0.6973       NaN        <NA>       False
+  scale: difference of marginal means (eight cells)
+
+--- stratified randomization test (model-free) vs the model p-value ----------
+term  label  statistic      scale  p_perm   p_model
+   A  model    0.07153 difference   5e-05 2.334e-25
+   B effort   0.009505 difference  0.1837    0.1242
+   C critic   -0.00934 difference  0.1943    0.2139
+
+--- within-cell residual diagnostics (DESCRIPTIVE -- nothing routes on these) 
+                endpoint scale  shapiro_p     skew  excess_kurtosis  levene_p  sd_ratio
+prop_engineered_selected   raw     0.9822 0.008246          -0.3296    0.7446     1.848
+
+--- distribution-free comparison of the 8 configurations (letter source) -----
+  Kruskal-Wallis omnibus: H = 53.37, p = 3.13e-09, df = 7
+  rank effect size: epsilon^2 = 0.676, eta^2_H = 0.644 (share of rank variation explained by configuration)
+  Mann-Whitney U + Holm over 28 pairs: 11/28 differ
+
+  letter display (Mann-Whitney U, Holm-adjusted over 28 pairs); shared letter = not significantly different
+    {'---': 'a', '-+-': 'abc', '--+': 'ac', '-++': 'abc', '+--': 'd', '++-': 'd', '+-+': 'bd', '+++': 'bcd'}
+
+==============================================================================
+Total tokens  [total_tokens]   family = negbin   tier = extra
+==============================================================================
+  Added because it is what separates a PRICE effect from a BEHAVIOR effect in the cost result. PLAN.md is explicit that token counts are NOT structural: resource use is an observed outcome.
+  validation: n=80, dropped 0 non-finite, 8/8 cells, rank 8, cell counts 10-10
+
+--- factorial effects (effect = eight-cell marginal effect, response scale) --
+term               label                        tier     coef      se     p_link  effect  eff_lo  eff_hi  p_response     p_holm significant  structural
+   A               model main (Holm within endpoint)   0.1397 0.02033  6.501e-12   1.424   1.304   1.556   4.448e-15  8.895e-15        True       False
+   B              effort main (Holm within endpoint)  0.07869 0.02033  0.0001088    1.12   1.023   1.226     0.01442    0.01442        True       False
+   C              critic main (Holm within endpoint)   0.5164 0.02033 2.919e-142   2.857   2.635   3.098  2.133e-142 6.398e-142        True       False
+  AB        model:effort                 exploratory -0.02258 0.02033     0.2669  0.9671  0.8835   1.059       0.469        NaN        <NA>       False
+  AC        model:critic                 exploratory  0.08172 0.02033  5.848e-05   1.342   1.228   1.466   7.335e-11        NaN        <NA>       False
+  BC       effort:critic                 exploratory -0.03601 0.02033    0.07656  0.9954  0.9093    1.09      0.9202        NaN        <NA>       False
+ ABC model:effort:critic                 exploratory -0.00566 0.02033     0.7807  0.9775   0.893    1.07      0.6224        NaN        <NA>       False
+  scale: ratio of marginal means (eight cells)
+
+--- stratified randomization test (model-free) vs the model p-value ----------
+term  label  statistic     scale  p_perm    p_model
+   A  model     0.3537 log ratio   5e-05  4.448e-15
+   B effort     0.1129 log ratio 0.08475    0.01442
+   C critic       1.05 log ratio   5e-05 2.133e-142
+
+--- within-cell residual diagnostics (DESCRIPTIVE -- nothing routes on these) 
+    endpoint scale  shapiro_p   skew  excess_kurtosis  levene_p  sd_ratio
+total_tokens   raw  2.716e-06  1.251            1.424  0.001479     19.41
+total_tokens   log  0.0002108 0.9782           0.9711   0.07764     5.801
+
+--- distribution-free comparison of the 8 configurations (letter source) -----
+  Kruskal-Wallis omnibus: H = 71.38, p = 7.78e-13, df = 7
+  rank effect size: epsilon^2 = 0.904, eta^2_H = 0.894 (share of rank variation explained by configuration)
+  Mann-Whitney U + Holm over 28 pairs: 25/28 differ
+
+  letter display (Mann-Whitney U, Holm-adjusted over 28 pairs); shared letter = not significantly different
+    {'---': 'a', '-+-': 'b', '--+': 'c', '-++': 'c', '+--': 'b', '++-': 'd', '+-+': 'e', '+++': 'e'}
+
+==============================================================================
+Agent turns  [n_turns_total]   family = negbin   tier = extra
+==============================================================================
+  Added as a price-free measure of how much work the workflow actually did.
+  validation: n=80, dropped 0 non-finite, 8/8 cells, rank 8, cell counts 10-10
+
+--- factorial effects (effect = eight-cell marginal effect, response scale) --
+term               label                        tier     coef      se    p_link  effect  eff_lo  eff_hi  p_response    p_holm significant  structural
+   A               model main (Holm within endpoint)  0.05733 0.02696   0.03347   1.156   1.044    1.28    0.005447   0.01089        True       False
+   B              effort main (Holm within endpoint) -0.01069 0.02696    0.6918  0.9385  0.8474   1.039      0.2234    0.2234       False       False
+   C              critic main (Holm within endpoint)   0.3511 0.02696 8.982e-39    2.03   1.827   2.256   1.574e-39 4.723e-39        True       False
+  AB        model:effort                 exploratory -0.03427 0.02696    0.2037  0.9311  0.8407   1.031      0.1708       NaN        <NA>       False
+  AC        model:critic                 exploratory  0.04337 0.02696    0.1077   1.138   1.027    1.26     0.01334       NaN        <NA>       False
+  BC       effort:critic                 exploratory -0.05636 0.02696   0.03658  0.8842  0.7983  0.9794      0.0183       NaN        <NA>       False
+ ABC model:effort:critic                 exploratory 0.008433 0.02696    0.7544  0.9843  0.8887    1.09      0.7609       NaN        <NA>       False
+  scale: ratio of marginal means (eight cells)
+
+--- stratified randomization test (model-free) vs the model p-value ----------
+term  label  statistic     scale  p_perm   p_model
+   A  model      0.145 log ratio  0.0172  0.005447
+   B effort   -0.06345 log ratio  0.3223    0.2234
+   C critic     0.7081 log ratio   5e-05 1.574e-39
+
+--- within-cell residual diagnostics (DESCRIPTIVE -- nothing routes on these) 
+     endpoint scale  shapiro_p   skew  excess_kurtosis  levene_p  sd_ratio
+n_turns_total   raw  1.409e-06  1.218            1.681   0.08902     15.18
+n_turns_total   log  5.394e-05 0.9401             1.28      0.17     6.621
+
+--- distribution-free comparison of the 8 configurations (letter source) -----
+  Kruskal-Wallis omnibus: H = 65.23, p = 1.35e-11, df = 7
+  rank effect size: epsilon^2 = 0.826, eta^2_H = 0.809 (share of rank variation explained by configuration)
+  Mann-Whitney U + Holm over 28 pairs: 21/28 differ
+
+  letter display (Mann-Whitney U, Holm-adjusted over 28 pairs); shared letter = not significantly different
+    {'---': 'a', '-+-': 'b', '--+': 'c', '-++': 'c', '+--': 'b', '++-': 'b', '+-+': 'd', '+++': 'cd'}
+
+==============================================================================
+Inner-CV score (Optuna best)  [inner_cv_score]   family = beta   tier = extra
+==============================================================================
+  Added to test the optimism gap: does the score the modeling agent optimizes track held-out PR-AUC?
+  validation: n=80, dropped 0 non-finite, 8/8 cells, rank 8, cell counts 10-10
+
+--- factorial effects (effect = eight-cell marginal effect, response scale) --
+term               label                        tier      coef       se    p_link    effect    eff_lo    eff_hi  p_response    p_holm significant  structural
+   A               model main (Holm within endpoint)  0.009016 0.001787 4.528e-07  0.004361  0.002666  0.006056   4.608e-07 1.382e-06        True       False
+   B              effort main (Holm within endpoint)  0.005826 0.001787  0.001113  0.002821  0.001125  0.004516    0.001109  0.002219        True       False
+   C              critic main (Holm within endpoint)  0.004475 0.001787   0.01227  0.002164 0.0004688  0.003859     0.01235   0.01235        True       False
+  AB        model:effort                 exploratory  0.001489 0.001787    0.4046 0.0007182 -0.000977  0.002413      0.4063       NaN        <NA>       False
+  AC        model:critic                 exploratory   0.00455 0.001787    0.0109    0.0022 0.0005048  0.003895     0.01097       NaN        <NA>       False
+  BC       effort:critic                 exploratory -0.002444 0.001787    0.1714 -0.001184 -0.002879 0.0005113      0.1711       NaN        <NA>       False
+ ABC model:effort:critic                 exploratory -0.002332 0.001787    0.1919  -0.00113 -0.002825 0.0005656      0.1915       NaN        <NA>       False
+  scale: difference of marginal means (eight cells)
+  NOTE: BFGS reported warnflag=2 (precision loss, not a model failure);
+  refitted with L-BFGS-B. See fit_beta_robust().
+
+--- stratified randomization test (model-free) vs the model p-value ----------
+term  label  statistic      scale  p_perm   p_model
+   A  model   0.004359 difference   5e-05 4.608e-07
+   B effort   0.002821 difference 0.00305  0.001109
+   C critic   0.002168 difference  0.0249   0.01235
+
+--- within-cell residual diagnostics (DESCRIPTIVE -- nothing routes on these) 
+      endpoint scale  shapiro_p     skew  excess_kurtosis  levene_p  sd_ratio
+inner_cv_score   raw    0.04273 -0.03506           -1.062 1.187e-05     4.552
+
+--- distribution-free comparison of the 8 configurations (letter source) -----
+  Kruskal-Wallis omnibus: H = 32.64, p = 3.1e-05, df = 7
+  rank effect size: epsilon^2 = 0.413, eta^2_H = 0.356 (share of rank variation explained by configuration)
+  Mann-Whitney U + Holm over 28 pairs: 6/28 differ
+
+  letter display (Mann-Whitney U, Holm-adjusted over 28 pairs); shared letter = not significantly different
+    {'---': 'a', '-+-': 'ab', '--+': 'a', '-++': 'ab', '+--': 'ab', '++-': 'b', '+-+': 'b', '+++': 'b'}
+
+==============================================================================
+PRIMARY ENDPOINT: additional prespecified checks
+==============================================================================
+
+--- run-to-run stability: is precision configuration-dependent? --------------
+  pr_auc                       LRT chi2(3) =   1.44, p = 0.6961   -> no evidence against constant precision
+  roc_auc                      LRT chi2(3) =   1.52, p = 0.6775   -> no evidence against constant precision
+  prop_engineered_selected     LRT chi2(3) =   2.66, p = 0.4476   -> no evidence against constant precision
+  (alternative holds precision MAIN EFFECTS only; a rejection is a
+   finding about reliability in its own right and also breaks the
+   constant-phi assumption the power analysis rests on)
+
+--- cell-stratified bootstrap for PR-AUC (2000 resamples) --------------------
+  betafx.bootstrap_contrasts() aborts on this dataset at a 71.7% refit rate.
+  Investigated as its error message instructs: every failure is BFGS warnflag=2
+  (precision loss at phi-hat ~ 4e3), not a model failure. Rerun through
+  fit_beta_robust(), which keeps the 90% requirement and only changes the
+  descent algorithm on a flagged refit.
+term               label   contrast   boot_lo    boot_hi  boot_se  delta_se
+   A               model  -0.004888 -0.008224  -0.001377 0.001785  0.001765
+   B              effort  -0.004047 -0.007614 -0.0004023  0.00183  0.001765
+   C              critic -0.0005691 -0.004147   0.002734 0.001791  0.001765
+  AB        model:effort   0.001327 -0.002077   0.004915  0.00175  0.001765
+  AC        model:critic -4.473e-05 -0.003381   0.003442 0.001764  0.001765
+  BC       effort:critic  -0.001403 -0.004813   0.001976 0.001759  0.001765
+ ABC model:effort:critic  -0.001064 -0.004575   0.002464 0.001796  0.001765
+  1997 fitted, 3 failed (99.9%); 564 needed the L-BFGS-B fallback.
+  Resampling is WITHIN cell, so the balanced design is preserved. boot_se against
+  delta_se is the check that matters: agreement means the parametric sampling
+  distribution is not doing any work the data cannot support.
+
+--- refit-based randomization test for the primary term (betafx) -------------
+  observed |marginal effect| = 0.00489, p_perm = 0.0135 (+/- 0.0055 MC), 1708/2000 permutations usable
+  CAVEAT: 292 permutations were dropped by the same BFGS flag
+  described in fit_beta_robust(), and they are not a random subset -- the sharpest
+  likelihoods are the ones that fail. The model-free stratified randomization
+  test reported with the endpoint above (20,000 permutations, nothing discarded)
+  is the backstop to rely on; this one is corroboration.
+
+==============================================================================
+SENSITIVITY: the selection-composition question modeled as a binomial
+==============================================================================
+
+  prop_engineered_selected is a count out of a known total: of the
+  n_features_after_fs features that survived selection, how many were
+  engineered. PLAN.md prefers a BINOMIAL model whenever the denominator is
+  known, because it uses the sample size of each proportion (a 3/30 is much
+  weaker evidence than a 30/300) instead of estimating one dispersion for all.
+
+  Reported as a sensitivity rather than as the primary model because the
+  denominator here is itself a random outcome of the selection step, not a
+  fixed design quantity, and the beta model does not have to assume otherwise.
+  Agreement between the two is the point of running both.
+term               label    effect   eff_lo   eff_hi         p  beta_model_effect  beta_model_p
+   A               model   0.06884  0.04622  0.09145 2.431e-09            0.07252     2.334e-25
+   B              effort   0.01022  -0.0124  0.03283    0.3759            0.01071        0.1242
+   C              critic  -0.01366 -0.03628 0.008955    0.2364          -0.008663        0.2139
+  AB        model:effort  -0.01582 -0.03844 0.006791    0.1702           -0.01798      0.009885
+  AC        model:critic   -0.0184 -0.04101 0.004218    0.1108           -0.01932      0.005569
+  BC       effort:critic -0.008889  -0.0315  0.01373    0.4411           -0.01136        0.1031
+ ABC model:effort:critic  0.003384 -0.01923    0.026    0.7693           0.002711        0.6973
+
+==============================================================================
+GLOBAL HOLM SENSITIVITY (over-conservative; not the decision rule)
+==============================================================================
+                      endpoint term  label     effect          p  p_holm_global  survives_global
+                 wallclock_min    C critic      3.904 2.865e-168     6.875e-167             True
+                           usd    A  model      3.705 1.389e-139     3.195e-138             True
+                           usd    C critic      3.461 5.103e-123     1.123e-121             True
+         n_engineered_features    A  model      1.821   7.1e-113     1.491e-111             True
+n_engineered_features_selected    A  model      2.586  1.175e-63       2.35e-62             True
+                 wallclock_min    B effort      2.095  2.621e-41      4.981e-40             True
+                 wallclock_min    A  model      1.846  3.044e-29      5.479e-28             True
+           n_features_after_fs    A  model      1.801  3.297e-28      5.605e-27             True
+      prop_engineered_selected    A  model    0.07252  2.334e-25      3.735e-24             True
+         n_engineered_features    B effort      1.205  1.807e-11       2.71e-10             True
+n_engineered_features_selected    B effort      1.388  4.157e-11      5.819e-10             True
+                           usd    B effort      1.415  1.025e-08      1.333e-07             True
+           n_features_after_fs    B effort      1.339  2.325e-08       2.79e-07             True
+           n_features_after_fs    C critic       1.26  8.036e-06       8.84e-05             True
+n_engineered_features_selected    C critic      1.162   0.004372        0.04372             True
+                        pr_auc    A  model  -0.004888   0.005605        0.05045            False
+                        pr_auc    B effort  -0.004047    0.02183         0.1746            False
+                       roc_auc    A  model   0.001636    0.04035         0.2824            False
+      prop_engineered_selected    B effort    0.01071     0.1242         0.7452            False
+      prop_engineered_selected    C critic  -0.008663     0.2139              1            False
+         n_engineered_features    C critic     0.9688     0.2635              1            False
+                       roc_auc    C critic  0.0007674     0.3362              1            False
+                       roc_auc    B effort  0.0002771     0.7284              1            False
+                        pr_auc    C critic -0.0005691     0.7471              1            False
+
+==============================================================================
+DEPLOYMENT VIEW: performance against cost and time
+==============================================================================
+sign              cell  pr_auc    pr_sd   usd  minutes    tokens  pareto_cost  pareto_time
+ --- sonnet/medium/off  0.5425 0.007684 1.067    6.066 4.387e+05         True         True
+ -+-  sonnet/xhigh/off  0.5375 0.004295 1.641    13.17 5.708e+05        False        False
+ --+  sonnet/medium/on  0.5423 0.009302 2.801    18.65 1.112e+06        False        False
+ +--   opus/medium/off  0.5353   0.0102 3.006    7.605 5.095e+05        False        False
+ -++   sonnet/xhigh/on  0.5366 0.008726 4.401    43.45 1.281e+06        False        False
+ ++-    opus/xhigh/off   0.535 0.009181 4.739    20.36 6.196e+05        False        False
+ +-+    opus/medium/on  0.5372 0.006932 12.43    42.48 1.832e+06        False        False
+ +++     opus/xhigh/on   0.532 0.008779 16.53    79.69 1.885e+06        False        False
+  sign order: model effort critic, '-' = sonnet/medium/off
+
+==============================================================================
+EXTRA: does the inner-CV score the agent optimizes track held-out PR-AUC?
+==============================================================================
+  Pearson  r = -0.113 (p = 0.320)
+  Spearman r = -0.160 (p = 0.157)
+  optimism gap (inner CV - held-out PR-AUC): mean +0.0521, SD 0.0105, range +0.0292 to +0.0757
+
+==============================================================================
+EXTRA: is the cost effect price or behavior?
+==============================================================================
+term               label  token_ratio  cost_ratio  implied_price_ratio
+   A               model        1.424       3.705                2.601
+   B              effort         1.12       1.415                1.264
+   C              critic        2.857       3.461                1.211
+  AB        model:effort       0.9671        1.17                 1.21
+  AC        model:critic        1.342       2.119                1.579
+  BC       effort:critic       0.9954       1.157                1.162
+ ABC model:effort:critic       0.9775       1.059                1.084
+
+  Reading this table: cost = price x tokens. Along the CRITIC and EFFORT
+  factors the price per token is identical on both sides, so the cost ratio
+  and the token ratio should agree and any gap is composition (prompt vs
+  completion mix). Along the MODEL factor the implied price ratio is the part
+  that was fixed by the price schedule before any run happened -- that column
+  is the price component PLAN.md requires to be disclosed rather than
+  reported as a finding.
+
+==============================================================================
+DONE
+==============================================================================
+  tables -> C:\Users\Phil\Desktop\factorial_analysis\tables
+  json   -> C:\Users\Phil\Desktop\factorial_analysis\results.json
+  log    -> C:\Users\Phil\Desktop\factorial_analysis\analysis_log.txt
+
+
+##############################################################################
+# APPENDED AFTER THE RUN ABOVE by `python analysis.py --interaction-sensitivity`.
+# Reads results.json; fits nothing, resamples nothing. Every number in the
+# transcript above is unchanged.
+##############################################################################
+
+==============================================================================
+INTERACTION MULTIPLICITY SENSITIVITY (not prespecified; not a decision rule)
+==============================================================================
+
+  The multiplicity plan was fixed before any p-value was read and it allocated
+  the entire error budget to main effects. The 44 interaction terms got no
+  error rate and were reported CI-only. Nothing below changes that, changes any
+  p_holm already written, or changes any claim in FINDINGS.md.
+
+  The question here is the one the plan does not answer: IF an error rate had
+  been allocated to those 44 terms, which would survive it. Two families:
+
+    global           Holm across all 44 interaction terms at once
+    within-endpoint  Holm across each endpoint's own 4, mirroring the
+                     exploratory main-effect tier
+
+  Nothing is refitted. The p-values are the unadjusted link-scale ones already
+  computed per endpoint, read back and re-ranked.
+
+--- global Holm over all 44 interaction terms (top of the chain) -------------
+                endpoint        label     p_raw  global_threshold  p_holm_global  p_holm_within  survives_global
+           wallclock_min model:critic 1.603e-05          0.001136      0.0007053      6.411e-05             True
+            total_tokens model:critic 5.848e-05          0.001163       0.002515      0.0002339             True
+                     usd model:critic 7.937e-05           0.00119       0.003333      0.0003175             True
+     n_features_after_fs model:critic  0.002633           0.00122          0.108        0.01053            False
+prop_engineered_selected model:effort  0.003493           0.00125         0.1397        0.01397            False
+prop_engineered_selected model:critic  0.006635          0.001282         0.2588        0.01991            False
+   n_engineered_features model:effort  0.006876          0.001316         0.2613         0.0275            False
+          inner_cv_score model:critic    0.0109          0.001351         0.4033         0.0436            False
+
+  3/44 survive at alpha = 0.05. The chain stops at rank 4, n_features_after_fs model:critic: p = 0.00263 > alpha/41 = 0.00122.
+  Survivors are all one term (model:critic) on three correlated resource endpoints:
+    usd ~ wallclock_min r = 0.91; both largely downstream of total_tokens (r = 0.89, 0.89).
+  That is ONE resource-side pattern counted three times, not three findings.
+  It remains a sensitivity result and carries no confirmatory claim.
+
+--- within-endpoint Holm (each endpoint's own 4 interaction terms) -----------
+  9/44 survive the narrower family. The gap against the global family
+  is what family size costs; neither is a decision rule here.
+                endpoint               label     p_raw  p_holm_within  p_holm_global  survives_global
+           wallclock_min        model:critic 1.603e-05      6.411e-05      0.0007053             True
+            total_tokens        model:critic 5.848e-05      0.0002339       0.002515             True
+                     usd        model:critic 7.937e-05      0.0003175       0.003333             True
+     n_features_after_fs        model:critic  0.002633        0.01053          0.108            False
+prop_engineered_selected        model:effort  0.003493        0.01397         0.1397            False
+prop_engineered_selected        model:critic  0.006635        0.01991         0.2588            False
+   n_engineered_features        model:effort  0.006876         0.0275         0.2613            False
+          inner_cv_score        model:critic    0.0109         0.0436         0.4033            False
+           wallclock_min model:effort:critic   0.01658        0.04973         0.5967            False
+
+  tables/interaction_sensitivity.csv    44 rows
+  tables/all_terms_multiplicity.csv     77 rows (33 main + 44 interaction)
+  INTERACTION_SENSITIVITY.md          consolidated Markdown, both tables

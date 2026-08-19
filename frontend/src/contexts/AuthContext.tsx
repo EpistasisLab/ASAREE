@@ -24,8 +24,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // The boot-time session probe, and the one refreshUser() call with nobody to
+  // catch it: interactive callers (ProfileInfoSection) await it inside their own
+  // try/catch and want the rethrow above for anything that isn't a 401, but here
+  // a rejection would just surface as an unhandled promise rejection. Anything
+  // other than a clean "you have a valid session" -- backend still coming up,
+  // 500, network unreachable -- means the same thing to the app as no session at
+  // all, so land on `user = null` and let ProtectedRoute route to /login rather
+  // than leaving the tree in limbo.
   useEffect(() => {
-    refreshUser().finally(() => setIsLoading(false))
+    refreshUser()
+      .catch(() => setUser(null))
+      .finally(() => setIsLoading(false))
   }, [refreshUser])
 
   const login = useCallback(async (data: LoginRequest) => {

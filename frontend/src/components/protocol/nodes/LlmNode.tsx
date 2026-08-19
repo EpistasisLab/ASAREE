@@ -54,11 +54,23 @@ export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData 
   // credential yet) means "can't tell," not "invalid" -- only warn once
   // there's an actual list to check against, same as the Inspector's own
   // "unrecognized model" fallback treats this case.
+  //
+  // And only when that list is *authoritative*. `source: 'api'` is a live
+  // Azure Foundry deployment listing, so an id missing from it genuinely
+  // can't be called. `source: 'static'` is the curated anthropic/openai
+  // catalog, which is knowingly incomplete -- it can only ever name models
+  // that existed when the pinned agentic-core version was tagged -- and the
+  // inspector now offers "Custom model..." specifically so you can go past
+  // it. Flagging that deliberate choice as a problem would make the escape
+  // hatch look broken. The cost is that a typo'd anthropic/openai model is
+  // no longer caught here; it surfaces as a provider error on the first real
+  // call instead.
   const modelName = data.config?.model
+  const listIsAuthoritative = modelsQuery.data?.source === 'api'
   const warning = !modelName
     ? 'No model set'
-    : models.length > 0 && !models.some((m) => m.id === modelName)
-      ? `"${modelName}" isn't a known model for this provider`
+    : listIsAuthoritative && models.length > 0 && !models.some((m) => m.id === modelName)
+      ? `"${modelName}" isn't a deployment on this Azure Foundry project`
       : undefined
 
   return (

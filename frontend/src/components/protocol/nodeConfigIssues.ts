@@ -50,8 +50,15 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
         } else {
           const cached = queryClient.getQueryData<LLMSettingModelsResponse>(['llm-settings', config.provider, 'models'])
           const models = cached?.models ?? []
-          if (models.length > 0 && !models.some((m) => m.id === config.model)) {
-            issues.push(`"${config.model}" isn't a known model for this provider`)
+          // Only a live Azure deployment listing (`source: 'api'`) is
+          // authoritative enough to call an id wrong -- the static
+          // anthropic/openai catalog is knowingly incomplete and the
+          // inspector's "Custom model..." field exists to go past it, so an
+          // off-catalog id there is a supported choice, not a misconfigured
+          // node worth interrupting a Run for. Same gate as LlmNode.tsx's own
+          // warning triangle; see the longer note there.
+          if (cached?.source === 'api' && models.length > 0 && !models.some((m) => m.id === config.model)) {
+            issues.push(`"${config.model}" isn't a deployment on this Azure Foundry project`)
           }
         }
         break

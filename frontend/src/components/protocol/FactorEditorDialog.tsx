@@ -23,6 +23,7 @@ import {
   seedStructuredLevels,
   type LevelType,
 } from './factorLevels'
+import { ModelField } from './ModelField'
 import { NODE_INSPECTOR_CONTENT_CLASSNAME } from './NodeInspectorDialog'
 import { PROVIDER_META } from './nodes/LlmNode'
 import { PythonCodeEditor } from './PythonCodeEditor'
@@ -76,25 +77,12 @@ function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChan
       </div>
       <div className="space-y-1">
         <Label className="text-xs">Model</Label>
-        {models.length > 0 ? (
-          <Select value={(value.model as string) || '__none__'} onValueChange={(v) => v && v !== '__none__' && patch({ model: v })}>
-            <SelectTrigger className="h-8 w-full">
-              <SelectValue>{() => models.find((m) => m.id === value.model)?.label ?? (value.model as string) ?? 'Select…'}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__" disabled>
-                Select a model…
-              </SelectItem>
-              {models.map((m) => (
-                <SelectItem key={m.id} value={m.id}>
-                  {m.label ?? m.id}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <Input className="h-8" value={(value.model as string) ?? ''} onChange={(e) => patch({ model: e.target.value })} />
-        )}
+        <ModelField
+          value={(value.model as string) ?? ''}
+          models={models}
+          isLoading={modelsQuery.isLoading}
+          onChange={(model) => patch({ model })}
+        />
       </div>
       <div className="space-y-1">
         <Label className="text-xs">Temperature</Label>

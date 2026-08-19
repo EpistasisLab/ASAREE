@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { hashToChartHue } from '@/lib/utils'
 import { FactorBindableField } from './FactorBindableField'
+import { ModelField } from './ModelField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { PROVIDER_META } from './nodes/LlmNode'
 import type { LlmNodeConfig, LlmNodeData, ProtocolNode } from '@/types/protocols'
@@ -113,6 +114,11 @@ export function LlmNodeInspector({
   // hand-typed value not in the catalog) -- default to temperature-only,
   // the same safe fallback agentic-core's own DEFAULT_CAPABILITIES uses.
   const showTemperature = selectedModelInfo?.supports_temperature ?? true
+
+  // Deliberately off-catalog: a model id set here that the fetched list
+  // doesn't contain, once there IS a list to compare against (an empty list
+  // means "couldn't tell," which the `note` above explains instead).
+  const isOffCatalogModel = !!config.model && models.length > 0 && !selectedModelInfo
 
   function patchConfig(patch: Partial<LlmNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
@@ -234,37 +240,27 @@ export function LlmNodeInspector({
                 Model
                 {trigger}
               </Label>
-              {modelsQuery.isLoading ? (
-                <Skeleton className="h-8 w-full" />
-              ) : models.length > 0 ? (
-                <Select
-                  value={selectedModelInfo?.id ?? '__none__'}
-                  onValueChange={(value) => {
-                    if (value && value !== '__none__') patchConfig({ model: value })
-                  }}
-                >
-                  <SelectTrigger id="llm-model" className="w-full">
-                    <SelectValue>{() => selectedModelInfo?.label ?? selectedModelInfo?.id ?? 'Select a model…'}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__" disabled>
-                      Select a model…
-                    </SelectItem>
-                    {models.map((m) => (
-                      <SelectItem key={m.id} value={m.id}>
-                        {m.label ?? m.id}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                // Falls back to free-text when there's nothing to list yet --
-                // no Azure credential, or live discovery failed (see the note
-                // below) -- never a dead end.
-                <Input id="llm-model" value={config.model} onChange={(e) => patchConfig({ model: e.target.value })} />
-              )}
+              <ModelField
+                id="llm-model"
+                value={config.model}
+                models={models}
+                isLoading={modelsQuery.isLoading}
+                onChange={(model) => patchConfig({ model })}
+              />
               {modelsQuery.data?.source === 'error' && modelsQuery.data.note && (
                 <p className="text-xs text-muted-foreground">{modelsQuery.data.note}</p>
+              )}
+              {isOffCatalogModel && (
+                // Say why the controls just changed shape: capabilities are
+                // looked up by model id, so an id the catalog doesn't know
+                // falls back to DEFAULT_CAPABILITIES -- Temperature shown,
+                // Effort hidden -- regardless of what the model really
+                // supports. Worth stating plainly rather than letting the
+                // Effort control silently vanish.
+                <p className="text-xs text-muted-foreground">
+                  Not in the catalog, so its capabilities are unknown — Temperature is offered and Effort isn&apos;t. The
+                  id is sent to {meta.label} as typed.
+                </p>
               )}
             </div>
           )}

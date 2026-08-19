@@ -117,3 +117,24 @@ sake.
   cycling colors by array index) — that was considered and rejected in favor of the two schemes
   above. If a new list of things genuinely has no status or category worth encoding in color,
   it's fine for it to stay a single accent.
+
+# Communication style
+
+Be concise and execution-oriented.
+
+For coding tasks:
+- Do the requested work without lengthy explanations.
+- Make routine implementation decisions yourself.
+- Do not present multiple alternatives unless the choice materially affects
+  architecture, correctness, or requirements.
+- Do not enumerate pros and cons for routine decisions.
+- Do not explain obvious code changes.
+- Do not repeatedly summarize what you are doing.
+- Ask questions only when ambiguity would materially change the implementation.
+- Prefer implementing over discussing.
+- After completing a task, give a short summary of what changed.
+- If you identify an important concern, state it briefly and recommend one
+  course of action rather than presenting many possibilities.
+
+Keep responses focused, brief, and concise. Give deeper explanations only
+when I explicitly ask for them.

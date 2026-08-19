@@ -38,27 +38,29 @@ export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData 
   // check can basically never fire in practice); this instead validates
   // against the provider's own actually-discovered model list.
   const { modelsQuery, models } = useProviderModels(provider)
-  // An empty list (still loading, discovery failed, or Azure with no
-  // credential yet) means "can't tell," not "invalid" -- only warn once
-  // there's an actual list to check against, same as the Inspector's own
-  // "unrecognized model" fallback treats this case.
+  // An empty list (still loading, discovery failed, or no credential saved
+  // yet) means "can't tell," not "invalid" -- only warn once there's an
+  // actual list to check against, same as the Inspector's own "unrecognized
+  // model" fallback treats this case.
   //
   // And only when that list is *authoritative*. `source: 'api'` is a live
-  // Azure Foundry deployment listing, so an id missing from it genuinely
-  // can't be called. `source: 'static'` is the curated anthropic/openai
-  // catalog, which is knowingly incomplete -- it can only ever name models
-  // that existed when the pinned agentic-core version was tagged -- and the
-  // inspector now offers "Custom model..." specifically so you can go past
-  // it. Flagging that deliberate choice as a problem would make the escape
-  // hatch look broken. The cost is that a typo'd anthropic/openai model is
-  // no longer caught here; it surfaces as a provider error on the first real
+  // listing -- an Azure Foundry project's deployments, or Anthropic's own
+  // GET /v1/models -- so an id missing from it genuinely can't be called
+  // with this credential. `source: 'static'` is the curated catalog (OpenAI
+  // always, and either provider after a failed discovery call), which is
+  // knowingly incomplete -- it can only ever name models that existed when
+  // the pinned agentic-core version was tagged -- and the inspector offers
+  // "Custom model..." specifically so you can go past it. Flagging that
+  // deliberate choice as a problem would make the escape hatch look broken.
+  // The cost is that a typo'd model on a static-catalog provider is no
+  // longer caught here; it surfaces as a provider error on the first real
   // call instead.
   const modelName = data.config?.model
   const listIsAuthoritative = modelsQuery.data?.source === 'api'
   const warning = !modelName
     ? 'No model set'
     : listIsAuthoritative && models.length > 0 && !models.some((m) => m.id === modelName)
-      ? `"${modelName}" isn't a deployment on this Azure Foundry project`
+      ? `"${modelName}" isn't available on your ${meta.label} credential`
       : undefined
 
   return (

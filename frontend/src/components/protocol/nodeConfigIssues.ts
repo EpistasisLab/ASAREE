@@ -2,6 +2,7 @@ import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import type { LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { DatasetNodeData, LlmNodeData, McpToolNodeData, ScriptNodeData } from '@/types/protocols'
+import { PROVIDER_META } from './nodes/LlmNode'
 import { providerModelsKey } from './useProviderModels'
 
 export interface NodeConfigIssue {
@@ -51,15 +52,17 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
         } else {
           const cached = queryClient.getQueryData<LLMSettingModelsResponse>(providerModelsKey(config.provider))
           const models = cached?.models ?? []
-          // Only a live Azure deployment listing (`source: 'api'`) is
-          // authoritative enough to call an id wrong -- the static
-          // anthropic/openai catalog is knowingly incomplete and the
-          // inspector's "Custom model..." field exists to go past it, so an
-          // off-catalog id there is a supported choice, not a misconfigured
-          // node worth interrupting a Run for. Same gate as LlmNode.tsx's own
-          // warning triangle; see the longer note there.
+          // Only a live listing (`source: 'api'` -- an Azure Foundry
+          // project's deployments, or Anthropic's own GET /v1/models) is
+          // authoritative enough to call an id wrong. The static catalog is
+          // knowingly incomplete and the inspector's "Custom model..." field
+          // exists to go past it, so an off-catalog id there is a supported
+          // choice, not a misconfigured node worth interrupting a Run for.
+          // Same gate as LlmNode.tsx's own warning triangle; see the longer
+          // note there.
           if (cached?.source === 'api' && models.length > 0 && !models.some((m) => m.id === config.model)) {
-            issues.push(`"${config.model}" isn't a deployment on this Azure Foundry project`)
+            const label = PROVIDER_META[config.provider]?.label ?? config.provider
+            issues.push(`"${config.model}" isn't available on your ${label} credential`)
           }
         }
         break

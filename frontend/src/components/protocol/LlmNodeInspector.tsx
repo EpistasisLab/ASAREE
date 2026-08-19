@@ -54,12 +54,13 @@ export function LlmNodeInspector({
   // Every provider now has a real per-user credential (credential_resolver.py's
   // SUPPORTED_PROVIDERS) -- no more "informational, nothing to set up" branch.
   const provider = node?.data.config?.provider
-  // GET /llm-settings/{provider}/models -- static, credential-free catalog
-  // for anthropic/openai; a live Azure Foundry deployment discovery once a
-  // credential exists (see llm_model_discovery.py for why Azure can't use a
-  // static catalog the way the other two do). Shared with the canvas node
-  // cards via useProviderModels, so opening this inspector reads the list
-  // those cards already fetched rather than issuing its own request.
+  // GET /llm-settings/{provider}/models -- a live per-credential listing for
+  // anthropic and azure_foundry, the static catalog for openai (which has no
+  // capability endpoint) and for anyone with no credential saved yet. See
+  // llm_model_discovery.py's docstring for what each provider actually
+  // answers. Shared with the canvas node cards via useProviderModels, so
+  // opening this inspector reads the list those cards already fetched rather
+  // than issuing its own request.
   const { credentialsQuery, hasCredential, modelsQuery, models } = useProviderModels(provider)
   // Credential health belongs where you *pick* the credential, not only in a
   // settings screen -- this is the canvas-side entry point. Click-driven

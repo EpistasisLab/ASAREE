@@ -1,12 +1,31 @@
 """Which models a user can actually pick for a given provider/credential.
 
-Anthropic/OpenAI's own catalogs are curated and provider-wide -- they don't
-vary per user, so agentic_core.services.model_capabilities.CATALOG (already
-hand-maintained there specifically because litellm's own dynamic capability
-data is unreliable for newer models -- see that module's own docstring) is
-the source of truth for those two. No live call, no credential needed.
+There is NO cross-provider standard for capability discovery. All three were
+probed live, and all three answer differently:
 
-Azure Foundry deployments are the opposite: per-resource, so nothing short
+* **Anthropic** -- GET /v1/models returns a full capability tree per model
+  (``effort.supported`` plus a per-level ``supported`` flag, ``thinking``,
+  ``image_input``, ``structured_outputs``, ...) alongside ``max_input_tokens``
+  / ``max_tokens``. Authoritative and self-updating, so it's used directly and
+  agentic-core's _REGISTRY is bypassed for this provider.
+* **Azure Foundry** -- the deployments listing has a ``capabilities`` field,
+  but it only ever contains ``{"chat_completion": "true"}``: a modality, not a
+  sampling contract. Capability lookup there still has to go through
+  get_capabilities() on the underlying model name.
+* **OpenAI** -- GET /v1/models returns ``id``/``object``/``created``/
+  ``owned_by``/``shutdown_date`` and nothing else; there is no capability
+  endpoint at all (it's an open feature request). Hand-maintained data is the
+  only option, so this provider stays on the curated catalog.
+
+Nor is "temperature is being replaced by effort" quite true, which is why the
+two are separate booleans rather than one enum. On OpenAI's 5.1+ families the
+same model accepts *either* dial -- temperature is legal precisely when
+``reasoning_effort`` is ``none`` -- so support is a property of the request
+mode, not only of the model. ModelCapabilities flattens that to "which dial
+do we show", which is right for Anthropic (adaptive thinking is always on, so
+temperature is simply rejected) and an approximation for OpenAI.
+
+Azure Foundry deployments are the opposite of Anthropic's: per-resource, so nothing short
 of asking that resource can know what's actually deployed there. The listing
 call for a Foundry project's deployments (any publisher, including
 Anthropic) is ``{project_endpoint}/deployments?api-version=v1`` -- confirmed
@@ -30,9 +49,16 @@ actually works on.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import httpx
-from agentic_core.services.model_capabilities import CATALOG, ModelCapabilities, get_capabilities
+from agentic_core.services.model_capabilities import (
+    CATALOG,
+    DEFAULT_EFFORT,
+    EFFORT_LEVELS_FULL,
+    ModelCapabilities,
+    get_capabilities,
+)
 
 from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.services.user_llm_settings import decrypt_api_key
@@ -41,6 +67,13 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_DEPLOYMENTS_API_VERSION = "v1"
 _REQUEST_TIMEOUT_SECONDS = 10.0
+
+_ANTHROPIC_DEFAULT_API_BASE = "https://api.anthropic.com"
+_ANTHROPIC_VERSION = "2023-06-01"
+_ANTHROPIC_PAGE_LIMIT = 100
+# A page loop that can't run away if `has_more` is ever wrong. 10 pages of 100
+# is far past any plausible model count.
+_ANTHROPIC_MAX_PAGES = 10
 
 # Public because llm_connection_check reuses it: no project endpoint is the
 # one discovery failure that says nothing about whether the credential itself
@@ -61,17 +94,34 @@ class ModelInfo:
 
 
 async def discover_models(*, provider: str, setting: UserLLMSetting | None) -> tuple[list[ModelInfo], str, str | None]:
-    """Returns ``(models, source, note)`` -- ``source`` is ``"static"`` for
-    the curated Anthropic/OpenAI catalog, ``"api"`` for a live Azure Foundry
-    discovery that succeeded, or ``"error"`` (with ``note`` explaining why)
-    when Azure discovery couldn't run at all."""
-    if provider in ("anthropic", "openai"):
-        models = [
-            ModelInfo(id=entry.model, label=entry.label, capabilities=entry.capabilities)
-            for entry in CATALOG
-            if entry.provider == provider
-        ]
-        return models, "static", None
+    """Returns ``(models, source, note)``.
+
+    ``source`` is ``"api"`` for a live listing that succeeded (Anthropic or
+    Azure Foundry), ``"static"`` for the curated catalog -- whether that's the
+    only option (OpenAI), the no-credential case, or a fallback after a failed
+    Anthropic call -- or ``"error"`` when discovery couldn't run at all and
+    there's nothing to show.
+
+    Callers treat only ``"api"`` as authoritative enough to call a model id
+    wrong: a catalog can't vouch for ids it never knew about.
+    """
+    if provider == "anthropic":
+        # No credential means no listing call to make -- fall back to the
+        # curated catalog rather than showing nothing.
+        if setting is None:
+            return _static_catalog(provider), "static", None
+        return await _discover_anthropic(setting)
+
+    if provider == "openai":
+        # OpenAI's GET /v1/models is confirmed (probed live) to return only
+        # id/object/created/owned_by/shutdown_date -- no capability data at
+        # all, and no other endpoint exposes it. Listing it live would mean
+        # 124 entries (mostly embeddings/TTS/image/realtime models that can't
+        # serve a chat turn) with every one of them falling back to
+        # DEFAULT_CAPABILITIES, i.e. a Temperature slider offered for the
+        # whole reasoning lineup. Until that's addressed, the curated catalog
+        # is the more honest answer. See the module docstring.
+        return _static_catalog(provider), "static", None
 
     if provider == "azure_foundry":
         if setting is None or not setting.api_base:
@@ -81,6 +131,109 @@ async def discover_models(*, provider: str, setting: UserLLMSetting | None) -> t
         return await _discover_azure_via_project(setting)
 
     return [], "error", f"Model discovery isn't supported for provider {provider!r}."
+
+
+def _static_catalog(provider: str) -> list[ModelInfo]:
+    return [
+        ModelInfo(id=entry.model, label=entry.label, capabilities=entry.capabilities)
+        for entry in CATALOG
+        if entry.provider == provider
+    ]
+
+
+def _capabilities_from_anthropic(caps: dict[str, Any]) -> ModelCapabilities:
+    """Map Anthropic's own capability tree onto ModelCapabilities.
+
+    Shape confirmed live against GET /v1/models::
+
+        "effort": {"supported": true,
+                   "low": {"supported": true}, ..., "max": {"supported": true}}
+
+    This is strictly better than agentic-core's hand-maintained _REGISTRY for
+    this provider: the registry gives every entry one hardcoded effort ladder,
+    whereas the real ladders differ per model (opus-4-5 stops at high,
+    sonnet-4-6/opus-4-6 have no xhigh, the 5-series has the full set) and
+    older models like haiku-4-5/sonnet-4-5 report effort unsupported outright.
+
+    ``supports_temperature`` is the one value NOT stated by the API -- there
+    is no temperature leaf in the tree. Inferring it as "the inverse of
+    effort" reproduces exactly what _REGISTRY already encodes by hand, and
+    matches the underlying reason both exist: these models run adaptive
+    thinking (note "thinking.types.enabled.supported": false alongside
+    "adaptive": true) and 400 on an explicit temperature.
+    """
+    effort = caps.get("effort") or {}
+    supports_effort = bool(effort.get("supported"))
+    levels = [level for level in EFFORT_LEVELS_FULL if (effort.get(level) or {}).get("supported")]
+    return ModelCapabilities(
+        supports_temperature=not supports_effort,
+        supports_effort=supports_effort,
+        effort_levels=levels,
+        default_effort=(DEFAULT_EFFORT if DEFAULT_EFFORT in levels else levels[0]) if levels else None,
+    )
+
+
+async def _discover_anthropic(setting: UserLLMSetting) -> tuple[list[ModelInfo], str, str | None]:
+    """Live model list from Anthropic's own Models API.
+
+    Unlike Azure's listing this isn't per-resource -- Anthropic's catalog is
+    provider-wide -- but it's still fetched per credential, because a key's
+    org can be gated to a subset (Project Glasswing models, previews) and
+    because the response is the only authoritative source for the
+    capabilities above. A newly released model appears here the day it ships,
+    with no agentic-core release needed.
+
+    Failure falls back to the curated catalog rather than surfacing an error:
+    the catalog is stale, not wrong, and an empty dropdown is a worse answer
+    than an incomplete one. The returned source is "static" in that case, so
+    callers gating on "api" (LlmNode's unrecognized-model warning) correctly
+    stay quiet about ids this list can't vouch for.
+    """
+    api_key = decrypt_api_key(setting)
+    base = (setting.api_base or _ANTHROPIC_DEFAULT_API_BASE).rstrip("/")
+    entries: list[dict[str, Any]] = []
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+            after_id: str | None = None
+            for _ in range(_ANTHROPIC_MAX_PAGES):
+                params: dict[str, str | int] = {"limit": _ANTHROPIC_PAGE_LIMIT}
+                if after_id:
+                    params["after_id"] = after_id
+                response = await client.get(
+                    f"{base}/v1/models",
+                    params=params,
+                    headers={"x-api-key": api_key, "anthropic-version": _ANTHROPIC_VERSION},
+                )
+                response.raise_for_status()
+                page = response.json()
+                entries.extend(page.get("data") or [])
+                if not page.get("has_more"):
+                    break
+                after_id = page.get("last_id")
+                if not after_id:
+                    break
+    except httpx.HTTPError as e:
+        message = str(e).replace(api_key, "***")
+        logger.warning("anthropic_model_discovery_failed", extra={"error": message})
+        return (
+            _static_catalog("anthropic"),
+            "static",
+            f"Couldn't reach Anthropic to list models ({message}), so this is the built-in catalog. "
+            "You can still type any model name directly in the Model field.",
+        )
+
+    models = [
+        ModelInfo(
+            id=entry["id"],
+            label=entry.get("display_name"),
+            capabilities=_capabilities_from_anthropic(entry.get("capabilities") or {}),
+        )
+        for entry in entries
+        if entry.get("id")
+    ]
+    if not models:
+        return _static_catalog("anthropic"), "static", None
+    return models, "api", None
 
 
 async def _discover_azure_via_project(setting: UserLLMSetting) -> tuple[list[ModelInfo], str, str | None]:

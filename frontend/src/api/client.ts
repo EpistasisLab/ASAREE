@@ -313,8 +313,8 @@ export const llmSettingsApi = {
   remove: (provider: LLMProvider) => request<void>(`/llm-settings/${provider}`, { method: 'DELETE' }),
   // `provider` is a plain string, not LLMProvider -- unlike credential
   // storage (scoped to azure_foundry only in the UI today), model listing
-  // works for anthropic/openai too (no credential needed, see
-  // llm_model_discovery.py's static catalog path).
+  // works for anthropic/openai too, and answers even with no credential
+  // saved (see llm_model_discovery.py's static catalog fallback).
   listModels: (provider: string) => request<LLMSettingModelsResponse>(`/llm-settings/${provider}/models`),
   // Zero-token liveness check against the stored credential -- a free
   // authenticated GET per provider, never an inference call. On demand only

@@ -14,14 +14,15 @@ const CUSTOM_VALUE = '__custom__'
 // factor sweep can't express what a single node can.
 //
 // A dropdown over whatever GET /llm-settings/{provider}/models returned, but
-// never ONLY that. For anthropic/openai that response is a curated static
-// catalog living in agentic-core (see llm_model_discovery.py's docstring for
-// why it's hand-maintained), so it necessarily lags any model released after
-// the pinned agentic-core version -- with a dropdown alone, a brand-new model
-// is simply unreachable until someone tags a release in another repo. The
-// "Custom model..." escape hatch is for exactly that. Azure Foundry's list is
-// live and authoritative by comparison, so there it only matters for a
-// deployment created after this list was fetched.
+// never ONLY that. Anthropic and Azure Foundry answer with a live listing
+// (that provider's own API, per credential), so there "Custom model..." only
+// matters for something created after this list was fetched. OpenAI has no
+// capability endpoint at all, so its response is a curated static catalog
+// living in agentic-core -- see llm_model_discovery.py's docstring for the
+// per-provider findings -- which necessarily lags any model released after
+// the pinned agentic-core version. With a dropdown alone, a brand-new OpenAI
+// model would be unreachable until someone tags a release in another repo.
+// The same fallback applies to Anthropic whenever its listing call fails.
 //
 // An off-catalog id is a real, supported choice, not an error state: the
 // backend never validates `model` against the catalog (it's passed straight

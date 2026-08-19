@@ -22,7 +22,7 @@ def _foundry_setting(api_base: str = "my-resource", azure_project_endpoint: str 
     )
 
 
-async def test_discover_models_anthropic_returns_static_catalog() -> None:
+async def test_discover_models_anthropic_without_a_credential_returns_static_catalog() -> None:
     models, source, note = await discovery.discover_models(provider="anthropic", setting=None)
     assert source == "static"
     assert note is None
@@ -182,3 +182,197 @@ async def test_discover_models_azure_project_endpoint_failure_scrubs_api_key(mon
     assert models == []
     assert source == "error"
     assert "secret-key" not in (note or "")
+
+
+# --- Anthropic live discovery -------------------------------------------------
+#
+# Response shapes below are verbatim from a live GET /v1/models (trimmed to the
+# fields this module reads). The capability tree is the whole reason Anthropic
+# doesn't go through agentic-core's _REGISTRY.
+
+
+def _anthropic_setting(api_base: str | None = None) -> UserLLMSetting:
+    return UserLLMSetting(provider="anthropic", api_key_encrypted=encrypt("secret-key"), api_base=api_base)
+
+
+def _effort(*levels: str) -> dict:
+    tree: dict = {"supported": bool(levels)}
+    for level in ("low", "medium", "high", "xhigh", "max"):
+        tree[level] = {"supported": level in levels}
+    return tree
+
+
+class _PagingClient:
+    """Serves a queue of pages and records what it was asked for."""
+
+    def __init__(self, pages: list[dict], captured: dict) -> None:
+        self._pages = pages
+        self._captured = captured
+
+    async def __aenter__(self) -> _PagingClient:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+    async def get(self, url: str, *, params: dict, headers: dict) -> _FakeResponse:
+        self._captured.setdefault("urls", []).append(url)
+        self._captured.setdefault("params", []).append(params)
+        self._captured["headers"] = headers
+        return _FakeResponse(self._pages.pop(0))
+
+
+async def test_anthropic_reads_effort_levels_from_the_live_capability_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+    page = {
+        "data": [
+            {
+                "id": "claude-opus-5",
+                "display_name": "Claude Opus 5",
+                "capabilities": {"effort": _effort("low", "medium", "high", "xhigh", "max")},
+            },
+            {
+                "id": "claude-opus-4-5-20251101",
+                "display_name": "Claude Opus 4.5",
+                "capabilities": {"effort": _effort("low", "medium", "high")},
+            },
+            {
+                "id": "claude-haiku-4-5-20251001",
+                "display_name": "Claude Haiku 4.5",
+                "capabilities": {"effort": _effort()},
+            },
+        ],
+        "has_more": False,
+    }
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], captured))
+
+    models, source, note = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+
+    assert source == "api"
+    assert note is None
+    by_id = {m.id: m for m in models}
+
+    # Per-model ladders really do differ -- the exact thing a single hardcoded
+    # registry list gets wrong.
+    assert by_id["claude-opus-5"].capabilities.effort_levels == ["low", "medium", "high", "xhigh", "max"]
+    assert by_id["claude-opus-4-5-20251101"].capabilities.effort_levels == ["low", "medium", "high"]
+
+    # An effort model is a no-temperature model, and vice versa.
+    assert by_id["claude-opus-5"].capabilities.supports_effort is True
+    assert by_id["claude-opus-5"].capabilities.supports_temperature is False
+    assert by_id["claude-haiku-4-5-20251001"].capabilities.supports_effort is False
+    assert by_id["claude-haiku-4-5-20251001"].capabilities.supports_temperature is True
+    assert by_id["claude-haiku-4-5-20251001"].capabilities.effort_levels == []
+
+    assert by_id["claude-opus-5"].label == "Claude Opus 5"
+    assert captured["headers"] == {"x-api-key": "secret-key", "anthropic-version": "2023-06-01"}
+    assert captured["urls"] == ["https://api.anthropic.com/v1/models"]
+
+
+async def test_anthropic_default_effort_prefers_medium_but_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    page = {
+        "data": [
+            {"id": "has-medium", "display_name": "A", "capabilities": {"effort": _effort("low", "medium", "high")}},
+            {"id": "no-medium", "display_name": "B", "capabilities": {"effort": _effort("high", "max")}},
+        ],
+        "has_more": False,
+    }
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], {}))
+
+    models, _, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    by_id = {m.id: m for m in models}
+
+    assert by_id["has-medium"].capabilities.default_effort == "medium"
+    assert by_id["no-medium"].capabilities.default_effort == "high"  # first available, not a missing "medium"
+
+
+async def test_anthropic_follows_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+    pages = [
+        {"data": [{"id": "first", "capabilities": {}}], "has_more": True, "last_id": "first"},
+        {"data": [{"id": "second", "capabilities": {}}], "has_more": False},
+    ]
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient(pages, captured))
+
+    models, source, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+
+    assert source == "api"
+    assert [m.id for m in models] == ["first", "second"]
+    assert captured["params"][1]["after_id"] == "first"
+
+
+async def test_anthropic_missing_capability_tree_defaults_to_temperature(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A model published before the capabilities field existed, or any shape we
+    # don't recognise, must not silently claim effort support.
+    page = {"data": [{"id": "mystery-model", "display_name": "Mystery"}], "has_more": False}
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], {}))
+
+    models, _, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+
+    assert models[0].capabilities.supports_effort is False
+    assert models[0].capabilities.supports_temperature is True
+    assert models[0].capabilities.default_effort is None
+
+
+async def test_anthropic_failure_falls_back_to_the_catalog_and_scrubs_the_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A stale catalog beats an empty dropdown, and "static" keeps callers from
+    # flagging ids this list can't vouch for.
+    monkeypatch.setattr(
+        discovery.httpx,
+        "AsyncClient",
+        lambda **kwargs: _FakeAsyncClient(_FakeResponse({}, status_code=401), captured_headers=[]),
+    )
+
+    models, source, note = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+
+    assert source == "static"
+    assert models  # the curated catalog, not []
+    assert any(m.id == "claude-sonnet-5" for m in models)
+    assert note and "secret-key" not in note
+
+
+async def test_anthropic_honours_a_custom_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(
+        discovery.httpx,
+        "AsyncClient",
+        lambda **kwargs: _PagingClient([{"data": [], "has_more": False}], captured),
+    )
+
+    await discovery.discover_models(
+        provider="anthropic", setting=_anthropic_setting(api_base="https://proxy.internal/")
+    )
+
+    assert captured["urls"] == ["https://proxy.internal/v1/models"]
+
+
+async def test_anthropic_empty_listing_falls_back_to_the_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient([{"data": [], "has_more": False}], {})
+    )
+
+    models, source, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+
+    assert source == "static"
+    assert models
+
+
+async def test_openai_stays_on_the_curated_catalog_without_calling_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    # GET /v1/models carries no capability data (probed live), and listing it
+    # would surface ~124 mostly non-chat models each defaulting to
+    # temperature-only. Don't spend a request to get a worse answer.
+    def _explode(**kwargs: object) -> None:
+        raise AssertionError("openai discovery should make no HTTP call")
+
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", _explode)
+
+    setting = UserLLMSetting(provider="openai", api_key_encrypted=encrypt("secret-key"), api_base=None)
+    models, source, note = await discovery.discover_models(provider="openai", setting=setting)
+
+    assert source == "static"
+    assert note is None
+    assert models

@@ -53,8 +53,8 @@ export interface LLMModelInfo {
 // services/llm_connection_check.py).
 //
 // Three states, not two, and the distinction is load-bearing: "unknown"
-// covers an Azure resource that exposes no deployment-listing API at all
-// (the normal case for Claude-on-Foundry) and a provider that answered 429.
+// covers an Azure credential with no project endpoint (so no free listing
+// call exists for it at all) and a provider that answered 429.
 // Neither says the credential is bad, and rendering either as a failure
 // would send people rotating a key that works. `ok` also deliberately does
 // NOT mean "ready to run" -- quota, billing and per-project model

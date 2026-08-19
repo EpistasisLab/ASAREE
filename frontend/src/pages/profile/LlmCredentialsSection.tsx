@@ -38,8 +38,9 @@ import {
 // The three outcomes of a connection check, in the same color language the
 // rest of the app uses for status (see the root CLAUDE.md): emerald for
 // done/good, amber for indeterminate, destructive for broken. "unknown" is
-// deliberately amber and not red -- an Azure resource with no listing API,
-// or a provider that answered 429, tells us nothing bad about the key.
+// deliberately amber and not red -- an Azure credential with no project
+// endpoint to list, or a provider that answered 429, tells us nothing bad
+// about the key.
 const STATUS_META: Record<LLMConnectionStatus, { label: string; color: string; Icon: typeof CircleCheck }> = {
   // Not "Ready" or "Connected": a free list call proves the key, the network
   // and the org, but quota/billing/per-project model access are only

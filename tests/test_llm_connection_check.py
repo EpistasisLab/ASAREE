@@ -8,7 +8,6 @@ import pytest
 
 from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.services import llm_connection_check as check
-from asaree.services import llm_model_discovery as discovery
 from asaree.services.user_llm_settings import encrypt
 
 _PROJECT_ENDPOINT = "https://my-resource.services.ai.azure.com/api/projects/my-project"
@@ -143,12 +142,12 @@ async def test_azure_success_delegates_to_deployment_discovery(monkeypatch: pyte
     assert result.endpoint == _PROJECT_ENDPOINT
 
 
-async def test_azure_without_a_listing_api_is_unknown_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The expected case for a Foundry resource hosting Claude models: the
-    # classic endpoint 404s because those were never "Azure OpenAI
-    # deployments". That says nothing about the credential.
+async def test_azure_without_a_project_endpoint_is_unknown_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No project endpoint means no free listing call exists for this
+    # credential -- which says nothing about whether it can infer (inference
+    # only needs api_base). Must not even attempt discovery.
     async def fake_discover(*, provider: str, setting: UserLLMSetting):
-        return [], "error", discovery.NO_LISTING_API_NOTE
+        raise AssertionError("discovery should not run without a project endpoint")
 
     monkeypatch.setattr(check, "discover_models", fake_discover)
 
@@ -164,7 +163,8 @@ async def test_azure_real_discovery_error_is_a_failure(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(check, "discover_models", fake_discover)
 
-    result = await check.check_connection(provider="azure_foundry", setting=_setting("azure_foundry", api_base="r"))
+    setting = _setting("azure_foundry", api_base="r", azure_project_endpoint=_PROJECT_ENDPOINT)
+    result = await check.check_connection(provider="azure_foundry", setting=setting)
 
     assert result.status == "failed"
 

@@ -14,7 +14,7 @@ so the check is a plain GET:
 - anthropic: GET {base}/v1/models, ``x-api-key`` + ``anthropic-version``
 - azure:     no separate call -- deployment discovery IS the check, so this
   delegates to llm_model_discovery rather than growing a second copy of that
-  module's two-endpoint logic.
+  module's endpoint handling.
 
 What a 200 proves: the key is real, the network path works, and the org/
 resource resolves. What it does NOT prove: quota, billing, or per-project
@@ -22,9 +22,10 @@ model permissions -- those are only enforced at inference time, so a key can
 pass here and still return 429 insufficient_quota on the first real request.
 The UI wording must stay honest about that ("Key valid", never "Ready").
 
-Hence three states, not two: an Azure resource with no listing API at all
-(the common Claude-on-Foundry case) is UNKNOWN, not failed -- refusing to
-list deployments says nothing about whether the credential can infer.
+Hence three states, not two: an Azure credential with no project endpoint
+(so nothing to ask for a deployment list) is UNKNOWN, not failed -- having
+no listing call available says nothing about whether the credential can
+infer.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from typing import Literal
 import httpx
 
 from asaree.models.user_llm_setting import UserLLMSetting
-from asaree.services.llm_model_discovery import NO_LISTING_API_NOTE, discover_models
+from asaree.services.llm_model_discovery import discover_models
 from asaree.services.user_llm_settings import decrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -125,29 +126,32 @@ async def check_connection(*, provider: str, setting: UserLLMSetting) -> Connect
 
 async def _check_azure(setting: UserLLMSetting) -> ConnectionCheck:
     """Reuses deployment discovery verbatim -- for Foundry, "can I list what's
-    deployed here" IS the zero-cost credential check, and duplicating that
-    module's project-vs-classic endpoint choice would just give two answers
-    that could drift apart."""
+    deployed here" IS the zero-cost credential check, and a second copy of the
+    project-endpoint call here would just give two answers that could drift
+    apart."""
     endpoint = setting.azure_project_endpoint or setting.api_base
+    if not setting.azure_project_endpoint:
+        # Nothing to ask: the project-scoped deployments call is the only
+        # free listing call this credential could make, and it needs an
+        # endpoint we don't have. Emphatically not a bad credential --
+        # inference only needs api_base -- and reporting it as one would send
+        # users chasing a key that's fine. Inconclusive is the truthful
+        # answer. Checked here rather than by matching on discover_models'
+        # note text, so the two can't drift apart on a reworded string.
+        return ConnectionCheck(
+            status="unknown",
+            detail=(
+                "This credential has no Project endpoint, so it can't be checked for free. Add one to enable "
+                "deployment listing, or test it with a real run."
+            ),
+            endpoint=endpoint,
+        )
+
     models, source, note = await discover_models(provider="azure_foundry", setting=setting)
     if source == "api":
         return ConnectionCheck(
             status="ok",
             detail=f"Reached the Azure resource and listed {len(models)} deployment(s).",
-            endpoint=endpoint,
-        )
-    if note == NO_LISTING_API_NOTE:
-        # A 404 from the classic endpoint means this resource has no
-        # api-key-authenticated listing API -- the expected case for a
-        # Foundry resource hosting Claude models. That is emphatically not a
-        # bad credential, and reporting it as one would send users chasing a
-        # key that's fine. Inconclusive is the truthful answer.
-        return ConnectionCheck(
-            status="unknown",
-            detail=(
-                "This Azure resource exposes no deployment-listing API, so the credential can't be checked "
-                "for free. Add a Project endpoint to enable listing, or test it with a real run."
-            ),
             endpoint=endpoint,
         )
     return ConnectionCheck(status="failed", detail=note or "Could not reach the Azure resource.", endpoint=endpoint)

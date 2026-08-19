@@ -82,68 +82,34 @@ class _FakeAsyncClient:
         return self._response
 
 
-async def test_discover_models_azure_success_maps_deployments(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured_headers: list[dict] = []
-    fake_response = _FakeResponse({"data": [{"id": "my-gpt4-deployment"}, {"id": "claude-sonnet-5"}]})
-    monkeypatch.setattr(
-        discovery.httpx,
-        "AsyncClient",
-        lambda **kwargs: _FakeAsyncClient(fake_response, captured_headers=captured_headers),
-    )
+async def test_discover_models_azure_without_a_project_endpoint_asks_for_one_without_calling_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The project-scoped deployments call is the only listing call this
+    # credential could make, so with no project endpoint there is nothing to
+    # ask -- don't burn a request finding that out. (The classic Azure OpenAI
+    # `{resource}/openai/deployments` endpoint used to be tried here as a
+    # fallback; it 404s unconditionally on a Foundry resource hosting Claude
+    # models, so it was removed rather than kept.)
+    def _explode(**kwargs: object) -> None:
+        raise AssertionError("no HTTP call should be made without a project endpoint")
 
-    models, source, note = await discovery.discover_models(provider="azure_foundry", setting=_foundry_setting())
-
-    assert source == "api"
-    assert note is None
-    assert [m.id for m in models] == ["claude-sonnet-5", "my-gpt4-deployment"]  # sorted
-    # The deployment named after a known Claude model resolves real capabilities.
-    claude_entry = next(m for m in models if m.id == "claude-sonnet-5")
-    assert claude_entry.capabilities.supports_effort is True
-    # api-key header auth, not Authorization/Bearer.
-    assert captured_headers[0] == {"api-key": "secret-key"}
-
-
-async def test_discover_models_azure_failure_scrubs_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_response = _FakeResponse({}, status_code=401)
-    monkeypatch.setattr(
-        discovery.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(fake_response, captured_headers=[])
-    )
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", _explode)
 
     models, source, note = await discovery.discover_models(provider="azure_foundry", setting=_foundry_setting())
 
     assert models == []
     assert source == "error"
-    assert "secret-key" not in (note or "")
-
-
-async def test_discover_models_azure_404_gets_a_specific_friendly_note(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A services.ai.azure.com host has no api-key-authenticated deployment-
-    # listing endpoint at all (confirmed against ARES's own discovery code) --
-    # this is the expected, common case for a Foundry resource hosting Claude
-    # models, not a raw httpx exception dump.
-    fake_response = _FakeResponse({}, status_code=404)
-    monkeypatch.setattr(
-        discovery.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(fake_response, captured_headers=[])
-    )
-
-    models, source, note = await discovery.discover_models(provider="azure_foundry", setting=_foundry_setting())
-
-    assert models == []
-    assert source == "error"
-    assert note == (
-        "This Azure resource has no deployment-listing API available -- enter your deployment's name directly "
-        "in the Model field below, or add a Project endpoint to this credential to enable listing (expected for "
-        "a Foundry resource hosting Claude models)."
-    )
+    assert note == discovery.NO_PROJECT_ENDPOINT_NOTE
+    assert "Project endpoint" in note
 
 
 async def test_discover_models_azure_project_endpoint_maps_real_response_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     # Real shape confirmed live against an actual Foundry project: {"value":
-    # [{"name", "type", "modelName", "modelPublisher", ...}]} -- distinct
-    # from the classic endpoint's {"data": [{"id"}]}. `name` is the
-    # deployment's own callable name; `modelName` is the underlying
-    # published model id (better for capability lookup/label when they
-    # differ, e.g. a deployment aliased as "prod-claude").
+    # [{"name", "type", "modelName", "modelPublisher", ...}]}. `name` is the
+    # deployment's own callable name; `modelName` is the underlying published
+    # model id (better for capability lookup/label when they differ, e.g. a
+    # deployment aliased as "prod-claude").
     captured_headers: list[dict] = []
     fake_response = _FakeResponse(
         {
@@ -180,7 +146,7 @@ async def test_discover_models_azure_project_endpoint_maps_real_response_shape(m
     assert captured_headers[0] == {"api-key": "secret-key"}
 
 
-async def test_discover_models_azure_project_endpoint_takes_precedence_over_classic(
+async def test_discover_models_azure_hits_only_the_project_deployments_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_urls: list[str] = []

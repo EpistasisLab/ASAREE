@@ -1,8 +1,10 @@
 """asaree-sklearn-eda — exploratory-analysis MCP server.
 
-Thin FastMCP wrapper over :mod:`asaree_sklearn_core`. ``get_data_dictionary``
-reaches the ASAREE registry by name; ``get_feature_distributions`` and
-``get_dataset_info`` resolve their matrix from the workspace HEAD.
+Thin FastMCP wrapper over :mod:`asaree_sklearn_core`. ``get_feature_distributions``
+and ``get_dataset_info`` resolve their matrix from the workspace HEAD;
+``get_data_dictionary`` reads the copy ``asaree-workspace``'s ``open_workspace``
+publishes into that same workspace directory, falling back to the ASAREE
+registry over HTTP when there's no ambient workspace.
 
 This server has no dependency on asaree_workspace_core — HEAD's train/test
 parquet already live at a stable, permanent location once a stage is
@@ -75,15 +77,37 @@ def _read_head(workspace_id: str) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame
     return X_train, y_train, X_test, y_test, target
 
 
-@mcp.tool()
-def get_data_dictionary(name: str, columns: str = "") -> str:
-    """Fetch the data dictionary for a registered dataset, on demand.
+def _dictionary_from_workspace(ctx: Context | None) -> str | None:
+    """The dictionary asaree-workspace's ``open_workspace`` left in this cell's
+    workspace, or None if there isn't one.
 
-    Args:
-        name: Dataset name as registered via POST /api/datasets.
-        columns: Comma-separated column names to return in FULL detail. If empty,
-            returns a COMPACT INDEX (name + type + truncated description) so you can
-            scan what exists, then call again for the few you need.
+    Preferred over the HTTP path below for the same reason this server reads
+    ``state.json`` off disk instead of asking for the data over the wire: the
+    workspace directory is already shared with this subprocess, so there's no
+    endpoint to reach and no token to hold. ``open_workspace`` writes it there
+    on every open, having read it from the database under the run owner's own
+    scoping.
+    """
+    try:
+        workspace_id = _workspace_id_from_ctx("", ctx)
+    except HeadNotReadyError:
+        return None
+    root = os.environ.get("ASAREE_DATASET_WORKSPACE_DIR", "./data/workspaces")
+    path = Path(root).resolve() / workspace_id / "data_dictionary.json"
+    try:
+        return path.read_text() if path.is_file() else None
+    except OSError:
+        return None
+
+
+def _dictionary_from_api(name: str) -> tuple[str | None, str | None]:
+    """Fall back to GET /datasets/by-name — returns (dictionary_json, error).
+
+    Only reachable with ``ASAREE_INTERNAL_MCP_API_KEY`` set to a real user API
+    token (the API authenticates by token hash and scopes datasets by owner),
+    which is why the workspace file above is the normal route. This stays for
+    the direct/notebook case, where a tool is called outside a cell run and
+    there's no ambient workspace at all.
     """
     headers: dict[str, str] = {}
     if _ASAREE_MCP_API_KEY:
@@ -92,18 +116,35 @@ def get_data_dictionary(name: str, columns: str = "") -> str:
         with httpx.Client(base_url=_ASAREE_API_URL, timeout=10.0, headers=headers) as client:
             resp = client.get(f"/api/datasets/by-name/{name}")
     except httpx.RequestError as e:
-        return json.dumps({"error": f"Could not reach ASAREE API: {e}"})
+        return None, f"Could not reach ASAREE API: {e}"
 
     if resp.status_code == 404:
-        return json.dumps({"error": f"Dataset '{name}' not found in registry."})
+        return None, f"Dataset '{name}' not found in registry."
     if resp.status_code != 200:
-        return json.dumps({"error": f"ASAREE API returned {resp.status_code}: {resp.text}"})
+        return None, f"ASAREE API returned {resp.status_code}: {resp.text}"
+    dictionary_json = resp.json().get("dictionary_json")
+    if not dictionary_json:
+        return None, f"Dataset '{name}' has no data dictionary registered."
+    return str(dictionary_json), None
 
-    reg = resp.json()
-    if not reg.get("dictionary_json"):
-        return json.dumps({"error": f"Dataset '{name}' has no data dictionary registered."})
+
+@mcp.tool()
+def get_data_dictionary(name: str, columns: str = "", ctx: Context | None = None) -> str:
+    """Fetch the data dictionary for a registered dataset, on demand.
+
+    Args:
+        name: Dataset name as registered via POST /api/datasets.
+        columns: Comma-separated column names to return in FULL detail. If empty,
+            returns a COMPACT INDEX (name + type + truncated description) so you can
+            scan what exists, then call again for the few you need.
+    """
+    raw = _dictionary_from_workspace(ctx)
+    if raw is None:
+        raw, error = _dictionary_from_api(name)
+        if raw is None:
+            return json.dumps({"error": error})
     try:
-        ddict = json.loads(reg["dictionary_json"])
+        ddict = json.loads(raw)
     except (json.JSONDecodeError, TypeError) as e:
         return json.dumps({"error": f"Could not parse data dictionary: {e}"})
 

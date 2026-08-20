@@ -19,6 +19,7 @@ agents and drives resume from here.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import uuid
 from pathlib import Path
@@ -41,6 +42,9 @@ from asaree.models.database import get_session
 from asaree.services.datasets import get_dataset_by_name
 
 mcp = FastMCP("asaree-workspace")
+
+# stderr, never stdout: stdout is the MCP transport itself on a stdio server.
+logger = logging.getLogger(__name__)
 
 _STAGES = ("dc", "fte", "fs")
 
@@ -242,6 +246,47 @@ async def _fetch_owned_registration(
         }, None
 
 
+DATA_DICTIONARY_FILENAME = "data_dictionary.json"
+
+
+def _publish_data_dictionary(ws: Workspace, dictionary_json: str | None) -> bool:
+    """Copy the registration's data dictionary into the cell's workspace.
+
+    The train/test data reaches the domain MCP servers over the shared
+    filesystem, but ``dictionary_json`` lives only in Postgres — and those
+    servers deliberately hold no DB credentials, so the only channel left to
+    them was an authenticated HTTP call back into the API with a token
+    (``ASAREE_INTERNAL_MCP_API_KEY``) that a fresh deployment doesn't have.
+    Writing it here, next to the ``state.json`` they already read, puts the
+    dictionary on the same route as everything else they consume: no token, no
+    network, no per-deployment setup step.
+
+    This server is the right place for it because it's the one with database
+    access (see ``_fetch_owned_registration``), and ``open_workspace`` is the
+    one call every pipeline makes before touching the data. Ownership is
+    already enforced upstream of here, and the file lands inside a workspace
+    named for its own experiment/cell, so it's scoped exactly like the parquet
+    beside it.
+
+    Returns whether a dictionary is available for this cell. A write failure is
+    swallowed on purpose: a dictionary is an aid to an agent, never a
+    precondition for the run, and the reader falls back to the API anyway.
+    """
+    if not dictionary_json:
+        return False
+    try:
+        ws.dir.mkdir(parents=True, exist_ok=True)
+        path = ws.dir / DATA_DICTIONARY_FILENAME
+        # Atomic, and rewritten on every open so an edited registration can't
+        # leave a resumed cell reading a stale copy.
+        tmp = ws.dir / f"{DATA_DICTIONARY_FILENAME}.tmp"
+        tmp.write_text(dictionary_json)
+        tmp.replace(path)
+    except OSError as e:
+        logger.warning("workspace_data_dictionary_write_failed", extra={"workspace": ws.workspace_id, "error": str(e)})
+    return True
+
+
 @mcp.tool()
 async def open_workspace(
     experiment_id: str,
@@ -320,7 +365,7 @@ async def open_workspace(
         "note": "Workspace opened. The test split is held out and never returned. "
         "Downstream stages read/write this workspace_id on disk (ambient _meta).",
     }
-    has_dict = bool(reg.get("dictionary_json"))
+    has_dict = _publish_data_dictionary(ws, reg.get("dictionary_json"))
     response["data_dictionary_available"] = has_dict
     if has_dict:
         response["data_dictionary_hint"] = f"Call get_data_dictionary(name='{name}', columns='col1,col2') for detail."

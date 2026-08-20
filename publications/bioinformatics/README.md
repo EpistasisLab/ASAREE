@@ -12,139 +12,136 @@ protocol shape, on a dataset anyone can download.
 
 | File | |
 | --- | --- |
-| `myocardial-use-case.json` | The experiment: protocol graph (36 edges, 5 agents, 4 critic gates, 8 MCP tool bindings) + design spec |
+| `myocardial-anthropic.json` | The experiment, wired to an **Anthropic** LLM node |
+| `myocardial-openai.json` | The same, wired to **OpenAI** |
+| `myocardial-azure-foundry.json` | The same, wired to **Azure Foundry** — what the paper's runs used |
 | `mi_ZSN.csv` | The dataset — 1700 admissions × 111 features, target `mi_ZSN` |
 | `dict_ZSN.json` | The data dictionary for those 111 columns |
-| `import_use_case.py` | Imports all of the above into a running ASAREE |
-| `stats/` | The paper's analysis scripts and outputs for the spinal runs (not part of the import) |
+| `stats/` | The paper's analysis scripts and outputs for the spinal runs (not part of this walkthrough) |
 
-The dataset is the **ZSN** target of
+The three JSON files are the same protocol graph — identical agents, prompts,
+critic gates, and tool wiring. They differ only in the shared LLM node and the
+factors bound to it, because a node's provider is fixed when the node is
+created and can't be switched afterwards. Pick the one matching the API key you
+have:
+
+| File | Model factor | Effort factor | Cells |
+| --- | --- | --- | --- |
+| `myocardial-anthropic.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 80 |
+| `myocardial-openai.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 80 |
+| `myocardial-azure-foundry.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 80 |
+
+All three are 2 × 2 × 2 designs (model × effort × critic on/off) at 10
+replicates, with the smaller/larger model of a family at the middle and top of
+its provider's effort ladder. The two ladders aren't the same length: OpenAI's
+`reasoning_effort` stops at `high`, so `high` is that variant's counterpart to
+Anthropic's `xhigh`, not a rung below it.
+
+Model levels are editable on the Design tab after importing, and the model field
+accepts any id you type — the levels above are just what the catalog can vouch
+for. Whether a model gets an Effort or a Temperature control is a per-model fact
+declared in `motoro.services.model_capabilities`, not a per-provider one, so if
+you swap a model in, check which of the two the node then offers: an effort
+factor bound to a temperature-based model varies nothing at runtime, silently.
+
+## The dataset
+
+The **ZSN** target of
 [UCI's Myocardial Infarction Complications](https://archive.ics.uci.edu/dataset/579/myocardial+infarction+complications)
 (Golovenkin et al.) — 1700 admissions, predicting chronic heart failure as a
 complication. 23.2% positive, so `average_precision` is the design's primary
 metric rather than accuracy.
 
 The column names are short Russian-derived codes (`nr11`, `zab_leg_01`,
-`S_AD_KBRIG`), which is why `dict_ZSN.json` matters: `asaree-sklearn-eda`'s
-`get_data_dictionary` serves it back to an agent that asks what a column means.
-ASAREE itself never parses it.
+`S_AD_KBRIG`), which is why `dict_ZSN.json` matters: it's what
+`asaree-sklearn-eda`'s `get_data_dictionary` serves back to an agent that asks
+what a column means. ASAREE itself never parses it.
 
-## Prerequisites
+## Walkthrough
 
-**1. A running ASAREE.** From the repo root:
+Everything below happens in the GUI.
 
-```bash
-GH_TOKEN=$(gh auth token) docker compose up -d --build
-```
+**0. Get ASAREE running** — see the [root README](../../README.md), then open
+http://localhost:5173. Every MCP server this use case needs (`asaree-workspace`
+and the six `asaree-sklearn-*` servers) ships with ASAREE and registers itself
+on startup; there is nothing to install or register by hand.
 
-Every MCP server this use case needs (`asaree-workspace` and the six
-`asaree-sklearn-*` servers) ships with ASAREE and auto-registers on startup —
-there is nothing to register by hand.
+**1. Register.** Create an account and sign in.
 
-**2. A user and an API token** — see the SDK's
-[Auth bootstrap](../../sdk/README.md#auth-bootstrap). Export both:
+**2. Create an experiment.** The **+** button in the header makes one
+(`Untitled Experiment 1`) and drops you straight onto its protocol canvas.
+Rename it from the canvas's **⋮** menu → *Rename experiment*.
 
-```bash
-export ASAREE_BASE_URL=http://localhost:8000
-export ASAREE_API_KEY=<your token>
-```
+**3. Import the use case.** **⋮** → *Import from file…* → pick the JSON for
+your provider. That lays out the whole graph and, because a factor is
+meaningless without both halves of its binding, brings the design spec with it:
+its factors, five metrics, 10 replicates, the critic-gate coordination strategy.
 
-**3. An Azure Foundry credential**, since the protocol's LLM node is
-`azure_foundry` (levels `claude-sonnet-5` and `claude-opus-5`):
+Import **merges alongside, never replaces** — nothing you already have is
+overwritten, but importing twice into the same canvas gives you two copies of
+the graph. Use a fresh, empty experiment.
 
-```python
-from asaree_client import AsareeClient
+**4. Add the LLM credential.** Open the shared LLM node — it feeds all five
+agents and all four critic gates, so it's the only place a model gets chosen.
+Add the credential from the node itself, or from **Profile → LLM credentials**.
+Once it's saved, the Model dropdown lists what that credential can actually
+reach, and the node shows Effort or Temperature depending on which one the
+selected model accepts.
 
-with AsareeClient() as client:
-    client.llm_settings.set_key("azure_foundry", "<api key>", api_base="<resource name>")
-```
+**5. Register the dataset.** Open the *Myocardial Infarction Dataset* node →
+*Register new dataset*:
 
-To run against a different provider instead, change the LLM node's `provider`
-on the protocol canvas after importing, and the `Azure Foundry:Model` factor's
-levels to that provider's model ids.
+| Field | Value |
+| --- | --- |
+| Name | `myocardial_infarction` |
+| CSV file | `mi_ZSN.csv` |
+| Target column | `mi_ZSN` |
+| Data dictionary | `dict_ZSN.json` |
 
-## Import
+It's selected on the node as soon as it's registered. The **Data dictionary**
+field is what makes this dataset workable: the agents are told to resolve every
+column's meaning with `get_data_dictionary` rather than guess from its name, and
+`dict_ZSN.json` is what that tool serves back. Nothing else to configure —
+`asaree-workspace` publishes the dictionary into each cell's own workspace
+directory when the pipeline opens it, so the reader finds it on the same shared
+filesystem it already reads the data from.
 
-```bash
-uv run --with ./sdk python publications/bioinformatics/import_use_case.py
-```
+**6. Split it 70/30.** Same node inspector → *Split dataset* → **Quick split**:
 
-It prints what it did and the experiment id to open. Idempotent — run it again
-and it reuses everything already there under the same names instead of making a
-second copy.
+| Field | Value |
+| --- | --- |
+| Target column | `mi_ZSN` |
+| Test size | `0.3` |
+| Seed | `42` |
 
-Five steps:
+Leave *Group column* empty — with a target column and no groups the split is
+stratified, which matters here: at a 23.2% positive rate an unstratified 30%
+holdout can leave the two halves at materially different base rates, and every
+metric in the design is prevalence-sensitive.
 
-1. **Registers the dataset** as `myocardial_infarction` from `mi_ZSN.csv`, with
-   `dict_ZSN.json` attached and `mi_ZSN` as the target column.
-2. **Splits it 70/30**, stratified on the target, seed 42 (see below).
-3. **Creates the experiment** `Myocardial Infarction Use Case` and attaches the
-   dataset to it.
-4. **Creates the protocol** from the file's `graph`, repointing the dataset and
-   MCP-server UUIDs baked into the export at your own install's rows.
-5. **Applies the design spec** and materializes its cells.
+The split is what the agents actually see. The workspace an agent opens is
+built from the train half; the test half is only touched by the final model
+script. Re-splitting at a different seed overwrites rather than accumulating.
 
-Then open `/experiments/{id}/protocol` — the graph, its Design/Cells/Runs/
-Results tabs, and a full grid of unstarted cells are all there.
+**7. Generate the cells.** Side panel → **Design** tab → *Generate design*. It
+reports the total: 2 × 2 × 2 factors × 10 replicates = **80 cells**.
 
-## The split
+**8. Run.** Two ways:
 
-`test_size=0.3`, `seed=42`, stratified on `mi_ZSN` — ASAREE's own
-`POST /datasets/{id}/split/quick` (`client.datasets.quick_split`), not a
-pre-split pair of files. Stratifying matters here: at a 23.2% positive rate an
-unstratified 30% holdout can land the two halves at materially different base
-rates, and every metric in the design is prevalence-sensitive.
+- *Run cell* (top-right of the canvas) to pick one cell, then **Run** — do this
+  first.
+- *Run all cells* in the top bar: every not-yet-scored cell at once, enqueued as
+  one batch.
 
-The split is what the agents actually see — the workspace an agent opens is
-built from `train_path`, and `test_path` is only touched by the final model
-script. Re-splitting overwrites rather than accumulating, so if you want a
-different holdout:
+Watch progress on the canvas itself, or in the side panel's **Runs** tab;
+results land in **Cells** and **Results**.
 
-```python
-client.datasets.quick_split(dataset_id, target_column="mi_ZSN", test_size=0.2, seed=7)
-```
+## Cost
 
-The importer skips step 2 entirely if the dataset already has both paths set,
-so a re-import won't clobber a split you chose yourself.
-
-## Running it
-
-The design is 2 × 2 × 2 factors × 10 replicates = **80 cells**, each one a full
-five-agent pipeline at reasoning effort up to `xhigh`. Generating the grid costs
-nothing — cells are rows until you start a run — but running all 80 is a real
-bill. Start with one:
-
-```python
-run = client.protocols.run(protocol_id, cell_label="<a label from the Cells tab>")
-client.protocols.get_run(protocol_id, run.id)   # poll; starts as "pending"
-```
-
-When you're satisfied, launch the rest — one run per not-yet-scored cell,
-enqueued all at once:
-
-```python
-batch = client.protocols.run_cells(protocol_id)
-```
-
-To make the grid itself smaller instead, lower `replicates` in
-`myocardial-use-case.json`'s `design_spec` **before importing** (or edit it on
-the Design tab and re-generate). `generate-design` is additive — it creates
-missing combinations and never deletes, so lowering replicates afterwards
-leaves the 72 extra cells in place. They're harmless if you never run them;
-`run_cells` is what would pick them up.
-
-## Optional: let agents read the data dictionary
-
-`get_data_dictionary` fetches the registered dataset's `dictionary_json` back
-out of the ASAREE API, and datasets are owner-scoped — so the MCP server needs
-a token of its own to read yours. Set `ASAREE_INTERNAL_MCP_API_KEY` in `.env`
-(any ordinary user API token; whoever owns it decides whose dictionaries the
-server can see) and restart:
-
-```bash
-docker compose up -d
-```
-
-Left empty, the tool returns an `error` and the agents proceed on bare column
-names — which for this dataset means reasoning about `nr11` and `zab_leg_01`
-with no idea what they are. Worth setting.
+Generating the grid is free — cells are rows until a run starts — but 80 runs
+of a five-agent pipeline, half of them at the top of the effort ladder, is a
+real bill. Run one cell
+first, and if you only want a smoke test, lower **Replicates** on the Design
+tab *before* generating: `Generate design` is additive, so it creates missing
+combinations and never deletes. Lowering replicates afterwards leaves the extra
+cells in place (harmless unless you press *Run all cells*).

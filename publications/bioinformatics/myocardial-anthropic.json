@@ -1,27 +1,27 @@
 {
-  "name": "Myocardial Infarction Use Case",
-  "description": "Adaptation of spinal-use-case.json's SF-DC -> SF-FTE -> SF-FS -> SF-MLM -> SF-Score pipeline to the newly registered \"myocardial_infarction\" dataset (the UCI Myocardial Infarction Complications / ZSN dataset), renamed MI-DC -> MI-FTE -> MI-FS -> MI-MLM -> MI-Score. The five agents' system_prompt values, all four Critic Gates' system_prompt values (SF-Score/MI-Score is intentionally ungated in both files -- see spinal-use-case.json's own description for why), the Pattern/Tool/LLM node wiring, and the design_spec (factors, replicates, coordination_strategy) are copied verbatim from spinal-use-case.json unchanged -- that pipeline's methodology (cleaning, feature engineering, selection, hyperparameter planning, scoring) and its review criteria are dataset-agnostic by construction; nothing about them assumes the spinal dataset. Only the dataset-specific surface changed: the five node labels (SF-* -> MI-*, including the literal SF-Score/SF-MLM mentions inside agent-score's and gate-mlm's own goal text), the Dataset node (renamed \"Myocardial Infarction Dataset\", dataset_name -> \"myocardial_infarction\"), and each of MI-DC/MI-FTE/MI-FS/MI-MLM's task_brief block within their own goal text. Unlike spinal_fusion_seed42, myocardial_infarction is already registered AND already attached via dataset_id to experiment 104185b6-5b54-4fa4-9887-df811dbdf004 -- no register-then-PATCH step is needed before running this file against that experiment, so (unlike spinal-use-case.json's Dataset node) this file's Dataset node has dataset_id pre-filled with the real registered UUID (56d2bbd7-624f-44e3-bd1f-a070b41432b1), not left null. The MCP Tool nodes' server_id values are reused verbatim from spinal-use-case.json -- same asaree-sklearn-*/asaree-workspace servers, same jay.moran@cshs.org account/environment; reselect by name only if imported elsewhere. Three real dataset differences are called out explicitly in each worker's task_brief.notes rather than left for the agent to discover cold: (1) the dataset carries an explicit ID column (role=id, 1..1700, all-unique) that must be dropped/excluded as a non-feature record identifier -- there was no such column in spinal_fusion_seed42; (2) unlike spinal's already-one-hot-encoded demographic/social-history columns, every MI feature is RAW -- a mix of integer/real/binary/ordinal/categorical types with real missingness, so DC's and FTE's own generic instructions (inspect first, do not assume completeness, decide each encoding from semantics/spread) now do real work rather than passing through mostly-clean data; (3) MI's column names are short Russian-derived codes (e.g. nr11, np01, zab_leg_01), not descriptive English -- each worker's task_brief now says explicitly to resolve every column's meaning via get_data_dictionary rather than the name, since DC's/FTE's system_prompt still says column names are descriptive (left unchanged, verbatim from spinal, since it's generic pipeline guidance -- the task_brief override is the intended place for a dataset-specific correction, matching how task_brief already carries every other dataset fact in this file's own design). expected_positive_rate (0.232) was computed directly from the registered dataset's raw.csv (394 positive / 1700), the same way spinal's 0.273 reflects its own registered data.",
+  "name": "Myocardial Infarction Use Case (Anthropic)",
+  "description": "MI-DC -> MI-FTE -> MI-FS -> MI-MLM -> MI-Score: five agents in series on the UCI Myocardial Infarction Complications (ZSN) dataset, each handing a versioned dataset workspace to the next, the first four behind a Critic Gate (MI-Score is intentionally ungated -- it only executes a fixed scoring script, so there is no design decision left to review). The pipeline's methodology (cleaning, feature engineering, selection, hyperparameter planning, scoring) and the critics' review criteria are dataset-agnostic; everything dataset-specific lives in each worker's own task_brief block. Three facts are stated there rather than left for an agent to discover cold: (1) the dataset carries an explicit ID column (role=id, 1..1700, all-unique) that must be dropped as a non-feature record identifier; (2) every feature is RAW -- a mix of integer/real/binary/ordinal/categorical types with real missingness -- so DC's and FTE's inspect-first instructions do real work here; (3) the column names are short Russian-derived codes (nr11, np01, zab_leg_01), not descriptive English, so every column's meaning must be resolved via get_data_dictionary rather than guessed from its name. expected_positive_rate (0.232) is 394 positive of 1700. See README.md in this directory for how to import and run this.",
   "graph": {
     "nodes": [
       {
         "id": "llm-shared",
-        "type": "llm_azure_foundry",
+        "type": "llm_anthropic",
         "position": {
           "x": 1140,
           "y": 680
         },
         "data": {
-          "label": "Azure Foundry (shared)",
+          "label": "Anthropic (shared)",
           "config": {
-            "provider": "azure_foundry",
+            "provider": "anthropic",
             "model": "claude-sonnet-5",
             "temperature": null,
             "effort": "medium",
             "max_tokens": 128000
           },
           "factor_bindings": {
-            "config.model": "Azure Foundry:Model",
-            "config.effort": "Azure Foundry:Effort"
+            "config.model": "Anthropic:Model",
+            "config.effort": "Anthropic:Effort"
           }
         }
       },
@@ -968,7 +968,7 @@
   "design_spec": {
     "factors": [
       {
-        "name": "Azure Foundry:Model",
+        "name": "Anthropic:Model",
         "levels": [
           "claude-sonnet-5",
           "claude-opus-5"
@@ -976,7 +976,7 @@
         "level_type": "string"
       },
       {
-        "name": "Azure Foundry:Effort",
+        "name": "Anthropic:Effort",
         "levels": [
           "medium",
           "xhigh"

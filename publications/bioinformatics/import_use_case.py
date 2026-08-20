@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Import myocardial-use-case.json (and its dataset) into a running ASAREE.
+"""Import a myocardial-*.json use case (and its dataset) into a running ASAREE.
 
     ASAREE_BASE_URL=http://localhost:8000 ASAREE_API_KEY=... \
-        uv run --with ./sdk python publications/bioinformatics/import_use_case.py
+        uv run --with ./sdk python publications/bioinformatics/import_use_case.py \
+        [myocardial-anthropic.json]
 
-See README.md in this directory for the full walkthrough. Idempotent: run it
-again and it reuses whatever already exists under the same names rather than
-creating a second copy.
+The API-side equivalent of README.md's GUI walkthrough, for rebuilding the
+experiment from scratch repeatedly; the GUI is the documented path. Takes any
+of the three provider variants in this directory, defaulting to the Azure
+Foundry one the paper's runs used. Idempotent: run it again and it reuses
+whatever already exists under the same names rather than creating a second
+copy.
 
 What it does, in order (the order matters -- an experiment has to exist before
 a protocol can attach to it, and the dataset has to be registered before the
@@ -33,7 +37,7 @@ from asaree_client.exceptions import AsareeNotFoundError
 
 HERE = Path(__file__).resolve().parent
 
-USE_CASE_FILE = HERE / "myocardial-use-case.json"
+DEFAULT_USE_CASE_FILE = HERE / "myocardial-azure-foundry.json"
 DATA_FILE = HERE / "mi_ZSN.csv"
 DICTIONARY_FILE = HERE / "dict_ZSN.json"
 
@@ -71,8 +75,11 @@ def _localize(graph: dict[str, Any], *, dataset_id: str, server_ids: dict[str, s
     return missing
 
 
-def main() -> int:
-    for path in (USE_CASE_FILE, DATA_FILE, DICTIONARY_FILE):
+def main(argv: list[str]) -> int:
+    # The three provider variants differ only in their LLM node and the
+    # factors bound to it, so any of them imports through this same path.
+    use_case_file = Path(argv[0]).resolve() if argv else DEFAULT_USE_CASE_FILE
+    for path in (use_case_file, DATA_FILE, DICTIONARY_FILE):
         if not path.is_file():
             print(f"ERROR: {path} is missing.", file=sys.stderr)
             return 2
@@ -81,7 +88,7 @@ def main() -> int:
         print("       See sdk/README.md's 'Auth bootstrap' to issue a token.", file=sys.stderr)
         return 2
 
-    use_case = json.loads(USE_CASE_FILE.read_text())
+    use_case = json.loads(use_case_file.read_text())
     graph = use_case["graph"]
 
     with AsareeClient() as client:
@@ -163,4 +170,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

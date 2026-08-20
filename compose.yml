@@ -1,33 +1,100 @@
-# ASAREE's own compose file. `include:` pulls Motoro's own compose.yml
-# in as part of this project, so a single `docker compose up` here also
-# brings up motoro-postgres/motoro-redis/motoro-migrate --
-# no separate `docker compose up -d` in the Motoro repo needed first.
-# Mirrors Motoro's own migrate-then-serve shape (see
-# Motoro/compose.yml and docker/Dockerfile.migrate).
+# ASAREE's own compose file -- self-contained: `git clone` this repo and
+# `docker compose up -d --build` is the whole setup. Motoro is a pinned git
+# dependency (pyproject.toml, [tool.uv.sources]) that uv fetches during the
+# build, so no checkout of that repo is needed here.
 #
-# MOTORO_DIR points at a checkout of Motoro; defaults to a
-# sibling directory (../Motoro relative to this file), matching how
-# it's actually checked out today. Override it (env var or .env) if yours
-# lives somewhere else. Don't also run `docker compose up` directly inside
-# that checkout while this is up -- same container_names/ports, so the two
-# would collide.
+# This used to `include: ${MOTORO_DIR:-../Motoro}/compose.yml`, which made a
+# sibling checkout a hard prerequisite purely to obtain three services. They are
+# defined below instead, and the migrate one now runs out of ASAREE's own image
+# -- the installed `motoro` wheel ships its Alembic chain and the CLI that
+# applies it, so core's schema comes from the exact pinned version the app
+# imports rather than from whatever commit a local checkout happened to be on.
+# Service names, container names, ports and the volume name are unchanged from
+# Motoro's file, so an existing dev environment keeps its data.
 #
-# Motoro is a pinned git dependency (see pyproject.toml). While that repo is
-# private, building needs a GitHub token with read access to it, passed as a
-# build secret -- GH_TOKEN=$(gh auth token) works if you're logged in via the
-# gh CLI:
+# Don't also run `docker compose up` inside a Motoro checkout while this is up
+# -- same container names and ports, so the two would collide.
+#
+# Motoro's repo is public, so `--build` needs no credential. The gh_token build
+# secret below is only for building against a private fork; an unset GH_TOKEN is
+# fine (an empty password still fetches a public repo -- see Dockerfile). To use
+# one:
 #
 #   GH_TOKEN=$(gh auth token) docker compose up -d --build
-#
-# Only `--build` needs it; plain `docker compose up -d` against existing
-# images does not. Once Motoro is public the prefix becomes unnecessary (an
-# empty secret still fetches a public repo fine -- see Dockerfile), but it
-# stays harmless, so this remains the one command that always works.
-
-include:
-  - path: ${MOTORO_DIR:-../Motoro}/compose.yml
 
 services:
+  # Motoro's backing store, and ASAREE's: one server, two databases in one
+  # volume -- `motoro` (core's schema, created by POSTGRES_DB below) and
+  # `asaree` (this repo's, created on demand by asaree.migrations'
+  # _ensure_database_exists).
+  #
+  # pgvector rather than plain postgres:16, inherited from Motoro's own file:
+  # nothing uses the extension yet, semantic memory will, and swapping the image
+  # later would mean recreating the volume.
+  motoro-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: motoro-postgres
+    environment:
+      POSTGRES_USER: agentic
+      POSTGRES_PASSWORD: agentic
+      POSTGRES_DB: motoro
+    ports:
+      # Host-side only -- the services below reach it at motoro-postgres:5432 on
+      # the compose network. 5453 is offset from the default so it can coexist
+      # with a local Postgres; override in .env if it's still taken.
+      - "${POSTGRES_PORT:-5453}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentic -d motoro"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  motoro-redis:
+    # Motoro's working memory, plus ASAREE's own use of it (rate limiting, the
+    # JWT deny list, and the arq queue the worker below reads).
+    image: redis:7-alpine
+    container_name: motoro-redis
+    ports:
+      - "${REDIS_PORT:-6381}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Core's schema, applied from ASAREE's own image (see the header) -- the same
+  # build as asaree-app, so this costs one extra container, not an extra image.
+  # `deploy` = upgrade then sync-catalog (project the pattern registry into
+  # architectural_patterns); both idempotent, and the catalog step is why this
+  # needs the full runtime rather than Alembic alone.
+  #
+  # Runs to completion and exits 0 -- `Exited (0)` in `docker compose ps` is
+  # success, hence restart: "no". `--url` is passed explicitly because core's CLI
+  # otherwise reads a bare DATABASE_URL, which nothing here sets.
+  motoro-migrate:
+    build:
+      context: .
+      secrets:
+        - gh_token
+      additional_contexts:
+        gitdir: ./.git
+    container_name: motoro-migrate
+    depends_on:
+      # Not service_started: Postgres accepts connections briefly while still
+      # running initdb, which races the creation of the database being migrated.
+      motoro-postgres:
+        condition: service_healthy
+    entrypoint: ["python", "-m", "motoro.migrations"]
+    command:
+      - deploy
+      - --url
+      - postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/motoro
+    restart: "no"
+
   asaree-migrate:
     build:
       context: .
@@ -41,8 +108,11 @@ services:
         gitdir: ./.git
     container_name: asaree-migrate
     depends_on:
-      motoro-postgres:
-        condition: service_healthy
+      # After core's, not merely after Postgres: no product table has an FK into
+      # a core one (they reference core rows by opaque UUID), but the deploy is
+      # sequenced core-first -- see asaree.migrations' module docstring.
+      motoro-migrate:
+        condition: service_completed_successfully
     env_file: .env
     environment:
       # Internal container network, not the host-mapped ports in .env
@@ -146,6 +216,13 @@ services:
       - ./frontend:/app
       - /app/node_modules
     restart: unless-stopped
+
+volumes:
+  postgres_data:
+    # Explicit name, matching what Motoro's own compose.yml declared while this
+    # file included it -- renaming it would orphan every existing dev
+    # environment's data behind a new, empty volume.
+    name: motoro_postgres_data
 
 secrets:
   gh_token:

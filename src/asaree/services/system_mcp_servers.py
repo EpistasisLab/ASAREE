@@ -37,8 +37,8 @@ OKF_SERVER_NAME = "motoro-okf"
 # repo's own venv -- asaree.* is ASAREE, motoro.* comes from the pinned Motoro
 # dependency, and the asaree_sklearn_* packages are the mcp-servers/ path
 # dependencies (see pyproject.toml). That uniformity is the point: because
-# they're installed rather than checked out somewhere, `uv run --directory
-# <this repo>` reaches all of them, so no stored command embeds a path outside
+# they're installed rather than checked out somewhere, `uv run --no-sync
+# --directory <this repo>` reaches all of them, so no stored command embeds a path outside
 # the deployment and a fresh `docker compose up` comes up with the full set
 # connected and no manual registration step.
 #
@@ -65,8 +65,21 @@ SYSTEM_MCP_SERVERS: Final[tuple[tuple[str, str], ...]] = (
 
 
 def command_for(module: str) -> str:
-    """The stored ``command`` for a bundled server module."""
-    return f"uv run --directory {_REPO_ROOT} python -m {module}"
+    """The stored ``command`` for a bundled server module.
+
+    ``--no-sync`` is load-bearing, not an optimization. ``uv run`` syncs the
+    project environment first by default, which means rebuilding ``asaree``
+    itself from ``/app`` -- and since the version is derived from the git tag
+    (hatch-vcs), that build needs a ``.git`` the image deliberately does not
+    carry: it is bind-mounted for the final ``uv sync`` and never copied into a
+    layer. Without this flag every one of these servers dies at spawn with
+    "Error getting the version from source `vcs`", surfacing only as
+    ``McpError: Connection closed``, and a deployment comes up with no tools at
+    all. The venv these servers need is already fully installed by then, so
+    there is nothing for the sync to do anyway -- it also stops each spawn from
+    re-resolving (and downloading) the dev dependency group.
+    """
+    return f"uv run --no-sync --directory {_REPO_ROOT} python -m {module}"
 
 
 async def _ensure_system_server(name: str, command: str) -> None:

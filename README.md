@@ -43,13 +43,16 @@ You're now at true zero. To get back to a working state:
 
 1. Create a user and issue a token (see the SDK's
    [Auth bootstrap](sdk/README.md#auth-bootstrap)).
-2. Register any use-case-specific MCP servers, e.g. from
-   `asaree-spinal-use-case`: `uv run python register_servers.py`.
-3. Re-run a use case notebook's early setup cells (experiment, dataset, agent
-   creation, and the LLM credential cell if the account needs its own).
+2. Re-run a use case notebook's early setup cells (experiment, dataset, agent
+   creation, and the LLM credential cell if the account needs its own) — or, for
+   the public myocardial-infarction use case, one command:
+   [`publications/bioinformatics/README.md`](publications/bioinformatics/README.md).
 
-ASAREE's own bundled servers (`asaree-workspace`, `motoro-okf`) need no manual
-step — they auto-register the next time the app starts (`app.py`'s lifespan).
+No MCP server registration step: every bundled server — `asaree-workspace`,
+`motoro-okf`, and the six domain servers (`asaree-sklearn-dc`, `-eda`, `-fs`,
+`-fte`, `-model`, `-stats`, from `mcp-servers/`) — is an installed dependency of
+the app itself, and auto-registers the next time the app or worker starts (see
+`asaree.services.system_mcp_servers`).
 
 ### If you run Motoro's compose standalone
 

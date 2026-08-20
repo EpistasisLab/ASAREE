@@ -34,7 +34,7 @@ It assumes a sibling checkout at `../Motoro`; set `MOTORO_DIR` in `.env` if
 yours lives elsewhere.
 
 For a complete worked example, see the public myocardial-infarction use case:
-[`publications/bioinformatics/README.md`](publications/bioinformatics/README.md).
+[`publications/bioinformatics2026/README.md`](publications/bioinformatics2026/README.md).
 
 ## Resetting your dev environment
 
@@ -54,7 +54,7 @@ You're now at true zero. To get back to a working state:
 2. Re-run a use case notebook's early setup cells (experiment, dataset, agent
    creation, and the LLM credential cell if the account needs its own) — or, for
    the public myocardial-infarction use case, follow its walkthrough:
-   [`publications/bioinformatics/README.md`](publications/bioinformatics/README.md).
+   [`publications/bioinformatics2026/README.md`](publications/bioinformatics2026/README.md).
 
 No MCP server registration step: every bundled server — `asaree-workspace`,
 `motoro-okf`, and the six domain servers (`asaree-sklearn-dc`, `-eda`, `-fs`,

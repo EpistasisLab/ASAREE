@@ -31,7 +31,14 @@ from asaree_client.models import (
     WorkspaceEvent,
 )
 
-__version__ = "0.0.1"
+try:
+    # Written by hatch-vcs at build time from the repo's git tag.
+    from asaree_client._version import __version__
+except ImportError:
+    # Imported from a source tree that was never built. _transport sends this as
+    # the User-Agent, so it has to resolve to something -- say "unknown" rather
+    # than a number that would go stale the way the old hardcoded one did.
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     "Agent",

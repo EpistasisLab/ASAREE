@@ -33,6 +33,12 @@ services:
       context: .
       secrets:
         - gh_token
+      # `asaree`'s version is derived from this repo's git tags at build time
+      # (hatch-vcs), so the final `uv sync` can't build the project without the
+      # git metadata. It arrives as its own named context rather than through
+      # the main one so .dockerignore can go on excluding .git/ — see Dockerfile.
+      additional_contexts:
+        gitdir: ./.git
     container_name: asaree-migrate
     depends_on:
       motoro-postgres:
@@ -52,6 +58,10 @@ services:
       context: .
       secrets:
         - gh_token
+      # See asaree-migrate above: hatch-vcs needs the git metadata to derive a
+      # version, and .git/ stays out of the main context.
+      additional_contexts:
+        gitdir: ./.git
     container_name: asaree-app
     depends_on:
       asaree-migrate:
@@ -91,6 +101,10 @@ services:
       context: .
       secrets:
         - gh_token
+      # See asaree-migrate above: hatch-vcs needs the git metadata to derive a
+      # version, and .git/ stays out of the main context.
+      additional_contexts:
+        gitdir: ./.git
     container_name: asaree-worker
     depends_on:
       asaree-migrate:

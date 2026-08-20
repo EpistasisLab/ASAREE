@@ -1,6 +1,11 @@
 [project]
 name = "asaree-client"
-version = "0.0.1"
+# Derived from the same git tag as the app it talks to (raw-options.root = ".."
+# points hatch-vcs at the repo root from this subdirectory). That's deliberate:
+# this SDK ships in the same repo and is versioned with it, and __init__.py's
+# __version__ -- which _transport sends as the User-Agent on every request --
+# now names the exact build rather than a number someone forgot to bump.
+dynamic = ["version"]
 description = "Trimmed synchronous SDK for ASAREE — just enough to drive a factorial experiment from a notebook."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -18,8 +23,16 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+# The .git this reads lives one level up, at the repo root.
+raw-options = { root = ".." }
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/asaree_client/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/asaree_client"]

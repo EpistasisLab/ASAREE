@@ -10,6 +10,13 @@ __pycache__/
 dist/
 *.egg-info/
 data/
+# .git/ stays excluded even though the build has to read it. hatch-vcs derives
+# the package version from the repo's tags, so the final `uv sync` can't build
+# this project without that metadata -- but it arrives as a *named build context*
+# (compose.yml's `additional_contexts: gitdir: ./.git`), which is a separate
+# context this file does not filter. Keeping the exclusion is the point: a future
+# stray `COPY . .` can never bake the full history, and whatever was ever
+# committed and later removed from it, into an image layer.
 .git/
 sdk/
 tests/

@@ -30,7 +30,6 @@ wheels = [
 
 [[package]]
 name = "asaree-client"
-version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

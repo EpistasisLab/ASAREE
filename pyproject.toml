@@ -1,6 +1,11 @@
 [project]
 name = "asaree"
-version = "0.0.1"
+# Derived from the git tag by hatch-vcs (see [tool.hatch.version]), same as
+# Motoro. Nothing to edit when cutting a release: tag it and the version
+# follows. Between tags this reads as a dev version (0.2.1.dev4+g<sha>), which
+# is the point -- it names the exact build rather than whatever number was last
+# typed here.
+dynamic = ["version"]
 description = "ASAREE — the product built on Motoro."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -97,8 +102,18 @@ asaree-sklearn-model = { path = "mcp-servers/asaree-sklearn-model", editable = t
 asaree-sklearn-stats = { path = "mcp-servers/asaree-sklearn-stats", editable = true }
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+# Generated at build time, gitignored, and shipped in the wheel so an installed
+# app can report its own version without the git metadata it was built from.
+# NOTE: this is why the Dockerfile bind-mounts .git into the final `uv sync` --
+# that step builds this project, and hatch-vcs has nothing to read without it.
+[tool.hatch.build.hooks.vcs]
+version-file = "src/asaree/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/asaree"]

@@ -84,7 +84,20 @@ COPY scripts/ ./scripts/
 # links the local `asaree` package itself (editable install -- reads src/
 # directly at import time, so this step never needs to rerun the heavy
 # dependency resolution/download above just because app code changed).
-RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+#
+# The .git mount is what lets this step build at all: pyproject.toml has no
+# literal version, hatch-vcs derives it from the repo's tags, and it needs the
+# git metadata to do that.
+#
+# `from=gitdir` -- a *named* build context (compose.yml's `additional_contexts`)
+# rather than the main one -- for two reasons. It never lands in an image layer,
+# and .dockerignore can go on excluding .git/ from the main context, so no future
+# `COPY . .` added here can bake the history into an image. Building this by hand
+# outside Compose therefore needs the context passed explicitly:
+#
+#   docker build --build-context gitdir=./.git --secret id=gh_token,env=GH_TOKEN .
+RUN --mount=type=bind,from=gitdir,target=/app/.git \
+    --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv sync --frozen --no-dev
 
 # Absent on purpose: the repo's .env. AsareeSettings reads host-side URLs

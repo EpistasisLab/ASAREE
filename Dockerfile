@@ -8,10 +8,12 @@
 # depends on uv being invoked per request.
 #
 # uv stays in the final image deliberately (unlike a slimmed multi-stage
-# build): app.py spawns its bundled MCP servers (asaree-workspace,
-# motoro-okf) via `uv run --directory <repo root> python -m ...`, the
-# same subprocess convention used in every dev environment so far. Removing
-# uv here would just move the same "no uv at runtime" problem one level down.
+# build): the app spawns its bundled MCP servers (asaree-workspace,
+# motoro-okf, and the six asaree-sklearn-* servers -- see
+# asaree.services.system_mcp_servers) via `uv run --directory <repo root>
+# python -m ...`, the same subprocess convention used in every dev environment
+# so far. Removing uv here would just move the same "no uv at runtime" problem
+# one level down.
 FROM python:3.13-slim
 
 WORKDIR /app
@@ -24,9 +26,15 @@ RUN pip install --no-cache-dir uv
 # README.md is not documentation here: pyproject declares `readme =
 # "README.md"`, and hatchling refuses to build the wheel without it.
 COPY pyproject.toml uv.lock README.md ./
-# Editable local path dependency (asaree-workspace-core) -- must be present
-# before `uv sync`, not copied in after.
+# Editable local path dependencies -- must be present before `uv sync`, not
+# copied in after: asaree-workspace-core, plus the seven mcp-servers/ packages
+# (the six bundled domain MCP servers and the asaree-sklearn-core library they
+# wrap). Installing them here is what lets each server's registered command be
+# `uv run --directory /app python -m <module>` with no host path in it, so a
+# fresh deployment auto-registers them with no bind mount and no
+# register_servers.py step.
 COPY workspace-core/ ./workspace-core/
+COPY mcp-servers/ ./mcp-servers/
 
 # Dependencies only, deliberately BEFORE `COPY src/` below -- src/ changes on
 # nearly every commit, and this project's own `asaree` package doesn't need

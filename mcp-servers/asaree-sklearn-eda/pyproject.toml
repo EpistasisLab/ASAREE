@@ -1,0 +1,20 @@
+[project]
+name = "asaree-sklearn-eda"
+version = "0.1.0"
+description = "ASAREE exploratory-analysis MCP server — data dictionary lookup plus feature distributions and dataset info resolved from the workspace HEAD by reading its state.json directly (no asaree-workspace-core dependency). Thin wrapper over asaree-sklearn-core. See milestone #112 / issue #1457."
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.0.0,<2.0.0",
+    "asaree-sklearn-core",
+    "httpx>=0.28.0",
+]
+
+[tool.uv.sources]
+asaree-sklearn-core = { path = "../asaree-sklearn-core", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/asaree_sklearn_eda"]

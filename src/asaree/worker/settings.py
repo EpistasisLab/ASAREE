@@ -1,7 +1,8 @@
 """arq worker entrypoint: ``arq asaree.worker.settings.WorkerSettings``.
 
 Startup mirrors app.py's lifespan (configure -> set_credential_resolver ->
-hydrate_registry) for the same reason app.py's own docstring gives:
+ensure_system_servers -> hydrate_registry) for the same reason app.py's own
+docstring gives:
 motoro.mcp.registry.get_registry() is a per-process singleton, and the
 worker is a different OS process from the API -- it starts with an empty
 registry and has to hydrate its own.
@@ -29,6 +30,7 @@ from asaree.config import get_settings
 from asaree.models.database import dispose_engine
 from asaree.redis_client import dispose_redis
 from asaree.services.credential_resolver import resolve as resolve_credentials
+from asaree.services.system_mcp_servers import ensure_system_servers
 from asaree.worker.tasks import check_stale_runs, execute_protocol_run_task, execute_run_task
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,11 @@ logger = logging.getLogger(__name__)
 async def on_startup(ctx: dict[str, Any]) -> None:
     configure(get_settings())
     set_credential_resolver(resolve_credentials)
+    # Before hydrate_registry, same as app.py's lifespan and for the same
+    # ordering reason -- and in this process too, not just the API's, because
+    # this is the process that actually spawns those subprocesses for a run.
+    # See asaree.services.system_mcp_servers.
+    await ensure_system_servers()
     failed = await hydrate_registry()
     if failed:
         logger.warning("worker_mcp_servers_failed_to_reconnect", extra={"servers": failed})

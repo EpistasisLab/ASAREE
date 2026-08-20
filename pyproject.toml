@@ -12,10 +12,27 @@ dependencies = [
     # repo's main. See project_plan/core_asaree_use_case.md in the ARES repo.
     "motoro",
     # The on-disk versioned dataset workspace (see [tool.uv.sources] below) —
-    # its own package because domain-specific MCP servers (asaree-spinal-use-
-    # case/mcp-servers) depend on the same on-disk format externally, the same
-    # way ASAREE itself depends on Motoro.
+    # its own package rather than a module of `asaree`, because the domain MCP
+    # servers under mcp-servers/ depend on the same on-disk format without
+    # depending on ASAREE itself, the same way ASAREE depends on Motoro.
     "asaree-workspace-core",
+    # The bundled domain MCP servers (mcp-servers/, path sources below), and
+    # the MCP-free computation library they all wrap. Dependencies of the app
+    # itself, not a separate checkout, because `app.py`'s lifespan spawns them
+    # as subprocesses out of THIS venv — installing them here is what lets
+    # their stored `command` be a plain `python -m asaree_sklearn_dc` with no
+    # host path in it, so they auto-register on a fresh deployment exactly
+    # like asaree-workspace and motoro-okf do. They used to live in
+    # asaree-spinal-use-case and be registered by hand (a `uv run --directory
+    # <host path>` command that only resolved on the machine that wrote it);
+    # nothing about them is spinal, so they belong with the product.
+    "asaree-sklearn-core",
+    "asaree-sklearn-dc",
+    "asaree-sklearn-eda",
+    "asaree-sklearn-fs",
+    "asaree-sklearn-fte",
+    "asaree-sklearn-model",
+    "asaree-sklearn-stats",
     "fastapi>=0.121.0",
     "uvicorn[standard]>=0.38.0",
     "pydantic>=2.10.0",
@@ -66,6 +83,18 @@ dev = [
 [tool.uv.sources]
 motoro = { git = "https://github.com/EpistasisLab/motoro.git", tag = "v0.2.0" }
 asaree-workspace-core = { path = "workspace-core", editable = true }
+# Every mcp-servers/ package is declared here, including asaree-sklearn-core
+# (which the six servers each depend on): uv resolves `tool.uv.sources` from
+# the root project only, so a sub-package's own `{ path = "../asaree-sklearn-
+# core" }` entry is NOT consulted from here — this root declaration is what
+# actually satisfies that shared dependency.
+asaree-sklearn-core = { path = "mcp-servers/asaree-sklearn-core", editable = true }
+asaree-sklearn-dc = { path = "mcp-servers/asaree-sklearn-dc", editable = true }
+asaree-sklearn-eda = { path = "mcp-servers/asaree-sklearn-eda", editable = true }
+asaree-sklearn-fs = { path = "mcp-servers/asaree-sklearn-fs", editable = true }
+asaree-sklearn-fte = { path = "mcp-servers/asaree-sklearn-fte", editable = true }
+asaree-sklearn-model = { path = "mcp-servers/asaree-sklearn-model", editable = true }
+asaree-sklearn-stats = { path = "mcp-servers/asaree-sklearn-stats", editable = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -77,6 +106,15 @@ packages = ["src/asaree"]
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+# Standalone package trees and scripts, not part of the `asaree` package: each
+# is its own distribution with its own conventions, so this config isn't
+# theirs to impose. Mostly that means scikit-learn's own capitalization (X for
+# a feature matrix, y for a target) tripping N803/N806 on nearly every
+# function in mcp-servers/ -- the same exception per-file-ignores already
+# grants src/asaree/mcp_servers/workspace_server.py, for the same reason.
+# Without this, `ruff check .` reports ~150 findings that `ruff check src/`
+# (the command that actually gates this repo) never saw.
+extend-exclude = ["mcp-servers", "workspace-core", "publications"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "B", "SIM"]

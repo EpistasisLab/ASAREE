@@ -63,24 +63,22 @@ services:
       ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/motoro
       ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/asaree
       ASAREE_REDIS_URL: redis://motoro-redis:6379/0
+      # asaree-sklearn-eda's get_data_dictionary calls back into this API for a
+      # registered dataset's dictionary_json. Its own default is
+      # localhost:8000, which is nothing from inside the worker container that
+      # spawns it — hence the service name. Allowlisted for MCP subprocesses
+      # via ASAREE_MCP_ALLOWED_ENV_VARS in .env.
+      ASAREE_API_URL: http://asaree-app:8000
     ports:
       - "8000:8000"
     volumes:
       # Persists dataset workspaces and the OKF bundle across restarts —
       # otherwise both live inside the container's own ephemeral filesystem.
+      # The only mount this service needs: every bundled MCP server is an
+      # installed dependency in the image (see pyproject.toml's mcp-servers/
+      # path sources), so their stored `command` is `uv run --directory /app
+      # python -m ...` with no host path to replay.
       - ./data:/app/data
-      # register_servers.py (run on the host, from a use-case repo) persists
-      # an absolute HOST path in each domain server's `command` column --
-      # `uv run --directory <host path> ...`. Mounted at the identical path
-      # so that command resolves inside the container too, without needing
-      # to re-register anything. Adjust the host side if your checkout of
-      # asaree-spinal-use-case lives somewhere else.
-      #
-      # Read-write, not read-only: uv run --directory manages that
-      # directory's own .venv (creating/rebuilding it as needed), and a host-
-      # built .venv doesn't match the container's interpreter, so uv needs to
-      # recreate it here on first run.
-      - /home/moranj3/dev/asaree-spinal-use-case/mcp-servers:/home/moranj3/dev/asaree-spinal-use-case/mcp-servers
     restart: unless-stopped
 
   # Same built image as asaree-app, running the arq worker instead of
@@ -104,17 +102,14 @@ services:
       ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/motoro
       ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/asaree
       ASAREE_REDIS_URL: redis://motoro-redis:6379/0
+      ASAREE_API_URL: http://asaree-app:8000
     command: ["arq", "asaree.worker.settings.WorkerSettings"]
     volumes:
-      # Same two mounts as asaree-app, and for the same reasons: dataset
-      # workspaces/OKF bundle need to survive a restart, and hydrate_registry
-      # (asaree.worker.settings.on_startup) reconnects domain MCP servers by
-      # replaying their persisted `command`, which is a HOST path under this
-      # use-case repo -- the worker is now the process that actually spawns
-      # those subprocesses, so it needs the identical mount, at the identical
-      # path, that asaree-app has.
+      # Same mount as asaree-app, and for the same reason: the dataset
+      # workspaces and OKF bundle need to survive a restart. The worker is the
+      # process that actually spawns the MCP subprocesses for a run, so it
+      # reads and writes the same workspace tree the API does.
       - ./data:/app/data
-      - /home/moranj3/dev/asaree-spinal-use-case/mcp-servers:/home/moranj3/dev/asaree-spinal-use-case/mcp-servers
     restart: unless-stopped
 
   asaree-frontend:

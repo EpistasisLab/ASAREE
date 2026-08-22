@@ -1,4 +1,7 @@
 import { Repeat2 } from 'lucide-react'
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -41,11 +44,28 @@ export function ReasonActPatternNodeInspector({
   onClose: () => void
 }) {
   const { requestMakeFactor } = useProtocolCanvasActions()
+  // Shown instead of closing outright when a required field (see
+  // ReasonActPatternNode.tsx's matching warning-triangle check) is still
+  // empty -- lets the user close anyway rather than trapping them in the
+  // inspector, but makes sure they saw it first.
+  const [pendingCloseWarning, setPendingCloseWarning] = useState(false)
 
   if (!node) return null
   const data = node.data
   const config = data.config
   const bindings = data.factor_bindings ?? {}
+
+  const missingFields: string[] = []
+  if (config.max_iterations == null) missingFields.push('Max iterations')
+  if (config.include_scratchpad && config.scratchpad_window == null) missingFields.push('Scratchpad window')
+
+  function requestClose() {
+    if (missingFields.length > 0) {
+      setPendingCloseWarning(true)
+      return
+    }
+    onClose()
+  }
 
   function patchConfig(patch: Partial<ReasonActPatternConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
@@ -65,7 +85,7 @@ export function ReasonActPatternNodeInspector({
     <NodeInspectorDialog
       open
       onOpenChange={(open) => {
-        if (!open) onClose()
+        if (!open) requestClose()
       }}
       accent={ACCENT}
       title={
@@ -75,7 +95,7 @@ export function ReasonActPatternNodeInspector({
           <MakeNodeFactorButton onClick={() => requestMakeFactor(node.id)} />
         </>
       }
-      onClose={onClose}
+      onClose={requestClose}
     >
       <div className="grid grid-cols-2 gap-4">
         <FactorBindableField
@@ -99,8 +119,8 @@ export function ReasonActPatternNodeInspector({
                 id="reason-act-max-iterations"
                 type="number"
                 min="1"
-                value={config.max_iterations}
-                onChange={(e) => patchConfig({ max_iterations: Number(e.target.value) })}
+                value={config.max_iterations ?? ''}
+                onChange={(e) => patchConfig({ max_iterations: e.target.value === '' ? null : Number(e.target.value) })}
               />
             </div>
           )}
@@ -190,13 +210,31 @@ export function ReasonActPatternNodeInspector({
                 id="reason-act-scratchpad-window"
                 type="number"
                 min="1"
-                value={config.scratchpad_window}
-                onChange={(e) => patchConfig({ scratchpad_window: Number(e.target.value) })}
+                value={config.scratchpad_window ?? ''}
+                onChange={(e) => patchConfig({ scratchpad_window: e.target.value === '' ? null : Number(e.target.value) })}
               />
             </div>
           )}
         </FactorBindableField>
       )}
+
+      <Dialog open={pendingCloseWarning} onOpenChange={(open) => !open && setPendingCloseWarning(false)}>
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Required fields are empty</DialogTitle>
+            <DialogDescription>
+              {missingFields.join(' and ')} {missingFields.length === 1 ? 'is' : 'are'} required for this pattern to run. You can close and fill{' '}
+              {missingFields.length === 1 ? 'it' : 'them'} in later, but the node will stay flagged until you do.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingCloseWarning(false)}>
+              Go back
+            </Button>
+            <Button onClick={onClose}>Close anyway</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </NodeInspectorDialog>
   )
 }

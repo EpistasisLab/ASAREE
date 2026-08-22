@@ -30,6 +30,12 @@ export function ReasonActPatternNode({ id, data, selected }: NodeProps & { data:
   const { requestConnectorAdd } = useProtocolCanvasActions()
   const targetAgentId = connections[0]?.target
 
+  // scratchpad_window only matters -- and so is only required -- while
+  // include_scratchpad is on; see nodeConfigIssues.ts's matching check.
+  const warnings: string[] = []
+  if (data.config.max_iterations == null) warnings.push('Max iterations is required')
+  if (data.config.include_scratchpad && data.config.scratchpad_window == null) warnings.push('Scratchpad window is required')
+
   return (
     <CircleNode
       id={id}
@@ -41,6 +47,7 @@ export function ReasonActPatternNode({ id, data, selected }: NodeProps & { data:
       handleId="architectural_pattern"
       handlePosition="bottom"
       factorCount={boundFactorCount(data)}
+      warning={warnings.length > 0 ? warnings : undefined}
       swap={
         targetAgentId
           ? { label: 'Swap pattern', onSwap: () => requestConnectorAdd({ nodeId: targetAgentId, slot: 'architectural_pattern' }) }

@@ -103,7 +103,11 @@ export interface AgentModelConfigData {
   model: string
   temperature?: number | null
   effort?: string | null
-  max_tokens: number
+  // Nullable so LlmNodeInspector's Input can be backspaced to empty without
+  // snapping to a forced value -- null is a real, persisted "not set yet"
+  // state flagged by LlmNode's warning triangle and nodeConfigIssues.ts's
+  // pre-flight scan, same convention as ReasonActPatternConfig's fields.
+  max_tokens: number | null
 }
 
 // Mirrors Motoro's output_contract field-spec exactly: {"name":str,
@@ -409,9 +413,14 @@ export function defaultScriptNodeData(label = 'Script'): ScriptNodeData {
 // each iteration either calls a tool or calls `final_answer`, repeating
 // until `final_answer` fires or max_iterations is hit.
 export interface ReasonActPatternConfig {
-  max_iterations: number
+  // Nullable so the inspector's Input can be backspaced to empty without
+  // snapping to 0 (Number('') === 0) -- null is a real, persisted "not set
+  // yet" state flagged by ReasonActPatternNode's warning triangle and
+  // nodeConfigIssues.ts's pre-flight scan, rather than being silently
+  // coerced into a runnable-but-wrong value.
+  max_iterations: number | null
   include_scratchpad: boolean
-  scratchpad_window: number
+  scratchpad_window: number | null
   observation_format: 'raw' | 'summarized'
 }
 

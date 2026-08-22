@@ -57,11 +57,20 @@ export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData 
   // call instead.
   const modelName = data.config?.model
   const listIsAuthoritative = modelsQuery.data?.source === 'api'
-  const warning = !modelName
-    ? 'No model set'
-    : listIsAuthoritative && models.length > 0 && !models.some((m) => m.id === modelName)
-      ? `"${modelName}" isn't available on your ${meta.label} credential`
-      : undefined
+  const selectedModelInfo = models.find((m) => m.id === modelName)
+  const warnings: string[] = []
+  if (!modelName) warnings.push('No model set')
+  else if (listIsAuthoritative && models.length > 0 && !selectedModelInfo) {
+    warnings.push(`"${modelName}" isn't available on your ${meta.label} credential`)
+  }
+  if (data.config?.max_tokens == null) warnings.push('Max tokens is required')
+  // Same "unrecognized model defaults to temperature-only" fallback as
+  // LlmNodeInspector.tsx's own showTemperature -- Temperature is required
+  // (not left to Motoro's own silent 0.7 default) whenever it's the field
+  // actually offered for this model.
+  if ((selectedModelInfo?.supports_temperature ?? true) && data.config?.temperature == null) {
+    warnings.push('Temperature is required')
+  }
 
   return (
     <CircleNode
@@ -72,7 +81,7 @@ export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData 
       label={data.label}
       placeholder={meta.label}
       handleId="llm"
-      warning={warning}
+      warning={warnings.length > 0 ? warnings : undefined}
       factorCount={boundFactorCount(data)}
     />
   )

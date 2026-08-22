@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import type { LLMSettingModelsResponse } from '@/types/llmSettings'
-import type { DatasetNodeData, LlmNodeData, McpToolNodeData, ScriptNodeData } from '@/types/protocols'
+import type { DatasetNodeData, LlmNodeData, McpToolNodeData, ReasonActPatternNodeData, ScriptNodeData } from '@/types/protocols'
 import { PROVIDER_META } from './nodes/LlmNode'
 import { providerModelsKey } from './useProviderModels'
 
@@ -47,11 +47,13 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
       case 'llm_openai':
       case 'llm_azure_foundry': {
         const config = (node.data as LlmNodeData).config
+        let selectedModelInfo: LLMSettingModelsResponse['models'][number] | undefined
         if (!config?.model) {
           issues.push('No model set')
         } else {
           const cached = queryClient.getQueryData<LLMSettingModelsResponse>(providerModelsKey(config.provider))
           const models = cached?.models ?? []
+          selectedModelInfo = models.find((m) => m.id === config.model)
           // Only a live listing (`source: 'api'` -- an Azure Foundry
           // project's deployments, or Anthropic's own GET /v1/models) is
           // authoritative enough to call an id wrong. The static catalog is
@@ -60,10 +62,18 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
           // choice, not a misconfigured node worth interrupting a Run for.
           // Same gate as LlmNode.tsx's own warning triangle; see the longer
           // note there.
-          if (cached?.source === 'api' && models.length > 0 && !models.some((m) => m.id === config.model)) {
+          if (cached?.source === 'api' && models.length > 0 && !selectedModelInfo) {
             const label = PROVIDER_META[config.provider]?.label ?? config.provider
             issues.push(`"${config.model}" isn't available on your ${label} credential`)
           }
+        }
+        if (config?.max_tokens == null) issues.push('Max tokens is required')
+        // Same "unrecognized model defaults to temperature-only" fallback as
+        // LlmNodeInspector.tsx's own showTemperature -- required whenever
+        // it's the field actually offered for this model, so it's never
+        // Motoro's own silent ModelConfig default (0.7) filling the gap.
+        if ((selectedModelInfo?.supports_temperature ?? true) && config?.temperature == null) {
+          issues.push('Temperature is required')
         }
         break
       }
@@ -80,6 +90,12 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
       case 'script': {
         const config = (node.data as ScriptNodeData).config
         if (!config?.code) issues.push('No code set')
+        break
+      }
+      case 'pattern_reason_act': {
+        const config = (node.data as ReasonActPatternNodeData).config
+        if (config.max_iterations == null) issues.push('Max iterations is required')
+        if (config.include_scratchpad && config.scratchpad_window == null) issues.push('Scratchpad window is required')
         break
       }
       default:

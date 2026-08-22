@@ -299,7 +299,12 @@ export function DesignTab({
 
   const [hypothesis, setHypothesis] = useState(experiment.hypothesis ?? '')
   const [factors, setFactors] = useState<DesignFactor[]>(experiment.design_spec?.factors ?? [])
-  const [replicates, setReplicates] = useState(experiment.design_spec?.replicates ?? 1)
+  // Nullable so the Input below can be backspaced to empty and retyped
+  // without every keystroke snapping to 1 (matches the node inspectors'
+  // convention) -- null only ever exists transiently while editing; it's
+  // never sent to the server (see saveMutation's `replicates ?? 1`) and
+  // every other read of this state falls back to `?? 1` too.
+  const [replicates, setReplicates] = useState<number | null>(experiment.design_spec?.replicates ?? 1)
   const [randomizationSeed, setRandomizationSeed] = useState<number | null>(experiment.design_spec?.randomization_seed ?? null)
   const [metrics, setMetrics] = useState<DesignMetric[]>(experiment.design_spec?.metrics ?? [])
   const [coordinationSlug, setCoordinationSlug] = useState<CoordinationStrategySlug>(
@@ -324,7 +329,7 @@ export function DesignTab({
         design_spec: {
           ...experiment.design_spec,
           factors: factors.filter((f) => f.name.trim() !== ''),
-          replicates,
+          replicates: replicates ?? 1,
           randomization_seed: randomizationSeed,
           metrics: metrics.filter((m) => m.name.trim() !== ''),
           coordination_strategy: { slug: coordinationSlug, params: experiment.design_spec?.coordination_strategy?.params ?? {} },
@@ -345,7 +350,7 @@ export function DesignTab({
 
   const validFactors = factors.filter((f) => f.name.trim() !== '' && f.levels.length > 0)
   const combinations = validFactors.reduce((acc, f) => acc * Math.max(f.levels.length, 1), 1)
-  const totalTrials = validFactors.length > 0 ? combinations * Math.max(replicates, 1) : 0
+  const totalTrials = validFactors.length > 0 ? combinations * Math.max(replicates ?? 1, 1) : 0
 
   const selectedStrategy = COORDINATION_STRATEGY_CATALOG.find((s) => s.slug === coordinationSlug)
 
@@ -442,8 +447,8 @@ export function DesignTab({
             id="design-replicates"
             type="number"
             min="1"
-            value={replicates}
-            onChange={(e) => setReplicates(Math.max(1, Number(e.target.value) || 1))}
+            value={replicates ?? ''}
+            onChange={(e) => setReplicates(e.target.value === '' ? null : Math.max(1, Number(e.target.value)))}
           />
         </div>
         <div className="space-y-1.5">
@@ -478,7 +483,7 @@ export function DesignTab({
       <div className="space-y-1.5 rounded-md border bg-muted/30 px-3 py-2">
         <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
           {validFactors.length} factor{validFactors.length === 1 ? '' : 's'} → {combinations} cell
-          {combinations === 1 ? '' : 's'} × {Math.max(replicates, 1)} replicate{replicates === 1 ? '' : 's'} = {totalTrials} total
+          {combinations === 1 ? '' : 's'} × {Math.max(replicates ?? 1, 1)} replicate{(replicates ?? 1) === 1 ? '' : 's'} = {totalTrials} total
           trial{totalTrials === 1 ? '' : 's'}
           <InfoTooltip>
             A "cell" here is one specific combination of factor levels (e.g. Model=A × Effort=medium) -- same term

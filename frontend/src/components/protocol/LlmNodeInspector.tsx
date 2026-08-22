@@ -3,6 +3,7 @@ import { Check, LoaderCircle, PlugZap, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ConnectionStatusBadge, useConnectionCheck } from '@/components/LlmConnectionCheck'
 import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -51,6 +52,11 @@ export function LlmNodeInspector({
   onClose: () => void
 }) {
   const [credentialDialogOpen, setCredentialDialogOpen] = useState(false)
+  // Shown instead of closing outright when a required field (see LlmNode.tsx's
+  // matching warning-triangle check) is still empty -- lets the user close
+  // anyway rather than trapping them in the inspector, but makes sure they
+  // saw it first. Same convention as ReasonActPatternNodeInspector.
+  const [pendingCloseWarning, setPendingCloseWarning] = useState(false)
   // Every provider now has a real per-user credential (credential_resolver.py's
   // SUPPORTED_PROVIDERS) -- no more "informational, nothing to set up" branch.
   const provider = node?.data.config?.provider
@@ -109,6 +115,24 @@ export function LlmNodeInspector({
   // means "couldn't tell," which the `note` above explains instead).
   const isOffCatalogModel = !!config.model && models.length > 0 && !selectedModelInfo
 
+  const missingFields: string[] = []
+  if (!config.model) missingFields.push('Model')
+  if (config.max_tokens == null) missingFields.push('Max tokens')
+  // Only required when shown: a model that doesn't support temperature (see
+  // showTemperature above) has no field to fill in, so it's not flagged.
+  // For models that DO support it, leaving it unset would otherwise let
+  // Motoro's own ModelConfig default (0.7) apply silently -- required so
+  // that value is always an explicit choice, not an invisible fallback.
+  if (showTemperature && config.temperature == null) missingFields.push('Temperature')
+
+  function requestClose() {
+    if (missingFields.length > 0) {
+      setPendingCloseWarning(true)
+      return
+    }
+    onClose()
+  }
+
   function patchConfig(patch: Partial<LlmNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
   }
@@ -127,7 +151,7 @@ export function LlmNodeInspector({
     <NodeInspectorDialog
       open
       onOpenChange={(open) => {
-        if (!open) onClose()
+        if (!open) requestClose()
       }}
       accent={ACCENT}
       title={
@@ -137,7 +161,7 @@ export function LlmNodeInspector({
         </>
       }
       onDelete={() => onDelete(node.id)}
-      onClose={onClose}
+      onClose={requestClose}
     >
       <div className="grid grid-cols-2 gap-4">
         <FactorBindableField
@@ -352,10 +376,14 @@ export function LlmNodeInspector({
                 type="number"
                 min="1"
                 max="200000"
-                value={config.max_tokens}
-                onChange={(e) =>
-                  patchConfig({ max_tokens: Math.min(200000, Math.max(1, Math.trunc(Number(e.target.value)) || 1)) })
-                }
+                value={config.max_tokens ?? ''}
+                onChange={(e) => {
+                  if (e.target.value === '') {
+                    patchConfig({ max_tokens: null })
+                    return
+                  }
+                  patchConfig({ max_tokens: Math.min(200000, Math.max(1, Math.trunc(Number(e.target.value)))) })
+                }}
               />
             </div>
           )}
@@ -366,6 +394,24 @@ export function LlmNodeInspector({
         onOpenChange={setCredentialDialogOpen}
         defaultProvider={(provider as LLMProvider | undefined) ?? null}
       />
+
+      <Dialog open={pendingCloseWarning} onOpenChange={(open) => !open && setPendingCloseWarning(false)}>
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Required fields are empty</DialogTitle>
+            <DialogDescription>
+              {missingFields.join(' and ')} {missingFields.length === 1 ? 'is' : 'are'} required for this connector to run. You can close and fill{' '}
+              {missingFields.length === 1 ? 'it' : 'them'} in later, but the node will stay flagged until you do.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingCloseWarning(false)}>
+              Go back
+            </Button>
+            <Button onClick={onClose}>Close anyway</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </NodeInspectorDialog>
   )
 }

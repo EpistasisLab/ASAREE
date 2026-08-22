@@ -745,10 +745,19 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // Debounced autosave: every nodes/edges change schedules a PATCH, reset on
   // the next change -- so a node drag (many onNodesChange firings) or a
   // burst of inspector edits only ever produces one write, 800ms after the
-  // user stops.
+  // user stops. pendingGraphRef tracks the latest not-yet-flushed graph so
+  // the unmount effect below can save it immediately -- otherwise this
+  // effect's own cleanup (which also runs on unmount, not just on the next
+  // nodes/edges change) cancels the timer via clearTimeout with nothing to
+  // replace it, silently dropping any edit made within the last 800ms
+  // before navigating away (e.g. adding a node then immediately clicking
+  // back to the experiment list).
+  const pendingGraphRef = useRef<ProtocolGraph | null>(null)
   useEffect(() => {
     const graph = toPersistedGraph(nodes, edges)
+    pendingGraphRef.current = graph
     const timer = setTimeout(() => {
+      pendingGraphRef.current = null
       protocolsApi.update(protocolId, { graph }).catch(() => {
         // Best-effort autosave; a transient failure just means the next
         // change's save attempt will carry the current (still-correct)
@@ -757,6 +766,19 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     }, AUTOSAVE_DELAY_MS)
     return () => clearTimeout(timer)
   }, [nodes, edges, protocolId])
+
+  // protocolId is stable for this component's whole lifetime (the parent
+  // remounts it via `key={protocol.id}` on protocol change -- see
+  // ProtocolCanvasPage.tsx), so this only ever fires on a genuine unmount,
+  // never mid-life.
+  useEffect(() => {
+    return () => {
+      if (pendingGraphRef.current) {
+        protocolsApi.update(protocolId, { graph: pendingGraphRef.current }).catch(() => {})
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null
   // Computed once per selection change, not per FactorBindableField -- an

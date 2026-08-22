@@ -20,7 +20,7 @@ import { Play, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { newNodeId } from '@/lib/nodeId'
-import { protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
+import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import {
   defaultAgentNodeData,
@@ -752,20 +752,58 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // replace it, silently dropping any edit made within the last 800ms
   // before navigating away (e.g. adding a node then immediately clicking
   // back to the experiment list).
+  //
+  // Only writes when the persisted shape of the graph actually DIFFERS from
+  // what was last loaded/saved (lastSavedGraphRef). Without that guard, this
+  // effect fires on mount and again as soon as xyflow measures the freshly
+  // mounted nodes, PATCHing back the exact graph it was just handed -- and
+  // since a remount re-seeds itself from a react-query cache entry that
+  // nothing updated after the previous visit's save, that echo write pushes
+  // the STALE graph over the newer one on the server. Server and cache then
+  // trade places on every visit, which is what made an added node blink in
+  // and out ("gone, back, gone") as you navigated away and back.
+  const lastSavedGraphRef = useRef(
+    JSON.stringify(toPersistedGraph(initialGraph.nodes as Node[], initialGraph.edges as Edge[])),
+  )
+  const saveSeqRef = useRef(0)
+  const saveGraph = useCallback(
+    (graph: ProtocolGraph) => {
+      lastSavedGraphRef.current = JSON.stringify(graph)
+      const seq = ++saveSeqRef.current
+      protocolsApi
+        .update(protocolId, { graph })
+        .then((updated) => {
+          // The other half of the fix above: keep the query entry this
+          // canvas is re-seeded from on the next mount in step with what
+          // was just persisted, so navigating away and back shows the edit
+          // rather than the pre-edit graph. Ignores an out-of-order
+          // response so a slow earlier save can't overwrite a later one.
+          if (seq !== saveSeqRef.current || !updated.experiment_id) return
+          queryClient.setQueryData(protocolForExperimentQueryKey(updated.experiment_id), updated)
+        })
+        .catch(() => {
+          // Best-effort autosave; a transient failure just means the next
+          // change's save attempt will carry the current (still-correct)
+          // in-memory state forward. Clearing the marker makes sure that
+          // next attempt happens even if the graph is edited back to the
+          // shape this failed save carried.
+          if (seq === saveSeqRef.current) lastSavedGraphRef.current = ''
+        })
+    },
+    [protocolId, queryClient],
+  )
+
   const pendingGraphRef = useRef<ProtocolGraph | null>(null)
   useEffect(() => {
     const graph = toPersistedGraph(nodes, edges)
+    if (JSON.stringify(graph) === lastSavedGraphRef.current) return
     pendingGraphRef.current = graph
     const timer = setTimeout(() => {
       pendingGraphRef.current = null
-      protocolsApi.update(protocolId, { graph }).catch(() => {
-        // Best-effort autosave; a transient failure just means the next
-        // change's save attempt will carry the current (still-correct)
-        // in-memory state forward.
-      })
+      saveGraph(graph)
     }, AUTOSAVE_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [nodes, edges, protocolId])
+  }, [nodes, edges, saveGraph])
 
   // protocolId is stable for this component's whole lifetime (the parent
   // remounts it via `key={protocol.id}` on protocol change -- see
@@ -773,9 +811,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // never mid-life.
   useEffect(() => {
     return () => {
-      if (pendingGraphRef.current) {
-        protocolsApi.update(protocolId, { graph: pendingGraphRef.current }).catch(() => {})
-      }
+      if (pendingGraphRef.current) saveGraph(pendingGraphRef.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

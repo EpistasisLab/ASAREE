@@ -12,6 +12,16 @@ export function protocolGraphQueryKey(protocolId: string) {
   return ['protocol-graph', protocolId] as const
 }
 
+// The key for the *persisted* protocol row ProtocolCanvasPage.tsx fetches
+// and seeds the canvas's initial nodes/edges from. Shared here because
+// ProtocolCanvas.tsx's autosave has to push every saved graph back into
+// this cache entry: navigating away unmounts the canvas, so the next visit
+// re-seeds itself from whatever this cache holds, and a cache still holding
+// the pre-edit graph makes a just-added node reappear as missing.
+export function protocolForExperimentQueryKey(experimentId: string) {
+  return ['protocols', 'for-experiment', experimentId] as const
+}
+
 // Only durable fields are persisted -- xyflow annotates nodes/edges with
 // ephemeral UI state (selected, dragging, measured dimensions) that has no
 // meaning once reloaded from the backend. Shared by ProtocolCanvas.tsx's own

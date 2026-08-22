@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { bestMetric, cellsStatusAccent, formatMetricLabel, metricValueSuffix, scaledMetricValue } from '@/lib/experiment'
+import { protocolForExperimentQueryKey } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import type { Cell, Experiment } from '@/types/experiments'
 import type { ProtocolRun } from '@/types/protocols'
@@ -246,7 +247,15 @@ export function ProtocolCanvasPage() {
   })
 
   const protocolQuery = useQuery({
-    queryKey: ['protocols', 'for-experiment', experimentId],
+    queryKey: protocolForExperimentQueryKey(experimentId!),
+    // This canvas is the only writer of a protocol's graph in the app, and
+    // its autosave writes every save straight back into this cache entry
+    // (see ProtocolCanvas.tsx) -- so refetching the instant you navigate
+    // back only risks racing a still-in-flight save and re-seeding the
+    // canvas from the pre-edit graph. A short staleTime lets the
+    // navigate-away-and-back loop read the cache we know is current, while
+    // still picking up outside changes (another tab, the API) after a beat.
+    staleTime: 30_000,
     queryFn: async () => {
       const existing = await protocolsApi.list(experimentId!)
       if (existing.length > 0) return existing[0]

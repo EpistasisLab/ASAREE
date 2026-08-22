@@ -264,10 +264,10 @@ export function defaultCriticGateNodeData(label = 'Critic Gate'): CriticGateNode
 
 // The LLM connector's node family -- named to match this app's existing
 // LLMProvider/LLMSetting vocabulary. One node type per provider
-// (llm_anthropic/llm_openai/llm_azure_foundry), not one generic node with a
-// Provider field -- a dedicated node per capability rather than one node with
-// an internal picker. Config shape is identical across all three (provider is
-// baked into which node type you
+// (llm_anthropic/llm_openai/llm_azure_foundry/llm_openrouter/llm_local), not
+// one generic node with a Provider field -- a dedicated node per capability
+// rather than one node with an internal picker. Config shape is identical
+// across all five (provider is baked into which node type you
 // picked, not user-editable), so they share this one config/data shape and
 // -- see LlmNodeInspector.tsx -- one inspector component, varying only the
 // hardcoded `provider` each default-data factory below sets. Supplies
@@ -300,6 +300,19 @@ export function defaultOpenAiLlmNodeData(label = 'OpenAI'): LlmNodeData {
 
 export function defaultAzureFoundryLlmNodeData(label = 'Azure AI Foundry'): LlmNodeData {
   return { label, config: { provider: 'azure_foundry', model: 'gpt-5', temperature: 0.7, max_tokens: 128000 } }
+}
+
+export function defaultOpenRouterLlmNodeData(label = 'OpenRouter'): LlmNodeData {
+  return { label, config: { provider: 'openrouter', model: 'anthropic/claude-sonnet-5', temperature: 0.7, max_tokens: 128000 } }
+}
+
+// model starts empty -- unlike every other provider here, there's no
+// universal default self-hosted model name to assume (see
+// CreateCredentialDialog.tsx's requiresApiBase for the matching "no default
+// host" reasoning on api_base). The Model field's own required-field
+// warning already flags this until the user picks one.
+export function defaultLocalLlmNodeData(label = 'Local'): LlmNodeData {
+  return { label, config: { provider: 'local', model: '', temperature: 0.7, max_tokens: 128000 } }
 }
 
 // A "Memory" node -- visual/validation scaffolding only for now. Wiring one

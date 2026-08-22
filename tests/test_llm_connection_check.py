@@ -169,6 +169,54 @@ async def test_azure_real_discovery_error_is_a_failure(monkeypatch: pytest.Monke
     assert result.status == "failed"
 
 
+async def test_openrouter_success_uses_bearer_auth_on_the_models_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_client(monkeypatch)
+
+    result = await check.check_connection(provider="openrouter", setting=_setting("openrouter"))
+
+    assert result.status == "ok"
+    url, headers = calls[0]
+    assert url == "https://openrouter.ai/api/v1/models"
+    assert headers == {"Authorization": "Bearer secret-key"}
+
+
+async def test_local_success_delegates_to_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_discover(*, provider: str, setting: UserLLMSetting):
+        return [object(), object(), object()], "api", None
+
+    monkeypatch.setattr(check, "discover_models", fake_discover)
+
+    setting = _setting("local", api_base="http://localhost:8000/v1")
+    result = await check.check_connection(provider="local", setting=setting)
+
+    assert result.status == "ok"
+    assert "3 model" in result.detail
+    assert result.endpoint == "http://localhost:8000/v1"
+
+
+async def test_local_without_a_base_url_is_unknown_not_failed() -> None:
+    result = await check.check_connection(provider="local", setting=_setting("local", api_base=None))
+
+    assert result.status == "unknown"
+    assert "can't be checked" in result.detail
+
+
+async def test_local_no_listing_route_is_unknown_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A server with no GET /models route is a normal, expected outcome, not
+    proof the credential is bad -- same posture as Azure's no-project-endpoint
+    case."""
+
+    async def fake_discover(*, provider: str, setting: UserLLMSetting):
+        return [], "error", "This server didn't return a model list."
+
+    monkeypatch.setattr(check, "discover_models", fake_discover)
+
+    setting = _setting("local", api_base="http://localhost:8000/v1")
+    result = await check.check_connection(provider="local", setting=setting)
+
+    assert result.status == "unknown"
+
+
 async def test_unsupported_provider_is_unknown() -> None:
     result = await check.check_connection(provider="bedrock", setting=_setting("bedrock"))
 

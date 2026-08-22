@@ -68,6 +68,8 @@ logger = logging.getLogger(__name__)
 _PROJECT_DEPLOYMENTS_API_VERSION = "v1"
 _REQUEST_TIMEOUT_SECONDS = 10.0
 
+_OPENROUTER_DEFAULT_API_BASE = "https://openrouter.ai/api/v1"
+
 _ANTHROPIC_DEFAULT_API_BASE = "https://api.anthropic.com"
 _ANTHROPIC_VERSION = "2023-06-01"
 _ANTHROPIC_PAGE_LIMIT = 100
@@ -129,6 +131,18 @@ async def discover_models(*, provider: str, setting: UserLLMSetting | None) -> t
         if not setting.azure_project_endpoint:
             return [], "error", NO_PROJECT_ENDPOINT_NOTE
         return await _discover_azure_via_project(setting)
+
+    if provider == "openrouter":
+        # Unlike every other provider here, OpenRouter's listing call needs
+        # no credential at all -- it's a public catalog -- so this runs even
+        # before a key is saved, same spirit as the static catalog being
+        # shown with no credential for Anthropic/OpenAI.
+        return await _discover_openrouter(setting)
+
+    if provider == "local":
+        if setting is None or not setting.api_base:
+            return [], "error", "Set up a credential with your server's base URL first."
+        return await _discover_local(setting)
 
     return [], "error", f"Model discovery isn't supported for provider {provider!r}."
 
@@ -233,6 +247,83 @@ async def _discover_anthropic(setting: UserLLMSetting) -> tuple[list[ModelInfo],
     ]
     if not models:
         return _static_catalog("anthropic"), "static", None
+    return models, "api", None
+
+
+async def _discover_openrouter(setting: UserLLMSetting | None) -> tuple[list[ModelInfo], str, str | None]:
+    """Live model list from OpenRouter's own public catalog.
+
+    Unlike every other live listing here, this needs no credential -- OpenRouter
+    documents GET /models as public, so a saved key is only used (as a bearer
+    token) when present, never required. The response has price/context data
+    but no explicit temperature-vs-effort field the way Anthropic's does, so
+    per-model capabilities fall back to Motoro's own get_capabilities(), which
+    strips the leading `vendor/` segment before matching (see
+    model_capabilities._normalize) -- an id like "anthropic/claude-opus-5"
+    resolves against the exact same registry entry the native Anthropic
+    provider does.
+    """
+    base = (setting.api_base if setting and setting.api_base else _OPENROUTER_DEFAULT_API_BASE).rstrip("/")
+    headers = {}
+    api_key = decrypt_api_key(setting) if setting is not None else None
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.get(f"{base}/models", headers=headers)
+            response.raise_for_status()
+        data = response.json().get("data") or []
+    except httpx.HTTPError as e:
+        message = str(e).replace(api_key, "***") if api_key else str(e)
+        logger.warning("openrouter_model_discovery_failed", extra={"error": message})
+        return (
+            [],
+            "error",
+            f"Couldn't reach OpenRouter to list models ({message}). You can still type any model id "
+            "directly in the Model field.",
+        )
+
+    models = sorted(
+        (
+            ModelInfo(id=m["id"], label=m.get("name"), capabilities=get_capabilities(m["id"]))
+            for m in data
+            if m.get("id")
+        ),
+        key=lambda m: m.id,
+    )
+    if not models:
+        return [], "error", "OpenRouter returned no models. You can still type any model id directly."
+    return models, "api", None
+
+
+async def _discover_local(setting: UserLLMSetting) -> tuple[list[ModelInfo], str, str | None]:
+    """Best-effort live listing via the OpenAI-compatible GET /models route
+    most self-hosted servers (LM Studio, vLLM, llama.cpp server, ...)
+    implement -- but that route isn't a hard requirement of being "an
+    OpenAI-compatible chat endpoint", so a server that doesn't expose it is a
+    normal, expected outcome (surfaced via ``source="error"`` purely so the
+    inspector's note actually renders -- see LlmNodeInspector.tsx, which only
+    shows ``note`` for that source -- not because it's a real error).
+    """
+    base = setting.api_base.rstrip("/") if setting.api_base else ""
+    api_key = decrypt_api_key(setting) or "not-needed"
+    fallback_note = "This server didn't return a model list -- type the model's name directly in the Model field below."
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.get(f"{base}/models", headers={"Authorization": f"Bearer {api_key}"})
+            response.raise_for_status()
+        data = response.json().get("data") or []
+    except httpx.HTTPError as e:
+        message = str(e).replace(api_key, "***")
+        logger.info("local_model_discovery_unavailable", extra={"error": message})
+        return [], "error", fallback_note
+
+    models = sorted(
+        (ModelInfo(id=m["id"], label=None, capabilities=get_capabilities(m["id"])) for m in data if m.get("id")),
+        key=lambda m: m.id,
+    )
+    if not models:
+        return [], "error", fallback_note
     return models, "api", None
 
 

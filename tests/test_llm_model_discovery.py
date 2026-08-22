@@ -361,6 +361,135 @@ async def test_anthropic_empty_listing_falls_back_to_the_catalog(monkeypatch: py
     assert models
 
 
+# --- OpenRouter / Local live discovery ----------------------------------
+#
+# Both hit a plain GET {base}/models with no `params` kwarg (unlike Azure's
+# deployments call), so they get their own minimal fake client.
+
+
+class _SimpleClient:
+    def __init__(self, response: _FakeResponse, *, captured: dict) -> None:
+        self._response = response
+        self._captured = captured
+
+    async def __aenter__(self) -> _SimpleClient:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+    async def get(self, url: str, *, headers: dict) -> _FakeResponse:
+        self._captured.setdefault("urls", []).append(url)
+        self._captured["headers"] = headers
+        return self._response
+
+
+def _openrouter_setting(api_key: str = "sk-or-real-key", api_base: str | None = None) -> UserLLMSetting:
+    return UserLLMSetting(provider="openrouter", api_key_encrypted=encrypt(api_key), api_base=api_base)
+
+
+async def test_openrouter_discovery_needs_no_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unlike every other live listing here, OpenRouter's catalog is public."""
+    captured: dict = {}
+    response = _FakeResponse({"data": [{"id": "anthropic/claude-sonnet-5", "name": "Claude Sonnet 5"}]})
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
+
+    models, source, note = await discovery.discover_models(provider="openrouter", setting=None)
+
+    assert source == "api"
+    assert note is None
+    assert [m.id for m in models] == ["anthropic/claude-sonnet-5"]
+    assert captured["headers"] == {}  # no Authorization header with no credential
+    assert captured["urls"] == ["https://openrouter.ai/api/v1/models"]
+
+
+async def test_openrouter_discovery_sends_bearer_token_when_credential_saved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+    response = _FakeResponse({"data": []})
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
+
+    await discovery.discover_models(provider="openrouter", setting=_openrouter_setting())
+
+    assert captured["headers"] == {"Authorization": "Bearer sk-or-real-key"}
+
+
+async def test_openrouter_model_capabilities_resolve_via_motoros_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OpenRouter's own response has no temperature-vs-effort field -- capability
+    lookup falls back to Motoro's model_capabilities, which strips the leading
+    `vendor/` segment, so an id like this resolves against the same registry
+    entry the native Anthropic provider does."""
+    response = _FakeResponse({"data": [{"id": "anthropic/claude-opus-5", "name": "Claude Opus 5"}]})
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+
+    models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
+
+    assert models[0].capabilities.supports_effort is True
+    assert models[0].capabilities.supports_temperature is False
+
+
+async def test_openrouter_honours_a_custom_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+    response = _FakeResponse({"data": []})
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
+
+    await discovery.discover_models(provider="openrouter", setting=_openrouter_setting(api_base="https://proxy.internal"))
+
+    assert captured["urls"] == ["https://proxy.internal/models"]
+
+
+async def test_openrouter_failure_scrubs_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _FakeResponse({}, status_code=401)
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+
+    models, source, note = await discovery.discover_models(provider="openrouter", setting=_openrouter_setting())
+
+    assert models == []
+    assert source == "error"
+    assert "sk-or-real-key" not in (note or "")
+
+
+def _local_setting(api_key: str = "", api_base: str | None = "http://localhost:8000/v1") -> UserLLMSetting:
+    return UserLLMSetting(provider="local", api_key_encrypted=encrypt(api_key), api_base=api_base)
+
+
+async def test_local_discovery_without_a_base_url_returns_error() -> None:
+    models, source, note = await discovery.discover_models(provider="local", setting=None)
+    assert models == []
+    assert source == "error"
+    assert note
+
+
+async def test_local_discovery_uses_placeholder_key_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+    response = _FakeResponse({"data": [{"id": "llama-3-70b-instruct"}]})
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
+
+    models, source, note = await discovery.discover_models(provider="local", setting=_local_setting())
+
+    assert source == "api"
+    assert note is None
+    assert [m.id for m in models] == ["llama-3-70b-instruct"]
+    assert captured["headers"] == {"Authorization": "Bearer not-needed"}
+
+
+async def test_local_discovery_no_listing_route_surfaces_as_error_source_so_the_note_renders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server with no GET /models route is a normal, expected outcome -- not
+    a real error -- but LlmNodeInspector.tsx only renders `note` when
+    `source == "error"`, so that's the source used to actually surface it."""
+    response = _FakeResponse({}, status_code=404)
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+
+    models, source, note = await discovery.discover_models(provider="local", setting=_local_setting())
+
+    assert models == []
+    assert source == "error"
+    assert "Model field" in note
+
+
 async def test_openai_stays_on_the_curated_catalog_without_calling_out(monkeypatch: pytest.MonkeyPatch) -> None:
     # GET /v1/models carries no capability data (probed live), and listing it
     # would surface ~124 mostly non-chat models each defaulting to

@@ -166,7 +166,7 @@ export function LlmCredentialsSection() {
             <TableHeader>
               <TableRow>
                 <TableHead>Provider</TableHead>
-                <TableHead>Project endpoint</TableHead>
+                <TableHead>Endpoint</TableHead>
                 <TableHead>Connection</TableHead>
                 <TableHead className="w-20" />
               </TableRow>
@@ -185,9 +185,9 @@ export function LlmCredentialsSection() {
                     </TableCell>
                     <TableCell
                       className="max-w-64 truncate font-mono text-xs text-muted-foreground"
-                      title={setting.azure_project_endpoint ?? undefined}
+                      title={setting.azure_project_endpoint ?? setting.api_base ?? undefined}
                     >
-                      {setting.azure_project_endpoint ?? '—'}
+                      {setting.azure_project_endpoint ?? setting.api_base ?? '—'}
                     </TableCell>
                     <TableCell className="align-top">
                       <ConnectionCheckCell provider={setting.provider} />

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, Atom, Bot, BrainCircuit, Cloud, Code2, Database, Repeat2, ShieldCheck, Sparkles, Wrench, X } from 'lucide-react'
+import { ArrowRight, Atom, Bot, BrainCircuit, Cloud, Code2, Database, HardDrive, Repeat2, Route, ShieldCheck, Sparkles, Wrench, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -33,6 +33,18 @@ const NODE_CATALOG = [
     label: 'Azure AI Foundry',
     description: "An Agent or Critic Gate's model, temperature, and parameters -- routed through your own Azure resource",
     icon: Cloud,
+  },
+  {
+    type: 'llm_openrouter',
+    label: 'OpenRouter',
+    description: "An Agent or Critic Gate's model, temperature, and parameters -- routed through your own OpenRouter account",
+    icon: Route,
+  },
+  {
+    type: 'llm_local',
+    label: 'Local',
+    description: "An Agent or Critic Gate's model, temperature, and parameters -- routed to a self-hosted OpenAI-compatible server",
+    icon: HardDrive,
   },
   {
     type: 'pattern_reason_act',

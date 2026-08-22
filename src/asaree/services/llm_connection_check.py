@@ -10,11 +10,14 @@ wrong" from "my agent is misconfigured" until a real run failed.
 Every provider exposes an authenticated *list* endpoint that bills nothing,
 so the check is a plain GET:
 
-- openai:    GET {base}/v1/models, ``Authorization: Bearer``
-- anthropic: GET {base}/v1/models, ``x-api-key`` + ``anthropic-version``
-- azure:     no separate call -- deployment discovery IS the check, so this
+- openai:     GET {base}/v1/models, ``Authorization: Bearer``
+- anthropic:  GET {base}/v1/models, ``x-api-key`` + ``anthropic-version``
+- openrouter: GET {base}/v1/models, ``Authorization: Bearer`` (same shape as openai)
+- azure:      no separate call -- deployment discovery IS the check, so this
   delegates to llm_model_discovery rather than growing a second copy of that
   module's endpoint handling.
+- local:      same delegation as azure -- a self-hosted server's own
+  ``GET /models`` listing (if it has one) IS the check.
 
 What a 200 proves: the key is real, the network path works, and the org/
 resource resolves. What it does NOT prove: quota, billing, or per-project
@@ -46,6 +49,7 @@ _REQUEST_TIMEOUT_SECONDS = 10.0
 
 _OPENAI_DEFAULT_BASE = "https://api.openai.com/v1"
 _ANTHROPIC_DEFAULT_BASE = "https://api.anthropic.com"
+_OPENROUTER_DEFAULT_BASE = "https://openrouter.ai/api/v1"
 
 # Pinned because Anthropic's API requires it on every request; any supported
 # version works for a models list, so this never needs to chase the latest.
@@ -78,6 +82,8 @@ def _models_url(base: str) -> str:
 async def check_connection(*, provider: str, setting: UserLLMSetting) -> ConnectionCheck:
     if provider == "azure_foundry":
         return await _check_azure(setting)
+    if provider == "local":
+        return await _check_local(setting)
 
     api_key = decrypt_api_key(setting)
     if provider == "openai":
@@ -86,6 +92,9 @@ async def check_connection(*, provider: str, setting: UserLLMSetting) -> Connect
     elif provider == "anthropic":
         url = _models_url(setting.api_base or _ANTHROPIC_DEFAULT_BASE)
         headers = {"x-api-key": api_key, "anthropic-version": _ANTHROPIC_VERSION}
+    elif provider == "openrouter":
+        url = _models_url(setting.api_base or _OPENROUTER_DEFAULT_BASE)
+        headers = {"Authorization": f"Bearer {api_key}"}
     else:
         return ConnectionCheck(
             status="unknown", detail=f"Connection checks aren't supported for provider {provider!r}.", endpoint=None
@@ -155,3 +164,26 @@ async def _check_azure(setting: UserLLMSetting) -> ConnectionCheck:
             endpoint=endpoint,
         )
     return ConnectionCheck(status="failed", detail=note or "Could not reach the Azure resource.", endpoint=endpoint)
+
+
+async def _check_local(setting: UserLLMSetting) -> ConnectionCheck:
+    """Same delegation as ``_check_azure``: for a self-hosted server, "can I
+    list what's loaded" is the only free check available, and a server that
+    doesn't implement ``GET /models`` (a normal, expected case -- see
+    llm_model_discovery._discover_local) simply can't be checked for free,
+    not a sign the credential is bad.
+    """
+    if not setting.api_base:
+        return ConnectionCheck(
+            status="unknown", detail="This credential has no base URL, so it can't be checked.", endpoint=None
+        )
+    models, source, note = await discover_models(provider="local", setting=setting)
+    if source == "api":
+        return ConnectionCheck(
+            status="ok", detail=f"Reached the server and listed {len(models)} model(s).", endpoint=setting.api_base
+        )
+    return ConnectionCheck(
+        status="unknown",
+        detail=note or "This server doesn't expose a model list, so it can't be checked for free. Test it with a run.",
+        endpoint=setting.api_base,
+    )

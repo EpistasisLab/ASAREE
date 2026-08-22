@@ -2,7 +2,7 @@
 // much thinner than what a provider's real settings could hold (no
 // display_name/is_default/delete yet, one row per (user, provider), PUT
 // upserts it). api_key is write-only: never echoed back in any response.
-export type LLMProvider = 'anthropic' | 'openai' | 'azure_foundry'
+export type LLMProvider = 'anthropic' | 'openai' | 'azure_foundry' | 'openrouter' | 'local'
 
 export interface LLMSetting {
   provider: LLMProvider
@@ -26,6 +26,12 @@ export const LLM_PROVIDER_CATALOG: { id: LLMProvider; label: string; description
   { id: 'anthropic', label: 'Anthropic', description: 'Route requests through your own Anthropic account' },
   { id: 'openai', label: 'OpenAI', description: 'Route requests through your own OpenAI account' },
   { id: 'azure_foundry', label: 'Azure AI Foundry', description: 'Route models through your own Azure resource' },
+  { id: 'openrouter', label: 'OpenRouter', description: 'Route requests through your own OpenRouter account' },
+  {
+    id: 'local',
+    label: 'Local',
+    description: 'A self-hosted OpenAI-compatible server (LM Studio, vLLM, llama.cpp, …)',
+  },
 ]
 
 export const LLM_PROVIDER_LABELS: Record<LLMProvider, string> = Object.fromEntries(

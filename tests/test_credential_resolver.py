@@ -42,7 +42,7 @@ async def owner_id() -> AsyncIterator[uuid.UUID]:
             await db.delete(db_user)
 
 
-@pytest.mark.parametrize("provider", ["anthropic", "openai", "azure_foundry"])
+@pytest.mark.parametrize("provider", ["anthropic", "openai", "azure_foundry", "openrouter", "local"])
 async def test_resolve_raises_when_no_credential_saved(owner_id: uuid.UUID, provider: str) -> None:
     config = ModelConfig(provider=provider, model="some-model")
     with pytest.raises(LLMCredentialNotConfiguredError, match=provider):
@@ -91,5 +91,45 @@ async def test_resolve_azure_foundry_saved_credential_missing_api_base_raises(ow
         await upsert_setting(db, user_id=owner_id, provider="azure_foundry", api_key="secret-key", api_base=None)
 
     config = ModelConfig(provider="azure_foundry", model="gpt-5")
+    with pytest.raises(ValueError, match="api_base"):
+        await resolve(config, owner_id)
+
+
+async def test_resolve_openrouter_with_saved_credential(owner_id: uuid.UUID) -> None:
+    """No model-string override -- litellm's own `openrouter/` route already
+    matches the provider's own value, unlike azure_foundry/local."""
+    async with get_session() as db:
+        await upsert_setting(db, user_id=owner_id, provider="openrouter", api_key="sk-or-real-key")
+
+    config = ModelConfig(provider="openrouter", model="anthropic/claude-sonnet-5")
+    conn = await resolve(config, owner_id)
+
+    assert conn is not None
+    assert conn["api_key"] == "sk-or-real-key"
+    assert conn["model"] is None
+
+
+async def test_resolve_local_with_saved_credential(owner_id: uuid.UUID) -> None:
+    async with get_session() as db:
+        await upsert_setting(
+            db, user_id=owner_id, provider="local", api_key="", api_base="http://localhost:8000/v1"
+        )
+
+    config = ModelConfig(provider="local", model="llama-3-70b-instruct")
+    conn = await resolve(config, owner_id)
+
+    assert conn is not None
+    # Most self-hosted servers don't check the key, but litellm's OpenAI
+    # client still requires a non-empty string.
+    assert conn["api_key"] == "not-needed"
+    assert conn["model"] == "openai/llama-3-70b-instruct"
+    assert conn["api_base"] == "http://localhost:8000/v1"
+
+
+async def test_resolve_local_saved_credential_missing_api_base_raises(owner_id: uuid.UUID) -> None:
+    async with get_session() as db:
+        await upsert_setting(db, user_id=owner_id, provider="local", api_key="", api_base=None)
+
+    config = ModelConfig(provider="local", model="m")
     with pytest.raises(ValueError, match="api_base"):
         await resolve(config, owner_id)

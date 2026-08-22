@@ -1,5 +1,5 @@
 import type { NodeProps } from '@xyflow/react'
-import { Atom, Cloud, Sparkles } from 'lucide-react'
+import { Atom, Cloud, HardDrive, Route, Sparkles } from 'lucide-react'
 import { hashToChartHue } from '@/lib/utils'
 import type { LlmNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
@@ -24,6 +24,8 @@ export const PROVIDER_META: Record<string, { label: string; icon: typeof Sparkle
   anthropic: { label: 'Anthropic', icon: Sparkles },
   openai: { label: 'OpenAI', icon: Atom },
   azure_foundry: { label: 'Azure AI Foundry', icon: Cloud },
+  openrouter: { label: 'OpenRouter', icon: Route },
+  local: { label: 'Local', icon: HardDrive },
 }
 
 export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData }) {

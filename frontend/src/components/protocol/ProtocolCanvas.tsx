@@ -28,9 +28,11 @@ import {
   defaultAzureFoundryLlmNodeData,
   defaultCriticGateNodeData,
   defaultDatasetNodeData,
+  defaultLocalLlmNodeData,
   defaultMcpToolNodeData,
   defaultMemoryNodeData,
   defaultOpenAiLlmNodeData,
+  defaultOpenRouterLlmNodeData,
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
   defaultSingleAgentBaselinePatternNodeData,
@@ -91,7 +93,7 @@ import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 // ReasonActPatternNodeData's own comments in types/protocols.ts) -- each
 // connector slot accepts this whole family, not one exact type, mirroring
 // how the "tool" slot already accepts any mcp_tool node.
-const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry']
+const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry', 'llm_openrouter', 'llm_local']
 const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
 // Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
 // whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
@@ -101,12 +103,14 @@ const NODE_TYPES = {
   agent: AgentNode,
   mcp_tool: McpToolNode,
   critic_gate: CriticGateNode,
-  // All three LLM provider types render through the same component -- it
+  // All five LLM provider types render through the same component -- it
   // derives icon/accent/placeholder from data.config.provider, not from
-  // which of these three keys it was registered under.
+  // which of these five keys it was registered under.
   llm_anthropic: LlmNode,
   llm_openai: LlmNode,
   llm_azure_foundry: LlmNode,
+  llm_openrouter: LlmNode,
+  llm_local: LlmNode,
   memory: MemoryNode,
   dataset: DatasetNode,
   script: ScriptNode,
@@ -142,6 +146,8 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'llm_anthropic') return defaultAnthropicLlmNodeData()
   if (nodeType === 'llm_openai') return defaultOpenAiLlmNodeData()
   if (nodeType === 'llm_azure_foundry') return defaultAzureFoundryLlmNodeData()
+  if (nodeType === 'llm_openrouter') return defaultOpenRouterLlmNodeData()
+  if (nodeType === 'llm_local') return defaultLocalLlmNodeData()
   if (nodeType === 'memory') return defaultMemoryNodeData()
   if (nodeType === 'dataset') return defaultDatasetNodeData()
   if (nodeType === 'script') return defaultScriptNodeData()

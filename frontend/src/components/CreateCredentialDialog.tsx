@@ -30,6 +30,7 @@ export function CreateCredentialDialog({
   const [provider, setProvider] = useState<LLMProvider | null>(defaultProvider)
   const [apiKey, setApiKey] = useState('')
   const [azureProjectEndpoint, setAzureProjectEndpoint] = useState('')
+  const [apiBase, setApiBase] = useState('')
   const queryClient = useQueryClient()
 
   const settingsQuery = useQuery({
@@ -44,6 +45,15 @@ export function CreateCredentialDialog({
   // URL. Asking for both looked like two near-identical URLs with no
   // visible reason to differ.
   const requiresProjectEndpoint = provider === 'azure_foundry'
+  // The only provider here with no default host to fall back to -- every
+  // other provider either has a well-known API base (anthropic/openai/
+  // openrouter) or derives one server-side (azure_foundry, from the Project
+  // endpoint above).
+  const requiresApiBase = provider === 'local'
+  // A self-hosted server rarely checks the key -- api_key stays optional
+  // for this provider only (see credential_resolver.py's "not-needed"
+  // placeholder).
+  const apiKeyOptional = provider === 'local'
 
   // Selecting a provider (either directly from the search list, or via
   // defaultProvider when opened from an existing credential's own "Edit")
@@ -54,6 +64,7 @@ export function CreateCredentialDialog({
     setProvider(id)
     const existingSetting = id ? settingsQuery.data?.find((s) => s.provider === id) : undefined
     setAzureProjectEndpoint(existingSetting?.azure_project_endpoint ?? '')
+    setApiBase(existingSetting?.api_base ?? '')
   }
 
   // A single dialog instance is reused across whichever node's inspector (or
@@ -80,8 +91,13 @@ export function CreateCredentialDialog({
       llmSettingsApi.upsert({
         provider: provider!,
         api_key: apiKey,
-        // api_base is derived server-side from azure_project_endpoint --
-        // not sent here at all (see upsert_setting's own comment).
+        // api_base is derived server-side from azure_project_endpoint for
+        // azure_foundry -- not sent here at all for that provider (see
+        // upsert_setting's own comment). Only local's own field (below) is
+        // wired up here; anthropic/openai/openrouter keep their well-known
+        // defaults with no UI to override one, same as before this provider
+        // existed.
+        api_base: requiresApiBase ? apiBase || null : null,
         azure_project_endpoint: requiresProjectEndpoint ? azureProjectEndpoint || null : null,
       }),
     onSuccess: () => {
@@ -98,6 +114,7 @@ export function CreateCredentialDialog({
     setProvider(null)
     setApiKey('')
     setAzureProjectEndpoint('')
+    setApiBase('')
     saveMutation.reset()
     check.reset()
   }
@@ -171,7 +188,7 @@ export function CreateCredentialDialog({
             )}
 
             <div className="space-y-1.5">
-              <Label htmlFor="credential-api-key">API key</Label>
+              <Label htmlFor="credential-api-key">API key{apiKeyOptional && ' (optional)'}</Label>
               <PasswordInput
                 id="credential-api-key"
                 value={apiKey}
@@ -181,9 +198,29 @@ export function CreateCredentialDialog({
                 }}
               />
               <p className="text-xs text-muted-foreground">
-                Encrypted at rest before storage -- only decrypted at the moment a run needs it, never logged.
+                {apiKeyOptional
+                  ? "Most self-hosted servers don't check this -- leave it blank unless yours does."
+                  : 'Encrypted at rest before storage -- only decrypted at the moment a run needs it, never logged.'}
               </p>
             </div>
+
+            {requiresApiBase && (
+              <div className="space-y-1.5">
+                <Label htmlFor="credential-api-base">Base URL</Label>
+                <Input
+                  id="credential-api-base"
+                  placeholder="http://localhost:8000/v1"
+                  value={apiBase}
+                  onChange={(e) => {
+                    setApiBase(e.target.value)
+                    clearResultOnEdit()
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Your server's OpenAI-compatible base URL -- there's no default host for a self-hosted server.
+                </p>
+              </div>
+            )}
 
             {requiresProjectEndpoint && (
               <div className="space-y-1.5">
@@ -251,7 +288,12 @@ export function CreateCredentialDialog({
               ) : (
                 <Button
                   onClick={() => saveMutation.mutate()}
-                  disabled={!apiKey.trim() || (requiresProjectEndpoint && !azureProjectEndpoint.trim()) || saveMutation.isPending}
+                  disabled={
+                    (!apiKeyOptional && !apiKey.trim()) ||
+                    (requiresProjectEndpoint && !azureProjectEndpoint.trim()) ||
+                    (requiresApiBase && !apiBase.trim()) ||
+                    saveMutation.isPending
+                  }
                 >
                   {saveMutation.isPending ? 'Saving…' : 'Save credential'}
                 </Button>

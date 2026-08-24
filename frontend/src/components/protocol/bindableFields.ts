@@ -1,10 +1,27 @@
 import type { Edge, Node } from '@xyflow/react'
 import type { LevelType } from './factorLevels'
+import type { McpServer } from '@/types/mcpServers'
 
 export interface BindableFieldSpec {
   fieldPath: string
   label: string
   levelType: LevelType
+}
+
+// The bundled asaree-sklearn-* system servers (see the backend's
+// services/system_mcp_servers.py) are hidden from every MCP Tool server
+// picker -- they're still registered, still connected, and still usable by
+// anything that already references them; they're just not offered as a fresh
+// pick in the canvas.
+const HIDDEN_SERVER_NAME_PREFIX = 'asaree-sklearn-'
+
+// The servers an MCP Tool node's Server select should offer -- shared by
+// McpToolNodeInspector and FactorEditorDialog's tool_config level rows so
+// both hide the same set. A currently-selected server is always kept, even
+// if hidden: dropping it would render the picker blank and silently make an
+// existing node's config uneditable.
+export function selectableMcpServers(servers: McpServer[], currentServerId?: string | null): McpServer[] {
+  return servers.filter((s) => !s.name.startsWith(HIDDEN_SERVER_NAME_PREFIX) || s.id === currentServerId)
 }
 
 // Picking a server for an MCP Tool node's Tool connector -- shared by
@@ -111,14 +128,20 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
         { fieldPath: 'config', label: 'Provider & model', levelType: 'llm_config' },
       ]
     case 'mcp_tool':
-      return [
-        { fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' },
-        // The whole node as a factor -- levels can be entirely different MCP
-        // servers (each with their own allowed tools). _resolve_tool_config
-        // reads each wired mcp_tool node's own config fresh, so this already
-        // works with zero backend changes.
-        { fieldPath: 'config', label: 'Server & tools', levelType: 'tool_config' },
-      ]
+    case 'mcp_scikit_learn':
+      // Deliberately WITHOUT a whole-config "Server & tools" (tool_config)
+      // factor, which these node types used to offer: its levels are each a
+      // server + allow-list pair, so binding it would let a cell swap the
+      // node onto a DIFFERENT server. Every MCP node is now created by
+      // picking one server in the MCP Servers browser and stands for that
+      // server alone (see McpToolNodeInspector's header comment), so
+      // reassigning it -- by dropdown or by factor level -- is out of the
+      // model. Varying the allow-list alone would need its own level type;
+      // until then, an experiment that wants two different tool sets uses
+      // two nodes. The tool_config level type itself is kept in
+      // FactorEditorDialog so experiments that already have such a factor
+      // still render.
+      return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     case 'memory':
       // No runtime effect yet (Memory execution isn't implemented at all) --
       // ships as declared capability only, matching Memory's existing
@@ -211,6 +234,7 @@ function isConnectorNodeType(type: string | undefined): boolean {
   return (
     type === 'memory' ||
     type === 'mcp_tool' ||
+    type === 'mcp_scikit_learn' ||
     type === 'dataset' ||
     type === 'script' ||
     LLM_NODE_TYPES.has(type ?? '') ||

@@ -32,6 +32,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 WORKSPACE_SERVER_NAME = "asaree-workspace"
 OKF_SERVER_NAME = "motoro-okf"
+SCIKIT_LEARN_SERVER_NAME = "scikit-learn-mcp"
 
 # (server name, module to run). Every module here is importable from this
 # repo's own venv -- asaree.* is ASAREE, motoro.* comes from the pinned Motoro
@@ -61,6 +62,13 @@ SYSTEM_MCP_SERVERS: Final[tuple[tuple[str, str], ...]] = (
     ("asaree-sklearn-fte", "asaree_sklearn_fte"),
     ("asaree-sklearn-model", "asaree_sklearn_model"),
     ("asaree-sklearn-stats", "asaree_sklearn_stats"),
+    # Not part of the asaree-sklearn-* family despite the subject matter: it
+    # imports nothing from this repo and takes its dataset as a path/URI
+    # argument instead of reading the workspace layout, so it stands alone as a
+    # publishable server. Registered here for the same reason as the rest --
+    # this is the process that spawns it -- and it is the one server the canvas
+    # currently offers, the six above being hidden from the picker.
+    (SCIKIT_LEARN_SERVER_NAME, "scikit_learn_mcp"),
 )
 
 

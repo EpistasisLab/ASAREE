@@ -77,9 +77,14 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
         }
         break
       }
-      case 'mcp_tool': {
+      case 'mcp_tool':
+      case 'mcp_scikit_learn': {
         const config = (node.data as McpToolNodeData).config
-        if (!((config?.tool_names?.length ?? 0) > 0)) issues.push('Not configured -- pick a server and at least one tool')
+        // Same wording as McpToolNode's own badge -- an MCP node's server is
+        // fixed at creation, so the allow-list is the only thing to fix.
+        if (!((config?.tool_names?.length ?? 0) > 0)) {
+          issues.push('Not configured -- allow at least one tool')
+        }
         break
       }
       case 'dataset': {

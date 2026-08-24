@@ -24,6 +24,10 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
   const summary = toolNames.length > 0 ? `${data.config.server_name ?? '?'}: ${toolNames.join(', ')}` : null
   const { updateNodeData } = useReactFlow()
   const enabled = data.config?.enabled ?? true
+  // Every MCP node already HAS its server (picked in the browser at creation
+  // time), so telling its user to go pick one would send them looking for a
+  // dropdown that isn't there -- only the allow-list can be empty.
+  const warning = 'Not configured -- allow at least one tool'
 
   return (
     <CircleNode
@@ -34,7 +38,7 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
       label={data.label}
       placeholder="MCP Tool"
       handleId="tool"
-      warning={summary ? undefined : 'Not configured -- pick a server and at least one tool'}
+      warning={summary ? undefined : warning}
       factorCount={boundFactorCount(data)}
       dimmed={!enabled}
       isActive={enabled}

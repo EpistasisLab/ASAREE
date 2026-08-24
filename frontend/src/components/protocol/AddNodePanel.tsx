@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { ArrowRight, Atom, Bot, BrainCircuit, Cloud, Code2, Database, HardDrive, Repeat2, Route, ShieldCheck, Sparkles, Wrench, X } from 'lucide-react'
+import { ArrowRight, Atom, Bot, BrainCircuit, Cloud, Code2, Database, HardDrive, Repeat2, Route, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { MCP_SERVER_BROWSE } from './mcpServerCatalog'
 
 // Every entry here earns its place: GET /api/mcp-servers already backs the
 // tool picker, GET /datasets already backs the dataset picker,
@@ -19,7 +20,20 @@ import { Input } from '@/components/ui/input'
 // allowedTypes, IS that picker.
 const NODE_CATALOG = [
   { type: 'agent', label: 'Agent', description: 'An LLM agent stage in the pipeline', icon: Bot },
-  { type: 'mcp_tool', label: 'MCP Tool', description: "Allow-list a subset of a registered MCP server's tools for an Agent", icon: Wrench },
+  // Not a node type -- picking this opens the server browser
+  // (McpServerBrowserPanel), and the node gets created from whichever
+  // server is chosen there. It replaced a plain "MCP Tool" entry that made
+  // a blank node whose server you then had to find in a dropdown: the
+  // server IS the choice, so it belongs in this catalog, not two clicks
+  // deeper. Generic `mcp_tool` nodes are still created (for any server with
+  // no dedicated type of its own) and still open their old inspector, so
+  // nothing already on a canvas changes.
+  {
+    type: MCP_SERVER_BROWSE,
+    label: 'MCP Servers',
+    description: "Browse available MCP servers and allow-list their tools for an Agent",
+    icon: Server,
+  },
   {
     type: 'critic_gate',
     label: 'Critic Gate',

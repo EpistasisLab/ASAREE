@@ -5,6 +5,10 @@ import type { DatasetNodeData, LlmNodeData, McpToolNodeData } from '@/types/prot
 // shared import -- same reasoning as nodeConfigIssues.ts's own comment:
 // keeps this module from being coupled to that component's internals.
 const LLM_NODE_TYPES = new Set(['llm_anthropic', 'llm_openai', 'llm_azure_foundry'])
+// Ditto for the MCP-tool family (mcpServerCatalog.ts's MCP_TOOL_NODE_TYPES)
+// -- both types carry the same config, so a run summary reads the server
+// name off either one identically.
+const MCP_TOOL_NODE_TYPES = ['mcp_tool', 'mcp_scikit_learn']
 // "llm" is the pre-rename spelling of "ai" (see migrateLegacyHandles in
 // ProtocolCanvas.tsx) -- kept here, as in that file's CONNECTOR_HANDLES, so
 // this stays a question of "is this a connector edge at all" rather than one
@@ -50,7 +54,7 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
   )
   const toolServers = uniq(
     relevantNodes
-      .filter((n) => n.type === 'mcp_tool')
+      .filter((n) => MCP_TOOL_NODE_TYPES.includes(n.type ?? ''))
       .map((n) => (n.data as McpToolNodeData).config)
       .filter((config) => (config?.enabled ?? true) && (config?.tool_names?.length ?? 0) > 0)
       .map((config) => config.server_name)

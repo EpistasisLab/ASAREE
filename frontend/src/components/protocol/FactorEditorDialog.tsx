@@ -11,7 +11,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { mcpServersApi } from '@/api/client'
 import { cardAccent, cn, hashToChartHue, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
-import { pickToolNamesForServer, type UnboundField } from './bindableFields'
+import { pickToolNamesForServer, selectableMcpServers, type UnboundField } from './bindableFields'
 import { useProviderModels } from './useProviderModels'
 import {
   computeFactorName,
@@ -133,7 +133,7 @@ function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChan
 // node's own config fresh).
 function ToolConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
   const serversQuery = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list() })
-  const servers = serversQuery.data ?? []
+  const servers = selectableMcpServers(serversQuery.data ?? [], value.server_id as string | undefined)
   const selectedServer = servers.find((s) => s.id === value.server_id)
   const tools = selectedServer?.capabilities?.tools ?? []
   const selectedTools = (value.tool_names as string[] | undefined) ?? []

@@ -51,6 +51,7 @@ import type {
   SingleAgentBaselinePatternNodeData,
 } from '@/types/protocols'
 import type { DesignFactor } from '@/types/experiments'
+import type { McpServer } from '@/types/mcpServers'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
 import { agentTracedLabel, unboundBindableFields, type UnboundField } from './bindableFields'
@@ -62,6 +63,8 @@ import { DEFAULT_ZOOM } from './constants'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import { findFreePosition } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
+import { McpServerBrowserPanel } from './McpServerBrowserPanel'
+import { MCP_SERVER_BROWSE, MCP_TOOL_NODE_TYPES, nodeDataForServer, presetForServer } from './mcpServerCatalog'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { MemoryNodeInspector } from './MemoryNodeInspector'
 import {
@@ -108,7 +111,11 @@ const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'resourc
 
 const NODE_TYPES = {
   agent: AgentNode,
+  // Both MCP-tool types render through the same component (as the five LLM
+  // provider types do) -- they carry identical data and differ only in
+  // whether their server was picked in the browser or in a dropdown.
   mcp_tool: McpToolNode,
+  mcp_scikit_learn: McpToolNode,
   critic_gate: CriticGateNode,
   // All five LLM provider types render through the same component -- it
   // derives icon/accent/placeholder from data.config.provider, not from
@@ -148,6 +155,9 @@ function isNearViewport(a: Viewport, b: Viewport): boolean {
 }
 
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
+  // mcp_scikit_learn isn't here: a server-dedicated node is never created
+  // blank -- addServerNode builds its data from the picked server, since a
+  // node whose whole identity is one server would be meaningless without it.
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData()
   if (nodeType === 'critic_gate') return defaultCriticGateNodeData()
   if (nodeType === 'llm_anthropic') return defaultAnthropicLlmNodeData()
@@ -175,7 +185,7 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
 // operates WITH.
 const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; title: string }> = {
   ai: { allowedTypes: LLM_NODE_TYPES, title: 'Add AI' },
-  tool: { allowedTypes: ['mcp_tool', 'script'], title: 'Add Tool' },
+  tool: { allowedTypes: [MCP_SERVER_BROWSE, 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   resource: { allowedTypes: ['dataset'], title: 'Add Resource' },
@@ -312,6 +322,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // that node's own unbound fields (see requestMakeFactor below).
   const [factorPickerNodeId, setFactorPickerNodeId] = useState<string | null>(null)
   const [addPanelOpen, setAddPanelOpen] = useState(false)
+  // The second level of the add-node panel: AddNodePanel's "MCP Servers"
+  // entry swaps the browser in over it, and its Back button returns. Only
+  // meaningful while addPanelOpen.
+  const [serverBrowserOpen, setServerBrowserOpen] = useState(false)
   // A pending node deletion awaiting user confirmation -- populated either
   // by onBeforeDelete (Backspace/Delete key, the hover toolbar's trash
   // icon -- both go through xyflow's own deleteElements) or by
@@ -534,6 +548,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   function closeAddPanel() {
     setAddPanelOpen(false)
+    setServerBrowserOpen(false)
     setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(null)
     setPendingEdgeInsert(null)
@@ -546,6 +561,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const requestConnectorAdd = useCallback((request: ConnectorAddRequest) => {
     setSelectedNodeId(null)
     setPendingConnectorAdd(request)
+    setServerBrowserOpen(false)
     setAddPanelOpen(true)
   }, [])
   // A MainEdgeAddStub requests this instead -- same panel, restricted to
@@ -555,6 +571,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const requestMainEdgeAdd = useCallback((request: MainEdgeAddRequest) => {
     setSelectedNodeId(null)
     setPendingMainEdgeAdd(request)
+    setServerBrowserOpen(false)
     setAddPanelOpen(true)
   }, [])
   // An InteractEdge's own "+" requests this -- same panel again, restricted
@@ -563,6 +580,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const requestEdgeInsert = useCallback((request: EdgeInsertRequest) => {
     setSelectedNodeId(null)
     setPendingEdgeInsert(request)
+    setServerBrowserOpen(false)
     setAddPanelOpen(true)
   }, [])
   // The canvas's per-node Play icon (NodeHoverToolbar) -- opens
@@ -662,7 +680,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // New nodes land near the pane's current center, nudged away from any
   // node already there (findFreePosition) so a fresh node never lands on
   // top of an existing one.
-  function addNode(nodeType: string) {
+  function addNode(nodeType: string, dataOverride?: ProtocolNode['data']) {
+    // Not a node type -- drills into the server browser, keeping whichever
+    // pending connector/edge request is in flight so picking a server there
+    // still wires the resulting node into the slot that asked for it.
+    if (nodeType === MCP_SERVER_BROWSE) {
+      setServerBrowserOpen(true)
+      return
+    }
     if (pendingConnectorAdd) {
       const { nodeId: originId, slot } = pendingConnectorAdd
       const originNode = nodes.find((n) => n.id === originId)
@@ -686,7 +711,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         slot === 'architectural_pattern'
           ? edges.find((e) => e.target === originId && e.targetHandle === 'architectural_pattern')
           : undefined
-      setNodes((nds) => nds.filter((n) => n.id !== existingPatternEdge?.source).concat({ id: newId, type: nodeType, position, data: defaultDataFor(nodeType) }))
+      setNodes((nds) =>
+        nds
+          .filter((n) => n.id !== existingPatternEdge?.source)
+          .concat({ id: newId, type: nodeType, position, data: dataOverride ?? defaultDataFor(nodeType) }),
+      )
       setEdges((eds) =>
         eds
           .filter((e) => e.id !== existingPatternEdge?.id)
@@ -762,7 +791,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     const desired = screenToFlowPosition(center)
     const position = findFreePosition(nodes.map((n) => n.position), desired)
     const newId = newNodeId()
-    const newNode: Node = { id: newId, type: nodeType, position, data: defaultDataFor(nodeType) }
+    const newNode: Node = { id: newId, type: nodeType, position, data: dataOverride ?? defaultDataFor(nodeType) }
 
     if (nodeType === 'agent') {
       // Unlike LLM (no auto-created default; you must wire one), every new
@@ -777,6 +806,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
     setNodes((nds) => nds.concat(newNode))
     setAddPanelOpen(false)
+  }
+
+  // Picking a server in the browser -- the node is created with that server
+  // already bound (nodeDataForServer) and, when the server has a dedicated
+  // node type, as that type. Everything after this point is the ordinary
+  // addNode path, so a server node wires into a Tool connector, lands on the
+  // canvas, and opens its inspector exactly like any other node.
+  function addServerNode(server: McpServer) {
+    setServerBrowserOpen(false)
+    addNode(presetForServer(server).nodeType, nodeDataForServer(server))
   }
 
   // Debounced autosave: every nodes/edges change schedules a PATCH, reset on
@@ -932,7 +971,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             (targetNode.type === 'agent' || targetNode.type === 'critic_gate')
           )
         case 'tool':
-          return (sourceNode.type === 'mcp_tool' || sourceNode.type === 'script') && targetNode.type === 'agent'
+          return (
+            (MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') || sourceNode.type === 'script') &&
+            targetNode.type === 'agent'
+          )
         case 'memory':
           return sourceNode.type === 'memory' && targetNode.type === 'agent'
         case 'architectural_pattern':
@@ -947,7 +989,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           return (
             !LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'memory' &&
-            sourceNode.type !== 'mcp_tool' &&
+            !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'dataset' &&
             sourceNode.type !== 'script' &&
             !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '')
@@ -1147,6 +1189,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               onClick={() => {
                 setSelectedNodeId(null)
                 setPendingConnectorAdd(null)
+                setServerBrowserOpen(false)
                 setAddPanelOpen(true)
               }}
             >
@@ -1161,7 +1204,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             />
           </div>
         </div>
-        {addPanelOpen ? (
+        {addPanelOpen && serverBrowserOpen ? (
+          <McpServerBrowserPanel
+            onPick={addServerNode}
+            onBack={() => setServerBrowserOpen(false)}
+            onClose={closeAddPanel}
+          />
+        ) : addPanelOpen ? (
           <AddNodePanel
             onAdd={addNode}
             onClose={closeAddPanel}
@@ -1182,9 +1231,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                     : undefined
             }
           />
-        ) : selectedNode?.type === 'mcp_tool' ? (
+        ) : MCP_TOOL_NODE_TYPES.includes(selectedNode?.type ?? '') ? (
           <McpToolNodeInspector
-            node={{ id: selectedNode.id, type: 'mcp_tool', position: selectedNode.position, data: selectedNode.data as McpToolNodeData }}
+            node={{ id: selectedNode!.id, type: selectedNode!.type!, position: selectedNode!.position, data: selectedNode!.data as McpToolNodeData }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}

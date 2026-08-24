@@ -154,13 +154,23 @@ _LLM_NODE_TYPES = frozenset({"llm_anthropic", "llm_openai", "llm_azure_foundry"}
 # cap, coexisting freely with one connected execution-pattern node.
 _EXECUTION_PATTERN_NODE_TYPES = frozenset({"pattern_reason_act", "pattern_single_agent_baseline"})
 _MEMORY_NODE_TYPES = frozenset({"memory"})  # one today; kept as a set for symmetry with the other two families
-# One today; an mcp_tool node is always a Tool-connector source (one server
-# connection, allow-listing a subset of its tools) -- it never gets its own
-# execution turn, matching every other connector-source family. There's no
-# more "standalone pipeline step" role: calling one tool directly with no
-# agent isn't supported (a real, deliberate feature removal -- see the
-# removed _run_mcp_tool_node).
-_MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool"})
+# An MCP-tool node is always a Tool-connector source (one server connection,
+# allow-listing a subset of its tools) -- it never gets its own execution
+# turn, matching every other connector-source family. There's no more
+# "standalone pipeline step" role: calling one tool directly with no agent
+# isn't supported (a real, deliberate feature removal -- see the removed
+# _run_mcp_tool_node).
+#
+# Two types, one identical config shape (McpToolNodeConfig on the frontend:
+# server_id/server_name/tool_names/enabled), so everything downstream --
+# _resolve_tool_config included -- treats them interchangeably and only this
+# set has to know both exist. They differ purely in how the server gets
+# chosen: "mcp_tool" is the generic node whose inspector has a server
+# dropdown, while "mcp_scikit_learn" is a node dedicated to one specific
+# server, picked from the canvas's MCP Servers browser and pinned at
+# creation. A future dedicated node for another server joins this set the
+# same way.
+_MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool", "mcp_scikit_learn"})
 # One today each; kept as sets for symmetry with the other connector
 # families. Dataset declares which registered dataset an agent's workspace
 # tools operate on (_resolve_dataset_config, folded into _build_user_input's
@@ -302,6 +312,7 @@ _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "agent": "Agent",
     "critic_gate": "Critic Gate",
     "mcp_tool": "MCP Tool",
+    "mcp_scikit_learn": "Scikit-learn MCP",
     "memory": "Memory",
     "dataset": "Dataset",
     "script": "Script",

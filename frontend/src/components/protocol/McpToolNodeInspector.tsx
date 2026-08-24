@@ -1,12 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Wrench } from 'lucide-react'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { mcpServersApi } from '@/api/client'
 import { hashToChartHue } from '@/lib/utils'
-import { pickToolNamesForServer } from './bindableFields'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
@@ -23,6 +21,16 @@ const ACCENT = hashToChartHue('mcp_tool')
 // see McpToolNodeConfig's own comment), not a node per individual tool. No
 // Settings tab yet: there's nothing execution-constraint-shaped for a tool
 // node the way budget/duration are for an agent.
+//
+// Serves both MCP-tool node types. Neither one shows a Server field at all:
+// every MCP node is now created by picking a server in the MCP Servers
+// browser (see mcpServerBrowserPanel/mcpServerCatalog.ts), which pins
+// server_id/server_name onto the node's data, so a node IS one server and
+// this inspector is purely "which of its tools may the agent call". The old
+// dropdown -- and the whole-config "Server & tools" factor binding that hung
+// off it -- are gone deliberately: reassigning a node's server after the
+// fact contradicts the one-node-per-server model. Use a second MCP Servers
+// node instead.
 export function McpToolNodeInspector({
   node,
   experimentId,
@@ -112,116 +120,63 @@ export function McpToolNodeInspector({
         )}
       </FactorBindableField>
 
-      {serversQuery.isLoading ? (
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <Label>Tools allowed</Label>
+          {tools.length > 0 && (
+            <div className="flex gap-3 text-xs text-muted-foreground">
+              <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: tools.map((t) => t.name) })}>
+                All
+              </button>
+              <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: [] })}>
+                None
+              </button>
+            </div>
+          )}
+        </div>
+        {serversQuery.isLoading ? (
           <Skeleton className="h-16 w-full" />
         ) : serversQuery.isError ? (
           <p className="text-sm text-destructive">Could not load your registered MCP servers.</p>
-        ) : !serversQuery.data || serversQuery.data.length === 0 ? (
+        ) : !selectedServer ? (
+          // The node names a server that GET /mcp-servers no longer returns
+          // (deregistered, or a protocol JSON imported from another install).
+          // There's deliberately no dropdown to repoint it -- replacing the
+          // node from the MCP Servers panel is the fix.
           <p className="text-sm text-muted-foreground">
-            No MCP servers registered yet. Register one via the API, then come back to pick a tool here.
+            <span className="font-mono">{config.server_name ?? 'This node’s server'}</span> isn&rsquo;t registered. Delete this node and
+            add it again from the MCP Servers panel.
           </p>
+        ) : tools.length === 0 ? (
+          <p className="text-sm text-muted-foreground">This server has no tools.</p>
         ) : (
-          <>
-            <FactorBindableField
-              experimentId={experimentId}
-              fieldPath="config"
-              defaultLabel="Server & tools"
-              nodeLabel={factorNodeLabel}
-              levelType="tool_config"
-              currentValue={config}
-              boundFactorName={bindings.config}
-              onBind={(name) => bindFactor('config', name)}
-              onUnbind={() => unbindFactor('config')}
-            >
-              {(trigger) => (
-                <div className="space-y-1.5">
-                  <Label className="flex items-center gap-1.5">
-                    Server
-                    {trigger}
-                  </Label>
-                  <Select
-                    value={config.server_id ?? '__none__'}
-                    onValueChange={(value) => {
-                      if (!value || value === '__none__') return
-                      const server = serversQuery.data.find((s) => s.id === value)
-                      const availableToolNames = server?.capabilities?.tools?.map((t) => t.name) ?? []
-                      // Keeps whichever of the current allow-list's tool names
-                      // still exist on the newly picked server (e.g.
-                      // reselecting after importing a protocol JSON, where
-                      // tool_names was already set but server_id was null) --
-                      // only defaults to "all tools" when nothing carries
-                      // over, so a genuinely fresh pick still starts from the
-                      // friendly "everything enabled" default rather than an
-                      // allow-list that silently does nothing until the user
-                      // discovers they need to flip each tool on.
-                      patchConfig({
-                        server_id: value,
-                        server_name: server?.name ?? null,
-                        tool_names: pickToolNamesForServer(selectedTools, availableToolNames),
-                      })
-                    }}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue>{() => selectedServer?.name ?? 'Select a server…'}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__" disabled>
-                        Select a server…
-                      </SelectItem>
-                      {serversQuery.data.map((server) => (
-                        <SelectItem key={server.id} value={server.id}>
-                          {server.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+          // Sized off the viewport, not a fixed max-h: the inspector frame is
+          // already full-height (NODE_INSPECTOR_CONTENT_CLASSNAME), so the
+          // list should use whatever's left after the header and the Enabled
+          // row rather than stopping short at 16rem and scrolling inside a
+          // mostly-empty dialog.
+          <div className="max-h-[calc(100vh-17rem)] min-h-40 space-y-0.5 overflow-y-auto rounded-lg border p-1.5">
+            {tools.map((tool) => (
+              <div key={tool.name} className="flex items-start justify-between gap-3 rounded-md px-1.5 py-1 hover:bg-muted">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{tool.name}</p>
+                  {tool.description && (
+                    <p className="truncate text-xs text-muted-foreground" title={tool.description}>
+                      {tool.description}
+                    </p>
+                  )}
                 </div>
-              )}
-            </FactorBindableField>
-
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <Label>Tools allowed</Label>
-                {tools.length > 0 && (
-                  <div className="flex gap-3 text-xs text-muted-foreground">
-                    <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: tools.map((t) => t.name) })}>
-                      All
-                    </button>
-                    <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: [] })}>
-                      None
-                    </button>
-                  </div>
-                )}
+                <Switch
+                  size="sm"
+                  className="mt-0.5 shrink-0"
+                  checked={selectedTools.includes(tool.name)}
+                  onCheckedChange={(allowed) => toggleTool(tool.name, allowed)}
+                />
               </div>
-              {!config.server_id ? (
-                <p className="text-sm text-muted-foreground">Pick a server first.</p>
-              ) : tools.length === 0 ? (
-                <p className="text-sm text-muted-foreground">This server has no tools.</p>
-              ) : (
-                <div className="max-h-64 space-y-0.5 overflow-y-auto rounded-lg border p-1.5">
-                  {tools.map((tool) => (
-                    <div key={tool.name} className="flex items-start justify-between gap-3 rounded-md px-1.5 py-1 hover:bg-muted">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">{tool.name}</p>
-                        {tool.description && (
-                          <p className="truncate text-xs text-muted-foreground" title={tool.description}>
-                            {tool.description}
-                          </p>
-                        )}
-                      </div>
-                      <Switch
-                        size="sm"
-                        className="mt-0.5 shrink-0"
-                        checked={selectedTools.includes(tool.name)}
-                        onCheckedChange={(allowed) => toggleTool(tool.name, allowed)}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
+            ))}
+          </div>
         )}
+      </div>
     </NodeInspectorDialog>
   )
 }

@@ -97,7 +97,11 @@ const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry', 'llm
 const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
 // Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
 // whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
-const CONNECTOR_HANDLES = new Set(['llm', 'tool', 'memory', 'architectural_pattern'])
+const CONNECTOR_HANDLES = new Set(['llm', 'tool', 'memory', 'architectural_pattern', 'resource'])
+// The two connector slots that live on an Agent's TOP edge (see
+// AgentNode.tsx) -- a node feeding one of these is placed ABOVE its agent,
+// every other slot's source below it.
+const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'resource'])
 
 const NODE_TYPES = {
   agent: AgentNode,
@@ -159,16 +163,33 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
 // Mirrors isValidConnection's own per-slot source-type-family rule -- the
 // panel that opens for a connector "+" is pre-filtered to that slot's whole
 // family of node types (LLM_NODE_TYPES/PATTERN_NODE_TYPES above) rather than
-// the full catalog. Tool's own family includes Dataset/Script alongside
-// mcp_tool (one connector accepting several kinds of node -- see AgentNode.tsx's
-// own comment on its Tool handle) -- both are pure config sources with no
-// callable capability of their own, so they share Tool's slot rather than
-// getting a dedicated one.
+// the full catalog. Tool's own family includes Script alongside mcp_tool
+// (one connector accepting several kinds of node -- see AgentNode.tsx's own
+// comment on its Tool handle): a Script is a pure config source with no
+// callable capability of its own, so it shares Tool's slot rather than
+// getting a dedicated one. Dataset used to share it too, but now has its
+// own Resource slot -- what an agent operates ON, not a capability it
+// operates WITH.
 const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; title: string }> = {
   llm: { allowedTypes: LLM_NODE_TYPES, title: 'Add LLM' },
-  tool: { allowedTypes: ['mcp_tool', 'dataset', 'script'], title: 'Add Tool' },
+  tool: { allowedTypes: ['mcp_tool', 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
+  resource: { allowedTypes: ['dataset'], title: 'Add Resource' },
+}
+
+// Dataset nodes wired before the Resource slot existed sit on targetHandle
+// "tool" (its old home). Rewritten to "resource" the moment a graph is
+// loaded into the canvas, so the edge lands on the right handle and the
+// next autosave persists the fix -- the backend keeps accepting either
+// handle for a dataset source regardless (_LEGACY_DATASET_HANDLES in
+// services/protocol_execution.py), so an old graph that's never opened
+// still runs.
+function migrateDatasetEdges(graph: ProtocolGraph): Edge[] {
+  const datasetIds = new Set(graph.nodes.filter((n) => n.type === 'dataset').map((n) => n.id))
+  return (graph.edges as Edge[]).map((e) =>
+    e.targetHandle === 'tool' && datasetIds.has(e.source) ? { ...e, sourceHandle: 'resource', targetHandle: 'resource' } : e,
+  )
 }
 
 // Imperative, not a prop -- DesignTab.tsx (a sibling of ProtocolCanvas, not
@@ -204,7 +225,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   initialGraph: ProtocolGraph
 }>(function ProtocolCanvas({ protocolId, experimentId, initialGraph }, canvasHandleRef) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialGraph.nodes as Node[])
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialGraph.edges as Edge[])
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateDatasetEdges(initialGraph))
   const queryClient = useQueryClient()
 
   // Mirrors the canvas's own live state into the shared query cache on
@@ -629,13 +650,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     if (pendingConnectorAdd) {
       const { nodeId: originId, slot } = pendingConnectorAdd
       const originNode = nodes.find((n) => n.id === originId)
-      // Architectural Pattern connects from above (its connector lives on
-      // the agent's own TOP edge -- see AgentNode.tsx), every other slot
-      // from below -- matches agentDefaultPattern's own placement, so a
-      // swapped-in replacement pattern node lands in the same spot the
-      // auto-created default one did.
+      // Architectural Pattern and Resource connect from above (their
+      // connectors live on the agent's own TOP edge -- see AgentNode.tsx),
+      // every other slot from below -- matches agentDefaultPattern's own
+      // placement, so a swapped-in replacement pattern node lands in the
+      // same spot the auto-created default one did.
       const desired = originNode
-        ? { x: originNode.position.x, y: originNode.position.y + (slot === 'architectural_pattern' ? -160 : 160) }
+        ? { x: originNode.position.x, y: originNode.position.y + (TOP_EDGE_SLOTS.has(slot) ? -160 : 160) }
         : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
       const position = findFreePosition(nodes.map((n) => n.position), desired)
       const newId = newNodeId()
@@ -895,14 +916,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             (targetNode.type === 'agent' || targetNode.type === 'critic_gate')
           )
         case 'tool':
-          return (
-            (sourceNode.type === 'mcp_tool' || sourceNode.type === 'dataset' || sourceNode.type === 'script') &&
-            targetNode.type === 'agent'
-          )
+          return (sourceNode.type === 'mcp_tool' || sourceNode.type === 'script') && targetNode.type === 'agent'
         case 'memory':
           return sourceNode.type === 'memory' && targetNode.type === 'agent'
         case 'architectural_pattern':
           return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
+        case 'resource':
+          return sourceNode.type === 'dataset' && targetNode.type === 'agent'
         default:
           // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool/
           // dataset/script nodes have no main handle to drag from in the

@@ -6,6 +6,7 @@ export function ConnectorHandleLabel({
   left,
   top,
   side = 'bottom',
+  align = 'right',
   children,
 }: {
   left?: string
@@ -14,6 +15,12 @@ export function ConnectorHandleLabel({
   // vertical slot instead of both defaulting to dead center.
   top?: string
   side?: 'bottom' | 'right' | 'top'
+  // Only meaningful for side="top": which side of the handle the caption
+  // hangs off. The default ("right") suits a handle near the node's LEFT
+  // corner (Pattern); "left" is for one near the RIGHT corner (Resource),
+  // where a right-hanging caption would run off the card and straight into
+  // the run-status/factor badges that live on that corner.
+  align?: 'left' | 'right'
   children: string
 }) {
   if (side === 'right') {
@@ -36,7 +43,9 @@ export function ConnectorHandleLabel({
     // placement.
     return (
       <span
-        className="absolute top-0 ml-2 -translate-y-1/2 text-[0.55rem] font-medium whitespace-nowrap text-muted-foreground"
+        className={`absolute top-0 -translate-y-1/2 text-[0.55rem] font-medium whitespace-nowrap text-muted-foreground ${
+          align === 'left' ? '-ml-2 -translate-x-full' : 'ml-2'
+        }`}
         style={{ left }}
       >
         {children}

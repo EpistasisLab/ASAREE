@@ -97,15 +97,16 @@ export function AgentNode({
           toolbar (NodeHoverToolbar) already claims the top-center span
           (-top-8, appearing on :hover) and the run-status Badge already
           claims the top-right corner, so top-left is the one open zone on
-          this edge left for a third occupant. The 3 bottom sub-connectors:
-          required LLM (exactly one), optional max-1 Memory (visual
-          scaffolding only -- see MemoryNodeData), and optional repeatable
-          Tool. Dataset and Script are pure config sources too, but
-          deliberately do NOT get their own slot -- they wire into this same
+          this edge left for a third occupant. Resource joins it on this same
+          top edge, mirrored to the top-RIGHT (see its own comment below).
+          The 3 bottom sub-connectors: required LLM (exactly one), optional
+          max-1 Memory (visual scaffolding only -- see MemoryNodeData), and
+          optional repeatable Tool. Script is a pure config source too, but
+          deliberately does NOT get its own slot -- it wires into this same
           Tool connector (one connector accepting a FAMILY of node types,
           matching Motoro's own
           _NODE_TYPE_TO_HANDLE): the Tool "+" panel's search just lists
-          mcp_tool/Dataset/Script side by side (see CONNECTOR_PANEL_INFO.tool's
+          mcp_tool/Script side by side (see CONNECTOR_PANEL_INFO.tool's
           allowedTypes in ProtocolCanvas.tsx), and which sub-kind a given
           wired node actually is gets recovered from its own node `type`, not
           from a dedicated handle. */}
@@ -127,6 +128,31 @@ export function AgentNode({
           and ProtocolCanvas.tsx's nodesWithRunStatus for why the connected
           pattern node itself can't be deleted directly either. */}
       <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="15%" side="top" alwaysVisible />
+      {/* Resource -- the data an agent works ON, as opposed to the Tool
+          connector's "capabilities it works WITH". Today that's a Dataset
+          node (max one, matching protocol_execution.py's own "at most one
+          Dataset connection" cap); it used to share the Tool slot, and
+          graphs saved back then still carry dataset edges on targetHandle
+          "tool" -- ProtocolCanvas.tsx rewrites those to "resource" on load,
+          and the backend keeps accepting both (see _LEGACY_DATASET_HANDLES).
+
+          Sits on the top edge next to Pattern, since both are "what this
+          agent IS configured with" rather than a runtime capability, but
+          mirrored to 85%: the hover toolbar owns the top-center span
+          (roughly 27%-73% of a w-60 card), so 15% and 85% are the only two
+          spots on this edge a "+" stub stays clickable. Its label hangs
+          LEFT (align) so it doesn't run off the corner into the
+          run-status/factor badges. */}
+      <Handle
+        type="target"
+        id="resource"
+        position={Position.Top}
+        style={{ left: '85%' }}
+        title="Resource -- the Dataset this agent operates on"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
+      <ConnectorHandleLabel left="85%" side="top" align="left">Resource</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="resource" left="85%" side="top" />
       <Handle
         type="target"
         id="llm"

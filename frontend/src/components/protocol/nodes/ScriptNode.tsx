@@ -10,8 +10,8 @@ import { CircleNode } from './CircleNode'
 // ScriptNodeData's own comment in types/protocols.ts), so NOT dashed.
 // Rendered as a small circle-with-icon (see CircleNode), same as
 // every other connector source. Wires into the Agent's shared Tool
-// connector (handleId="tool", see DatasetNode.tsx's own comment), not a
-// dedicated "script" handle.
+// connector (handleId="tool", alongside mcp_tool -- see AgentNode.tsx's own
+// comment), not a dedicated "script" handle.
 const ACCENT = hashToChartHue('script')
 
 export function ScriptNode({ id, data, selected }: NodeProps & { data: ScriptNodeData }) {

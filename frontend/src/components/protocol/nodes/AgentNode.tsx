@@ -89,19 +89,19 @@ export function AgentNode({
         text={data.config?.prompt || data.config?.goal || null}
         warning={data.missingLlm ? "No AI connected -- this agent can't run" : null}
       />
-      {/* FOUR connectors live on the TOP edge -- Pattern, Skill, Knowledge,
-          Resource -- all of them "what this agent IS configured with" rather
-          than a runtime capability, which is what separates them from the
-          bottom row. Their x-positions are NOT evenly spaced, and that's
-          forced, not a style choice: the hover toolbar (NodeHoverToolbar,
-          -top-8, appearing on :hover with a solid bg-card) is ~112px wide and
-          centered, so it owns the middle of this card and would sit right on
-          top of any "+" stub placed there -- all four have to fit in the two
-          margins outside it. That's also why the card is w-72 rather than the
-          w-60 it was with three: at 240px the margins are 64px each, which two
-          centered captions won't fit in; at 288px they're 88px. Hence a
-          Pattern/Skill pair in the left margin (5% / 18%) and a
-          Knowledge/Resource pair in the right (74% / 90%), each spaced so
+      {/* FOUR connectors live on the TOP edge -- Pattern, Skill, Dataset,
+          Knowledge, in that reading order -- all of them "what this agent IS
+          configured with" rather than a runtime capability, which is what
+          separates them from the bottom row. Their x-positions are NOT evenly
+          spaced, and that's forced, not a style choice: the hover toolbar
+          (NodeHoverToolbar, -top-8, appearing on :hover with a solid bg-card)
+          is ~112px wide and centered, so it owns the middle of this card and
+          would sit right on top of any "+" stub placed there -- all four have
+          to fit in the two margins outside it. That's also why the card is
+          w-72 rather than the w-60 it was with three: at 240px the margins are
+          64px each, which two centered captions won't fit in; at 288px they're
+          88px. Hence a Pattern/Skill pair in the left margin (5% / 18%) and a
+          Dataset/Knowledge pair in the right (74% / 90%), each spaced so
           neither their ~26px stubs nor their centered captions collide. Every
           caption is centered directly above its own handle, mirroring the
           bottom row (see ConnectorHandleLabel's side="top" branch).
@@ -152,6 +152,30 @@ export function AgentNode({
       />
       <ConnectorHandleLabel left="18%" side="top">Skill</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="skill" left="18%" side="top" alwaysVisible />
+      {/* Dataset -- the data an agent works ON, as opposed to the Tool
+          connector's "capabilities it works WITH". Max one, matching
+          protocol_execution.py's own "at most one Dataset connection" cap.
+          The slot is named after the node type because that node is its only
+          member; it was briefly called "Resource", and before that it shared
+          the Tool slot outright, so older graphs carry dataset edges on
+          targetHandle "resource" or "tool" -- migrateLegacyHandles rewrites
+          both to "dataset" on load, and the backend keeps accepting all three
+          (see _LEGACY_DATASET_HANDLES).
+
+          Placed immediately right of Skill so the top edge reads
+          Pattern -> Skill -> Dataset -> Knowledge: the two slots naming a
+          registered artifact the user picked from a browser (Skill, Dataset)
+          sit next to each other, rather than being split by the margin gap. */}
+      <Handle
+        type="target"
+        id="dataset"
+        position={Position.Top}
+        style={{ left: '74%' }}
+        title="Dataset -- the registered dataset this agent operates on"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
+      <ConnectorHandleLabel left="74%" side="top">Dataset</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="dataset" left="74%" side="top" />
       {/* Knowledge -- registered OKF bundles, each a directory of Markdown
           concepts on the SERVER's disk that the agent reads AND writes as it
           works (see OkfBundleNodeData). Its own slot rather than sharing
@@ -161,11 +185,13 @@ export function AgentNode({
           knowledge base, not one more capability, and that distinction would
           be lost among five servers on the Tool slot.
 
-          Left of Resource, and in that order deliberately -- Knowledge and
-          Resource are both "data this agent works on," with Knowledge the
-          softer, longer-lived one (a knowledge base that outlives the run)
-          and Resource the concrete dataset this run operates on, so the
-          rightmost slot stays the one nearest the run itself.
+          Last on this edge, at 90%: it's the softest, longest-lived thing an
+          agent is configured with (a knowledge base that outlives the run),
+          so it sits furthest from the Pattern/Skill/Dataset run-shaping
+          group. Its centered caption can graze the top of the run-status
+          Badge on that corner while a run is in flight; the caption is the
+          secondary read there, and moving it off-center again would undo the
+          "every connector's label sits on the connector" rule.
 
           Repeatable and UNCAPPED, like Skill and Tool: reading a shared team
           bundle while writing to a personal one is a normal setup. So its "+"
@@ -174,37 +200,12 @@ export function AgentNode({
         type="target"
         id="knowledge"
         position={Position.Top}
-        style={{ left: '74%' }}
+        style={{ left: '90%' }}
         title="Knowledge -- OKF bundles this agent can read and write; add as many as you like"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="74%" side="top">Knowledge</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="knowledge" left="74%" side="top" alwaysVisible />
-      {/* Resource -- the data an agent works ON, as opposed to the Tool
-          connector's "capabilities it works WITH". Today that's a Dataset
-          node (max one, matching protocol_execution.py's own "at most one
-          Dataset connection" cap); it used to share the Tool slot, and
-          graphs saved back then still carry dataset edges on targetHandle
-          "tool" -- migrateLegacyHandles rewrites those to "resource" on load,
-          and the backend keeps accepting both (see _LEGACY_DATASET_HANDLES).
-
-          Paired with Knowledge in the right-hand margin at 90% -- see this
-          edge's own placement note above. Its centered caption can graze the
-          top of the run-status Badge on that corner while a run is in
-          flight; the
-          caption is the secondary read there, and moving it off-center again
-          would undo the "every connector's label sits on the connector"
-          rule. */}
-      <Handle
-        type="target"
-        id="resource"
-        position={Position.Top}
-        style={{ left: '90%' }}
-        title="Resource -- the Dataset this agent operates on"
-        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
-      />
-      <ConnectorHandleLabel left="90%" side="top">Resource</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="resource" left="90%" side="top" />
+      <ConnectorHandleLabel left="90%" side="top">Knowledge</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="knowledge" left="90%" side="top" alwaysVisible />
       {/* Handle id `ai`; graphs saved before the rename carry these edges on
           `llm` -- ProtocolCanvas.tsx rewrites those on load
           (migrateLegacyHandles) and the backend keeps accepting both (see

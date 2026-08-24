@@ -115,10 +115,10 @@ class ProtocolValidationError(Exception):
 
 
 # The connector-typed slots on an agent/critic_gate node. ai/tool/memory are
-# a deliberately closed set; architectural_pattern and resource are
+# a deliberately closed set; architectural_pattern and dataset are
 # ASAREE-specific -- architectural_pattern for ARES's pluggable
-# architectural patterns, resource for the data an agent operates ON (a
-# Dataset today) as opposed to the capabilities it operates WITH -- visual/
+# architectural patterns, dataset for the data an agent operates ON as
+# opposed to the capabilities it operates WITH -- visual/
 # validation scaffolding only for now, same deliberate non-implementation as
 # "memory" (see ArchitecturalPatternNodeData on the frontend). Reuses
 # ProtocolEdge's existing sourceHandle/targetHandle fields rather than adding
@@ -126,12 +126,13 @@ class ProtocolValidationError(Exception):
 # data-flow) is any edge whose targetHandle is one of these -- everything
 # else. The type marker always lives on the target side of an edge.
 #
-# "llm" is in here purely as the pre-rename spelling of "ai" (see
-# _LEGACY_AI_HANDLES): an un-migrated edge must still be recognised as a
-# connector, or it would be misread as a main pipeline edge and turn a
-# perfectly good graph into a cycle/ordering error.
+# "llm" and "resource" are in here purely as pre-rename spellings of "ai" and
+# "dataset" (see _LEGACY_AI_HANDLES/_LEGACY_DATASET_HANDLES): an un-migrated
+# edge must still be recognised as a connector, or it would be misread as a
+# main pipeline edge and turn a perfectly good graph into a cycle/ordering
+# error.
 _CONNECTOR_HANDLES = frozenset(
-    {"ai", "llm", "tool", "memory", "architectural_pattern", "resource", "skill", "knowledge"}
+    {"ai", "llm", "tool", "memory", "architectural_pattern", "dataset", "resource", "skill", "knowledge"}
 )
 
 # Each connector slot accepts a FAMILY of node types, not one exact type --
@@ -236,17 +237,20 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "ai" for t in _LLM_NODE_TYPES},
     **{t: "architectural_pattern" for t in _EXECUTION_PATTERN_NODE_TYPES},
     **{t: "memory" for t in _MEMORY_NODE_TYPES},
-    # Dataset/Script share the Tool connector rather than getting their own
-    # slot -- one connector accepting a FAMILY of node types (see this dict's
-    # own docstring above _LLM_NODE_TYPES). All
-    # three are pure config sources an agent's Tool "+" panel can add
-    # (AddNodePanel filters its catalog by CONNECTOR_PANEL_INFO.tool's
-    # allowedTypes on the frontend); which one a given wired node actually IS
-    # is recovered by checking the source node's own `type`, not by which
-    # handle it's on (see _resolve_tool_config/_resolve_dataset_config/
+    # Script still shares the Tool connector rather than getting its own slot
+    # -- one connector accepting a FAMILY of node types (see this dict's own
+    # docstring above _LLM_NODE_TYPES). Both are pure config sources an
+    # agent's Tool "+" panel can add (AddNodePanel filters its catalog by
+    # CONNECTOR_PANEL_INFO.tool's allowedTypes on the frontend); which one a
+    # given wired node actually IS is recovered by checking the source node's
+    # own `type`, not by which handle it's on (see _resolve_tool_config/
     # _resolve_script_config, and the per-agent validation block below).
+    #
+    # Dataset used to be in that same shared bucket and no longer is: it has
+    # its own slot, named after the node type itself since `dataset` is the
+    # only member of the family.
     **{t: "tool" for t in _MCP_TOOL_NODE_TYPES},
-    **{t: "resource" for t in _DATASET_NODE_TYPES},
+    **{t: "dataset" for t in _DATASET_NODE_TYPES},
     **{t: "tool" for t in _SCRIPT_NODE_TYPES},
     **{t: "skill" for t in _SKILL_NODE_TYPES},
     **{t: "knowledge" for t in _OKF_BUNDLE_NODE_TYPES},
@@ -260,21 +264,25 @@ _HANDLE_LABELS: dict[str, str] = {
     "memory": "Memory",
     "architectural_pattern": "Architectural Pattern",
     "tool": "Tool",
-    "resource": "Resource",
+    "dataset": "Dataset",
+    "resource": "Dataset",  # pre-rename spelling, same slot -- see _LEGACY_DATASET_HANDLES
     "skill": "Skill",
     "knowledge": "Knowledge",
 }
 
-# Two connector slots have been renamed since graphs started being saved,
-# and a stored graph is an opaque JSONB blob, so both spellings have to keep
+# Connector slots have been renamed twice since graphs started being saved,
+# and a stored graph is an opaque JSONB blob, so every spelling has to keep
 # resolving:
 #
 #   "llm" -> "ai"       the AI connector (its caption was renamed first, the
 #                       handle id after -- migration 3f1a7c9b2e04)
 #   "tool" -> "resource" for a Dataset source, when Dataset stopped sharing
 #                       the Tool slot (same migration)
+#   "resource" -> "dataset"  when that slot, whose only member is the Dataset
+#                       node, was renamed after it and moved next to Skill
+#                       (migration b7c2d9e14a35)
 #
-# That migration rewrites every stored graph, and the canvas rewrites any
+# Those migrations rewrite every stored graph, and the canvas rewrites any
 # graph it opens (migrateLegacyHandles in ProtocolCanvas.tsx), so these sets
 # are not load-bearing for data at rest. They exist so the deploy is
 # ORDER-INDEPENDENT: a browser still running pre-rename JS keeps autosaving
@@ -282,15 +290,19 @@ _HANDLE_LABELS: dict[str, str] = {
 # SDK/notebook caller pinned to an older graph shape keeps working. Nothing
 # creates an old-spelling edge going forward -- isValidConnection won't.
 _LEGACY_AI_HANDLES = frozenset({"ai", "llm"})
-_LEGACY_DATASET_HANDLES = frozenset({"resource", "tool"})
+_LEGACY_DATASET_HANDLES = frozenset({"dataset", "resource", "tool"})
 # Keyed by the CURRENT slot id -- every spelling an edge into that slot may
-# legitimately still carry. Only "ai" qualifies: that rename was TOTAL (no
-# other slot has ever used the "llm" handle), so an old-spelling edge can be
-# resolved from the handle alone. Dataset's is not -- "tool" still means the
-# Tool slot for mcp_tool/Script sources, so a legacy dataset edge can only be
-# picked out by ALSO checking its source node's type, which is why
+# legitimately still carry *on the handle alone*, i.e. every rename that was
+# TOTAL. "llm" and "resource" both qualify: no other slot has ever used
+# either, so an old-spelling edge can be resolved without looking at its
+# source node. "tool" does not -- it still means the Tool slot for
+# mcp_tool/Script sources, so a pre-Resource dataset edge can only be picked
+# out by ALSO checking its source node's type, which is why the wider
 # _LEGACY_DATASET_HANDLES is applied at its own call sites instead.
-_LEGACY_HANDLES_BY_SLOT: dict[str, frozenset[str]] = {"ai": _LEGACY_AI_HANDLES}
+_LEGACY_HANDLES_BY_SLOT: dict[str, frozenset[str]] = {
+    "ai": _LEGACY_AI_HANDLES,
+    "dataset": frozenset({"dataset", "resource"}),
+}
 
 # node type -> Motoro PatternConfig slug, for _resolve_pattern_config.
 _EXECUTION_PATTERN_SLUGS: dict[str, str] = {
@@ -483,7 +495,7 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
         tool_edges = _edges_with_handle(graph, nid, "tool", direction="incoming")
         memory_edges = _edges_with_handle(graph, nid, "memory", direction="incoming")
         pattern_edges = _edges_with_handle(graph, nid, "architectural_pattern", direction="incoming")
-        resource_edges = _edges_with_handle(graph, nid, "resource", direction="incoming")
+        dataset_slot_edges = _edges_with_handle(graph, nid, "dataset", direction="incoming")
         skill_edges = _edges_with_handle(graph, nid, "skill", direction="incoming")
         knowledge_edges = _edges_with_handle(graph, nid, "knowledge", direction="incoming")
         if node_type == "agent":
@@ -493,11 +505,12 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             # _resolve_tool_config/_resolve_script_config) -- so which
             # sub-kind a given edge is can only be recovered from its source
             # node's own `type`, not the (shared) handle. Dataset edges are
-            # scanned across BOTH handles, since a pre-Resource-connector
-            # graph still has them on "tool" (see _LEGACY_DATASET_HANDLES).
+            # scanned across BOTH handles, since a pre-Dataset-connector graph
+            # still has them on "tool" (see _LEGACY_DATASET_HANDLES; the
+            # "resource" spelling is already folded into dataset_slot_edges).
             dataset_edges = [
                 e
-                for e in resource_edges + tool_edges
+                for e in dataset_slot_edges + tool_edges
                 if (nodes.get(e["source"]) or {}).get("type") in _DATASET_NODE_TYPES
             ]
             for edge in tool_edges:
@@ -507,10 +520,10 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                     raise ProtocolValidationError(
                         f"Node {name!r}'s Tool connection must come from an MCP Tool or Script node."
                     )
-            for edge in resource_edges:
-                resource_source = nodes.get(edge["source"])
-                if resource_source is None or resource_source.get("type") not in _DATASET_NODE_TYPES:
-                    raise ProtocolValidationError(f"Node {name!r}'s Resource connection must come from a Dataset node.")
+            for edge in dataset_slot_edges:
+                dataset_source = nodes.get(edge["source"])
+                if dataset_source is None or dataset_source.get("type") not in _DATASET_NODE_TYPES:
+                    raise ProtocolValidationError(f"Node {name!r}'s Dataset connection must come from a Dataset node.")
             # Deliberately uncapped, like Tool and unlike Memory/Dataset/
             # Script: several skills on one agent is the normal case, not an
             # ambiguity to resolve -- each contributes ~100 tokens of level-1
@@ -567,9 +580,9 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                         f"Node {name!r}'s Architectural Pattern connection must come from an Architectural "
                         "Pattern node."
                     )
-        elif tool_edges or memory_edges or pattern_edges or resource_edges or skill_edges or knowledge_edges:
+        elif tool_edges or memory_edges or pattern_edges or dataset_slot_edges or skill_edges or knowledge_edges:
             raise ProtocolValidationError(
-                f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or "
+                f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or "
                 f"Knowledge connection (node {name!r})."
             )
 
@@ -587,13 +600,14 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             ]
             if outgoing_wrong_handle:
                 handle_label = _HANDLE_LABELS[expected_handle]
-                # Script shares the Tool handle, Dataset owns the Resource
-                # one, and OKF Bundle owns Knowledge, but none of them is
-                # literally a "Tool"/"Resource"/"Knowledge" node -- use their
-                # own display name as the leading noun (e.g. "Dataset node 'X'
-                # can only connect to a node's Resource slot") while every
+                # Script shares the Tool handle and OKF Bundle owns Knowledge,
+                # but neither is literally a "Tool"/"Knowledge" node -- use
+                # their own display name as the leading noun (e.g. "Script node
+                # 'X' can only connect to a node's Tool slot") while every
                 # other family's leading noun still matches its handle label
-                # 1:1, unchanged.
+                # 1:1, unchanged. Dataset is in the list for symmetry only:
+                # its slot is now named after it, so both halves read
+                # "Dataset" either way.
                 leading_label = (
                     _NODE_TYPE_DISPLAY_NAMES[node_type]
                     if node_type in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES | _OKF_BUNDLE_NODE_TYPES
@@ -760,9 +774,10 @@ def _resolve_dataset_config(graph: dict[str, Any], node_id: str) -> dict[str, An
     """``{"dataset_id": ..., "dataset_name": ...}`` from the node's connected
     Dataset node, or ``{}`` if none is connected -- optional, like Memory
     (``topological_order`` caps it at one, doesn't require it). Scans the
-    Resource handle plus the Tool one it used to share with mcp_tool/Script
-    (see ``_LEGACY_DATASET_HANDLES``), matching on the source node's own
-    ``type`` rather than trusting the handle alone. Read by
+    Dataset handle plus both spellings it has been saved under before -- the
+    short-lived ``resource`` one and the Tool handle it originally shared with
+    mcp_tool/Script (see ``_LEGACY_DATASET_HANDLES``) -- matching on the source
+    node's own ``type`` rather than trusting the handle alone. Read by
     ``_build_user_input`` to fold a
     "Dataset context" block into the wired agent's own instruction; never
     resolved into any Motoro config, since a dataset isn't something

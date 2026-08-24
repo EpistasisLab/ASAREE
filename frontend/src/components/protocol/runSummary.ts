@@ -9,18 +9,20 @@ const LLM_NODE_TYPES = new Set(['llm_anthropic', 'llm_openai', 'llm_azure_foundr
 // -- every type in it carries the same config, so a run summary reads the
 // server name off any of them identically.
 const MCP_TOOL_NODE_TYPES = ['mcp_tool', 'mcp_scikit_learn', 'mcp_client_tool']
-// "llm" is the pre-rename spelling of "ai" (see migrateLegacyHandles in
-// ProtocolCanvas.tsx) -- kept here, as in that file's CONNECTOR_HANDLES, so
-// this stays a question of "is this a connector edge at all" rather than one
-// that silently answers no for a graph that hasn't been normalised yet.
+// "llm" and "resource" are the pre-rename spellings of "ai" and "dataset"
+// (see migrateLegacyHandles in ProtocolCanvas.tsx) -- kept here, as in that
+// file's CONNECTOR_HANDLES, so this stays a question of "is this a connector
+// edge at all" rather than one that silently answers no for a graph that
+// hasn't been normalised yet.
 const DEPENDENCY_HANDLES = new Set([
   'ai',
   'llm',
   'tool',
   'memory',
   'architectural_pattern',
-  'resource',
   'skill',
+  'dataset',
+  'resource',
   'knowledge',
 ])
 

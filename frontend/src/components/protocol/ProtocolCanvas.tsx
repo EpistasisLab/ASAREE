@@ -120,23 +120,24 @@ const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry', 'llm
 const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
 // Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
 // whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
-// Includes the pre-rename "llm" spelling for the same reason the backend
-// set does: a graph that hasn't been through migrateLegacyHandles yet must
-// not have its AI edges misread as main pipeline edges.
+// Includes the pre-rename "llm" and "resource" spellings for the same reason
+// the backend set does: a graph that hasn't been through migrateLegacyHandles
+// yet must not have its AI/Dataset edges misread as main pipeline edges.
 const CONNECTOR_HANDLES = new Set([
   'ai',
   'llm',
   'tool',
   'memory',
   'architectural_pattern',
-  'resource',
   'skill',
+  'dataset',
+  'resource',
   'knowledge',
 ])
 // The four connector slots that live on an Agent's TOP edge (see
 // AgentNode.tsx) -- a node feeding one of these is placed ABOVE its agent,
 // every other slot's source below it.
-const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'resource', 'skill', 'knowledge'])
+const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'dataset', 'knowledge'])
 
 const NODE_TYPES = {
   agent: AgentNode,
@@ -218,31 +219,33 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
 // comment on its Tool handle): a Script is a pure config source with no
 // callable capability of its own, so it shares Tool's slot rather than
 // getting a dedicated one. Dataset used to share it too, but now has its
-// own Resource slot -- what an agent operates ON, not a capability it
-// operates WITH.
+// own slot -- what an agent operates ON, not a capability it operates WITH.
 const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; title: string }> = {
   ai: { allowedTypes: LLM_NODE_TYPES, title: 'Add AI' },
   tool: { allowedTypes: [MCP_SERVER_BROWSE, 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
-  resource: { allowedTypes: ['dataset'], title: 'Add Resource' },
   skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
+  dataset: { allowedTypes: ['dataset'], title: 'Add Dataset' },
   knowledge: { allowedTypes: [OKF_BUNDLE_BROWSE], title: 'Add Knowledge' },
 }
 
-// Two connector slots have been renamed since graphs started being saved,
-// and a slot id lives in persisted data (it's the edge's source/targetHandle):
+// Connector slots have been renamed since graphs started being saved, and a
+// slot id lives in persisted data (it's the edge's source/targetHandle):
 //
 //   * "llm" -> "ai", on every edge, when the connector's caption became "AI".
 //   * "tool" -> "resource" for DATASET-sourced edges only -- Dataset used to
 //     share the Tool slot with mcp_tool/script, which both keep "tool". Hence
 //     the source-type check rather than a blanket swap.
+//   * "resource" -> "dataset", on every edge -- that slot's only member is the
+//     Dataset node, so it was renamed after it (and moved next to Skill). No
+//     source-type check needed: nothing else has ever used "resource".
 //
 // Rewritten the moment a graph is loaded into the canvas so the edge lands on
 // the right handle and the next autosave persists the fix. This is one of
-// three layers, none of them load-bearing alone: an Alembic data migration
-// (3f1a7c9b2e04) makes stored graphs canonical, the backend keeps resolving
-// the old spellings (_LEGACY_AI_HANDLES / _LEGACY_DATASET_HANDLES in
+// three layers, none of them load-bearing alone: Alembic data migrations
+// (3f1a7c9b2e04, b7c2d9e14a35) make stored graphs canonical, the backend keeps
+// resolving the old spellings (_LEGACY_AI_HANDLES / _LEGACY_DATASET_HANDLES in
 // services/protocol_execution.py) so a graph that's never opened still runs,
 // and this covers a tab that loaded before the deploy and is still autosaving
 // old-spelling edges.
@@ -250,8 +253,8 @@ function migrateLegacyHandles(graph: ProtocolGraph): Edge[] {
   const datasetIds = new Set(graph.nodes.filter((n) => n.type === 'dataset').map((n) => n.id))
   return (graph.edges as Edge[]).map((e) => {
     if (e.targetHandle === 'llm') return { ...e, sourceHandle: 'ai', targetHandle: 'ai' }
-    if (e.targetHandle === 'tool' && datasetIds.has(e.source)) {
-      return { ...e, sourceHandle: 'resource', targetHandle: 'resource' }
+    if (e.targetHandle === 'resource' || (e.targetHandle === 'tool' && datasetIds.has(e.source))) {
+      return { ...e, sourceHandle: 'dataset', targetHandle: 'dataset' }
     }
     return e
   })
@@ -1057,10 +1060,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           return sourceNode.type === 'memory' && targetNode.type === 'agent'
         case 'architectural_pattern':
           return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
-        case 'resource':
-          return sourceNode.type === 'dataset' && targetNode.type === 'agent'
         case 'skill':
           return sourceNode.type === 'skill' && targetNode.type === 'agent'
+        case 'dataset':
+          return sourceNode.type === 'dataset' && targetNode.type === 'agent'
         case 'knowledge':
           return sourceNode.type === 'okf_bundle' && targetNode.type === 'agent'
         default:

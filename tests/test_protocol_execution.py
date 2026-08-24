@@ -112,11 +112,12 @@ def _dataset_node(node_id: str = "dataset1", dataset_name: str = "spinal-fusion-
     }
 
 
-def _dataset_edge(source: str, target: str, handle: str = "resource") -> dict:
-    # Dataset has its own Resource connector handle (see
-    # _NODE_TYPE_TO_HANDLE). `handle="tool"` reproduces a graph saved before
-    # that slot existed, when it shared the Tool handle -- still accepted,
-    # see _LEGACY_DATASET_HANDLES.
+def _dataset_edge(source: str, target: str, handle: str = "dataset") -> dict:
+    # Dataset has its own connector handle (see _NODE_TYPE_TO_HANDLE).
+    # `handle="resource"` reproduces a graph saved while that slot was still
+    # called Resource, and `handle="tool"` one saved before it existed at all,
+    # when it shared the Tool handle -- both still accepted, see
+    # _LEGACY_DATASET_HANDLES.
     return {"id": f"{source}-{target}-dataset", "source": source, "target": target, "targetHandle": handle}
 
 
@@ -311,7 +312,7 @@ def test_build_user_input_appends_dataset_context_when_wired() -> None:
 
 
 def test_build_user_input_appends_dataset_context_from_legacy_tool_handle() -> None:
-    # A graph saved before the Resource connector existed still has its
+    # A graph saved before the Dataset connector existed still has its
     # dataset edge on the Tool handle (see _LEGACY_DATASET_HANDLES) -- it
     # keeps resolving identically, so an old protocol runs unchanged even if
     # it's never opened in the canvas (which would rewrite the handle).
@@ -322,6 +323,23 @@ def test_build_user_input_appends_dataset_context_from_legacy_tool_handle() -> N
         "edges": [agent_llm_edge, _dataset_edge("dataset1", "a", handle="tool")],
     }
     topological_order(graph)  # legacy handle is still a valid wiring, not a validation error
+    result = pe._build_user_input(
+        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
+    )
+    assert 'name="spinal-fusion-v1"' in result
+
+
+def test_build_user_input_appends_dataset_context_from_legacy_resource_handle() -> None:
+    # Ditto for the intermediate spelling: the slot existed but was called
+    # "Resource" (migration 3f1a7c9b2e04) before being renamed after the only
+    # node type it accepts (b7c2d9e14a35).
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="spinal-fusion-v1")
+    graph = {
+        "nodes": [_llm_node(), agent, dataset],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a", handle="resource")],
+    }
+    topological_order(graph)
     result = pe._build_user_input(
         agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
     )
@@ -1404,7 +1422,7 @@ def test_tool_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
     ):
         topological_order(graph)
 
@@ -1483,9 +1501,9 @@ def test_multiple_dataset_connections_raises() -> None:
         topological_order(graph)
 
 
-def test_dataset_connections_split_across_legacy_and_resource_handles_raises() -> None:
+def test_dataset_connections_split_across_legacy_and_current_handles_raises() -> None:
     # The cap counts dataset sources across BOTH handles, so a graph that's
-    # half-migrated (one old Tool-handle edge, one new Resource one) can't
+    # half-migrated (one old Tool-handle edge, one new Dataset one) can't
     # sneak two datasets onto the same agent.
     llm = _llm_node()
     agent, agent_llm_edge = _agent_with_llm("a")
@@ -1505,7 +1523,7 @@ def test_dataset_connection_from_non_dataset_source_raises() -> None:
         "nodes": [llm, agent, _node("b", "agent")],
         "edges": [agent_llm_edge, _dataset_edge("b", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="Resource connection must come from a Dataset node"):
+    with pytest.raises(ProtocolValidationError, match="Dataset connection must come from a Dataset node"):
         topological_order(graph)
 
 
@@ -1525,7 +1543,7 @@ def test_dataset_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
     ):
         topological_order(graph)
 
@@ -1542,7 +1560,7 @@ def test_dataset_node_with_plain_outgoing_edge_raises() -> None:
             {"id": "dataset1-b", "source": "dataset1", "target": "b"},
         ],
     }
-    with pytest.raises(ProtocolValidationError, match="Dataset node .* can only connect to a node's Resource slot"):
+    with pytest.raises(ProtocolValidationError, match="Dataset node .* can only connect to a node's Dataset slot"):
         topological_order(graph)
 
 
@@ -1585,7 +1603,7 @@ def test_script_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
     ):
         topological_order(graph)
 
@@ -1646,7 +1664,7 @@ def test_skill_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
     ):
         topological_order(graph)
 
@@ -1872,7 +1890,7 @@ def test_architectural_pattern_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
     ):
         topological_order(graph)
 

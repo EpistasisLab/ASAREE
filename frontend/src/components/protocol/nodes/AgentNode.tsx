@@ -89,20 +89,24 @@ export function AgentNode({
         text={data.config?.prompt || data.config?.goal || null}
         warning={data.missingLlm ? "No AI connected -- this agent can't run" : null}
       />
-      {/* Architectural Pattern sits on the TOP edge, on its own -- it's a
-          swap-only, never-zero connector (see its own comment below), a
-          different enough interaction from the other three that giving it
-          its own edge reads more clearly than crowding it into the bottom
-          row. Offset to the top-LEFT rather than dead-center: the hover
-          toolbar (NodeHoverToolbar) already claims the top-center span
-          (-top-8, appearing on :hover) and the run-status Badge already
-          claims the top-right corner, so top-left is the one open zone on
-          this edge left for a third occupant. Resource joins it on this same
-          top edge, mirrored to the top-RIGHT (see its own comment below).
+      {/* THREE connectors live on the TOP edge -- Pattern, Skill, Resource --
+          all of them "what this agent IS configured with" rather than a
+          runtime capability, which is what separates them from the bottom
+          row. Their x-positions are NOT evenly spaced, and that's forced,
+          not a style choice: the hover toolbar (NodeHoverToolbar, -top-8,
+          appearing on :hover with a solid bg-card) owns roughly 27%-73% of
+          this w-60 card and would sit right on top of any "+" stub placed in
+          that span -- so all three have to fit in the two margins outside
+          it. Hence a Pattern/Skill pair packed into the left one (6% / 22%,
+          spaced so neither their ~26px stubs nor their centered captions
+          collide) and Resource alone at 85%. Every caption is centered
+          directly above its own handle, mirroring the bottom row (see
+          ConnectorHandleLabel's side="top" branch).
+
           The 3 bottom sub-connectors: required AI (exactly one), optional
           max-1 Memory (visual scaffolding only -- see MemoryNodeData), and
           optional repeatable Tool. Script is a pure config source too, but
-          deliberately does NOT get its own slot -- it wires into this same
+          deliberately does NOT get its own slot -- it wires into that same
           Tool connector (one connector accepting a FAMILY of node types,
           matching Motoro's own
           _NODE_TYPE_TO_HANDLE): the Tool "+" panel's search just lists
@@ -114,11 +118,11 @@ export function AgentNode({
         type="target"
         id="architectural_pattern"
         position={Position.Top}
-        style={{ left: '15%' }}
+        style={{ left: '6%' }}
         title="Architectural Pattern -- always exactly one; pick a node here to swap it"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="15%" side="top">Pattern</ConnectorHandleLabel>
+      <ConnectorHandleLabel left="6%" side="top">Pattern</ConnectorHandleLabel>
       {/* Never hides once connected (unlike AI/Memory) -- an execution
           pattern must never go to zero (Motoro silently falls back
           to reason_act if left unconnected, undoing the whole point of
@@ -127,7 +131,24 @@ export function AgentNode({
           addNode()'s own pendingConnectorAdd branch for the replace logic,
           and ProtocolCanvas.tsx's nodesWithRunStatus for why the connected
           pattern node itself can't be deleted directly either. */}
-      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="15%" side="top" alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="6%" side="top" alwaysVisible />
+      {/* Skill -- registered Agent Skills, one SKILL.md document each, stored
+          server-side and referenced by id (see SkillNodeData). Repeatable and
+          UNCAPPED, like Tool and unlike everything else on this edge:
+          carrying several skills is the normal case, since each costs only
+          its ~100-token name+description until the model actually opens one
+          (Motoro's engine/skills.py does the progressive disclosure). So its
+          "+" stub stays visible after the first connection. */}
+      <Handle
+        type="target"
+        id="skill"
+        position={Position.Top}
+        style={{ left: '22%' }}
+        title="Skill -- Agent Skills this agent can open; add as many as you like"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
+      <ConnectorHandleLabel left="22%" side="top">Skill</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="skill" left="22%" side="top" alwaysVisible />
       {/* Resource -- the data an agent works ON, as opposed to the Tool
           connector's "capabilities it works WITH". Today that's a Dataset
           node (max one, matching protocol_execution.py's own "at most one
@@ -136,13 +157,12 @@ export function AgentNode({
           "tool" -- migrateLegacyHandles rewrites those to "resource" on load,
           and the backend keeps accepting both (see _LEGACY_DATASET_HANDLES).
 
-          Sits on the top edge next to Pattern, since both are "what this
-          agent IS configured with" rather than a runtime capability, but
-          mirrored to 85%: the hover toolbar owns the top-center span
-          (roughly 27%-73% of a w-60 card), so 15% and 85% are the only two
-          spots on this edge a "+" stub stays clickable. Its label hangs
-          LEFT (align) so it doesn't run off the corner into the
-          run-status/factor badges. */}
+          Alone in the right-hand margin at 85% -- see this edge's own
+          placement note above. Its centered caption can graze the top of the
+          run-status Badge on that corner while a run is in flight; the
+          caption is the secondary read there, and moving it off-center again
+          would undo the "every connector's label sits on the connector"
+          rule. */}
       <Handle
         type="target"
         id="resource"
@@ -151,7 +171,7 @@ export function AgentNode({
         title="Resource -- the Dataset this agent operates on"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="85%" side="top" align="left">Resource</ConnectorHandleLabel>
+      <ConnectorHandleLabel left="85%" side="top">Resource</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="resource" left="85%" side="top" />
       {/* Handle id `ai`; graphs saved before the rename carry these edges on
           `llm` -- ProtocolCanvas.tsx rewrites those on load

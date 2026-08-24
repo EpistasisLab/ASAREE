@@ -79,6 +79,10 @@ export function RunConfirmDialog({
               <dt className="inline font-medium text-foreground">MCP tools: </dt>
               <dd className="inline">{summary.toolServers.length > 0 ? summary.toolServers.join(', ') : 'none wired'}</dd>
             </div>
+            <div>
+              <dt className="inline font-medium text-foreground">Skills: </dt>
+              <dd className="inline">{summary.skills.length > 0 ? summary.skills.join(', ') : 'none wired'}</dd>
+            </div>
           </dl>
         </div>
 

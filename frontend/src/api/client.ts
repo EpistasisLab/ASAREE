@@ -17,6 +17,7 @@ import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsRespo
 import type { McpServer } from '@/types/mcpServers'
 import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
+import type { Skill, SkillListResponse } from '@/types/skills'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -302,6 +303,39 @@ export const mcpServersApi = {
   // existing scope (system servers like asaree-workspace aren't listed here
   // either; not something the MCP Tool node picker widens).
   list: () => request<McpServer[]>('/mcp-servers'),
+}
+
+export const skillsApi = {
+  // The caller's own skills plus any global system skill -- GET /skills
+  // returns {items,total}, unwrapped here so callers get a plain array like
+  // datasetsApi.list()/mcpServersApi.list() do.
+  list: () => request<SkillListResponse>('/skills').then((r) => r.items),
+  get: (id: string) => request<Skill>(`/skills/${id}`),
+  // A skill is registered by uploading its .md file, not by filling in a
+  // form: the file IS the skill (see SkillNodeData in types/protocols.ts),
+  // and its frontmatter already carries the name/description. `name`/
+  // `description` are overrides for a file whose frontmatter is missing or
+  // wrong -- omit them for the normal path.
+  create: (data: { file: File; name?: string; description?: string }) => {
+    const form = new FormData()
+    form.set('file', data.file)
+    if (data.name) form.set('name', data.name)
+    if (data.description) form.set('description', data.description)
+    return request<Skill>('/skills/upload', { method: 'POST', body: form })
+  },
+  // The stored skill rendered back out as a SKILL.md document, so what a
+  // user uploaded is also what they can read back and re-upload.
+  markdown: (id: string) => request<{ markdown: string }>(`/skills/${id}/markdown`),
+  update: (id: string, data: { name?: string; description?: string; body?: string }) =>
+    request<Skill>(`/skills/${id}`, { method: 'PATCH', body: data }),
+  replaceFromFile: (id: string, file: File) => {
+    const form = new FormData()
+    form.set('file', file)
+    return request<Skill>(`/skills/${id}/markdown`, { method: 'PUT', body: form })
+  },
+  // Soft-deletes server-side: an agent still holding this id keeps running,
+  // just without the skill (Motoro's resolve_skills skips and logs it).
+  remove: (id: string) => request<void>(`/skills/${id}`, { method: 'DELETE' }),
 }
 
 export const llmSettingsApi = {

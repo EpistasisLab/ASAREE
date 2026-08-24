@@ -134,6 +134,21 @@ def _script_edge(source: str, target: str) -> dict:
     return {"id": f"{source}-{target}-script", "source": source, "target": target, "targetHandle": "tool"}
 
 
+def _skill_node(node_id: str = "skill1", skill_id: str = "s1", name: str = "spinal-scoring") -> dict:
+    return {
+        "id": node_id,
+        "type": "skill",
+        "data": {"label": "", "config": {"skill_id": skill_id, "skill_name": name}},
+    }
+
+
+def _skill_edge(source: str, target: str) -> dict:
+    # Skill gets its own connector handle rather than sharing Tool's, because
+    # core has a real slot for it (Agent.skill_config) -- see
+    # _resolve_skill_config.
+    return {"id": f"{source}-{target}-skill", "source": source, "target": target, "targetHandle": "skill"}
+
+
 def _agent_with_llm(node_id: str, llm_id: str = "llm") -> tuple[dict, dict]:
     """A minimal valid agent + its required LLM connector edge -- the
     boilerplate every connector-validation test below needs just to get
@@ -1356,7 +1371,7 @@ def test_tool_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, or Resource connection",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill",
     ):
         topological_order(graph)
 
@@ -1477,7 +1492,7 @@ def test_dataset_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, or Resource connection",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill",
     ):
         topological_order(graph)
 
@@ -1537,7 +1552,7 @@ def test_script_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, or Resource connection",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill",
     ):
         topological_order(graph)
 
@@ -1556,6 +1571,112 @@ def test_script_node_with_plain_outgoing_edge_raises() -> None:
     }
     with pytest.raises(ProtocolValidationError, match="Script node .* can only connect to a node's Tool slot"):
         topological_order(graph)
+
+
+def test_skill_connector_is_repeatable_and_uncapped() -> None:
+    # Unlike Memory/Dataset/Script (max 1) and the execution pattern (max 1),
+    # the Skill connector is uncapped -- several skills on one agent is the
+    # normal case, since each costs ~100 tokens of level-1 metadata until the
+    # model actually opens it.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    s1, s2, s3 = _skill_node("s1", "id1"), _skill_node("s2", "id2"), _skill_node("s3", "id3")
+    graph = {
+        "nodes": [llm, agent, s1, s2, s3],
+        "edges": [agent_llm_edge, _skill_edge("s1", "a"), _skill_edge("s2", "a"), _skill_edge("s3", "a")],
+    }
+    assert {n["id"] for n in topological_order(graph)} == {"llm", "a", "s1", "s2", "s3"}
+
+
+def test_skill_connection_from_non_skill_node_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _script_node()],
+        "edges": [agent_llm_edge, _skill_edge("script1", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="Skill connection must come from a Skill node"):
+        topological_order(graph)
+
+
+def test_skill_connection_on_critic_gate_raises() -> None:
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate"), _skill_node()],
+        "edges": [
+            worker_llm_edge,
+            _llm_edge("llm", "g1"),
+            {"id": "w1-g1", "source": "w1", "target": "g1"},
+            _skill_edge("skill1", "g1"),
+        ],
+    }
+    with pytest.raises(
+        ProtocolValidationError,
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill",
+    ):
+        topological_order(graph)
+
+
+def test_skill_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _skill_node(), _node("b", "agent")],
+        "edges": [
+            agent_llm_edge,
+            _skill_edge("skill1", "a"),
+            {"id": "skill1-b", "source": "skill1", "target": "b"},
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="Skill node .* can only connect to a node's Skill slot"):
+        topological_order(graph)
+
+
+def test_skill_node_is_not_a_sink() -> None:
+    # A pure config source never counts as a pipeline's final output, even
+    # unwired -- otherwise a dangling Skill node breaks the one-sink rule.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [llm, agent, _skill_node()], "edges": [agent_llm_edge, _skill_edge("skill1", "a")]}
+    assert pe.sink_node_ids(graph) == ["a"]
+
+
+def test_resolve_skill_config_collects_ids_in_wiring_order() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _skill_node("s1", "id-a"), _skill_node("s2", "id-b")],
+        "edges": [agent_llm_edge, _skill_edge("s1", "a"), _skill_edge("s2", "a")],
+    }
+    assert pe._resolve_skill_config(graph, "a") == {"skill_ids": ["id-a", "id-b"]}
+
+
+def test_resolve_skill_config_dedupes_and_skips_disabled_and_unset() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    duplicate = _skill_node("s2", "id-a")
+    disabled = _skill_node("s3", "id-c")
+    disabled["data"]["config"]["enabled"] = False
+    unset = _skill_node("s4", "")
+    graph = {
+        "nodes": [llm, agent, _skill_node("s1", "id-a"), duplicate, disabled, unset],
+        "edges": [
+            agent_llm_edge,
+            _skill_edge("s1", "a"),
+            _skill_edge("s2", "a"),
+            _skill_edge("s3", "a"),
+            _skill_edge("s4", "a"),
+        ],
+    }
+    assert pe._resolve_skill_config(graph, "a") == {"skill_ids": ["id-a"]}
+
+
+def test_resolve_skill_config_empty_with_nothing_wired() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_skill_config(graph, "a") == {}
 
 
 def test_multiple_execution_pattern_connections_raises() -> None:
@@ -1599,7 +1720,7 @@ def test_architectural_pattern_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, or Resource connection",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill",
     ):
         topological_order(graph)
 

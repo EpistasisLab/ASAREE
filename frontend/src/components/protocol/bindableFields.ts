@@ -172,6 +172,16 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       // per cell" factor kind yet (a real, separable future capability,
       // deliberately deferred).
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
+    case 'skill':
+      // Only `enabled` -- the natural "which skill" factor is the WHOLE node
+      // (levels = different skills), but unlike script/llm/tool_config, a
+      // skill node's config is just an id pointing at a row in the skill
+      // library, so a level would carry a per-account id rather than the
+      // thing itself. Comparing two skills today means two nodes, one
+      // enabled per cell; a real skill_config level type is deferred until
+      // the level editor can pick from the library the way the inspector
+      // does.
+      return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     case 'script':
       // The whole node as a factor -- levels are entirely different scripts.
       // _resolve_script_config reads the wired script node's whole config
@@ -236,6 +246,7 @@ function isConnectorNodeType(type: string | undefined): boolean {
     type === 'mcp_tool' ||
     type === 'mcp_scikit_learn' ||
     type === 'dataset' ||
+    type === 'skill' ||
     type === 'script' ||
     LLM_NODE_TYPES.has(type ?? '') ||
     (type ?? '').startsWith('pattern_')

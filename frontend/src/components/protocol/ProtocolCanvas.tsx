@@ -36,6 +36,7 @@ import {
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
   defaultSingleAgentBaselinePatternNodeData,
+  defaultSkillNodeData,
 } from '@/types/protocols'
 import type {
   AgentNodeData,
@@ -49,6 +50,7 @@ import type {
   ReasonActPatternNodeData,
   ScriptNodeData,
   SingleAgentBaselinePatternNodeData,
+  SkillNodeData,
 } from '@/types/protocols'
 import type { DesignFactor } from '@/types/experiments'
 import type { McpServer } from '@/types/mcpServers'
@@ -80,6 +82,7 @@ import type { RunScope } from './runSummary'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
 import { SelectCellDialog } from './SelectCellDialog'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
+import { SkillNodeInspector } from './SkillNodeInspector'
 import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
@@ -90,6 +93,7 @@ import { MemoryNode } from './nodes/MemoryNode'
 import { ReasonActPatternNode } from './nodes/ReasonActPatternNode'
 import { ScriptNode } from './nodes/ScriptNode'
 import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatternNode'
+import { SkillNode } from './nodes/SkillNode'
 import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 
 // One node type per LLM provider / architectural pattern (see LlmNodeData/
@@ -103,11 +107,11 @@ const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline
 // Includes the pre-rename "llm" spelling for the same reason the backend
 // set does: a graph that hasn't been through migrateLegacyHandles yet must
 // not have its AI edges misread as main pipeline edges.
-const CONNECTOR_HANDLES = new Set(['ai', 'llm', 'tool', 'memory', 'architectural_pattern', 'resource'])
-// The two connector slots that live on an Agent's TOP edge (see
+const CONNECTOR_HANDLES = new Set(['ai', 'llm', 'tool', 'memory', 'architectural_pattern', 'resource', 'skill'])
+// The three connector slots that live on an Agent's TOP edge (see
 // AgentNode.tsx) -- a node feeding one of these is placed ABOVE its agent,
 // every other slot's source below it.
-const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'resource'])
+const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'resource', 'skill'])
 
 const NODE_TYPES = {
   agent: AgentNode,
@@ -127,6 +131,7 @@ const NODE_TYPES = {
   llm_local: LlmNode,
   memory: MemoryNode,
   dataset: DatasetNode,
+  skill: SkillNode,
   script: ScriptNode,
   pattern_reason_act: ReasonActPatternNode,
   pattern_single_agent_baseline: SingleAgentBaselinePatternNode,
@@ -167,6 +172,7 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'llm_local') return defaultLocalLlmNodeData()
   if (nodeType === 'memory') return defaultMemoryNodeData()
   if (nodeType === 'dataset') return defaultDatasetNodeData()
+  if (nodeType === 'skill') return defaultSkillNodeData()
   if (nodeType === 'script') return defaultScriptNodeData()
   if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData()
   if (nodeType === 'pattern_single_agent_baseline') return defaultSingleAgentBaselinePatternNodeData()
@@ -189,6 +195,7 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   resource: { allowedTypes: ['dataset'], title: 'Add Resource' },
+  skill: { allowedTypes: ['skill'], title: 'Add Skill' },
 }
 
 // Two connector slots have been renamed since graphs started being saved,
@@ -939,6 +946,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | LlmNodeData
       | MemoryNodeData
       | DatasetNodeData
+      | SkillNodeData
       | ScriptNodeData
       | ReasonActPatternNodeData
       | SingleAgentBaselinePatternNodeData,
@@ -981,16 +989,19 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
         case 'resource':
           return sourceNode.type === 'dataset' && targetNode.type === 'agent'
+        case 'skill':
+          return sourceNode.type === 'skill' && targetNode.type === 'agent'
         default:
           // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool/
-          // dataset/script nodes have no main handle to drag from in the
-          // first place, so this mostly guards against a stray connection,
-          // not real interactive use.
+          // dataset/skill/script nodes have no main handle to drag from in
+          // the first place, so this mostly guards against a stray
+          // connection, not real interactive use.
           return (
             !LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'memory' &&
             !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'dataset' &&
+            sourceNode.type !== 'skill' &&
             sourceNode.type !== 'script' &&
             !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '')
           )
@@ -1270,6 +1281,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : selectedNode?.type === 'dataset' ? (
           <DatasetNodeInspector
             node={{ id: selectedNode.id, type: 'dataset', position: selectedNode.position, data: selectedNode.data as DatasetNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'skill' ? (
+          <SkillNodeInspector
+            node={{ id: selectedNode.id, type: 'skill', position: selectedNode.position, data: selectedNode.data as SkillNodeData }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}

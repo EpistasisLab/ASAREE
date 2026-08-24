@@ -129,7 +129,7 @@ class ProtocolValidationError(Exception):
 # _LEGACY_AI_HANDLES): an un-migrated edge must still be recognised as a
 # connector, or it would be misread as a main pipeline edge and turn a
 # perfectly good graph into a cycle/ordering error.
-_CONNECTOR_HANDLES = frozenset({"ai", "llm", "tool", "memory", "architectural_pattern", "resource"})
+_CONNECTOR_HANDLES = frozenset({"ai", "llm", "tool", "memory", "architectural_pattern", "resource", "skill"})
 
 # Each connector slot accepts a FAMILY of node types, not one exact type --
 # mirrors how "tool" already accepts any mcp_tool node. LLM and Architectural
@@ -180,6 +180,16 @@ _MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool", "mcp_scikit_learn"})
 # "pure config source" status as every other connector.
 _DATASET_NODE_TYPES = frozenset({"dataset"})
 _SCRIPT_NODE_TYPES = frozenset({"script"})
+# A Skill node names one registered Agent Skill (a SKILL.md document stored in
+# core -- see motoro.models.skill.Skill and asaree.api.skills). Unlike Dataset
+# and Script it gets its OWN connector slot rather than sharing Tool's, because
+# core has a real slot for it: skill_config is an agent capability axis
+# alongside model/tool/memory/pattern, resolved by Motoro into the run's own
+# skill index (_resolve_skill_config below), not folded into the prompt by
+# ASAREE. Repeatable and uncapped, like Tool -- carrying five skills is the
+# normal case, since level-1 metadata is ~100 tokens each and a body only
+# loads when the model asks for it.
+_SKILL_NODE_TYPES = frozenset({"skill"})
 
 # Every node type that's a pure config source -- never gets its own execution
 # turn, never a pipeline "final output" (see sink_node_ids/run_protocol's
@@ -192,6 +202,7 @@ _PURE_CONFIG_SOURCE_TYPES = (
     | _MCP_TOOL_NODE_TYPES
     | _DATASET_NODE_TYPES
     | _SCRIPT_NODE_TYPES
+    | _SKILL_NODE_TYPES
 )
 
 # Which connector handle each pure-config-source node type may exclusively
@@ -215,6 +226,7 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "tool" for t in _MCP_TOOL_NODE_TYPES},
     **{t: "resource" for t in _DATASET_NODE_TYPES},
     **{t: "tool" for t in _SCRIPT_NODE_TYPES},
+    **{t: "skill" for t in _SKILL_NODE_TYPES},
 }
 # The user-facing name of each connector slot -- mirrors
 # CONNECTOR_SLOT_LABELS on the frontend, so a validation error always names
@@ -226,6 +238,7 @@ _HANDLE_LABELS: dict[str, str] = {
     "architectural_pattern": "Architectural Pattern",
     "tool": "Tool",
     "resource": "Resource",
+    "skill": "Skill",
 }
 
 # Two connector slots have been renamed since graphs started being saved,
@@ -316,6 +329,7 @@ _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "memory": "Memory",
     "dataset": "Dataset",
     "script": "Script",
+    "skill": "Skill",
     "pattern_reason_act": "Reason + Act",
     "pattern_single_agent_baseline": "Single-Agent Baseline",
     "llm_anthropic": "Anthropic",
@@ -444,6 +458,7 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
         memory_edges = _edges_with_handle(graph, nid, "memory", direction="incoming")
         pattern_edges = _edges_with_handle(graph, nid, "architectural_pattern", direction="incoming")
         resource_edges = _edges_with_handle(graph, nid, "resource", direction="incoming")
+        skill_edges = _edges_with_handle(graph, nid, "skill", direction="incoming")
         if node_type == "agent":
             # The Tool connector accepts a family of source types -- an
             # mcp_tool node contributes a callable capability, while a
@@ -471,6 +486,15 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                     raise ProtocolValidationError(
                         f"Node {name!r}'s Resource connection must come from a Dataset node."
                     )
+            # Deliberately uncapped, like Tool and unlike Memory/Dataset/
+            # Script: several skills on one agent is the normal case, not an
+            # ambiguity to resolve -- each contributes ~100 tokens of level-1
+            # metadata and its body only loads if the model asks. Duplicates
+            # aren't rejected either; _resolve_skill_config de-dupes.
+            for edge in skill_edges:
+                skill_source = nodes.get(edge["source"])
+                if skill_source is None or skill_source.get("type") not in _SKILL_NODE_TYPES:
+                    raise ProtocolValidationError(f"Node {name!r}'s Skill connection must come from a Skill node.")
             script_edges = [e for e in tool_edges if (nodes.get(e["source"]) or {}).get("type") in _SCRIPT_NODE_TYPES]
             if len(memory_edges) > 1:
                 raise ProtocolValidationError(
@@ -508,10 +532,10 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                         f"Node {name!r}'s Architectural Pattern connection must come from an Architectural "
                         "Pattern node."
                     )
-        elif tool_edges or memory_edges or pattern_edges or resource_edges:
+        elif tool_edges or memory_edges or pattern_edges or resource_edges or skill_edges:
             raise ProtocolValidationError(
-                f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, or Resource connection "
-                f"(node {name!r})."
+                f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill "
+                f"connection (node {name!r})."
             )
 
         if node_type in _NODE_TYPE_TO_HANDLE:
@@ -736,6 +760,37 @@ def _resolve_script_config(graph: dict[str, Any], node_id: str) -> dict[str, Any
         if source is not None and source.get("type") in _SCRIPT_NODE_TYPES:
             return (source.get("data") or {}).get("config") or {}
     return {}
+
+
+def _resolve_skill_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """``{"skill_ids": [...]}`` -- every Skill node wired into this agent's
+    Skill connector, in a stable order -- or ``{}`` when none is connected.
+
+    Ids, not bodies: the skill document itself lives in core
+    (:mod:`motoro.services.skill_service`), and the node only names it, so
+    editing a registered skill takes effect on the next run without touching
+    a single graph. Unlike Dataset/Script this is a real Motoro config slot
+    (``Agent.skill_config``), so ASAREE hands the ids over and lets the engine
+    do progressive disclosure -- it never folds a skill body into the prompt
+    itself.
+
+    Order is the canvas wiring order (which is the order the agent's skill
+    index lists them in), de-duplicated: two nodes naming the same registered
+    skill would otherwise index it twice. A node with ``enabled: False`` or no
+    resolved ``skill_id`` is skipped, matching ``_resolve_tool_config``."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    skill_ids: list[str] = []
+    for edge in _edges_with_handle(graph, node_id, "skill", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") not in _SKILL_NODE_TYPES:
+            continue
+        skill_node_config = (source.get("data") or {}).get("config") or {}
+        if not skill_node_config.get("enabled", True):
+            continue
+        skill_id = skill_node_config.get("skill_id")
+        if skill_id and str(skill_id) not in skill_ids:
+            skill_ids.append(str(skill_id))
+    return {"skill_ids": skill_ids} if skill_ids else {}
 
 
 def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
@@ -1001,6 +1056,11 @@ async def _run_agent_node(
         execution_pattern=pattern_config_data.get("execution_pattern"),
         pattern_params=pattern_config_data.get("pattern_params") or {},
     ).model_dump()
+    # Always a dict, never None, even with nothing wired: Motoro's update_agent
+    # reads None as "leave unchanged", so an agent that had skills and then had
+    # them unwired on the canvas would silently keep running with them. An
+    # explicit empty list is how you detach.
+    skill_config = _resolve_skill_config(graph, node["id"]) or {"skill_ids": []}
     description = config.get("description") or ""
     label = node.get("data", {}).get("label")
     if label:
@@ -1021,6 +1081,7 @@ async def _run_agent_node(
             model_config=model_config,
             pattern_config=pattern_config,
             tool_config=tool_config,
+            skill_config=skill_config,
             output_contract=config.get("output_contract"),
             budget_limit_usd=config.get("budget_limit_usd"),
             max_run_duration_seconds=config.get("max_run_duration_seconds"),
@@ -1034,6 +1095,7 @@ async def _run_agent_node(
             model_config=model_config,
             pattern_config=pattern_config,
             tool_config=tool_config,
+            skill_config=skill_config,
             output_contract=config.get("output_contract"),
             budget_limit_usd=config.get("budget_limit_usd"),
             max_run_duration_seconds=config.get("max_run_duration_seconds"),

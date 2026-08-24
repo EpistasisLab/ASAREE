@@ -25,6 +25,7 @@ export interface ProtocolNode {
     | MemoryNodeData
     | DatasetNodeData
     | ScriptNodeData
+    | SkillNodeData
     | ReasonActPatternNodeData
     | SingleAgentBaselinePatternNodeData
 }
@@ -399,6 +400,44 @@ export interface ScriptNodeData {
 
 export function defaultScriptNodeData(label = 'Script'): ScriptNodeData {
   return { label, config: { name: 'script', language: 'python', code: '' } }
+}
+
+// A "Skill" node -- names one registered Agent Skill for the Agent it's wired
+// into. An Agent Skill is a SKILL.md document (YAML frontmatter carrying a
+// `name` and a `description` of what it does AND when to use it, then a
+// Markdown body of instructions); the spec packages one in a directory, but
+// the directory only exists to bundle optional scripts/templates alongside
+// it, so a skill with none of those IS exactly one .md file -- that's the
+// shape ASAREE registers (POST /skills/upload) and stores server-side.
+//
+// skill_id/skill_name mirrors DatasetNodeConfig's own dataset_id/dataset_name
+// pairing, and for the same reason: the document itself lives in the skill
+// library, not in the graph, so editing a registered skill takes effect on
+// the next run without touching a single protocol. Unlike Dataset, this
+// resolves into a REAL Motoro config slot -- _resolve_skill_config collects
+// every wired node's id into the agent's `skill_config`, and Motoro's engine
+// decides how to disclose them (an index of names+descriptions up front, each
+// body only on the model's own `load_skill` call).
+export interface SkillNodeConfig {
+  skill_id: string | null
+  skill_name: string | null
+  // Cached off the registered skill purely so the node/inspector can show
+  // what this skill is for without a fetch -- the run always reads the
+  // server's own copy by id, never this.
+  skill_description?: string | null
+  // Absent means enabled, matching every other connector's own convention.
+  enabled?: boolean
+}
+
+export interface SkillNodeData {
+  label: string
+  config: SkillNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultSkillNodeData(label = 'Skill'): SkillNodeData {
+  return { label, config: { skill_id: null, skill_name: null, skill_description: null, enabled: true } }
 }
 
 // The Architectural Pattern connector's node family -- UNLIKE Memory (see

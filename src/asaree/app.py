@@ -26,6 +26,7 @@ from asaree.api.llm_settings import router as llm_settings_router
 from asaree.api.mcp_servers import router as mcp_servers_router
 from asaree.api.protocols import router as protocols_router
 from asaree.api.runs import router as runs_router
+from asaree.api.skills import router as skills_router
 from asaree.api.users import router as users_router
 from asaree.config import get_settings
 from asaree.models.database import dispose_engine
@@ -84,6 +85,7 @@ def create_app() -> FastAPI:
     app.include_router(users_router, prefix="/api")
     app.include_router(datasets_router, prefix="/api")
     app.include_router(mcp_servers_router, prefix="/api")
+    app.include_router(skills_router, prefix="/api")
     app.include_router(llm_settings_router, prefix="/api")
     app.include_router(agents_router, prefix="/api")
     app.include_router(runs_router, prefix="/api")

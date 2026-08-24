@@ -1,7 +1,14 @@
 import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import type { LLMSettingModelsResponse } from '@/types/llmSettings'
-import type { DatasetNodeData, LlmNodeData, McpToolNodeData, ReasonActPatternNodeData, ScriptNodeData } from '@/types/protocols'
+import type {
+  DatasetNodeData,
+  LlmNodeData,
+  McpToolNodeData,
+  ReasonActPatternNodeData,
+  ScriptNodeData,
+  SkillNodeData,
+} from '@/types/protocols'
 import { PROVIDER_META } from './nodes/LlmNode'
 import { providerModelsKey } from './useProviderModels'
 
@@ -12,7 +19,7 @@ export interface NodeConfigIssue {
 }
 
 // A pre-flight scan run right before a real Run fires, so an obviously
-// misconfigured node (no model, no dataset picked, no script code, an
+// misconfigured node (no model, no dataset or skill picked, no script code, an
 // agent with nothing wired into its required LLM connector) surfaces as an
 // upfront "run anyway?" confirmation instead of only ever showing up as a
 // generic "one or more nodes failed" AFTER a real (billable) run attempt.
@@ -90,6 +97,12 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
       case 'dataset': {
         const config = (node.data as DatasetNodeData).config
         if (!config?.dataset_id) issues.push('No dataset selected')
+        break
+      }
+      case 'skill': {
+        const config = (node.data as SkillNodeData).config
+        // Same wording as SkillNode's own badge.
+        if (!config?.skill_id) issues.push('No skill selected')
         break
       }
       case 'script': {

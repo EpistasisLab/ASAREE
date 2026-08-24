@@ -6,7 +6,6 @@ export function ConnectorHandleLabel({
   left,
   top,
   side = 'bottom',
-  align = 'right',
   children,
 }: {
   left?: string
@@ -15,12 +14,6 @@ export function ConnectorHandleLabel({
   // vertical slot instead of both defaulting to dead center.
   top?: string
   side?: 'bottom' | 'right' | 'top'
-  // Only meaningful for side="top": which side of the handle the caption
-  // hangs off. The default ("right") suits a handle near the node's LEFT
-  // corner (Pattern); "left" is for one near the RIGHT corner (Resource),
-  // where a right-hanging caption would run off the card and straight into
-  // the run-status/factor badges that live on that corner.
-  align?: 'left' | 'right'
   children: string
 }) {
   if (side === 'right') {
@@ -34,18 +27,17 @@ export function ConnectorHandleLabel({
     )
   }
   if (side === 'top') {
-    // Beside the handle, not above it -- a top-edge connector on a node
-    // positioned ABOVE it (see AgentNode.tsx's own Architectural Pattern
-    // connector) sits close enough to its own source node that a label
-    // floating further up would crowd into it; anchoring at the handle's own
-    // `left` and nudging right with a fixed margin instead reads like a
-    // side-mounted tag, same idea as side="right"'s own beside-the-node
-    // placement.
+    // Centered directly ABOVE its handle -- an exact mirror of the bottom
+    // branch below, so the three top-edge captions (Pattern / Skill /
+    // Resource) read the same way as AI / Memory / Tool do underneath. They
+    // used to hang off to one side of the handle instead, which meant a
+    // caption's own position had to be reasoned about per-connector
+    // (left-hanging near the right corner, right-hanging near the left one);
+    // centering makes the caption belong unambiguously to the dot below it,
+    // which is what a label on a connector is for.
     return (
       <span
-        className={`absolute top-0 -translate-y-1/2 text-[0.55rem] font-medium whitespace-nowrap text-muted-foreground ${
-          align === 'left' ? '-ml-2 -translate-x-full' : 'ml-2'
-        }`}
+        className="absolute -top-4 -translate-x-1/2 text-[0.55rem] font-medium whitespace-nowrap text-muted-foreground"
         style={{ left }}
       >
         {children}

@@ -1,5 +1,5 @@
 import type { Edge, Node } from '@xyflow/react'
-import type { DatasetNodeData, LlmNodeData, McpToolNodeData } from '@/types/protocols'
+import type { DatasetNodeData, LlmNodeData, McpToolNodeData, SkillNodeData } from '@/types/protocols'
 
 // Plain duplicate of ProtocolCanvas.tsx's own LLM_NODE_TYPES rather than a
 // shared import -- same reasoning as nodeConfigIssues.ts's own comment:
@@ -13,7 +13,7 @@ const MCP_TOOL_NODE_TYPES = ['mcp_tool', 'mcp_scikit_learn']
 // ProtocolCanvas.tsx) -- kept here, as in that file's CONNECTOR_HANDLES, so
 // this stays a question of "is this a connector edge at all" rather than one
 // that silently answers no for a graph that hasn't been normalised yet.
-const DEPENDENCY_HANDLES = new Set(['ai', 'llm', 'tool', 'memory', 'architectural_pattern', 'resource'])
+const DEPENDENCY_HANDLES = new Set(['ai', 'llm', 'tool', 'memory', 'architectural_pattern', 'resource', 'skill'])
 
 export type RunScope = { type: 'graph' } | { type: 'cell'; label: string } | { type: 'node'; nodeId: string; label: string }
 
@@ -23,6 +23,7 @@ export interface RunSummary {
   datasets: string[]
   models: string[]
   toolServers: string[]
+  skills: string[]
 }
 
 // Builds a plain-language summary of what a Run click will actually
@@ -41,6 +42,19 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
     relevantNodes
       .filter((n) => n.type === 'dataset')
       .map((n) => (n.data as DatasetNodeData).config?.dataset_name)
+      .filter((name): name is string => !!name),
+  )
+  // Disabled skill nodes are dropped here, matching _resolve_skill_config's
+  // own `enabled is False` skip -- an off skill genuinely doesn't reach the
+  // run, so listing it would overstate what's about to happen. (Datasets
+  // above don't filter the same way: `enabled` there only skips a prompt
+  // block, and the experiment's dataset_id FK is still what runs.)
+  const skills = uniq(
+    relevantNodes
+      .filter((n) => n.type === 'skill')
+      .map((n) => (n.data as SkillNodeData).config)
+      .filter((config) => config?.enabled ?? true)
+      .map((config) => config?.skill_name)
       .filter((name): name is string => !!name),
   )
   const models = uniq(
@@ -69,6 +83,7 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
     datasets,
     models,
     toolServers,
+    skills,
   }
 }
 

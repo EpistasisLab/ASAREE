@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, Atom, Bot, BrainCircuit, Cloud, Code2, Database, HardDrive, Repeat2, Route, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
+import { ArrowRight, Atom, Bot, BrainCircuit, Cloud, Code2, Database, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { MCP_SERVER_BROWSE } from './mcpServerCatalog'
@@ -83,6 +83,12 @@ const NODE_CATALOG = [
     label: 'Dataset',
     description: "Declares which registered dataset an Agent's workspace tools operate on",
     icon: Database,
+  },
+  {
+    type: 'skill',
+    label: 'Skill',
+    description: 'An Agent Skill -- one SKILL.md an Agent opens when its description matches the task at hand',
+    icon: ScrollText,
   },
   {
     type: 'script',

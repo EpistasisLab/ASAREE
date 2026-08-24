@@ -33,7 +33,7 @@ from asaree.config import get_settings
 from asaree.models.database import dispose_engine
 from asaree.redis_client import dispose_redis
 from asaree.services.credential_resolver import resolve as resolve_credentials
-from asaree.services.system_mcp_servers import ensure_system_servers
+from asaree.services.system_mcp_servers import ensure_system_servers, refresh_system_server_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     failed = await hydrate_registry()
     if failed:
         logger.warning("mcp_servers_failed_to_reconnect", extra={"servers": failed})
+
+    # After hydration, not before: this one reads the live clients. Keeps the
+    # tool list the canvas shows in step with the code that shipped.
+    await refresh_system_server_capabilities()
 
     yield
 

@@ -59,7 +59,7 @@ const PRESETS: Record<string, McpServerPreset> = {
   'scikit-learn-mcp': {
     nodeType: 'mcp_scikit_learn',
     label: 'Scikit-learn MCP',
-    description: 'Profile a dataset, define a split, and fit logistic regression for AUC + metrics',
+    description: 'Profile a dataset, define a split, and fit logistic regression or a random forest for AUC + metrics',
     icon: FlaskConical,
   },
 }

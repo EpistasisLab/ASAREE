@@ -1,17 +1,19 @@
-"""scikit-learn-mcp -- logistic regression on a tabular file, end to end.
+"""scikit-learn-mcp -- tabular classification on a file, end to end.
 
 Sized for one job: an agent is handed a dataset path and a one-line instruction
-("fit a logistic regression and report the AUC"), and has to work out the rest
-itself. That framing decides the shape of every tool here.
+("fit a model and report the AUC"), and has to work out the rest itself. That
+framing decides the shape of every tool here.
 
-**Declarative first.** ``fit_logistic_regression``, ``cross_validate_...`` and
-``tune_...`` take the *decisions* -- penalty, regularization strength, class
-weighting, how to split -- as typed arguments and own the mechanics
-(impute, scale, one-hot, fit, score). Asking a model to re-emit that pipeline as
-fresh sklearn source on every call buys nothing but new ways to get it wrong:
-unscaled features quietly wrecking a penalized fit, an unseen category raising
-at predict time, a threshold tuned on the test split. The script tools remain
-for what the arguments can't express.
+**Declarative first.** Two estimator families -- logistic regression and random
+forest -- each with a ``fit_``/``cross_validate_``/``tune_`` trio that takes the
+*decisions* (regularization or tree depth, class weighting, how to split) as
+typed arguments and owns the mechanics (impute, scale, one-hot, fit, score).
+Asking a model to re-emit that pipeline as fresh sklearn source on every call
+buys nothing but new ways to get it wrong: unscaled features quietly wrecking a
+penalized fit, an unseen category raising at predict time, a threshold tuned on
+the test split. The two families share their split, scoring and provenance
+blocks, so their results are directly comparable -- run both. The script tools
+remain for what the arguments can't express.
 
 **Nothing is scored on data the model was fit on.** Every metric comes from a
 held-out split (or out-of-fold predictions), computed by :mod:`scoring` from
@@ -42,7 +44,7 @@ import numpy as np
 import pandas as pd
 from mcp.server import FastMCP
 
-from scikit_learn_mcp import logistic, profile, scoring, splitting
+from scikit_learn_mcp import forest, logistic, profile, scoring, splitting
 from scikit_learn_mcp.data import DataError, frame_sha256, load_frame, split_xy
 
 mcp = FastMCP("scikit-learn-mcp")
@@ -113,7 +115,7 @@ def _prepare(
     if resolved == "regression":
         raise DataError(
             f"target {target_column!r} looks continuous ({frame[target_column].nunique()} distinct values). "
-            "Logistic regression is for classification -- use run_linear_regression_script, or pass "
+            "Every declarative tool here is a classifier -- use run_linear_regression_script, or pass "
             "task_type='multiclass' if these really are class labels."
         )
 
@@ -146,10 +148,10 @@ def _guarded(fn: Any) -> Any:
     return wrapper
 
 
-def _model_block(model_spec: dict[str, Any]) -> dict[str, Any]:
+def _model_block(model_spec: dict[str, Any], estimator: str) -> dict[str, Any]:
     """The estimator's hyperparameters, minus the column roles reported separately."""
     roles = {"numeric", "categorical", "dropped_high_cardinality"}
-    return {"estimator": "LogisticRegression", **{k: v for k, v in model_spec.items() if k not in roles}}
+    return {"estimator": estimator, **{k: v for k, v in model_spec.items() if k not in roles}}
 
 
 def _binary_view(y: pd.Series, classes: list[Any], positive_label: str) -> tuple[np.ndarray, Any, int]:
@@ -431,7 +433,7 @@ def fit_logistic_regression(
             **scored,
             "coefficients": logistic.coefficients(pipe, scaled=scale, top_k=top_k_coefficients),
             "baseline": _baseline(split.y_train, split.y_test, prep.task_type, positive_label),
-            "model": _model_block(model_spec),
+            "model": _model_block(model_spec, "LogisticRegression"),
             "preprocessing": {
                 "numeric_columns": model_spec["numeric"],
                 "categorical_columns_one_hot": model_spec["categorical"],
@@ -576,7 +578,7 @@ def cross_validate_logistic_regression(
             "n_splits_requested": int(n_splits),
             "n_splits_used": int(used_splits),
             "grouped_folds": groups is not None,
-            "model": _model_block(model_spec),
+            "model": _model_block(model_spec, "LogisticRegression"),
             "preprocessing": {
                 "numeric_columns": model_spec["numeric"],
                 "categorical_columns_one_hot": model_spec["categorical"],
@@ -729,13 +731,442 @@ def tune_logistic_regression(
                 pipe, scaled=bool(best["params"].get("scale", True)), top_k=top_k_coefficients
             ),
             "baseline": _baseline(split.y_train, split.y_test, prep.task_type, positive_label),
-            "model": _model_block(model_spec),
+            "model": _model_block(model_spec, "LogisticRegression"),
             "preprocessing": {
                 "numeric_columns": model_spec["numeric"],
                 "categorical_columns_one_hot": model_spec["categorical"],
                 "dropped_high_cardinality": model_spec["dropped_high_cardinality"],
             },
             "convergence": _convergence(pipe),
+            **prep.provenance(target_column, data_path),
+        }
+    )
+
+
+# --------------------------------------------------------------------------
+# Random forest
+# --------------------------------------------------------------------------
+
+
+def _forest_preprocessing(model_spec: dict[str, Any], pipe: Any = None, features: pd.DataFrame | None = None) -> dict[str, Any]:
+    """The preprocessing block, with the reason there's no scaling step in it."""
+    block = {
+        "numeric_columns_imputed": model_spec["numeric"],
+        "categorical_columns_one_hot": model_spec["categorical"],
+        "dropped_high_cardinality": model_spec["dropped_high_cardinality"],
+        "scaling": "not applied -- a tree splits on thresholds, so rescaling a feature changes nothing",
+    }
+    if pipe is not None and features is not None:
+        block["n_encoded_features"] = int(pipe.named_steps["pre"].transform(features.head(1)).shape[1])
+    return block
+
+
+def _permutation_scorer(task_type: str) -> str:
+    return "roc_auc" if task_type == "binary" else "roc_auc_ovr"
+
+
+@mcp.tool()
+@_guarded
+def fit_random_forest(
+    data_path: str,
+    target_column: str,
+    task_type: str = "auto",
+    positive_label: str = "",
+    n_estimators: int = 300,
+    criterion: str = "gini",
+    max_depth: int = 0,
+    min_samples_split: int = 2,
+    min_samples_leaf: int = 1,
+    max_features: str = "sqrt",
+    bootstrap: bool = True,
+    class_weight: str = "",
+    numeric_impute: str = "median",
+    max_categories: int = 20,
+    threshold: str = "0.5",
+    split_json: str = "",
+    test_size: float = 0.2,
+    random_seed: int = 42,
+    stratify: bool = True,
+    top_k_features: int = 25,
+    permutation_importance: bool = False,
+    include_curves: bool = False,
+) -> str:
+    """Fit a random forest and report ROC-AUC and its associated metrics.
+
+    The nonlinear counterpart to ``fit_logistic_regression``, and the one to
+    reach for when the outcome plausibly depends on interactions or thresholds
+    rather than a weighted sum -- it needs no feature engineering to find them.
+    Same contract: builds the pipeline (impute, one-hot the categoricals, fit
+    ``RandomForestClassifier``), fits on the training split only, scores on the
+    held-out split. Run both and compare; if the forest doesn't beat the logistic
+    fit, the readable model is the one to report.
+
+    Numerics are imputed but NOT scaled -- a tree is invariant to rescaling, so
+    there is no ``scale`` argument here.
+
+    Returns the same ``test_metrics``/``test_curves``/``baseline``/``split`` blocks
+    as the logistic tool, plus ``feature_importances`` in place of coefficients
+    and, when ``bootstrap`` is on, an ``out_of_bag`` block: every training row
+    scored by the trees that didn't draw it, which is a second held-out estimate
+    over all n rows for free. A large gap between the OOB and holdout AUCs is
+    worth reading as a split that isn't representative.
+
+    Args:
+        data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+        target_column: Column to predict; every other non-bookkeeping column is a feature.
+        task_type: 'auto' (infer from the target), 'binary' or 'multiclass'.
+        positive_label: Binary positive class; defaults to the highest label.
+        n_estimators: Number of trees. More is monotonically better and slower --
+            never a source of overfitting; drop it only to make a search finish.
+        criterion: Split quality -- 'gini' (default), 'entropy' or 'log_loss'.
+        max_depth: 0 (default) grows every tree until its leaves are pure; a positive
+            depth caps them, which is the blunt way to fight overfitting.
+        min_samples_split: Minimum rows in a node before it may split.
+        min_samples_leaf: Minimum rows in a leaf. Raise it (5, 10, 25) on noisy or
+            small data -- the gentler, usually better regularizer.
+        max_features: Features considered per split: 'sqrt' (default), 'log2', 'all',
+            a fraction in (0, 1], or a whole-number count. Lower decorrelates the trees.
+        bootstrap: Sample rows with replacement per tree. Off means every tree sees
+            every row, which loses both the variance reduction and the OOB estimate.
+        class_weight: '', 'balanced', or 'balanced_subsample' (reweighted per bootstrap).
+        numeric_impute: 'median' (default), 'mean' or 'most_frequent'.
+        max_categories: Cardinality ceiling above which a categorical column is dropped.
+        threshold: '0.5', a number in (0, 1), or 'youden'/'f1' to tune the cutoff on
+            TRAINING out-of-fold predictions. Never tuned on the test split.
+        split_json: Split spec -- see describe_split for grouped/temporal/predefined.
+        test_size: Held-out fraction, strictly between 0 and 1.
+        random_seed: Seed for the split and the forest.
+        stratify: Keep the class balance equal across the split.
+        top_k_features: How many features to report, most important first.
+        permutation_importance: Also measure importance by shuffling each raw column
+            on the held-out split. Slower, and the number to trust when the impurity
+            ranking is doing the talking -- impurity importance flatters continuous
+            and high-cardinality columns.
+        include_curves: Add ROC/PR points, calibration bins and a 19-step threshold
+            sweep. Off by default -- see fit_logistic_regression.
+    """
+    prep = _prepare(data_path, target_column, task_type, split_json, test_size, random_seed, stratify)
+    split = prep.split
+    factory, model_spec = forest.make_pipeline_factory(
+        split.x_train,
+        n_estimators=n_estimators,
+        criterion=criterion,
+        max_depth=max_depth,
+        min_samples_split=min_samples_split,
+        min_samples_leaf=min_samples_leaf,
+        max_features=max_features,
+        bootstrap=bootstrap,
+        class_weight=class_weight,
+        numeric_impute=numeric_impute,
+        max_categories=max_categories,
+        random_seed=random_seed,
+    )
+
+    pipe = factory()
+    pipe.fit(split.x_train, split.y_train)
+    classes = sorted(np.unique(split.y_train).tolist())
+
+    # Out-of-fold training predictions, only when a tuned threshold needs them.
+    # The forest's own OOB predictions are also out-of-sample and would be free,
+    # but they can be missing for a row no tree left out -- k explicit folds give
+    # every row a prediction, which is what a threshold sweep assumes.
+    oof = None
+    if prep.task_type == "binary" and threshold.strip().lower() in {"youden", "f1"}:
+        n_splits = forest.usable_n_splits(split.y_train, 5, split.groups_train)
+        folds = splitting.fold_indices(
+            split.x_train, split.y_train, prep.spec, n_splits,
+            groups=split.groups_train, classification=True,
+        )
+        oof, _, _ = forest.out_of_fold_proba(factory, split.x_train, split.y_train, folds)
+
+    scored = _score_holdout(pipe, prep, positive_label, threshold, oof, classes, include_curves)
+    out_of_bag = forest.oob_metrics(pipe, split.y_train, classes, prep.task_type, positive_label)
+    importances: dict[str, Any] = {"impurity": forest.importances(pipe, top_k=top_k_features)}
+    if permutation_importance:
+        importances["permutation"] = forest.permutation_terms(
+            pipe, split.x_test, split.y_test,
+            scorer=_permutation_scorer(prep.task_type), top_k=top_k_features, random_seed=random_seed,
+        )
+
+    return scoring.dumps(
+        {
+            **scored,
+            "feature_importances": importances,
+            **({"out_of_bag": out_of_bag} if out_of_bag else {}),
+            "baseline": _baseline(split.y_train, split.y_test, prep.task_type, positive_label),
+            "model": _model_block(model_spec, "RandomForestClassifier"),
+            "preprocessing": _forest_preprocessing(model_spec, pipe, split.x_train),
+            **prep.provenance(target_column, data_path),
+        }
+    )
+
+
+@mcp.tool()
+@_guarded
+def cross_validate_random_forest(
+    data_path: str,
+    target_column: str,
+    task_type: str = "auto",
+    positive_label: str = "",
+    n_splits: int = 5,
+    n_estimators: int = 300,
+    criterion: str = "gini",
+    max_depth: int = 0,
+    min_samples_split: int = 2,
+    min_samples_leaf: int = 1,
+    max_features: str = "sqrt",
+    bootstrap: bool = True,
+    class_weight: str = "",
+    numeric_impute: str = "median",
+    max_categories: int = 20,
+    split_json: str = "",
+    random_seed: int = 42,
+    stratify: bool = True,
+    include_curves: bool = False,
+) -> str:
+    """Cross-validate a random forest: AUC with an error bar, over the whole dataset.
+
+    Exactly ``cross_validate_logistic_regression``'s contract with a forest in
+    place of the linear model -- per-fold scores, their mean and standard
+    deviation, and the pooled out-of-fold metrics -- and the fair way to compare
+    the two families, since a single holdout can flatter either one by a few
+    hundredths. Grouping is honored; ``n_splits`` is clamped to what the rarest
+    class and the group count support, and the realized value reported.
+
+    Note this refits the whole forest per fold, so it costs ``n_splits`` times
+    one fit. ``fit_random_forest``'s ``out_of_bag`` block is the cheap
+    approximation when that's too slow.
+
+    Args:
+        data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+        target_column: Column to predict.
+        task_type: 'auto', 'binary' or 'multiclass'.
+        positive_label: Binary positive class; defaults to the highest label.
+        n_splits: Requested number of folds (clamped to what the data supports).
+        n_estimators: Number of trees per fold.
+        criterion: 'gini', 'entropy' or 'log_loss'.
+        max_depth: 0 for unlimited, else the depth cap.
+        min_samples_split: Minimum rows in a node before it may split.
+        min_samples_leaf: Minimum rows in a leaf.
+        max_features: 'sqrt', 'log2', 'all', a fraction in (0, 1], or a count.
+        bootstrap: Sample rows with replacement per tree.
+        class_weight: '', 'balanced' or 'balanced_subsample'.
+        numeric_impute: 'median', 'mean' or 'most_frequent'.
+        max_categories: Cardinality ceiling for one-hot encoding.
+        split_json: Only ``group_column``/``stratify``/``random_seed`` matter here --
+            CV uses every row, so ``test_size`` and the holdout strategies don't apply.
+        random_seed: Seed for the folds and the forest.
+        stratify: Keep the class balance equal across folds.
+        include_curves: Add pooled out-of-fold ROC/PR points, calibration bins and a
+            threshold sweep. Off by default -- see fit_logistic_regression.
+    """
+    spec = splitting.parse_spec(split_json, random_seed=random_seed, stratify=stratify)
+    frame, spec = splitting.load_for_spec(data_path, spec)
+    if target_column not in frame.columns:
+        cols = ", ".join(map(str, frame.columns[:25]))
+        return _error(f"target column {target_column!r} not in dataset; columns are: {cols}")
+
+    resolved = profile.infer_task_type(frame[target_column]) if (task_type or "auto").lower() == "auto" else task_type
+    if resolved not in _CLASSIFICATION:
+        return _error(
+            f"target {target_column!r} is {resolved!r}, not a classification target. "
+            "RandomForestClassifier needs discrete classes."
+        )
+
+    reserved = splitting.reserved_columns(spec, target_column)
+    features = frame[[c for c in frame.columns if c not in reserved]]
+    y = frame[target_column]
+    groups = frame[spec.group_column] if spec.group_column and spec.group_column in frame.columns else None
+
+    factory, model_spec = forest.make_pipeline_factory(
+        features, n_estimators=n_estimators, criterion=criterion, max_depth=max_depth,
+        min_samples_split=min_samples_split, min_samples_leaf=min_samples_leaf, max_features=max_features,
+        bootstrap=bootstrap, class_weight=class_weight, numeric_impute=numeric_impute,
+        max_categories=max_categories, random_seed=random_seed,
+    )
+    used_splits = forest.usable_n_splits(y, n_splits, groups)
+    folds = splitting.fold_indices(features, y, spec, used_splits, groups=groups, classification=True)
+    oof, classes, _ = forest.out_of_fold_proba(factory, features, y, folds)
+
+    if resolved == "binary":
+        y_bin, label, column = _binary_view(y, classes, positive_label)
+        per_fold = [scoring.binary_bundle(y_bin[te], oof[te, column], 0.5) for _, te in folds]
+        keys = ("roc_auc", "average_precision", "brier_score", "accuracy", "balanced_accuracy", "f1")
+        pooled = scoring.binary_bundle(y_bin, oof[:, column], 0.5)
+        pooled["positive_label"] = str(label)
+        pooled_curves: dict[str, Any] = scoring.binary_curves(y_bin, oof[:, column], full=include_curves)
+    else:
+        y_values = y.to_numpy()
+        per_fold = [scoring.multiclass_bundle(y_values[te], oof[te], classes) for _, te in folds]
+        keys = ("roc_auc_ovr", "accuracy", "balanced_accuracy", "f1_macro", "log_loss")
+        pooled = scoring.multiclass_bundle(y_values, oof, classes)
+        pooled_curves = {}
+
+    return scoring.dumps(
+        {
+            "cv_metrics": {k: scoring.summarize_folds([f.get(k) for f in per_fold]) for k in keys},
+            "per_fold": [
+                {"fold": i, "n": int(len(te)), **{k: f.get(k) for k in keys}}
+                for i, ((_, te), f) in enumerate(zip(folds, per_fold, strict=True))
+            ],
+            "pooled_out_of_fold_metrics": pooled,
+            **({"pooled_out_of_fold_curves": pooled_curves} if pooled_curves else {}),
+            "n_splits_requested": int(n_splits),
+            "n_splits_used": int(used_splits),
+            "grouped_folds": groups is not None,
+            "model": _model_block(model_spec, "RandomForestClassifier"),
+            "preprocessing": _forest_preprocessing(model_spec),
+            "task_type": resolved,
+            "target_column": target_column,
+            "data_path": data_path,
+            "n_rows": int(len(frame)),
+            "class_distribution": {str(k): int(v) for k, v in y.value_counts().items()},
+            "data_sha256": frame_sha256(frame),
+            "package_versions": scoring.env_provenance(),
+        }
+    )
+
+
+@mcp.tool()
+@_guarded
+def tune_random_forest(
+    data_path: str,
+    target_column: str,
+    grid_json: str = "",
+    task_type: str = "auto",
+    positive_label: str = "",
+    selection_metric: str = "roc_auc",
+    n_splits: int = 5,
+    n_estimators: int = 300,
+    threshold: str = "0.5",
+    max_categories: int = 20,
+    split_json: str = "",
+    test_size: float = 0.2,
+    random_seed: int = 42,
+    stratify: bool = True,
+    top_k_features: int = 25,
+    include_curves: bool = False,
+) -> str:
+    """Search forest hyperparameters by CV on the training split, then score the winner.
+
+    ``tune_logistic_regression``'s guarantee, applied to a forest: every
+    candidate is scored by cross-validation *inside the training split*, and only
+    the winner touches the held-out data, exactly once.
+
+    The default grid varies ``max_features`` and ``min_samples_leaf`` and toggles
+    ``class_weight`` -- how decorrelated the trees are and how far they may
+    memorize, which is where a forest's achievable AUC actually lives. It does
+    not search ``n_estimators``: more trees never overfit, so that's a compute
+    knob (its own argument here), not a candidate. Supply ``grid_json`` to search
+    something else, e.g. ``{"min_samples_leaf": [1, 5, 20], "max_depth": [0, 6]}``.
+
+    Budget: candidates x folds full forest fits. Keep the grid and
+    ``n_estimators`` modest while exploring, then confirm the winner with
+    ``fit_random_forest`` at a larger tree count.
+
+    Args:
+        data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+        target_column: Column to predict.
+        grid_json: JSON object mapping any of n_estimators/criterion/max_depth/
+            min_samples_split/min_samples_leaf/max_features/bootstrap/class_weight/
+            numeric_impute to a list of values. Empty uses the default grid.
+        task_type: 'auto', 'binary' or 'multiclass'.
+        positive_label: Binary positive class; defaults to the highest label.
+        selection_metric: What CV maximizes -- 'roc_auc' (default),
+            'average_precision' (better under heavy imbalance), 'balanced_accuracy' or 'f1'.
+        n_splits: Inner CV folds (clamped to what the training split supports).
+        n_estimators: Trees per candidate, unless the grid overrides it.
+        threshold: '0.5', a number, or 'youden'/'f1' tuned on the winner's out-of-fold
+            training predictions.
+        max_categories: Cardinality ceiling for one-hot encoding.
+        split_json: Split spec -- see describe_split.
+        test_size: Held-out fraction.
+        random_seed: Seed for the split, the folds and the forest.
+        stratify: Keep the class balance equal across the split and folds.
+        top_k_features: How many of the winner's feature importances to report.
+        include_curves: Add the winner's holdout ROC/PR points, calibration bins and a
+            threshold sweep. Off by default -- see fit_logistic_regression.
+    """
+    prep = _prepare(data_path, target_column, task_type, split_json, test_size, random_seed, stratify)
+    split = prep.split
+
+    grid = forest.DEFAULT_GRID
+    if grid_json.strip():
+        try:
+            grid = json.loads(grid_json)
+        except json.JSONDecodeError as e:
+            return _error(f"grid_json is not valid JSON: {e}")
+        if not isinstance(grid, dict):
+            return _error(f"grid_json must be a JSON object, got {type(grid).__name__}")
+    candidates = forest.expand_grid(grid, forest.GRID_KEYS)
+
+    metric_key = {
+        "roc_auc": "roc_auc" if prep.task_type == "binary" else "roc_auc_ovr",
+        "average_precision": "average_precision",
+        "balanced_accuracy": "balanced_accuracy",
+        "f1": "f1" if prep.task_type == "binary" else "f1_macro",
+    }.get(selection_metric)
+    if metric_key is None:
+        return _error(
+            f"selection_metric must be one of ['roc_auc', 'average_precision', 'balanced_accuracy', 'f1'], "
+            f"got {selection_metric!r}"
+        )
+    if selection_metric == "average_precision" and prep.task_type != "binary":
+        return _error("selection_metric 'average_precision' applies to binary targets only")
+
+    used_splits = forest.usable_n_splits(split.y_train, n_splits, split.groups_train)
+    folds = splitting.fold_indices(
+        split.x_train, split.y_train, prep.spec, used_splits,
+        groups=split.groups_train, classification=True,
+    )
+    classes = sorted(np.unique(split.y_train).tolist())
+    defaults = {"n_estimators": n_estimators, "max_categories": max_categories, "random_seed": random_seed}
+
+    results = []
+    for candidate in candidates:
+        factory, _ = forest.make_pipeline_factory(split.x_train, **{**defaults, **candidate})
+        oof, _, _ = forest.out_of_fold_proba(factory, split.x_train, split.y_train, folds)
+        if prep.task_type == "binary":
+            y_bin, _, column = _binary_view(split.y_train, classes, positive_label)
+            fold_scores = [scoring.binary_bundle(y_bin[te], oof[te, column], 0.5).get(metric_key) for _, te in folds]
+        else:
+            y_values = split.y_train.to_numpy()
+            fold_scores = [scoring.multiclass_bundle(y_values[te], oof[te], classes).get(metric_key) for _, te in folds]
+        results.append({"params": dict(candidate), "cv": scoring.summarize_folds(fold_scores), "_oof": oof})
+
+    scored = [r for r in results if r["cv"]["mean"] is not None]
+    if not scored:
+        return _error(f"every candidate scored None on {selection_metric!r} -- the folds may be single-class")
+    # Ties broken toward the *more* constrained forest (bigger leaves): when two
+    # settings are indistinguishable in CV, the one that memorizes less wins.
+    best = min(scored, key=lambda r: (-r["cv"]["mean"], -r["params"].get("min_samples_leaf", 1)))
+
+    factory, model_spec = forest.make_pipeline_factory(split.x_train, **{**defaults, **best["params"]})
+    pipe = factory()
+    pipe.fit(split.x_train, split.y_train)
+    holdout = _score_holdout(pipe, prep, positive_label, threshold, best["_oof"], classes, include_curves)
+    out_of_bag = forest.oob_metrics(pipe, split.y_train, classes, prep.task_type, positive_label)
+
+    return scoring.dumps(
+        {
+            **holdout,
+            "best_params": best["params"],
+            "best_cv": {selection_metric: best["cv"]},
+            "search": {
+                "selection_metric": selection_metric,
+                "n_candidates": len(candidates),
+                "n_splits_used": int(used_splits),
+                "scored_on": "cross-validation within the training split only",
+                "leaderboard": sorted(
+                    ({"params": r["params"], selection_metric: r["cv"]["mean"], "std": r["cv"]["std"]} for r in scored),
+                    key=lambda r: -(r[selection_metric] or 0),
+                ),
+            },
+            "feature_importances": {"impurity": forest.importances(pipe, top_k=top_k_features)},
+            **({"out_of_bag": out_of_bag} if out_of_bag else {}),
+            "baseline": _baseline(split.y_train, split.y_test, prep.task_type, positive_label),
+            "model": _model_block(model_spec, "RandomForestClassifier"),
+            "preprocessing": _forest_preprocessing(model_spec),
             **prep.provenance(target_column, data_path),
         }
     )

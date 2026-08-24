@@ -366,6 +366,155 @@ def test_tune(clf_path: str) -> None:
     check("bad selection_metric rejected", "selection_metric" in out.get("error", ""), out.get("error", ""))
 
 
+def test_fit_random_forest(clf_path: str) -> None:
+    print("\nfit_random_forest -- binary")
+    out = json.loads(server.fit_random_forest(data_path=clf_path, target_column="outcome", n_estimators=100))
+    check("no error", "error" not in out, out.get("error", ""))
+    m = out.get("test_metrics", {})
+    check("roc_auc is strong on separable data", (m.get("roc_auc") or 0) > 0.9, str(m.get("roc_auc")))
+    check("estimator named", out.get("model", {}).get("estimator") == "RandomForestClassifier", str(out.get("model")))
+    check("beats the no-skill baseline", (m.get("roc_auc") or 0) > (out["baseline"].get("roc_auc") or 0))
+
+    imp = out.get("feature_importances", {}).get("impurity", {})
+    terms = imp.get("terms", [])
+    check("impurity importances reported", len(terms) > 0, str(imp))
+    check("x1 is the most important feature", terms and terms[0]["feature"].endswith("x1"), str(terms[:2]))
+    check("per-tree spread reported", all("std" in t for t in terms), str(terms[:2]))
+    check("impurity bias caveat travels with them", "biased" in imp.get("note", ""), imp.get("note", ""))
+    check("permutation withheld by default", "permutation" not in out["feature_importances"])
+
+    oob = out.get("out_of_bag", {})
+    check("out-of-bag estimate reported", (oob.get("roc_auc") or 0) > 0.9, str(oob))
+    check("oob covers the training split", oob.get("n_rows_scored", 0) > 0.9 * oob.get("n_rows_total", 1), str(oob))
+
+    pre = out.get("preprocessing", {})
+    check("numerics imputed, not scaled", pre.get("numeric_columns_imputed") == ["x1", "x2"], str(pre))
+    check("no scaling step, and it says why", "tree splits on thresholds" in pre.get("scaling", ""), str(pre))
+    check("site one-hot encoded", pre.get("categorical_columns_one_hot") == ["site"], str(pre))
+    check("split audited like the logistic tools", "split_sha256" in out, str(sorted(out)))
+
+
+def test_fit_random_forest_options(clf_path: str) -> None:
+    print("\nfit_random_forest -- options")
+    out = json.loads(
+        server.fit_random_forest(
+            data_path=clf_path, target_column="outcome", n_estimators=60,
+            max_features="0.5", min_samples_leaf=5, max_depth=4, class_weight="balanced",
+        )
+    )
+    model = out.get("model", {})
+    check("fractional max_features parsed", model.get("max_features") == 0.5, str(model))
+    check("max_depth recorded", model.get("max_depth") == 4, str(model))
+    check("class_weight recorded", model.get("class_weight") == "balanced", str(model))
+
+    out = json.loads(
+        server.fit_random_forest(data_path=clf_path, target_column="outcome", n_estimators=40, bootstrap=False)
+    )
+    check("unlimited depth is None, not 0", out.get("model", {}).get("max_depth") is None, str(out.get("model")))
+    check("no out-of-bag block without bootstrap", "out_of_bag" not in out, str(out.get("out_of_bag")))
+
+    out = json.loads(
+        server.fit_random_forest(data_path=clf_path, target_column="outcome", n_estimators=40, max_features="nonsense")
+    )
+    check("bad max_features rejected", "max_features" in out.get("error", ""), out.get("error", ""))
+
+    out = json.loads(
+        server.fit_random_forest(data_path=clf_path, target_column="outcome", n_estimators=40, criterion="nope")
+    )
+    check("bad criterion rejected", "criterion must be one of" in out.get("error", ""), out.get("error", ""))
+
+    out = json.loads(
+        server.fit_random_forest(
+            data_path=clf_path, target_column="outcome", n_estimators=40,
+            bootstrap=False, class_weight="balanced_subsample",
+        )
+    )
+    check("balanced_subsample needs bootstrap", "bootstrap=True" in out.get("error", ""), out.get("error", ""))
+
+    out = json.loads(
+        server.fit_random_forest(
+            data_path=clf_path, target_column="outcome", n_estimators=40, permutation_importance=True, top_k_features=3
+        )
+    )
+    perm = out.get("feature_importances", {}).get("permutation", {})
+    check("permutation importance on request", len(perm.get("terms", [])) > 0, str(perm))
+    check(
+        "permutation reports raw columns, not encoded ones",
+        {t["feature"] for t in perm["terms"]} <= {"x1", "x2", "site"},
+        str(perm["terms"]),
+    )
+
+    out = json.loads(
+        server.fit_random_forest(data_path=clf_path, target_column="outcome", n_estimators=40, threshold="youden")
+    )
+    thr = out.get("threshold", {})
+    check("tuned on training out-of-fold predictions", thr.get("selected_on") == "training out-of-fold predictions", str(thr))
+
+
+def test_random_forest_multiclass_and_regression(multi_path: str, reg_path: str) -> None:
+    print("\nfit_random_forest -- multiclass and a continuous target")
+    out = json.loads(server.fit_random_forest(data_path=multi_path, target_column="grade", n_estimators=60))
+    check("task type auto-detected", out.get("task_type") == "multiclass", str(out.get("task_type")))
+    check("ovr auc beats chance", (out.get("test_metrics", {}).get("roc_auc_ovr") or 0) > 0.7, str(out.get("test_metrics")))
+    check("multiclass out-of-bag reported", (out.get("out_of_bag", {}).get("roc_auc_ovr") or 0) > 0.7, str(out.get("out_of_bag")))
+
+    out = json.loads(server.fit_random_forest(data_path=reg_path, target_column="price", n_estimators=40))
+    check("continuous target refused", "continuous" in out.get("error", ""), out.get("error", ""))
+
+
+def test_cross_validate_random_forest(clf_path: str, grouped_path: str) -> None:
+    print("\ncross_validate_random_forest")
+    out = json.loads(
+        server.cross_validate_random_forest(data_path=clf_path, target_column="outcome", n_estimators=60)
+    )
+    check("no error", "error" not in out, out.get("error", ""))
+    auc = out.get("cv_metrics", {}).get("roc_auc", {})
+    check("mean auc reported", (auc.get("mean") or 0) > 0.9, str(auc))
+    check("five folds used", out.get("n_splits_used") == 5 and len(out.get("per_fold", [])) == 5)
+    check("folds cover every row", sum(f["n"] for f in out["per_fold"]) == out["n_rows"])
+    check("pooled out-of-fold metrics present", "roc_auc" in out.get("pooled_out_of_fold_metrics", {}))
+
+    grouped = json.loads(
+        server.cross_validate_random_forest(
+            data_path=grouped_path, target_column="outcome", n_estimators=60,
+            split_json='{"group_column": "patient_id"}',
+        )
+    )
+    check("grouped folds flagged", grouped.get("grouped_folds") is True, str(grouped.get("grouped_folds")))
+    check(
+        "group column not used as a feature",
+        "patient_id" not in grouped["preprocessing"]["categorical_columns_one_hot"],
+        str(grouped["preprocessing"]),
+    )
+
+
+def test_tune_random_forest(clf_path: str) -> None:
+    print("\ntune_random_forest")
+    out = json.loads(server.tune_random_forest(data_path=clf_path, target_column="outcome", n_estimators=40))
+    check("no error", "error" not in out, out.get("error", ""))
+    check("default grid searched", out["search"]["n_candidates"] == 8, str(out["search"]["n_candidates"]))
+    check("winner reported", "max_features" in out.get("best_params", {}), str(out.get("best_params")))
+    check(
+        "selection happened inside the training split",
+        out["search"]["scored_on"] == "cross-validation within the training split only",
+    )
+    check("holdout metrics returned", (out.get("test_metrics", {}).get("roc_auc") or 0) > 0.9)
+    check("winner's importances returned", len(out["feature_importances"]["impurity"]["terms"]) > 0)
+
+    out = json.loads(
+        server.tune_random_forest(
+            data_path=clf_path, target_column="outcome", n_estimators=40,
+            grid_json='{"min_samples_leaf": [1, 10]}',
+        )
+    )
+    check("custom grid honored", out["search"]["n_candidates"] == 2, str(out["search"]))
+
+    out = json.loads(
+        server.tune_random_forest(data_path=clf_path, target_column="outcome", grid_json='{"C": [1.0]}')
+    )
+    check("a logistic grid key is rejected here", "unknown grid key" in out.get("error", ""), out.get("error", ""))
+
+
 def test_leakage_audit_catches_duplicates(tmp: Path) -> None:
     print("\nleakage audit -- duplicated rows")
     rng = np.random.RandomState(4)
@@ -511,6 +660,9 @@ def test_tool_schemas_survive_the_guard() -> None:
         "fit_logistic_regression",
         "cross_validate_logistic_regression",
         "tune_logistic_regression",
+        "fit_random_forest",
+        "cross_validate_random_forest",
+        "tune_random_forest",
         "run_logistic_regression_script",
         "run_linear_regression_script",
         "ping",
@@ -541,6 +693,11 @@ def main() -> int:
         test_cross_validate(clf_path)
         test_cross_validate_grouped(grouped_path)
         test_tune(clf_path)
+        test_fit_random_forest(clf_path)
+        test_fit_random_forest_options(clf_path)
+        test_random_forest_multiclass_and_regression(multi_path, reg_path)
+        test_cross_validate_random_forest(clf_path, grouped_path)
+        test_tune_random_forest(clf_path)
         test_leakage_audit_catches_duplicates(tmp)
         test_linear_regression_script(reg_path)
         test_logistic_script(clf_path)

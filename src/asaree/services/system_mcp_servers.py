@@ -1,8 +1,9 @@
 """The MCP servers ASAREE ships and registers for itself, on every boot.
 
 Both processes that spawn MCP subprocesses run :func:`ensure_system_servers`
-before ``hydrate_registry`` -- the API (``asaree.app``'s lifespan) and the run
-worker (``asaree.worker.settings.on_startup``). It lives here rather than in
+before ``hydrate_registry`` and :func:`refresh_system_server_capabilities`
+after it -- the API (``asaree.app``'s lifespan) and the run worker
+(``asaree.worker.settings.on_startup``). It lives here rather than in
 ``app.py`` so the worker can call it without importing the FastAPI app and
 every router with it.
 
@@ -22,7 +23,8 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from motoro.services.mcp_service import get_server_by_name, register_server, update_server
+from motoro.mcp.registry import get_registry
+from motoro.services.mcp_service import get_server_by_name, refresh_server, register_server, update_server
 
 logger = logging.getLogger(__name__)
 
@@ -155,3 +157,55 @@ async def ensure_system_servers() -> None:
     """Register/repair every server in :data:`SYSTEM_MCP_SERVERS`."""
     for name, module in SYSTEM_MCP_SERVERS:
         await _ensure_system_server(name, command_for(module))
+
+
+async def refresh_system_server_capabilities() -> None:
+    """Re-persist ``capabilities`` for any system server whose tool set moved.
+
+    **Must run after** ``hydrate_registry``, unlike everything above: it reads
+    the live client, which only exists once the server is in the registry.
+
+    The gap this closes: ``capabilities.tools`` is written exactly once, by
+    ``register_server`` at first registration. ``hydrate_registry`` reconnects
+    on every boot but never writes the discovered tools back, and
+    :func:`_ensure_system_server` only reconciles when the stored *command*
+    differs -- which it doesn't when a bundled server gains or loses a tool in
+    a code change, since the command is ``python -m <module>`` either way. So
+    the row keeps advertising the tool list from whenever the deployment first
+    booted. Nothing at *run* time notices (an agent's tools come from the live
+    registry), but the canvas reads this column: a new tool is missing from the
+    MCP node's allow-list, and a removed one lingers as a checkbox for a tool
+    that no longer exists.
+
+    Scoped to :data:`SYSTEM_MCP_SERVERS` because those are the ones whose code
+    ships with ASAREE and therefore changes underneath a live database. A
+    user-registered server is theirs to ``POST /mcp-servers/{id}/refresh``.
+    Compared before writing so the ordinary boot -- nothing changed -- costs one
+    in-memory set comparison per server and no database round-trip at all.
+    """
+    registry = get_registry().servers
+    for name, _ in SYSTEM_MCP_SERVERS:
+        try:
+            entry = registry.get(name)
+            if entry is None or not entry.client.connected:
+                continue
+            config = await get_server_by_name(name)
+            if config is None:
+                continue
+            live = sorted(t.name for t in entry.client.tools)
+            stored = sorted(t.get("name", "") for t in (config.capabilities or {}).get("tools") or [])
+            if live == stored:
+                continue
+            logger.warning(
+                "system_mcp_server_capabilities_refreshed",
+                extra={
+                    "server": name,
+                    "added": sorted(set(live) - set(stored)),
+                    "removed": sorted(set(stored) - set(live)),
+                },
+            )
+            await refresh_server(config.id)
+        except Exception:
+            # Per server, for the same reason _ensure_system_server swallows:
+            # a stale tool list is a cosmetic problem and must not fail a boot.
+            logger.exception("system_mcp_server_capability_refresh_failed", extra={"server": name})

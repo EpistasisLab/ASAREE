@@ -1,7 +1,7 @@
 [project]
 name = "scikit-learn-mcp"
 version = "0.1.0"
-description = "A standalone scikit-learn MCP server for logistic regression on a tabular file: profile the dataset, define and audit a train/test split, fit/cross-validate/tune declaratively, and get ROC-AUC with its associated metrics, curves and odds ratios -- all scored server-side on data the model never saw. Reads its dataset from a path/URI argument, so it has no dependency on ASAREE or any particular workspace layout and runs against any MCP client."
+description = "A standalone scikit-learn MCP server for classification on a tabular file: profile the dataset, define and audit a train/test split, then fit/cross-validate/tune either a logistic regression or a random forest declaratively and get ROC-AUC with its associated metrics, curves, odds ratios and feature importances -- all scored server-side on data the model never saw. Reads its dataset from a path/URI argument, so it has no dependency on ASAREE or any particular workspace layout and runs against any MCP client."
 requires-python = ">=3.12"
 dependencies = [
     "mcp>=1.0.0,<2.0.0",

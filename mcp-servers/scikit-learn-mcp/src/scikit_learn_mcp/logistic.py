@@ -305,11 +305,15 @@ _GRID_KEYS = ("C", "penalty", "solver", "class_weight", "l1_ratio", "scale", "nu
 _MAX_GRID = 60
 
 
-def expand_grid(grid: dict[str, list[Any]]) -> list[dict[str, Any]]:
-    """Every combination in *grid*, as a list of keyword overrides."""
-    unknown = sorted(set(grid) - set(_GRID_KEYS))
+def expand_grid(grid: dict[str, list[Any]], keys: tuple[str, ...] = _GRID_KEYS) -> list[dict[str, Any]]:
+    """Every combination in *grid*, as a list of keyword overrides.
+
+    *keys* is the estimator's tunable argument list -- the caller passes its own
+    (see forest.GRID_KEYS), since the expansion itself is estimator-agnostic.
+    """
+    unknown = sorted(set(grid) - set(keys))
     if unknown:
-        raise SpecError(f"unknown grid key(s) {unknown}; tunable arguments are {list(_GRID_KEYS)}")
+        raise SpecError(f"unknown grid key(s) {unknown}; tunable arguments are {list(keys)}")
     combos: list[dict[str, Any]] = [{}]
     for key in sorted(grid):
         values = grid[key]

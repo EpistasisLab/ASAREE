@@ -114,6 +114,11 @@ export interface Experiment {
   design_type: string
   task_brief: Record<string, unknown> | null
   design_spec: DesignSpec | null
+  // Every dataset attached to this experiment, in canvas wiring order -- an
+  // experiment can run against several since the Dataset connector was
+  // uncapped. `dataset_id` is a read-only view of the first one, kept for
+  // code written before that; it is no longer a stored column.
+  dataset_ids: string[]
   dataset_id: string | null
   created_at: string
   archived_at: string | null

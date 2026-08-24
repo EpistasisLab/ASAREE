@@ -69,11 +69,16 @@ class ResearchExperiment(Base, TimestampMixin):
     owner_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    # Nullable and SET NULL on delete -- unlike owner_id, losing the dataset
-    # (or predating this column) isn't a reason to lose the experiment.
-    dataset_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("registered_datasets.id", ondelete="SET NULL"), nullable=True, index=True
-    )
+    # Datasets are NOT a column here. They used to be a single nullable
+    # `dataset_id` FK, which encoded "an experiment has exactly one dataset";
+    # that stopped being true once an agent's Dataset connector was uncapped,
+    # so the relationship moved to the experiment_datasets join table (see
+    # models/experiment_dataset.py, migration d5a3b90c71e4). Read/write it
+    # through services.experiments' get_experiment_dataset_ids/
+    # set_experiment_datasets -- the API still exposes a scalar `dataset_id`
+    # on top of that list for the SDK and notebook, but it's a view, not
+    # storage.
+    #
     # Null = active. A safer alternative to delete_experiment (which cascades
     # every FactorialCellResult under it) -- archiving just hides the
     # experiment from the default list (see list_experiments's

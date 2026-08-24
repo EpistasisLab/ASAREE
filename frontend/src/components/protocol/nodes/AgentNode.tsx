@@ -153,8 +153,11 @@ export function AgentNode({
       <ConnectorHandleLabel left="18%" side="top">Skill</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="skill" left="18%" side="top" alwaysVisible />
       {/* Dataset -- the data an agent works ON, as opposed to the Tool
-          connector's "capabilities it works WITH". Max one, matching
-          protocol_execution.py's own "at most one Dataset connection" cap.
+          connector's "capabilities it works WITH". Uncapped, like Skill and
+          Knowledge: an agent can be wired to several datasets, and each one
+          becomes its own workspace the agent opens by name (see
+          _resolve_dataset_configs / _build_user_input). It was capped at one
+          until the "allow multiple datasets" change.
           The slot is named after the node type because that node is its only
           member; it was briefly called "Resource", and before that it shared
           the Tool slot outright, so older graphs carry dataset edges on
@@ -171,11 +174,11 @@ export function AgentNode({
         id="dataset"
         position={Position.Top}
         style={{ left: '74%' }}
-        title="Dataset -- the registered dataset this agent operates on"
+        title="Dataset -- registered datasets this agent operates on; add as many as you like"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left="74%" side="top">Dataset</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="dataset" left="74%" side="top" />
+      <ConnectorAddStub nodeId={id} slot="dataset" left="74%" side="top" alwaysVisible />
       {/* Knowledge -- registered OKF bundles, each a directory of Markdown
           concepts on the SERVER's disk that the agent reads AND writes as it
           works (see OkfBundleNodeData). Its own slot rather than sharing

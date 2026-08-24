@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ArrowRight, Atom, BookMarked, Bot, BrainCircuit, Cloud, Code2, Database, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { DATASET_BROWSE } from './datasetCatalog'
 import { MCP_SERVER_BROWSE } from './mcpServerCatalog'
 import { OKF_BUNDLE_BROWSE } from './okfCatalog'
 import { SKILL_BROWSE } from './skillCatalog'
@@ -10,7 +11,7 @@ import { SKILL_BROWSE } from './skillCatalog'
 // tool picker, GET /datasets already backs the dataset picker,
 // services.protocol_execution._run_gated_worker already implements the
 // critic gate's revision loop, and _resolve_llm_config/_resolve_tool_config/
-// _resolve_dataset_config/_resolve_script_config already resolve an agent's
+// _resolve_dataset_configs/_resolve_script_config already resolve an agent's
 // respective connectors. "memory" and the two pattern entries are the
 // exceptions -- each is real in the graph/validation sense (wiring one up is
 // accepted and does something visually) but has NO runtime effect yet,
@@ -80,10 +81,16 @@ const NODE_CATALOG = [
     description: 'Not yet functional -- declares intent for a future phase',
     icon: BrainCircuit,
   },
+  // Not a node type either -- picking this opens the dataset browser
+  // (DatasetBrowserPanel), same reasoning as MCP Servers above and Skills
+  // below: the
+  // dataset IS the choice, and that browser is the only place the library is
+  // listed, so it's where registering and deleting live too. As with Skill,
+  // there's no picker in the node's inspector -- the dataset IS the node.
   {
-    type: 'dataset',
-    label: 'Dataset',
-    description: "Declares which registered dataset an Agent's workspace tools operate on",
+    type: DATASET_BROWSE,
+    label: 'Datasets',
+    description: "Browse your registered datasets -- the data an Agent's workspace tools operate on",
     icon: Database,
   },
   // Not a node type either -- picking this opens the skill browser

@@ -36,16 +36,25 @@ class DatasetValidationError(ValueError):
 
 def _split(
     df: pd.DataFrame, *, test_size: float, seed: int, target_column: str | None, group_column: str | None
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, str | None]:
+    """Split *df*, returning ``(train, test, group_column_actually_used)``.
+
+    That third element is not the ``group_column`` argument echoed back: a
+    requested group column that isn't in the frame is silently ignored here
+    and the split falls back to stratification. Callers persist what this
+    returns (``RegisteredDataset.split_group_column``) so the recorded
+    provenance describes the split that happened, not the one that was asked
+    for -- the fallback is exactly the case where the difference matters.
+    """
     use_groups = bool(group_column and group_column in df.columns)
     if use_groups:
         gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
         train_idx, test_idx = next(gss.split(df, groups=df[group_column]))
-        return df.iloc[train_idx], df.iloc[test_idx]
+        return df.iloc[train_idx], df.iloc[test_idx], group_column
 
     stratify = df[target_column] if target_column and target_column in df.columns else None
     train_df, test_df = train_test_split(df, test_size=test_size, random_state=seed, stratify=stratify)
-    return train_df, test_df
+    return train_df, test_df, None
 
 
 def _dataset_dir(dataset_id: uuid.UUID) -> Path:
@@ -129,7 +138,7 @@ async def quick_split_dataset(
     if effective_target and effective_target not in df.columns:
         raise DatasetValidationError(f"target_column '{effective_target}' is not a column in this dataset")
 
-    train_df, test_df = _split(
+    train_df, test_df, used_group_column = _split(
         df, test_size=test_size, seed=seed, target_column=effective_target, group_column=group_column
     )
 
@@ -144,6 +153,13 @@ async def quick_split_dataset(
     dataset.test_path = str(test_path)
     dataset.train_sha256 = sha256_file(train_path)
     dataset.test_sha256 = sha256_file(test_path)
+    # Overwritten wholesale on every re-split, like the paths/hashes above --
+    # these describe the split that currently exists, not a history of the
+    # ones that came before it.
+    dataset.split_method = "quick"
+    dataset.split_group_column = used_group_column
+    dataset.split_test_size = test_size
+    dataset.split_seed = seed
     if target_column:
         dataset.target_column = target_column
     await db.flush()
@@ -189,6 +205,14 @@ async def register_manual_split(
     dataset.test_path = str(test_path)
     dataset.train_sha256 = sha256_file(train_path)
     dataset.test_sha256 = sha256_file(test_path)
+    dataset.split_method = "manual"
+    # Cleared, not left behind: a manual split replaces whatever quick split
+    # was there, and stale group/test_size/seed values would describe a split
+    # that no longer exists. ASAREE didn't compute this one and has no honest
+    # values to put here -- "unknown" is the true answer, and null says it.
+    dataset.split_group_column = None
+    dataset.split_test_size = None
+    dataset.split_seed = None
     await db.flush()
     await db.refresh(dataset)
     return dataset

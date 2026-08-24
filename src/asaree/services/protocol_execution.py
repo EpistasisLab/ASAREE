@@ -179,7 +179,7 @@ _MEMORY_NODE_TYPES = frozenset({"memory"})  # one today; kept as a set for symme
 _MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool", "mcp_scikit_learn", "mcp_client_tool"})
 # One today each; kept as sets for symmetry with the other connector
 # families. Dataset declares which registered dataset an agent's workspace
-# tools operate on (_resolve_dataset_config, folded into _build_user_input's
+# tools operate on (_resolve_dataset_configs, folded into _build_user_input's
 # own "Dataset context" block); Script carries a fixed piece of code an
 # agent passes verbatim as some tool's own code-shaped argument (e.g.
 # run_model_script's `code`) -- neither is executed by ASAREE itself, same
@@ -504,15 +504,11 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             # Script node contributes declarative config/context (see
             # _resolve_tool_config/_resolve_script_config) -- so which
             # sub-kind a given edge is can only be recovered from its source
-            # node's own `type`, not the (shared) handle. Dataset edges are
-            # scanned across BOTH handles, since a pre-Dataset-connector graph
-            # still has them on "tool" (see _LEGACY_DATASET_HANDLES; the
-            # "resource" spelling is already folded into dataset_slot_edges).
-            dataset_edges = [
-                e
-                for e in dataset_slot_edges + tool_edges
-                if (nodes.get(e["source"]) or {}).get("type") in _DATASET_NODE_TYPES
-            ]
+            # node's own `type`, not the (shared) handle. (A pre-Dataset-
+            # connector graph still has its dataset edges on "tool" -- see
+            # _LEGACY_DATASET_HANDLES -- which is why a Dataset source is
+            # accepted on this handle too; _resolve_dataset_configs scans
+            # every legacy spelling when it comes to actually reading them.)
             for edge in tool_edges:
                 tool_source = nodes.get(edge["source"])
                 source_type = tool_source.get("type") if tool_source else None
@@ -524,7 +520,7 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 dataset_source = nodes.get(edge["source"])
                 if dataset_source is None or dataset_source.get("type") not in _DATASET_NODE_TYPES:
                     raise ProtocolValidationError(f"Node {name!r}'s Dataset connection must come from a Dataset node.")
-            # Deliberately uncapped, like Tool and unlike Memory/Dataset/
+            # Deliberately uncapped, like Tool/Dataset and unlike Memory/
             # Script: several skills on one agent is the normal case, not an
             # ambiguity to resolve -- each contributes ~100 tokens of level-1
             # metadata and its body only loads if the model asks. Duplicates
@@ -552,10 +548,14 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 memory_source = nodes.get(edge["source"])
                 if memory_source is None or memory_source.get("type") != "memory":
                     raise ProtocolValidationError(f"Node {name!r}'s Memory connection must come from a Memory node.")
-            if len(dataset_edges) > 1:
-                raise ProtocolValidationError(
-                    f"Node {name!r} can have at most one Dataset connection (found {len(dataset_edges)})."
-                )
+            # Uncapped, like Skill and Knowledge above. It used to be capped
+            # at one, on the assumption that an agent operates on "the"
+            # dataset -- but comparing a model across several datasets, or
+            # joining a cohort table to a measurements table, is ordinary
+            # science, and the cap made it unexpressible. Each wired dataset
+            # is named in the agent's Dataset-context block and opened as its
+            # own workspace; duplicates aren't rejected because
+            # _resolve_dataset_configs de-dupes by dataset_id.
             if len(script_edges) > 1:
                 raise ProtocolValidationError(
                     f"Node {name!r} can have at most one Script connection (found {len(script_edges)})."
@@ -770,27 +770,51 @@ def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     return (source.get("data") or {}).get("config") or {}
 
 
-def _resolve_dataset_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
-    """``{"dataset_id": ..., "dataset_name": ...}`` from the node's connected
-    Dataset node, or ``{}`` if none is connected -- optional, like Memory
-    (``topological_order`` caps it at one, doesn't require it). Scans the
-    Dataset handle plus both spellings it has been saved under before -- the
-    short-lived ``resource`` one and the Tool handle it originally shared with
-    mcp_tool/Script (see ``_LEGACY_DATASET_HANDLES``) -- matching on the source
-    node's own ``type`` rather than trusting the handle alone. Read by
-    ``_build_user_input`` to fold a
-    "Dataset context" block into the wired agent's own instruction; never
-    resolved into any Motoro config, since a dataset isn't something
-    Motoro's own ModelConfig/PatternConfig/ToolConfig has a slot for --
-    it's purely prompt context an agent uses to call ``open_workspace``
-    itself."""
+def _resolve_dataset_configs(graph: dict[str, Any], node_id: str) -> list[dict[str, Any]]:
+    """Every Dataset node wired into this agent, as a list of
+    ``{"dataset_id": ..., "dataset_name": ...}`` configs in canvas wiring
+    order -- ``[]`` when none is connected.
+
+    A list rather than a single config because the Dataset connector is
+    uncapped (like Skill and Knowledge): comparing a model across datasets, or
+    joining two tables, is ordinary science. An agent with exactly one Dataset
+    node -- still the common case -- simply gets a one-element list.
+
+    Scans the Dataset handle plus both spellings it has been saved under
+    before -- the short-lived ``resource`` one and the Tool handle it
+    originally shared with mcp_tool/Script (see ``_LEGACY_DATASET_HANDLES``)
+    -- matching on the source node's own ``type`` rather than trusting the
+    handle alone. Nodes with ``enabled: False`` or no ``dataset_name`` are
+    skipped and duplicates de-duped by ``dataset_id``, matching
+    ``_resolve_skill_config``: two nodes naming one dataset would otherwise
+    tell the agent to open the same workspace twice.
+
+    Read by ``_build_user_input`` to fold a "Dataset context" block into the
+    wired agent's own instruction; never resolved into any Motoro config,
+    since a dataset isn't something Motoro's own ModelConfig/PatternConfig/
+    ToolConfig has a slot for -- it's purely prompt context an agent uses to
+    call ``open_workspace`` itself."""
     nodes, _downstream, _upstream = _adjacency(graph)
-    for handle in _LEGACY_DATASET_HANDLES:
-        for edge in _edges_with_handle(graph, node_id, handle, direction="incoming"):
-            source = nodes.get(edge["source"])
-            if source is not None and source.get("type") in _DATASET_NODE_TYPES:
-                return (source.get("data") or {}).get("config") or {}
-    return {}
+    configs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    # Edges first, handles second: an agent's Dataset nodes should come out in
+    # the order they were wired, not grouped by which handle spelling they
+    # happen to be saved under.
+    for edge in graph.get("edges") or []:
+        if edge.get("target") != node_id or edge.get("targetHandle") not in _LEGACY_DATASET_HANDLES:
+            continue
+        source = nodes.get(edge.get("source"))
+        if source is None or source.get("type") not in _DATASET_NODE_TYPES:
+            continue
+        config = (source.get("data") or {}).get("config") or {}
+        if not config.get("enabled", True) or not config.get("dataset_name"):
+            continue
+        key = str(config.get("dataset_id") or config["dataset_name"])
+        if key in seen:
+            continue
+        seen.add(key)
+        configs.append(config)
+    return configs
 
 
 def _resolve_script_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
@@ -887,7 +911,7 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     connector also accepts Script source nodes (plus, on a graph saved
     before the Resource connector existed, Dataset ones -- see
     ``_LEGACY_DATASET_HANDLES``) -- those are skipped here entirely, since
-    they're read by ``_resolve_script_config``/``_resolve_dataset_config``
+    they're read by ``_resolve_script_config``/``_resolve_dataset_configs``
     instead, not folded into this allow-list.
 
     ``tool_names`` MUST be namespaced as ``"{server_name}.{tool_name}"`` --
@@ -1019,20 +1043,28 @@ def _build_user_input(
     if upstream_context:
         parts.append("Upstream context:\n" + "\n\n".join(upstream_context))
 
-    dataset_config = _resolve_dataset_config(graph, node["id"])
-    dataset_name = dataset_config.get("dataset_name")
-    if (
-        dataset_name
-        and dataset_config.get("enabled", True)
-        and experiment_id is not None
-        and effective_cell_label is not None
-    ):
-        parts.append(
-            "Dataset context:\n"
-            f'A dataset named "{dataset_name}" is registered for this run. Call open_workspace '
-            f'with experiment_id="{experiment_id}", cell_label="{effective_cell_label}", '
-            f'name="{dataset_name}" before doing any data work.'
-        )
+    dataset_configs = _resolve_dataset_configs(graph, node["id"])
+    if dataset_configs and experiment_id is not None and effective_cell_label is not None:
+        dataset_names = [str(c["dataset_name"]) for c in dataset_configs]
+        if len(dataset_names) == 1:
+            parts.append(
+                "Dataset context:\n"
+                f'A dataset named "{dataset_names[0]}" is registered for this run. Call open_workspace '
+                f'with experiment_id="{experiment_id}", cell_label="{effective_cell_label}", '
+                f'name="{dataset_names[0]}" before doing any data work.'
+            )
+        else:
+            # Same experiment_id/cell_label for all of them -- open_workspace's
+            # `name` is what distinguishes the workspaces, so the agent makes
+            # one call per dataset rather than one call listing several.
+            listed = "\n".join(f'- "{n}"' for n in dataset_names)
+            parts.append(
+                "Dataset context:\n"
+                f"{len(dataset_names)} datasets are registered for this run:\n{listed}\n"
+                f'Call open_workspace with experiment_id="{experiment_id}", '
+                f'cell_label="{effective_cell_label}" and name= each dataset you need, once per '
+                "dataset, before doing any data work -- each one is a separate workspace."
+            )
 
     script_config = _resolve_script_config(graph, node["id"])
     script_code = script_config.get("code")

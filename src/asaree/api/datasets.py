@@ -59,6 +59,16 @@ class DatasetResponse(BaseModel):
     test_path: str | None
     train_sha256: str | None
     test_sha256: str | None
+    # How that split was produced -- the hashes above identify the files, these
+    # describe (and are enough to reproduce) the procedure. All null for a
+    # never-split dataset, and also for one split before these columns existed;
+    # split_group_column is the column actually grouped on, so null there means
+    # a stratified split, not "we forgot to record it". Read out by the Dataset
+    # node inspector alongside the hashes.
+    split_method: str | None = None
+    split_group_column: str | None = None
+    split_test_size: float | None = None
+    split_seed: int | None = None
     target_column: str | None
     description: str | None = None
     # Opaque JSON-encoded string — ASAREE never parses this; a domain MCP server
@@ -78,6 +88,10 @@ def _dataset_response(d: Any) -> DatasetResponse:
         test_path=d.test_path,
         train_sha256=d.train_sha256,
         test_sha256=d.test_sha256,
+        split_method=d.split_method,
+        split_group_column=d.split_group_column,
+        split_test_size=d.split_test_size,
+        split_seed=d.split_seed,
         target_column=d.target_column,
         description=d.description,
         dictionary_json=d.dictionary_json,

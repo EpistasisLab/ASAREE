@@ -45,7 +45,7 @@ export interface RunSummary {
 // scope "node" (the per-node Play icon) only that node's own directly-wired
 // dependencies count, mirroring the one-level connector traversal
 // services.protocol_execution's _resolve_llm_config/_resolve_tool_config/
-// _resolve_dataset_config do server-side -- kept as a client-side duplicate
+// _resolve_dataset_configs do server-side -- kept as a client-side duplicate
 // for the same reason nodeConfigIssues.ts already is.
 export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): RunSummary {
   const relevantNodes = scope.type === 'node' ? nodesWiredTo(nodes, edges, scope.nodeId) : nodes
@@ -60,7 +60,7 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
   // own `enabled is False` skip -- an off skill genuinely doesn't reach the
   // run, so listing it would overstate what's about to happen. (Datasets
   // above don't filter the same way: `enabled` there only skips a prompt
-  // block, and the experiment's dataset_id FK is still what runs.)
+  // block, and the dataset stays attached to the experiment either way.)
   const skills = uniq(
     relevantNodes
       .filter((n) => n.type === 'skill')

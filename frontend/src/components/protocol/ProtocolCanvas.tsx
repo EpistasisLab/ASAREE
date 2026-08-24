@@ -52,6 +52,7 @@ import type {
   SingleAgentBaselinePatternNodeData,
   SkillNodeData,
 } from '@/types/protocols'
+import type { Dataset } from '@/types/datasets'
 import type { DesignFactor } from '@/types/experiments'
 import type { McpServer } from '@/types/mcpServers'
 import type { OkfBundle } from '@/types/okf'
@@ -67,6 +68,8 @@ import { DEFAULT_ZOOM } from './constants'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import { findFreePosition } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
+import { DatasetBrowserPanel } from './DatasetBrowserPanel'
+import { DATASET_BROWSE, nodeDataForDataset } from './datasetCatalog'
 import { McpServerBrowserPanel } from './McpServerBrowserPanel'
 import {
   MCP_CLIENT_TOOL_NODE_TYPE,
@@ -211,6 +214,21 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   return defaultAgentNodeData()
 }
 
+// The registered datasets this canvas declares, in the order their nodes were
+// added -- what gets PATCHed onto the experiment's own dataset list (see the
+// syncExperimentDatasets effect). Nodes still on the browse placeholder have no
+// dataset_id yet and are skipped; two nodes naming the same dataset collapse to
+// one entry, since the join table is keyed by (experiment, dataset).
+function datasetIdsInGraph(nodes: Node[]): string[] {
+  const ids: string[] = []
+  for (const node of nodes) {
+    if (node.type !== 'dataset') continue
+    const datasetId = (node.data as DatasetNodeData).config?.dataset_id
+    if (datasetId && !ids.includes(datasetId)) ids.push(datasetId)
+  }
+  return ids
+}
+
 // Mirrors isValidConnection's own per-slot source-type-family rule -- the
 // panel that opens for a connector "+" is pre-filtered to that slot's whole
 // family of node types (LLM_NODE_TYPES/PATTERN_NODE_TYPES above) rather than
@@ -226,7 +244,7 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
-  dataset: { allowedTypes: ['dataset'], title: 'Add Dataset' },
+  dataset: { allowedTypes: [DATASET_BROWSE], title: 'Add Dataset' },
   knowledge: { allowedTypes: [OKF_BUNDLE_BROWSE], title: 'Add Knowledge' },
 }
 
@@ -370,6 +388,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const [serverBrowserOpen, setServerBrowserOpen] = useState(false)
   const [skillBrowserOpen, setSkillBrowserOpen] = useState(false)
   const [bundleBrowserOpen, setBundleBrowserOpen] = useState(false)
+  const [datasetBrowserOpen, setDatasetBrowserOpen] = useState(false)
   // A pending node deletion awaiting user confirmation -- populated either
   // by onBeforeDelete (Backspace/Delete key, the hover toolbar's trash
   // icon -- both go through xyflow's own deleteElements) or by
@@ -449,6 +468,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const runMutation = useMutation({
     mutationFn: () => protocolsApi.run(protocolId, selectedCellLabel),
     onSuccess: (run) => setRunId(run.id),
+  })
+
+  // Keeps the linked experiment's own dataset list (the experiment_datasets
+  // join table) in step with the Dataset nodes on this canvas -- see the
+  // effect near the autosave below, which is what calls this.
+  const syncExperimentDatasets = useMutation({
+    mutationFn: (datasetIds: string[]) => experimentsApi.update(experimentId!, { dataset_ids: datasetIds }),
   })
 
   // Run button's own entry point -- always opens RunConfirmDialog first
@@ -595,6 +621,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     setServerBrowserOpen(false)
     setSkillBrowserOpen(false)
     setBundleBrowserOpen(false)
+    setDatasetBrowserOpen(false)
     setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(null)
     setPendingEdgeInsert(null)
@@ -742,6 +769,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     // Ditto for OKF bundles -- see OKF_BUNDLE_BROWSE in okfCatalog.ts.
     if (nodeType === OKF_BUNDLE_BROWSE) {
       setBundleBrowserOpen(true)
+      return
+    }
+    // Ditto for datasets -- see DATASET_BROWSE in datasetCatalog.ts.
+    if (nodeType === DATASET_BROWSE) {
+      setDatasetBrowserOpen(true)
       return
     }
     if (pendingConnectorAdd) {
@@ -897,6 +929,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     addNode('skill', nodeDataForSkill(skill))
   }
 
+  // Same shape again. Attaching the dataset to the linked experiment isn't
+  // done here: an experiment can hold several now, and they can leave the
+  // canvas as well as join it (delete a Dataset node), so the sync watches
+  // the node list instead of hooking this one entry point.
+  function addDatasetNode(dataset: Dataset) {
+    setDatasetBrowserOpen(false)
+    addNode('dataset', nodeDataForDataset(dataset))
+  }
+
   // Debounced autosave: every nodes/edges change schedules a PATCH, reset on
   // the next change -- so a node drag (many onNodesChange firings) or a
   // burst of inspector edits only ever produces one write, 800ms after the
@@ -959,6 +1000,32 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     }, AUTOSAVE_DELAY_MS)
     return () => clearTimeout(timer)
   }, [nodes, edges, saveGraph])
+
+  // Keeps the linked experiment's dataset list equal to the Dataset nodes on
+  // this canvas -- the experiment record should be able to answer "what data
+  // is this experiment about" without anyone parsing the graph. Fire-and-
+  // forget, matching FactorBindableField's own immediate-persist convention.
+  //
+  // Seeded from the graph as LOADED, so this only ever fires on a real user
+  // change, never on mount. That matters: the notebook attaches a dataset
+  // over the SDK before any canvas exists (spinal_pipeline.ipynb's Step 2),
+  // and a mount-time "reconcile" would see zero Dataset nodes and detach it.
+  //
+  // Every Dataset node counts, wired or not and enabled or not -- putting one
+  // on the canvas is the declaration that this experiment is about that data;
+  // `enabled` only governs whether the run's prompt mentions it.
+  const lastSyncedDatasetIdsRef = useRef(JSON.stringify(datasetIdsInGraph(initialGraph.nodes as Node[])))
+  useEffect(() => {
+    if (!experimentId) return
+    const datasetIds = datasetIdsInGraph(nodes)
+    const serialized = JSON.stringify(datasetIds)
+    if (serialized === lastSyncedDatasetIdsRef.current) return
+    lastSyncedDatasetIdsRef.current = serialized
+    syncExperimentDatasets.mutate(datasetIds)
+    // syncExperimentDatasets is a stable-enough mutation object; including it
+    // would re-run this on every render of the mutation's own state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, experimentId])
 
   // protocolId is stable for this component's whole lifetime (the parent
   // remounts it via `key={protocol.id}` on protocol change -- see
@@ -1304,6 +1371,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           <OkfBundleBrowserPanel
             onPick={addBundleNode}
             onBack={() => setBundleBrowserOpen(false)}
+            onClose={closeAddPanel}
+          />
+        ) : addPanelOpen && datasetBrowserOpen ? (
+          <DatasetBrowserPanel
+            onPick={addDatasetNode}
+            onBack={() => setDatasetBrowserOpen(false)}
             onClose={closeAddPanel}
           />
         ) : addPanelOpen ? (

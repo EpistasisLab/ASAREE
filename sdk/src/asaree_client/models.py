@@ -76,6 +76,11 @@ class Experiment(BaseModel):
     design_type: str
     task_brief: dict[str, Any] | None
     design_spec: dict[str, Any] | None
+    # Every dataset attached to this experiment, in canvas wiring order --
+    # an experiment can run against several since the Dataset connector was
+    # uncapped. ``dataset_id`` is a read-only view of the first one, kept so
+    # code written before that keeps working; it is no longer a stored column.
+    dataset_ids: list[uuid.UUID] = []
     dataset_id: uuid.UUID | None = None
     archived_at: datetime | None = None
     created_at: datetime

@@ -104,11 +104,11 @@ def _tool_edge(source: str, target: str) -> dict:
     return {"id": f"{source}-{target}-tool", "source": source, "target": target, "targetHandle": "tool"}
 
 
-def _dataset_node(node_id: str = "dataset1", dataset_name: str = "spinal-fusion-v1") -> dict:
+def _dataset_node(node_id: str = "dataset1", dataset_name: str = "spinal-fusion-v1", dataset_id: str = "d1") -> dict:
     return {
         "id": node_id,
         "type": "dataset",
-        "data": {"label": "", "config": {"dataset_id": "d1", "dataset_name": dataset_name}},
+        "data": {"label": "", "config": {"dataset_id": dataset_id, "dataset_name": dataset_name}},
     }
 
 
@@ -307,6 +307,28 @@ def test_build_user_input_appends_dataset_context_when_wired() -> None:
     )
     assert "Dataset context:" in result
     assert 'name="spinal-fusion-v1"' in result
+    assert f'experiment_id="{uuid.UUID(int=1)}"' in result
+    assert 'cell_label="tier_a__rep_0"' in result
+
+
+def test_build_user_input_names_every_wired_dataset() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [
+            agent,
+            _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1"),
+            _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2"),
+        ],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
+    }
+    result = pe._build_user_input(
+        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
+    )
+    assert "2 datasets are registered for this run:" in result
+    assert '- "cohort-a"' in result
+    assert '- "cohort-b"' in result
+    # One experiment_id/cell_label for all of them -- `name` is what separates
+    # the workspaces.
     assert f'experiment_id="{uuid.UUID(int=1)}"' in result
     assert 'cell_label="tier_a__rep_0"' in result
 
@@ -1489,31 +1511,34 @@ def test_memory_node_with_plain_outgoing_edge_raises() -> None:
         topological_order(graph)
 
 
-def test_multiple_dataset_connections_raises() -> None:
+def test_multiple_dataset_connections_are_allowed() -> None:
+    # Uncapped, like Skill and Knowledge: comparing a model across datasets
+    # (or joining two tables) is ordinary science, and the old one-dataset cap
+    # made it unexpressible.
     llm = _llm_node()
     agent, agent_llm_edge = _agent_with_llm("a")
-    ds1, ds2 = _dataset_node("ds1"), _dataset_node("ds2")
+    ds1 = _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1")
+    ds2 = _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2")
     graph = {
         "nodes": [llm, agent, ds1, ds2],
         "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="at most one Dataset connection"):
-        topological_order(graph)
+    assert [n["id"] for n in topological_order(graph)] == ["llm", "ds1", "ds2", "a"]
 
 
-def test_dataset_connections_split_across_legacy_and_current_handles_raises() -> None:
-    # The cap counts dataset sources across BOTH handles, so a graph that's
-    # half-migrated (one old Tool-handle edge, one new Dataset one) can't
-    # sneak two datasets onto the same agent.
+def test_dataset_connections_split_across_legacy_and_current_handles_are_allowed() -> None:
+    # A half-migrated graph (one old Tool-handle edge, one new Dataset one)
+    # resolves to both datasets rather than tripping a cap.
     llm = _llm_node()
     agent, agent_llm_edge = _agent_with_llm("a")
-    ds1, ds2 = _dataset_node("ds1"), _dataset_node("ds2")
+    ds1 = _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1")
+    ds2 = _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2")
     graph = {
         "nodes": [llm, agent, ds1, ds2],
         "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a", handle="tool")],
     }
-    with pytest.raises(ProtocolValidationError, match="at most one Dataset connection"):
-        topological_order(graph)
+    topological_order(graph)
+    assert [c["dataset_name"] for c in pe._resolve_dataset_configs(graph, "a")] == ["cohort-a", "cohort-b"]
 
 
 def test_dataset_connection_from_non_dataset_source_raises() -> None:
@@ -1970,16 +1995,49 @@ def test_resolve_llm_config_empty_when_unconnected() -> None:
     assert pe._resolve_llm_config(graph, "a") == {}
 
 
-def test_resolve_dataset_config_returns_connected_node_config() -> None:
+def test_resolve_dataset_configs_returns_connected_node_config() -> None:
     agent, agent_llm_edge = _agent_with_llm("a")
     dataset = _dataset_node(dataset_name="spinal-fusion-v1")
     graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
-    assert pe._resolve_dataset_config(graph, "a") == {"dataset_id": "d1", "dataset_name": "spinal-fusion-v1"}
+    assert pe._resolve_dataset_configs(graph, "a") == [{"dataset_id": "d1", "dataset_name": "spinal-fusion-v1"}]
 
 
-def test_resolve_dataset_config_empty_when_unconnected() -> None:
+def test_resolve_dataset_configs_empty_when_unconnected() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    assert pe._resolve_dataset_config(graph, "a") == {}
+    assert pe._resolve_dataset_configs(graph, "a") == []
+
+
+def test_resolve_dataset_configs_keeps_wiring_order_and_dedupes() -> None:
+    # Two nodes naming the same registered dataset is a legal graph -- it
+    # would just tell the agent to open one workspace twice, so the second is
+    # dropped rather than rejected (same call _resolve_skill_config makes).
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [
+            agent,
+            _dataset_node("ds1", dataset_name="cohort-b", dataset_id="d2"),
+            _dataset_node("ds2", dataset_name="cohort-a", dataset_id="d1"),
+            _dataset_node("ds3", dataset_name="cohort-a", dataset_id="d1"),
+        ],
+        "edges": [
+            agent_llm_edge,
+            _dataset_edge("ds1", "a"),
+            _dataset_edge("ds2", "a"),
+            _dataset_edge("ds3", "a"),
+        ],
+    }
+    assert [c["dataset_name"] for c in pe._resolve_dataset_configs(graph, "a")] == ["cohort-b", "cohort-a"]
+
+
+def test_resolve_dataset_configs_skips_disabled_nodes() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    disabled = _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2")
+    disabled["data"]["config"]["enabled"] = False
+    graph = {
+        "nodes": [agent, _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1"), disabled],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
+    }
+    assert [c["dataset_name"] for c in pe._resolve_dataset_configs(graph, "a")] == ["cohort-a"]
 
 
 def test_resolve_script_config_returns_connected_node_config() -> None:

@@ -74,14 +74,31 @@ rather than doing it silently as a routine part of coding:
 
 # Experiment data model
 
-- **`ResearchExperiment.dataset_id` is a real, nullable FK** to `registered_datasets`
-  (migration `a1b2c3d4e5f6`), unlike agents below — a dataset genuinely is a first-class,
-  one-to-one property of an experiment worth a real relationship, matching what ARES does.
-  It's set via `PATCH /experiments/{id}`, not at creation: the notebook's Step 1 (create the
-  experiment) runs *before* Step 2 (register the dataset), so there's nothing to attach yet
-  at create time — see the `client.experiments.update(...)` call added right after Step 2 in
-  `spinal_pipeline.ipynb`. Experiments created before this migration simply have
-  `dataset_id: null` — that's an expected, permanent state for them, not a bug to backfill.
+- **Datasets are a real, stored many-to-many** — the `experiment_datasets` join table
+  (`models/experiment_dataset.py`, migration `d5a3b90c71e4`), unlike agents below: a dataset
+  genuinely is a first-class property of an experiment worth a real relationship, matching
+  what ARES does. It started as a scalar `ResearchExperiment.dataset_id` FK (migration
+  `a1b2c3d4e5f6`); that column is **dropped** — uncapping the Dataset connector means one
+  experiment can run against several, so a single winner would have been a lie. Read/write it
+  through `services/experiments.py`'s `set_experiment_datasets` /
+  `get_experiment_dataset_ids` / `get_dataset_ids_by_experiment` (the batch one — use it on
+  list endpoints to avoid an N+1), never by touching the model.
+  - `position` on the join row preserves **canvas wiring order**, which is the order the
+    agent's prompt lists the datasets in, so it's user-visible, not cosmetic.
+  - `dataset_ids` is a **full replacement**, not a merge (`[]` detaches everything). The API
+    and SDK still accept and return the old scalar `dataset_id`: on write it's the
+    one-dataset shorthand, on read a view of `dataset_ids[0]`. Don't add a second source of
+    truth — the join table is it.
+  - It's set via `PATCH /experiments/{id}`, not at creation: the notebook's Step 1 (create the
+    experiment) runs *before* Step 2 (register the dataset), so there's nothing to attach yet
+    at create time — see the `client.experiments.update(...)` call after Step 2 in
+    `spinal_pipeline.ipynb`. In the GUI it's `ProtocolCanvas.tsx`'s `syncExperimentDatasets`
+    effect, which PATCHes whenever the canvas's set of Dataset nodes changes. That effect's
+    ref is deliberately **seeded from the graph as loaded so it never fires on mount** — a
+    mount-time "reconcile" would see zero Dataset nodes on a notebook-driven experiment and
+    detach its dataset. Keep that property if you touch it.
+  - An experiment with no datasets attached is an expected, permanent state (everything
+    created before the FK existed) — not a bug to backfill.
 - **Agents are deliberately NOT a stored relationship** — there's no `experiment_agents` join
   table, and none is planned. Agents are reusable per-user templates, not something an
   experiment "owns"; asking "which agents ran in this experiment" is answered by scanning the

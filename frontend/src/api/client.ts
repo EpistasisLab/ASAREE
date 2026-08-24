@@ -187,9 +187,15 @@ export const experimentsApi = {
       design_spec?: DesignSpec | null
       // A timestamp to archive, null to unarchive -- canvas menu's Archive/Unarchive action.
       archived_at?: string | null
-      // Set from the canvas's own Dataset node (DatasetNodeInspector) the
-      // moment a user picks a dataset there -- keeps the node's own config
-      // and this experiment's real dataset_id FK from drifting apart.
+      // The experiment's whole attached-dataset list, in canvas wiring order
+      // -- a full replacement, not a merge ([] detaches everything). Sent
+      // whenever the canvas's set of Dataset nodes changes (ProtocolCanvas's
+      // syncExperimentDatasets effect), so the nodes' own configs and the
+      // experiment_datasets rows can't drift apart.
+      dataset_ids?: string[]
+      // The one-dataset shorthand, kept for callers written before the
+      // connector was uncapped -- the server turns it into a single-element
+      // dataset_ids (or [] for null). Prefer dataset_ids.
       dataset_id?: string | null
     },
   ) => request<Experiment>(`/experiments/${id}`, { method: 'PATCH', body: data }),
@@ -246,8 +252,9 @@ export const protocolsApi = {
 }
 
 export const datasetsApi = {
-  // Owner-scoped, same convention as mcpServersApi.list -- backs the
-  // Dataset node's own Server-select-style picker (DatasetNodeInspector).
+  // Owner-scoped, same convention as mcpServersApi.list -- backs the canvas's
+  // dataset browser (DatasetBrowserPanel) and the Dataset node inspector's
+  // read-out of whichever dataset the node is bound to.
   list: () => request<Dataset[]>('/datasets'),
   get: (id: string) => request<Dataset>(`/datasets/${id}`),
   // POST /datasets is a multipart upload -- stores ONLY the raw file,
@@ -286,6 +293,11 @@ export const datasetsApi = {
     form.set('test_file', data.testFile)
     return request<Dataset>(`/datasets/${id}/split/manual`, { method: 'POST', body: form })
   },
+  // Drops the row AND the uploaded files (services.datasets.delete_dataset) --
+  // irreversible, unlike okfApi.remove, which only forgets a registration.
+  // Offered from DatasetBrowserPanel, the one place the whole library is
+  // listed.
+  remove: (id: string) => request<void>(`/datasets/${id}`, { method: 'DELETE' }),
 }
 
 export const agentsApi = {

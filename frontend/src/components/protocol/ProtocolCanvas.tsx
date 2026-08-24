@@ -36,7 +36,6 @@ import {
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
   defaultSingleAgentBaselinePatternNodeData,
-  defaultSkillNodeData,
 } from '@/types/protocols'
 import type {
   AgentNodeData,
@@ -163,9 +162,10 @@ function isNearViewport(a: Viewport, b: Viewport): boolean {
 }
 
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
-  // mcp_scikit_learn isn't here: a server-dedicated node is never created
-  // blank -- addServerNode builds its data from the picked server, since a
-  // node whose whole identity is one server would be meaningless without it.
+  // mcp_scikit_learn and skill aren't here: neither is ever created blank --
+  // addServerNode/addSkillNode build the data from the picked server/skill,
+  // since a node whose whole identity is one server (or one skill) would be
+  // meaningless without it.
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData()
   if (nodeType === 'critic_gate') return defaultCriticGateNodeData()
   if (nodeType === 'llm_anthropic') return defaultAnthropicLlmNodeData()
@@ -175,7 +175,6 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'llm_local') return defaultLocalLlmNodeData()
   if (nodeType === 'memory') return defaultMemoryNodeData()
   if (nodeType === 'dataset') return defaultDatasetNodeData()
-  if (nodeType === 'skill') return defaultSkillNodeData()
   if (nodeType === 'script') return defaultScriptNodeData()
   if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData()
   if (nodeType === 'pattern_single_agent_baseline') return defaultSingleAgentBaselinePatternNodeData()

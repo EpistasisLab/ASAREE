@@ -10,9 +10,9 @@ export const SKILL_BROWSE = 'skills_browse'
 // A Skill node is never created blank: the skill IS the choice, so picking
 // one in the browser is how you add the node, rather than adding an empty
 // node and then hunting for the skill in a dropdown inside its inspector.
-// (The inspector's own picker still exists -- it's how you CHANGE an
-// already-placed node, and how an imported graph's per-account skill_id
-// gets re-pointed at the importing user's own copy.)
+// There is no picker in the inspector either -- a node IS one skill, and
+// repointing it afterwards would contradict that; you add a second Skill
+// node instead. Same model as the server-dedicated MCP node types.
 //
 // name/description are cached onto the node so the card and inspector header
 // render without a fetch; the id is the only part a run reads (see

@@ -70,9 +70,9 @@ export function SkillBrowserPanel({
       </div>
 
       <Input autoFocus placeholder="Search skills…" value={query} onChange={(e) => setQuery(e.target.value)} />
-      {/* Outside every branch below, for the same reason it is in
-          SkillNodeInspector: an empty or failed list is exactly when you most
-          need the way to add one. */}
+      {/* Outside every branch below on purpose: this is the only place in the
+          app that can register a skill, and an empty or failed list is exactly
+          when you most need the way to add one. */}
       <Button variant="outline" size="sm" onClick={() => setRegisterDialogOpen(true)}>
         <Plus className="size-3.5" /> Register new skill
       </Button>
@@ -172,9 +172,9 @@ export function SkillBrowserPanel({
 
       {deleteMutation.isError && <p className="text-sm text-destructive">Could not delete that skill.</p>}
 
-      {/* Registering from here just refreshes the list -- unlike the
-          inspector's own copy of this dialog, there's no node yet to select
-          the new skill onto. */}
+      {/* Registering just refreshes the list rather than immediately creating
+          a node: uploading and placing are separate decisions, and you may
+          well be stocking the library before wiring anything up. */}
       <RegisterSkillDialog open={registerDialogOpen} onOpenChange={setRegisterDialogOpen} />
     </div>
   )

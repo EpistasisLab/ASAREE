@@ -436,9 +436,11 @@ export interface SkillNodeData {
   [key: string]: unknown
 }
 
-export function defaultSkillNodeData(label = 'Skill'): SkillNodeData {
-  return { label, config: { skill_id: null, skill_name: null, skill_description: null, enabled: true } }
-}
+// No defaultSkillNodeData counterpart to the factories above, deliberately:
+// a Skill node is never created blank. skillCatalog.ts's nodeDataForSkill
+// builds it from the skill picked in the browser, since a node whose whole
+// identity is one skill would be meaningless without it -- same as the
+// server-dedicated MCP node types.
 
 // The Architectural Pattern connector's node family -- UNLIKE Memory (see
 // MemoryNodeData's own comment), wiring one into an Agent's Architectural

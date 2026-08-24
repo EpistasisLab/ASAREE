@@ -116,44 +116,46 @@ export function SkillNodeInspector({
         )}
       </FactorBindableField>
 
-      {skillsQuery.isLoading ? (
-        <Skeleton className="h-8 w-full" />
-      ) : skillsQuery.isError ? (
-        <p className="text-sm text-destructive">Could not load your registered skills.</p>
-      ) : (
-        <div className="space-y-1.5">
-          <Label>Skill</Label>
-          {!skillsQuery.data || skillsQuery.data.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No skills registered yet.</p>
-          ) : (
-            <Select
-              value={config.skill_id ?? '__none__'}
-              onValueChange={(value) => {
-                if (!value || value === '__none__') return
-                const skill = skillsQuery.data.find((s) => s.id === value)
-                if (skill) selectSkill(skill)
-              }}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue>{() => selectedSkill?.name ?? 'Select a skill…'}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__" disabled>
-                  Select a skill…
+      {/* Uploading is deliberately OUTSIDE every branch below: registering a
+          skill is a POST that doesn't care whether the list GET succeeded, and
+          hiding the button on a failed/empty list leaves a fresh install with
+          no way at all to add its first skill. */}
+      <div className="space-y-1.5">
+        <Label>Skill</Label>
+        {skillsQuery.isLoading ? (
+          <Skeleton className="h-8 w-full" />
+        ) : skillsQuery.isError ? (
+          <p className="text-sm text-destructive">Could not load your registered skills -- you can still register a new one.</p>
+        ) : !skillsQuery.data || skillsQuery.data.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No skills registered yet.</p>
+        ) : (
+          <Select
+            value={config.skill_id ?? '__none__'}
+            onValueChange={(value) => {
+              if (!value || value === '__none__') return
+              const skill = skillsQuery.data.find((s) => s.id === value)
+              if (skill) selectSkill(skill)
+            }}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue>{() => selectedSkill?.name ?? 'Select a skill…'}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__" disabled>
+                Select a skill…
+              </SelectItem>
+              {skillsQuery.data.map((skill) => (
+                <SelectItem key={skill.id} value={skill.id}>
+                  {skill.name}
                 </SelectItem>
-                {skillsQuery.data.map((skill) => (
-                  <SelectItem key={skill.id} value={skill.id}>
-                    {skill.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <Button variant="outline" size="sm" onClick={() => setRegisterDialogOpen(true)}>
-            <Plus className="size-3.5" /> Register new skill
-          </Button>
-        </div>
-      )}
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        <Button variant="outline" size="sm" onClick={() => setRegisterDialogOpen(true)}>
+          <Plus className="size-3.5" /> Register new skill
+        </Button>
+      </div>
 
       {selectedSkill && (
         <div className="space-y-2 rounded-lg border px-3 py-2 text-sm">

@@ -59,8 +59,11 @@ def _llm_node(node_id: str = "llm", config: dict | None = None) -> dict:
     return {"id": node_id, "type": "llm_anthropic", "data": {"label": "", "config": config or {}}}
 
 
-def _llm_edge(source: str, target: str) -> dict:
-    return {"id": f"{source}-{target}-llm", "source": source, "target": target, "targetHandle": "llm"}
+def _llm_edge(source: str, target: str, handle: str = "ai") -> dict:
+    # `handle` is only ever overridden to exercise the pre-rename "llm"
+    # spelling that migration 3f1a7c9b2e04 rewrites -- see
+    # test_legacy_llm_handle_still_resolves.
+    return {"id": f"{source}-{target}-ai", "source": source, "target": target, "targetHandle": handle}
 
 
 def _memory_node(node_id: str = "memory") -> dict:
@@ -134,7 +137,7 @@ def _script_edge(source: str, target: str) -> dict:
 def _agent_with_llm(node_id: str, llm_id: str = "llm") -> tuple[dict, dict]:
     """A minimal valid agent + its required LLM connector edge -- the
     boilerplate every connector-validation test below needs just to get
-    past the "every agent needs exactly one LLM connection" rule so it can
+    past the "every agent needs exactly one AI connection" rule so it can
     test the thing it actually cares about."""
     return _node(node_id, "agent"), _llm_edge(llm_id, node_id)
 
@@ -863,7 +866,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
                     },
                     {"id": "worker", "type": "agent", "data": {"config": {}}},
                 ],
-                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "llm"}],
+                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "ai"}],
             },
         )
         protocol_id = protocol.id
@@ -917,7 +920,7 @@ async def _run_single_cell_protocol(owner_id: uuid.UUID) -> tuple[uuid.UUID, str
                     {"id": "llm1", "type": "llm_anthropic", "data": {"config": {}}},
                     {"id": "worker", "type": "agent", "data": {"config": {}}},
                 ],
-                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "llm"}],
+                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "ai"}],
             },
         )
         protocol_id = protocol.id
@@ -1275,7 +1278,7 @@ async def test_poll_cancel_flag_sets_event_once_cancellation_requested(owner_id:
 
 def test_agent_missing_llm_connection_raises() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    with pytest.raises(ProtocolValidationError, match="exactly one LLM connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
         topological_order(graph)
 
 
@@ -1285,7 +1288,7 @@ def test_agent_duplicate_llm_connection_raises() -> None:
         "nodes": [llm1, llm2, _node("a", "agent")],
         "edges": [_llm_edge("llm1", "a"), _llm_edge("llm2", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="exactly one LLM connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
         topological_order(graph)
 
 
@@ -1296,16 +1299,33 @@ def test_critic_gate_missing_llm_connection_raises() -> None:
         "nodes": [llm, worker, _node("g1", "critic_gate")],
         "edges": [worker_llm_edge, {"id": "w1-g1", "source": "w1", "target": "g1"}],
     }
-    with pytest.raises(ProtocolValidationError, match="exactly one LLM connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
         topological_order(graph)
+
+
+def test_legacy_llm_handle_still_resolves() -> None:
+    # The AI connector's handle id was "llm" before it was renamed to "ai"
+    # (migration 3f1a7c9b2e04 rewrites stored graphs). An un-migrated edge --
+    # or one autosaved by a browser tab still running the pre-rename JS --
+    # must resolve identically: same wiring, same model config, no "exactly
+    # one AI connection" error from the edge being read as a main pipeline
+    # edge instead.
+    llm = _llm_node(config={"provider": "anthropic", "model": "claude-sonnet-4-5"})
+    agent = _node("a", "agent")
+    graph = {
+        "nodes": [llm, agent],
+        "edges": [_llm_edge("llm", "a", handle="llm")],
+    }
+    assert [n["id"] for n in topological_order(graph)] == ["llm", "a"]
+    assert pe._resolve_llm_config(graph, "a")["model"] == "claude-sonnet-4-5"
 
 
 def test_llm_connection_from_non_llm_source_raises() -> None:
     graph = {
         "nodes": [_node("t1", "step"), _node("a", "agent")],
-        "edges": [{"id": "t1-a-llm", "source": "t1", "target": "a", "targetHandle": "llm"}],
+        "edges": [{"id": "t1-a-ai", "source": "t1", "target": "a", "targetHandle": "ai"}],
     }
-    with pytest.raises(ProtocolValidationError, match="must come from an LLM node"):
+    with pytest.raises(ProtocolValidationError, match="must come from an AI node"):
         topological_order(graph)
 
 
@@ -1387,7 +1407,7 @@ def test_llm_node_with_plain_outgoing_edge_raises() -> None:
         "nodes": [llm, agent, _node("b", "agent")],
         "edges": [agent_llm_edge, {"id": "llm-b", "source": "llm", "target": "b"}],
     }
-    with pytest.raises(ProtocolValidationError, match="LLM node .* can only connect to a node's LLM slot"):
+    with pytest.raises(ProtocolValidationError, match="AI node .* can only connect to a node's AI slot"):
         topological_order(graph)
 
 
@@ -1962,7 +1982,7 @@ def test_validate_single_node_runnable_rejects_a_node_with_upstream_input() -> N
 
 def test_validate_single_node_runnable_rejects_zero_llm_connections() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    with pytest.raises(ProtocolValidationError, match="must have exactly one LLM connection"):
+    with pytest.raises(ProtocolValidationError, match="must have exactly one AI connection"):
         pe.validate_single_node_runnable(graph, "a")
 
 
@@ -1970,7 +1990,7 @@ def test_validate_single_node_runnable_rejects_llm_edge_from_wrong_node_type() -
     agent = _node("a", "agent")
     not_an_llm = _node("x", "agent")
     graph = {"nodes": [agent, not_an_llm], "edges": [_llm_edge("x", "a")]}
-    with pytest.raises(ProtocolValidationError, match="must come from an LLM node"):
+    with pytest.raises(ProtocolValidationError, match="must come from an AI node"):
         pe.validate_single_node_runnable(graph, "a")
 
 

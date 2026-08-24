@@ -31,7 +31,7 @@ export interface NodeConfigIssue {
 // (that query never ran, or hasn't resolved yet) just means "can't tell,"
 // same as LlmNode.tsx's own empty-list case -- not treated as an issue.
 export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: QueryClient): NodeConfigIssue[] {
-  const agentIdsWithLlm = new Set(edges.filter((e) => e.targetHandle === 'llm').map((e) => e.target))
+  const agentIdsWithLlm = new Set(edges.filter((e) => e.targetHandle === 'ai').map((e) => e.target))
   const result: NodeConfigIssue[] = []
 
   for (const node of nodes) {
@@ -41,7 +41,7 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
 
     switch (node.type) {
       case 'agent':
-        if (!agentIdsWithLlm.has(node.id)) issues.push('No LLM connected')
+        if (!agentIdsWithLlm.has(node.id)) issues.push('No AI connected')
         break
       case 'llm_anthropic':
       case 'llm_openai':

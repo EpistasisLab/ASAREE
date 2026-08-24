@@ -5,7 +5,11 @@ import type { DatasetNodeData, LlmNodeData, McpToolNodeData } from '@/types/prot
 // shared import -- same reasoning as nodeConfigIssues.ts's own comment:
 // keeps this module from being coupled to that component's internals.
 const LLM_NODE_TYPES = new Set(['llm_anthropic', 'llm_openai', 'llm_azure_foundry'])
-const DEPENDENCY_HANDLES = new Set(['llm', 'tool', 'memory', 'architectural_pattern', 'resource'])
+// "llm" is the pre-rename spelling of "ai" (see migrateLegacyHandles in
+// ProtocolCanvas.tsx) -- kept here, as in that file's CONNECTOR_HANDLES, so
+// this stays a question of "is this a connector edge at all" rather than one
+// that silently answers no for a graph that hasn't been normalised yet.
+const DEPENDENCY_HANDLES = new Set(['ai', 'llm', 'tool', 'memory', 'architectural_pattern', 'resource'])
 
 export type RunScope = { type: 'graph' } | { type: 'cell'; label: string } | { type: 'node'; nodeId: string; label: string }
 

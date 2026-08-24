@@ -82,7 +82,7 @@ export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData 
       icon={meta.icon}
       label={data.label}
       placeholder={meta.label}
-      handleId="llm"
+      handleId="ai"
       warning={warnings.length > 0 ? warnings : undefined}
       factorCount={boundFactorCount(data)}
     />

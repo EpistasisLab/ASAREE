@@ -766,57 +766,57 @@
         "id": "e-llm-dc",
         "source": "llm-shared",
         "target": "agent-dc",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-fte",
         "source": "llm-shared",
         "target": "agent-fte",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-fs",
         "source": "llm-shared",
         "target": "agent-fs",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-mlm",
         "source": "llm-shared",
         "target": "agent-mlm",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-gatedc",
         "source": "llm-shared",
         "target": "gate-dc",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-gatefte",
         "source": "llm-shared",
         "target": "gate-fte",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-gatefs",
         "source": "llm-shared",
         "target": "gate-fs",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-gatemlm",
         "source": "llm-shared",
         "target": "gate-mlm",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-pattern-dc",
@@ -913,22 +913,22 @@
         "id": "e-dataset-agent-dc",
         "source": "dataset-spinal",
         "target": "agent-dc",
-        "sourceHandle": "tool",
-        "targetHandle": "tool"
+        "sourceHandle": "resource",
+        "targetHandle": "resource"
       },
       {
         "id": "e-dataset-agent-fte",
         "source": "dataset-spinal",
         "target": "agent-fte",
-        "sourceHandle": "tool",
-        "targetHandle": "tool"
+        "sourceHandle": "resource",
+        "targetHandle": "resource"
       },
       {
         "id": "e-dataset-agent-fs",
         "source": "dataset-spinal",
         "target": "agent-fs",
-        "sourceHandle": "tool",
-        "targetHandle": "tool"
+        "sourceHandle": "resource",
+        "targetHandle": "resource"
       },
       {
         "id": "e-gatemlm-to-score",
@@ -939,8 +939,8 @@
         "id": "e-llm-score",
         "source": "llm-shared",
         "target": "agent-score",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-pattern-score",

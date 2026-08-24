@@ -113,7 +113,7 @@ class ProtocolValidationError(Exception):
     """The graph can't be run as-is (empty, a cycle, or a malformed critic-gate topology)."""
 
 
-# The connector-typed slots on an agent/critic_gate node. llm/tool/memory are
+# The connector-typed slots on an agent/critic_gate node. ai/tool/memory are
 # a deliberately closed set; architectural_pattern and resource are
 # ASAREE-specific -- architectural_pattern for ARES's pluggable
 # architectural patterns, resource for the data an agent operates ON (a
@@ -124,7 +124,12 @@ class ProtocolValidationError(Exception):
 # a new "connection type" concept. A "main" edge (today's plain pipeline
 # data-flow) is any edge whose targetHandle is one of these -- everything
 # else. The type marker always lives on the target side of an edge.
-_CONNECTOR_HANDLES = frozenset({"llm", "tool", "memory", "architectural_pattern", "resource"})
+#
+# "llm" is in here purely as the pre-rename spelling of "ai" (see
+# _LEGACY_AI_HANDLES): an un-migrated edge must still be recognised as a
+# connector, or it would be misread as a main pipeline edge and turn a
+# perfectly good graph into a cycle/ordering error.
+_CONNECTOR_HANDLES = frozenset({"ai", "llm", "tool", "memory", "architectural_pattern", "resource"})
 
 # Each connector slot accepts a FAMILY of node types, not one exact type --
 # mirrors how "tool" already accepts any mcp_tool node. LLM and Architectural
@@ -185,7 +190,7 @@ _PURE_CONFIG_SOURCE_TYPES = (
 # adding to _LLM_NODE_TYPES/_EXECUTION_PATTERN_NODE_TYPES above, not a
 # second lookup.
 _NODE_TYPE_TO_HANDLE: dict[str, str] = {
-    **{t: "llm" for t in _LLM_NODE_TYPES},
+    **{t: "ai" for t in _LLM_NODE_TYPES},
     **{t: "architectural_pattern" for t in _EXECUTION_PATTERN_NODE_TYPES},
     **{t: "memory" for t in _MEMORY_NODE_TYPES},
     # Dataset/Script share the Tool connector rather than getting their own
@@ -201,24 +206,44 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "resource" for t in _DATASET_NODE_TYPES},
     **{t: "tool" for t in _SCRIPT_NODE_TYPES},
 }
+# The user-facing name of each connector slot -- mirrors
+# CONNECTOR_SLOT_LABELS on the frontend, so a validation error always names
+# the connector by the caption printed next to it on the canvas.
 _HANDLE_LABELS: dict[str, str] = {
-    "llm": "LLM",
+    "ai": "AI",
+    "llm": "AI",  # pre-rename spelling, same slot -- see _LEGACY_AI_HANDLES
     "memory": "Memory",
     "architectural_pattern": "Architectural Pattern",
     "tool": "Tool",
     "resource": "Resource",
 }
 
-# Dataset had no slot of its own originally -- it shared the Tool connector
-# with mcp_tool/Script, so every graph saved before the Resource connector
-# existed carries its dataset edges on targetHandle "tool". Both handles
-# stay valid for a dataset source rather than migrating stored graphs: the
-# frontend rewrites the edge to "resource" the first time such a graph is
-# opened (migrateDatasetEdges in ProtocolCanvas.tsx), and until then the old
-# wiring keeps resolving and running exactly as before. Nothing else may use
-# the Tool handle for a dataset going forward -- isValidConnection won't
-# create one.
+# Two connector slots have been renamed since graphs started being saved,
+# and a stored graph is an opaque JSONB blob, so both spellings have to keep
+# resolving:
+#
+#   "llm" -> "ai"       the AI connector (its caption was renamed first, the
+#                       handle id after -- migration 3f1a7c9b2e04)
+#   "tool" -> "resource" for a Dataset source, when Dataset stopped sharing
+#                       the Tool slot (same migration)
+#
+# That migration rewrites every stored graph, and the canvas rewrites any
+# graph it opens (migrateLegacyHandles in ProtocolCanvas.tsx), so these sets
+# are not load-bearing for data at rest. They exist so the deploy is
+# ORDER-INDEPENDENT: a browser still running pre-rename JS keeps autosaving
+# old-spelling edges at whatever moment the new backend goes live, and an
+# SDK/notebook caller pinned to an older graph shape keeps working. Nothing
+# creates an old-spelling edge going forward -- isValidConnection won't.
+_LEGACY_AI_HANDLES = frozenset({"ai", "llm"})
 _LEGACY_DATASET_HANDLES = frozenset({"resource", "tool"})
+# Keyed by the CURRENT slot id -- every spelling an edge into that slot may
+# legitimately still carry. Only "ai" qualifies: that rename was TOTAL (no
+# other slot has ever used the "llm" handle), so an old-spelling edge can be
+# resolved from the handle alone. Dataset's is not -- "tool" still means the
+# Tool slot for mcp_tool/Script sources, so a legacy dataset edge can only be
+# picked out by ALSO checking its source node's type, which is why
+# _LEGACY_DATASET_HANDLES is applied at its own call sites instead.
+_LEGACY_HANDLES_BY_SLOT: dict[str, frozenset[str]] = {"ai": _LEGACY_AI_HANDLES}
 
 # node type -> Motoro PatternConfig slug, for _resolve_pattern_config.
 _EXECUTION_PATTERN_SLUGS: dict[str, str] = {
@@ -395,14 +420,14 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
         name = _node_display_name(node)
 
         if node_type in ("agent", "critic_gate"):
-            llm_edges = _edges_with_handle(graph, nid, "llm", direction="incoming")
+            llm_edges = _edges_with_handle(graph, nid, "ai", direction="incoming")
             if len(llm_edges) != 1:
                 raise ProtocolValidationError(
-                    f"Node {name!r} must have exactly one LLM connection (found {len(llm_edges)})."
+                    f"Node {name!r} must have exactly one AI connection (found {len(llm_edges)})."
                 )
             llm_source = nodes.get(llm_edges[0]["source"])
             if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
-                raise ProtocolValidationError(f"Node {name!r}'s LLM connection must come from an LLM node.")
+                raise ProtocolValidationError(f"Node {name!r}'s AI connection must come from an AI node.")
 
         tool_edges = _edges_with_handle(graph, nid, "tool", direction="incoming")
         memory_edges = _edges_with_handle(graph, nid, "memory", direction="incoming")
@@ -481,7 +506,9 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
         if node_type in _NODE_TYPE_TO_HANDLE:
             expected_handle = _NODE_TYPE_TO_HANDLE[node_type]
             allowed_handles = (
-                _LEGACY_DATASET_HANDLES if node_type in _DATASET_NODE_TYPES else frozenset({expected_handle})
+                _LEGACY_DATASET_HANDLES
+                if node_type in _DATASET_NODE_TYPES
+                else _LEGACY_HANDLES_BY_SLOT.get(expected_handle, frozenset({expected_handle}))
             )
             outgoing_wrong_handle = [
                 e
@@ -510,13 +537,18 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _edges_with_handle(graph: dict[str, Any], node_id: str, handle: str, *, direction: str) -> list[dict[str, Any]]:
-    """Edges into/out of *node_id* whose ``targetHandle`` matches *handle*
-    -- the connector-type marker always lives on the target side of an edge
+    """Edges into/out of *node_id* wired into the *handle* connector slot --
+    the connector-type marker always lives on the target side of an edge
     (see ``_CONNECTOR_HANDLES``), regardless of which end is being queried.
     ``direction`` is ``"incoming"`` (*node_id* is the edge's target) or
-    ``"outgoing"`` (*node_id* is the edge's source)."""
+    ``"outgoing"`` (*node_id* is the edge's source).
+
+    Matches every spelling that slot has ever been saved under, not just its
+    current id (see ``_LEGACY_HANDLES_BY_SLOT``), so callers can name the
+    current slot and never think about the rename again."""
     key = "target" if direction == "incoming" else "source"
-    return [e for e in graph.get("edges") or [] if e.get(key) == node_id and e.get("targetHandle") == handle]
+    handles = _LEGACY_HANDLES_BY_SLOT.get(handle, frozenset({handle}))
+    return [e for e in graph.get("edges") or [] if e.get(key) == node_id and e.get("targetHandle") in handles]
 
 
 def sink_node_ids(graph: dict[str, Any]) -> list[str]:
@@ -646,7 +678,7 @@ def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     from the required LLM connector instead (``topological_order`` already
     validated it exists exactly once)."""
     nodes, _downstream, _upstream = _adjacency(graph)
-    edges = _edges_with_handle(graph, node_id, "llm", direction="incoming")
+    edges = _edges_with_handle(graph, node_id, "ai", direction="incoming")
     if not edges:
         return {}
     source = nodes.get(edges[0]["source"])
@@ -1408,14 +1440,14 @@ def validate_single_node_runnable(graph: dict[str, Any], node_id: str) -> dict[s
             "This agent has upstream input from another node -- running it alone isn't supported yet. "
             "Use the canvas's main Run button to run the whole pipeline."
         )
-    llm_edges = _edges_with_handle(graph, node_id, "llm", direction="incoming")
+    llm_edges = _edges_with_handle(graph, node_id, "ai", direction="incoming")
     if len(llm_edges) != 1:
         raise ProtocolValidationError(
-            f"Node {_node_display_name(node)!r} must have exactly one LLM connection (found {len(llm_edges)})."
+            f"Node {_node_display_name(node)!r} must have exactly one AI connection (found {len(llm_edges)})."
         )
     llm_source = nodes.get(llm_edges[0]["source"])
     if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
-        raise ProtocolValidationError(f"Node {_node_display_name(node)!r}'s LLM connection must come from an LLM node.")
+        raise ProtocolValidationError(f"Node {_node_display_name(node)!r}'s AI connection must come from an AI node.")
     return node
 
 

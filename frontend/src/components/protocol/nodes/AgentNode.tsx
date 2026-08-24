@@ -87,7 +87,7 @@ export function AgentNode({
       </div>
       <NodeSummaryLine
         text={data.config?.prompt || data.config?.goal || null}
-        warning={data.missingLlm ? "No LLM connected -- this agent can't run" : null}
+        warning={data.missingLlm ? "No AI connected -- this agent can't run" : null}
       />
       {/* Architectural Pattern sits on the TOP edge, on its own -- it's a
           swap-only, never-zero connector (see its own comment below), a
@@ -99,7 +99,7 @@ export function AgentNode({
           claims the top-right corner, so top-left is the one open zone on
           this edge left for a third occupant. Resource joins it on this same
           top edge, mirrored to the top-RIGHT (see its own comment below).
-          The 3 bottom sub-connectors: required LLM (exactly one), optional
+          The 3 bottom sub-connectors: required AI (exactly one), optional
           max-1 Memory (visual scaffolding only -- see MemoryNodeData), and
           optional repeatable Tool. Script is a pure config source too, but
           deliberately does NOT get its own slot -- it wires into this same
@@ -119,7 +119,7 @@ export function AgentNode({
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left="15%" side="top">Pattern</ConnectorHandleLabel>
-      {/* Never hides once connected (unlike LLM/Memory) -- an execution
+      {/* Never hides once connected (unlike AI/Memory) -- an execution
           pattern must never go to zero (Motoro silently falls back
           to reason_act if left unconnected, undoing the whole point of
           making the default explicit), so the only way to change it is to
@@ -133,7 +133,7 @@ export function AgentNode({
           node (max one, matching protocol_execution.py's own "at most one
           Dataset connection" cap); it used to share the Tool slot, and
           graphs saved back then still carry dataset edges on targetHandle
-          "tool" -- ProtocolCanvas.tsx rewrites those to "resource" on load,
+          "tool" -- migrateLegacyHandles rewrites those to "resource" on load,
           and the backend keeps accepting both (see _LEGACY_DATASET_HANDLES).
 
           Sits on the top edge next to Pattern, since both are "what this
@@ -153,16 +153,21 @@ export function AgentNode({
       />
       <ConnectorHandleLabel left="85%" side="top" align="left">Resource</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="resource" left="85%" side="top" />
+      {/* Handle id `ai`; graphs saved before the rename carry these edges on
+          `llm` -- ProtocolCanvas.tsx rewrites those on load
+          (migrateLegacyHandles) and the backend keeps accepting both (see
+          _LEGACY_AI_HANDLES). The node types feeding it are still called
+          LLM_NODE_TYPES: those name a model family, not this slot. */}
       <Handle
         type="target"
-        id="llm"
+        id="ai"
         position={Position.Bottom}
         style={{ left: '20%' }}
-        title="LLM (required)"
+        title="AI (required)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="20%">LLM</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="llm" left="20%" />
+      <ConnectorHandleLabel left="20%">AI</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="ai" left="20%" />
       <Handle
         type="target"
         id="memory"

@@ -1,7 +1,7 @@
 import type { MouseEvent } from 'react'
 import { useNodeConnections } from '@xyflow/react'
 import { Plus } from 'lucide-react'
-import { useProtocolCanvasActions, type ConnectorSlot } from '../ProtocolCanvasContext'
+import { CONNECTOR_SLOT_LABELS, useProtocolCanvasActions, type ConnectorSlot } from '../ProtocolCanvasContext'
 
 // The affordance for an empty sub-connector: a short stub line ending
 // in a small "+" circle. Clicking it opens the same "+" side panel the
@@ -61,8 +61,8 @@ export function ConnectorAddStub({
     <button
       type="button"
       onClick={handleClick}
-      aria-label={`Add ${slot}`}
-      title={`Add ${slot}`}
+      aria-label={`Add ${CONNECTOR_SLOT_LABELS[slot]}`}
+      title={`Add ${CONNECTOR_SLOT_LABELS[slot]}`}
       className={
         side === 'right'
           ? 'group absolute top-1/2 -right-11 flex -translate-y-1/2 cursor-pointer items-center p-1.5'

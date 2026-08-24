@@ -97,7 +97,10 @@ const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry', 'llm
 const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
 // Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
 // whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
-const CONNECTOR_HANDLES = new Set(['llm', 'tool', 'memory', 'architectural_pattern', 'resource'])
+// Includes the pre-rename "llm" spelling for the same reason the backend
+// set does: a graph that hasn't been through migrateLegacyHandles yet must
+// not have its AI edges misread as main pipeline edges.
+const CONNECTOR_HANDLES = new Set(['ai', 'llm', 'tool', 'memory', 'architectural_pattern', 'resource'])
 // The two connector slots that live on an Agent's TOP edge (see
 // AgentNode.tsx) -- a node feeding one of these is placed ABOVE its agent,
 // every other slot's source below it.
@@ -171,25 +174,38 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
 // own Resource slot -- what an agent operates ON, not a capability it
 // operates WITH.
 const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; title: string }> = {
-  llm: { allowedTypes: LLM_NODE_TYPES, title: 'Add LLM' },
+  ai: { allowedTypes: LLM_NODE_TYPES, title: 'Add AI' },
   tool: { allowedTypes: ['mcp_tool', 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   resource: { allowedTypes: ['dataset'], title: 'Add Resource' },
 }
 
-// Dataset nodes wired before the Resource slot existed sit on targetHandle
-// "tool" (its old home). Rewritten to "resource" the moment a graph is
-// loaded into the canvas, so the edge lands on the right handle and the
-// next autosave persists the fix -- the backend keeps accepting either
-// handle for a dataset source regardless (_LEGACY_DATASET_HANDLES in
-// services/protocol_execution.py), so an old graph that's never opened
-// still runs.
-function migrateDatasetEdges(graph: ProtocolGraph): Edge[] {
+// Two connector slots have been renamed since graphs started being saved,
+// and a slot id lives in persisted data (it's the edge's source/targetHandle):
+//
+//   * "llm" -> "ai", on every edge, when the connector's caption became "AI".
+//   * "tool" -> "resource" for DATASET-sourced edges only -- Dataset used to
+//     share the Tool slot with mcp_tool/script, which both keep "tool". Hence
+//     the source-type check rather than a blanket swap.
+//
+// Rewritten the moment a graph is loaded into the canvas so the edge lands on
+// the right handle and the next autosave persists the fix. This is one of
+// three layers, none of them load-bearing alone: an Alembic data migration
+// (3f1a7c9b2e04) makes stored graphs canonical, the backend keeps resolving
+// the old spellings (_LEGACY_AI_HANDLES / _LEGACY_DATASET_HANDLES in
+// services/protocol_execution.py) so a graph that's never opened still runs,
+// and this covers a tab that loaded before the deploy and is still autosaving
+// old-spelling edges.
+function migrateLegacyHandles(graph: ProtocolGraph): Edge[] {
   const datasetIds = new Set(graph.nodes.filter((n) => n.type === 'dataset').map((n) => n.id))
-  return (graph.edges as Edge[]).map((e) =>
-    e.targetHandle === 'tool' && datasetIds.has(e.source) ? { ...e, sourceHandle: 'resource', targetHandle: 'resource' } : e,
-  )
+  return (graph.edges as Edge[]).map((e) => {
+    if (e.targetHandle === 'llm') return { ...e, sourceHandle: 'ai', targetHandle: 'ai' }
+    if (e.targetHandle === 'tool' && datasetIds.has(e.source)) {
+      return { ...e, sourceHandle: 'resource', targetHandle: 'resource' }
+    }
+    return e
+  })
 }
 
 // Imperative, not a prop -- DesignTab.tsx (a sibling of ProtocolCanvas, not
@@ -225,7 +241,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   initialGraph: ProtocolGraph
 }>(function ProtocolCanvas({ protocolId, experimentId, initialGraph }, canvasHandleRef) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialGraph.nodes as Node[])
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateDatasetEdges(initialGraph))
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateLegacyHandles(initialGraph))
   const queryClient = useQueryClient()
 
   // Mirrors the canvas's own live state into the shared query cache on
@@ -456,7 +472,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // wire-time by isValidConnection, and an execution pattern can never
   // reach zero (see nonDeletablePatternNodeIds above) -- so this is the
   // only one actually reachable through normal use.
-  const agentIdsWithLlm = useMemo(() => new Set(edges.filter((e) => e.targetHandle === 'llm').map((e) => e.target)), [edges])
+  const agentIdsWithLlm = useMemo(() => new Set(edges.filter((e) => e.targetHandle === 'ai').map((e) => e.target)), [edges])
 
   // The canvas's per-node Play icon is only offered for a node with no
   // upstream *main* pipeline edge (mirrors services.protocol_execution's
@@ -910,7 +926,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       const targetNode = nodes.find((n) => n.id === connection.target)
       if (!sourceNode || !targetNode) return false
       switch (connection.targetHandle) {
-        case 'llm':
+        case 'ai':
           return (
             LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
             (targetNode.type === 'agent' || targetNode.type === 'critic_gate')

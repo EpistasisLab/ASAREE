@@ -129,6 +129,7 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       ]
     case 'mcp_tool':
     case 'mcp_scikit_learn':
+    case 'mcp_client_tool':
       // Deliberately WITHOUT a whole-config "Server & tools" (tool_config)
       // factor, which these node types used to offer: its levels are each a
       // server + allow-list pair, so binding it would let a cell swap the
@@ -253,6 +254,7 @@ function isConnectorNodeType(type: string | undefined): boolean {
     type === 'memory' ||
     type === 'mcp_tool' ||
     type === 'mcp_scikit_learn' ||
+    type === 'mcp_client_tool' ||
     type === 'dataset' ||
     type === 'skill' ||
     type === 'okf_bundle' ||

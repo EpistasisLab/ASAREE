@@ -6,9 +6,9 @@ import type { DatasetNodeData, LlmNodeData, McpToolNodeData, OkfBundleNodeData, 
 // keeps this module from being coupled to that component's internals.
 const LLM_NODE_TYPES = new Set(['llm_anthropic', 'llm_openai', 'llm_azure_foundry'])
 // Ditto for the MCP-tool family (mcpServerCatalog.ts's MCP_TOOL_NODE_TYPES)
-// -- both types carry the same config, so a run summary reads the server
-// name off either one identically.
-const MCP_TOOL_NODE_TYPES = ['mcp_tool', 'mcp_scikit_learn']
+// -- every type in it carries the same config, so a run summary reads the
+// server name off any of them identically.
+const MCP_TOOL_NODE_TYPES = ['mcp_tool', 'mcp_scikit_learn', 'mcp_client_tool']
 // "llm" is the pre-rename spelling of "ai" (see migrateLegacyHandles in
 // ProtocolCanvas.tsx) -- kept here, as in that file's CONNECTOR_HANDLES, so
 // this stays a question of "is this a connector edge at all" rather than one

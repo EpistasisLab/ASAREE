@@ -14,7 +14,23 @@ export const MCP_SERVER_BROWSE = 'mcp_servers'
 // protocol_execution.py's own _MCP_TOOL_NODE_TYPES. They all carry an
 // identical McpToolNodeData; the type only records HOW the server was
 // chosen (see PRESETS below).
-export const MCP_TOOL_NODE_TYPES = ['mcp_tool', 'mcp_scikit_learn']
+export const MCP_TOOL_NODE_TYPES = ['mcp_tool', 'mcp_scikit_learn', 'mcp_client_tool']
+
+// The node for a server the USER connected, rather than one the deployment
+// had already registered: the MCP Servers browser pins a "Connect an MCP
+// server" row above its list, which registers a stdio or streamable-HTTP
+// connection (ConnectMcpServerDialog) and drops one of these on the canvas
+// bound to it.
+//
+// A type of its own, even though it carries the same McpToolNodeData and
+// runs through the same code path as `mcp_tool`, because the two answer
+// different questions on a canvas you come back to a month later: an
+// `mcp_tool` node points at infrastructure that was already there, while
+// this one points at a connection that only exists because this protocol
+// asked for it -- and whose endpoint is therefore part of the experiment's
+// record. Its inspector shows that endpoint; the generic one has none to
+// show.
+export const MCP_CLIENT_TOOL_NODE_TYPE = 'mcp_client_tool'
 
 export interface McpServerPreset {
   // The xyflow node type a node for this server is created as.
@@ -69,6 +85,21 @@ export function presetForServer(server: McpServer): McpServerPreset {
 export function nodeDataForServer(server: McpServer): McpToolNodeData {
   return {
     label: presetForServer(server).label,
+    config: {
+      server_id: server.id,
+      server_name: server.name,
+      tool_names: server.capabilities?.tools?.map((t) => t.name) ?? [],
+      enabled: true,
+    },
+  }
+}
+
+// Same data as nodeDataForServer, but labelled by the registered name rather
+// than a preset: a just-connected server has no preset by definition, and the
+// name is what the user themselves just typed.
+export function nodeDataForClientTool(server: McpServer): McpToolNodeData {
+  return {
+    label: server.name,
     config: {
       server_id: server.id,
       server_name: server.name,

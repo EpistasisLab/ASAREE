@@ -1996,6 +1996,21 @@ def test_resolve_tool_config_collects_all_connected_tool_nodes() -> None:
     assert resolved == {"server_names": ["srv-a", "srv-b"], "tool_names": ["srv-a.fn_a", "srv-b.fn_b"]}
 
 
+def test_resolve_tool_config_treats_a_client_tool_node_like_any_other() -> None:
+    """A user-registered server (the MCP Client Tool node) is a Tool source
+    like any other: same config shape, same resolution, no special case. Only
+    the node type differs, and only to record where the server came from."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    client = _tool_node("tool1", server_name="my-search", tool_names=["search"])
+    client["type"] = "mcp_client_tool"
+    graph = {"nodes": [_llm_node(), agent, client], "edges": [agent_llm_edge, _tool_edge("tool1", "a")]}
+    assert topological_order(graph)  # accepted on the Tool connector at all
+    assert pe._resolve_tool_config(graph, "a") == {
+        "server_names": ["my-search"],
+        "tool_names": ["my-search.search"],
+    }
+
+
 def test_resolve_tool_config_empty_when_no_tool_connections() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
     assert pe._resolve_tool_config(graph, "a") == {"server_names": [], "tool_names": []}

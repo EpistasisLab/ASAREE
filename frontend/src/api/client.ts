@@ -304,6 +304,18 @@ export const mcpServersApi = {
   // existing scope (system servers like asaree-workspace aren't listed here
   // either; not something the MCP Tool node picker widens).
   list: () => request<McpServer[]>('/mcp-servers'),
+  // Registers a connection the user typed in themselves -- backs the MCP
+  // Client Tool node (ConnectMcpServerDialog). The response already carries
+  // the discovered tools: core connects and lists them synchronously during
+  // registration, so a 201 whose `status` is 'error' means "row saved, server
+  // unreachable", not a failure to save. 409 on a duplicate `name`, 422 when
+  // the stdio allowlist or the SSRF guard rejects it.
+  create: (data: { name: string; transport: string; command?: string | null; url?: string | null; headers?: Record<string, string> | null }) =>
+    request<McpServer>('/mcp-servers', { method: 'POST', body: data }),
+  // Re-dials and re-discovers tools. The repair path for a server registered
+  // while it happened to be down.
+  reconnect: (id: string) => request<McpServer>(`/mcp-servers/${id}/reconnect`, { method: 'POST' }),
+  remove: (id: string) => request<void>(`/mcp-servers/${id}`, { method: 'DELETE' }),
 }
 
 export const skillsApi = {

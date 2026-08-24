@@ -1,5 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
-import { Wrench } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Plug, RefreshCw, Wrench } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
@@ -7,10 +9,16 @@ import { mcpServersApi } from '@/api/client'
 import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
+import { MCP_CLIENT_TOOL_NODE_TYPE } from './mcpServerCatalog'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { McpToolNodeData, ProtocolNode } from '@/types/protocols'
 
+// Kept in step with McpToolNode/McpClientToolNode's own accents -- the same
+// node shouldn't change colour between the canvas and its inspector.
 const ACCENT = hashToChartHue('mcp_tool')
+const CLIENT_ACCENT = hashToChartHue(MCP_CLIENT_TOOL_NODE_TYPE)
+
+const TRANSPORT_LABELS: Record<string, string> = { stdio: 'stdio', http: 'Streamable HTTP', sse: 'SSE' }
 
 // Same floating-dialog shell as AgentNodeInspector, but the "parameters" a
 // tool node needs are just "which server, which of its tools to allow" --
@@ -53,6 +61,25 @@ export function McpToolNodeInspector({
   onClose: () => void
 }) {
   const serversQuery = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list() })
+  const queryClient = useQueryClient()
+  const serverId = node?.data.config.server_id ?? null
+
+  // Re-dials and re-discovers tools, then writes the fresh list onto the node
+  // -- the node's own tool_names is what a run allow-lists against, so a
+  // reconnect that only updated the server row would leave the node stale.
+  const reconnectMutation = useMutation({
+    mutationFn: () => mcpServersApi.reconnect(serverId!),
+    onSuccess: (server) => {
+      queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+      const discovered = server.capabilities?.tools?.map((t) => t.name) ?? []
+      if (node) {
+        onChange(node.id, {
+          ...node.data,
+          config: { ...node.data.config, tool_names: node.data.config.tool_names.filter((n) => discovered.includes(n)) },
+        })
+      }
+    },
+  })
 
   if (!node) return null
   const data = node.data
@@ -61,6 +88,9 @@ export function McpToolNodeInspector({
   const selectedServer = serversQuery.data?.find((s) => s.id === config.server_id)
   const tools = selectedServer?.capabilities?.tools ?? []
   const selectedTools = config.tool_names ?? []
+  const isClientTool = node.type === MCP_CLIENT_TOOL_NODE_TYPE
+  const accent = isClientTool ? CLIENT_ACCENT : ACCENT
+  const Icon = isClientTool ? Plug : Wrench
 
   function patchConfig(patch: Partial<McpToolNodeData['config']>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
@@ -86,11 +116,15 @@ export function McpToolNodeInspector({
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-      accent={ACCENT}
+      accent={accent}
       title={
         <>
-          <Wrench className="size-5" style={{ color: ACCENT }} />
-          <EditableNodeTitle label={data.label} placeholder="MCP Tool" onCommit={(label) => onChange(node.id, { ...data, label })} />
+          <Icon className="size-5" style={{ color: accent }} />
+          <EditableNodeTitle
+            label={data.label}
+            placeholder={isClientTool ? 'MCP Client Tool' : 'MCP Tool'}
+            onCommit={(label) => onChange(node.id, { ...data, label })}
+          />
         </>
       }
       onDelete={() => onDelete(node.id)}
@@ -119,6 +153,46 @@ export function McpToolNodeInspector({
           </div>
         )}
       </FactorBindableField>
+
+      {/* Which process this node actually talks to. Most valuable on a client
+          tool -- its endpoint is something a user typed, so it's part of the
+          experiment's record rather than deployment infrastructure -- but a
+          preset node's connection is worth being able to confirm too. */}
+      {selectedServer && (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <Label>Connection</Label>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Reconnect"
+              title="Reconnect and re-discover this server's tools"
+              disabled={reconnectMutation.isPending}
+              onClick={() => reconnectMutation.mutate()}
+            >
+              <RefreshCw className={`size-3.5 ${reconnectMutation.isPending ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
+          <div className="space-y-1 rounded-lg border px-3 py-2">
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="font-mono text-xs">
+                {TRANSPORT_LABELS[selectedServer.transport] ?? selectedServer.transport}
+              </Badge>
+              {selectedServer.status !== 'connected' && (
+                <Badge variant="outline" className="text-destructive">
+                  {selectedServer.status}
+                </Badge>
+              )}
+            </div>
+            {/* dir="rtl" so a long command/URL truncates at the FRONT -- the
+                distinguishing part of either one is at the end. */}
+            <p className="truncate font-mono text-xs text-muted-foreground" dir="rtl" title={selectedServer.command ?? selectedServer.url ?? ''}>
+              {selectedServer.command ?? selectedServer.url ?? '(no endpoint recorded)'}
+            </p>
+            {selectedServer.error_message && <p className="text-xs text-destructive">{selectedServer.error_message}</p>}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">

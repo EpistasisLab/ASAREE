@@ -68,7 +68,14 @@ import { FactorEditorDialog } from './FactorEditorDialog'
 import { findFreePosition } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
 import { McpServerBrowserPanel } from './McpServerBrowserPanel'
-import { MCP_SERVER_BROWSE, MCP_TOOL_NODE_TYPES, nodeDataForServer, presetForServer } from './mcpServerCatalog'
+import {
+  MCP_CLIENT_TOOL_NODE_TYPE,
+  MCP_SERVER_BROWSE,
+  MCP_TOOL_NODE_TYPES,
+  nodeDataForClientTool,
+  nodeDataForServer,
+  presetForServer,
+} from './mcpServerCatalog'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { MemoryNodeInspector } from './MemoryNodeInspector'
 import {
@@ -95,6 +102,7 @@ import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
 import { DatasetNode } from './nodes/DatasetNode'
 import { LlmNode } from './nodes/LlmNode'
+import { McpClientToolNode } from './nodes/McpClientToolNode'
 import { McpToolNode } from './nodes/McpToolNode'
 import { MemoryNode } from './nodes/MemoryNode'
 import { ReasonActPatternNode } from './nodes/ReasonActPatternNode'
@@ -137,6 +145,10 @@ const NODE_TYPES = {
   // whether their server was picked in the browser or in a dropdown.
   mcp_tool: McpToolNode,
   mcp_scikit_learn: McpToolNode,
+  // The exception to "both MCP-tool types render the same": a client tool has
+  // its own icon and hue, since where its server came from is the one thing
+  // that distinguishes it. Same data, same inspector.
+  mcp_client_tool: McpClientToolNode,
   critic_gate: CriticGateNode,
   // All five LLM provider types render through the same component -- it
   // derives icon/accent/placeholder from data.config.provider, not from
@@ -178,10 +190,11 @@ function isNearViewport(a: Viewport, b: Viewport): boolean {
 }
 
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
-  // mcp_scikit_learn, skill and okf_bundle aren't here: none is ever created
-  // blank -- addServerNode/addSkillNode/addBundleNode build the data from the
-  // picked server/skill/bundle, since a node whose whole identity is one of
-  // those would be meaningless without it.
+  // mcp_scikit_learn, mcp_client_tool, skill and okf_bundle aren't here: none
+  // is ever created blank -- addServerNode/addClientToolNode/addSkillNode/
+  // addBundleNode build the data from the picked or just-connected
+  // server/skill/bundle, since a node whose whole identity is one of those
+  // would be meaningless without it.
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData()
   if (nodeType === 'critic_gate') return defaultCriticGateNodeData()
   if (nodeType === 'llm_anthropic') return defaultAnthropicLlmNodeData()
@@ -858,6 +871,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     addNode(presetForServer(server).nodeType, nodeDataForServer(server))
   }
 
+  // Same shape as addServerNode, for a server the user just registered through
+  // the browser's pinned "MCP Client Tool" row rather than picked off the list.
+  // It gets the dedicated client-tool type regardless of any preset: the point
+  // of the node is that this protocol brought its own server.
+  function addClientToolNode(server: McpServer) {
+    setServerBrowserOpen(false)
+    addNode(MCP_CLIENT_TOOL_NODE_TYPE, nodeDataForClientTool(server))
+  }
+
   // Same shape as addServerNode: the node is created with the bundle already
   // bound, and everything after this is the ordinary addNode path.
   function addBundleNode(bundle: OkfBundle) {
@@ -1269,6 +1291,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         {addPanelOpen && serverBrowserOpen ? (
           <McpServerBrowserPanel
             onPick={addServerNode}
+            onConnect={addClientToolNode}
             onBack={() => setServerBrowserOpen(false)}
             onClose={closeAddPanel}
           />

@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, X } from 'lucide-react'
+import { ArrowLeft, Plug, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { mcpServersApi } from '@/api/client'
 import { selectableMcpServers } from './bindableFields'
+import { ConnectMcpServerDialog } from './ConnectMcpServerDialog'
 import { presetForServer } from './mcpServerCatalog'
 import type { McpServer } from '@/types/mcpServers'
 
@@ -19,16 +20,29 @@ import type { McpServer } from '@/types/mcpServers'
 // The list is GET /mcp-servers, minus whatever selectableMcpServers hides,
 // so a server the deployment registers (or a researcher registers for
 // themselves) shows up here without a frontend change.
+//
+// Pinned above that list, always, is the MCP Client Tool row: it isn't one of
+// the registered servers, it's how you add one that isn't here yet (a stdio
+// subprocess or a streamable-HTTP endpoint). Pinned rather than sorted into
+// the list because it's the answer to "none of these is what I want" -- which
+// is exactly when a user has stopped reading the list -- and it stays put when
+// the search box filters everything else away.
 export function McpServerBrowserPanel({
   onPick,
+  onConnect,
   onBack,
   onClose,
 }: {
   onPick: (server: McpServer) => void
+  // Fires with a server the user just registered through the connect dialog,
+  // so the caller can place an MCP Client Tool node for it. Separate from
+  // onPick because the node type differs -- see MCP_CLIENT_TOOL_NODE_TYPE.
+  onConnect: (server: McpServer) => void
   onBack: () => void
   onClose: () => void
 }) {
   const [query, setQuery] = useState('')
+  const [connectOpen, setConnectOpen] = useState(false)
   const serversQuery = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list() })
   const servers = selectableMcpServers(serversQuery.data ?? [])
   const term = query.trim().toLowerCase()
@@ -50,6 +64,33 @@ export function McpServerBrowserPanel({
         </Button>
       </div>
       <Input autoFocus placeholder="Search servers…" value={query} onChange={(e) => setQuery(e.target.value)} />
+
+      {/* Outside the loading/error/empty branches below on purpose: connecting
+          a server is exactly what you want to do when the list failed to load
+          or has nothing in it. */}
+      <button
+        type="button"
+        onClick={() => setConnectOpen(true)}
+        className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2.5 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/30 transition-colors hover:bg-primary/10"
+      >
+        <Plug className="mt-0.5 size-4 shrink-0 text-primary" />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium">MCP Client Tool</p>
+          <p className="text-xs text-muted-foreground">
+            Connect your own server -- a local stdio command, or a remote streamable HTTP endpoint
+          </p>
+        </div>
+      </button>
+
+      <ConnectMcpServerDialog
+        open={connectOpen}
+        onOpenChange={setConnectOpen}
+        onConnected={(server) => {
+          setConnectOpen(false)
+          onConnect(server)
+        }}
+      />
+
       {serversQuery.isLoading ? (
         <div className="flex flex-col gap-1.5">
           <Skeleton className="h-14 w-full" />

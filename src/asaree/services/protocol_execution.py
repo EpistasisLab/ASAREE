@@ -169,11 +169,13 @@ _MEMORY_NODE_TYPES = frozenset({"memory"})  # one today; kept as a set for symme
 # _resolve_tool_config included -- treats them interchangeably and only this
 # set has to know both exist. They differ purely in how the server gets
 # chosen: "mcp_tool" is the generic node whose inspector has a server
-# dropdown, while "mcp_scikit_learn" is a node dedicated to one specific
-# server, picked from the canvas's MCP Servers browser and pinned at
-# creation. A future dedicated node for another server joins this set the
-# same way.
-_MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool", "mcp_scikit_learn"})
+# dropdown, "mcp_scikit_learn" is a node dedicated to one specific server,
+# picked from the canvas's MCP Servers browser and pinned at creation, and
+# "mcp_client_tool" is a server the user REGISTERED from that browser (a
+# stdio command or a streamable-HTTP URL they typed) rather than one the
+# deployment already had. A future dedicated node for another server joins
+# this set the same way.
+_MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool", "mcp_scikit_learn", "mcp_client_tool"})
 # One today each; kept as sets for symmetry with the other connector
 # families. Dataset declares which registered dataset an agent's workspace
 # tools operate on (_resolve_dataset_config, folded into _build_user_input's
@@ -348,6 +350,7 @@ _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "critic_gate": "Critic Gate",
     "mcp_tool": "MCP Tool",
     "mcp_scikit_learn": "Scikit-learn MCP",
+    "mcp_client_tool": "MCP Client Tool",
     "memory": "Memory",
     "dataset": "Dataset",
     "script": "Script",

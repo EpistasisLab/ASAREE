@@ -149,6 +149,39 @@ def _skill_edge(source: str, target: str) -> dict:
     return {"id": f"{source}-{target}-skill", "source": source, "target": target, "targetHandle": "skill"}
 
 
+def _okf_bundle_node(
+    node_id: str = "okf1",
+    server_name: str = "okf-bundle-spine-abc12345",
+    tool_names: list[str] | None = None,
+) -> dict:
+    return {
+        "id": node_id,
+        "type": "okf_bundle",
+        "data": {
+            "label": "",
+            "config": {
+                "bundle_id": "b1",
+                "server_name": server_name,
+                "bundle_path": "/home/r/okf/spine",
+                "bundle_label": "spine",
+                "tool_names": ["list_concepts", "read_concept"] if tool_names is None else tool_names,
+            },
+        },
+    }
+
+
+def _knowledge_edge(source: str, target: str) -> dict:
+    # OKF Bundle gets its own connector handle rather than sharing Tool's:
+    # what it declares is a knowledge base, not one more capability. It still
+    # resolves into the same tool allow-list -- see _resolve_knowledge_config.
+    return {
+        "id": f"{source}-{target}-knowledge",
+        "source": source,
+        "target": target,
+        "targetHandle": "knowledge",
+    }
+
+
 def _agent_with_llm(node_id: str, llm_id: str = "llm") -> tuple[dict, dict]:
     """A minimal valid agent + its required LLM connector edge -- the
     boilerplate every connector-validation test below needs just to get
@@ -1371,7 +1404,7 @@ def test_tool_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or",
     ):
         topological_order(graph)
 
@@ -1492,7 +1525,7 @@ def test_dataset_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or",
     ):
         topological_order(graph)
 
@@ -1552,7 +1585,7 @@ def test_script_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or",
     ):
         topological_order(graph)
 
@@ -1613,7 +1646,7 @@ def test_skill_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or",
     ):
         topological_order(graph)
 
@@ -1679,6 +1712,125 @@ def test_resolve_skill_config_empty_with_nothing_wired() -> None:
     assert pe._resolve_skill_config(graph, "a") == {}
 
 
+def test_knowledge_connector_is_repeatable_and_uncapped() -> None:
+    # Uncapped like Skill/Tool: reading a shared team bundle while writing to
+    # a personal one is a normal setup, not an ambiguity to resolve.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    b1 = _okf_bundle_node("b1", "okf-bundle-one-11111111")
+    b2 = _okf_bundle_node("b2", "okf-bundle-two-22222222")
+    graph = {
+        "nodes": [llm, agent, b1, b2],
+        "edges": [agent_llm_edge, _knowledge_edge("b1", "a"), _knowledge_edge("b2", "a")],
+    }
+    assert {n["id"] for n in topological_order(graph)} == {"llm", "a", "b1", "b2"}
+
+
+def test_knowledge_connection_from_non_bundle_node_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _skill_node()],
+        "edges": [agent_llm_edge, _knowledge_edge("skill1", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="Knowledge connection must come from an OKF Bundle node"):
+        topological_order(graph)
+
+
+def test_knowledge_connection_on_critic_gate_raises() -> None:
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate"), _okf_bundle_node()],
+        "edges": [
+            worker_llm_edge,
+            _llm_edge("llm", "g1"),
+            {"id": "w1-g1", "source": "w1", "target": "g1"},
+            _knowledge_edge("okf1", "g1"),
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="Only Agent nodes can have a Tool, Memory"):
+        topological_order(graph)
+
+
+def test_okf_bundle_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _okf_bundle_node(), _node("b", "agent")],
+        "edges": [
+            agent_llm_edge,
+            _knowledge_edge("okf1", "a"),
+            {"id": "okf1-b", "source": "okf1", "target": "b"},
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="OKF Bundle node .* can only connect to a node's Knowledge slot"):
+        topological_order(graph)
+
+
+def test_okf_bundle_node_is_not_a_sink() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _okf_bundle_node()],
+        "edges": [agent_llm_edge, _knowledge_edge("okf1", "a")],
+    }
+    assert pe.sink_node_ids(graph) == ["a"]
+
+
+def test_resolve_knowledge_config_namespaces_tool_names() -> None:
+    # The whole point of the resolver: gather_tools matches on
+    # "{server}.{tool}", so a bare name silently starves the agent instead of
+    # erroring.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _okf_bundle_node("b1", "okf-bundle-spine-abc12345")],
+        "edges": [agent_llm_edge, _knowledge_edge("b1", "a")],
+    }
+    assert pe._resolve_knowledge_config(graph, "a") == {
+        "server_names": ["okf-bundle-spine-abc12345"],
+        "tool_names": [
+            "okf-bundle-spine-abc12345.list_concepts",
+            "okf-bundle-spine-abc12345.read_concept",
+        ],
+    }
+
+
+def test_resolve_knowledge_config_dedupes_and_skips_disabled_and_unset() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    duplicate = _okf_bundle_node("b2", "okf-bundle-spine-abc12345")
+    disabled = _okf_bundle_node("b3", "okf-bundle-other-99999999")
+    disabled["data"]["config"]["enabled"] = False
+    unset = _okf_bundle_node("b4", "")
+    graph = {
+        "nodes": [
+            llm,
+            agent,
+            _okf_bundle_node("b1", "okf-bundle-spine-abc12345"),
+            duplicate,
+            disabled,
+            unset,
+        ],
+        "edges": [
+            agent_llm_edge,
+            _knowledge_edge("b1", "a"),
+            _knowledge_edge("b2", "a"),
+            _knowledge_edge("b3", "a"),
+            _knowledge_edge("b4", "a"),
+        ],
+    }
+    assert pe._resolve_knowledge_config(graph, "a")["server_names"] == ["okf-bundle-spine-abc12345"]
+
+
+def test_resolve_knowledge_config_empty_with_nothing_wired() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_knowledge_config(graph, "a") == {"server_names": [], "tool_names": []}
+
+
 def test_multiple_execution_pattern_connections_raises() -> None:
     # Capped at one -- execution_pattern is a single value, unlike Tool
     # (repeatable) or Memory (already max-1 for a different reason).
@@ -1720,7 +1872,7 @@ def test_architectural_pattern_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or",
     ):
         topological_order(graph)
 
@@ -1857,8 +2009,6 @@ def test_resolve_tool_config_allows_multiple_tools_from_one_server() -> None:
     graph = {"nodes": [agent, tool], "edges": [agent_llm_edge, _tool_edge("tool1", "a")]}
     resolved = pe._resolve_tool_config(graph, "a")
     assert resolved == {"server_names": ["srv-a"], "tool_names": ["srv-a.fn_a", "srv-a.fn_b", "srv-a.fn_c"]}
-
-
 
 
 def test_resolve_tool_config_skips_disabled_tool_node() -> None:

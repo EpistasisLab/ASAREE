@@ -1,5 +1,5 @@
 import type { Edge, Node } from '@xyflow/react'
-import type { DatasetNodeData, LlmNodeData, McpToolNodeData, SkillNodeData } from '@/types/protocols'
+import type { DatasetNodeData, LlmNodeData, McpToolNodeData, OkfBundleNodeData, SkillNodeData } from '@/types/protocols'
 
 // Plain duplicate of ProtocolCanvas.tsx's own LLM_NODE_TYPES rather than a
 // shared import -- same reasoning as nodeConfigIssues.ts's own comment:
@@ -13,7 +13,16 @@ const MCP_TOOL_NODE_TYPES = ['mcp_tool', 'mcp_scikit_learn']
 // ProtocolCanvas.tsx) -- kept here, as in that file's CONNECTOR_HANDLES, so
 // this stays a question of "is this a connector edge at all" rather than one
 // that silently answers no for a graph that hasn't been normalised yet.
-const DEPENDENCY_HANDLES = new Set(['ai', 'llm', 'tool', 'memory', 'architectural_pattern', 'resource', 'skill'])
+const DEPENDENCY_HANDLES = new Set([
+  'ai',
+  'llm',
+  'tool',
+  'memory',
+  'architectural_pattern',
+  'resource',
+  'skill',
+  'knowledge',
+])
 
 export type RunScope = { type: 'graph' } | { type: 'cell'; label: string } | { type: 'node'; nodeId: string; label: string }
 
@@ -24,6 +33,7 @@ export interface RunSummary {
   models: string[]
   toolServers: string[]
   skills: string[]
+  knowledgeBundles: string[]
 }
 
 // Builds a plain-language summary of what a Run click will actually
@@ -57,6 +67,18 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
       .map((config) => config?.skill_name)
       .filter((name): name is string => !!name),
   )
+  // Same `enabled` filter and same reason as skills: an off bundle's tools
+  // never reach the agent's allow-list (_resolve_knowledge_config skips it).
+  // Labelled by folder, not by the generated okf-bundle-<hash> server name --
+  // the folder is what the user recognises.
+  const knowledgeBundles = uniq(
+    relevantNodes
+      .filter((n) => n.type === 'okf_bundle')
+      .map((n) => (n.data as OkfBundleNodeData).config)
+      .filter((config) => (config?.enabled ?? true) && !!config?.server_name)
+      .map((config) => config.bundle_label ?? config.bundle_path ?? config.server_name)
+      .filter((name): name is string => !!name),
+  )
   const models = uniq(
     relevantNodes
       .filter((n) => LLM_NODE_TYPES.has(n.type ?? ''))
@@ -84,6 +106,7 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
     models,
     toolServers,
     skills,
+    knowledgeBundles,
   }
 }
 

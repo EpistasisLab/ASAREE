@@ -31,6 +31,7 @@ from motoro.runner import create_agent, create_run, execute_run, get_agent_by_na
 from motoro.schemas.agent import ModelConfig
 from motoro.schemas.output import parse_envelope
 from motoro.schemas.pattern import PatternConfig
+from motoro.services.mcp_service import hydrate_registry
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.config import get_settings
@@ -129,7 +130,9 @@ class ProtocolValidationError(Exception):
 # _LEGACY_AI_HANDLES): an un-migrated edge must still be recognised as a
 # connector, or it would be misread as a main pipeline edge and turn a
 # perfectly good graph into a cycle/ordering error.
-_CONNECTOR_HANDLES = frozenset({"ai", "llm", "tool", "memory", "architectural_pattern", "resource", "skill"})
+_CONNECTOR_HANDLES = frozenset(
+    {"ai", "llm", "tool", "memory", "architectural_pattern", "resource", "skill", "knowledge"}
+)
 
 # Each connector slot accepts a FAMILY of node types, not one exact type --
 # mirrors how "tool" already accepts any mcp_tool node. LLM and Architectural
@@ -190,6 +193,22 @@ _SCRIPT_NODE_TYPES = frozenset({"script"})
 # normal case, since level-1 metadata is ~100 tokens each and a body only
 # loads when the model asks for it.
 _SKILL_NODE_TYPES = frozenset({"skill"})
+# An OKF Bundle node names one registered OKF bundle -- a directory of
+# markdown concepts the user pointed ASAREE at, served by its own MCP server
+# process (see asaree.services.okf_bundles for why it's a server per bundle
+# and not a path argument). It gets its own Knowledge connector rather than
+# sharing Tool's, because what it contributes is a *knowledge base the agent
+# reads and writes*, not one more capability: the distinction the canvas is
+# making is the same one OKF itself makes, and burying a bundle among five
+# MCP servers on the Tool slot would lose it.
+#
+# Mechanically, though, it IS an MCP server, so it resolves into the very same
+# tool_config as the Tool connector (_resolve_knowledge_config, merged in
+# _run_agent_node) -- the split is at the level of what the user is saying,
+# not how the run consumes it. Repeatable and uncapped, like Skill and Tool:
+# an agent may legitimately read from a shared team bundle and write to its
+# own.
+_OKF_BUNDLE_NODE_TYPES = frozenset({"okf_bundle"})
 
 # Every node type that's a pure config source -- never gets its own execution
 # turn, never a pipeline "final output" (see sink_node_ids/run_protocol's
@@ -203,6 +222,7 @@ _PURE_CONFIG_SOURCE_TYPES = (
     | _DATASET_NODE_TYPES
     | _SCRIPT_NODE_TYPES
     | _SKILL_NODE_TYPES
+    | _OKF_BUNDLE_NODE_TYPES
 )
 
 # Which connector handle each pure-config-source node type may exclusively
@@ -227,6 +247,7 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "resource" for t in _DATASET_NODE_TYPES},
     **{t: "tool" for t in _SCRIPT_NODE_TYPES},
     **{t: "skill" for t in _SKILL_NODE_TYPES},
+    **{t: "knowledge" for t in _OKF_BUNDLE_NODE_TYPES},
 }
 # The user-facing name of each connector slot -- mirrors
 # CONNECTOR_SLOT_LABELS on the frontend, so a validation error always names
@@ -239,6 +260,7 @@ _HANDLE_LABELS: dict[str, str] = {
     "tool": "Tool",
     "resource": "Resource",
     "skill": "Skill",
+    "knowledge": "Knowledge",
 }
 
 # Two connector slots have been renamed since graphs started being saved,
@@ -330,6 +352,7 @@ _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "dataset": "Dataset",
     "script": "Script",
     "skill": "Skill",
+    "okf_bundle": "OKF Bundle",
     "pattern_reason_act": "Reason + Act",
     "pattern_single_agent_baseline": "Single-Agent Baseline",
     "llm_anthropic": "Anthropic",
@@ -459,6 +482,7 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
         pattern_edges = _edges_with_handle(graph, nid, "architectural_pattern", direction="incoming")
         resource_edges = _edges_with_handle(graph, nid, "resource", direction="incoming")
         skill_edges = _edges_with_handle(graph, nid, "skill", direction="incoming")
+        knowledge_edges = _edges_with_handle(graph, nid, "knowledge", direction="incoming")
         if node_type == "agent":
             # The Tool connector accepts a family of source types -- an
             # mcp_tool node contributes a callable capability, while a
@@ -483,9 +507,7 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             for edge in resource_edges:
                 resource_source = nodes.get(edge["source"])
                 if resource_source is None or resource_source.get("type") not in _DATASET_NODE_TYPES:
-                    raise ProtocolValidationError(
-                        f"Node {name!r}'s Resource connection must come from a Dataset node."
-                    )
+                    raise ProtocolValidationError(f"Node {name!r}'s Resource connection must come from a Dataset node.")
             # Deliberately uncapped, like Tool and unlike Memory/Dataset/
             # Script: several skills on one agent is the normal case, not an
             # ambiguity to resolve -- each contributes ~100 tokens of level-1
@@ -495,6 +517,16 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 skill_source = nodes.get(edge["source"])
                 if skill_source is None or skill_source.get("type") not in _SKILL_NODE_TYPES:
                     raise ProtocolValidationError(f"Node {name!r}'s Skill connection must come from a Skill node.")
+            # Uncapped for the same reason as Skill: reading a shared team
+            # bundle while writing to a personal one is a normal setup, not an
+            # ambiguity. _resolve_knowledge_config de-dupes by server name, so
+            # two nodes naming the same bundle cost nothing.
+            for edge in knowledge_edges:
+                knowledge_source = nodes.get(edge["source"])
+                if knowledge_source is None or knowledge_source.get("type") not in _OKF_BUNDLE_NODE_TYPES:
+                    raise ProtocolValidationError(
+                        f"Node {name!r}'s Knowledge connection must come from an OKF Bundle node."
+                    )
             script_edges = [e for e in tool_edges if (nodes.get(e["source"]) or {}).get("type") in _SCRIPT_NODE_TYPES]
             if len(memory_edges) > 1:
                 raise ProtocolValidationError(
@@ -532,10 +564,10 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                         f"Node {name!r}'s Architectural Pattern connection must come from an Architectural "
                         "Pattern node."
                     )
-        elif tool_edges or memory_edges or pattern_edges or resource_edges or skill_edges:
+        elif tool_edges or memory_edges or pattern_edges or resource_edges or skill_edges or knowledge_edges:
             raise ProtocolValidationError(
-                f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, or Skill "
-                f"connection (node {name!r})."
+                f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Resource, Skill, or "
+                f"Knowledge connection (node {name!r})."
             )
 
         if node_type in _NODE_TYPE_TO_HANDLE:
@@ -552,15 +584,16 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             ]
             if outgoing_wrong_handle:
                 handle_label = _HANDLE_LABELS[expected_handle]
-                # Script shares the Tool handle, and Dataset owns the
-                # Resource one, but neither is literally a "Tool"/"Resource"
-                # node -- use their own display name as the leading noun
-                # (e.g. "Dataset node 'X' can only connect to a node's
-                # Resource slot") while every other family's leading noun
-                # still matches its handle label 1:1, unchanged.
+                # Script shares the Tool handle, Dataset owns the Resource
+                # one, and OKF Bundle owns Knowledge, but none of them is
+                # literally a "Tool"/"Resource"/"Knowledge" node -- use their
+                # own display name as the leading noun (e.g. "Dataset node 'X'
+                # can only connect to a node's Resource slot") while every
+                # other family's leading noun still matches its handle label
+                # 1:1, unchanged.
                 leading_label = (
                     _NODE_TYPE_DISPLAY_NAMES[node_type]
-                    if node_type in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES
+                    if node_type in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES | _OKF_BUNDLE_NODE_TYPES
                     else handle_label
                 )
                 raise ProtocolValidationError(
@@ -597,9 +630,7 @@ def sink_node_ids(graph: dict[str, Any]) -> list[str]:
     sink)."""
     nodes, downstream, _upstream = _adjacency(graph)
     return [
-        nid
-        for nid, node in nodes.items()
-        if not downstream[nid] and node.get("type") not in _PURE_CONFIG_SOURCE_TYPES
+        nid for nid, node in nodes.items() if not downstream[nid] and node.get("type") not in _PURE_CONFIG_SOURCE_TYPES
     ]
 
 
@@ -871,6 +902,45 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     return {"server_names": server_names, "tool_names": tool_names}
 
 
+def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """The Knowledge connector's contribution to the agent's tool allow-list,
+    shaped exactly like ``_resolve_tool_config``'s so the two can be merged.
+
+    An OKF bundle is served by a real MCP server (one process per bundle --
+    see :mod:`asaree.services.okf_bundles`), so at run time "knowledge" is
+    just more tools: the split between this connector and Tool is about what
+    the user is declaring, not about how the engine consumes it. Hence the
+    identical shape rather than a separate Motoro config slot -- unlike Skill,
+    core has no ``knowledge_config`` to hand this to.
+
+    Namespaced ``"{server_name}.{tool}"`` for the same non-negotiable reason
+    as ``_resolve_tool_config``: bare names match nothing in
+    ``run_tools.gather_tools`` and would silently leave the agent with no
+    tools at all. A node with no ``tool_names`` cached (a bundle whose server
+    failed to spawn, so nothing was ever discovered) contributes its server
+    name but no tools -- the run then behaves as if the bundle weren't wired,
+    which is the honest outcome for a bundle that isn't actually reachable.
+
+    De-duplicated by server: two nodes pointing at the same bundle are one
+    server, and listing it twice would just double every tool name."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    server_names: list[str] = []
+    tool_names: list[str] = []
+    for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") not in _OKF_BUNDLE_NODE_TYPES:
+            continue
+        bundle_config = (source.get("data") or {}).get("config") or {}
+        if not bundle_config.get("enabled", True):
+            continue
+        server_name = bundle_config.get("server_name")
+        if not server_name or server_name in server_names:
+            continue
+        server_names.append(server_name)
+        tool_names.extend(f"{server_name}.{name}" for name in bundle_config.get("tool_names") or [])
+    return {"server_names": server_names, "tool_names": tool_names}
+
+
 def _is_node_active(node: dict[str, Any]) -> bool:
     """Whether this node's own logic actually runs -- a deactivated node
     passes its upstream input straight through as its own output instead
@@ -926,9 +996,7 @@ def _build_user_input(
 
     upstream_ids = _upstream_ids(graph, node["id"])
     upstream_context = [
-        f"[{uid}]: {node_runs[uid]['output_text']}"
-        for uid in upstream_ids
-        if node_runs.get(uid, {}).get("output_text")
+        f"[{uid}]: {node_runs[uid]['output_text']}" for uid in upstream_ids if node_runs.get(uid, {}).get("output_text")
     ]
     if upstream_context:
         parts.append("Upstream context:\n" + "\n\n".join(upstream_context))
@@ -1051,6 +1119,17 @@ async def _run_agent_node(
     model_config_data = {k: v for k, v in _resolve_llm_config(graph, node["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
     tool_config = _resolve_tool_config(graph, node["id"])
+    # The Knowledge connector's OKF bundles are MCP servers like any other, so
+    # they land in this same allow-list rather than a slot of their own -- see
+    # _resolve_knowledge_config. Appended, not merged key-by-key: both halves
+    # are already namespaced and de-duplicated within themselves, and a bundle
+    # can't collide with a Tool-connector server (its name is generated,
+    # okf-bundle-prefixed, and unique per owner+path).
+    knowledge_config = _resolve_knowledge_config(graph, node["id"])
+    tool_config = {
+        "server_names": tool_config["server_names"] + knowledge_config["server_names"],
+        "tool_names": tool_config["tool_names"] + knowledge_config["tool_names"],
+    }
     pattern_config_data = _resolve_pattern_config(graph, node["id"])
     pattern_config = PatternConfig(
         execution_pattern=pattern_config_data.get("execution_pattern"),
@@ -1410,7 +1489,7 @@ async def plan_cell_runs(
     owner_id: uuid.UUID,
     graph: dict[str, Any],
 ) -> tuple[list[ProtocolRun], int]:
-    """"Run all cells": creates one pending :class:`ProtocolRun` per
+    """ "Run all cells": creates one pending :class:`ProtocolRun` per
     not-yet-scored :class:`FactorialCellResult` under *experiment_id*, each
     carrying that cell's own ``factor_values`` for ``run_protocol`` to
     substitute at execution time via ``apply_factor_bindings``. Returns
@@ -1577,6 +1656,19 @@ async def _run_single_node(
 
 
 async def run_protocol(protocol_run_id: uuid.UUID) -> None:
+    # The worker hydrates its MCP registry once, at startup (worker/settings.py),
+    # so any server registered SINCE then -- an OKF bundle the user added
+    # mid-session being the case this exists for -- isn't live in this process
+    # and its tools would silently be missing from gather_tools' allow-list
+    # match. Re-hydrating here picks those up; it's a cheap no-op for servers
+    # already in the registry, which is every one of them on the common path.
+    # Best-effort: a hydration failure costs the run whatever servers weren't
+    # already live (surfacing as a normal "tool not available" at agent level),
+    # which is a far better outcome than refusing to start the run at all.
+    try:
+        await hydrate_registry()
+    except Exception:
+        logger.warning("MCP registry hydration failed; continuing with the registry as-is", exc_info=True)
     async with get_session() as db:
         run = await get_protocol_run(db, protocol_run_id)
         if run is None:
@@ -1681,8 +1773,15 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         if node_id in gated_by:
             gate = gated_by[node_id]
             worker_run, gate_run = await _run_gated_worker(
-                node, gate, protocol_id=protocol_id, protocol_run_id=protocol_run_id, owner_id=owner_id,
-                graph=graph, node_runs=node_runs, workspace_id=workspace_id, experiment_id=experiment_id,
+                node,
+                gate,
+                protocol_id=protocol_id,
+                protocol_run_id=protocol_run_id,
+                owner_id=owner_id,
+                graph=graph,
+                node_runs=node_runs,
+                workspace_id=workspace_id,
+                experiment_id=experiment_id,
                 effective_cell_label=effective_cell_label,
             )
             node_runs[node_id] = worker_run

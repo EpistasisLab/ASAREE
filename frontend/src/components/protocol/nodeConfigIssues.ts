@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import type { LLMSettingModelsResponse } from '@/types/llmSettings'
+import type { OkfBundle } from '@/types/okf'
 import type { Skill } from '@/types/skills'
 import type {
   DatasetNodeData,
@@ -8,6 +9,7 @@ import type {
   McpToolNodeData,
   ReasonActPatternNodeData,
   ScriptNodeData,
+  OkfBundleNodeData,
   SkillNodeData,
 } from '@/types/protocols'
 import { PROVIDER_META } from './nodes/LlmNode'
@@ -113,6 +115,29 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
           const cached = queryClient.getQueryData<Skill[]>(['skills'])
           if (cached && !cached.some((s) => s.id === config.skill_id)) {
             issues.push(`Skill no longer exists${config.skill_name ? ` ("${config.skill_name}")` : ''}`)
+          }
+        }
+        break
+      }
+      case 'okf_bundle': {
+        const config = (node.data as OkfBundleNodeData).config
+        // Same wording as OkfBundleNode's own badge. server_name, not
+        // bundle_id, is what a run keys off -- a node without it contributes
+        // nothing even if it still remembers which row it came from.
+        if (!config?.server_name) {
+          issues.push('No bundle selected')
+        } else if ((config.tool_names?.length ?? 0) === 0) {
+          // Registered, but its MCP server never reported any tools -- almost
+          // always a server that failed to spawn. The agent would get nothing
+          // from the bundle, silently, so it's worth flagging up front.
+          issues.push('No tools discovered -- the bundle server may have failed to start')
+        } else {
+          // A set id can still resolve to nothing -- deregistered, or a graph
+          // imported from another account. Cache-only, same contract as the
+          // skill check above: a miss means "can't tell," not an issue.
+          const cached = queryClient.getQueryData<OkfBundle[]>(['okf-bundles'])
+          if (cached && !cached.some((b) => b.id === config.bundle_id)) {
+            issues.push(`OKF bundle is no longer registered${config.bundle_path ? ` ("${config.bundle_path}")` : ''}`)
           }
         }
         break

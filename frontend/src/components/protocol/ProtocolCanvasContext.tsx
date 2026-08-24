@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 
-export type ConnectorSlot = 'ai' | 'tool' | 'memory' | 'architectural_pattern' | 'resource' | 'skill'
+export type ConnectorSlot = 'ai' | 'tool' | 'memory' | 'architectural_pattern' | 'resource' | 'skill' | 'knowledge'
 
 // What each slot is CALLED in the UI, as opposed to the handle id it's
 // stored under -- the multi-word ones would otherwise surface raw,
@@ -14,6 +14,7 @@ export const CONNECTOR_SLOT_LABELS: Record<ConnectorSlot, string> = {
   architectural_pattern: 'Architectural Pattern',
   resource: 'Resource',
   skill: 'Skill',
+  knowledge: 'Knowledge',
 }
 
 export interface ConnectorAddRequest {

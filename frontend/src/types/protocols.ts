@@ -26,6 +26,7 @@ export interface ProtocolNode {
     | DatasetNodeData
     | ScriptNodeData
     | SkillNodeData
+    | OkfBundleNodeData
     | ReasonActPatternNodeData
     | SingleAgentBaselinePatternNodeData
 }
@@ -441,6 +442,48 @@ export interface SkillNodeData {
 // builds it from the skill picked in the browser, since a node whose whole
 // identity is one skill would be meaningless without it -- same as the
 // server-dedicated MCP node types.
+
+// An "OKF Bundle" node -- the Knowledge connector's one node type. Names a
+// registered OKF bundle: a directory of Markdown concept files (Open Knowledge
+// Format) on the SERVER's disk that the user pointed ASAREE at, and that the
+// wired agent can read from and write back to during a run.
+//
+// Registration is a server-side act (POST /okf/bundles), not a path typed onto
+// this node, because the OKF MCP server jails itself to one directory read from
+// its own process environment -- so each bundle is its own MCP server process
+// (see services/okf_bundles.py). That makes `server_name` the field a run
+// actually reads: _resolve_knowledge_config namespaces the tool names against
+// it and merges them into the agent's tool_config, exactly like an MCP Tool
+// node. The Knowledge/Tool split is about what the user is DECLARING -- a
+// knowledge base versus a capability -- not about how the engine consumes it.
+export interface OkfBundleNodeConfig {
+  // The registered MCP server row (GET /okf/bundles). Cached so the inspector
+  // can refresh tools / preview concepts without re-resolving from the name.
+  bundle_id: string | null
+  // What a run keys off -- the generated okf-bundle-* server name. Without it
+  // the node contributes nothing, since its tools can't be namespaced.
+  server_name: string | null
+  // Display only: the absolute path on the server, and the folder's own name.
+  bundle_path: string | null
+  bundle_label: string | null
+  // The bundle server's tools, BARE (e.g. "read_concept"), cached at
+  // registration. Namespaced "{server_name}.{tool}" at resolve time, matching
+  // McpToolNodeConfig. No per-tool picker in V1: a bundle's tools are a fixed
+  // read/write set that only makes sense together.
+  tool_names: string[]
+  // Absent means enabled, matching every other connector's own convention.
+  enabled?: boolean
+}
+
+export interface OkfBundleNodeData {
+  label: string
+  config: OkfBundleNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+// No default factory, same reasoning as Skill: the bundle IS the node, so it's
+// built from the one picked in the browser -- see okfCatalog.ts.
 
 // The Architectural Pattern connector's node family -- UNLIKE Memory (see
 // MemoryNodeData's own comment), wiring one into an Agent's Architectural

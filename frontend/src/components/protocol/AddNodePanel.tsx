@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { ArrowRight, Atom, Bot, BrainCircuit, Cloud, Code2, Database, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
+import { ArrowRight, Atom, BookMarked, Bot, BrainCircuit, Cloud, Code2, Database, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { MCP_SERVER_BROWSE } from './mcpServerCatalog'
+import { OKF_BUNDLE_BROWSE } from './okfCatalog'
 import { SKILL_BROWSE } from './skillCatalog'
 
 // Every entry here earns its place: GET /api/mcp-servers already backs the
@@ -95,6 +96,16 @@ const NODE_CATALOG = [
     label: 'Skills',
     description: 'Browse your Agent Skills -- one SKILL.md an Agent opens when its description matches the task',
     icon: ScrollText,
+  },
+  // Not a node type either -- picking this opens the OKF bundle browser
+  // (OkfBundleBrowserPanel), same reasoning as MCP Servers and Skills above.
+  // That browser is also the only place bundles are registered, since one
+  // means picking a directory on the server rather than uploading anything.
+  {
+    type: OKF_BUNDLE_BROWSE,
+    label: 'OKF Bundles',
+    description: 'A folder of Markdown concepts on the server that an Agent reads and writes as it works',
+    icon: BookMarked,
   },
   {
     type: 'script',

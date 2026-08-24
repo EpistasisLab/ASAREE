@@ -15,6 +15,7 @@ import type { Dataset } from '@/types/datasets'
 import type { Cell, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
+import type { OkfBrowseResponse, OkfBundle } from '@/types/okf'
 import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse } from '@/types/skills'
@@ -336,6 +337,25 @@ export const skillsApi = {
   // Soft-deletes server-side: an agent still holding this id keeps running,
   // just without the skill (Motoro's resolve_skills skips and logs it).
   remove: (id: string) => request<void>(`/skills/${id}`, { method: 'DELETE' }),
+}
+
+export const okfApi = {
+  // Browse the SERVER's disk, jailed to its configured bundle root. There is
+  // no client-machine file access anywhere in this feature -- on the local
+  // single-machine install this is built for, the server's disk IS the user's.
+  browse: (path = '') => request<OkfBrowseResponse>(`/okf/browse?path=${encodeURIComponent(path)}`),
+  list: () => request<OkfBundle[]>('/okf/bundles'),
+  // Spawns an OKF MCP server jailed to `path` and persists the registration,
+  // so a bad path fails here rather than mid-run. Idempotent per (user, path).
+  create: (path: string) => request<OkfBundle>('/okf/bundles', { method: 'POST', body: { path } }),
+  // Re-discover the bundle server's tools, and clear a stale connection error.
+  refresh: (id: string) => request<OkfBundle>(`/okf/bundles/${id}/refresh`, { method: 'POST' }),
+  // Forgets the registration only -- never touches the directory itself.
+  remove: (id: string) => request<void>(`/okf/bundles/${id}`, { method: 'DELETE' }),
+  // The bundle server's own list_concepts output, verbatim, for the inspector's
+  // preview -- what's in there is the server's answer, not one reconstructed
+  // from a directory listing.
+  concepts: (id: string) => request<{ is_error: boolean; content: string }>(`/okf/bundles/${id}/concepts`),
 }
 
 export const llmSettingsApi = {

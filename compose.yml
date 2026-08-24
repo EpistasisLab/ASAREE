@@ -149,6 +149,12 @@ services:
       # spawns it — hence the service name. Allowlisted for MCP subprocesses
       # via ASAREE_MCP_ALLOWED_ENV_VARS in .env.
       ASAREE_API_URL: http://asaree-app:8000
+      # The user-bundle browse/registration root (Knowledge connector). The
+      # .env default is a host path meaning nothing in here — inside the
+      # container the only host filesystem visible is the ./data mount below,
+      # so that mount IS the reachable universe. A user's bundle has to be
+      # placed under ./data on the host to be registrable at all.
+      ASAREE_OKF_BUNDLE_ROOT: /app/data
     ports:
       - "8000:8000"
     volumes:
@@ -187,6 +193,9 @@ services:
       ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/asaree
       ASAREE_REDIS_URL: redis://motoro-redis:6379/0
       ASAREE_API_URL: http://asaree-app:8000
+      # Must match asaree-app's: this is the process that actually spawns a
+      # bundle's MCP server, so a path the API accepted has to resolve here too.
+      ASAREE_OKF_BUNDLE_ROOT: /app/data
     command: ["arq", "asaree.worker.settings.WorkerSettings"]
     volumes:
       # Same mount as asaree-app, and for the same reason: the dataset

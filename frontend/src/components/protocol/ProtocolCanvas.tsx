@@ -44,6 +44,7 @@ import type {
   LlmNodeData,
   McpToolNodeData,
   MemoryNodeData,
+  OkfBundleNodeData,
   ProtocolGraph,
   ProtocolNode,
   ReasonActPatternNodeData,
@@ -53,6 +54,7 @@ import type {
 } from '@/types/protocols'
 import type { DesignFactor } from '@/types/experiments'
 import type { McpServer } from '@/types/mcpServers'
+import type { OkfBundle } from '@/types/okf'
 import type { Skill } from '@/types/skills'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
@@ -82,6 +84,9 @@ import type { RunScope } from './runSummary'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
 import { SelectCellDialog } from './SelectCellDialog'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
+import { OkfBundleBrowserPanel } from './OkfBundleBrowserPanel'
+import { OKF_BUNDLE_BROWSE, nodeDataForBundle } from './okfCatalog'
+import { OkfBundleNodeInspector } from './OkfBundleNodeInspector'
 import { SkillBrowserPanel } from './SkillBrowserPanel'
 import { SKILL_BROWSE, nodeDataForSkill } from './skillCatalog'
 import { SkillNodeInspector } from './SkillNodeInspector'
@@ -95,6 +100,7 @@ import { MemoryNode } from './nodes/MemoryNode'
 import { ReasonActPatternNode } from './nodes/ReasonActPatternNode'
 import { ScriptNode } from './nodes/ScriptNode'
 import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatternNode'
+import { OkfBundleNode } from './nodes/OkfBundleNode'
 import { SkillNode } from './nodes/SkillNode'
 import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 
@@ -109,11 +115,20 @@ const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline
 // Includes the pre-rename "llm" spelling for the same reason the backend
 // set does: a graph that hasn't been through migrateLegacyHandles yet must
 // not have its AI edges misread as main pipeline edges.
-const CONNECTOR_HANDLES = new Set(['ai', 'llm', 'tool', 'memory', 'architectural_pattern', 'resource', 'skill'])
-// The three connector slots that live on an Agent's TOP edge (see
+const CONNECTOR_HANDLES = new Set([
+  'ai',
+  'llm',
+  'tool',
+  'memory',
+  'architectural_pattern',
+  'resource',
+  'skill',
+  'knowledge',
+])
+// The four connector slots that live on an Agent's TOP edge (see
 // AgentNode.tsx) -- a node feeding one of these is placed ABOVE its agent,
 // every other slot's source below it.
-const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'resource', 'skill'])
+const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'resource', 'skill', 'knowledge'])
 
 const NODE_TYPES = {
   agent: AgentNode,
@@ -134,6 +149,7 @@ const NODE_TYPES = {
   memory: MemoryNode,
   dataset: DatasetNode,
   skill: SkillNode,
+  okf_bundle: OkfBundleNode,
   script: ScriptNode,
   pattern_reason_act: ReasonActPatternNode,
   pattern_single_agent_baseline: SingleAgentBaselinePatternNode,
@@ -162,10 +178,10 @@ function isNearViewport(a: Viewport, b: Viewport): boolean {
 }
 
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
-  // mcp_scikit_learn and skill aren't here: neither is ever created blank --
-  // addServerNode/addSkillNode build the data from the picked server/skill,
-  // since a node whose whole identity is one server (or one skill) would be
-  // meaningless without it.
+  // mcp_scikit_learn, skill and okf_bundle aren't here: none is ever created
+  // blank -- addServerNode/addSkillNode/addBundleNode build the data from the
+  // picked server/skill/bundle, since a node whose whole identity is one of
+  // those would be meaningless without it.
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData()
   if (nodeType === 'critic_gate') return defaultCriticGateNodeData()
   if (nodeType === 'llm_anthropic') return defaultAnthropicLlmNodeData()
@@ -198,6 +214,7 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   resource: { allowedTypes: ['dataset'], title: 'Add Resource' },
   skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
+  knowledge: { allowedTypes: [OKF_BUNDLE_BROWSE], title: 'Add Knowledge' },
 }
 
 // Two connector slots have been renamed since graphs started being saved,
@@ -336,6 +353,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // meaningful while addPanelOpen.
   const [serverBrowserOpen, setServerBrowserOpen] = useState(false)
   const [skillBrowserOpen, setSkillBrowserOpen] = useState(false)
+  const [bundleBrowserOpen, setBundleBrowserOpen] = useState(false)
   // A pending node deletion awaiting user confirmation -- populated either
   // by onBeforeDelete (Backspace/Delete key, the hover toolbar's trash
   // icon -- both go through xyflow's own deleteElements) or by
@@ -560,6 +578,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     setAddPanelOpen(false)
     setServerBrowserOpen(false)
     setSkillBrowserOpen(false)
+    setBundleBrowserOpen(false)
     setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(null)
     setPendingEdgeInsert(null)
@@ -704,10 +723,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       setSkillBrowserOpen(true)
       return
     }
+    // Ditto for OKF bundles -- see OKF_BUNDLE_BROWSE in okfCatalog.ts.
+    if (nodeType === OKF_BUNDLE_BROWSE) {
+      setBundleBrowserOpen(true)
+      return
+    }
     if (pendingConnectorAdd) {
       const { nodeId: originId, slot } = pendingConnectorAdd
       const originNode = nodes.find((n) => n.id === originId)
-      // Architectural Pattern and Resource connect from above (their
+      // Architectural Pattern, Skill, Knowledge and Resource connect from above (their
       // connectors live on the agent's own TOP edge -- see AgentNode.tsx),
       // every other slot from below -- matches agentDefaultPattern's own
       // placement, so a swapped-in replacement pattern node lands in the
@@ -832,6 +856,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   function addServerNode(server: McpServer) {
     setServerBrowserOpen(false)
     addNode(presetForServer(server).nodeType, nodeDataForServer(server))
+  }
+
+  // Same shape as addServerNode: the node is created with the bundle already
+  // bound, and everything after this is the ordinary addNode path.
+  function addBundleNode(bundle: OkfBundle) {
+    setBundleBrowserOpen(false)
+    addNode('okf_bundle', nodeDataForBundle(bundle))
   }
 
   // Same shape as addServerNode: the node is created with the skill already
@@ -963,6 +994,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | MemoryNodeData
       | DatasetNodeData
       | SkillNodeData
+      | OkfBundleNodeData
       | ScriptNodeData
       | ReasonActPatternNodeData
       | SingleAgentBaselinePatternNodeData,
@@ -1007,9 +1039,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           return sourceNode.type === 'dataset' && targetNode.type === 'agent'
         case 'skill':
           return sourceNode.type === 'skill' && targetNode.type === 'agent'
+        case 'knowledge':
+          return sourceNode.type === 'okf_bundle' && targetNode.type === 'agent'
         default:
           // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool/
-          // dataset/skill/script nodes have no main handle to drag from in
+          // dataset/skill/okf_bundle/script nodes have no main handle to drag from in
           // the first place, so this mostly guards against a stray
           // connection, not real interactive use.
           return (
@@ -1018,6 +1052,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'dataset' &&
             sourceNode.type !== 'skill' &&
+            sourceNode.type !== 'okf_bundle' &&
             sourceNode.type !== 'script' &&
             !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '')
           )
@@ -1239,6 +1274,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           />
         ) : addPanelOpen && skillBrowserOpen ? (
           <SkillBrowserPanel onPick={addSkillNode} onBack={() => setSkillBrowserOpen(false)} onClose={closeAddPanel} />
+        ) : addPanelOpen && bundleBrowserOpen ? (
+          <OkfBundleBrowserPanel
+            onPick={addBundleNode}
+            onBack={() => setBundleBrowserOpen(false)}
+            onClose={closeAddPanel}
+          />
         ) : addPanelOpen ? (
           <AddNodePanel
             onAdd={addNode}
@@ -1308,6 +1349,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : selectedNode?.type === 'skill' ? (
           <SkillNodeInspector
             node={{ id: selectedNode.id, type: 'skill', position: selectedNode.position, data: selectedNode.data as SkillNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'okf_bundle' ? (
+          <OkfBundleNodeInspector
+            node={{ id: selectedNode.id, type: 'okf_bundle', position: selectedNode.position, data: selectedNode.data as OkfBundleNodeData }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}

@@ -50,6 +50,22 @@ class AsareeSettings(CoreSettings):
     # deliberately deferred decision.
     dataset_storage_dir: str = "./data/datasets"
 
+    # The one directory a user may browse and register OKF bundles under
+    # (GET /okf/browse, POST /okf/bundles -- services/okf_bundles.py). Every
+    # path is jailed inside this root, so it is the whole reach of that API
+    # and of the per-bundle MCP servers it spawns.
+    #
+    # "~" (the home directory of whoever runs the server process) is the
+    # default because the case this exists for is a researcher running ASAREE
+    # on their own machine: there, the server's filesystem IS their
+    # filesystem, so their bundle is already reachable and typing a path is
+    # enough. Narrow it on any deployment where that isn't true -- under
+    # compose the API/worker containers see only their own mounts, so this
+    # points at the bundle mount instead (see compose.yml). A bundle on a
+    # laptop with the server somewhere else is out of reach either way, and
+    # deliberately so: nothing here tunnels to a client machine.
+    okf_bundle_root: str = "~"
+
     # Encrypts per-user LLM provider API keys at rest (user_llm_settings).
     # Deliberately ASAREE's own — core's services.encryption is explicitly a
     # single server-side secret with no user in the picture at all, the

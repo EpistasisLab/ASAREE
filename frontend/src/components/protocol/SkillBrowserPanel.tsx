@@ -79,8 +79,8 @@ export function SkillBrowserPanel({
 
       {skillsQuery.isLoading ? (
         <div className="flex flex-col gap-1.5">
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
         </div>
       ) : skillsQuery.isError ? (
         <p className="py-4 text-center text-sm text-destructive">Could not load skills.</p>
@@ -91,9 +91,14 @@ export function SkillBrowserPanel({
       ) : (
         <div className="flex flex-col gap-1.5">
           {filtered.map((skill) => (
+            // Same metrics as McpServerBrowserPanel's rows (px-3 py-2.5,
+            // text-sm, three single-line rows) so the two browsers read as one
+            // list style. The card is a div rather than that panel's single
+            // <button> only because it also holds the delete control -- a
+            // button can't nest a button -- hence hover: here instead.
             <div
               key={skill.id}
-              className="rounded-lg border bg-background px-3 py-2.5 text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20"
+              className="rounded-lg border bg-background px-3 py-2.5 text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20 transition-colors hover:bg-muted"
             >
               {confirmingDeleteId === skill.id ? (
                 <div className="space-y-2">
@@ -124,31 +129,40 @@ export function SkillBrowserPanel({
                   >
                     <ScrollText className="mt-0.5 size-4 shrink-0 text-primary" />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-mono text-xs font-medium">{skill.name}</p>
-                      <p className="text-xs text-muted-foreground">{skill.description}</p>
+                      <p className="truncate font-mono font-medium">{skill.name}</p>
+                      {/* Truncated to one line, same as McpServerBrowserPanel's
+                          own rows: a description is up to 1024 chars and is
+                          written as "what it does AND when to use it," so left
+                          to wrap it turns every row into a paragraph. The full
+                          text is one click away in the node's inspector, and
+                          `title` gives it on hover here. */}
+                      <p className="truncate text-xs text-muted-foreground" title={skill.description}>
+                        {skill.description}
+                      </p>
                       <p className="truncate font-mono text-[11px] text-muted-foreground/70">
                         {skill.body.length.toLocaleString()} chars
                         {skill.source_filename ? ` · ${skill.source_filename}` : ''}
                       </p>
                     </div>
                   </button>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
-                    {/* A built-in belongs to the deployment, not to this user
-                        -- the API refuses a non-owner mutation anyway, so the
-                        control isn't offered rather than offered and denied. */}
-                    {skill.is_system ? (
-                      <Badge variant="outline">Built-in</Badge>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`Delete ${skill.name}`}
-                        onClick={() => setConfirmingDeleteId(skill.id)}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    )}
-                  </div>
+                  {/* A built-in belongs to the deployment, not to this user --
+                      the API refuses a non-owner mutation anyway, so the
+                      control isn't offered rather than offered and denied. */}
+                  {skill.is_system ? (
+                    <Badge variant="outline" className="shrink-0">
+                      Built-in
+                    </Badge>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="shrink-0"
+                      aria-label={`Delete ${skill.name}`}
+                      onClick={() => setConfirmingDeleteId(skill.id)}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  )}
                 </div>
               )}
             </div>

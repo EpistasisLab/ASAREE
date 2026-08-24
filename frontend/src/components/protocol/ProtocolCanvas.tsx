@@ -54,6 +54,7 @@ import type {
 } from '@/types/protocols'
 import type { DesignFactor } from '@/types/experiments'
 import type { McpServer } from '@/types/mcpServers'
+import type { Skill } from '@/types/skills'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
 import { agentTracedLabel, unboundBindableFields, type UnboundField } from './bindableFields'
@@ -82,6 +83,8 @@ import type { RunScope } from './runSummary'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
 import { SelectCellDialog } from './SelectCellDialog'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
+import { SkillBrowserPanel } from './SkillBrowserPanel'
+import { SKILL_BROWSE, nodeDataForSkill } from './skillCatalog'
 import { SkillNodeInspector } from './SkillNodeInspector'
 import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
@@ -195,7 +198,7 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   resource: { allowedTypes: ['dataset'], title: 'Add Resource' },
-  skill: { allowedTypes: ['skill'], title: 'Add Skill' },
+  skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
 }
 
 // Two connector slots have been renamed since graphs started being saved,
@@ -333,6 +336,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // entry swaps the browser in over it, and its Back button returns. Only
   // meaningful while addPanelOpen.
   const [serverBrowserOpen, setServerBrowserOpen] = useState(false)
+  const [skillBrowserOpen, setSkillBrowserOpen] = useState(false)
   // A pending node deletion awaiting user confirmation -- populated either
   // by onBeforeDelete (Backspace/Delete key, the hover toolbar's trash
   // icon -- both go through xyflow's own deleteElements) or by
@@ -556,6 +560,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   function closeAddPanel() {
     setAddPanelOpen(false)
     setServerBrowserOpen(false)
+    setSkillBrowserOpen(false)
     setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(null)
     setPendingEdgeInsert(null)
@@ -695,6 +700,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       setServerBrowserOpen(true)
       return
     }
+    // Ditto for skills -- see SKILL_BROWSE in skillCatalog.ts.
+    if (nodeType === SKILL_BROWSE) {
+      setSkillBrowserOpen(true)
+      return
+    }
     if (pendingConnectorAdd) {
       const { nodeId: originId, slot } = pendingConnectorAdd
       const originNode = nodes.find((n) => n.id === originId)
@@ -823,6 +833,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   function addServerNode(server: McpServer) {
     setServerBrowserOpen(false)
     addNode(presetForServer(server).nodeType, nodeDataForServer(server))
+  }
+
+  // Same shape as addServerNode: the node is created with the skill already
+  // bound, and everything after this is the ordinary addNode path.
+  function addSkillNode(skill: Skill) {
+    setSkillBrowserOpen(false)
+    addNode('skill', nodeDataForSkill(skill))
   }
 
   // Debounced autosave: every nodes/edges change schedules a PATCH, reset on
@@ -1221,6 +1238,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onBack={() => setServerBrowserOpen(false)}
             onClose={closeAddPanel}
           />
+        ) : addPanelOpen && skillBrowserOpen ? (
+          <SkillBrowserPanel onPick={addSkillNode} onBack={() => setSkillBrowserOpen(false)} onClose={closeAddPanel} />
         ) : addPanelOpen ? (
           <AddNodePanel
             onAdd={addNode}

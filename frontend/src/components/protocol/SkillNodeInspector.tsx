@@ -129,28 +129,41 @@ export function SkillNodeInspector({
         ) : !skillsQuery.data || skillsQuery.data.length === 0 ? (
           <p className="text-sm text-muted-foreground">No skills registered yet.</p>
         ) : (
-          <Select
-            value={config.skill_id ?? '__none__'}
-            onValueChange={(value) => {
-              if (!value || value === '__none__') return
-              const skill = skillsQuery.data.find((s) => s.id === value)
-              if (skill) selectSkill(skill)
-            }}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue>{() => selectedSkill?.name ?? 'Select a skill…'}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__" disabled>
-                Select a skill…
-              </SelectItem>
-              {skillsQuery.data.map((skill) => (
-                <SelectItem key={skill.id} value={skill.id}>
-                  {skill.name}
+          <>
+            {/* The node keeps whatever id it was given, so a skill deleted
+                from the library (or a graph imported from another account)
+                leaves an id that resolves to nothing. Said plainly here
+                rather than letting the cached skill_name imply all is well
+                -- findNodeConfigIssues flags the same state before a run. */}
+            {config.skill_id && !selectedSkill && (
+              <p className="text-sm text-destructive">
+                The skill this node names no longer exists{config.skill_name ? ` ("${config.skill_name}")` : ''} -- pick
+                another below.
+              </p>
+            )}
+            <Select
+              value={config.skill_id ?? '__none__'}
+              onValueChange={(value) => {
+                if (!value || value === '__none__') return
+                const skill = skillsQuery.data.find((s) => s.id === value)
+                if (skill) selectSkill(skill)
+              }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue>{() => selectedSkill?.name ?? 'Select a skill…'}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__" disabled>
+                  Select a skill…
                 </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+                {skillsQuery.data.map((skill) => (
+                  <SelectItem key={skill.id} value={skill.id}>
+                    {skill.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </>
         )}
         <Button variant="outline" size="sm" onClick={() => setRegisterDialogOpen(true)}>
           <Plus className="size-3.5" /> Register new skill

@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import type { LLMSettingModelsResponse } from '@/types/llmSettings'
+import type { Skill } from '@/types/skills'
 import type {
   DatasetNodeData,
   LlmNodeData,
@@ -102,7 +103,18 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
       case 'skill': {
         const config = (node.data as SkillNodeData).config
         // Same wording as SkillNode's own badge.
-        if (!config?.skill_id) issues.push('No skill selected')
+        if (!config?.skill_id) {
+          issues.push('No skill selected')
+        } else {
+          // A set id can still resolve to nothing -- a skill deleted from the
+          // library, or a graph imported from another account, both leave the
+          // id (and its cached skill_name) behind. Cache-only, same contract
+          // as the model check above: a miss means "can't tell," not an issue.
+          const cached = queryClient.getQueryData<Skill[]>(['skills'])
+          if (cached && !cached.some((s) => s.id === config.skill_id)) {
+            issues.push(`Skill no longer exists${config.skill_name ? ` ("${config.skill_name}")` : ''}`)
+          }
+        }
         break
       }
       case 'script': {

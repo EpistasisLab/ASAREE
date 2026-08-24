@@ -3,6 +3,7 @@ import { ArrowRight, Atom, Bot, BrainCircuit, Cloud, Code2, Database, HardDrive,
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { MCP_SERVER_BROWSE } from './mcpServerCatalog'
+import { SKILL_BROWSE } from './skillCatalog'
 
 // Every entry here earns its place: GET /api/mcp-servers already backs the
 // tool picker, GET /datasets already backs the dataset picker,
@@ -84,10 +85,15 @@ const NODE_CATALOG = [
     description: "Declares which registered dataset an Agent's workspace tools operate on",
     icon: Database,
   },
+  // Not a node type either -- picking this opens the skill browser
+  // (SkillBrowserPanel), same reasoning as MCP Servers above: the skill IS
+  // the choice, so it belongs in this catalog rather than two clicks deeper
+  // in a blank node's inspector. That browser is also the only view of the
+  // whole skill library, so it's where registering and deleting live.
   {
-    type: 'skill',
-    label: 'Skill',
-    description: 'An Agent Skill -- one SKILL.md an Agent opens when its description matches the task at hand',
+    type: SKILL_BROWSE,
+    label: 'Skills',
+    description: 'Browse your Agent Skills -- one SKILL.md an Agent opens when its description matches the task',
     icon: ScrollText,
   },
   {

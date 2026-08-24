@@ -43,7 +43,7 @@ const PRESETS: Record<string, McpServerPreset> = {
   'scikit-learn-mcp': {
     nodeType: 'mcp_scikit_learn',
     label: 'Scikit-learn MCP',
-    description: 'Fit XGBoost and linear-regression models, scored on a held-out split',
+    description: 'Profile a dataset, define a split, and fit logistic regression for AUC + metrics',
     icon: FlaskConical,
   },
 }

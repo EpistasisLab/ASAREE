@@ -59,6 +59,17 @@ def load_frame(data_path: str) -> pd.DataFrame:
     return frame
 
 
+def xy(frame: pd.DataFrame, target_column: str) -> tuple[pd.DataFrame, pd.Series]:
+    """Split *frame* into (features, target), validating the target column."""
+    if target_column not in frame.columns:
+        cols = ", ".join(map(str, frame.columns[:25]))
+        raise DataError(f"target column {target_column!r} not in dataset; columns are: {cols}")
+    features = frame.drop(columns=[target_column])
+    if features.shape[1] == 0:
+        raise DataError("dataset has no feature columns besides the target")
+    return features, frame[target_column]
+
+
 def split_xy(
     frame: pd.DataFrame,
     target_column: str,
@@ -73,13 +84,7 @@ def split_xy(
     appear on both sides of the split -- a hard failure there would be a
     confusing way to learn that one class has a single row.
     """
-    if target_column not in frame.columns:
-        cols = ", ".join(map(str, frame.columns[:25]))
-        raise DataError(f"target column {target_column!r} not in dataset; columns are: {cols}")
-    features = frame.drop(columns=[target_column])
-    target = frame[target_column]
-    if features.shape[1] == 0:
-        raise DataError("dataset has no feature columns besides the target")
+    features, target = xy(frame, target_column)
     strat = target if stratify and target.value_counts().min() >= 2 else None
     X_train, X_test, y_train, y_test = train_test_split(  # noqa: N806
         features, target, test_size=test_size, random_state=random_seed, stratify=strat

@@ -1,26 +1,37 @@
-"""scikit-learn-mcp -- a standalone XGBoost + linear-regression MCP server.
+"""scikit-learn-mcp -- logistic regression on a tabular file, end to end.
 
-Two script-execution tools, one per model family. The caller writes the fitting
-code; this server binds it the TRAINING split only, then applies the held-out
-test split and computes every metric itself (see :mod:`scikit_learn_mcp.scoring`).
-A script therefore cannot see or leak test labels, which makes evaluation
-leakage structurally impossible rather than a rule the caller is asked to
-follow.
+Sized for one job: an agent is handed a dataset path and a one-line instruction
+("fit a logistic regression and report the AUC"), and has to work out the rest
+itself. That framing decides the shape of every tool here.
 
-Script-execution rather than a fixed ``fit(params)`` signature because the
-useful part of a modeling decision is the preprocessing, encoding, class
-weighting and hyperparameter choices *around* the estimator, and enumerating
-those as tool parameters would either constrain the caller to a fraction of
-what the library does or reproduce the whole sklearn API as JSON schema.
+**Declarative first.** ``fit_logistic_regression``, ``cross_validate_...`` and
+``tune_...`` take the *decisions* -- penalty, regularization strength, class
+weighting, how to split -- as typed arguments and own the mechanics
+(impute, scale, one-hot, fit, score). Asking a model to re-emit that pipeline as
+fresh sklearn source on every call buys nothing but new ways to get it wrong:
+unscaled features quietly wrecking a penalized fit, an unseen category raising
+at predict time, a threshold tuned on the test split. The script tools remain
+for what the arguments can't express.
+
+**Nothing is scored on data the model was fit on.** Every metric comes from a
+held-out split (or out-of-fold predictions), computed by :mod:`scoring` from
+labels the estimator never saw. Threshold selection and hyperparameter search
+run against training-side out-of-fold predictions only, so the test split stays
+untouched until the final scorecard.
+
+**The split is a first-class, audited, hashed object** (:mod:`splitting`) rather
+than an implicit ``test_size``. A random split of non-independent rows inflates
+an AUC and looks *better* for it, so grouped and temporal strategies are
+available and the realized split is checked for the known leaks on every call.
 
 Nothing here imports ASAREE. The dataset arrives as a path or URI
-(:mod:`scikit_learn_mcp.data`), so the server is usable from any MCP client
-against any file.
+(:mod:`data`), so the server is usable from any MCP client against any file.
 """
 
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import io
 import json
@@ -31,7 +42,7 @@ import numpy as np
 import pandas as pd
 from mcp.server import FastMCP
 
-from scikit_learn_mcp import scoring
+from scikit_learn_mcp import logistic, profile, scoring, splitting
 from scikit_learn_mcp.data import DataError, frame_sha256, load_frame, split_xy
 
 mcp = FastMCP("scikit-learn-mcp")
@@ -43,6 +54,696 @@ _TASK_TYPES = _CLASSIFICATION | {"regression"}
 # than the metrics the call was made for.
 _ERR_CHARS = 2000
 _STDOUT_CHARS = 4000
+
+
+# --------------------------------------------------------------------------
+# Shared plumbing
+# --------------------------------------------------------------------------
+
+
+class _Prepared:
+    """A loaded, split, audited dataset -- what every declarative tool starts from."""
+
+    def __init__(self, frame: pd.DataFrame, spec: splitting.SplitSpec, split: splitting.Split, task_type: str):
+        self.frame = frame
+        self.spec = spec
+        self.split = split
+        self.task_type = task_type
+        self.data_sha256 = frame_sha256(frame)
+        self.audit = splitting.audit(split, spec, classification=task_type in _CLASSIFICATION)
+
+    def provenance(self, target_column: str, data_path: str) -> dict[str, Any]:
+        return {
+            "task_type": self.task_type,
+            "target_column": target_column,
+            "data_path": data_path,
+            "n_rows": int(len(self.frame)),
+            "n_features": int(self.split.x_train.shape[1]),
+            "feature_columns": [str(c) for c in self.split.x_train.columns],
+            "split": {**self.spec.as_dict(), **self.audit},
+            "data_sha256": self.data_sha256,
+            "split_sha256": splitting.spec_sha256(self.spec, self.data_sha256),
+            "package_versions": scoring.env_provenance(),
+        }
+
+
+def _prepare(
+    data_path: str,
+    target_column: str,
+    task_type: str,
+    split_json: str,
+    test_size: float,
+    random_seed: int,
+    stratify: bool,
+) -> _Prepared:
+    """Load, resolve the task type, split, and audit -- raising on anything wrong."""
+    spec = splitting.parse_spec(split_json, test_size=test_size, random_seed=random_seed, stratify=stratify)
+    frame, spec = splitting.load_for_spec(data_path, spec)
+    if target_column not in frame.columns:
+        cols = ", ".join(map(str, frame.columns[:25]))
+        raise DataError(f"target column {target_column!r} not in dataset; columns are: {cols}")
+
+    resolved = (task_type or "auto").lower()
+    if resolved == "auto":
+        resolved = profile.infer_task_type(frame[target_column])
+        if resolved == "degenerate":
+            raise DataError(f"target {target_column!r} has a single distinct value -- nothing to predict")
+    if resolved not in _TASK_TYPES:
+        raise DataError(f"task_type must be 'auto' or one of {sorted(_TASK_TYPES)}, got {task_type!r}")
+    if resolved == "regression":
+        raise DataError(
+            f"target {target_column!r} looks continuous ({frame[target_column].nunique()} distinct values). "
+            "Logistic regression is for classification -- use run_linear_regression_script, or pass "
+            "task_type='multiclass' if these really are class labels."
+        )
+
+    split = splitting.apply_spec(frame, target_column, spec, classification=True)
+    return _Prepared(frame, spec, split, resolved)
+
+
+def _error(message: str, **extra: Any) -> str:
+    return scoring.dumps({"error": message, **extra})
+
+
+def _guarded(fn: Any) -> Any:
+    """Turn this package's own exceptions into a tool result rather than a crash.
+
+    ``functools.wraps`` is load-bearing, not tidiness: it sets ``__wrapped__``,
+    which is what makes ``inspect.signature`` see through the wrapper -- and
+    FastMCP builds each tool's JSON schema from that signature. Without it every
+    decorated tool would advertise ``(*args, **kwargs)``.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> str:
+        try:
+            return fn(*args, **kwargs)
+        except (DataError, splitting.SplitError, logistic.SpecError) as e:
+            return _error(str(e))
+        except Exception as e:  # noqa: BLE001 -- surfaced to the caller, never raised at the transport
+            return _error(f"{type(e).__name__}: {e}", traceback=traceback.format_exc()[-_ERR_CHARS:])
+
+    return wrapper
+
+
+def _model_block(model_spec: dict[str, Any]) -> dict[str, Any]:
+    """The estimator's hyperparameters, minus the column roles reported separately."""
+    roles = {"numeric", "categorical", "dropped_high_cardinality"}
+    return {"estimator": "LogisticRegression", **{k: v for k, v in model_spec.items() if k not in roles}}
+
+
+def _binary_view(y: pd.Series, classes: list[Any], positive_label: str) -> tuple[np.ndarray, Any, int]:
+    """(0/1 labels, positive label, its column in a probability matrix)."""
+    label, column = logistic.positive_column(classes, positive_label)
+    return (y == label).astype(int).to_numpy(), label, column
+
+
+def _baseline(y_train: pd.Series, y_test: pd.Series, task_type: str, positive_label: str) -> dict[str, Any]:
+    """What a model that has learned nothing scores on this test split.
+
+    An AUC has no absolute meaning: 0.72 is strong on some problems and
+    worthless on others, and 0.95 accuracy is a failing grade at 5% prevalence.
+    Reporting the floor next to the number costs nothing -- the no-skill model
+    predicts the training class prior for every row -- and spares the caller
+    from needing a field's conventions to read the result.
+    """
+    classes = sorted(np.unique(y_train).tolist())
+    prior = y_train.value_counts(normalize=True)
+    proba = np.tile(np.array([prior.get(c, 0.0) for c in classes], dtype=float), (len(y_test), 1))
+    label = "always predicts the training class prior"
+    if task_type == "binary":
+        y_bin, _, column = _binary_view(y_test, classes, positive_label)
+        bundle = scoring.binary_bundle(y_bin, proba[:, column], 0.5)
+        keep = {"roc_auc", "average_precision", "accuracy", "balanced_accuracy", "brier_score"}
+    else:
+        bundle = scoring.multiclass_bundle(y_test.to_numpy(), proba, classes)
+        keep = {"roc_auc_ovr", "accuracy", "balanced_accuracy", "log_loss"}
+    return {"strategy": label, **{k: v for k, v in bundle.items() if k in keep}}
+
+
+def _score_holdout(
+    pipe: Any,
+    prep: _Prepared,
+    positive_label: str,
+    threshold_rule: str,
+    oof_proba: np.ndarray | None,
+    classes: list[Any],
+    include_curves: bool = False,
+) -> dict[str, Any]:
+    """Apply *pipe* to the held-out split and bundle every metric it supports."""
+    split = prep.split
+    proba = np.asarray(pipe.predict_proba(split.x_test), dtype=float)
+    position = {cls: j for j, cls in enumerate(pipe.named_steps["clf"].classes_)}
+    aligned = np.column_stack([
+        proba[:, position[cls]] if cls in position else np.zeros(len(split.x_test)) for cls in classes
+    ])
+
+    if prep.task_type != "binary":
+        return {
+            "test_metrics": scoring.multiclass_bundle(split.y_test.to_numpy(), aligned, classes),
+            "threshold": None,
+        }
+
+    y_bin, label, column = _binary_view(split.y_test, classes, positive_label)
+    # The operating point is chosen on TRAIN-side out-of-fold predictions and
+    # merely applied here. Choosing it on the test split would be the exact
+    # leak this server is built to make impossible.
+    if oof_proba is None:
+        threshold, how = logistic.resolve_threshold(threshold_rule, np.zeros(0), np.zeros(0))
+    else:
+        y_train_bin, _, _ = _binary_view(split.y_train, classes, positive_label)
+        threshold, how = logistic.resolve_threshold(threshold_rule, y_train_bin, oof_proba[:, column])
+    # Rounded before scoring, not after, so the cutoff reported in `threshold`
+    # is the one the confusion matrix was actually built at.
+    threshold = round(float(threshold), 4)
+    bundle = scoring.binary_bundle(y_bin, aligned[:, column], threshold)
+    bundle["positive_label"] = str(label)
+    return {
+        "test_metrics": bundle,
+        "test_curves": scoring.binary_curves(y_bin, aligned[:, column], full=include_curves),
+        "threshold": {
+            "value": threshold,
+            "rule": how,
+            "selected_on": "a fixed value" if how == "fixed" else "training out-of-fold predictions",
+        },
+    }
+
+
+# --------------------------------------------------------------------------
+# Orientation
+# --------------------------------------------------------------------------
+
+
+@mcp.tool()
+@_guarded
+def describe_dataset(data_path: str, target_column: str = "", max_columns: int = 100) -> str:
+    """Inspect a dataset and get suggestions for how to model it. START HERE.
+
+    Answers the questions that come before any fit: what is in this file, which
+    column is plausibly the outcome, is it binary or multiclass, how balanced
+    is it, and is there an id or date column that would make a random split
+    leak. Suggestions are name/cardinality heuristics labelled with their
+    evidence -- they are for the caller to confirm, not to apply blindly.
+
+    Args:
+        data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+        target_column: Optional. When given, adds a task-type inference, the
+            class balance, and the caveats that balance implies for AUC.
+        max_columns: Cap on how many columns to describe.
+    """
+    frame = load_frame(data_path)
+    columns, truncated = profile.column_report(frame, max_columns)
+    payload: dict[str, Any] = {
+        "n_rows": int(len(frame)),
+        "n_columns": int(frame.shape[1]),
+        "columns": columns,
+        "truncated_columns": truncated,
+        "suggestions": profile.suggestions(frame, columns),
+        "data_sha256": frame_sha256(frame),
+    }
+    if target_column:
+        if target_column not in frame.columns:
+            cols = ", ".join(map(str, frame.columns[:25]))
+            return _error(f"target column {target_column!r} not in dataset; columns are: {cols}")
+        payload["target"] = profile.target_summary(frame[target_column], target_column)
+    return scoring.dumps(payload)
+
+
+@mcp.tool()
+@_guarded
+def describe_split(
+    data_path: str,
+    target_column: str,
+    split_json: str = "",
+    test_size: float = 0.2,
+    random_seed: int = 42,
+    stratify: bool = True,
+) -> str:
+    """Preview and audit a train/test split without fitting anything.
+
+    Worth one call before a long fit, and the only way to see the leakage audit
+    on its own: row counts and class balance per side, which columns were
+    excluded from the features as bookkeeping, whether any group value or
+    duplicate feature row appears on both sides, and the ``split_sha256`` that
+    identifies this exact division of this exact file.
+
+    ``split_json`` is a JSON object accepted by every modeling tool here:
+
+      * ``{"strategy": "random"}`` -- default; stratified row-wise sampling.
+      * ``{"strategy": "group", "group_column": "patient_id"}`` -- keeps every
+        row of an entity on one side. Use whenever rows repeat per subject,
+        site or session; a random split there inflates the AUC.
+      * ``{"strategy": "time", "time_column": "visit_date"}`` -- trains on the
+        past, tests on the strictly later rows.
+      * ``{"strategy": "predefined", "split_column": "split"}`` or
+        ``{"strategy": "predefined", "test_path": "test.csv"}`` -- use a split
+        somebody else already decided.
+
+    Args:
+        data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+        target_column: Column to predict.
+        split_json: Split spec as above; overrides the three arguments below.
+        test_size: Held-out fraction, strictly between 0 and 1.
+        random_seed: Seed for the split.
+        stratify: Keep the class balance equal across sides (classification).
+    """
+    prep = _prepare(data_path, target_column, "auto", split_json, test_size, random_seed, stratify)
+    return scoring.dumps(
+        {
+            "split": {**prep.spec.as_dict(), **prep.audit},
+            "task_type": prep.task_type,
+            "feature_columns": [str(c) for c in prep.split.x_train.columns],
+            "data_sha256": prep.data_sha256,
+            "split_sha256": splitting.spec_sha256(prep.spec, prep.data_sha256),
+        }
+    )
+
+
+# --------------------------------------------------------------------------
+# Logistic regression
+# --------------------------------------------------------------------------
+
+
+@mcp.tool()
+@_guarded
+def fit_logistic_regression(
+    data_path: str,
+    target_column: str,
+    task_type: str = "auto",
+    positive_label: str = "",
+    penalty: str = "l2",
+    C: float = 1.0,  # noqa: N803 -- sklearn's name for inverse regularization strength
+    solver: str = "auto",
+    class_weight: str = "",
+    max_iter: int = 1000,
+    l1_ratio: float = 0.5,
+    scale: bool = True,
+    numeric_impute: str = "median",
+    max_categories: int = 20,
+    threshold: str = "0.5",
+    split_json: str = "",
+    test_size: float = 0.2,
+    random_seed: int = 42,
+    stratify: bool = True,
+    top_k_coefficients: int = 25,
+    include_curves: bool = False,
+) -> str:
+    """Fit a logistic regression and report ROC-AUC and its associated metrics.
+
+    The main tool. Builds the standard pipeline -- impute missing values, scale
+    the numerics, one-hot the categoricals, fit ``LogisticRegression`` -- fits it
+    on the training split only, and scores it on the held-out split. No code to
+    write, and no way to accidentally score on training data.
+
+    Returns: ``test_metrics`` (ROC-AUC, PR-AUC and its prevalence baseline,
+    Brier, accuracy, balanced accuracy, precision/recall/specificity, F1, MCC,
+    confusion matrix), ``test_curves`` (ROC and PR points, a calibration
+    profile, and a threshold sweep with the Youden-J and best-F1 operating
+    points), ``coefficients`` with odds ratios, a ``baseline`` showing what a
+    no-skill model scores on the same split, the ``preprocessing`` decisions
+    actually applied, and the audited ``split``.
+
+    Non-numeric columns with more than ``max_categories`` levels are dropped
+    rather than one-hot encoded, and reported under ``preprocessing`` -- an id
+    or free-text column would otherwise expand into thousands of columns that
+    fit the training data perfectly and predict nothing.
+
+    Args:
+        data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+        target_column: Column to predict; every other non-bookkeeping column is a feature.
+        task_type: 'auto' (infer from the target), 'binary' or 'multiclass'.
+        positive_label: Binary positive class; defaults to the highest label.
+        penalty: 'l2' (default), 'l1', 'elasticnet' or 'none'.
+        C: Inverse regularization strength; smaller means more shrinkage.
+        solver: 'auto' picks one compatible with the penalty; else lbfgs/liblinear/saga/etc.
+        class_weight: '' or 'balanced' -- reweight classes by inverse frequency.
+        max_iter: Solver iteration cap; raise it if convergence is reported as a warning.
+        l1_ratio: Elasticnet mix, 0 (pure l2) to 1 (pure l1). Ignored otherwise.
+        scale: Standardize numeric features. Keep on for any penalized fit.
+        numeric_impute: 'median' (default), 'mean' or 'most_frequent'.
+        max_categories: Cardinality ceiling above which a categorical column is dropped.
+        threshold: '0.5', a number in (0, 1), or 'youden'/'f1' to tune the cutoff on
+            TRAINING out-of-fold predictions. Never tuned on the test split.
+        split_json: Split spec -- see describe_split for grouped/temporal/predefined.
+        test_size: Held-out fraction, strictly between 0 and 1.
+        random_seed: Seed for the split and the solver.
+        stratify: Keep the class balance equal across the split.
+        top_k_coefficients: How many coefficients to report, largest magnitude first.
+        include_curves: Add ROC/PR points, calibration bins and a 19-step threshold
+            sweep to the result. Off by default because they roughly quintuple its
+            size; switch on when you're plotting or exporting, not just reading.
+            The best Youden-J and F1 operating points come back either way.
+    """
+    prep = _prepare(data_path, target_column, task_type, split_json, test_size, random_seed, stratify)
+    split = prep.split
+    factory, model_spec = logistic.make_pipeline_factory(
+        split.x_train,
+        penalty=penalty,
+        C=C,
+        solver=solver,
+        class_weight=class_weight,
+        max_iter=max_iter,
+        l1_ratio=l1_ratio,
+        scale=scale,
+        numeric_impute=numeric_impute,
+        max_categories=max_categories,
+        random_seed=random_seed,
+    )
+
+    pipe = factory()
+    pipe.fit(split.x_train, split.y_train)
+    classes = sorted(np.unique(split.y_train).tolist())
+
+    # Out-of-fold training predictions, computed only when a tuned threshold
+    # actually needs them -- k extra fits are not worth paying for a fixed 0.5.
+    oof = None
+    if prep.task_type == "binary" and threshold.strip().lower() in {"youden", "f1"}:
+        n_splits = logistic.usable_n_splits(split.y_train, 5, split.groups_train)
+        folds = splitting.fold_indices(
+            split.x_train, split.y_train, prep.spec, n_splits,
+            groups=split.groups_train, classification=True,
+        )
+        oof, _, _ = logistic.out_of_fold_proba(factory, split.x_train, split.y_train, folds)
+
+    scored = _score_holdout(pipe, prep, positive_label, threshold, oof, classes, include_curves)
+    return scoring.dumps(
+        {
+            **scored,
+            "coefficients": logistic.coefficients(pipe, scaled=scale, top_k=top_k_coefficients),
+            "baseline": _baseline(split.y_train, split.y_test, prep.task_type, positive_label),
+            "model": _model_block(model_spec),
+            "preprocessing": {
+                "numeric_columns": model_spec["numeric"],
+                "categorical_columns_one_hot": model_spec["categorical"],
+                "dropped_high_cardinality": model_spec["dropped_high_cardinality"],
+                "n_encoded_features": int(pipe.named_steps["pre"].transform(split.x_train.head(1)).shape[1]),
+            },
+            "convergence": _convergence(pipe),
+            **prep.provenance(target_column, data_path),
+        }
+    )
+
+
+def _convergence(pipe: Any) -> dict[str, Any]:
+    """Whether the solver actually converged -- a silent non-convergence is a wrong model."""
+    clf = pipe.named_steps["clf"]
+    iters = np.atleast_1d(np.asarray(getattr(clf, "n_iter_", []), dtype=float))
+    if iters.size == 0:
+        return {"converged": None}
+    hit_cap = bool(np.any(iters >= clf.max_iter))
+    return {
+        "converged": not hit_cap,
+        "n_iter": [int(i) for i in iters],
+        "max_iter": int(clf.max_iter),
+        **({"warning": "the solver hit max_iter without converging -- raise max_iter or scale the features"}
+           if hit_cap else {}),
+    }
+
+
+@mcp.tool()
+@_guarded
+def cross_validate_logistic_regression(
+    data_path: str,
+    target_column: str,
+    task_type: str = "auto",
+    positive_label: str = "",
+    n_splits: int = 5,
+    penalty: str = "l2",
+    C: float = 1.0,  # noqa: N803
+    solver: str = "auto",
+    class_weight: str = "",
+    max_iter: int = 1000,
+    l1_ratio: float = 0.5,
+    scale: bool = True,
+    numeric_impute: str = "median",
+    max_categories: int = 20,
+    split_json: str = "",
+    random_seed: int = 42,
+    stratify: bool = True,
+    include_curves: bool = False,
+) -> str:
+    """Cross-validate a logistic regression: AUC with an error bar, over the whole dataset.
+
+    A single 80/20 split yields one AUC and no sense of how much of it is luck;
+    on a few hundred rows two seeds can differ by 0.05. This refits per fold
+    over every row and reports per-fold scores, their mean and standard
+    deviation, and the pooled out-of-fold metrics (every row predicted by a
+    model that never saw it) -- which is the number to report when the question
+    is "how good is this model", as distinct from ``fit_logistic_regression``'s
+    "how did this model do on that holdout".
+
+    Grouping is honored: a ``group_column`` in ``split_json`` makes the folds
+    grouped too, so the CV estimate isn't leak-inflated. ``n_splits`` is clamped
+    down when the rarest class or the group count can't support it, and the
+    realized value is reported.
+
+    Args:
+        data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+        target_column: Column to predict.
+        task_type: 'auto', 'binary' or 'multiclass'.
+        positive_label: Binary positive class; defaults to the highest label.
+        n_splits: Requested number of folds (clamped to what the data supports).
+        penalty: 'l2', 'l1', 'elasticnet' or 'none'.
+        C: Inverse regularization strength.
+        solver: 'auto', or one compatible with the penalty.
+        class_weight: '' or 'balanced'.
+        max_iter: Solver iteration cap.
+        l1_ratio: Elasticnet mix, 0 to 1.
+        scale: Standardize numeric features.
+        numeric_impute: 'median', 'mean' or 'most_frequent'.
+        max_categories: Cardinality ceiling for one-hot encoding.
+        split_json: Only ``group_column``/``stratify``/``random_seed`` matter here --
+            CV uses every row, so ``test_size`` and the holdout strategies don't apply.
+        random_seed: Seed for the folds and the solver.
+        stratify: Keep the class balance equal across folds.
+        include_curves: Add pooled out-of-fold ROC/PR points, calibration bins and a
+            threshold sweep. Off by default -- see fit_logistic_regression.
+    """
+    spec = splitting.parse_spec(split_json, random_seed=random_seed, stratify=stratify)
+    frame, spec = splitting.load_for_spec(data_path, spec)
+    if target_column not in frame.columns:
+        cols = ", ".join(map(str, frame.columns[:25]))
+        return _error(f"target column {target_column!r} not in dataset; columns are: {cols}")
+
+    resolved = profile.infer_task_type(frame[target_column]) if (task_type or "auto").lower() == "auto" else task_type
+    if resolved not in _CLASSIFICATION:
+        return _error(
+            f"target {target_column!r} is {resolved!r}, not a classification target. "
+            "Logistic regression needs discrete classes."
+        )
+
+    reserved = splitting.reserved_columns(spec, target_column)
+    features = frame[[c for c in frame.columns if c not in reserved]]
+    y = frame[target_column]
+    groups = frame[spec.group_column] if spec.group_column and spec.group_column in frame.columns else None
+
+    factory, model_spec = logistic.make_pipeline_factory(
+        features, penalty=penalty, C=C, solver=solver, class_weight=class_weight, max_iter=max_iter,
+        l1_ratio=l1_ratio, scale=scale, numeric_impute=numeric_impute, max_categories=max_categories,
+        random_seed=random_seed,
+    )
+    used_splits = logistic.usable_n_splits(y, n_splits, groups)
+    folds = splitting.fold_indices(features, y, spec, used_splits, groups=groups, classification=True)
+    oof, classes, _ = logistic.out_of_fold_proba(factory, features, y, folds)
+
+    if resolved == "binary":
+        y_bin, label, column = _binary_view(y, classes, positive_label)
+        per_fold = [scoring.binary_bundle(y_bin[te], oof[te, column], 0.5) for _, te in folds]
+        keys = ("roc_auc", "average_precision", "brier_score", "accuracy", "balanced_accuracy", "f1")
+        pooled = scoring.binary_bundle(y_bin, oof[:, column], 0.5)
+        pooled["positive_label"] = str(label)
+        pooled_curves: dict[str, Any] = scoring.binary_curves(y_bin, oof[:, column], full=include_curves)
+    else:
+        y_values = y.to_numpy()
+        per_fold = [scoring.multiclass_bundle(y_values[te], oof[te], classes) for _, te in folds]
+        keys = ("roc_auc_ovr", "accuracy", "balanced_accuracy", "f1_macro", "log_loss")
+        pooled = scoring.multiclass_bundle(y_values, oof, classes)
+        pooled_curves = {}
+
+    data_sha256 = frame_sha256(frame)
+    return scoring.dumps(
+        {
+            "cv_metrics": {k: scoring.summarize_folds([f.get(k) for f in per_fold]) for k in keys},
+            "per_fold": [
+                {"fold": i, "n": int(len(te)), **{k: f.get(k) for k in keys}}
+                for i, ((_, te), f) in enumerate(zip(folds, per_fold, strict=True))
+            ],
+            # Pooled != mean-of-folds: one AUC over all out-of-fold predictions
+            # at once, which is less noisy but hides between-fold variation.
+            # Both are reported because they answer different questions.
+            "pooled_out_of_fold_metrics": pooled,
+            **({"pooled_out_of_fold_curves": pooled_curves} if pooled_curves else {}),
+            "n_splits_requested": int(n_splits),
+            "n_splits_used": int(used_splits),
+            "grouped_folds": groups is not None,
+            "model": _model_block(model_spec),
+            "preprocessing": {
+                "numeric_columns": model_spec["numeric"],
+                "categorical_columns_one_hot": model_spec["categorical"],
+                "dropped_high_cardinality": model_spec["dropped_high_cardinality"],
+            },
+            "task_type": resolved,
+            "target_column": target_column,
+            "data_path": data_path,
+            "n_rows": int(len(frame)),
+            "class_distribution": {str(k): int(v) for k, v in y.value_counts().items()},
+            "data_sha256": data_sha256,
+            "package_versions": scoring.env_provenance(),
+        }
+    )
+
+
+@mcp.tool()
+@_guarded
+def tune_logistic_regression(
+    data_path: str,
+    target_column: str,
+    grid_json: str = "",
+    task_type: str = "auto",
+    positive_label: str = "",
+    selection_metric: str = "roc_auc",
+    n_splits: int = 5,
+    threshold: str = "0.5",
+    max_categories: int = 20,
+    split_json: str = "",
+    test_size: float = 0.2,
+    random_seed: int = 42,
+    stratify: bool = True,
+    top_k_coefficients: int = 25,
+    include_curves: bool = False,
+) -> str:
+    """Search hyperparameters by CV on the training split, then score the winner on the holdout.
+
+    The honest version of "try a few settings and report the best number".
+    Every candidate is scored by cross-validation *inside the training split*;
+    only the winner is refit on the full training split and applied to the
+    held-out data, exactly once. Picking a winner on the test split and then
+    reporting that same split's AUC -- the usual way this goes wrong -- is not
+    reachable through this tool.
+
+    The default grid varies ``C`` over four orders of magnitude and toggles
+    ``class_weight``, which covers most of what is available on a clean tabular
+    file. Supply ``grid_json`` to search something else, e.g.
+    ``{"C": [0.1, 1, 10], "penalty": ["l1", "l2"], "solver": ["liblinear"]}``.
+
+    Args:
+        data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+        target_column: Column to predict.
+        grid_json: JSON object mapping any of C/penalty/solver/class_weight/l1_ratio/
+            scale/numeric_impute/max_iter to a list of values. Empty uses the default grid.
+        task_type: 'auto', 'binary' or 'multiclass'.
+        positive_label: Binary positive class; defaults to the highest label.
+        selection_metric: What CV maximizes -- 'roc_auc' (default),
+            'average_precision' (better under heavy imbalance), 'balanced_accuracy' or 'f1'.
+        n_splits: Inner CV folds (clamped to what the training split supports).
+        threshold: '0.5', a number, or 'youden'/'f1' tuned on the winner's out-of-fold
+            training predictions.
+        max_categories: Cardinality ceiling for one-hot encoding.
+        split_json: Split spec -- see describe_split.
+        test_size: Held-out fraction.
+        random_seed: Seed for the split, the folds and the solver.
+        stratify: Keep the class balance equal across the split and folds.
+        top_k_coefficients: How many coefficients of the winner to report.
+        include_curves: Add the winner's holdout ROC/PR points, calibration bins and a
+            threshold sweep. Off by default -- see fit_logistic_regression.
+    """
+    prep = _prepare(data_path, target_column, task_type, split_json, test_size, random_seed, stratify)
+    split = prep.split
+
+    grid = logistic.DEFAULT_GRID
+    if grid_json.strip():
+        try:
+            grid = json.loads(grid_json)
+        except json.JSONDecodeError as e:
+            return _error(f"grid_json is not valid JSON: {e}")
+        if not isinstance(grid, dict):
+            return _error(f"grid_json must be a JSON object, got {type(grid).__name__}")
+    candidates = logistic.expand_grid(grid)
+
+    metric_key = {
+        "roc_auc": "roc_auc" if prep.task_type == "binary" else "roc_auc_ovr",
+        "average_precision": "average_precision",
+        "balanced_accuracy": "balanced_accuracy",
+        "f1": "f1" if prep.task_type == "binary" else "f1_macro",
+    }.get(selection_metric)
+    if metric_key is None:
+        return _error(
+            f"selection_metric must be one of ['roc_auc', 'average_precision', 'balanced_accuracy', 'f1'], "
+            f"got {selection_metric!r}"
+        )
+    if selection_metric == "average_precision" and prep.task_type != "binary":
+        return _error("selection_metric 'average_precision' applies to binary targets only")
+
+    used_splits = logistic.usable_n_splits(split.y_train, n_splits, split.groups_train)
+    folds = splitting.fold_indices(
+        split.x_train, split.y_train, prep.spec, used_splits,
+        groups=split.groups_train, classification=True,
+    )
+    classes = sorted(np.unique(split.y_train).tolist())
+
+    results = []
+    for candidate in candidates:
+        factory, model_spec = logistic.make_pipeline_factory(
+            split.x_train, max_categories=max_categories, random_seed=random_seed, **candidate
+        )
+        oof, _, _ = logistic.out_of_fold_proba(factory, split.x_train, split.y_train, folds)
+        if prep.task_type == "binary":
+            y_bin, _, column = _binary_view(split.y_train, classes, positive_label)
+            fold_scores = [scoring.binary_bundle(y_bin[te], oof[te, column], 0.5).get(metric_key) for _, te in folds]
+        else:
+            y_values = split.y_train.to_numpy()
+            fold_scores = [scoring.multiclass_bundle(y_values[te], oof[te], classes).get(metric_key) for _, te in folds]
+        summary = scoring.summarize_folds(fold_scores)
+        results.append({"params": dict(candidate), "cv": summary, "_spec": model_spec, "_oof": oof})
+
+    scored = [r for r in results if r["cv"]["mean"] is not None]
+    if not scored:
+        return _error(f"every candidate scored None on {selection_metric!r} -- the folds may be single-class")
+    # Ties broken toward the *more* regularized model (smaller C): when two
+    # settings are indistinguishable in CV, the simpler one generalizes better.
+    best = min(scored, key=lambda r: (-r["cv"]["mean"], r["params"].get("C", 1.0)))
+
+    factory, model_spec = logistic.make_pipeline_factory(
+        split.x_train, max_categories=max_categories, random_seed=random_seed, **best["params"]
+    )
+    pipe = factory()
+    pipe.fit(split.x_train, split.y_train)
+    holdout = _score_holdout(pipe, prep, positive_label, threshold, best["_oof"], classes, include_curves)
+
+    return scoring.dumps(
+        {
+            **holdout,
+            "best_params": best["params"],
+            "best_cv": {selection_metric: best["cv"]},
+            "search": {
+                "selection_metric": selection_metric,
+                "n_candidates": len(candidates),
+                "n_splits_used": int(used_splits),
+                "scored_on": "cross-validation within the training split only",
+                "leaderboard": sorted(
+                    ({"params": r["params"], selection_metric: r["cv"]["mean"], "std": r["cv"]["std"]} for r in scored),
+                    key=lambda r: -(r[selection_metric] or 0),
+                ),
+            },
+            "coefficients": logistic.coefficients(
+                pipe, scaled=bool(best["params"].get("scale", True)), top_k=top_k_coefficients
+            ),
+            "baseline": _baseline(split.y_train, split.y_test, prep.task_type, positive_label),
+            "model": _model_block(model_spec),
+            "preprocessing": {
+                "numeric_columns": model_spec["numeric"],
+                "categorical_columns_one_hot": model_spec["categorical"],
+                "dropped_high_cardinality": model_spec["dropped_high_cardinality"],
+            },
+            "convergence": _convergence(pipe),
+            **prep.provenance(target_column, data_path),
+        }
+    )
+
+
+# --------------------------------------------------------------------------
+# Script execution -- the escape hatch
+# --------------------------------------------------------------------------
 
 
 def _parse_payload(payload_json: str) -> tuple[dict[str, Any] | None, str]:
@@ -68,8 +769,9 @@ def _run_script(
     payload_json: str,
     extra_names: dict[str, Any],
     family: str,
+    include_curves: bool = False,
 ) -> str:
-    """Shared body of both tools: load, split, exec on train, score on test."""
+    """Shared body of both script tools: load, split, exec on train, score on test."""
     code_sha256 = hashlib.sha256(code.encode("utf-8")).hexdigest()
     base = {"model_family": family, "code_sha256": code_sha256}
 
@@ -137,7 +839,9 @@ def _run_script(
         )
 
     try:
-        test_metrics = _score(fn, task_type, positive_label, y_train, X_test, y_test)
+        test_metrics, curves = _score_script(
+            fn, task_type, positive_label, y_train, X_test, y_test, namespace, include_curves
+        )
     except Exception as e:  # noqa: BLE001
         return scoring.dumps(
             {
@@ -155,6 +859,7 @@ def _run_script(
             **base,
             "task_type": task_type,
             "test_metrics": test_metrics,
+            **({"test_curves": curves} if curves else {}),
             "model_decisions": decisions if isinstance(decisions, dict) else {},
             "stdout": stdout.getvalue()[-_STDOUT_CHARS:],
             "executed_code": code,
@@ -170,33 +875,36 @@ def _run_script(
     )
 
 
-def _score(
+def _score_script(
     fn: Any,
     task_type: str,
     positive_label: str,
     y_train: pd.Series,
     X_test: pd.DataFrame,  # noqa: N803
     y_test: pd.Series,
-) -> dict[str, Any]:
+    namespace: dict[str, Any],
+    include_curves: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Apply the script's callable to the held-out split and bundle its metrics."""
     if task_type == "regression":
-        return scoring.regression_bundle(y_test.values, np.asarray(fn(X_test), dtype=float))
+        return scoring.regression_bundle(y_test.to_numpy(), np.asarray(fn(X_test), dtype=float)), {}
 
     # Class labels come from TRAIN, so the ordering a script's predict_proba
     # columns must follow is knowable from what the script itself was given.
     classes = sorted(np.unique(y_train).tolist())
     if task_type == "binary":
         pos = type(classes[0])(positive_label) if positive_label != "" else classes[-1]
-        y_bin = (y_test == pos).astype(int).values
+        y_bin = (y_test == pos).astype(int).to_numpy()
         proba = np.asarray(fn(X_test), dtype=float).ravel()
-        bundle = scoring.binary_bundle(y_bin, proba, 0.5)
+        chosen = namespace.get("chosen_threshold")
+        bundle = scoring.binary_bundle(y_bin, proba, 0.5 if chosen is None else float(chosen))
         bundle["positive_label"] = str(pos)
-        return bundle
-    return scoring.multiclass_bundle(y_test.values, np.asarray(fn(X_test), dtype=float), classes)
+        return bundle, scoring.binary_curves(y_bin, proba, full=include_curves)
+    return scoring.multiclass_bundle(y_test.to_numpy(), np.asarray(fn(X_test), dtype=float), classes), {}
 
 
 @mcp.tool()
-def run_xgboost_script(
+def run_logistic_regression_script(
     code: str,
     data_path: str,
     target_column: str,
@@ -205,10 +913,17 @@ def run_xgboost_script(
     test_size: float = 0.2,
     random_seed: int = 42,
     payload_json: str = "",
+    include_curves: bool = False,
 ) -> str:
-    """Fit an XGBoost model with your own script, then score it on a held-out split.
+    """Fit a classifier with your own script, then score it on a held-out split.
 
-    Your code is executed with the TRAINING split only in scope. It must define a
+    The escape hatch for what ``fit_logistic_regression``'s arguments can't
+    express -- a custom ColumnTransformer, an interaction basis, a calibrated
+    or stacked estimator, a different classifier entirely. Prefer the
+    declarative tool when it covers the case: it handles preprocessing,
+    threshold selection and the split audit for you.
+
+    Your code runs with the TRAINING split only in scope. It must define a
     top-level callable capturing the fitted model:
 
       * task_type 'binary'      -> ``predict_proba(X)`` returning 1-D P(positive)
@@ -216,24 +931,33 @@ def run_xgboost_script(
         probabilities in ascending class-label order
       * task_type 'regression'  -> ``predict(X)`` returning 1-D predictions
 
-    THIS tool then applies the test split and computes every metric, so the script
-    can never see the test labels. Pre-bound names: ``X_train``, ``y_train``, ``xgb``
-    (the xgboost module), ``XGBClassifier``, ``XGBRegressor``, ``pd``, ``np``,
-    ``random_seed``, ``hp`` (the parsed payload). Any installed package may be
-    imported. Optionally set a ``result`` dict of train-side decisions to echo back
-    (it must not contain test metrics).
+    THIS tool then applies the test split and computes every metric, so the
+    script can never see the test labels. Pre-bound names: ``X_train``,
+    ``y_train``, ``LogisticRegression``, ``LogisticRegressionCV``, ``Pipeline``,
+    ``make_pipeline``, ``ColumnTransformer``, ``StandardScaler``,
+    ``OneHotEncoder``, ``SimpleImputer``, ``pd``, ``np``, ``random_seed``, ``hp``
+    (the parsed payload). Any installed package may be imported. Set
+    ``chosen_threshold`` to pick the binary operating point (default 0.5), and a
+    ``result`` dict of train-side decisions to echo back (it must not contain
+    test metrics).
 
     Args:
         code: Python source defining predict_proba(X) or predict(X) as above.
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
-        target_column: Column in that file to predict; every other column is a feature.
+        target_column: Column to predict; every other column is a feature.
         task_type: 'binary', 'multiclass', or 'regression'.
         positive_label: Binary positive-class label; defaults to the highest class.
         test_size: Held-out fraction, strictly between 0 and 1.
         random_seed: Seed for the split, and bound into the script.
         payload_json: Optional JSON object of hyperparameters, bound as ``hp``.
+        include_curves: Add ROC/PR points, calibration bins and a threshold sweep.
+            Off by default -- see fit_logistic_regression.
     """
-    import xgboost as xgb
+    from sklearn.compose import ColumnTransformer
+    from sklearn.impute import SimpleImputer
+    from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+    from sklearn.pipeline import Pipeline, make_pipeline
+    from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
     return _run_script(
         code=code,
@@ -244,8 +968,18 @@ def run_xgboost_script(
         test_size=test_size,
         random_seed=random_seed,
         payload_json=payload_json,
-        extra_names={"xgb": xgb, "XGBClassifier": xgb.XGBClassifier, "XGBRegressor": xgb.XGBRegressor},
-        family="xgboost",
+        include_curves=include_curves,
+        extra_names={
+            "LogisticRegression": LogisticRegression,
+            "LogisticRegressionCV": LogisticRegressionCV,
+            "Pipeline": Pipeline,
+            "make_pipeline": make_pipeline,
+            "ColumnTransformer": ColumnTransformer,
+            "StandardScaler": StandardScaler,
+            "OneHotEncoder": OneHotEncoder,
+            "SimpleImputer": SimpleImputer,
+        },
+        family="logistic_regression",
     )
 
 
@@ -260,18 +994,17 @@ def run_linear_regression_script(
 ) -> str:
     """Fit a linear regression with your own script, then score it on a held-out split.
 
-    Regression only -- for a linear *classifier* use LogisticRegression via
-    ``run_xgboost_script``'s script slot, or fit it here and report your own
-    diagnostics. Your code is executed with the TRAINING split only in scope and
-    must define a top-level callable ``predict(X)`` returning 1-D predictions;
-    THIS tool applies the test split and computes R^2/RMSE/MAE/MAPE itself.
+    Regression only -- for a linear *classifier* use ``fit_logistic_regression``.
+    Your code is executed with the TRAINING split only in scope and must define
+    a top-level callable ``predict(X)`` returning 1-D predictions; THIS tool
+    applies the test split and computes R^2/RMSE/MAE/MAPE itself.
 
     Pre-bound names: ``X_train``, ``y_train``, ``LinearRegression``, ``Ridge``,
     ``Lasso``, ``ElasticNet``, ``Pipeline``, ``StandardScaler``, ``pd``, ``np``,
     ``random_seed``, ``hp`` (the parsed payload). Any installed package may be
-    imported. Set a ``result`` dict to echo back train-side decisions -- coefficients
-    and intercept are a good thing to put there, since this tool reports metrics
-    but knows nothing about your model's internals.
+    imported. Set a ``result`` dict to echo back train-side decisions --
+    coefficients and intercept are a good thing to put there, since this tool
+    reports metrics but knows nothing about your model's internals.
 
     Args:
         code: Python source defining predict(X).
@@ -303,41 +1036,6 @@ def run_linear_regression_script(
             "StandardScaler": StandardScaler,
         },
         family="linear_regression",
-    )
-
-
-@mcp.tool()
-def describe_dataset(data_path: str, max_columns: int = 100) -> str:
-    """Inspect a dataset's shape, columns and dtypes before modeling it.
-
-    Exists so the two modeling tools' ``target_column`` argument can be chosen
-    from what the file actually contains rather than guessed at.
-
-    Args:
-        data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
-        max_columns: Cap on how many columns to describe.
-    """
-    try:
-        frame = load_frame(data_path)
-    except DataError as e:
-        return scoring.dumps({"error": f"dataset: {e}"})
-    head = frame.iloc[:, :max_columns]
-    return scoring.dumps(
-        {
-            "n_rows": int(len(frame)),
-            "n_columns": int(frame.shape[1]),
-            "columns": [
-                {
-                    "name": str(name),
-                    "dtype": str(head[name].dtype),
-                    "n_missing": int(head[name].isna().sum()),
-                    "n_unique": int(head[name].nunique(dropna=True)),
-                }
-                for name in head.columns
-            ],
-            "truncated_columns": max(0, int(frame.shape[1]) - int(head.shape[1])),
-            "data_sha256": frame_sha256(frame),
-        }
     )
 
 

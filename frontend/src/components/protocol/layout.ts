@@ -113,27 +113,18 @@ export function findFreePosition(
 }
 
 // One column per step of the main flow, one row per parallel branch. A host's
-// own children reach from ~24px left of its card to ~260px right of it (the
-// Knowledge slot at 90% of a w-72 card, plus a caption), and up to three
-// ranks above it (see TIDY_CHILD_RANK_HEIGHT), so these are those bands plus
-// a gap -- wide/tall enough that two adjacent hosts' children can't
+// own children reach from ~24px left of its card to ~380px right of it (the
+// Knowledge slot at 90% of a w-72 card, plus a caption, plus any rightward
+// nudge), and from 160px above it to ~240px below, so these are those bands
+// plus a gap -- wide enough that two adjacent hosts' children can't
 // interleave, which is the thing that makes a hand-arranged canvas
 // unreadable in the first place.
 const TIDY_COLUMN_WIDTH = 460
-const TIDY_ROW_HEIGHT = 520
+const TIDY_ROW_HEIGHT = 440
 // Slots on the agent's TOP edge -- their nodes sit above the host, everything
 // else below. Mirrors addNode's own TOP_EDGE_SLOTS.
 const TIDY_TOP_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'dataset', 'knowledge'])
 const TIDY_CHILD_OFFSET_Y = 160
-// When a child's own x is already taken, it moves one rank FURTHER from the
-// host instead of sideways. Sideways is what findFreePosition does when a
-// node is dropped one at a time (nothing better is knowable then), but a
-// whole-canvas tidy knows the whole row up front -- and the top edge's four
-// connectors are as little as 37px apart, so a sideways nudge there walks a
-// node out from under its own connector and in under its neighbour's. Rank
-// separation keeps every x exact and lets the edges do the explaining.
-const TIDY_CHILD_RANK_HEIGHT = 120
-const TIDY_MAX_CHILD_RANKS = 6
 
 type TidyNode = { id: string; type?: string; position: XYPosition }
 type TidyEdge = { source: string; target: string; targetHandle?: string | null }
@@ -214,37 +205,30 @@ export function tidyLayout(nodes: TidyNode[], edges: TidyEdge[]): Map<string, XY
     })
   }
 
-  const overlapsPlaced = (p: XYPosition) =>
-    placed.some(
-      (q) =>
-        Math.abs(q.x - p.x) < CONNECTOR_CHILD_CLEARANCE.width && Math.abs(q.y - p.y) < CONNECTOR_CHILD_CLEARANCE.height,
-    )
-
   // Children after every host, left column first, so the leftward host wins
   // any contested space and its neighbour's satellites are the ones nudged.
   // Within a host, the slots are placed in the order the edges were created,
   // which is the order the user wired them.
+  //
+  // All of a host's children share ONE row per edge (above for the top slots,
+  // below for the rest) and slide rightward when a spot is taken -- the same
+  // findFreePosition scan a hand-dropped node gets. A stacked variant was
+  // tried, putting a contested child a rank further from the host so every x
+  // stayed exact; it was rejected as unreadable, and the tradeoff is real
+  // either way: the top edge's connectors are 37-55px apart but a circle node
+  // is 56px wide, so a full top row physically cannot fit at exact x's. One
+  // row and a nudge is the chosen side of that.
   const orderedHosts = [...hosts].sort(
     (a, b) => column.get(a.id)! - column.get(b.id)! || positions.get(a.id)!.y - positions.get(b.id)!.y,
   )
   for (const host of orderedHosts) {
     const hostPosition = positions.get(host.id)!
     for (const child of childrenByHost.get(host.id) ?? []) {
-      const direction = TIDY_TOP_SLOTS.has(child.slot) ? -1 : 1
-      const x = hostPosition.x + connectorNodeOffsetX(host.type, child.slot)
-      let position: XYPosition | undefined
-      for (let rank = 0; rank < TIDY_MAX_CHILD_RANKS; rank++) {
-        const candidate = { x, y: hostPosition.y + direction * (TIDY_CHILD_OFFSET_Y + rank * TIDY_CHILD_RANK_HEIGHT) }
-        if (!overlapsPlaced(candidate)) {
-          position = candidate
-          break
-        }
+      const desired = {
+        x: hostPosition.x + connectorNodeOffsetX(host.type, child.slot),
+        y: hostPosition.y + (TIDY_TOP_SLOTS.has(child.slot) ? -TIDY_CHILD_OFFSET_Y : TIDY_CHILD_OFFSET_Y),
       }
-      // Six ranks deep means one connector is feeding a whole stack of nodes;
-      // at that point exact-x has stopped paying for itself and the generic
-      // search is the better answer.
-      const fallback = { x, y: hostPosition.y + direction * TIDY_CHILD_OFFSET_Y }
-      position ??= findFreePosition(placed, fallback, CONNECTOR_CHILD_CLEARANCE)
+      const position = findFreePosition(placed, desired, CONNECTOR_CHILD_CLEARANCE)
       positions.set(child.id, position)
       placed.push(position)
     }

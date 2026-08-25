@@ -1,9 +1,9 @@
 import { ShieldCheck } from 'lucide-react'
+import { nodeAccent } from '@/lib/nodeAccent'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { hashToChartHue } from '@/lib/utils'
 import { defaultSystemPrompt } from './defaultSystemPrompt'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
@@ -11,7 +11,7 @@ import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { NodeRunOutputPanel } from './NodeRunOutputPanel'
 import type { CriticGateNodeConfig, CriticGateNodeData, NodeRunState, ProtocolNode } from '@/types/protocols'
 
-const ACCENT = hashToChartHue('critic_gate')
+const ACCENT = nodeAccent('critic_gate')
 
 // Same fixed-size NodeInspectorDialog shell as AgentNodeInspector/
 // McpToolNodeInspector (see that file), but with a deliberately smaller

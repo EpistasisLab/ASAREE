@@ -1,6 +1,6 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { ScrollText } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { SkillNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
@@ -12,7 +12,7 @@ import { CircleNode } from './CircleNode'
 // ProtocolCanvas.tsx and _NODE_TYPE_TO_HANDLE in protocol_execution.py),
 // which sits on the agent's top edge -- hence handlePosition="bottom", same
 // as Dataset and the pattern nodes.
-const ACCENT = hashToChartHue('skill')
+const ACCENT = nodeAccent('skill')
 
 export function SkillNode({ id, data, selected }: NodeProps & { data: SkillNodeData }) {
   const { updateNodeData } = useReactFlow()

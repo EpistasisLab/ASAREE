@@ -1,19 +1,19 @@
 import { Repeat2 } from 'lucide-react'
 import { useState } from 'react'
+import { nodeAccent } from '@/lib/nodeAccent'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { hashToChartHue } from '@/lib/utils'
 import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import type { ReasonActPatternConfig, ReasonActPatternNodeData, ProtocolNode } from '@/types/protocols'
 
 const OBSERVATION_FORMATS = ['raw', 'summarized'] as const
-const ACCENT = hashToChartHue('pattern_reason_act')
+const ACCENT = nodeAccent('pattern_reason_act')
 
 // Fields mirror Motoro's own ReasonActPattern.configuration_schema
 // (engine/patterns/builtin/reason_act.py) exactly, and ARE wired to a real

@@ -1,3 +1,4 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plug, RefreshCw, Wrench } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -6,7 +7,6 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { mcpServersApi } from '@/api/client'
-import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { MCP_CLIENT_TOOL_NODE_TYPE } from './mcpServerCatalog'
@@ -15,8 +15,8 @@ import type { McpToolNodeData, ProtocolNode } from '@/types/protocols'
 
 // Kept in step with McpToolNode/McpClientToolNode's own accents -- the same
 // node shouldn't change colour between the canvas and its inspector.
-const ACCENT = hashToChartHue('mcp_tool')
-const CLIENT_ACCENT = hashToChartHue(MCP_CLIENT_TOOL_NODE_TYPE)
+const ACCENT = nodeAccent('mcp_tool')
+const CLIENT_ACCENT = nodeAccent(MCP_CLIENT_TOOL_NODE_TYPE)
 
 const TRANSPORT_LABELS: Record<string, string> = { stdio: 'stdio', http: 'Streamable HTTP', sse: 'SSE' }
 

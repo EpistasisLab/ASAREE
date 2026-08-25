@@ -1,3 +1,4 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { FileText, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -6,13 +7,12 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { okfApi } from '@/api/client'
-import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { OkfDocumentNodeData, ProtocolNode } from '@/types/protocols'
 
-const ACCENT = hashToChartHue('okf_document')
+const ACCENT = nodeAccent('okf_document')
 
 // The mirror of OkfBundleNodeInspector, and the same two refusals: no picker
 // to repoint the node at a different document (a node IS one document -- add a

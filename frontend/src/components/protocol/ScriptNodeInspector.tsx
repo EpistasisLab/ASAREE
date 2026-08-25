@@ -1,14 +1,14 @@
 import { Code2 } from 'lucide-react'
+import { nodeAccent } from '@/lib/nodeAccent'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { PythonCodeEditor } from './PythonCodeEditor'
 import type { ScriptNodeConfig, ScriptNodeData, ProtocolNode } from '@/types/protocols'
 
-const ACCENT = hashToChartHue('script')
+const ACCENT = nodeAccent('script')
 
 // Same floating-dialog shell as every other node inspector. Python-only for
 // v1 (see ScriptNodeData's own comment in types/protocols.ts) -- "Language"

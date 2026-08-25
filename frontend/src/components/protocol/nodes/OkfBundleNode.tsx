@@ -1,6 +1,6 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { BookMarked } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { OkfBundleNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
@@ -12,7 +12,7 @@ import { CircleNode } from './CircleNode'
 // connector (handleId="knowledge", matching CONNECTOR_PANEL_INFO.knowledge in
 // ProtocolCanvas.tsx and _NODE_TYPE_TO_HANDLE in protocol_execution.py), which
 // sits on the agent's top edge -- hence handlePosition="bottom", same as Skill.
-const ACCENT = hashToChartHue('okf_bundle')
+const ACCENT = nodeAccent('okf_bundle')
 
 export function OkfBundleNode({ id, data, selected }: NodeProps & { data: OkfBundleNodeData }) {
   const { updateNodeData } = useReactFlow()

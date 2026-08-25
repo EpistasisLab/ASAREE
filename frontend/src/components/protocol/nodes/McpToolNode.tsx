@@ -1,13 +1,13 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { Wrench } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { McpToolNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
 
-// A different hue from "agent" -- real category variety (CLAUDE.md's
-// hash-driven tint rule), all mcp_tool nodes still share this one hue.
-const ACCENT = hashToChartHue('mcp_tool')
+// One hue for the kind, not per instance: all mcp_tool nodes share this, and
+// it's a slot of its own next to mcp_client_tool's (see lib/nodeAccent.ts).
+const ACCENT = nodeAccent('mcp_tool')
 
 // Always an Agent's Tool-connector source -- one MCP server connection,
 // allow-listing a subset of its tools (McpToolNodeConfig.tool_names) --

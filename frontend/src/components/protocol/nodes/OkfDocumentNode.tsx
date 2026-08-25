@@ -1,6 +1,6 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { FileText } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { OkfDocumentNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
@@ -13,7 +13,7 @@ import { CircleNode } from './CircleNode'
 // Its own hue rather than sharing the bundle's: they sit side by side on the
 // same connector, and "one file I uploaded" vs. "a folder on the server" is
 // exactly the distinction a glance at the canvas should make.
-const ACCENT = hashToChartHue('okf_document')
+const ACCENT = nodeAccent('okf_document')
 
 export function OkfDocumentNode({ id, data, selected }: NodeProps & { data: OkfDocumentNodeData }) {
   const { updateNodeData } = useReactFlow()

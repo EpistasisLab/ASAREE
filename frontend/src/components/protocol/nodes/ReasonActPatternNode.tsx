@@ -1,6 +1,6 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useNodeConnections, type NodeProps } from '@xyflow/react'
 import { Repeat2 } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { ReasonActPatternNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
@@ -16,7 +16,7 @@ import { CircleNode } from './CircleNode'
 // ProtocolCanvas.tsx) with its own connector on the BOTTOM edge
 // (handlePosition="bottom" below) so the edge runs straight down into the
 // agent's own top connector.
-const ACCENT = hashToChartHue('pattern_reason_act')
+const ACCENT = nodeAccent('pattern_reason_act')
 
 export function ReasonActPatternNode({ id, data, selected }: NodeProps & { data: ReasonActPatternNodeData }) {
   // An agent's execution pattern must never go to zero (see

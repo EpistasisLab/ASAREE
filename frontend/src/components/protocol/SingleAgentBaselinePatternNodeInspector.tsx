@@ -1,14 +1,14 @@
 import { ArrowRight } from 'lucide-react'
+import { nodeAccent } from '@/lib/nodeAccent'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { hashToChartHue } from '@/lib/utils'
 import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import type { SingleAgentBaselinePatternConfig, SingleAgentBaselinePatternNodeData, ProtocolNode } from '@/types/protocols'
 
-const ACCENT = hashToChartHue('pattern_single_agent_baseline')
+const ACCENT = nodeAccent('pattern_single_agent_baseline')
 
 // Fields mirror Motoro's own SingleAgentBaselinePattern.configuration_schema
 // (engine/patterns/builtin/single_agent_baseline.py) exactly, and ARE wired

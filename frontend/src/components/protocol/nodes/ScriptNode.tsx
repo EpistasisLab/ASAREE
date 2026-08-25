@@ -1,6 +1,6 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import type { NodeProps } from '@xyflow/react'
 import { Code2 } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { ScriptNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
@@ -12,7 +12,7 @@ import { CircleNode } from './CircleNode'
 // every other connector source. Wires into the Agent's shared Tool
 // connector (handleId="tool", alongside mcp_tool -- see AgentNode.tsx's own
 // comment), not a dedicated "script" handle.
-const ACCENT = hashToChartHue('script')
+const ACCENT = nodeAccent('script')
 
 export function ScriptNode({ id, data, selected }: NodeProps & { data: ScriptNodeData }) {
   return (

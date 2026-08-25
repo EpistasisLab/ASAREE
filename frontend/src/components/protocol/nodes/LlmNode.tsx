@@ -1,6 +1,6 @@
 import type { NodeProps } from '@xyflow/react'
 import { Atom, Cloud, HardDrive, Route, Sparkles } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
+import { nodeAccent } from '@/lib/nodeAccent'
 import type { LlmNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { useProviderModels } from '../useProviderModels'
@@ -9,11 +9,12 @@ import { CircleNode } from './CircleNode'
 // One shared card renderer for all three LLM provider node types
 // (llm_anthropic/llm_openai/llm_azure_foundry -- see LlmNodeData's own
 // comment in types/protocols.ts for why they're separate node types).
-// Icon/accent/placeholder are derived from data.config.provider rather than
-// the xyflow `type` prop, so this stays correct even if a node is ever
-// duplicated -- hashToChartHue(provider) gives each provider its own
-// distinct hue (CLAUDE.md's hash-driven tint rule: real category variety,
-// not a uniform "LLM" hue for three actually-different things).
+// Icon/placeholder are derived from data.config.provider rather than the
+// xyflow `type` prop, so this stays correct even if a node is ever duplicated.
+// The ACCENT is not: every provider draws in the one `llm` hue (see
+// lib/nodeAccent.ts). It used to hash the provider, giving each its own -- but
+// that made one node kind look like five, and put Skill and Azure on the same
+// color. Which vendor this is stays legible from the icon and the label.
 //
 // Rendered as a small circle-with-icon (see CircleNode) -- a pure
 // config source, no target handle at all, model/temperature/etc. only show
@@ -30,7 +31,7 @@ export const PROVIDER_META: Record<string, { label: string; icon: typeof Sparkle
 
 export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData }) {
   const meta = PROVIDER_META[data.config?.provider] ?? { label: data.config?.provider || 'LLM', icon: Sparkles }
-  const accent = hashToChartHue(data.config?.provider || 'llm')
+  const accent = nodeAccent('llm')
   const provider = data.config?.provider
 
   // Shared with LlmNodeInspector via useProviderModels -- one cache entry per

@@ -1,3 +1,4 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useQuery } from '@tanstack/react-query'
 import { ScrollText } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -5,13 +6,12 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { skillsApi } from '@/api/client'
-import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { ProtocolNode, SkillNodeData } from '@/types/protocols'
 
-const ACCENT = hashToChartHue('skill')
+const ACCENT = nodeAccent('skill')
 
 // Same floating-dialog shell as McpToolNodeInspector, and the same model: no
 // Skill field at all. Every Skill node is created by picking a skill in the

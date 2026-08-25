@@ -1,6 +1,6 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { Database } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { DatasetNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
@@ -18,7 +18,7 @@ import { CircleNode } from './CircleNode'
 // hover toolbar's own power icon toggles this same config.enabled
 // _build_user_input already checks before emitting a "Dataset context"
 // block, same as the Switch in its own inspector.
-const ACCENT = hashToChartHue('dataset')
+const ACCENT = nodeAccent('dataset')
 
 export function DatasetNode({ id, data, selected }: NodeProps & { data: DatasetNodeData }) {
   const { updateNodeData } = useReactFlow()

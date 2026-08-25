@@ -1,7 +1,8 @@
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { ShieldCheck, ShieldOff } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import { cardAccent, hashToChartHue } from '@/lib/utils'
+import { cardAccent } from '@/lib/utils'
+import { nodeAccent } from '@/lib/nodeAccent'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { CriticGateNodeData, NodeRunStatus } from '@/types/protocols'
 import { boundFactorCount, hasBoundFactor } from '../bindableFields'
@@ -11,9 +12,9 @@ import { ConnectorHandleLabel } from './ConnectorHandleLabel'
 import { NodeFactorBadge } from './NodeFactorBadge'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 
-// A third hue, distinct from "agent"/"mcp_tool" -- real category variety
-// (CLAUDE.md's hash-driven tint rule), all critic_gate nodes share this one.
-const ACCENT = hashToChartHue('critic_gate')
+// All critic_gate nodes share this one hue -- a warm red, the only node whose
+// job is to stop a run (see lib/nodeAccent.ts).
+const ACCENT = nodeAccent('critic_gate')
 
 export function CriticGateNode({ id, data, selected }: NodeProps & { data: CriticGateNodeData & { runStatus?: NodeRunStatus } }) {
   const enabled = data.config?.enabled ?? true

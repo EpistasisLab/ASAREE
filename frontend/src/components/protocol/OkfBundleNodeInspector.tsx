@@ -1,3 +1,4 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookMarked, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -6,14 +7,13 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { okfApi } from '@/api/client'
-import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { OkfConceptList } from './OkfConceptList'
 import type { OkfBundleNodeData, ProtocolNode } from '@/types/protocols'
 
-const ACCENT = hashToChartHue('okf_bundle')
+const ACCENT = nodeAccent('okf_bundle')
 
 // Same model as SkillNodeInspector: no bundle picker. Every OKF Bundle node is
 // created by picking a bundle in the OKF bundles browser

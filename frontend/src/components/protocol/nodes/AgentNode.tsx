@@ -1,7 +1,8 @@
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { Bot } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import { cardAccent, hashToChartHue } from '@/lib/utils'
+import { cardAccent } from '@/lib/utils'
+import { nodeAccent } from '@/lib/nodeAccent'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { AgentNodeData, NodeRunStatus } from '@/types/protocols'
 import { boundFactorCount, hasBoundFactor } from '../bindableFields'
@@ -13,10 +14,12 @@ import { NodeFactorBadge } from './NodeFactorBadge'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 import { NodeSummaryLine } from './NodeSummaryLine'
 
-// All "agent" nodes share one hue in V1 -- type-based coloring (CLAUDE.md's
-// hash-driven tint rule for "real category variety"), not per-instance
-// variety, since a node's identity is its type, not its label.
-const ACCENT = hashToChartHue('agent')
+// All "agent" nodes share one hue -- color on this canvas is type-based (see
+// lib/nodeAccent.ts), not per-instance, since a node's identity is its type,
+// not its label. The connector captions below are the one thing here that
+// does NOT follow --card-accent: they're yellow, to be found against the node
+// rather than to match it (ConnectorHandleLabel).
+const ACCENT = nodeAccent('agent')
 
 export function AgentNode({
   id,
@@ -101,10 +104,18 @@ export function AgentNode({
           w-72 rather than the w-60 it was with three: at 240px the margins are
           64px each, which two centered captions won't fit in; at 288px they're
           88px. Hence a Pattern/Skill pair in the left margin (5% / 18%) and a
-          Dataset/Knowledge pair in the right (74% / 90%), each spaced so
+          Dataset/Knowledge pair in the right (71% / 90%), each spaced so
           neither their ~26px stubs nor their centered captions collide. Every
           caption is centered directly above its own handle, mirroring the
           bottom row (see ConnectorHandleLabel's side="top" branch).
+
+          Dataset is at 71% rather than the 74% it started at: "Dataset" and
+          "Knowledge" are the two longest captions on this edge, and centered
+          at 74/90 they were within a pixel or two of touching. 71% is about
+          as far left as it can go -- the toolbar's right edge is at ~69%, and
+          the stub's own padding already overlaps it slightly (harmless, the
+          toolbar is above the stub's z-index and only there on hover, and the
+          visible "+" glyph still clears it).
 
           The 3 bottom sub-connectors: required AI (exactly one), optional
           max-1 Memory (visual scaffolding only -- see MemoryNodeData), and
@@ -179,12 +190,12 @@ export function AgentNode({
         type="target"
         id="dataset"
         position={Position.Top}
-        style={{ left: '74%' }}
+        style={{ left: '71%' }}
         title="Dataset -- the registered dataset this agent operates on (one; make it a factor to compare several)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="74%" side="top">Dataset</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="dataset" left="74%" side="top" />
+      <ConnectorHandleLabel left="71%" side="top">Dataset</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="dataset" left="71%" side="top" />
       {/* Knowledge -- registered OKF bundles, each a directory of Markdown
           concepts on the SERVER's disk that the agent reads AND writes as it
           works (see OkfBundleNodeData). Its own slot rather than sharing

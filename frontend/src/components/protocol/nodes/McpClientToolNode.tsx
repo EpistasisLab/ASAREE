@@ -1,15 +1,16 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { Plug } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { McpToolNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
 
-// Its own hue, distinct from McpToolNode's -- CLAUDE.md's hash-driven tint
-// rule: "a server the deployment provided" and "a server this protocol
-// connected to itself" are a real category difference, and the second one is
-// worth spotting at a glance on someone else's canvas.
-const ACCENT = hashToChartHue('mcp_client_tool')
+// Its own hue, distinct from McpToolNode's: "a server the deployment
+// provided" and "a server this protocol connected to itself" are a real
+// category difference, and the second one is worth spotting at a glance on
+// someone else's canvas. Adjacent slots on purpose, since the two are alike
+// -- see lib/nodeAccent.ts.
+const ACCENT = nodeAccent('mcp_client_tool')
 
 // Behaves exactly like McpToolNode -- an Agent's Tool-connector source,
 // allow-listing a subset of one server's tools, never a pipeline step of its

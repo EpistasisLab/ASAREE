@@ -130,8 +130,23 @@ sake.
   status but real category variety — e.g. `AgentCard` tints by `model_config.model`, so agents
   sharing an LLM visually match without a hardcoded model→color table that goes stale the moment
   a new model ships. Same input always produces the same one of the five `--chart-*` hues.
+  **Not for protocol-canvas nodes** — see the table below.
+- **Table-driven tint** (`lib/nodeAccent.ts`'s `nodeAccent(kind)`): protocol-canvas nodes only.
+  Thirteen node kinds against five `--chart-*` hues made collisions arithmetic, and they landed
+  on the confusable pairs (Skill/AI, Dataset/Knowledge, Pattern/Script), so every kind now has an
+  explicit entry. Five keep the `--chart-*` hue the old hash gave them (agent, dataset,
+  reason+act, critic gate, and the LLM family) and the other eight moved to a `--node-1`…`--node-8`
+  slot in `index.css`'s `.dark` block — **fixing a repeat means moving the bucket-mates, not
+  repainting the canvas**, so don't reassign an anchor's hue without being asked. Both the node
+  card and its inspector call `nodeAccent` with the same key so they can't drift; a kind with no
+  entry falls back to `--primary` rather than a hashed hue, so a new node type visibly asks for a
+  slot. Adjacent hues are assigned to related kinds on purpose (the two MCP kinds, the two OKF
+  kinds). Note LLM nodes are one hue for the whole family, not one per provider.
+  - `--node-label` (yellow) is separate from all of them: it's the connector captions on
+    `AgentNode`/`CriticGateNode`, which are meant to stand out *from* their node, so they
+    deliberately don't follow `--card-accent` the way everything else inside a card does.
 - **Don't hash/rotate a tint just to break up visual monotony** with no underlying meaning (e.g.
-  cycling colors by array index) — that was considered and rejected in favor of the two schemes
+  cycling colors by array index) — that was considered and rejected in favor of the schemes
   above. If a new list of things genuinely has no status or category worth encoding in color,
   it's fine for it to stay a single accent.
 

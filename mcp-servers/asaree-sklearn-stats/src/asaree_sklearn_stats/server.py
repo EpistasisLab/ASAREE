@@ -16,7 +16,15 @@ from mcp.server import FastMCP
 from asaree_sklearn_core import stats
 from asaree_sklearn_core.errors import ComputeError
 
-mcp = FastMCP("asaree-sklearn-stats")
+INSTRUCTIONS = """\
+Run a statistical test or summary over records and scores you pass in \
+directly.
+
+Self-contained: these tools take their data as arguments and touch no \
+dataset or workspace, so they can be called at any point without setting \
+anything up first."""
+
+mcp = FastMCP("asaree-sklearn-stats", instructions=INSTRUCTIONS)
 
 
 @mcp.tool()

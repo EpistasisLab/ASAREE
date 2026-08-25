@@ -37,7 +37,17 @@ from mcp.server.fastmcp import Context
 
 from asaree_sklearn_core import dc
 
-mcp = FastMCP("asaree-sklearn-dc")
+INSTRUCTIONS = """\
+Clean a dataset's columns: coerce impossible values to missing, then drop or \
+impute what's left.
+
+Inspect first, act second -- the decisions stay with you. Call \
+inspect_columns for a read-only report, apply_coercions to turn integrity \
+errors and implausible outliers into NaN, and only then drop_and_impute, so \
+the drop threshold is judged against real post-coercion missingness rather \
+than a guess."""
+
+mcp = FastMCP("asaree-sklearn-dc", instructions=INSTRUCTIONS)
 
 STAGE = "dc"
 

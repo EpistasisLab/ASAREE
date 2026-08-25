@@ -30,7 +30,15 @@ from mcp.server.fastmcp import Context
 import asaree_sklearn_core as core
 from asaree_sklearn_core import fte
 
-mcp = FastMCP("asaree-sklearn-fte")
+INSTRUCTIONS = """\
+Turn cleaned columns into a model-ready matrix.
+
+Two tools, in order: build_features derives the engineered columns, then \
+fit_preprocessor reads that result and overwrites it with the fully encoded \
+matrix. Both fit on TRAIN only and apply to test, so encoding a category or \
+scaling a column can't leak test information into the fit."""
+
+mcp = FastMCP("asaree-sklearn-fte", instructions=INSTRUCTIONS)
 
 STAGE = "fte"
 

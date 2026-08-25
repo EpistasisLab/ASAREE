@@ -35,7 +35,15 @@ from mcp.server.fastmcp import Context
 
 from asaree_sklearn_core import model, provenance
 
-mcp = FastMCP("asaree-sklearn-model")
+INSTRUCTIONS = """\
+Fit a classifier from your own script and score it on a held-out split.
+
+One tool, run_model_script. Your code is bound the TRAINING matrix only and \
+must define predict_proba(X); the tool then applies the test split and \
+computes every metric itself, so a script can neither see nor leak the test \
+labels."""
+
+mcp = FastMCP("asaree-sklearn-model", instructions=INSTRUCTIONS)
 
 _META_KEY_WORKSPACE_ID = "motoro.workspace_id"
 

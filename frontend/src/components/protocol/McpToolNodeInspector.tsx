@@ -87,6 +87,7 @@ export function McpToolNodeInspector({
   const bindings = data.factor_bindings ?? {}
   const selectedServer = serversQuery.data?.find((s) => s.id === config.server_id)
   const tools = selectedServer?.capabilities?.tools ?? []
+  const instructions = selectedServer?.capabilities?.instructions?.trim()
   const selectedTools = config.tool_names ?? []
   const isClientTool = node.type === MCP_CLIENT_TOOL_NODE_TYPE
   const accent = isClientTool ? CLIENT_ACCENT : ACCENT
@@ -191,6 +192,14 @@ export function McpToolNodeInspector({
             </p>
             {selectedServer.error_message && <p className="text-xs text-destructive">{selectedServer.error_message}</p>}
           </div>
+          {/* The server's own `instructions` -- what it tells an agent it is,
+              as opposed to the per-tool descriptions in the list below. Not
+              truncated and not mono: it's prose the server author wrote for a
+              reader, and it's the one thing here that answers "what is this
+              server FOR" rather than "where does it run". Absent for a server
+              that sends none, and for a row registered before this was
+              captured -- reconnecting above fills that in. */}
+          {instructions && <p className="whitespace-pre-line text-xs text-muted-foreground">{instructions}</p>}
         </div>
       )}
 

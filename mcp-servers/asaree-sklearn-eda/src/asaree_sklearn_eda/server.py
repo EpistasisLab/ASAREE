@@ -29,7 +29,15 @@ from mcp.server.fastmcp import Context
 
 from asaree_sklearn_core import eda
 
-mcp = FastMCP("asaree-sklearn-eda")
+INSTRUCTIONS = """\
+Look at a dataset before modeling it: shape, per-feature distributions, and \
+what the columns actually mean.
+
+get_dataset_info and get_feature_distributions read the current accepted \
+version of the working dataset; get_data_dictionary returns the registered \
+descriptions of its columns. All read-only -- nothing here changes the data."""
+
+mcp = FastMCP("asaree-sklearn-eda", instructions=INSTRUCTIONS)
 
 _ASAREE_API_URL = os.environ.get("ASAREE_API_URL", "http://localhost:8000")
 _ASAREE_MCP_API_KEY = os.environ.get("ASAREE_INTERNAL_MCP_API_KEY", "")

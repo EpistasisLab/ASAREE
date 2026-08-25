@@ -160,7 +160,7 @@ async def ensure_system_servers() -> None:
 
 
 async def refresh_system_server_capabilities() -> None:
-    """Re-persist ``capabilities`` for any system server whose tool set moved.
+    """Re-persist ``capabilities`` for any system server whose self-description moved.
 
     **Must run after** ``hydrate_registry``, unlike everything above: it reads
     the live client, which only exists once the server is in the registry.
@@ -177,6 +177,12 @@ async def refresh_system_server_capabilities() -> None:
     MCP node's allow-list, and a removed one lingers as a checkbox for a tool
     that no longer exists.
 
+    ``instructions`` -- the server's own description of itself, from the
+    initialize handshake -- goes stale the same way and is compared here for
+    the same reason. It matters more than it looks: editing a bundled server's
+    blurb changes no tool name at all, so a tools-only comparison would never
+    fire and the new text would never reach a row that already exists.
+
     Scoped to :data:`SYSTEM_MCP_SERVERS` because those are the ones whose code
     ships with ASAREE and therefore changes underneath a live database. A
     user-registered server is theirs to ``POST /mcp-servers/{id}/refresh``.
@@ -192,9 +198,12 @@ async def refresh_system_server_capabilities() -> None:
             config = await get_server_by_name(name)
             if config is None:
                 continue
+            capabilities = config.capabilities or {}
             live = sorted(t.name for t in entry.client.tools)
-            stored = sorted(t.get("name", "") for t in (config.capabilities or {}).get("tools") or [])
-            if live == stored:
+            stored = sorted(t.get("name", "") for t in capabilities.get("tools") or [])
+            live_instructions = getattr(entry.client, "instructions", "") or ""
+            stored_instructions = capabilities.get("instructions") or ""
+            if live == stored and live_instructions == stored_instructions:
                 continue
             logger.warning(
                 "system_mcp_server_capabilities_refreshed",
@@ -202,6 +211,7 @@ async def refresh_system_server_capabilities() -> None:
                     "server": name,
                     "added": sorted(set(live) - set(stored)),
                     "removed": sorted(set(stored) - set(live)),
+                    "instructions_changed": live_instructions != stored_instructions,
                 },
             )
             await refresh_server(config.id)

@@ -49,7 +49,27 @@ from mcp.server import FastMCP
 from scikit_learn_mcp import forest, logistic, profile, scoring, splitting
 from scikit_learn_mcp.data import DataError, frame_sha256, load_frame, split_xy
 
-mcp = FastMCP("scikit-learn-mcp")
+# What this server tells a client it is, during the initialize handshake --
+# the server-level counterpart to each tool's own description. Written for the
+# agent that will use the tools, so it answers "which of these do I reach for
+# and in what order", not "how is this implemented" (that's the module
+# docstring above).
+INSTRUCTIONS = """\
+Fit and evaluate a tabular classifier from a dataset file, with every metric \
+computed on data the model never saw.
+
+Start with describe_dataset to see the columns and pick a target, then \
+describe_split to check the split isn't leaking (grouped or temporal data \
+needs a strategy other than random). Then fit: logistic_regression and \
+random_forest each have a fit_/cross_validate_/tune_ trio, and they share \
+their split, scoring and provenance blocks, so running both gives directly \
+comparable results.
+
+Every declarative tool here is a classifier. A continuous target needs \
+run_logistic_regression_script with task_type='regression', which is also the \
+escape hatch for any pipeline the typed arguments can't express."""
+
+mcp = FastMCP("scikit-learn-mcp", instructions=INSTRUCTIONS)
 
 _CLASSIFICATION = {"binary", "multiclass"}
 _TASK_TYPES = _CLASSIFICATION | {"regression"}

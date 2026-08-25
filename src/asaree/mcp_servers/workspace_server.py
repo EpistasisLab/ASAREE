@@ -41,7 +41,17 @@ from mcp.server.fastmcp import Context
 from asaree.models.database import get_session
 from asaree.services.datasets import get_dataset_by_name
 
-mcp = FastMCP("asaree-workspace")
+INSTRUCTIONS = """\
+Version a dataset across a cleaning/feature-engineering/selection pipeline, \
+so each stage is reviewable and reversible.
+
+Open a stage to get a scratch area seeded from the current accepted version, \
+let the matching sklearn server write into it, then accept it to promote the \
+result to the new HEAD -- or discard it and the accepted history is \
+untouched. Everything downstream reads HEAD, so nothing sees a stage that \
+was never accepted."""
+
+mcp = FastMCP("asaree-workspace", instructions=INSTRUCTIONS)
 
 # stderr, never stdout: stdout is the MCP transport itself on a stdio server.
 logger = logging.getLogger(__name__)

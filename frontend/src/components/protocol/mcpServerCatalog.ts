@@ -77,6 +77,21 @@ export function presetForServer(server: McpServer): McpServerPreset {
   )
 }
 
+// One line describing *server* for a browse list.
+//
+// The server's own `instructions` (its self-description from the MCP
+// initialize handshake) wins over PRESETS' copy: it's written by whoever
+// wrote the tools, it stays right when they change, and it's the only thing
+// there is for a server a user connected themselves -- where the preset
+// fallback is the not-very-informative "N tools". Only the first paragraph,
+// since the row truncates to one line anyway; the inspector shows the whole
+// thing.
+export function descriptionForServer(server: McpServer): string {
+  const instructions = server.capabilities?.instructions?.trim()
+  if (instructions) return instructions.split(/\n\s*\n/, 1)[0]!.replace(/\s+/g, ' ')
+  return presetForServer(server).description
+}
+
 // A node for *server*, with the server already bound and every one of its
 // tools allowed. "All tools on" is the same friendly default the generic
 // node's server dropdown applies (pickToolNamesForServer) -- an empty

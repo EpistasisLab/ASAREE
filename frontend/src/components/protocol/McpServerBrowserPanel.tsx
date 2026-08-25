@@ -7,7 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { mcpServersApi } from '@/api/client'
 import { selectableMcpServers } from './bindableFields'
 import { ConnectMcpServerDialog } from './ConnectMcpServerDialog'
-import { presetForServer } from './mcpServerCatalog'
+import { descriptionForServer, presetForServer } from './mcpServerCatalog'
 import type { McpServer } from '@/types/mcpServers'
 
 // The second level of the "Add Tool" drill-down: AddNodePanel's "MCP
@@ -117,7 +117,9 @@ export function McpServerBrowserPanel({
                 <preset.icon className="mt-0.5 size-4 shrink-0 text-primary" />
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">{preset.label}</p>
-                  <p className="truncate text-xs text-muted-foreground">{preset.description}</p>
+                  <p className="truncate text-xs text-muted-foreground" title={descriptionForServer(server)}>
+                    {descriptionForServer(server)}
+                  </p>
                   {/* The registered id and tool count, monospaced -- the
                       precise, technical identity behind the friendly label,
                       so it's unambiguous which process is being wired in. */}

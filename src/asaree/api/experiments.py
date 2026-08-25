@@ -36,6 +36,7 @@ from asaree.services.experiments import (
 from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_experiment_design, analyze_factorial
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
 from asaree.services.protocol_runs import list_experiment_trials
+from asaree.services.protocols import sync_protocol_names_to_experiment
 
 # For a Content-Disposition filename only -- never touches the experiment's
 # own stored name, just what the browser offers to save the download as.
@@ -262,6 +263,13 @@ async def update_experiment_endpoint(
     if fields:
         experiment = await update_experiment(db, experiment_id, fields=fields)
         assert experiment is not None  # existence already checked above
+    if fields.get("name"):
+        # A protocol's name is a snapshot of the experiment's name at the
+        # moment the canvas created it; re-sync it here, server-side, so an
+        # SDK/notebook rename fixes it up too and not just the GUI's.
+        await sync_protocol_names_to_experiment(
+            db, experiment_id=experiment_id, experiment_name=experiment.name, owner_id=user.id
+        )
     return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment_id))
 
 

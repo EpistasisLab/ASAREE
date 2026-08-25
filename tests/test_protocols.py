@@ -24,9 +24,11 @@ from asaree.services.experiments import create_experiment
 from asaree.services.protocols import (
     create_protocol,
     delete_protocol,
+    generated_protocol_name,
     get_protocol,
     get_protocol_by_name,
     list_protocols,
+    sync_protocol_names_to_experiment,
     update_protocol,
 )
 
@@ -97,6 +99,74 @@ async def test_update_unknown_field_rejected(owner_id: uuid.UUID) -> None:
         with pytest.raises(ValueError, match="not settable"):
             await update_protocol(db, protocol.id, fields={"owner_id": uuid.uuid4()})
         await delete_protocol(db, protocol.id)
+
+
+async def test_rename_sync_follows_the_experiment_name(owner_id: uuid.UUID) -> None:
+    """An auto-named protocol tracks its experiment's name; a hand-named one
+    (and a protocol on another experiment) is left alone."""
+    async with get_session() as db:
+        experiment = await create_experiment(db, name="old name", owner_id=owner_id)
+        auto = await create_protocol(
+            db,
+            name=generated_protocol_name("old name", experiment.id),
+            owner_id=owner_id,
+            experiment_id=experiment.id,
+        )
+        custom = await create_protocol(
+            db, name="my tuning sweep", owner_id=owner_id, experiment_id=experiment.id
+        )
+        elsewhere = await create_protocol(db, name="unattached", owner_id=owner_id)
+
+    async with get_session() as db:
+        renamed = await sync_protocol_names_to_experiment(
+            db, experiment_id=experiment.id, experiment_name="new name", owner_id=owner_id
+        )
+        assert [p.id for p in renamed] == [auto.id]
+
+    async with get_session() as db:
+        assert (await get_protocol(db, auto.id)).name == generated_protocol_name("new name", experiment.id)
+        assert (await get_protocol(db, custom.id)).name == "my tuning sweep"
+        assert (await get_protocol(db, elsewhere.id)).name == "unattached"
+        # Idempotent: a second pass with the same name renames nothing.
+        assert await sync_protocol_names_to_experiment(
+            db, experiment_id=experiment.id, experiment_name="new name", owner_id=owner_id
+        ) == []
+
+    async with get_session() as db:
+        for pid in (auto.id, custom.id, elsewhere.id):
+            await delete_protocol(db, pid)
+        exp = await db.get(type(experiment), experiment.id)
+        if exp is not None:
+            await db.delete(exp)
+
+
+async def test_rename_sync_skips_a_name_another_protocol_holds(owner_id: uuid.UUID) -> None:
+    """Two auto-named protocols on one experiment both want the same string;
+    the second must be skipped, not crash on uq_protocols_owner_name."""
+    async with get_session() as db:
+        experiment = await create_experiment(db, name="before", owner_id=owner_id)
+        target = generated_protocol_name("after", experiment.id)
+        squatter = await create_protocol(db, name=target, owner_id=owner_id, experiment_id=experiment.id)
+        other = await create_protocol(
+            db,
+            name=generated_protocol_name("before", experiment.id),
+            owner_id=owner_id,
+            experiment_id=experiment.id,
+        )
+
+    async with get_session() as db:
+        renamed = await sync_protocol_names_to_experiment(
+            db, experiment_id=experiment.id, experiment_name="after", owner_id=owner_id
+        )
+        assert renamed == []
+
+    async with get_session() as db:
+        assert (await get_protocol(db, other.id)).name == generated_protocol_name("before", experiment.id)
+        for pid in (squatter.id, other.id):
+            await delete_protocol(db, pid)
+        exp = await db.get(type(experiment), experiment.id)
+        if exp is not None:
+            await db.delete(exp)
 
 
 async def test_list_filtered_by_experiment(owner_id: uuid.UUID) -> None:

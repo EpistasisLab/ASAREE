@@ -1,4 +1,4 @@
-import { FlaskConical, Wrench } from 'lucide-react'
+import { BookMarked, FlaskConical, Wrench } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { McpServer } from '@/types/mcpServers'
 import type { McpToolNodeData } from '@/types/protocols'
@@ -61,6 +61,19 @@ const PRESETS: Record<string, McpServerPreset> = {
     label: 'Scikit-learn MCP',
     description: 'Profile a dataset, define a split, and fit logistic regression or a random forest for AUC + metrics',
     icon: FlaskConical,
+  },
+  // The deployment-wide OKF server, over AGENTIC_OKF_BUNDLE_DIR -- distinct
+  // from the per-bundle `okf-bundle-*` servers behind the Knowledge
+  // connector's OKF Bundle nodes. Here for the label alone, not a node type
+  // of its own: `motoro-okf` is Motoro's registered name for the process,
+  // which says whose code it is rather than what it does. The registered name
+  // still shows in the mono line under the label, so the two are never
+  // ambiguous.
+  'motoro-okf': {
+    nodeType: 'mcp_tool',
+    label: 'OKF MCP',
+    description: "Read and write concepts in the deployment's shared OKF knowledge base",
+    icon: BookMarked,
   },
 }
 

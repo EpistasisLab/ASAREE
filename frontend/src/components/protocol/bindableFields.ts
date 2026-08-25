@@ -8,12 +8,24 @@ export interface BindableFieldSpec {
   levelType: LevelType
 }
 
-// The bundled asaree-sklearn-* system servers (see the backend's
-// services/system_mcp_servers.py) are hidden from every MCP Tool server
+// The bundled system servers (see the backend's
+// services/system_mcp_servers.py) that are hidden from every MCP Tool server
 // picker -- they're still registered, still connected, and still usable by
 // anything that already references them; they're just not offered as a fresh
 // pick in the canvas.
-const HIDDEN_SERVER_NAME_PREFIX = 'asaree-sklearn-'
+//
+// Two different reasons, same treatment. The six asaree-sklearn-* servers are
+// the myocardial pipeline's stages -- deployment plumbing, not something to
+// browse. `asaree-workspace` is hidden because adding it by hand is
+// REDUNDANT: every agent with a Dataset connector wired already gets the
+// workspace tools implicitly (the backend's WORKSPACE_AGENT_TOOLS /
+// _resolve_dataset_tool_config), so a node for it is at best a no-op and at
+// worst a second, divergent allow-list over the same tools.
+const HIDDEN_SERVER_NAME_PREFIXES = ['asaree-sklearn-', 'asaree-workspace']
+
+function isHiddenServerName(name: string): boolean {
+  return HIDDEN_SERVER_NAME_PREFIXES.some((prefix) => name.startsWith(prefix))
+}
 
 // ...unless THIS canvas is already one of the pipelines built on them (the
 // myocardial use cases in publications/bioinformatics), in which case hiding
@@ -32,10 +44,12 @@ const HIDDEN_SERVER_NAME_PREFIX = 'asaree-sklearn-'
 // Revealing ALL of them (not just the ones this graph happens to reference) is
 // deliberate: these servers are the stages of one pipeline, and a canvas
 // holding the DC stage is exactly the canvas that might want to add the FS one.
+// The same goes for the pre-modernization use-case graphs, which still wire
+// asaree-workspace explicitly.
 export function revealsHiddenMcpServers(nodes: Node[]): boolean {
   return nodes.some((n) => {
     const name = (n.data as { config?: { server_name?: string | null } })?.config?.server_name
-    return typeof name === 'string' && name.startsWith(HIDDEN_SERVER_NAME_PREFIX)
+    return typeof name === 'string' && isHiddenServerName(name)
   })
 }
 
@@ -56,7 +70,7 @@ export function selectableMcpServers(
   revealHidden = false,
 ): McpServer[] {
   if (revealHidden) return servers
-  return servers.filter((s) => !s.name.startsWith(HIDDEN_SERVER_NAME_PREFIX) || s.id === currentServerId)
+  return servers.filter((s) => !isHiddenServerName(s.name) || s.id === currentServerId)
 }
 
 // Picking a server for an MCP Tool node's Tool connector -- shared by

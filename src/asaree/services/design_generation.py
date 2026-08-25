@@ -59,13 +59,20 @@ def generate_design(factors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [dict(zip(names, values, strict=True)) for values in itertools.product(*levels_lists)]
 
 
-# Checked in order for a dict-valued level (e.g. a whole LLM/Tool node config
-# or a pattern-override payload bound as a single factor) -- whichever of
-# these identifying keys is present first names the slug, since one of them
+# Checked in order for a dict-valued level (e.g. a whole LLM/Tool/Dataset node
+# config or a pattern-override payload bound as a single factor) -- whichever
+# of these identifying keys is present first names the slug, since one of them
 # is always the thing a human actually wants to see in a cell label
-# ("claude-sonnet-5", "reason_act", "search-mcp"). Falls back to a short
-# stable hash when none match, rather than Python's own unstable dict repr.
-_DICT_SLUG_PRIORITY_KEYS = ("model", "provider", "execution_pattern", "server_name", "enabled")
+# ("claude-sonnet-5", "reason_act", "search-mcp", "spine-2024"). Falls back to
+# a short stable hash when none match, rather than Python's own unstable dict
+# repr.
+#
+# ``dataset_name`` must stay AHEAD of ``enabled``: a Dataset node's config is
+# ``{dataset_id, dataset_name, enabled}``, so with ``enabled`` matching first
+# every level of a dataset factor would slug to "true" and the whole design
+# would collapse onto one cell label. ``dataset_id`` is deliberately absent --
+# it's a uuid, unreadable in a label, and the name already identifies the row.
+_DICT_SLUG_PRIORITY_KEYS = ("model", "provider", "execution_pattern", "server_name", "dataset_name", "enabled")
 
 
 def _slugify(value: Any) -> str:

@@ -963,10 +963,15 @@ def _resolve_dataset_configs(graph: dict[str, Any], node_id: str) -> list[dict[s
     ``{"dataset_id": ..., "dataset_name": ...}`` configs in canvas wiring
     order -- ``[]`` when none is connected.
 
-    A list rather than a single config because the Dataset connector is
-    uncapped (like Skill and Knowledge): comparing a model across datasets, or
-    joining two tables, is ordinary science. An agent with exactly one Dataset
-    node -- still the common case -- simply gets a one-element list.
+    A list rather than a single config for compatibility, not because several
+    is the intended shape: the Dataset connector was briefly uncapped and
+    graphs saved in that window can still carry two or more. It is capped at
+    one again (see ``AgentNode.tsx``), because a cell's workspace is keyed by
+    ``experiment_id/cell_label`` alone and therefore holds exactly one dataset
+    -- ``seed_cell_workspace`` rejects a second. Comparing datasets is a
+    ``dataset_config`` FACTOR instead: ``apply_factor_bindings`` replaces this
+    node's whole ``data.config`` per cell (it runs before anything here), so
+    each cell resolves to a one-element list naming its own dataset.
 
     Scans the Dataset handle plus both spellings it has been saved under
     before -- the short-lived ``resource`` one and the Tool handle it
@@ -1335,9 +1340,14 @@ def _build_user_input(
             # alone, so all of these would resolve to the same directory.
             # open_workspace now refuses the second one rather than silently
             # returning the first one's data (it used to claim, wrongly, that
-            # each name got its own workspace). Several datasets per cell needs
-            # a real fix -- either a name-keyed workspace id or a per-dataset
-            # cell -- not a prompt that talks the model into a collision.
+            # each name got its own workspace).
+            #
+            # A LEGACY path now: the connector is capped at one again, and
+            # the real fix landed as the per-dataset cell -- a
+            # ``dataset_config`` factor, whose levels are whole Dataset
+            # configs, so each cell gets its own dataset in its own
+            # workspace. Only a graph saved while the connector was uncapped
+            # still reaches this branch.
             listed = "\n".join(f'- "{n}"' for n in dataset_names)
             parts.append(
                 "Dataset context:\n"

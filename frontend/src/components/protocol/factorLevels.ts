@@ -1,8 +1,8 @@
 import type { DesignFactor } from '@/types/experiments'
 
-// llm_config/tool_config/pattern/script_config are the "whole node as a
-// factor" kinds (see bindableFields.ts) -- their levels are OBJECTS (a
-// whole LLM/Tool/Script node config, or a {execution_pattern,
+// llm_config/tool_config/pattern/script_config/dataset_config are the "whole
+// node as a factor" kinds (see bindableFields.ts) -- their levels are OBJECTS
+// (a whole LLM/Tool/Script/Dataset node config, or a {execution_pattern,
 // pattern_params} payload), never strings, unlike every other kind here.
 export type LevelType =
   | 'string'
@@ -13,6 +13,7 @@ export type LevelType =
   | 'tool_config'
   | 'pattern'
   | 'script_config'
+  | 'dataset_config'
 
 export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   string: 'String',
@@ -23,13 +24,20 @@ export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   tool_config: 'Server & tools',
   pattern: 'Execution pattern',
   script_config: 'Script',
+  dataset_config: 'Dataset',
 }
 
 // Whether a level of this kind is a structured object rather than a plain
 // string -- FactorEditorDialog's `levels` state switches its element type
 // based on this.
 export function isStructuredLevelType(type: LevelType): boolean {
-  return type === 'llm_config' || type === 'tool_config' || type === 'pattern' || type === 'script_config'
+  return (
+    type === 'llm_config' ||
+    type === 'tool_config' ||
+    type === 'pattern' ||
+    type === 'script_config' ||
+    type === 'dataset_config'
+  )
 }
 
 export function levelTypeOf(factor: DesignFactor): LevelType {
@@ -74,6 +82,13 @@ export function emptyStructuredLevel(type: LevelType): unknown {
       return { execution_pattern: 'reason_act', pattern_params: { reason_act: {} } }
     case 'script_config':
       return { name: 'script', language: 'python', code: '' }
+    // Both id and name, because both are read: the executor resolves the
+    // dataset by NAME (_resolve_dataset_configs -> seed_cell_workspace),
+    // while the canvas's own syncExperimentDatasets records the ID on the
+    // experiment_datasets join row. DatasetConfigLevelRow's picker always
+    // writes the pair together, never one alone.
+    case 'dataset_config':
+      return { dataset_id: null, dataset_name: null, enabled: true }
     default:
       return ''
   }

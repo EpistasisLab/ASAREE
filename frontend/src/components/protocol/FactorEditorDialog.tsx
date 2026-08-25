@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { mcpServersApi } from '@/api/client'
+import { datasetsApi, mcpServersApi } from '@/api/client'
 import { cardAccent, cn, hashToChartHue, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
 import { pickToolNamesForServer, selectableMcpServers, type UnboundField } from './bindableFields'
 import { useProviderModels } from './useProviderModels'
@@ -30,7 +30,17 @@ import { PROVIDER_META } from './nodes/LlmNode'
 import { PythonCodeEditor } from './PythonCodeEditor'
 import type { DesignFactor } from '@/types/experiments'
 
-const LEVEL_TYPES: LevelType[] = ['string', 'text', 'number', 'boolean', 'llm_config', 'tool_config', 'pattern', 'script_config']
+const LEVEL_TYPES: LevelType[] = [
+  'string',
+  'text',
+  'number',
+  'boolean',
+  'llm_config',
+  'tool_config',
+  'pattern',
+  'script_config',
+  'dataset_config',
+]
 const EFFORT_LEVELS_FALLBACK = ['low', 'medium', 'high', 'xhigh', 'max']
 const PATTERN_OPTIONS = [
   { slug: 'reason_act', label: 'Reason + Act' },
@@ -292,6 +302,100 @@ function ScriptConfigLevelRow({ value, onChange }: { value: StructuredLevel; onC
   )
 }
 
+// One row of a "dataset_config" factor's levels -- a whole Dataset node
+// config, so each level is one registered dataset this experiment runs
+// against (protocol_execution.py's _resolve_dataset_configs reads the wired
+// node's own, already factor-patched, config verbatim and seeds the cell's
+// workspace from `dataset_name`).
+//
+// This is the one structured row that does NOT mirror its inspector's own
+// controls: DatasetNodeInspector deliberately has no "which dataset" picker
+// at all (the dataset IS the node, chosen from the canvas's Datasets
+// browser). A factor's levels have no node to be, so the picker has to live
+// here -- it's the only place in the app where "which dataset" is a choice
+// rather than an identity. Deliberately narrow: name, target column and
+// split state are the three things that decide whether two datasets are
+// comparable, and the full read-out stays in the inspector for the node's
+// own base level.
+function DatasetConfigLevelRow({
+  value,
+  onChange,
+  usedElsewhere,
+}: {
+  value: StructuredLevel
+  onChange: (next: StructuredLevel) => void
+  // Dataset ids already picked by this factor's OTHER levels -- greyed out
+  // rather than removed, same convention as FactorBindableField's own
+  // levelOptions Select: two levels naming one dataset wouldn't vary
+  // anything between their cells, but hiding the option would leave no clue
+  // why it's gone.
+  usedElsewhere: Set<string>
+}) {
+  const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: () => datasetsApi.list() })
+  const datasets = datasetsQuery.data ?? []
+  const selected = datasets.find((d) => d.id === value.dataset_id)
+
+  return (
+    <div className="space-y-2 rounded-lg border p-2">
+      <div className="space-y-1">
+        <Label className="text-xs">Dataset</Label>
+        <Select
+          value={(value.dataset_id as string) || '__none__'}
+          onValueChange={(v) => {
+            if (!v || v === '__none__') return
+            const dataset = datasets.find((d) => d.id === v)
+            // id AND name together -- the executor resolves by name, the
+            // canvas's dataset_ids sync by id (see factorLevels.ts's
+            // emptyStructuredLevel). Writing one without the other would
+            // leave one of the two silently broken.
+            onChange({ ...value, dataset_id: v, dataset_name: dataset?.name ?? null })
+          }}
+        >
+          <SelectTrigger className="h-8 w-full">
+            <SelectValue>
+              {() => selected?.name ?? (value.dataset_name as string) ?? 'Select a dataset…'}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__" disabled>
+              {datasetsQuery.isLoading ? 'Loading…' : datasets.length === 0 ? 'No registered datasets' : 'Select a dataset…'}
+            </SelectItem>
+            {datasets.map((d) => (
+              <SelectItem key={d.id} value={d.id} disabled={d.id !== value.dataset_id && usedElsewhere.has(d.id)}>
+                {d.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {selected ? (
+        <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs">
+          <Badge variant="outline">Target: {selected.target_column ?? '—'}</Badge>
+          {/* A dataset with no train_path has never been split, and a cell
+              can't open a workspace on it -- worth catching here rather
+              than at Run time, when it costs a real attempt. */}
+          <Badge variant="outline" className={selected.train_path ? undefined : 'text-destructive'}>
+            {selected.train_path ? 'Split' : 'Not split yet'}
+          </Badge>
+        </div>
+      ) : value.dataset_name ? (
+        <p className="text-xs text-muted-foreground">
+          This level names <span className="font-mono">{String(value.dataset_name)}</span>, which is not in your
+          library — pick a replacement.
+        </p>
+      ) : null}
+      <div className="flex items-center justify-between rounded-md border px-2 py-1.5">
+        <Label className="text-xs">Enabled</Label>
+        <Switch
+          size="sm"
+          checked={(value.enabled as boolean | undefined) ?? true}
+          onCheckedChange={(enabled) => onChange({ ...value, enabled })}
+        />
+      </div>
+    </div>
+  )
+}
+
 // A per-factor editor with real room -- reuses the node inspector's own
 // fixed near-fullscreen frame sizing (NODE_INSPECTOR_CONTENT_CLASSNAME) and
 // HUD glow/ring/corner-brackets (HUD_ACCENT_RING_CLASSNAME), but is built
@@ -526,6 +630,19 @@ export function FactorEditorDialog({
                           ) : levelType === 'pattern' ? (
                             <PatternLevelRow
                               value={level as StructuredLevel}
+                              onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
+                            />
+                          ) : levelType === 'dataset_config' ? (
+                            <DatasetConfigLevelRow
+                              value={level as StructuredLevel}
+                              usedElsewhere={
+                                new Set(
+                                  levels
+                                    .filter((_, j) => j !== i)
+                                    .map((l) => (l as StructuredLevel).dataset_id)
+                                    .filter((id): id is string => typeof id === 'string'),
+                                )
+                              }
                               onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
                             />
                           ) : (

@@ -168,11 +168,26 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
         { fieldPath: 'config.stop_on_first_success', label: 'Stop on first success', levelType: 'boolean' },
       ]
     case 'dataset':
-      // No runtime effect from `enabled` beyond skipping the Dataset-context
-      // block in _build_user_input -- no whole-node "swap the whole dataset
-      // per cell" factor kind yet (a real, separable future capability,
-      // deliberately deferred).
-      return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
+      return [
+        // No runtime effect beyond skipping the Dataset-context block in
+        // _build_user_input.
+        { fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' },
+        // The whole node as a factor -- levels are entirely different
+        // datasets, which is the ONLY supported way to run one experiment
+        // across several of them. The Dataset connector is capped at one
+        // node per agent (see AgentNode.tsx) precisely because a cell's
+        // workspace is keyed by experiment_id/cell_label and therefore holds
+        // exactly one dataset; varying it per CELL is the shape that fits,
+        // and wiring several at once never was.
+        //
+        // Unlike skill/okf_bundle above -- whose configs are also just
+        // per-account pointers -- this one earns a structured level type
+        // because the pointer is what the executor actually consumes:
+        // _resolve_dataset_configs reads the (already factor-patched)
+        // node config verbatim and seeds the cell's workspace from
+        // `dataset_name`, so a substituted level needs no backend change.
+        { fieldPath: 'config', label: 'Dataset', levelType: 'dataset_config' },
+      ]
     case 'skill':
       // Only `enabled` -- the natural "which skill" factor is the WHOLE node
       // (levels = different skills), but unlike script/llm/tool_config, a

@@ -65,6 +65,13 @@ function formatTestSize(fraction: number): string {
 // syncExperimentDatasets effect): with no picker, the binding can no longer
 // change from inside this dialog.
 //
+// The one exception to "no picker here" is the title row's "Make factor"
+// button: a dataset_config factor's levels are whole Dataset configs, so
+// picking among registered datasets happens in FactorEditorDialog's own
+// DatasetConfigLevelRow. That's the supported way to run one experiment
+// across several datasets -- the Dataset connector itself is capped at one
+// node per agent, since a cell's workspace holds exactly one dataset.
+//
 // A dataset_id in an imported protocol JSON is per-account/environment (same
 // reasoning as an MCP Tool node's server_id), so an imported node can name a
 // dataset this account doesn't have; the Description section says so and
@@ -123,6 +130,27 @@ export function DatasetNodeInspector({
         <>
           <Database className="size-5" style={{ color: ACCENT }} />
           <EditableNodeTitle label={data.label} placeholder="Dataset" onCommit={(label) => onChange(node.id, { ...data, label })} />
+          {/* In the title row rather than beside a field, because there is no
+              "which dataset" field here to sit beside -- the dataset IS the
+              node. Same position as the Agent/Pattern inspectors' own
+              MakeNodeFactorButton, and the same visual identity, but this one
+              binds one specific field (`config`, the whole node) directly
+              instead of opening a per-node field picker: a Dataset node has
+              exactly one whole-node factor worth making, so a picker listing
+              one entry would be a step with no choice in it. */}
+          <FactorBindableField
+            experimentId={experimentId}
+            fieldPath="config"
+            defaultLabel="Dataset"
+            nodeLabel={factorNodeLabel}
+            levelType="dataset_config"
+            currentValue={config}
+            boundFactorName={bindings.config}
+            onBind={(name) => bindFactor('config', name)}
+            onUnbind={() => unbindFactor('config')}
+          >
+            {(trigger) => trigger}
+          </FactorBindableField>
         </>
       }
       onDelete={() => onDelete(node.id)}

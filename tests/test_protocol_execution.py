@@ -920,6 +920,28 @@ def test_apply_factor_bindings_substitutes_critic_enabled_boolean() -> None:
     assert patched["nodes"][0]["data"]["config"]["enabled"] is False
 
 
+def test_apply_factor_bindings_swaps_the_whole_dataset_per_cell() -> None:
+    """The dataset-as-factor path end to end, on the pure half: a Dataset
+    node's whole `config` bound to a 'dataset_config' factor resolves to
+    exactly ONE dataset per cell -- which is what keeps a cell's single
+    workspace (keyed by experiment_id/cell_label) holding a single dataset,
+    and what lets _preseed_dataset_workspace's len == 1 rule fire."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="cohort-a", dataset_id="d1")
+    dataset["data"]["factor_bindings"] = {"config": "Agent:Dataset:Dataset"}
+    graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
+
+    for name, dataset_id in (("cohort-a", "d1"), ("cohort-b", "d2")):
+        level = {"dataset_id": dataset_id, "dataset_name": name, "enabled": True}
+        patched = apply_factor_bindings(graph, {"Agent:Dataset:Dataset": level})
+        configs = pe._resolve_dataset_configs(patched, "a")
+        assert [c["dataset_name"] for c in configs] == [name]
+
+    # And the base graph is untouched, so the next cell starts from the same
+    # place (apply_factor_bindings deep-copies).
+    assert [c["dataset_name"] for c in pe._resolve_dataset_configs(graph, "a")] == ["cohort-a"]
+
+
 def test_sink_node_ids_linear_chain_single_sink() -> None:
     graph = _graph(["a", "b", "c"], [("a", "b"), ("b", "c")])
     assert sink_node_ids(graph) == ["c"]

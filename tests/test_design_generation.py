@@ -82,6 +82,17 @@ def test_cell_label_for_dict_valued_level_prefers_identifying_key() -> None:
     assert cell_label_for(combo) == "llm_claude-sonnet-5"
 
 
+def test_cell_label_for_dataset_level_names_the_dataset_not_its_enabled_flag() -> None:
+    """A dataset_config level is a whole Dataset node config -- and that config
+    carries `enabled`, which is also a slug priority key. If `enabled` won,
+    every level of a dataset factor would slug to "true" and the whole design
+    would collapse onto one cell label."""
+    combo_a = {"data": {"dataset_id": str(uuid.uuid4()), "dataset_name": "Spine 2024", "enabled": True}}
+    combo_b = {"data": {"dataset_id": str(uuid.uuid4()), "dataset_name": "Spine 2025", "enabled": True}}
+    assert cell_label_for(combo_a) == "data_spine-2024"
+    assert cell_label_for(combo_b) == "data_spine-2025"
+
+
 def test_cell_label_for_dict_valued_level_falls_back_to_stable_hash() -> None:
     combo = {"weird": {"foo": "bar", "baz": 1}}
     label = cell_label_for(combo)

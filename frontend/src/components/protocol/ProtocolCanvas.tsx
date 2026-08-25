@@ -229,12 +229,37 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
 // syncExperimentDatasets effect). Nodes still on the browse placeholder have no
 // dataset_id yet and are skipped; two nodes naming the same dataset collapse to
 // one entry, since the join table is keyed by (experiment, dataset).
-function datasetIdsInGraph(nodes: Node[]): string[] {
+//
+// `factors` is the experiment's own design_spec.factors, and it matters
+// because a Dataset node whose whole `config` is bound to a 'dataset_config'
+// factor holds only ONE of the datasets this experiment runs against -- the
+// base level sitting in the node. The rest live in that factor's levels, and
+// apply_factor_bindings substitutes them per cell at run time, so reading the
+// graph alone would under-report the experiment's data to everything that
+// asks the record instead of the canvas. Levels come after the node's own id
+// (position on the join row is canvas wiring order), and duplicates collapse
+// the same way.
+// Module-level so the dataset-sync effect's dependency list gets a stable
+// reference when the experiment has no factors -- a fresh [] every render
+// would re-run it forever.
+const EMPTY_FACTORS: DesignFactor[] = []
+
+function datasetIdsInGraph(nodes: Node[], factors: DesignFactor[] = EMPTY_FACTORS): string[] {
   const ids: string[] = []
+  const add = (id: unknown) => {
+    if (typeof id === 'string' && id && !ids.includes(id)) ids.push(id)
+  }
+  const boundFactorNames = new Set<string>()
   for (const node of nodes) {
     if (node.type !== 'dataset') continue
-    const datasetId = (node.data as DatasetNodeData).config?.dataset_id
-    if (datasetId && !ids.includes(datasetId)) ids.push(datasetId)
+    const data = node.data as DatasetNodeData
+    add(data.config?.dataset_id)
+    const factorName = data.factor_bindings?.config
+    if (factorName) boundFactorNames.add(factorName)
+  }
+  for (const factor of factors) {
+    if (factor.level_type !== 'dataset_config' || !boundFactorNames.has(factor.name)) continue
+    for (const level of factor.levels) add((level as { dataset_id?: unknown } | null)?.dataset_id)
   }
   return ids
 }
@@ -482,6 +507,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const runMutation = useMutation({
     mutationFn: () => protocolsApi.run(protocolId, selectedCellLabel),
     onSuccess: (run) => setRunId(run.id),
+  })
+
+  // Read-only subscription to the linked experiment, purely so the dataset
+  // sync below sees 'dataset_config' factor levels (see its own comment).
+  // Same query key the page and FactorBindableField already use, so this
+  // shares their cache entry rather than adding a request of its own.
+  const experimentFactorsQuery = useQuery({
+    queryKey: ['experiments', experimentId],
+    queryFn: () => experimentsApi.get(experimentId!),
+    enabled: !!experimentId,
   })
 
   // Keeps the linked experiment's own dataset list (the experiment_datasets
@@ -1040,10 +1075,21 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // Every Dataset node counts, wired or not and enabled or not -- putting one
   // on the canvas is the declaration that this experiment is about that data;
   // `enabled` only governs whether the run's prompt mentions it.
+  //
+  // Factors are in the dependency list alongside nodes because a
+  // 'dataset_config' factor's levels are datasets this experiment runs
+  // against too (see datasetIdsInGraph) -- and editing those levels from the
+  // Design tab's FactorsEditor changes no node at all, so a nodes-only
+  // dependency would miss it. This subscribes to the same
+  // ['experiments', id] cache entry the page and FactorBindableField already
+  // use (TanStack dedupes by key, so it costs no extra request), which is
+  // what makes a factor save here land immediately: FactorBindableField
+  // invalidates that exact key on success.
+  const factors = experimentFactorsQuery.data?.design_spec?.factors ?? EMPTY_FACTORS
   const lastSyncedDatasetIdsRef = useRef(JSON.stringify(datasetIdsInGraph(initialGraph.nodes as Node[])))
   useEffect(() => {
     if (!experimentId) return
-    const datasetIds = datasetIdsInGraph(nodes)
+    const datasetIds = datasetIdsInGraph(nodes, factors)
     const serialized = JSON.stringify(datasetIds)
     if (serialized === lastSyncedDatasetIdsRef.current) return
     lastSyncedDatasetIdsRef.current = serialized
@@ -1051,7 +1097,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     // syncExperimentDatasets is a stable-enough mutation object; including it
     // would re-run this on every render of the mutation's own state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, experimentId])
+  }, [nodes, factors, experimentId])
 
   // protocolId is stable for this component's whole lifetime (the parent
   // remounts it via `key={protocol.id}` on protocol change -- see
@@ -1157,7 +1203,20 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         case 'skill':
           return sourceNode.type === 'skill' && targetNode.type === 'agent'
         case 'dataset':
-          return sourceNode.type === 'dataset' && targetNode.type === 'agent'
+          // The one slot with a cardinality check here, not just a hidden
+          // "+" stub (see AgentNode.tsx's Dataset comment, and ai/memory
+          // above, which are capped the same way but rely on the stub
+          // alone). A second dataset on one agent isn't merely unsupported
+          // -- every cell resolves ONE workspace, so seed_cell_workspace
+          // rejects it at run time, after the run has already started.
+          // Comparing datasets is a 'dataset_config' factor instead.
+          return (
+            sourceNode.type === 'dataset' &&
+            targetNode.type === 'agent' &&
+            !edges.some(
+              (e) => e.target === connection.target && e.targetHandle === 'dataset' && e.source !== connection.source,
+            )
+          )
         case 'knowledge':
           // The one connector with two source types -- bundles and uploaded
           // documents are interchangeable here, since both resolve to the same
@@ -1180,7 +1239,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           )
       }
     },
-    [nodes],
+    [nodes, edges],
   )
 
   function deleteNode(nodeId: string) {

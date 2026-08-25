@@ -12,8 +12,10 @@ Asking a model to re-emit that pipeline as fresh sklearn source on every call
 buys nothing but new ways to get it wrong: unscaled features quietly wrecking a
 penalized fit, an unseen category raising at predict time, a threshold tuned on
 the test split. The two families share their split, scoring and provenance
-blocks, so their results are directly comparable -- run both. The script tools
-remain for what the arguments can't express.
+blocks, so their results are directly comparable -- run both.
+``run_logistic_regression_script`` remains for what the arguments can't express,
+and is also the only way to fit a continuous target, since every declarative
+tool here is a classifier.
 
 **Nothing is scored on data the model was fit on.** Every metric comes from a
 held-out split (or out-of-fold predictions), computed by :mod:`scoring` from
@@ -115,8 +117,8 @@ def _prepare(
     if resolved == "regression":
         raise DataError(
             f"target {target_column!r} looks continuous ({frame[target_column].nunique()} distinct values). "
-            "Every declarative tool here is a classifier -- use run_linear_regression_script, or pass "
-            "task_type='multiclass' if these really are class labels."
+            "Every declarative tool here is a classifier -- use run_logistic_regression_script with "
+            "task_type='regression', or pass task_type='multiclass' if these really are class labels."
         )
 
     split = splitting.apply_spec(frame, target_column, spec, classification=True)
@@ -1346,13 +1348,18 @@ def run_logistic_regression_script(
     payload_json: str = "",
     include_curves: bool = False,
 ) -> str:
-    """Fit a classifier with your own script, then score it on a held-out split.
+    """Fit a model with your own script, then score it on a held-out split.
 
     The escape hatch for what ``fit_logistic_regression``'s arguments can't
     express -- a custom ColumnTransformer, an interaction basis, a calibrated
     or stacked estimator, a different classifier entirely. Prefer the
     declarative tool when it covers the case: it handles preprocessing,
     threshold selection and the split audit for you.
+
+    It is also the ONLY route to a regression target: every declarative tool
+    here is a classifier, so ``task_type='regression'`` plus a ``predict(X)``
+    is how you fit and score one (import Ridge, LinearRegression or whatever
+    else you need -- they aren't pre-bound).
 
     Your code runs with the TRAINING split only in scope. It must define a
     top-level callable capturing the fitted model:
@@ -1410,63 +1417,12 @@ def run_logistic_regression_script(
             "OneHotEncoder": OneHotEncoder,
             "SimpleImputer": SimpleImputer,
         },
-        family="logistic_regression",
-    )
-
-
-@mcp.tool()
-def run_linear_regression_script(
-    code: str,
-    data_path: str,
-    target_column: str,
-    test_size: float = 0.2,
-    random_seed: int = 42,
-    payload_json: str = "",
-) -> str:
-    """Fit a linear regression with your own script, then score it on a held-out split.
-
-    Regression only -- for a linear *classifier* use ``fit_logistic_regression``.
-    Your code is executed with the TRAINING split only in scope and must define
-    a top-level callable ``predict(X)`` returning 1-D predictions; THIS tool
-    applies the test split and computes R^2/RMSE/MAE/MAPE itself.
-
-    Pre-bound names: ``X_train``, ``y_train``, ``LinearRegression``, ``Ridge``,
-    ``Lasso``, ``ElasticNet``, ``Pipeline``, ``StandardScaler``, ``pd``, ``np``,
-    ``random_seed``, ``hp`` (the parsed payload). Any installed package may be
-    imported. Set a ``result`` dict to echo back train-side decisions --
-    coefficients and intercept are a good thing to put there, since this tool
-    reports metrics but knows nothing about your model's internals.
-
-    Args:
-        code: Python source defining predict(X).
-        data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
-        target_column: Numeric column to predict; every other column is a feature.
-        test_size: Held-out fraction, strictly between 0 and 1.
-        random_seed: Seed for the split, and bound into the script.
-        payload_json: Optional JSON object of hyperparameters, bound as ``hp``.
-    """
-    from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import StandardScaler
-
-    return _run_script(
-        code=code,
-        data_path=data_path,
-        target_column=target_column,
-        task_type="regression",
-        positive_label="",
-        test_size=test_size,
-        random_seed=random_seed,
-        payload_json=payload_json,
-        extra_names={
-            "LinearRegression": LinearRegression,
-            "Ridge": Ridge,
-            "Lasso": Lasso,
-            "ElasticNet": ElasticNet,
-            "Pipeline": Pipeline,
-            "StandardScaler": StandardScaler,
-        },
-        family="linear_regression",
+        # Not a flat "logistic_regression": with the linear-regression script
+        # tool gone this is also the regression route, and a run whose target
+        # was continuous is not a logistic fit however it got here. The script
+        # decides the estimator, so task_type is the most honest label
+        # available.
+        family="script" if task_type == "regression" else "logistic_regression",
     )
 
 

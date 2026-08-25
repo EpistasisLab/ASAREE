@@ -293,7 +293,7 @@ def test_fit_rejects_regression(reg_path: str) -> None:
     print("\nfit_logistic_regression -- continuous target")
     out = json.loads(server.fit_logistic_regression(data_path=reg_path, target_column="price"))
     check("continuous target refused", "continuous" in out.get("error", ""), out.get("error", ""))
-    check("points at the regression tool", "run_linear_regression_script" in out.get("error", ""))
+    check("points at the script tool", "run_logistic_regression_script" in out.get("error", ""))
 
 
 def test_cross_validate(clf_path: str) -> None:
@@ -531,16 +531,24 @@ def test_leakage_audit_catches_duplicates(tmp: Path) -> None:
     check("and warned about", warned, str(split["warnings"]))
 
 
-def test_linear_regression_script(reg_path: str) -> None:
-    print("\nrun_linear_regression_script")
+def test_regression_script(reg_path: str) -> None:
+    # The script tool is the only route to a continuous target now that the
+    # linear-regression tool is gone -- and the estimator has to be imported,
+    # since only the classification names are pre-bound.
+    print("\nrun_logistic_regression_script -- task_type='regression'")
     code = """
+from sklearn.linear_model import LinearRegression
 model = LinearRegression()
 model.fit(X_train, y_train)
 def predict(X):
     return model.predict(X)
 result = {"coef": model.coef_.tolist(), "intercept": float(model.intercept_)}
 """
-    out = json.loads(server.run_linear_regression_script(code=code, data_path=reg_path, target_column="price"))
+    out = json.loads(
+        server.run_logistic_regression_script(
+            code=code, data_path=reg_path, target_column="price", task_type="regression"
+        )
+    )
     check("no error", "error" not in out, out.get("error", ""))
     m = out.get("test_metrics", {})
     check("r2 recovers the generating model", (m.get("r2") or 0) > 0.99, str(m.get("r2")))
@@ -548,7 +556,9 @@ result = {"coef": model.coef_.tolist(), "intercept": float(model.intercept_)}
     coef = out.get("model_decisions", {}).get("coef", [])
     recovered = len(coef) == 2 and abs(coef[0] - 3.0) < 0.05 and abs(coef[1] + 2.0) < 0.05
     check("coefficients recovered", recovered, str(coef))
-    check("family recorded", out.get("model_family") == "linear_regression")
+    # Not "logistic_regression": the target was continuous, so labelling the
+    # run after the tool's name would misreport what was fitted.
+    check("family recorded", out.get("model_family") == "script", str(out.get("model_family")))
 
 
 def test_logistic_script(clf_path: str) -> None:
@@ -664,11 +674,11 @@ def test_tool_schemas_survive_the_guard() -> None:
         "cross_validate_random_forest",
         "tune_random_forest",
         "run_logistic_regression_script",
-        "run_linear_regression_script",
         "ping",
     }
     check("every tool registered", names == expected, str(sorted(names ^ expected)))
     check("xgboost tool is gone", "run_xgboost_script" not in names)
+    check("linear-regression script tool is gone", "run_linear_regression_script" not in names)
     params = set(inspect.signature(server.fit_logistic_regression).parameters)
     check("the guard preserves real signatures", "target_column" in params and "kwargs" not in params, str(params))
 
@@ -699,7 +709,7 @@ def main() -> int:
         test_cross_validate_random_forest(clf_path, grouped_path)
         test_tune_random_forest(clf_path)
         test_leakage_audit_catches_duplicates(tmp)
-        test_linear_regression_script(reg_path)
+        test_regression_script(reg_path)
         test_logistic_script(clf_path)
         test_test_labels_are_not_reachable(clf_path)
         test_error_paths(clf_path, tmp)

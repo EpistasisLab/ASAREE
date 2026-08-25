@@ -173,7 +173,10 @@ def target_summary(target: pd.Series, target_column: str) -> dict[str, Any]:
             "mean": _round(numeric.mean()),
             "std": _round(numeric.std()),
         }
-        notes.append("continuous target -- ROC-AUC does not apply; use run_linear_regression_script")
+        notes.append(
+            "continuous target -- ROC-AUC does not apply; use run_logistic_regression_script "
+            "with task_type='regression'"
+        )
     elif task_type == "degenerate":
         notes.append("the target has a single distinct value -- nothing to predict")
     else:

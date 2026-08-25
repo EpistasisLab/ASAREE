@@ -31,7 +31,9 @@ an AUC and looks *better* for it, so grouped and temporal strategies are
 available and the realized split is checked for the known leaks on every call.
 
 Nothing here imports ASAREE. The dataset arrives as a path or URI
-(:mod:`data`), so the server is usable from any MCP client against any file.
+(:mod:`data`) -- either as an argument or, when the client binds one for the
+step, through the caller-ambient ``_meta`` channel (``_resolve_dataset``) --
+so the server is usable from any MCP client against any file.
 """
 
 from __future__ import annotations
@@ -71,7 +73,12 @@ comparable results.
 
 Every declarative tool here is a classifier. A continuous target needs \
 run_script with task_type='regression', which is also the \
-escape hatch for any pipeline the typed arguments can't express."""
+escape hatch for any pipeline the typed arguments can't express.
+
+data_path and target_column are optional: when the client running you has \
+already bound this step's dataset, every tool resolves both from run context, \
+so omit them. Never invent a data_path from an id another tool reported -- a \
+workspace or session id is not a file."""
 
 mcp = FastMCP("scikit-learn-mcp", instructions=INSTRUCTIONS)
 
@@ -84,6 +91,19 @@ _TASK_TYPES = _CLASSIFICATION | {"regression"}
 # in here: this is one more place `code_path` can come from, honoured when the
 # call names no script of its own, and absent outside such a client.
 _META_KEY_SCRIPT_PATH = "motoro.ambient.script_path"
+# The same channel for the dataset itself: a client that already knows which
+# file this step is meant to work on (ASAREE binds its run's workspace HEAD --
+# see its ``_ambient_meta_for``) binds a locator and its target column here, so
+# ``data_path``/``target_column`` become optional arguments rather than
+# something the model has to reproduce. Two keys, not a workspace handle: this
+# server still only ever reads a path or URI, so nothing about a host's on-disk
+# layout leaks in, and a client that binds neither is unaffected.
+#
+# Without this the only dataset identity an ASAREE agent could see was the
+# workspace id ``workspace_status`` reports, and agents duly passed THAT as
+# ``data_path`` -- "no such file: 'a1b2.../adhoc-c3d4...'", every time.
+_META_KEY_DATA_PATH = "motoro.ambient.data_path"
+_META_KEY_TARGET_COLUMN = "motoro.ambient.target_column"
 # Truncation budgets. A tool result is read by a model, so an unbounded
 # traceback or a script that prints in a loop would otherwise cost more context
 # than the metrics the call was made for.
@@ -96,8 +116,8 @@ _STDOUT_CHARS = 4000
 # --------------------------------------------------------------------------
 
 
-def _ambient_script_path(ctx: Context | None) -> str:
-    """The script path the caller bound ambiently, or ``""`` when there is none.
+def _ambient(ctx: Context | None, key: str) -> str:
+    """The value the caller bound ambiently under *key*, or ``""`` if none.
 
     Deliberately total: no ambient ``_meta`` at all (a direct call, a client
     that doesn't use the convention) is the normal case outside an agent run,
@@ -109,8 +129,45 @@ def _ambient_script_path(ctx: Context | None) -> str:
         extra = getattr(ctx.request_context.meta, "model_extra", None) or {}
     except Exception:  # noqa: BLE001 -- no request context outside a live call
         return ""
-    path = extra.get(_META_KEY_SCRIPT_PATH)
-    return path if isinstance(path, str) else ""
+    value = extra.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def _ambient_script_path(ctx: Context | None) -> str:
+    """The script path the caller bound ambiently, or ``""`` when there is none."""
+    return _ambient(ctx, _META_KEY_SCRIPT_PATH)
+
+
+def _resolve_dataset(
+    data_path: str, target_column: str, ctx: Context | None, *, target_required: bool = True
+) -> tuple[str, str]:
+    """``(data_path, target_column)``, falling back to the ambient binding.
+
+    An explicit argument always wins -- a caller inside an agent run may still
+    have a genuine one-off file to look at. Each half falls back on its own:
+    binding the dataset ambiently shouldn't stop a caller from asking about a
+    different target column in it.
+
+    Raises :class:`DataError` (which every tool's ``_guarded`` turns into an
+    ``error`` result) when neither route supplies a value, since there is
+    nothing to load. The message says what to pass *and* what not to: a
+    workspace/session id is the wrong shape and is exactly what a model reaches
+    for when it can't find a path.
+    """
+    path = data_path.strip() or _ambient(ctx, _META_KEY_DATA_PATH)
+    if not path:
+        raise DataError(
+            "data_path is required: pass a path or URI to the dataset file, and no dataset is "
+            "bound to this step. If a tool reported a workspace or session id, that is not a "
+            "file path -- do not pass it here."
+        )
+    target = target_column.strip() or _ambient(ctx, _META_KEY_TARGET_COLUMN)
+    if target_required and not target:
+        raise DataError(
+            "target_column is required: name the column to predict (describe_dataset lists them), "
+            "and no target column is bound to this step."
+        )
+    return path, target
 
 
 class _Prepared:
@@ -288,7 +345,12 @@ def _score_holdout(
 
 @mcp.tool()
 @_guarded
-def describe_dataset(data_path: str, target_column: str = "", max_columns: int = 100) -> str:
+def describe_dataset(
+    data_path: str = "",
+    target_column: str = "",
+    max_columns: int = 100,
+    ctx: Context | None = None,
+) -> str:
     """Inspect a dataset and get suggestions for how to model it. START HERE.
 
     Answers the questions that come before any fit: what is in this file, which
@@ -299,10 +361,13 @@ def describe_dataset(data_path: str, target_column: str = "", max_columns: int =
 
     Args:
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+            Optional when the client bound this step's dataset ambiently -- omit it
+            there rather than guessing; a workspace or session id is not a path.
         target_column: Optional. When given, adds a task-type inference, the
             class balance, and the caveats that balance implies for AUC.
         max_columns: Cap on how many columns to describe.
     """
+    data_path, target_column = _resolve_dataset(data_path, target_column, ctx, target_required=False)
     frame = load_frame(data_path)
     columns, truncated = profile.column_report(frame, max_columns)
     payload: dict[str, Any] = {
@@ -324,12 +389,13 @@ def describe_dataset(data_path: str, target_column: str = "", max_columns: int =
 @mcp.tool()
 @_guarded
 def describe_split(
-    data_path: str,
-    target_column: str,
+    data_path: str = "",
+    target_column: str = "",
     split_json: str = "",
     test_size: float = 0.2,
     random_seed: int = 42,
     stratify: bool = True,
+    ctx: Context | None = None,
 ) -> str:
     """Preview and audit a train/test split without fitting anything.
 
@@ -353,12 +419,16 @@ def describe_split(
 
     Args:
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+            Optional when the client bound this step's dataset ambiently -- omit it
+            there rather than guessing; a workspace or session id is not a path.
         target_column: Column to predict.
+            Optional when the client bound it ambiently.
         split_json: Split spec as above; overrides the three arguments below.
         test_size: Held-out fraction, strictly between 0 and 1.
         random_seed: Seed for the split.
         stratify: Keep the class balance equal across sides (classification).
     """
+    data_path, target_column = _resolve_dataset(data_path, target_column, ctx)
     prep = _prepare(data_path, target_column, "auto", split_json, test_size, random_seed, stratify)
     return scoring.dumps(
         {
@@ -379,8 +449,8 @@ def describe_split(
 @mcp.tool()
 @_guarded
 def fit_logistic_regression(
-    data_path: str,
-    target_column: str,
+    data_path: str = "",
+    target_column: str = "",
     task_type: str = "auto",
     positive_label: str = "",
     penalty: str = "l2",
@@ -399,6 +469,7 @@ def fit_logistic_regression(
     stratify: bool = True,
     top_k_coefficients: int = 25,
     include_curves: bool = False,
+    ctx: Context | None = None,
 ) -> str:
     """Fit a logistic regression and report ROC-AUC and its associated metrics.
 
@@ -422,7 +493,10 @@ def fit_logistic_regression(
 
     Args:
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+            Optional when the client bound this step's dataset ambiently -- omit it
+            there rather than guessing; a workspace or session id is not a path.
         target_column: Column to predict; every other non-bookkeeping column is a feature.
+            Optional when the client bound it ambiently.
         task_type: 'auto' (infer from the target), 'binary' or 'multiclass'.
         positive_label: Binary positive class; defaults to the highest label.
         penalty: 'l2' (default), 'l1', 'elasticnet' or 'none'.
@@ -446,6 +520,7 @@ def fit_logistic_regression(
             size; switch on when you're plotting or exporting, not just reading.
             The best Youden-J and F1 operating points come back either way.
     """
+    data_path, target_column = _resolve_dataset(data_path, target_column, ctx)
     prep = _prepare(data_path, target_column, task_type, split_json, test_size, random_seed, stratify)
     split = prep.split
     factory, model_spec = logistic.make_pipeline_factory(
@@ -515,8 +590,8 @@ def _convergence(pipe: Any) -> dict[str, Any]:
 @mcp.tool()
 @_guarded
 def cross_validate_logistic_regression(
-    data_path: str,
-    target_column: str,
+    data_path: str = "",
+    target_column: str = "",
     task_type: str = "auto",
     positive_label: str = "",
     n_splits: int = 5,
@@ -533,6 +608,7 @@ def cross_validate_logistic_regression(
     random_seed: int = 42,
     stratify: bool = True,
     include_curves: bool = False,
+    ctx: Context | None = None,
 ) -> str:
     """Cross-validate a logistic regression: AUC with an error bar, over the whole dataset.
 
@@ -551,7 +627,10 @@ def cross_validate_logistic_regression(
 
     Args:
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+            Optional when the client bound this step's dataset ambiently -- omit it
+            there rather than guessing; a workspace or session id is not a path.
         target_column: Column to predict.
+            Optional when the client bound it ambiently.
         task_type: 'auto', 'binary' or 'multiclass'.
         positive_label: Binary positive class; defaults to the highest label.
         n_splits: Requested number of folds (clamped to what the data supports).
@@ -571,6 +650,7 @@ def cross_validate_logistic_regression(
         include_curves: Add pooled out-of-fold ROC/PR points, calibration bins and a
             threshold sweep. Off by default -- see fit_logistic_regression.
     """
+    data_path, target_column = _resolve_dataset(data_path, target_column, ctx)
     spec = splitting.parse_spec(split_json, random_seed=random_seed, stratify=stratify)
     frame, spec = splitting.load_for_spec(data_path, spec)
     if target_column not in frame.columns:
@@ -648,8 +728,8 @@ def cross_validate_logistic_regression(
 @mcp.tool()
 @_guarded
 def tune_logistic_regression(
-    data_path: str,
-    target_column: str,
+    data_path: str = "",
+    target_column: str = "",
     grid_json: str = "",
     task_type: str = "auto",
     positive_label: str = "",
@@ -663,6 +743,7 @@ def tune_logistic_regression(
     stratify: bool = True,
     top_k_coefficients: int = 25,
     include_curves: bool = False,
+    ctx: Context | None = None,
 ) -> str:
     """Search hyperparameters by CV on the training split, then score the winner on the holdout.
 
@@ -680,7 +761,10 @@ def tune_logistic_regression(
 
     Args:
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+            Optional when the client bound this step's dataset ambiently -- omit it
+            there rather than guessing; a workspace or session id is not a path.
         target_column: Column to predict.
+            Optional when the client bound it ambiently.
         grid_json: JSON object mapping any of C/penalty/solver/class_weight/l1_ratio/
             scale/numeric_impute/max_iter to a list of values. Empty uses the default grid.
         task_type: 'auto', 'binary' or 'multiclass'.
@@ -699,6 +783,7 @@ def tune_logistic_regression(
         include_curves: Add the winner's holdout ROC/PR points, calibration bins and a
             threshold sweep. Off by default -- see fit_logistic_regression.
     """
+    data_path, target_column = _resolve_dataset(data_path, target_column, ctx)
     prep = _prepare(data_path, target_column, task_type, split_json, test_size, random_seed, stratify)
     split = prep.split
 
@@ -818,8 +903,8 @@ def _permutation_scorer(task_type: str) -> str:
 @mcp.tool()
 @_guarded
 def fit_random_forest(
-    data_path: str,
-    target_column: str,
+    data_path: str = "",
+    target_column: str = "",
     task_type: str = "auto",
     positive_label: str = "",
     n_estimators: int = 300,
@@ -840,6 +925,7 @@ def fit_random_forest(
     top_k_features: int = 25,
     permutation_importance: bool = False,
     include_curves: bool = False,
+    ctx: Context | None = None,
 ) -> str:
     """Fit a random forest and report ROC-AUC and its associated metrics.
 
@@ -863,7 +949,10 @@ def fit_random_forest(
 
     Args:
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+            Optional when the client bound this step's dataset ambiently -- omit it
+            there rather than guessing; a workspace or session id is not a path.
         target_column: Column to predict; every other non-bookkeeping column is a feature.
+            Optional when the client bound it ambiently.
         task_type: 'auto' (infer from the target), 'binary' or 'multiclass'.
         positive_label: Binary positive class; defaults to the highest label.
         n_estimators: Number of trees. More is monotonically better and slower --
@@ -895,6 +984,7 @@ def fit_random_forest(
         include_curves: Add ROC/PR points, calibration bins and a 19-step threshold
             sweep. Off by default -- see fit_logistic_regression.
     """
+    data_path, target_column = _resolve_dataset(data_path, target_column, ctx)
     prep = _prepare(data_path, target_column, task_type, split_json, test_size, random_seed, stratify)
     split = prep.split
     factory, model_spec = forest.make_pipeline_factory(
@@ -954,8 +1044,8 @@ def fit_random_forest(
 @mcp.tool()
 @_guarded
 def cross_validate_random_forest(
-    data_path: str,
-    target_column: str,
+    data_path: str = "",
+    target_column: str = "",
     task_type: str = "auto",
     positive_label: str = "",
     n_splits: int = 5,
@@ -973,6 +1063,7 @@ def cross_validate_random_forest(
     random_seed: int = 42,
     stratify: bool = True,
     include_curves: bool = False,
+    ctx: Context | None = None,
 ) -> str:
     """Cross-validate a random forest: AUC with an error bar, over the whole dataset.
 
@@ -989,7 +1080,10 @@ def cross_validate_random_forest(
 
     Args:
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+            Optional when the client bound this step's dataset ambiently -- omit it
+            there rather than guessing; a workspace or session id is not a path.
         target_column: Column to predict.
+            Optional when the client bound it ambiently.
         task_type: 'auto', 'binary' or 'multiclass'.
         positive_label: Binary positive class; defaults to the highest label.
         n_splits: Requested number of folds (clamped to what the data supports).
@@ -1010,6 +1104,7 @@ def cross_validate_random_forest(
         include_curves: Add pooled out-of-fold ROC/PR points, calibration bins and a
             threshold sweep. Off by default -- see fit_logistic_regression.
     """
+    data_path, target_column = _resolve_dataset(data_path, target_column, ctx)
     spec = splitting.parse_spec(split_json, random_seed=random_seed, stratify=stratify)
     frame, spec = splitting.load_for_spec(data_path, spec)
     if target_column not in frame.columns:
@@ -1080,8 +1175,8 @@ def cross_validate_random_forest(
 @mcp.tool()
 @_guarded
 def tune_random_forest(
-    data_path: str,
-    target_column: str,
+    data_path: str = "",
+    target_column: str = "",
     grid_json: str = "",
     task_type: str = "auto",
     positive_label: str = "",
@@ -1096,6 +1191,7 @@ def tune_random_forest(
     stratify: bool = True,
     top_k_features: int = 25,
     include_curves: bool = False,
+    ctx: Context | None = None,
 ) -> str:
     """Search forest hyperparameters by CV on the training split, then score the winner.
 
@@ -1116,7 +1212,10 @@ def tune_random_forest(
 
     Args:
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+            Optional when the client bound this step's dataset ambiently -- omit it
+            there rather than guessing; a workspace or session id is not a path.
         target_column: Column to predict.
+            Optional when the client bound it ambiently.
         grid_json: JSON object mapping any of n_estimators/criterion/max_depth/
             min_samples_split/min_samples_leaf/max_features/bootstrap/class_weight/
             numeric_impute to a list of values. Empty uses the default grid.
@@ -1137,6 +1236,7 @@ def tune_random_forest(
         include_curves: Add the winner's holdout ROC/PR points, calibration bins and a
             threshold sweep. Off by default -- see fit_logistic_regression.
     """
+    data_path, target_column = _resolve_dataset(data_path, target_column, ctx)
     prep = _prepare(data_path, target_column, task_type, split_json, test_size, random_seed, stratify)
     split = prep.split
 
@@ -1393,15 +1493,16 @@ def _score_script(
 
 @mcp.tool()
 def run_script(
-    # data_path/target_column lead because they are the only two genuinely
-    # required arguments: `code` became optional when `code_path` joined it
-    # (exactly one is needed, which no signature can express -- and neither is,
-    # when the caller binds the script ambiently), and Python forbids a required
-    # parameter after an optional one. MCP calls arrive as a JSON object, so the
-    # order is invisible on the wire -- only the required/optional split it
-    # encodes is.
-    data_path: str,
-    target_column: str,
+    # data_path/target_column lead because they are the two the caller most
+    # likely has to supply: nothing here has a required parameter any more
+    # (`code` became optional when `code_path` joined it, and both are omitted
+    # when the caller binds the script ambiently; data_path/target_column
+    # likewise fall back to an ambient binding -- see _resolve_dataset), and
+    # what is genuinely needed is "exactly one of" in each pair, which no
+    # signature can express. MCP calls arrive as a JSON object, so the order is
+    # invisible on the wire; it is documentation of which arguments matter.
+    data_path: str = "",
+    target_column: str = "",
     code: str = "",
     code_path: str = "",
     task_type: str = "binary",
@@ -1450,7 +1551,10 @@ def run_script(
 
     Args:
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+            Optional when the client bound this step's dataset ambiently -- omit it
+            there rather than guessing; a workspace or session id is not a path.
         target_column: Column to predict; every other column is a feature.
+            Optional when the client bound it ambiently.
         code: Python source defining predict_proba(X) or predict(X) as above.
             Pass this OR ``code_path``, not both. Omit both when a script is
             already wired into this step -- it arrives as ambient run context
@@ -1471,6 +1575,14 @@ def run_script(
     from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
     from sklearn.pipeline import Pipeline, make_pipeline
     from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+    # Unlike every declarative tool here, this one is not `@_guarded` (it
+    # reports its own errors with the script's provenance attached), so the
+    # dataset resolution has to catch instead of raise.
+    try:
+        data_path, target_column = _resolve_dataset(data_path, target_column, ctx)
+    except DataError as e:
+        return _error(str(e))
 
     if code.strip() and code_path.strip():
         return json.dumps({"error": "pass `code` or `code_path`, not both."})

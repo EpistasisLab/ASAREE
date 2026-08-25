@@ -707,6 +707,59 @@ def predict_proba(X):
     check("unreadable ambient path is reported", "could not read" in out.get("error", ""), out.get("error", ""))
 
 
+def test_ambient_dataset(clf_path: str) -> None:
+    """A client that bound the step's dataset means no data_path argument at all.
+
+    The regression this covers: with data_path required and nothing bound, the
+    only dataset identity an agent could see was its host's workspace id, and
+    it passed that -- "no such file: '<uuid>/adhoc-<uuid>'".
+    """
+    print("\nambient dataset")
+    ctx = _FakeCtx({"motoro.ambient.data_path": clf_path, "motoro.ambient.target_column": "outcome"})
+
+    out = json.loads(server.describe_dataset(ctx=ctx))
+    check("describe_dataset resolved the dataset", out.get("n_rows") == 400, out.get("error", ""))
+    check("and the ambient target", out.get("target", {}).get("target_column") == "outcome", out.get("error", ""))
+
+    out = json.loads(server.fit_logistic_regression(ctx=ctx))
+    check("fit resolved both", out.get("data_path") == clf_path, out.get("error", ""))
+    check("and reports the ambient target", out.get("target_column") == "outcome", out.get("error", ""))
+
+    out = json.loads(server.describe_split(ctx=ctx))
+    check("describe_split resolved both", "split" in out, out.get("error", ""))
+
+    code = """
+def predict_proba(X):
+    return np.zeros(len(X))
+"""
+    out = json.loads(server.run_script(code=code, ctx=ctx))
+    check("run_script resolved both", out.get("data_path") == clf_path, out.get("error", ""))
+
+    # An explicit argument still wins, and each half falls back on its own.
+    only_path = _FakeCtx({"motoro.ambient.data_path": clf_path})
+    out = json.loads(server.fit_logistic_regression(target_column="outcome", ctx=only_path))
+    scored = out.get("test_metrics", {}).get("roc_auc") is not None
+    check("explicit target + ambient path", scored, out.get("error", ""))
+    only_target = _FakeCtx({"motoro.ambient.target_column": "outcome"})
+    out = json.loads(server.fit_logistic_regression(data_path=clf_path, ctx=only_target))
+    scored = out.get("test_metrics", {}).get("roc_auc") is not None
+    check("explicit path + ambient target", scored, out.get("error", ""))
+
+    # Nothing bound and nothing passed: a clear error, not a crash, and one
+    # that tells the model not to substitute an id for a path.
+    out = json.loads(server.fit_logistic_regression())
+    check("missing data_path is reported", "data_path is required" in out.get("error", ""), out.get("error", ""))
+    check("and warns off a workspace id", "not a file path" in out.get("error", ""), out.get("error", ""))
+    out = json.loads(server.run_script(code=code))
+    check("run_script reports it too", "data_path is required" in out.get("error", ""), out.get("error", ""))
+    out = json.loads(server.fit_logistic_regression(data_path=clf_path, ctx=_FakeCtx({})))
+    err = out.get("error", "")
+    check("missing target_column is reported", "target_column is required" in err, err)
+    # describe_dataset's target has always been optional -- ambience doesn't change that.
+    out = json.loads(server.describe_dataset(data_path=clf_path))
+    check("describe_dataset still needs no target", out.get("n_rows") == 400, out.get("error", ""))
+
+
 def test_tool_schemas_survive_the_guard() -> None:
     print("\nFastMCP schema generation")
     import asyncio
@@ -768,6 +821,7 @@ def main() -> int:
         test_error_paths(clf_path, tmp)
         test_payload_is_bound(clf_path)
         test_ambient_script_path(clf_path, tmp)
+        test_ambient_dataset(clf_path)
         test_tool_schemas_survive_the_guard()
 
     print(f"\n{_PASS} passed, {_FAIL} failed")

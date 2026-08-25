@@ -164,3 +164,48 @@ async def seed_cell_workspace(
         target_column=resolved_target,
         data_dictionary_available=publish_data_dictionary(ws, reg.get("dictionary_json")),
     )
+
+
+def head_data_locator(workspace_id: str) -> tuple[str, str]:
+    """``(train parquet path, target column)`` for *workspace_id*'s HEAD, or
+    ``("", "")`` when there's nothing to point at.
+
+    For the tools that take a dataset as a plain path instead of reading the
+    workspace layout themselves -- ``scikit-learn-mcp``, the one sklearn server
+    the canvas offers, which imports nothing from this repo by design. Without
+    a path bound for it, the only dataset identity such a tool's caller could
+    see was the workspace id ``workspace_status`` reports, and agents passed
+    THAT as ``data_path``: "no such file: '<experiment_id>/<cell_label>'".
+
+    HEAD, not the ``v0_raw`` seed, so a Score step after DC/FTE/FS fits on the
+    engineered matrix -- the same version ``asaree-sklearn-model``'s own
+    workspace-reading tools use. Read at turn start, so it names the HEAD the
+    agent's turn begins from; a stage this same turn accepts moves HEAD on and
+    the bound path goes stale, which is why it's a fallback for a tool that
+    can't read the workspace rather than the route for one that can.
+
+    The TRAIN side only: those tools make their own held-out split from the
+    file they're given, so handing over the frozen test parquet as well would
+    invite fitting on it. Scoring on a split of train is a weaker claim than
+    the workspace's frozen split, never a leaking one.
+
+    Total by design -- an unseeded or unreadable workspace returns ``("", "")``
+    and the tool asks for an explicit ``data_path`` as before. "Not seeded
+    yet" is the expected answer, not a fault (every caller asks before knowing
+    whether this cell has a workspace at all), so it returns quietly; only a
+    workspace that exists and still can't be read is worth a log line.
+    """
+    try:
+        ws = Workspace(workspace_id)
+        if not ws.exists():
+            return "", ""
+        state = ws.load_state()
+        head = next((v for v in state.get("versions", []) if v.get("id") == state.get("head")), None)
+        train = str((head or {}).get("train") or "")
+        target = str(state.get("target_column") or "")
+    except WorkspaceError:
+        return "", ""  # a malformed workspace_id -- nothing existed to read
+    except (OSError, ValueError) as e:
+        logger.warning("workspace_head_locator_failed", extra={"workspace_id": workspace_id, "error": str(e)})
+        return "", ""
+    return (train, target) if train else ("", "")

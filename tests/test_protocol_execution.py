@@ -631,6 +631,57 @@ def test_ambient_meta_writes_the_wired_script_and_carries_its_path(tmp_path: Pat
     assert Path(pe._ambient_meta_for(graph, "a", "exp1/cellA")["script_path"]).read_text() == "print('edited')"
 
 
+def test_ambient_meta_carries_the_workspace_head_as_a_data_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    # For scikit-learn-mcp, which takes its dataset as a path instead of
+    # reading the workspace: without this the only dataset identity the agent
+    # could see was the workspace id, and it passed THAT as data_path.
+    monkeypatch.setattr(pe, "head_data_locator", lambda wid: (f"/ws/{wid}/v1_dc/train.parquet", "outcome"))
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spinal-fusion-v1")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    meta = pe._ambient_meta_for(graph, "a", "exp1/cellA")
+    assert meta["data_path"] == "/ws/exp1/cellA/v1_dc/train.parquet"
+    assert meta["target_column"] == "outcome"
+
+    # Keyed off the workspace, NOT off a wired Dataset connector: the spinal
+    # graph wires the dataset into DC/FTE/FS only, and the nodes that actually
+    # want a path are the model-fitting ones (MLM, Score) that have none.
+    bare = {"nodes": [agent], "edges": [agent_llm_edge]}
+    assert pe._ambient_meta_for(bare, "a", "exp1/cellA")["data_path"] == "/ws/exp1/cellA/v1_dc/train.parquet"
+
+    # No workspace at all (an unlinked protocol run): nothing to name, and the
+    # tool asking for an explicit data_path is the correct outcome.
+    assert "data_path" not in pe._ambient_meta_for(graph, "a", None)
+
+
+async def test_node_run_context_seeds_before_reading_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ordering is the whole point: the ambient data_path names the workspace's
+    # HEAD version, which doesn't exist until the pre-seed has created it.
+    calls: list[str] = []
+
+    async def _seed(graph: dict, node_id: str, workspace_id: str | None, owner_id: uuid.UUID) -> str:
+        calls.append("seed")
+        return "spinal-fusion-v1"
+
+    def _locator(workspace_id: str) -> tuple[str, str]:
+        calls.append("locator")
+        return "/ws/train.parquet", "outcome"
+
+    monkeypatch.setattr(pe, "_preseed_dataset_workspace", _seed)
+    monkeypatch.setattr(pe, "head_data_locator", _locator)
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spinal-fusion-v1")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    ambient, seeded = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
+    assert calls == ["seed", "locator"]
+    assert seeded == "spinal-fusion-v1"
+    assert ambient["data_path"] == "/ws/train.parquet"
+
+
 def test_ambient_meta_omits_script_path_without_a_workspace() -> None:
     # Nowhere to write it, so no path -- and _build_user_input falls back to
     # inlining rather than cueing a file that doesn't exist.

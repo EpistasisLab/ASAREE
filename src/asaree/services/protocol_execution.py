@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.models.protocol_run import ProtocolRun
-from asaree.services.dataset_workspaces import WorkspaceSeedError, seed_cell_workspace
+from asaree.services.dataset_workspaces import WorkspaceSeedError, head_data_locator, seed_cell_workspace
 from asaree.services.experiments import get_experiment
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
 from asaree.services.metric_promotion import promote_cell_score_metrics
@@ -867,11 +867,23 @@ def _ambient_meta_for(graph: dict[str, Any], node_id: str, workspace_id: str | N
     own half of the channel ``workspace_id`` already uses -- the model never
     sees these and so can never mistype one.
 
-    Two keys today, both Reference-route (see the three routes at the top of
+    Four keys today, all Reference-route (see the three routes at the top of
     this module, and Motoro's ``engine/sense.py``):
 
     * ``dataset_names`` -- the wired Dataset connectors' names, which is what
       lets ``open_workspace`` be called with no arguments at all.
+    * ``data_path`` / ``target_column`` -- the cell workspace's HEAD train
+      parquet and its outcome column (``head_data_locator``), for the tools
+      that take a dataset as a path rather than reading the workspace
+      themselves (``scikit-learn-mcp``). Keyed off ``workspace_id`` alone, NOT
+      off this node having a Dataset connector: the workspace belongs to the
+      cell, and the nodes most likely to want a path are the ones with no
+      Dataset node wired. In the spinal graph the connector is on DC/FTE/FS
+      while the model-fitting steps (MLM, Score) ride on the ambient
+      workspace_id -- gating this on a wired dataset left exactly those two
+      with no path, which is the whole reason a path is bound at all.
+      ``head_data_locator`` is total, so a run whose workspace was never
+      seeded contributes nothing here.
     * ``script_path`` -- where the wired Script node's code was written. The
       code used to be pasted into the prompt for the model to copy back out
       into a tool argument; a script-running tool reads the file instead, so
@@ -889,6 +901,12 @@ def _ambient_meta_for(graph: dict[str, Any], node_id: str, workspace_id: str | N
     dataset_names = [str(c["dataset_name"]) for c in _resolve_dataset_configs(graph, node_id) if c.get("dataset_name")]
     if dataset_names:
         meta["dataset_names"] = dataset_names
+    if workspace_id:
+        data_path, target_column = head_data_locator(workspace_id)
+        if data_path:
+            meta["data_path"] = data_path
+        if target_column:
+            meta["target_column"] = target_column
     code = (_resolve_script_config(graph, node_id) or {}).get("code")
     if code:
         script_path = _materialize_script(workspace_id, node_id, str(code))
@@ -948,9 +966,14 @@ async def _node_run_context(
     """``(ambient_meta, seeded_dataset_name)`` for one node -- everything the
     node's References contribute, resolved together so the three call sites
     (gated worker, single-node play, main loop) can't drift apart on which
-    half they remembered to do."""
-    ambient_meta = _ambient_meta_for(graph, node_id, workspace_id)
+    half they remembered to do.
+
+    Seeding runs FIRST: the ambient ``data_path`` names the workspace's HEAD
+    version, which does not exist until the workspace does. For a node with no
+    Dataset connector the seeding is a no-op and the path comes from whatever
+    an earlier node in the run already seeded."""
     seeded_dataset = await _preseed_dataset_workspace(graph, node_id, workspace_id, owner_id)
+    ambient_meta = _ambient_meta_for(graph, node_id, workspace_id)
     return ambient_meta, seeded_dataset
 
 
@@ -1361,7 +1384,9 @@ def _build_user_input(
                 "Dataset context:\n"
                 f"Your data is already open: the dataset {seeded_dataset!r} is loaded into this "
                 "cell's workspace at HEAD. Do NOT call open_workspace -- the workspace tools and "
-                "the sklearn tools all resolve it from ambient run context. Start with the "
+                "the sklearn tools all resolve it from ambient run context, so omit any "
+                "data_path/workspace_id/target_column argument and never build one out of an id "
+                "another tool reported (a workspace id is not a file path). Start with the "
                 "analysis itself. (workspace_status() reports the current state if you need it.)"
             )
         elif len(dataset_names) == 1:

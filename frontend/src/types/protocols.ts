@@ -405,12 +405,12 @@ export function defaultScriptNodeData(label = 'Script'): ScriptNodeData {
 }
 
 // A "Skill" node -- names one registered Agent Skill for the Agent it's wired
-// into. An Agent Skill is a SKILL.md document (YAML frontmatter carrying a
-// `name` and a `description` of what it does AND when to use it, then a
-// Markdown body of instructions); the spec packages one in a directory, but
-// the directory only exists to bundle optional scripts/templates alongside
-// it, so a skill with none of those IS exactly one .md file -- that's the
-// shape ASAREE registers (POST /skills/upload) and stores server-side.
+// into. An Agent Skill is a *directory* whose entry point is SKILL.md (YAML
+// frontmatter carrying a `name` and a `description` of what it does AND when
+// to use it, then a Markdown body of instructions), optionally bundling
+// reference files the agent reads on demand. ASAREE registers either shape:
+// POST /skills/upload-folder for the directory, POST /skills/upload for a
+// skill that bundles nothing and so IS exactly one .md.
 //
 // skill_id/skill_name mirrors DatasetNodeConfig's own dataset_id/dataset_name
 // pairing, and for the same reason: the document itself lives in the skill
@@ -419,7 +419,8 @@ export function defaultScriptNodeData(label = 'Script'): ScriptNodeData {
 // resolves into a REAL Motoro config slot -- _resolve_skill_config collects
 // every wired node's id into the agent's `skill_config`, and Motoro's engine
 // decides how to disclose them (an index of names+descriptions up front, each
-// body only on the model's own `load_skill` call).
+// body only on the model's own `load_skill` call, and a bundled file only on
+// its `read_skill_file` call).
 export interface SkillNodeConfig {
   skill_id: string | null
   skill_name: string | null

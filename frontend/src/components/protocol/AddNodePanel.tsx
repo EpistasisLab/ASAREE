@@ -101,7 +101,7 @@ const NODE_CATALOG = [
   {
     type: SKILL_BROWSE,
     label: 'Skills',
-    description: 'Browse your Agent Skills -- one SKILL.md an Agent opens when its description matches the task',
+    description: 'Browse your Agent Skills -- instructions an Agent opens when their description matches the task',
     icon: ScrollText,
   },
   // Not a node type either -- picking this opens the OKF bundle browser

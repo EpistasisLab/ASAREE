@@ -336,17 +336,32 @@ export const skillsApi = {
   // datasetsApi.list()/mcpServersApi.list() do.
   list: () => request<SkillListResponse>('/skills').then((r) => r.items),
   get: (id: string) => request<Skill>(`/skills/${id}`),
-  // A skill is registered by uploading its .md file, not by filling in a
-  // form: the file IS the skill (see SkillNodeData in types/protocols.ts),
-  // and its frontmatter already carries the name/description. `name`/
-  // `description` are overrides for a file whose frontmatter is missing or
-  // wrong -- omit them for the normal path.
+  // A skill is registered by uploading it, not by filling in a form: the
+  // document IS the skill (see SkillNodeData in types/protocols.ts), and its
+  // frontmatter already carries the name/description. This is the single-file
+  // shape, for a skill that bundles no reference files; createFromFolder
+  // below is the directory shape. `name`/`description` are overrides for a
+  // file whose frontmatter is missing or wrong -- omit them for the normal
+  // path.
   create: (data: { file: File; name?: string; description?: string }) => {
     const form = new FormData()
     form.set('file', data.file)
     if (data.name) form.set('name', data.name)
     if (data.description) form.set('description', data.description)
     return request<Skill>('/skills/upload', { method: 'POST', body: form })
+  },
+  // The other upload shape: a whole skill *directory*, which is what the
+  // Agent Skills format actually specifies -- code-simplification/SKILL.md
+  // plus whatever level-3 reference files it bundles. Sent the same way
+  // okfApi.createFromUpload sends a bundle, under each file's
+  // webkitRelativePath, because that is the only thing a browser will say
+  // about where a picked folder came from; the server strips the leading
+  // folder segment. 422 if there's no SKILL.md, or if the folder carries a
+  // script (no shell to run one in -- register an MCP server instead).
+  createFromFolder: (files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file, file.webkitRelativePath || file.name)
+    return request<Skill>('/skills/upload-folder', { method: 'POST', body: form })
   },
   // The stored skill rendered back out as a SKILL.md document, so what a
   // user uploaded is also what they can read back and re-upload.
@@ -357,6 +372,14 @@ export const skillsApi = {
     const form = new FormData()
     form.set('file', file)
     return request<Skill>(`/skills/${id}/markdown`, { method: 'PUT', body: form })
+  },
+  // Replaces the whole directory, unlike replaceFromFile which only touches
+  // the SKILL.md: a re-upload that drops FORMS.md drops it, rather than
+  // leaving the skill holding a file its own instructions no longer mention.
+  replaceFromFolder: (id: string, files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file, file.webkitRelativePath || file.name)
+    return request<Skill>(`/skills/${id}/folder`, { method: 'PUT', body: form })
   },
   // Soft-deletes server-side: an agent still holding this id keeps running,
   // just without the skill (Motoro's resolve_skills skips and logs it).

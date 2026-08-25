@@ -141,6 +141,7 @@ export function SkillBrowserPanel({
                       </p>
                       <p className="truncate font-mono text-[11px] text-muted-foreground/70">
                         {skill.body.length.toLocaleString()} chars
+                        {skill.files.length > 0 ? ` · +${skill.files.length} file${skill.files.length === 1 ? '' : 's'}` : ''}
                         {skill.source_filename ? ` · ${skill.source_filename}` : ''}
                       </p>
                     </div>

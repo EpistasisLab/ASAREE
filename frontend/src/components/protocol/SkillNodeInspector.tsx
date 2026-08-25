@@ -138,6 +138,24 @@ export function SkillNodeInspector({
                 body is loaded on demand, when the model decides this skill
                 applies -- so it's shown first and in full, not truncated. */}
             <p className="text-xs text-muted-foreground">{selectedSkill.description}</p>
+            {/* Level 3: named, not shown. These are read one at a time during a
+                run, when the instructions send the agent to one -- so what
+                matters here is that they came along with the upload, and a
+                second full document inside this panel would bury the body. */}
+            {selectedSkill.files.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">
+                  Bundled files ({selectedSkill.files.length}, read on demand during a run)
+                </p>
+                <ul className="space-y-0.5">
+                  {selectedSkill.files.map((path) => (
+                    <li key={path} className="truncate font-mono text-[0.7rem] text-muted-foreground/70" title={path}>
+                      {path}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <div className="space-y-1">
               <p className="text-xs text-muted-foreground">
                 Instructions ({selectedSkill.body.length.toLocaleString()} characters, loaded only when the agent opens

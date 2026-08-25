@@ -135,7 +135,7 @@ export function AgentNode({
           and ProtocolCanvas.tsx's nodesWithRunStatus for why the connected
           pattern node itself can't be deleted directly either. */}
       <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="5%" side="top" alwaysVisible />
-      {/* Skill -- registered Agent Skills, one SKILL.md document each, stored
+      {/* Skill -- registered Agent Skills, one skill directory each, stored
           server-side and referenced by id (see SkillNodeData). Repeatable and
           UNCAPPED, like Tool and unlike everything else on this edge:
           carrying several skills is the normal case, since each costs only

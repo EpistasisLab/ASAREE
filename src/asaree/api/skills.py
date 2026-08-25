@@ -1,16 +1,25 @@
 """Agent Skills — a thin layer over motoro.services.skill_service.
 
 The format (frontmatter parsing, the name/description rules, per-owner
-uniqueness, soft delete) is core's, the same way MCP registration is; see
-Motoro's `docs/DESIGN.md` §"Skills: a file, not a directory". ASAREE's job is
-to resolve ``owner_id`` from ``CurrentUser`` and call through.
+uniqueness, soft delete, the bundled-file rules) is core's, the same way MCP
+registration is; see Motoro's `docs/DESIGN.md` §"Skills: a directory, stored as
+rows". ASAREE's job is to resolve ``owner_id`` from ``CurrentUser`` and call
+through.
 
-A skill is uploaded as a **single `.md` file** — that is the Agent Skills
-format's own degenerate case (a directory whose only required member is
-`SKILL.md`, with no bundled level-3 resources), not a simplification of it.
+Two upload shapes, because an Agent Skill is a *directory* whose only required
+member is `SKILL.md`:
+
+- ``POST /skills/upload`` takes that one file, for a skill with no bundled
+  level-3 resources — the format's own degenerate case, not a simplification.
+- ``POST /skills/upload-folder`` takes the whole directory the way
+  `POST /okf/bundles/upload` does, since a browser never reveals a real path:
+  each part's ``filename`` carries its ``webkitRelativePath``, and the leading
+  folder segment is stripped here rather than trusted from a separate field.
+
 Bundled *scripts* are the part core genuinely can't run: an agent's only
 side-channel is an MCP tool call, so a skill that needs to execute code should
-be registered as an MCP server instead.
+be registered as an MCP server instead. Core rejects them at the boundary, and
+that 422 is passed straight through.
 
 Reading is scoped to the caller's own skills plus any global system skill
 (``is_system=True``, ``owner_id=None``); mutating one is owner-only, matching
@@ -94,6 +103,77 @@ async def upload_skill_endpoint(
             )
     except SkillFormatError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return SkillResponse.model_validate(skill)
+
+
+async def _folder_payload(files: list[UploadFile]) -> list[tuple[str, str]]:
+    """``(path relative to the skill folder, text)`` for one directory upload.
+
+    The leading ``webkitRelativePath`` segment is the folder the user picked —
+    ``code-simplification/SKILL.md`` — and core's ``parse_skill_bundle`` wants
+    paths relative to the skill directory itself. Stripping it is this layer's
+    job because only this layer knows the upload came from a folder picker.
+
+    A part with no folder segment is a rejection rather than a guess: it means
+    the user dragged loose files, and a skill assembled from an unknown
+    directory layout is not the directory they have on disk.
+    """
+    payload: list[tuple[str, str]] = []
+    for upload in files:
+        name = upload.filename or ""
+        parts = [p for p in name.replace("\\", "/").split("/") if p]
+        if len(parts) < 2:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{name or 'A file'} didn't come from a folder — pick the skill's own folder.",
+            )
+        payload.append(("/".join(parts[1:]), _decode(await upload.read())))
+    return payload
+
+
+@router.post("/upload-folder", response_model=SkillResponse, status_code=201)
+async def upload_skill_folder_endpoint(
+    user: CurrentUser,
+    files: Annotated[list[UploadFile], File()],
+) -> SkillResponse:
+    """Register a skill from an uploaded skill *directory*.
+
+    ``source_filename`` records the folder the user picked, not a file: it is
+    only ever shown back to them as "from code-simplification/", and the folder
+    is what they chose.
+    """
+    payload = await _folder_payload(files)
+    folder = (files[0].filename or "").replace("\\", "/").split("/")[0] if files else None
+    try:
+        skill = await skill_service.create_skill_from_bundle(
+            payload, owner_id=user.id, source_filename=folder
+        )
+    except SkillFormatError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return SkillResponse.model_validate(skill)
+
+
+@router.put("/{skill_id}/folder", response_model=SkillResponse)
+async def replace_skill_folder_endpoint(
+    skill_id: uuid.UUID,
+    user: CurrentUser,
+    files: Annotated[list[UploadFile], File()],
+) -> SkillResponse:
+    """Replace a skill's whole directory from a re-uploaded folder.
+
+    A replacement, not a merge — a re-upload that drops ``FORMS.md`` drops it,
+    because the alternative leaves the skill holding a document its own
+    ``SKILL.md`` no longer mentions.
+    """
+    existing = await skill_service.get_skill(skill_id)
+    if existing is None or existing.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="No such skill")
+    payload = await _folder_payload(files)
+    try:
+        skill = await skill_service.update_skill_from_bundle(skill_id, payload)
+    except SkillFormatError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    assert skill is not None
     return SkillResponse.model_validate(skill)
 
 

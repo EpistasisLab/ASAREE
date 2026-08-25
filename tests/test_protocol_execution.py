@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -453,11 +454,25 @@ def test_build_user_input_omits_dataset_context_without_experiment_id() -> None:
     assert "Dataset context" not in result
 
 
-def test_build_user_input_appends_script_block_when_wired() -> None:
+def test_build_user_input_cues_bound_script_without_inlining_it() -> None:
+    # The script reached the tool as a path, so the source stays out of the
+    # prompt -- it would otherwise cost tokens on every turn of the loop and
+    # be only as faithful as the model's retyping.
     agent, agent_llm_edge = _agent_with_llm("a")
     script = _script_node(code="print('hello')")
     graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
-    result = pe._build_user_input(agent, graph, {})
+    result = pe._build_user_input(agent, graph, {}, script_bound=True)
+    assert "Script context:" in result
+    assert "print('hello')" not in result
+
+
+def test_build_user_input_inlines_script_when_it_could_not_be_bound() -> None:
+    # No workspace to write it to (an unlinked protocol run): a prompt the
+    # model can copy from beats no script at all.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hello')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+    result = pe._build_user_input(agent, graph, {}, script_bound=False)
     assert "Script to pass verbatim" in result
     assert "print('hello')" in result
 
@@ -466,6 +481,31 @@ def test_build_user_input_omits_script_block_when_unwired() -> None:
     node = _node("a", "agent", {"goal": "do the work"}, label="Worker")
     result = pe._build_user_input(node, {"nodes": [node], "edges": []}, {})
     assert "Script to pass verbatim" not in result
+    assert "Script context:" not in result
+
+
+def test_ambient_meta_writes_the_wired_script_and_carries_its_path(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(pe, "WORKSPACE_ROOT", str(tmp_path))
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hello')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+
+    meta = pe._ambient_meta_for(graph, "a", "exp1/cellA")
+    assert Path(meta["script_path"]).read_text() == "print('hello')"
+
+    # An edited Script node must not leave the previous run's copy behind for
+    # a rerun to execute -- the graph is the source of truth, not the file.
+    script["data"]["config"]["code"] = "print('edited')"
+    assert Path(pe._ambient_meta_for(graph, "a", "exp1/cellA")["script_path"]).read_text() == "print('edited')"
+
+
+def test_ambient_meta_omits_script_path_without_a_workspace() -> None:
+    # Nowhere to write it, so no path -- and _build_user_input falls back to
+    # inlining rather than cueing a file that doesn't exist.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hello')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+    assert pe._ambient_meta_for(graph, "a", None) == {}
 
 
 # --- _run_gated_worker (mocked -- no real LLM calls) -------------------------

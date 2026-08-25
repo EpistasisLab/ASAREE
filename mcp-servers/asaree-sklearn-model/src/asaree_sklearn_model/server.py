@@ -46,10 +46,33 @@ labels."""
 mcp = FastMCP("asaree-sklearn-model", instructions=INSTRUCTIONS)
 
 _META_KEY_WORKSPACE_ID = "motoro.workspace_id"
+# Where ASAREE wrote the Script node wired into this run, published under
+# Motoro's caller-ambient prefix. Its whole purpose is that the script reaches
+# this tool without passing through the model: ``code_sha256`` below exists to
+# detect a mangled transcription, and reading the file makes one impossible
+# instead of merely detectable.
+_META_KEY_SCRIPT_PATH = "motoro.ambient.script_path"
 
 
 class HeadNotReadyError(Exception):
     """Raised when the workspace or its HEAD version can't be resolved."""
+
+
+def _script_from_ctx(ctx: Context | None) -> str:
+    """The wired script's source, read off disk, or "" when there isn't one."""
+    if ctx is None:
+        return ""
+    try:
+        extra = getattr(ctx.request_context.meta, "model_extra", None) or {}
+    except Exception:  # noqa: BLE001 — no ambient meta available outside a request
+        return ""
+    path = extra.get(_META_KEY_SCRIPT_PATH)
+    if not isinstance(path, str) or not path:
+        return ""
+    try:
+        return Path(path).read_text()
+    except OSError:
+        return ""
 
 
 def _workspace_id_from_ctx(explicit: str, ctx: Context | None) -> str:
@@ -92,7 +115,7 @@ def _read_head(
 
 @mcp.tool()
 def run_model_script(
-    code: str,
+    code: str = "",
     random_seed: int = 42,
     task_type: str = "binary",
     positive_label: str = "",
@@ -119,6 +142,11 @@ def run_model_script(
 
     Args:
         code: Python source. Must define predict_proba(X); (binary) chosen_threshold.
+            OPTIONAL, and best omitted: when a Script is wired into the step, its
+            source is read straight off disk from ambient run context. Omitting
+            this is not a shortcut -- it is what guarantees the script executes
+            byte-for-byte as written, since nothing retypes it. Pass this only to
+            run a script that isn't the wired one.
         random_seed: Seed exposed to the code and used for permutation importance.
         task_type: 'binary' or 'multiclass'.
         positive_label: binary positive-class label (coerced to y's dtype).
@@ -129,6 +157,13 @@ def run_model_script(
         workspace_id: Cell workspace id; when omitted, resolved from ambient _meta.
             The matrices are read from the accepted HEAD version on disk.
     """
+    # Explicit argument wins (an agent may have a genuine one-off), but the
+    # wired script is the normal source -- see _script_from_ctx.
+    code = code.strip() or _script_from_ctx(ctx)
+    if not code:
+        return json.dumps(
+            {"error": "no script to run: none passed as `code`, and no script is wired into this step."}
+        )
     code_sha256 = hashlib.sha256(code.encode("utf-8")).hexdigest()
 
     hp: dict[str, Any] | None = None

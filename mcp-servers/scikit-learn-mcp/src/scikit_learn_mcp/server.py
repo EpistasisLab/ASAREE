@@ -42,6 +42,7 @@ import hashlib
 import io
 import json
 import traceback
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -1367,9 +1368,16 @@ def _score_script(
 
 @mcp.tool()
 def run_script(
-    code: str,
+    # data_path/target_column lead because they are the only two genuinely
+    # required arguments: `code` became optional when `code_path` joined it
+    # (exactly one is needed, which no signature can express), and Python
+    # forbids a required parameter after an optional one. MCP calls arrive as a
+    # JSON object, so the order is invisible on the wire -- only the
+    # required/optional split it encodes is.
     data_path: str,
     target_column: str,
+    code: str = "",
+    code_path: str = "",
     task_type: str = "binary",
     positive_label: str = "",
     test_size: float = 0.2,
@@ -1414,9 +1422,13 @@ def run_script(
     test metrics).
 
     Args:
-        code: Python source defining predict_proba(X) or predict(X) as above.
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
         target_column: Column to predict; every other column is a feature.
+        code: Python source defining predict_proba(X) or predict(X) as above.
+            Pass this OR ``code_path``, not both.
+        code_path: A file to read the source from instead. Prefer this whenever
+            the script already exists as a file: what runs is then byte-for-byte
+            what is on disk, with nothing retyping it in between.
         task_type: 'binary', 'multiclass', or 'regression'.
         positive_label: Binary positive-class label; defaults to the highest class.
         test_size: Held-out fraction, strictly between 0 and 1.
@@ -1430,6 +1442,16 @@ def run_script(
     from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
     from sklearn.pipeline import Pipeline, make_pipeline
     from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+    if code.strip() and code_path.strip():
+        return json.dumps({"error": "pass `code` or `code_path`, not both."})
+    if code_path.strip():
+        try:
+            code = Path(code_path).read_text()
+        except OSError as e:
+            return json.dumps({"error": f"could not read code_path {code_path!r}: {e}"})
+    if not code.strip():
+        return json.dumps({"error": "no script: pass `code` or `code_path`."})
 
     return _run_script(
         code=code,

@@ -30,6 +30,7 @@ from .context import (
 )
 from .workspace import (
     SEED_VERSION,
+    WORKSPACE_ROOT,
     STAGE_VERSION,
     STAGES,
     Workspace,
@@ -56,6 +57,7 @@ __all__ = [
     "resolve_workspace_id_from_ctx",
     "workspace_id_from_meta",
     "SEED_VERSION",
+    "WORKSPACE_ROOT",
     "STAGE_VERSION",
     "STAGES",
     "Workspace",

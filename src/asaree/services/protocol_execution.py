@@ -23,8 +23,10 @@ import copy
 import logging
 import re
 import uuid
+from pathlib import Path
 from typing import Any
 
+from asaree_workspace_core import WORKSPACE_ROOT
 from motoro.mcp.registry import get_registry
 from motoro.models.run import RunStatus
 from motoro.runner import create_agent, create_run, execute_run, get_agent_by_name, get_run, update_agent
@@ -802,7 +804,41 @@ def _compute_workspace_id(
     return f"{experiment_id}/{_effective_cell_label(cell_label, protocol_run_id)}"
 
 
-def _ambient_meta_for(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+def _materialize_script(workspace_id: str | None, node_id: str, code: str) -> str:
+    """Write a wired Script node's code next to the run's workspace; return its path.
+
+    ``""`` when there's nowhere to put it -- no workspace id (an unlinked
+    protocol run) or the write failed. The caller falls back to inlining the
+    code in the prompt, which is what this replaces.
+
+    The file lives under the run's own workspace directory because that
+    directory is already the shared surface between this process and the MCP
+    subprocesses: no new mount, no new configuration, and it is cleaned up with
+    the workspace it belongs to. Rewritten on every run rather than reused --
+    the graph is the source of truth, and an edited Script node must not leave
+    a stale copy behind for a rerun to execute.
+    """
+    if not workspace_id:
+        return ""
+    safe_node = _UNSAFE_WORKSPACE_LABEL_CHAR.sub("_", node_id)
+    try:
+        root = Path(WORKSPACE_ROOT).resolve()
+        directory = (root / workspace_id / "scripts").resolve()
+        if root not in directory.parents:  # workspace_id is already sanitized; belt and braces
+            return ""
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{safe_node}.py"
+        # Atomic: a tool reading this concurrently must never see a half-write.
+        tmp = directory / f"{safe_node}.py.tmp"
+        tmp.write_text(code)
+        tmp.replace(path)
+    except OSError:
+        logger.warning("script_materialize_failed", extra={"workspace_id": workspace_id, "node_id": node_id})
+        return ""
+    return str(path)
+
+
+def _ambient_meta_for(graph: dict[str, Any], node_id: str, workspace_id: str | None = None) -> dict[str, Any]:
     """The node's Reference-route values, for Motoro's caller-ambient ``_meta``.
 
     Motoro lifts ``run_metadata["ambient_meta"]`` onto every MCP tool call as
@@ -810,17 +846,34 @@ def _ambient_meta_for(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     own half of the channel ``workspace_id`` already uses -- the model never
     sees these and so can never mistype one.
 
-    Today that is the wired Dataset connectors' names, which is what lets
-    ``open_workspace`` be called with no arguments at all. Add to this rather
-    than to the prompt whenever a new connector contributes an *id* pointing at
-    data that lives elsewhere; a prompt is for content, not for references (the
-    three routes are written up in Motoro's ``engine/sense.py``).
+    Two keys today, both Reference-route (see the three routes at the top of
+    this module, and Motoro's ``engine/sense.py``):
+
+    * ``dataset_names`` -- the wired Dataset connectors' names, which is what
+      lets ``open_workspace`` be called with no arguments at all.
+    * ``script_path`` -- where the wired Script node's code was written. The
+      code used to be pasted into the prompt for the model to copy back out
+      into a tool argument; a script-running tool reads the file instead, so
+      what executes is byte-for-byte what the user wrote. ``run_model_script``
+      hashes its ``code`` for exactly this reason -- a hash detects a mangled
+      transcription after the fact, while a path removes the transcription.
+
+    Add to this rather than to the prompt whenever a new connector contributes
+    an id or a path pointing at something held elsewhere.
 
     ``{}`` when nothing is wired -- Motoro skips an absent/empty dict, so the
     wire call is unchanged for a node with no references.
     """
+    meta: dict[str, Any] = {}
     dataset_names = [str(c["dataset_name"]) for c in _resolve_dataset_configs(graph, node_id) if c.get("dataset_name")]
-    return {"dataset_names": dataset_names} if dataset_names else {}
+    if dataset_names:
+        meta["dataset_names"] = dataset_names
+    code = (_resolve_script_config(graph, node_id) or {}).get("code")
+    if code:
+        script_path = _materialize_script(workspace_id, node_id, str(code))
+        if script_path:
+            meta["script_path"] = script_path
+    return meta
 
 
 def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
@@ -1086,29 +1139,34 @@ def _build_user_input(
     *,
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
+    script_bound: bool = False,
 ) -> str:
     """The node's own prompt (falling back to its goal, then its canvas
     label), plus (flat, unstructured -- a deliberate V1 simplification) each
     already-completed upstream node's output_text as context, plus a Dataset
-    cue when this node has a Dataset connector wired, plus a Script block (the
-    wired Script node's own code, verbatim, for the agent to pass as some
-    tool's own code-shaped argument) when one is wired. `prompt` is the one
-    field meant to change per run (the per-invocation user message); `goal` is
-    a persistent objective, only used here as prompt's own fallback when the
-    user hasn't set one. Real structured handoff via output_contract.payload is
-    a fast-follow, the same way the source notebook's own stage-report-block
-    pattern could graduate to using it.
+    cue when this node has a Dataset connector wired, plus a Script cue when
+    one is wired. `prompt` is the one field meant to change per run (the
+    per-invocation user message); `goal` is a persistent objective, only used
+    here as prompt's own fallback when the user hasn't set one. Real structured
+    handoff via output_contract.payload is a fast-follow, the same way the
+    source notebook's own stage-report-block pattern could graduate to using
+    it.
 
-    On the Dataset block specifically: this used to dictate the exact
-    ``open_workspace(experiment_id=..., cell_label=..., name=...)`` call and
-    hope the model transcribed three ids correctly. It no longer does. All
-    three now reach the tool as ambient request ``_meta``
-    (``_ambient_meta_for``, plus the workspace_id ASAREE already bound), so
-    what stays here is only the part ``_meta`` genuinely cannot supply: the
-    *fact* that a dataset is waiting, and the name to disambiguate with when
-    more than one is wired. An id the model has to retype is an id it can get
-    wrong -- see the three routes in Motoro's ``engine/sense.py``: a dataset is
-    a Reference, and a Reference is bound, not narrated."""
+    Both the Dataset and the Script block used to be dictation: the exact
+    ``open_workspace(experiment_id=..., cell_label=..., name=...)`` call, and
+    the script's entire source pasted in for the model to copy back out into a
+    tool argument. Neither is now. Both are References, and a Reference is
+    bound into ambient request ``_meta``, not narrated (see the three routes at
+    the top of this module, and Motoro's ``engine/sense.py``) -- ``_meta`` is
+    out of the model's reach, so there is nothing to mistype. What stays here
+    is only what ``_meta`` genuinely cannot supply: the *fact* that a dataset
+    or a script is waiting, and the dataset name to disambiguate with when
+    more than one is wired.
+
+    *script_bound* says the wired script reached ``_meta`` as a path
+    (``_ambient_meta_for``). When it didn't -- an unlinked protocol run has no
+    workspace directory to write it to -- the code is inlined here as before,
+    because a prompt the model can copy from beats no script at all."""
     data: dict[str, Any] = node.get("data") or {}
     config: dict[str, Any] = data.get("config", {})
     seed: str = config.get("prompt") or config.get("goal") or data.get("label", "")
@@ -1159,7 +1217,19 @@ def _build_user_input(
 
     script_config = _resolve_script_config(graph, node["id"])
     script_code = script_config.get("code")
-    if script_code:
+    if script_code and script_bound:
+        parts.append(
+            "Script context:\n"
+            "A script is wired into this step. The script-running tool (e.g. run_model_script) picks "
+            "it up from ambient run context -- call it WITHOUT a `code` argument and it executes the "
+            "wired script exactly as written. Do not retype or paraphrase it."
+        )
+    elif script_code:
+        # No workspace directory to write it to (see _materialize_script), so
+        # fall back to what this did before: paste it and ask for a verbatim
+        # copy. Costs prompt tokens on every turn and is only as faithful as
+        # the model's transcription -- which is the whole reason the path
+        # above exists.
         parts.append(
             "Script to pass verbatim as the relevant tool's own code argument (e.g. run_model_script's "
             f"`code`):\n```python\n{script_code}\n```"
@@ -1238,6 +1308,7 @@ async def _run_agent_node(
     user_input: str,
     graph: dict[str, Any],
     workspace_id: str | None = None,
+    ambient_meta: dict[str, Any] | None = None,
 ) -> tuple[str | None, str | None, uuid.UUID | None]:
     """Create-or-sync the real agent and run it to completion. Returns
     ``(output_text, error, run_id)`` -- exactly one of output_text/error is
@@ -1333,7 +1404,20 @@ async def _run_agent_node(
             "protocol_run_id": str(protocol_run_id),
             "node_id": node["id"],
             **({"workspace_id": workspace_id} if workspace_id else {}),
-            **({"ambient_meta": ambient_meta} if (ambient_meta := _ambient_meta_for(graph, node["id"])) else {}),
+            # Precomputed by the caller when it also needed to know whether the
+            # script got bound (_build_user_input's script_bound); recomputed
+            # here only for a caller that didn't care.
+            **(
+                {"ambient_meta": resolved_ambient}
+                if (
+                    resolved_ambient := (
+                        ambient_meta
+                        if ambient_meta is not None
+                        else _ambient_meta_for(graph, node["id"], workspace_id)
+                    )
+                )
+                else {}
+            ),
         },
     )
     timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
@@ -1477,8 +1561,17 @@ async def _run_gated_worker(
     gate_config = gate["data"]["config"]
     max_revisions = max(int(gate_config.get("max_revisions") or 0), 0)
     enabled = bool(gate_config.get("enabled", True))
+    # Computed once for the whole revision loop: every attempt reruns the same
+    # worker against the same references, so re-materializing the script per
+    # attempt would only rewrite an identical file.
+    worker_ambient = _ambient_meta_for(graph, worker["id"], workspace_id)
     base_instruction = _build_user_input(
-        worker, graph, node_runs, experiment_id=experiment_id, effective_cell_label=effective_cell_label
+        worker,
+        graph,
+        node_runs,
+        experiment_id=experiment_id,
+        effective_cell_label=effective_cell_label,
+        script_bound="script_path" in worker_ambient,
     )
     instruction = base_instruction
     # Tracks the most recent critic verdict/run across attempts so the
@@ -1498,6 +1591,7 @@ async def _run_gated_worker(
             user_input=instruction,
             graph=graph,
             workspace_id=workspace_id,
+            ambient_meta=worker_ambient,
         )
         run_id_str = str(run_id) if run_id else None
         if error == _AGENT_CANCELLED:
@@ -1775,8 +1869,14 @@ async def _run_single_node(
     # synthetic per-run label (see _effective_cell_label).
     effective_cell_label = _effective_cell_label(None, protocol_run_id)
     workspace_id = _compute_workspace_id(experiment_id, None, protocol_run_id)
+    ambient_meta = _ambient_meta_for(graph, node["id"], workspace_id)
     user_input = _build_user_input(
-        node, graph, {}, experiment_id=experiment_id, effective_cell_label=effective_cell_label
+        node,
+        graph,
+        {},
+        experiment_id=experiment_id,
+        effective_cell_label=effective_cell_label,
+        script_bound="script_path" in ambient_meta,
     )
     output_text, error, run_id = await _run_agent_node(
         node,
@@ -1786,6 +1886,7 @@ async def _run_single_node(
         user_input=user_input,
         graph=graph,
         workspace_id=workspace_id,
+        ambient_meta=ambient_meta,
     )
     node_run = {
         "status": "failed" if error else "completed",
@@ -1951,8 +2052,14 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             # applies to a plain agent node.
             output_text, error, run_id = _upstream_output_text(graph, node_id, node_runs), None, None
         else:
+            ambient_meta = _ambient_meta_for(graph, node_id, workspace_id)
             user_input = _build_user_input(
-                node, graph, node_runs, experiment_id=experiment_id, effective_cell_label=effective_cell_label
+                node,
+                graph,
+                node_runs,
+                experiment_id=experiment_id,
+                effective_cell_label=effective_cell_label,
+                script_bound="script_path" in ambient_meta,
             )
             output_text, error, run_id = await _run_agent_node(
                 node,
@@ -1962,6 +2069,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 user_input=user_input,
                 graph=graph,
                 workspace_id=workspace_id,
+                ambient_meta=ambient_meta,
             )
 
         if error == _AGENT_CANCELLED:

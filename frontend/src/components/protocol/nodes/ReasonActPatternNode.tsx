@@ -18,7 +18,11 @@ import { CircleNode } from './CircleNode'
 // agent's own top connector.
 const ACCENT = nodeAccent('pattern_reason_act')
 
-export function ReasonActPatternNode({ id, data, selected }: NodeProps & { data: ReasonActPatternNodeData }) {
+export function ReasonActPatternNode({
+  id,
+  data,
+  selected,
+}: NodeProps & { data: ReasonActPatternNodeData & { hostHasNoTools?: boolean } }) {
   // An agent's execution pattern must never go to zero (see
   // ProtocolCanvas.tsx's nonDeletablePatternNodeIds), so once this is
   // actually wired into an agent, its hover toolbar offers Swap instead of
@@ -35,6 +39,12 @@ export function ReasonActPatternNode({ id, data, selected }: NodeProps & { data:
   const warnings: string[] = []
   if (data.config.max_iterations == null) warnings.push('Max iterations is required')
   if (data.config.include_scratchpad && data.config.scratchpad_window == null) warnings.push('Scratchpad window is required')
+  // Not a misconfiguration -- the run succeeds. It just doesn't LOOP: with
+  // nothing callable bound, motoro's reason_act ends on turn one (its own
+  // `implicit_final_answer` path), so the arm is a single LLM call wearing a
+  // ReAct label. Computed in ProtocolCanvas.tsx, since it depends on the
+  // AGENT's wiring rather than this node's own config.
+  if (data.hostHasNoTools) warnings.push('No tools, skills or knowledge on the agent -- the loop ends after one turn')
 
   return (
     <CircleNode

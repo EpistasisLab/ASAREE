@@ -178,6 +178,13 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
         const config = (node.data as ReasonActPatternNodeData).config
         if (config.max_iterations == null) issues.push('Max iterations is required')
         if (config.include_scratchpad && config.scratchpad_window == null) issues.push('Scratchpad window is required')
+        // The "no tools wired, so this loop won't loop" warning deliberately
+        // ISN'T repeated here -- it lives only where the canvas warning icon
+        // is computed (ProtocolCanvas.tsx's agentIdsWithCallableTools). Unlike
+        // everything else in this module it's not a misconfiguration: the run
+        // succeeds, it just takes one turn, so it doesn't need to interrupt a
+        // Run to be worth saying, and one implementation can't drift from a
+        // second one that doesn't exist.
         break
       }
       default:

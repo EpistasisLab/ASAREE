@@ -636,18 +636,67 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     [edges],
   )
 
+  // Which agents have anything the model can actually CALL -- feeds the ReAct
+  // pattern node's "this loop won't loop" warning icon below. That node's
+  // warning depends on its AGENT's wiring rather than its own config, so it
+  // can't be computed inside the node component the way its other warnings
+  // are; it's injected here alongside missingLlm instead.
+  //
+  // Mirrors the backend's three tool sources (services/protocol_execution.py):
+  // MCP nodes on the Tool connector (_resolve_tool_config), OKF bundles and
+  // documents on Knowledge (_resolve_knowledge_config -- a knowledge source is
+  // served by a real MCP server, so at run time it's just more tools), and
+  // Skill nodes, which the ReAct loop turns into a bound `load_skill` tool.
+  // Script nodes share the Tool connector but are NOT callable --
+  // _resolve_script_config folds their code into the prompt text -- so the
+  // source's own type is checked, not just the handle it lands on.
+  const agentIdsWithCallableTools = useMemo(() => {
+    const nodeTypeById = new Map(nodes.map((n) => [n.id, n.type]))
+    return new Set(
+      edges
+        .filter((e) => {
+          if (e.targetHandle === 'knowledge' || e.targetHandle === 'skill') return true
+          if (e.targetHandle !== 'tool') return false
+          const sourceType = nodeTypeById.get(e.source)
+          return sourceType === 'mcp_tool' || sourceType === 'mcp_scikit_learn' || sourceType === 'mcp_client_tool'
+        })
+        .map((e) => e.target),
+    )
+  }, [nodes, edges])
+  const patternHostIds = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const e of edges) {
+      if (e.targetHandle === 'architectural_pattern') map.set(e.source, e.target)
+    }
+    return map
+  }, [edges])
+
   const nodesWithRunStatus = useMemo((): Node[] => {
-    return nodes.map((n) => ({
-      ...n,
-      deletable: !nonDeletablePatternNodeIds.has(n.id),
-      data: {
-        ...n.data,
-        runStatus: runQuery.data?.node_runs[n.id]?.status,
-        missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
-        canRunAlone: n.type === 'agent' && !agentIdsWithUpstream.has(n.id),
-      },
-    }))
-  }, [nodes, runQuery.data, nonDeletablePatternNodeIds, agentIdsWithLlm, agentIdsWithUpstream])
+    return nodes.map((n) => {
+      const patternHostId = patternHostIds.get(n.id)
+      return {
+        ...n,
+        deletable: !nonDeletablePatternNodeIds.has(n.id),
+        data: {
+          ...n.data,
+          runStatus: runQuery.data?.node_runs[n.id]?.status,
+          missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
+          canRunAlone: n.type === 'agent' && !agentIdsWithUpstream.has(n.id),
+          // Only meaningful once the pattern is actually wired to an agent --
+          // an orphaned pattern node has no loop to warn about.
+          hostHasNoTools: !!patternHostId && !agentIdsWithCallableTools.has(patternHostId),
+        },
+      }
+    })
+  }, [
+    nodes,
+    runQuery.data,
+    nonDeletablePatternNodeIds,
+    agentIdsWithLlm,
+    agentIdsWithUpstream,
+    agentIdsWithCallableTools,
+    patternHostIds,
+  ])
 
   // Same protection, one layer up -- the architectural_pattern EDGE itself
   // must not be removable on its own (InteractEdge never renders a hover

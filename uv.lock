@@ -3293,7 +3293,6 @@ dependencies = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "scikit-learn" },
-    { name = "xgboost" },
 ]
 
 [package.metadata]
@@ -3303,7 +3302,6 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.0" },
     { name = "pyarrow", specifier = ">=15.0" },
     { name = "scikit-learn", specifier = ">=1.4" },
-    { name = "xgboost", specifier = ">=2.0" },
 ]
 
 [[package]]

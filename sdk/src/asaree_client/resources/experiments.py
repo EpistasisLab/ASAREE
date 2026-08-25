@@ -34,6 +34,7 @@ class Experiments:
         design_type: str = "factorial",
         task_brief: dict[str, Any] | None = None,
         factors: builtins.list[dict[str, Any]] | None = None,
+        dataset_ids: builtins.list[ResourceId] | None = None,
     ) -> Experiment:
         payload: dict[str, Any] = {"name": name, "design_type": design_type}
         if description is not None:
@@ -42,6 +43,8 @@ class Experiments:
             payload["task_brief"] = task_brief
         if factors is not None:
             payload["factors"] = factors
+        if dataset_ids is not None:
+            payload["dataset_ids"] = [str(d) for d in dataset_ids]
         data = self._client._post("/experiments", json=payload)
         return Experiment(**data)
 
@@ -63,13 +66,16 @@ class Experiments:
         name: str | None = _UNSET,
         description: str | None = _UNSET,
         hypothesis: str | None = _UNSET,
+        dataset_ids: builtins.list[ResourceId] | None = _UNSET,
         dataset_id: ResourceId | None = _UNSET,
         design_spec: dict[str, Any] | None = _UNSET,
         archived_at: datetime | None = _UNSET,
     ) -> Experiment:
         """Only the fields actually passed are sent (omit one to leave it
         unchanged; pass ``None`` explicitly to clear/detach it) --
-        ``dataset_id=None`` attaches nothing / detaches, same as before;
+        ``dataset_ids`` replaces the whole attached list (``[]`` detaches
+        everything) and ``dataset_id`` is the one-dataset shorthand, with
+        ``dataset_id=None`` attaching nothing / detaching, same as before;
         ``name``/``description``/``hypothesis`` are for editing an
         experiment's own identity/write-up straight from the SDK (matching
         the GUI's Rename/Edit description/Design-tab hypothesis fields).
@@ -89,6 +95,8 @@ class Experiments:
             payload["description"] = description
         if hypothesis is not _UNSET:
             payload["hypothesis"] = hypothesis
+        if dataset_ids is not _UNSET:
+            payload["dataset_ids"] = [str(d) for d in dataset_ids] if dataset_ids else []
         if dataset_id is not _UNSET:
             payload["dataset_id"] = str(dataset_id) if dataset_id else None
         if design_spec is not _UNSET:

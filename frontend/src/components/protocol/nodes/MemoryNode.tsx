@@ -1,6 +1,6 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { BrainCircuit } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { MemoryNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
@@ -13,7 +13,7 @@ import { CircleNode } from './CircleNode'
 // toolbar treatment as every other connector despite having no backend
 // effect yet -- consistent canvas behavior for the field today, ready to
 // mean something the moment Memory execution actually lands.
-const ACCENT = hashToChartHue('memory')
+const ACCENT = nodeAccent('memory')
 
 export function MemoryNode({ id, data, selected }: NodeProps & { data: MemoryNodeData }) {
   const { updateNodeData } = useReactFlow()

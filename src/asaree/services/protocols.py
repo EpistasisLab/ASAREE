@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Sequence
 from typing import Any
@@ -13,6 +14,63 @@ from asaree.models.protocol import Protocol
 
 _DEFAULT_GRAPH: dict[str, Any] = {"nodes": [], "edges": []}
 _SETTABLE_FIELDS = frozenset({"name", "description", "experiment_id", "graph"})
+
+
+def generated_protocol_name(experiment_name: str, experiment_id: uuid.UUID | str) -> str:
+    """The name the canvas auto-assigns a protocol it creates for an experiment.
+
+    The ``[shortid]`` suffix is not decoration: protocol names are unique per
+    owner (uq_protocols_owner_name), and two experiments sharing a name is the
+    normal case (every new one starts life as "Untitled Experiment"), so
+    without it the create would 409 forever. The experiment id is unique by
+    construction, so suffixing it makes the name collision-proof.
+
+    The frontend builds the same string when it creates the protocol (see
+    ProtocolCanvasPage.tsx's protocolQuery); this is the canonical definition
+    the rename sync below matches against.
+    """
+    return f"Protocol: {experiment_name} [{str(experiment_id)[:8]}]"
+
+
+def _is_generated_protocol_name(name: str, experiment_id: uuid.UUID | str) -> bool:
+    """Whether *name* is still the auto-generated one for this experiment.
+
+    Matched by shape (``Protocol: <anything> [<this experiment's shortid>]``)
+    rather than by comparing against the experiment's previous name: a
+    protocol created before some earlier rename carries a name we no longer
+    have on hand, and it should still be re-synced. A name that doesn't fit
+    the shape is one a user deliberately typed, so it is left alone.
+    """
+    return re.fullmatch(rf"Protocol: .*\[{re.escape(str(experiment_id)[:8])}\]", name or "") is not None
+
+
+async def sync_protocol_names_to_experiment(
+    db: AsyncSession, *, experiment_id: uuid.UUID, experiment_name: str, owner_id: uuid.UUID
+) -> list[Protocol]:
+    """Re-point an experiment's auto-named protocols at its current name.
+
+    Called on rename so the canvas, the export payload, and the download
+    filename don't keep showing the name the experiment had when its protocol
+    was first created. Protocols a user renamed by hand are skipped, as is any
+    protocol whose target name is already taken by a *different* protocol of
+    the same owner (two protocols on one experiment would otherwise both want
+    the same string and trip uq_protocols_owner_name).
+
+    Returns the protocols actually renamed.
+    """
+    target = generated_protocol_name(experiment_name, experiment_id)
+    renamed: list[Protocol] = []
+    for protocol in await list_protocols(db, owner_id=owner_id, experiment_id=experiment_id):
+        if protocol.name == target or not _is_generated_protocol_name(protocol.name, experiment_id):
+            continue
+        clash = await get_protocol_by_name(db, target, owner_id=owner_id)
+        if clash is not None and clash.id != protocol.id:
+            continue
+        protocol.name = target
+        renamed.append(protocol)
+    if renamed:
+        await db.flush()
+    return renamed
 
 
 async def create_protocol(

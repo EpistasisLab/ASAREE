@@ -1,7 +1,18 @@
 import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import type { LLMSettingModelsResponse } from '@/types/llmSettings'
-import type { DatasetNodeData, LlmNodeData, McpToolNodeData, ReasonActPatternNodeData, ScriptNodeData } from '@/types/protocols'
+import type { OkfBundle, OkfDocument } from '@/types/okf'
+import type { Skill } from '@/types/skills'
+import type {
+  DatasetNodeData,
+  LlmNodeData,
+  McpToolNodeData,
+  ReasonActPatternNodeData,
+  ScriptNodeData,
+  OkfBundleNodeData,
+  OkfDocumentNodeData,
+  SkillNodeData,
+} from '@/types/protocols'
 import { PROVIDER_META } from './nodes/LlmNode'
 import { providerModelsKey } from './useProviderModels'
 
@@ -12,7 +23,7 @@ export interface NodeConfigIssue {
 }
 
 // A pre-flight scan run right before a real Run fires, so an obviously
-// misconfigured node (no model, no dataset picked, no script code, an
+// misconfigured node (no model, no dataset or skill picked, no script code, an
 // agent with nothing wired into its required LLM connector) surfaces as an
 // upfront "run anyway?" confirmation instead of only ever showing up as a
 // generic "one or more nodes failed" AFTER a real (billable) run attempt.
@@ -31,7 +42,7 @@ export interface NodeConfigIssue {
 // (that query never ran, or hasn't resolved yet) just means "can't tell,"
 // same as LlmNode.tsx's own empty-list case -- not treated as an issue.
 export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: QueryClient): NodeConfigIssue[] {
-  const agentIdsWithLlm = new Set(edges.filter((e) => e.targetHandle === 'llm').map((e) => e.target))
+  const agentIdsWithLlm = new Set(edges.filter((e) => e.targetHandle === 'ai').map((e) => e.target))
   const result: NodeConfigIssue[] = []
 
   for (const node of nodes) {
@@ -41,7 +52,7 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
 
     switch (node.type) {
       case 'agent':
-        if (!agentIdsWithLlm.has(node.id)) issues.push('No LLM connected')
+        if (!agentIdsWithLlm.has(node.id)) issues.push('No AI connected')
         break
       case 'llm_anthropic':
       case 'llm_openai':
@@ -77,14 +88,85 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
         }
         break
       }
-      case 'mcp_tool': {
+      case 'mcp_tool':
+      case 'mcp_scikit_learn':
+      case 'mcp_client_tool': {
         const config = (node.data as McpToolNodeData).config
-        if (!((config?.tool_names?.length ?? 0) > 0)) issues.push('Not configured -- pick a server and at least one tool')
+        // Same wording as McpToolNode's own badge -- an MCP node's server is
+        // fixed at creation, so the allow-list is the only thing to fix.
+        // Skipped once the allow-list is a factor: the node's own tool_names
+        // is then just a base value every cell overrides, and an empty
+        // allow-list is a legitimate level ("this server withheld here"), so
+        // flagging it would block a Run that's correctly configured.
+        const allowListIsFactor = !!(node.data as { factor_bindings?: Record<string, string> })?.factor_bindings?.[
+          'config.tool_names'
+        ]
+        if (!allowListIsFactor && !((config?.tool_names?.length ?? 0) > 0)) {
+          issues.push('Not configured -- allow at least one tool')
+        }
         break
       }
       case 'dataset': {
         const config = (node.data as DatasetNodeData).config
         if (!config?.dataset_id) issues.push('No dataset selected')
+        break
+      }
+      case 'skill': {
+        const config = (node.data as SkillNodeData).config
+        // Same wording as SkillNode's own badge.
+        if (!config?.skill_id) {
+          issues.push('No skill selected')
+        } else {
+          // A set id can still resolve to nothing -- a skill deleted from the
+          // library, or a graph imported from another account, both leave the
+          // id (and its cached skill_name) behind. Cache-only, same contract
+          // as the model check above: a miss means "can't tell," not an issue.
+          const cached = queryClient.getQueryData<Skill[]>(['skills'])
+          if (cached && !cached.some((s) => s.id === config.skill_id)) {
+            issues.push(`Skill no longer exists${config.skill_name ? ` ("${config.skill_name}")` : ''}`)
+          }
+        }
+        break
+      }
+      case 'okf_bundle': {
+        const config = (node.data as OkfBundleNodeData).config
+        // Same wording as OkfBundleNode's own badge. server_name, not
+        // bundle_id, is what a run keys off -- a node without it contributes
+        // nothing even if it still remembers which row it came from.
+        if (!config?.server_name) {
+          issues.push('No bundle selected')
+        } else if ((config.tool_names?.length ?? 0) === 0) {
+          // Registered, but its MCP server never reported any tools -- almost
+          // always a server that failed to spawn. The agent would get nothing
+          // from the bundle, silently, so it's worth flagging up front.
+          issues.push('No tools discovered -- the bundle server may have failed to start')
+        } else {
+          // A set id can still resolve to nothing -- deregistered, or a graph
+          // imported from another account. Cache-only, same contract as the
+          // skill check above: a miss means "can't tell," not an issue.
+          const cached = queryClient.getQueryData<OkfBundle[]>(['okf-bundles'])
+          if (cached && !cached.some((b) => b.id === config.bundle_id)) {
+            issues.push(`OKF bundle is no longer registered${config.bundle_path ? ` ("${config.bundle_path}")` : ''}`)
+          }
+        }
+        break
+      }
+      case 'okf_document': {
+        const config = (node.data as OkfDocumentNodeData).config
+        // The bundle case's checks, against the document registry -- same
+        // wording as OkfDocumentNode's own badge.
+        if (!config?.server_name) {
+          issues.push('No document selected')
+        } else if ((config.tool_names?.length ?? 0) === 0) {
+          issues.push('No tools discovered -- the document server may have failed to start')
+        } else {
+          const cached = queryClient.getQueryData<OkfDocument[]>(['okf-documents'])
+          if (cached && !cached.some((d) => d.id === config.document_id)) {
+            issues.push(
+              `OKF document is no longer stored${config.document_title ? ` ("${config.document_title}")` : ''}`,
+            )
+          }
+        }
         break
       }
       case 'script': {
@@ -96,6 +178,13 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
         const config = (node.data as ReasonActPatternNodeData).config
         if (config.max_iterations == null) issues.push('Max iterations is required')
         if (config.include_scratchpad && config.scratchpad_window == null) issues.push('Scratchpad window is required')
+        // The "no tools wired, so this loop won't loop" warning deliberately
+        // ISN'T repeated here -- it lives only where the canvas warning icon
+        // is computed (ProtocolCanvas.tsx's agentIdsWithCallableTools). Unlike
+        // everything else in this module it's not a misconfiguration: the run
+        // succeeds, it just takes one turn, so it doesn't need to interrupt a
+        // Run to be worth saying, and one implementation can't drift from a
+        // second one that doesn't exist.
         break
       }
       default:

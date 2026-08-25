@@ -1,13 +1,17 @@
 import { useState } from 'react'
-import { ArrowRight, Atom, Bot, BrainCircuit, Cloud, Code2, Database, HardDrive, Repeat2, Route, ShieldCheck, Sparkles, Wrench, X } from 'lucide-react'
+import { ArrowRight, Atom, BookMarked, Bot, BrainCircuit, Cloud, Code2, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { DATASET_BROWSE } from './datasetCatalog'
+import { MCP_SERVER_BROWSE } from './mcpServerCatalog'
+import { OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE } from './okfCatalog'
+import { SKILL_BROWSE } from './skillCatalog'
 
 // Every entry here earns its place: GET /api/mcp-servers already backs the
 // tool picker, GET /datasets already backs the dataset picker,
 // services.protocol_execution._run_gated_worker already implements the
 // critic gate's revision loop, and _resolve_llm_config/_resolve_tool_config/
-// _resolve_dataset_config/_resolve_script_config already resolve an agent's
+// _resolve_dataset_configs/_resolve_script_config already resolve an agent's
 // respective connectors. "memory" and the two pattern entries are the
 // exceptions -- each is real in the graph/validation sense (wiring one up is
 // accepted and does something visually) but has NO runtime effect yet,
@@ -19,7 +23,20 @@ import { Input } from '@/components/ui/input'
 // allowedTypes, IS that picker.
 const NODE_CATALOG = [
   { type: 'agent', label: 'Agent', description: 'An LLM agent stage in the pipeline', icon: Bot },
-  { type: 'mcp_tool', label: 'MCP Tool', description: "Allow-list a subset of a registered MCP server's tools for an Agent", icon: Wrench },
+  // Not a node type -- picking this opens the server browser
+  // (McpServerBrowserPanel), and the node gets created from whichever
+  // server is chosen there. It replaced a plain "MCP Tool" entry that made
+  // a blank node whose server you then had to find in a dropdown: the
+  // server IS the choice, so it belongs in this catalog, not two clicks
+  // deeper. Generic `mcp_tool` nodes are still created (for any server with
+  // no dedicated type of its own) and still open their old inspector, so
+  // nothing already on a canvas changes.
+  {
+    type: MCP_SERVER_BROWSE,
+    label: 'MCP Servers',
+    description: "Browse available MCP servers and allow-list their tools for an Agent",
+    icon: Server,
+  },
   {
     type: 'critic_gate',
     label: 'Critic Gate',
@@ -64,11 +81,47 @@ const NODE_CATALOG = [
     description: 'Not yet functional -- declares intent for a future phase',
     icon: BrainCircuit,
   },
+  // Not a node type either -- picking this opens the dataset browser
+  // (DatasetBrowserPanel), same reasoning as MCP Servers above and Skills
+  // below: the
+  // dataset IS the choice, and that browser is the only place the library is
+  // listed, so it's where registering and deleting live too. As with Skill,
+  // there's no picker in the node's inspector -- the dataset IS the node.
   {
-    type: 'dataset',
-    label: 'Dataset',
-    description: "Declares which registered dataset an Agent's workspace tools operate on",
+    type: DATASET_BROWSE,
+    label: 'Datasets',
+    description: "Browse your registered datasets -- the data an Agent's workspace tools operate on",
     icon: Database,
+  },
+  // Not a node type either -- picking this opens the skill browser
+  // (SkillBrowserPanel), same reasoning as MCP Servers above: the skill IS
+  // the choice, so it belongs in this catalog rather than two clicks deeper
+  // in a blank node's inspector. That browser is also the only view of the
+  // whole skill library, so it's where registering and deleting live.
+  {
+    type: SKILL_BROWSE,
+    label: 'Skills',
+    description: 'Browse your Agent Skills -- instructions an Agent opens when their description matches the task',
+    icon: ScrollText,
+  },
+  // Not a node type either -- picking this opens the OKF bundle browser
+  // (OkfBundleBrowserPanel), same reasoning as MCP Servers and Skills above.
+  // That browser is also the only place bundles are uploaded.
+  {
+    type: OKF_BUNDLE_BROWSE,
+    label: 'OKF Bundles',
+    description: 'Upload a folder of Markdown concepts an Agent reads and writes as it works',
+    icon: BookMarked,
+  },
+  // The Knowledge connector's other half, and a separate entry rather than a
+  // mode of the one above because the unit differs, not the source: both
+  // upload from the user's own machine, but a bundle is a whole folder of
+  // concepts and a document is a single one -- exactly like Skills.
+  {
+    type: OKF_DOCUMENT_BROWSE,
+    label: 'OKF Documents',
+    description: 'Upload a single Markdown concept an Agent reads and rewrites as it works',
+    icon: FileText,
   },
   {
     type: 'script',

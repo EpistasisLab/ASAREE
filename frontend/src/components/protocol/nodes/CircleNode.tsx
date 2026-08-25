@@ -66,11 +66,12 @@ export function CircleNode({
   swap?: { label: string; onSwap: () => void }
   // Which edge of the circle the connector handle sits on -- 'top' (default)
   // for every source node positioned BELOW its target agent (LLM/Memory/
-  // Tool/Dataset/Script), so the edge exits upward into the agent's own
-  // bottom row. Architectural Pattern nodes are positioned ABOVE their
-  // agent instead (see agentDefaultPattern in ProtocolCanvas.tsx) and use
-  // 'bottom' here, so the edge runs straight down into the agent's own top
-  // connector rather than looping around.
+  // Tool/Script), so the edge exits upward into the agent's own bottom row.
+  // Architectural Pattern and Dataset nodes are positioned ABOVE their
+  // agent instead (their connectors live on the agent's top edge -- see
+  // agentDefaultPattern and addNode's TOP_EDGE_SLOTS in ProtocolCanvas.tsx)
+  // and use 'bottom' here, so the edge runs straight down into the agent's
+  // own top connector rather than looping around.
   handlePosition?: 'top' | 'bottom'
 }) {
   return (

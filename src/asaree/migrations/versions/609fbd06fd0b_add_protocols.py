@@ -33,14 +33,15 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(['owner_id'], ['users.id'], ondelete='RESTRICT'),
         sa.ForeignKeyConstraint(['experiment_id'], ['research_experiments.id'], ondelete='SET NULL'),
         sa.PrimaryKeyConstraint('id'),
+        if_not_exists=True,
     )
-    op.create_index(op.f('ix_protocols_owner_id'), 'protocols', ['owner_id'], unique=False)
-    op.create_index(op.f('ix_protocols_experiment_id'), 'protocols', ['experiment_id'], unique=False)
-    op.create_index('uq_protocols_owner_name', 'protocols', ['owner_id', 'name'], unique=True)
+    op.create_index(op.f('ix_protocols_owner_id'), 'protocols', ['owner_id'], unique=False, if_not_exists=True)
+    op.create_index(op.f('ix_protocols_experiment_id'), 'protocols', ['experiment_id'], unique=False, if_not_exists=True)
+    op.create_index('uq_protocols_owner_name', 'protocols', ['owner_id', 'name'], unique=True, if_not_exists=True)
 
 
 def downgrade() -> None:
-    op.drop_index('uq_protocols_owner_name', table_name='protocols')
-    op.drop_index(op.f('ix_protocols_experiment_id'), table_name='protocols')
-    op.drop_index(op.f('ix_protocols_owner_id'), table_name='protocols')
-    op.drop_table('protocols')
+    op.drop_index('uq_protocols_owner_name', table_name='protocols', if_exists=True)
+    op.drop_index(op.f('ix_protocols_experiment_id'), table_name='protocols', if_exists=True)
+    op.drop_index(op.f('ix_protocols_owner_id'), table_name='protocols', if_exists=True)
+    op.drop_table('protocols', if_exists=True)

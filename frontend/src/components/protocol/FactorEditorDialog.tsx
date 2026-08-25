@@ -9,9 +9,9 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { mcpServersApi } from '@/api/client'
+import { datasetsApi, mcpServersApi } from '@/api/client'
 import { cardAccent, cn, hashToChartHue, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
-import { pickToolNamesForServer, type UnboundField } from './bindableFields'
+import { pickToolNamesForServer, selectableMcpServers, type UnboundField } from './bindableFields'
 import { useProviderModels } from './useProviderModels'
 import {
   computeFactorName,
@@ -30,7 +30,18 @@ import { PROVIDER_META } from './nodes/LlmNode'
 import { PythonCodeEditor } from './PythonCodeEditor'
 import type { DesignFactor } from '@/types/experiments'
 
-const LEVEL_TYPES: LevelType[] = ['string', 'text', 'number', 'boolean', 'llm_config', 'tool_config', 'pattern', 'script_config']
+const LEVEL_TYPES: LevelType[] = [
+  'string',
+  'text',
+  'number',
+  'boolean',
+  'llm_config',
+  'tool_config',
+  'pattern',
+  'script_config',
+  'dataset_config',
+  'tool_names',
+]
 const EFFORT_LEVELS_FALLBACK = ['low', 'medium', 'high', 'xhigh', 'max']
 const PATTERN_OPTIONS = [
   { slug: 'reason_act', label: 'Reason + Act' },
@@ -131,9 +142,21 @@ function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChan
 // own Server/Tools-allowed fields; a level here is a whole mcp_tool node's
 // config (protocol_execution.py's _resolve_tool_config reads each wired
 // node's own config fresh).
-function ToolConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+function ToolConfigLevelRow({
+  value,
+  revealHiddenServers,
+  onChange,
+}: {
+  value: StructuredLevel
+  revealHiddenServers?: boolean
+  onChange: (next: StructuredLevel) => void
+}) {
   const serversQuery = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list() })
-  const servers = serversQuery.data ?? []
+  const servers = selectableMcpServers(
+    serversQuery.data ?? [],
+    value.server_id as string | undefined,
+    revealHiddenServers,
+  )
   const selectedServer = servers.find((s) => s.id === value.server_id)
   const tools = selectedServer?.capabilities?.tools ?? []
   const selectedTools = (value.tool_names as string[] | undefined) ?? []
@@ -292,6 +315,185 @@ function ScriptConfigLevelRow({ value, onChange }: { value: StructuredLevel; onC
   )
 }
 
+// One row of a "dataset_config" factor's levels -- a whole Dataset node
+// config, so each level is one registered dataset this experiment runs
+// against (protocol_execution.py's _resolve_dataset_configs reads the wired
+// node's own, already factor-patched, config verbatim and seeds the cell's
+// workspace from `dataset_name`).
+//
+// This is the one structured row that does NOT mirror its inspector's own
+// controls: DatasetNodeInspector deliberately has no "which dataset" picker
+// at all (the dataset IS the node, chosen from the canvas's Datasets
+// browser). A factor's levels have no node to be, so the picker has to live
+// here -- it's the only place in the app where "which dataset" is a choice
+// rather than an identity. Deliberately narrow: name, target column and
+// split state are the three things that decide whether two datasets are
+// comparable, and the full read-out stays in the inspector for the node's
+// own base level.
+function DatasetConfigLevelRow({
+  value,
+  onChange,
+  usedElsewhere,
+}: {
+  value: StructuredLevel
+  onChange: (next: StructuredLevel) => void
+  // Dataset ids already picked by this factor's OTHER levels -- greyed out
+  // rather than removed, same convention as FactorBindableField's own
+  // levelOptions Select: two levels naming one dataset wouldn't vary
+  // anything between their cells, but hiding the option would leave no clue
+  // why it's gone.
+  usedElsewhere: Set<string>
+}) {
+  const datasetsQuery = useQuery({ queryKey: ['datasets'], queryFn: () => datasetsApi.list() })
+  const datasets = datasetsQuery.data ?? []
+  const selected = datasets.find((d) => d.id === value.dataset_id)
+
+  return (
+    <div className="space-y-2 rounded-lg border p-2">
+      <div className="space-y-1">
+        <Label className="text-xs">Dataset</Label>
+        <Select
+          value={(value.dataset_id as string) || '__none__'}
+          onValueChange={(v) => {
+            if (!v || v === '__none__') return
+            const dataset = datasets.find((d) => d.id === v)
+            // id AND name together -- the executor resolves by name, the
+            // canvas's dataset_ids sync by id (see factorLevels.ts's
+            // emptyStructuredLevel). Writing one without the other would
+            // leave one of the two silently broken.
+            onChange({ ...value, dataset_id: v, dataset_name: dataset?.name ?? null })
+          }}
+        >
+          <SelectTrigger className="h-8 w-full">
+            <SelectValue>
+              {() => selected?.name ?? (value.dataset_name as string) ?? 'Select a dataset…'}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__" disabled>
+              {datasetsQuery.isLoading ? 'Loading…' : datasets.length === 0 ? 'No registered datasets' : 'Select a dataset…'}
+            </SelectItem>
+            {datasets.map((d) => (
+              <SelectItem key={d.id} value={d.id} disabled={d.id !== value.dataset_id && usedElsewhere.has(d.id)}>
+                {d.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {selected ? (
+        <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs">
+          <Badge variant="outline">Target: {selected.target_column ?? '—'}</Badge>
+          {/* A dataset with no train_path has never been split, and a cell
+              can't open a workspace on it -- worth catching here rather
+              than at Run time, when it costs a real attempt. */}
+          <Badge variant="outline" className={selected.train_path ? undefined : 'text-destructive'}>
+            {selected.train_path ? 'Split' : 'Not split yet'}
+          </Badge>
+        </div>
+      ) : value.dataset_name ? (
+        <p className="text-xs text-muted-foreground">
+          This level names <span className="font-mono">{String(value.dataset_name)}</span>, which is not in your
+          library — pick a replacement.
+        </p>
+      ) : null}
+      <div className="flex items-center justify-between rounded-md border px-2 py-1.5">
+        <Label className="text-xs">Enabled</Label>
+        <Switch
+          size="sm"
+          checked={(value.enabled as boolean | undefined) ?? true}
+          onCheckedChange={(enabled) => onChange({ ...value, enabled })}
+        />
+      </div>
+    </div>
+  )
+}
+
+// One row of a "tool_names" factor's levels -- an allow-list of BARE tool
+// names for one MCP node, i.e. exactly what McpToolNodeInspector's own "Tools
+// allowed" toggle list writes into config.tool_names (protocol_execution.py's
+// _resolve_tool_config namespaces them against the node's own server_name at
+// run time, so the level never carries the server).
+//
+// Which server's tools to offer therefore can't come from the level value --
+// it's threaded in from the node that binds this factor (see bindableFields.ts's
+// toolFactorServerId). When that can't be resolved (the node was deleted, or
+// the factor arrived with an imported design_spec) the level falls back to
+// listing its stored names read-only, so an unresolvable server never looks
+// like "no tools selected".
+function ToolNamesLevelRow({
+  value,
+  serverId,
+  onChange,
+}: {
+  value: string[]
+  serverId: string | null | undefined
+  onChange: (next: string[]) => void
+}) {
+  const serversQuery = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list() })
+  const server = serversQuery.data?.find((s) => s.id === serverId)
+  const tools = server?.capabilities?.tools ?? []
+
+  function toggleTool(name: string, allowed: boolean) {
+    onChange(allowed ? [...value, name] : value.filter((t) => t !== name))
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border p-2">
+      <div className="flex items-center justify-between gap-2">
+        {/* Stated outright rather than left to be counted off the switches --
+            "0 of 7" is the level worth noticing (this server contributes
+            nothing to that cell), and it's indistinguishable from an
+            unconfigured row otherwise. */}
+        <Badge variant="outline" className={cn('font-mono text-xs', value.length === 0 && 'text-muted-foreground')}>
+          {tools.length > 0 ? `${value.length} of ${tools.length} tools` : `${value.length} tool${value.length === 1 ? '' : 's'}`}
+        </Badge>
+        {tools.length > 0 && (
+          <div className="flex gap-3 text-xs text-muted-foreground">
+            <button type="button" className="cursor-pointer hover:text-foreground" onClick={() => onChange(tools.map((t) => t.name))}>
+              All
+            </button>
+            <button type="button" className="cursor-pointer hover:text-foreground" onClick={() => onChange([])}>
+              None
+            </button>
+          </div>
+        )}
+      </div>
+      {serversQuery.isLoading ? (
+        <p className="text-xs text-muted-foreground">Loading tools…</p>
+      ) : tools.length > 0 ? (
+        <div className="max-h-40 space-y-0.5 overflow-y-auto rounded-md border p-1">
+          {tools.map((tool) => (
+            <div key={tool.name} className="flex items-center justify-between gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted">
+              <span className="truncate font-mono" title={tool.description ?? tool.name}>
+                {tool.name}
+              </span>
+              <Switch size="sm" checked={value.includes(tool.name)} onCheckedChange={(allowed) => toggleTool(tool.name, allowed)} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-1 rounded-md border border-dashed p-2">
+          <p className="text-xs text-muted-foreground">
+            {server
+              ? 'This server has no tools.'
+              : "Can't reach the node this factor is bound to, so its server's tools aren't listed. These names are kept as-is:"}
+          </p>
+          {!server && value.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {value.map((name) => (
+                <Badge key={name} variant="outline" className="font-mono text-xs">
+                  {name}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // A per-factor editor with real room -- reuses the node inspector's own
 // fixed near-fullscreen frame sizing (NODE_INSPECTOR_CONTENT_CLASSNAME) and
 // HUD glow/ring/corner-brackets (HUD_ACCENT_RING_CLASSNAME), but is built
@@ -310,11 +512,26 @@ export function FactorEditorDialog({
   pickableFields,
   existingNames,
   emptyPickerMessage,
+  toolServerId,
+  revealHiddenServers,
   onSave,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   factor: DesignFactor
+  // Only meaningful for a `tool_names` factor: the pinned server whose tools
+  // its levels choose among. Supplied by whichever caller can see the bound
+  // node -- McpToolNodeInspector passes its own node's, DesignTab resolves it
+  // off the canvas graph (toolFactorServerId). In field-picker mode the
+  // picked field's own `serverId` wins over this, since that's the node the
+  // factor is about to be bound to.
+  toolServerId?: string | null
+  // Only meaningful for a `tool_config` factor, whose levels each pick their
+  // own server: whether this canvas already wires one of the hidden system
+  // servers, and so should be offered all of them (revealsHiddenMcpServers).
+  // `tool_names` levels don't need it -- they resolve their one pinned server
+  // by id straight off the server list, hidden or not.
+  revealHiddenServers?: boolean
   // Only passed by DesignTab's "Add factor" entry point or a node's own
   // hover-toolbar "Make experimental factor" icon -- every bindable field
   // (on the whole canvas, or scoped to just that one node) that isn't
@@ -521,11 +738,31 @@ export function FactorEditorDialog({
                           ) : levelType === 'tool_config' ? (
                             <ToolConfigLevelRow
                               value={level as StructuredLevel}
+                              revealHiddenServers={revealHiddenServers}
                               onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
                             />
                           ) : levelType === 'pattern' ? (
                             <PatternLevelRow
                               value={level as StructuredLevel}
+                              onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
+                            />
+                          ) : levelType === 'tool_names' ? (
+                            <ToolNamesLevelRow
+                              value={(level as string[] | null) ?? []}
+                              serverId={selectedField?.serverId ?? toolServerId}
+                              onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
+                            />
+                          ) : levelType === 'dataset_config' ? (
+                            <DatasetConfigLevelRow
+                              value={level as StructuredLevel}
+                              usedElsewhere={
+                                new Set(
+                                  levels
+                                    .filter((_, j) => j !== i)
+                                    .map((l) => (l as StructuredLevel).dataset_id)
+                                    .filter((id): id is string => typeof id === 'string'),
+                                )
+                              }
                               onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
                             />
                           ) : (

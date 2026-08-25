@@ -38,6 +38,14 @@ dependencies = [
     "asaree-sklearn-fte",
     "asaree-sklearn-model",
     "asaree-sklearn-stats",
+    # scikit-learn-mcp is deliberately NOT one of the asaree-sklearn-* family:
+    # it imports nothing from this project, takes its dataset as a path/URI
+    # argument rather than from the workspace layout, and is publishable and
+    # usable on its own against any MCP client. It's declared here only because
+    # ensure_system_servers registers it and spawns it out of THIS venv, the
+    # same reason the six above are — a deployment-level reference, not a
+    # coupling in the package.
+    "scikit-learn-mcp",
     "fastapi>=0.121.0",
     "uvicorn[standard]>=0.38.0",
     "pydantic>=2.10.0",
@@ -86,7 +94,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-motoro = { git = "https://github.com/EpistasisLab/motoro.git", tag = "v0.2.3" }
+motoro = { git = "https://github.com/EpistasisLab/motoro.git", tag = "v0.5.1" }
 asaree-workspace-core = { path = "workspace-core", editable = true }
 # Every mcp-servers/ package is declared here, including asaree-sklearn-core
 # (which the six servers each depend on): uv resolves `tool.uv.sources` from
@@ -100,6 +108,7 @@ asaree-sklearn-fs = { path = "mcp-servers/asaree-sklearn-fs", editable = true }
 asaree-sklearn-fte = { path = "mcp-servers/asaree-sklearn-fte", editable = true }
 asaree-sklearn-model = { path = "mcp-servers/asaree-sklearn-model", editable = true }
 asaree-sklearn-stats = { path = "mcp-servers/asaree-sklearn-stats", editable = true }
+scikit-learn-mcp = { path = "mcp-servers/scikit-learn-mcp", editable = true }
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

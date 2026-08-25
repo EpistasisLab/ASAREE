@@ -32,7 +32,16 @@ from mcp.server.fastmcp import Context
 import asaree_sklearn_core as core
 from asaree_sklearn_core import eda, fs
 
-mcp = FastMCP("asaree-sklearn-fs")
+INSTRUCTIONS = """\
+Select which features to keep, and see the correlations and class balance \
+behind that choice.
+
+Each selector independently re-reads the same fixed input rather than \
+chaining off the previous one, so running two does not silently compound \
+them -- to stack selections, pass the earlier result forward via \
+features_json. The diagnostics are read-only views of that same input."""
+
+mcp = FastMCP("asaree-sklearn-fs", instructions=INSTRUCTIONS)
 
 STAGE = "fs"
 

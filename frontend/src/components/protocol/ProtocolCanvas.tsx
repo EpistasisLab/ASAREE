@@ -44,24 +44,42 @@ import type {
   LlmNodeData,
   McpToolNodeData,
   MemoryNodeData,
+  OkfBundleNodeData,
+  OkfDocumentNodeData,
   ProtocolGraph,
   ProtocolNode,
   ReasonActPatternNodeData,
   ScriptNodeData,
   SingleAgentBaselinePatternNodeData,
+  SkillNodeData,
 } from '@/types/protocols'
+import type { Dataset } from '@/types/datasets'
 import type { DesignFactor } from '@/types/experiments'
+import type { McpServer } from '@/types/mcpServers'
+import type { OkfBundle, OkfDocument } from '@/types/okf'
+import type { Skill } from '@/types/skills'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
-import { agentTracedLabel, unboundBindableFields, type UnboundField } from './bindableFields'
+import { agentTracedLabel, revealsHiddenMcpServers, unboundBindableFields, type UnboundField } from './bindableFields'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { DatasetNodeInspector } from './DatasetNodeInspector'
 import { DeleteNodeConfirmDialog } from './DeleteNodeConfirmDialog'
 import { DEFAULT_ZOOM } from './constants'
 import { FactorEditorDialog } from './FactorEditorDialog'
-import { findFreePosition } from './layout'
+import { CONNECTOR_CHILD_CLEARANCE, connectorNodeOffsetX, findFreePosition, tidyLayout } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
+import { DatasetBrowserPanel } from './DatasetBrowserPanel'
+import { DATASET_BROWSE, nodeDataForDataset } from './datasetCatalog'
+import { McpServerBrowserPanel } from './McpServerBrowserPanel'
+import {
+  MCP_CLIENT_TOOL_NODE_TYPE,
+  MCP_SERVER_BROWSE,
+  MCP_TOOL_NODE_TYPES,
+  nodeDataForClientTool,
+  nodeDataForServer,
+  presetForServer,
+} from './mcpServerCatalog'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { MemoryNodeInspector } from './MemoryNodeInspector'
 import {
@@ -77,16 +95,28 @@ import type { RunScope } from './runSummary'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
 import { SelectCellDialog } from './SelectCellDialog'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
+import { OkfBundleBrowserPanel } from './OkfBundleBrowserPanel'
+import { OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE, nodeDataForBundle, nodeDataForDocument } from './okfCatalog'
+import { OkfBundleNodeInspector } from './OkfBundleNodeInspector'
+import { OkfDocumentBrowserPanel } from './OkfDocumentBrowserPanel'
+import { OkfDocumentNodeInspector } from './OkfDocumentNodeInspector'
+import { SkillBrowserPanel } from './SkillBrowserPanel'
+import { SKILL_BROWSE, nodeDataForSkill } from './skillCatalog'
+import { SkillNodeInspector } from './SkillNodeInspector'
 import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
 import { DatasetNode } from './nodes/DatasetNode'
 import { LlmNode } from './nodes/LlmNode'
+import { McpClientToolNode } from './nodes/McpClientToolNode'
 import { McpToolNode } from './nodes/McpToolNode'
 import { MemoryNode } from './nodes/MemoryNode'
 import { ReasonActPatternNode } from './nodes/ReasonActPatternNode'
 import { ScriptNode } from './nodes/ScriptNode'
 import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatternNode'
+import { OkfBundleNode } from './nodes/OkfBundleNode'
+import { OkfDocumentNode } from './nodes/OkfDocumentNode'
+import { SkillNode } from './nodes/SkillNode'
 import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 
 // One node type per LLM provider / architectural pattern (see LlmNodeData/
@@ -95,13 +125,42 @@ import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 // how the "tool" slot already accepts any mcp_tool node.
 const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry', 'llm_openrouter', 'llm_local']
 const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
+// The Knowledge slot's family, mirroring _KNOWLEDGE_NODE_TYPES in
+// services/protocol_execution.py: a server-side folder or an uploaded single
+// concept, both resolved identically into the agent's tool allow-list.
+const KNOWLEDGE_NODE_TYPES = ['okf_bundle', 'okf_document']
 // Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
 // whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
-const CONNECTOR_HANDLES = new Set(['llm', 'tool', 'memory', 'architectural_pattern'])
+// Includes the pre-rename "llm" and "resource" spellings for the same reason
+// the backend set does: a graph that hasn't been through migrateLegacyHandles
+// yet must not have its AI/Dataset edges misread as main pipeline edges.
+const CONNECTOR_HANDLES = new Set([
+  'ai',
+  'llm',
+  'tool',
+  'memory',
+  'architectural_pattern',
+  'skill',
+  'dataset',
+  'resource',
+  'knowledge',
+])
+// The four connector slots that live on an Agent's TOP edge (see
+// AgentNode.tsx) -- a node feeding one of these is placed ABOVE its agent,
+// every other slot's source below it.
+const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'dataset', 'knowledge'])
 
 const NODE_TYPES = {
   agent: AgentNode,
+  // Both MCP-tool types render through the same component (as the five LLM
+  // provider types do) -- they carry identical data and differ only in
+  // whether their server was picked in the browser or in a dropdown.
   mcp_tool: McpToolNode,
+  mcp_scikit_learn: McpToolNode,
+  // The exception to "both MCP-tool types render the same": a client tool has
+  // its own icon and hue, since where its server came from is the one thing
+  // that distinguishes it. Same data, same inspector.
+  mcp_client_tool: McpClientToolNode,
   critic_gate: CriticGateNode,
   // All five LLM provider types render through the same component -- it
   // derives icon/accent/placeholder from data.config.provider, not from
@@ -113,6 +172,9 @@ const NODE_TYPES = {
   llm_local: LlmNode,
   memory: MemoryNode,
   dataset: DatasetNode,
+  skill: SkillNode,
+  okf_bundle: OkfBundleNode,
+  okf_document: OkfDocumentNode,
   script: ScriptNode,
   pattern_reason_act: ReasonActPatternNode,
   pattern_single_agent_baseline: SingleAgentBaselinePatternNode,
@@ -141,6 +203,12 @@ function isNearViewport(a: Viewport, b: Viewport): boolean {
 }
 
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
+  // mcp_scikit_learn, mcp_client_tool, skill, okf_bundle and okf_document
+  // aren't here: none is ever created blank -- addServerNode/
+  // addClientToolNode/addSkillNode/addBundleNode/addDocumentNode build the
+  // data from the picked or just-connected server/skill/bundle/document, since
+  // a node whose whole identity is one of those would be meaningless without
+  // it.
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData()
   if (nodeType === 'critic_gate') return defaultCriticGateNodeData()
   if (nodeType === 'llm_anthropic') return defaultAnthropicLlmNodeData()
@@ -156,19 +224,96 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   return defaultAgentNodeData()
 }
 
+// The registered datasets this canvas declares, in the order their nodes were
+// added -- what gets PATCHed onto the experiment's own dataset list (see the
+// syncExperimentDatasets effect). Nodes still on the browse placeholder have no
+// dataset_id yet and are skipped; two nodes naming the same dataset collapse to
+// one entry, since the join table is keyed by (experiment, dataset).
+//
+// `factors` is the experiment's own design_spec.factors, and it matters
+// because a Dataset node whose whole `config` is bound to a 'dataset_config'
+// factor holds only ONE of the datasets this experiment runs against -- the
+// base level sitting in the node. The rest live in that factor's levels, and
+// apply_factor_bindings substitutes them per cell at run time, so reading the
+// graph alone would under-report the experiment's data to everything that
+// asks the record instead of the canvas. Levels come after the node's own id
+// (position on the join row is canvas wiring order), and duplicates collapse
+// the same way.
+// Module-level so the dataset-sync effect's dependency list gets a stable
+// reference when the experiment has no factors -- a fresh [] every render
+// would re-run it forever.
+const EMPTY_FACTORS: DesignFactor[] = []
+
+function datasetIdsInGraph(nodes: Node[], factors: DesignFactor[] = EMPTY_FACTORS): string[] {
+  const ids: string[] = []
+  const add = (id: unknown) => {
+    if (typeof id === 'string' && id && !ids.includes(id)) ids.push(id)
+  }
+  const boundFactorNames = new Set<string>()
+  for (const node of nodes) {
+    if (node.type !== 'dataset') continue
+    const data = node.data as DatasetNodeData
+    add(data.config?.dataset_id)
+    const factorName = data.factor_bindings?.config
+    if (factorName) boundFactorNames.add(factorName)
+  }
+  for (const factor of factors) {
+    if (factor.level_type !== 'dataset_config' || !boundFactorNames.has(factor.name)) continue
+    for (const level of factor.levels) add((level as { dataset_id?: unknown } | null)?.dataset_id)
+  }
+  return ids
+}
+
 // Mirrors isValidConnection's own per-slot source-type-family rule -- the
 // panel that opens for a connector "+" is pre-filtered to that slot's whole
 // family of node types (LLM_NODE_TYPES/PATTERN_NODE_TYPES above) rather than
-// the full catalog. Tool's own family includes Dataset/Script alongside
-// mcp_tool (one connector accepting several kinds of node -- see AgentNode.tsx's
-// own comment on its Tool handle) -- both are pure config sources with no
-// callable capability of their own, so they share Tool's slot rather than
-// getting a dedicated one.
+// the full catalog. Tool's own family includes Script alongside mcp_tool
+// (one connector accepting several kinds of node -- see AgentNode.tsx's own
+// comment on its Tool handle): a Script is a pure config source with no
+// callable capability of its own, so it shares Tool's slot rather than
+// getting a dedicated one. Dataset used to share it too, but now has its
+// own slot -- what an agent operates ON, not a capability it operates WITH.
 const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; title: string }> = {
-  llm: { allowedTypes: LLM_NODE_TYPES, title: 'Add LLM' },
-  tool: { allowedTypes: ['mcp_tool', 'dataset', 'script'], title: 'Add Tool' },
+  ai: { allowedTypes: LLM_NODE_TYPES, title: 'Add AI' },
+  tool: { allowedTypes: [MCP_SERVER_BROWSE, 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
+  skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
+  dataset: { allowedTypes: [DATASET_BROWSE], title: 'Add Dataset' },
+  // The one slot with two entries in its panel: knowledge arrives either as a
+  // folder already on the server (bundle) or as a file the user uploads
+  // (document), and which of those you have is the question the panel asks.
+  knowledge: { allowedTypes: [OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE], title: 'Add Knowledge' },
+}
+
+// Connector slots have been renamed since graphs started being saved, and a
+// slot id lives in persisted data (it's the edge's source/targetHandle):
+//
+//   * "llm" -> "ai", on every edge, when the connector's caption became "AI".
+//   * "tool" -> "resource" for DATASET-sourced edges only -- Dataset used to
+//     share the Tool slot with mcp_tool/script, which both keep "tool". Hence
+//     the source-type check rather than a blanket swap.
+//   * "resource" -> "dataset", on every edge -- that slot's only member is the
+//     Dataset node, so it was renamed after it (and moved next to Skill). No
+//     source-type check needed: nothing else has ever used "resource".
+//
+// Rewritten the moment a graph is loaded into the canvas so the edge lands on
+// the right handle and the next autosave persists the fix. This is one of
+// three layers, none of them load-bearing alone: Alembic data migrations
+// (3f1a7c9b2e04, b7c2d9e14a35) make stored graphs canonical, the backend keeps
+// resolving the old spellings (_LEGACY_AI_HANDLES / _LEGACY_DATASET_HANDLES in
+// services/protocol_execution.py) so a graph that's never opened still runs,
+// and this covers a tab that loaded before the deploy and is still autosaving
+// old-spelling edges.
+function migrateLegacyHandles(graph: ProtocolGraph): Edge[] {
+  const datasetIds = new Set(graph.nodes.filter((n) => n.type === 'dataset').map((n) => n.id))
+  return (graph.edges as Edge[]).map((e) => {
+    if (e.targetHandle === 'llm') return { ...e, sourceHandle: 'ai', targetHandle: 'ai' }
+    if (e.targetHandle === 'resource' || (e.targetHandle === 'tool' && datasetIds.has(e.source))) {
+      return { ...e, sourceHandle: 'dataset', targetHandle: 'dataset' }
+    }
+    return e
+  })
 }
 
 // Imperative, not a prop -- DesignTab.tsx (a sibling of ProtocolCanvas, not
@@ -204,7 +349,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   initialGraph: ProtocolGraph
 }>(function ProtocolCanvas({ protocolId, experimentId, initialGraph }, canvasHandleRef) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialGraph.nodes as Node[])
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialGraph.edges as Edge[])
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateLegacyHandles(initialGraph))
   const queryClient = useQueryClient()
 
   // Mirrors the canvas's own live state into the shared query cache on
@@ -275,6 +420,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // that node's own unbound fields (see requestMakeFactor below).
   const [factorPickerNodeId, setFactorPickerNodeId] = useState<string | null>(null)
   const [addPanelOpen, setAddPanelOpen] = useState(false)
+  // The second level of the add-node panel: AddNodePanel's "MCP Servers"
+  // entry swaps the browser in over it, and its Back button returns. Only
+  // meaningful while addPanelOpen.
+  const [serverBrowserOpen, setServerBrowserOpen] = useState(false)
+  const [skillBrowserOpen, setSkillBrowserOpen] = useState(false)
+  const [bundleBrowserOpen, setBundleBrowserOpen] = useState(false)
+  const [documentBrowserOpen, setDocumentBrowserOpen] = useState(false)
+  const [datasetBrowserOpen, setDatasetBrowserOpen] = useState(false)
   // A pending node deletion awaiting user confirmation -- populated either
   // by onBeforeDelete (Backspace/Delete key, the hover toolbar's trash
   // icon -- both go through xyflow's own deleteElements) or by
@@ -333,7 +486,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     enabled: !!experimentId && cellPickerOpen,
   })
   const paneRef = useRef<HTMLDivElement>(null)
-  const { screenToFlowPosition } = useReactFlow()
+  const { screenToFlowPosition, fitView } = useReactFlow()
 
   // The canvas's "resting" viewport isn't a fixed constant -- fitView (set
   // below) recomputes x/y/zoom from the actual node layout on mount, so we
@@ -351,9 +504,43 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   const onConnect = useCallback((connection: Connection) => setEdges((eds) => addEdge(connection, eds)), [setEdges])
 
+  // "Tidy up" -- reposition every node into a generated layout (see
+  // layout.ts's tidyLayout). Goes through this component's own setNodes
+  // rather than useReactFlow().setNodes because the flow is controlled, and
+  // that's also what lets the existing debounced autosave pick the new
+  // positions up with no extra request wiring. fitView waits a frame so it
+  // measures the moved nodes, not the ones they replaced.
+  const tidyUp = useCallback(() => {
+    setNodes((nds) => {
+      const positions = tidyLayout(nds, edges)
+      return nds.map((n) => {
+        const position = positions.get(n.id)
+        return position ? { ...n, position } : n
+      })
+    })
+    requestAnimationFrame(() => fitView({ maxZoom: DEFAULT_ZOOM, duration: 300 }))
+  }, [edges, fitView, setNodes])
+
   const runMutation = useMutation({
     mutationFn: () => protocolsApi.run(protocolId, selectedCellLabel),
     onSuccess: (run) => setRunId(run.id),
+  })
+
+  // Read-only subscription to the linked experiment, purely so the dataset
+  // sync below sees 'dataset_config' factor levels (see its own comment).
+  // Same query key the page and FactorBindableField already use, so this
+  // shares their cache entry rather than adding a request of its own.
+  const experimentFactorsQuery = useQuery({
+    queryKey: ['experiments', experimentId],
+    queryFn: () => experimentsApi.get(experimentId!),
+    enabled: !!experimentId,
+  })
+
+  // Keeps the linked experiment's own dataset list (the experiment_datasets
+  // join table) in step with the Dataset nodes on this canvas -- see the
+  // effect near the autosave below, which is what calls this.
+  const syncExperimentDatasets = useMutation({
+    mutationFn: (datasetIds: string[]) => experimentsApi.update(experimentId!, { dataset_ids: datasetIds }),
   })
 
   // Run button's own entry point -- always opens RunConfirmDialog first
@@ -435,7 +622,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // wire-time by isValidConnection, and an execution pattern can never
   // reach zero (see nonDeletablePatternNodeIds above) -- so this is the
   // only one actually reachable through normal use.
-  const agentIdsWithLlm = useMemo(() => new Set(edges.filter((e) => e.targetHandle === 'llm').map((e) => e.target)), [edges])
+  const agentIdsWithLlm = useMemo(() => new Set(edges.filter((e) => e.targetHandle === 'ai').map((e) => e.target)), [edges])
 
   // The canvas's per-node Play icon is only offered for a node with no
   // upstream *main* pipeline edge (mirrors services.protocol_execution's
@@ -449,18 +636,67 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     [edges],
   )
 
+  // Which agents have anything the model can actually CALL -- feeds the ReAct
+  // pattern node's "this loop won't loop" warning icon below. That node's
+  // warning depends on its AGENT's wiring rather than its own config, so it
+  // can't be computed inside the node component the way its other warnings
+  // are; it's injected here alongside missingLlm instead.
+  //
+  // Mirrors the backend's three tool sources (services/protocol_execution.py):
+  // MCP nodes on the Tool connector (_resolve_tool_config), OKF bundles and
+  // documents on Knowledge (_resolve_knowledge_config -- a knowledge source is
+  // served by a real MCP server, so at run time it's just more tools), and
+  // Skill nodes, which the ReAct loop turns into a bound `load_skill` tool.
+  // Script nodes share the Tool connector but are NOT callable --
+  // _resolve_script_config folds their code into the prompt text -- so the
+  // source's own type is checked, not just the handle it lands on.
+  const agentIdsWithCallableTools = useMemo(() => {
+    const nodeTypeById = new Map(nodes.map((n) => [n.id, n.type]))
+    return new Set(
+      edges
+        .filter((e) => {
+          if (e.targetHandle === 'knowledge' || e.targetHandle === 'skill') return true
+          if (e.targetHandle !== 'tool') return false
+          const sourceType = nodeTypeById.get(e.source)
+          return sourceType === 'mcp_tool' || sourceType === 'mcp_scikit_learn' || sourceType === 'mcp_client_tool'
+        })
+        .map((e) => e.target),
+    )
+  }, [nodes, edges])
+  const patternHostIds = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const e of edges) {
+      if (e.targetHandle === 'architectural_pattern') map.set(e.source, e.target)
+    }
+    return map
+  }, [edges])
+
   const nodesWithRunStatus = useMemo((): Node[] => {
-    return nodes.map((n) => ({
-      ...n,
-      deletable: !nonDeletablePatternNodeIds.has(n.id),
-      data: {
-        ...n.data,
-        runStatus: runQuery.data?.node_runs[n.id]?.status,
-        missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
-        canRunAlone: n.type === 'agent' && !agentIdsWithUpstream.has(n.id),
-      },
-    }))
-  }, [nodes, runQuery.data, nonDeletablePatternNodeIds, agentIdsWithLlm, agentIdsWithUpstream])
+    return nodes.map((n) => {
+      const patternHostId = patternHostIds.get(n.id)
+      return {
+        ...n,
+        deletable: !nonDeletablePatternNodeIds.has(n.id),
+        data: {
+          ...n.data,
+          runStatus: runQuery.data?.node_runs[n.id]?.status,
+          missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
+          canRunAlone: n.type === 'agent' && !agentIdsWithUpstream.has(n.id),
+          // Only meaningful once the pattern is actually wired to an agent --
+          // an orphaned pattern node has no loop to warn about.
+          hostHasNoTools: !!patternHostId && !agentIdsWithCallableTools.has(patternHostId),
+        },
+      }
+    })
+  }, [
+    nodes,
+    runQuery.data,
+    nonDeletablePatternNodeIds,
+    agentIdsWithLlm,
+    agentIdsWithUpstream,
+    agentIdsWithCallableTools,
+    patternHostIds,
+  ])
 
   // Same protection, one layer up -- the architectural_pattern EDGE itself
   // must not be removable on its own (InteractEdge never renders a hover
@@ -497,6 +733,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   function closeAddPanel() {
     setAddPanelOpen(false)
+    setServerBrowserOpen(false)
+    setSkillBrowserOpen(false)
+    setBundleBrowserOpen(false)
+    setDocumentBrowserOpen(false)
+    setDatasetBrowserOpen(false)
     setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(null)
     setPendingEdgeInsert(null)
@@ -509,6 +750,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const requestConnectorAdd = useCallback((request: ConnectorAddRequest) => {
     setSelectedNodeId(null)
     setPendingConnectorAdd(request)
+    setServerBrowserOpen(false)
     setAddPanelOpen(true)
   }, [])
   // A MainEdgeAddStub requests this instead -- same panel, restricted to
@@ -518,6 +760,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const requestMainEdgeAdd = useCallback((request: MainEdgeAddRequest) => {
     setSelectedNodeId(null)
     setPendingMainEdgeAdd(request)
+    setServerBrowserOpen(false)
     setAddPanelOpen(true)
   }, [])
   // An InteractEdge's own "+" requests this -- same panel again, restricted
@@ -526,6 +769,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const requestEdgeInsert = useCallback((request: EdgeInsertRequest) => {
     setSelectedNodeId(null)
     setPendingEdgeInsert(request)
+    setServerBrowserOpen(false)
     setAddPanelOpen(true)
   }, [])
   // The canvas's per-node Play icon (NodeHoverToolbar) -- opens
@@ -603,7 +847,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     // faces down into it (CircleNode's own handlePosition="bottom" for this
     // node type) for a short, direct edge instead of one looping around the
     // whole card.
-    const patternPosition = findFreePosition([...otherPositions, agentPosition], { x: agentPosition.x, y: agentPosition.y - 160 })
+    const patternPosition = findFreePosition(
+      [...otherPositions, agentPosition],
+      { x: agentPosition.x + connectorNodeOffsetX('agent', 'architectural_pattern'), y: agentPosition.y - 160 },
+      CONNECTOR_CHILD_CLEARANCE,
+    )
     const patternNode: Node = {
       id: patternId,
       type: 'pattern_reason_act',
@@ -625,19 +873,56 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // New nodes land near the pane's current center, nudged away from any
   // node already there (findFreePosition) so a fresh node never lands on
   // top of an existing one.
-  function addNode(nodeType: string) {
+  function addNode(nodeType: string, dataOverride?: ProtocolNode['data']) {
+    // Not a node type -- drills into the server browser, keeping whichever
+    // pending connector/edge request is in flight so picking a server there
+    // still wires the resulting node into the slot that asked for it.
+    if (nodeType === MCP_SERVER_BROWSE) {
+      setServerBrowserOpen(true)
+      return
+    }
+    // Ditto for skills -- see SKILL_BROWSE in skillCatalog.ts.
+    if (nodeType === SKILL_BROWSE) {
+      setSkillBrowserOpen(true)
+      return
+    }
+    // Ditto for OKF bundles -- see OKF_BUNDLE_BROWSE in okfCatalog.ts.
+    if (nodeType === OKF_BUNDLE_BROWSE) {
+      setBundleBrowserOpen(true)
+      return
+    }
+    // Ditto for uploaded OKF documents -- see OKF_DOCUMENT_BROWSE.
+    if (nodeType === OKF_DOCUMENT_BROWSE) {
+      setDocumentBrowserOpen(true)
+      return
+    }
+    // Ditto for datasets -- see DATASET_BROWSE in datasetCatalog.ts.
+    if (nodeType === DATASET_BROWSE) {
+      setDatasetBrowserOpen(true)
+      return
+    }
     if (pendingConnectorAdd) {
       const { nodeId: originId, slot } = pendingConnectorAdd
       const originNode = nodes.find((n) => n.id === originId)
-      // Architectural Pattern connects from above (its connector lives on
-      // the agent's own TOP edge -- see AgentNode.tsx), every other slot
-      // from below -- matches agentDefaultPattern's own placement, so a
-      // swapped-in replacement pattern node lands in the same spot the
-      // auto-created default one did.
+      // Architectural Pattern, Skill, Knowledge and Resource connect from above (their
+      // connectors live on the agent's own TOP edge -- see AgentNode.tsx),
+      // every other slot from below -- matches agentDefaultPattern's own
+      // placement, so a swapped-in replacement pattern node lands in the
+      // same spot the auto-created default one did.
+      // x is the connector's OWN position along the host's edge, not the
+      // host's left corner: with all seven slots dropping their node at the
+      // same x, a Tool node could land above the AI connector and every one
+      // after the first got shoved onto a ring around that same point, which
+      // read as nodes scattered at random rather than as "this one belongs to
+      // that connector". findFreePosition then prefers the same row when the
+      // spot is taken, so a second Tool sits beside the first.
       const desired = originNode
-        ? { x: originNode.position.x, y: originNode.position.y + (slot === 'architectural_pattern' ? -160 : 160) }
+        ? {
+            x: originNode.position.x + connectorNodeOffsetX(originNode.type, slot),
+            y: originNode.position.y + (TOP_EDGE_SLOTS.has(slot) ? -160 : 160),
+          }
         : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
-      const position = findFreePosition(nodes.map((n) => n.position), desired)
+      const position = findFreePosition(nodes.map((n) => n.position), desired, CONNECTOR_CHILD_CLEARANCE)
       const newId = newNodeId()
       // Execution pattern is capped at one but must never go to zero (see
       // AgentNode.tsx's own comment) -- its "+" stays visible even once
@@ -649,7 +934,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         slot === 'architectural_pattern'
           ? edges.find((e) => e.target === originId && e.targetHandle === 'architectural_pattern')
           : undefined
-      setNodes((nds) => nds.filter((n) => n.id !== existingPatternEdge?.source).concat({ id: newId, type: nodeType, position, data: defaultDataFor(nodeType) }))
+      setNodes((nds) =>
+        nds
+          .filter((n) => n.id !== existingPatternEdge?.source)
+          .concat({ id: newId, type: nodeType, position, data: dataOverride ?? defaultDataFor(nodeType) }),
+      )
       setEdges((eds) =>
         eds
           .filter((e) => e.id !== existingPatternEdge?.id)
@@ -725,7 +1014,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     const desired = screenToFlowPosition(center)
     const position = findFreePosition(nodes.map((n) => n.position), desired)
     const newId = newNodeId()
-    const newNode: Node = { id: newId, type: nodeType, position, data: defaultDataFor(nodeType) }
+    const newNode: Node = { id: newId, type: nodeType, position, data: dataOverride ?? defaultDataFor(nodeType) }
 
     if (nodeType === 'agent') {
       // Unlike LLM (no auto-created default; you must wire one), every new
@@ -740,6 +1029,54 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
     setNodes((nds) => nds.concat(newNode))
     setAddPanelOpen(false)
+  }
+
+  // Picking a server in the browser -- the node is created with that server
+  // already bound (nodeDataForServer) and, when the server has a dedicated
+  // node type, as that type. Everything after this point is the ordinary
+  // addNode path, so a server node wires into a Tool connector, lands on the
+  // canvas, and opens its inspector exactly like any other node.
+  function addServerNode(server: McpServer) {
+    setServerBrowserOpen(false)
+    addNode(presetForServer(server).nodeType, nodeDataForServer(server))
+  }
+
+  // Same shape as addServerNode, for a server the user just registered through
+  // the browser's pinned "MCP Client Tool" row rather than picked off the list.
+  // It gets the dedicated client-tool type regardless of any preset: the point
+  // of the node is that this protocol brought its own server.
+  function addClientToolNode(server: McpServer) {
+    setServerBrowserOpen(false)
+    addNode(MCP_CLIENT_TOOL_NODE_TYPE, nodeDataForClientTool(server))
+  }
+
+  // Same shape as addServerNode: the node is created with the bundle already
+  // bound, and everything after this is the ordinary addNode path.
+  function addBundleNode(bundle: OkfBundle) {
+    setBundleBrowserOpen(false)
+    addNode('okf_bundle', nodeDataForBundle(bundle))
+  }
+
+  // Same shape again, for the Knowledge connector's other node type.
+  function addDocumentNode(document: OkfDocument) {
+    setDocumentBrowserOpen(false)
+    addNode('okf_document', nodeDataForDocument(document))
+  }
+
+  // Same shape as addServerNode: the node is created with the skill already
+  // bound, and everything after this is the ordinary addNode path.
+  function addSkillNode(skill: Skill) {
+    setSkillBrowserOpen(false)
+    addNode('skill', nodeDataForSkill(skill))
+  }
+
+  // Same shape again. Attaching the dataset to the linked experiment isn't
+  // done here: an experiment can hold several now, and they can leave the
+  // canvas as well as join it (delete a Dataset node), so the sync watches
+  // the node list instead of hooking this one entry point.
+  function addDatasetNode(dataset: Dataset) {
+    setDatasetBrowserOpen(false)
+    addNode('dataset', nodeDataForDataset(dataset))
   }
 
   // Debounced autosave: every nodes/edges change schedules a PATCH, reset on
@@ -805,6 +1142,43 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     return () => clearTimeout(timer)
   }, [nodes, edges, saveGraph])
 
+  // Keeps the linked experiment's dataset list equal to the Dataset nodes on
+  // this canvas -- the experiment record should be able to answer "what data
+  // is this experiment about" without anyone parsing the graph. Fire-and-
+  // forget, matching FactorBindableField's own immediate-persist convention.
+  //
+  // Seeded from the graph as LOADED, so this only ever fires on a real user
+  // change, never on mount. That matters: the notebook attaches a dataset
+  // over the SDK before any canvas exists (spinal_pipeline.ipynb's Step 2),
+  // and a mount-time "reconcile" would see zero Dataset nodes and detach it.
+  //
+  // Every Dataset node counts, wired or not and enabled or not -- putting one
+  // on the canvas is the declaration that this experiment is about that data;
+  // `enabled` only governs whether the run's prompt mentions it.
+  //
+  // Factors are in the dependency list alongside nodes because a
+  // 'dataset_config' factor's levels are datasets this experiment runs
+  // against too (see datasetIdsInGraph) -- and editing those levels from the
+  // Design tab's FactorsEditor changes no node at all, so a nodes-only
+  // dependency would miss it. This subscribes to the same
+  // ['experiments', id] cache entry the page and FactorBindableField already
+  // use (TanStack dedupes by key, so it costs no extra request), which is
+  // what makes a factor save here land immediately: FactorBindableField
+  // invalidates that exact key on success.
+  const factors = experimentFactorsQuery.data?.design_spec?.factors ?? EMPTY_FACTORS
+  const lastSyncedDatasetIdsRef = useRef(JSON.stringify(datasetIdsInGraph(initialGraph.nodes as Node[])))
+  useEffect(() => {
+    if (!experimentId) return
+    const datasetIds = datasetIdsInGraph(nodes, factors)
+    const serialized = JSON.stringify(datasetIds)
+    if (serialized === lastSyncedDatasetIdsRef.current) return
+    lastSyncedDatasetIdsRef.current = serialized
+    syncExperimentDatasets.mutate(datasetIds)
+    // syncExperimentDatasets is a stable-enough mutation object; including it
+    // would re-run this on every render of the mutation's own state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, factors, experimentId])
+
   // protocolId is stable for this component's whole lifetime (the parent
   // remounts it via `key={protocol.id}` on protocol change -- see
   // ProtocolCanvasPage.tsx), so this only ever fires on a genuine unmount,
@@ -854,6 +1228,28 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
   }
 
+  // The third way a binding can disappear, alongside unbinding a field in an
+  // inspector (updateNodeData) and deleting the factor in the Design tab
+  // (DesignTab's own sweep): deleting the NODE that carried it. Without this,
+  // the factor outlived the only thing that referenced it -- still listed in
+  // the Design tab, still multiplying the cell count, and no longer reachable
+  // from any node's inspector to unbind.
+  //
+  // Runs for both delete paths (deleteNode and xyflow's onNodesDelete), and
+  // deliberately reuses pruneOrphanedFactors rather than deleting outright,
+  // so a factor shared across several nodes survives losing just one of them.
+  function pruneFactorsForDeletedNodes(deleted: Node[]) {
+    const deletedIds = new Set(deleted.map((n) => n.id))
+    const removedFactorNames = deleted.flatMap((n) =>
+      Object.values((n.data as { factor_bindings?: Record<string, string> } | undefined)?.factor_bindings ?? {}),
+    )
+    if (removedFactorNames.length === 0) return
+    void pruneOrphanedFactors(
+      nodes.filter((n) => !deletedIds.has(n.id)),
+      removedFactorNames,
+    )
+  }
+
   function updateNodeData(
     nodeId: string,
     data:
@@ -863,6 +1259,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | LlmNodeData
       | MemoryNodeData
       | DatasetNodeData
+      | SkillNodeData
+      | OkfBundleNodeData
+      | OkfDocumentNodeData
       | ScriptNodeData
       | ReasonActPatternNodeData
       | SingleAgentBaselinePatternNodeData,
@@ -889,42 +1288,68 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       const targetNode = nodes.find((n) => n.id === connection.target)
       if (!sourceNode || !targetNode) return false
       switch (connection.targetHandle) {
-        case 'llm':
+        case 'ai':
           return (
             LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
             (targetNode.type === 'agent' || targetNode.type === 'critic_gate')
           )
         case 'tool':
           return (
-            (sourceNode.type === 'mcp_tool' || sourceNode.type === 'dataset' || sourceNode.type === 'script') &&
+            (MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') || sourceNode.type === 'script') &&
             targetNode.type === 'agent'
           )
         case 'memory':
           return sourceNode.type === 'memory' && targetNode.type === 'agent'
         case 'architectural_pattern':
           return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
+        case 'skill':
+          return sourceNode.type === 'skill' && targetNode.type === 'agent'
+        case 'dataset':
+          // The one slot with a cardinality check here, not just a hidden
+          // "+" stub (see AgentNode.tsx's Dataset comment, and ai/memory
+          // above, which are capped the same way but rely on the stub
+          // alone). A second dataset on one agent isn't merely unsupported
+          // -- every cell resolves ONE workspace, so seed_cell_workspace
+          // rejects it at run time, after the run has already started.
+          // Comparing datasets is a 'dataset_config' factor instead.
+          return (
+            sourceNode.type === 'dataset' &&
+            targetNode.type === 'agent' &&
+            !edges.some(
+              (e) => e.target === connection.target && e.targetHandle === 'dataset' && e.source !== connection.source,
+            )
+          )
+        case 'knowledge':
+          // The one connector with two source types -- bundles and uploaded
+          // documents are interchangeable here, since both resolve to the same
+          // per-directory OKF server.
+          return KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
         default:
           // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool/
-          // dataset/script nodes have no main handle to drag from in the
-          // first place, so this mostly guards against a stray connection,
-          // not real interactive use.
+          // dataset/skill/knowledge/script nodes have no main handle to drag from in
+          // the first place, so this mostly guards against a stray
+          // connection, not real interactive use.
           return (
             !LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'memory' &&
-            sourceNode.type !== 'mcp_tool' &&
+            !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'dataset' &&
+            sourceNode.type !== 'skill' &&
+            !KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'script' &&
             !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '')
           )
       }
     },
-    [nodes],
+    [nodes, edges],
   )
 
   function deleteNode(nodeId: string) {
+    const node = nodes.find((n) => n.id === nodeId)
     setNodes((nds) => nds.filter((n) => n.id !== nodeId))
     setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId))
     setSelectedNodeId(null)
+    if (node) pruneFactorsForDeletedNodes([node])
   }
 
   // The node inspector's own Delete button calls deleteNode directly --
@@ -1009,6 +1434,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onPaneClick={() => setSelectedNodeId(null)}
             onNodesDelete={(deleted) => {
               if (deleted.some((n) => n.id === selectedNodeId)) setSelectedNodeId(null)
+              pruneFactorsForDeletedNodes(deleted)
             }}
             fitView
             fitViewOptions={{ maxZoom: DEFAULT_ZOOM }}
@@ -1031,7 +1457,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               <MiniMap pannable zoomable className="!bg-card" maskColor="color-mix(in oklch, var(--background), transparent 40%)" />
             )}
           </ReactFlow>
-          <CanvasControls />
+          <CanvasControls onTidy={tidyUp} />
           {(() => {
             // runMutation.error/runNodeMutation.error is the real validation
             // message (e.g. topological_order/validate_single_node_runnable
@@ -1111,6 +1537,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               onClick={() => {
                 setSelectedNodeId(null)
                 setPendingConnectorAdd(null)
+                setServerBrowserOpen(false)
                 setAddPanelOpen(true)
               }}
             >
@@ -1125,7 +1552,35 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             />
           </div>
         </div>
-        {addPanelOpen ? (
+        {addPanelOpen && serverBrowserOpen ? (
+          <McpServerBrowserPanel
+            onPick={addServerNode}
+            onConnect={addClientToolNode}
+            onBack={() => setServerBrowserOpen(false)}
+            onClose={closeAddPanel}
+            revealHiddenServers={revealsHiddenMcpServers(nodes)}
+          />
+        ) : addPanelOpen && skillBrowserOpen ? (
+          <SkillBrowserPanel onPick={addSkillNode} onBack={() => setSkillBrowserOpen(false)} onClose={closeAddPanel} />
+        ) : addPanelOpen && bundleBrowserOpen ? (
+          <OkfBundleBrowserPanel
+            onPick={addBundleNode}
+            onBack={() => setBundleBrowserOpen(false)}
+            onClose={closeAddPanel}
+          />
+        ) : addPanelOpen && documentBrowserOpen ? (
+          <OkfDocumentBrowserPanel
+            onPick={addDocumentNode}
+            onBack={() => setDocumentBrowserOpen(false)}
+            onClose={closeAddPanel}
+          />
+        ) : addPanelOpen && datasetBrowserOpen ? (
+          <DatasetBrowserPanel
+            onPick={addDatasetNode}
+            onBack={() => setDatasetBrowserOpen(false)}
+            onClose={closeAddPanel}
+          />
+        ) : addPanelOpen ? (
           <AddNodePanel
             onAdd={addNode}
             onClose={closeAddPanel}
@@ -1146,9 +1601,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                     : undefined
             }
           />
-        ) : selectedNode?.type === 'mcp_tool' ? (
+        ) : MCP_TOOL_NODE_TYPES.includes(selectedNode?.type ?? '') ? (
           <McpToolNodeInspector
-            node={{ id: selectedNode.id, type: 'mcp_tool', position: selectedNode.position, data: selectedNode.data as McpToolNodeData }}
+            node={{ id: selectedNode!.id, type: selectedNode!.type!, position: selectedNode!.position, data: selectedNode!.data as McpToolNodeData }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
@@ -1185,6 +1640,33 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : selectedNode?.type === 'dataset' ? (
           <DatasetNodeInspector
             node={{ id: selectedNode.id, type: 'dataset', position: selectedNode.position, data: selectedNode.data as DatasetNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'skill' ? (
+          <SkillNodeInspector
+            node={{ id: selectedNode.id, type: 'skill', position: selectedNode.position, data: selectedNode.data as SkillNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'okf_bundle' ? (
+          <OkfBundleNodeInspector
+            node={{ id: selectedNode.id, type: 'okf_bundle', position: selectedNode.position, data: selectedNode.data as OkfBundleNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'okf_document' ? (
+          <OkfDocumentNodeInspector
+            node={{ id: selectedNode.id, type: 'okf_document', position: selectedNode.position, data: selectedNode.data as OkfDocumentNodeData }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
@@ -1278,6 +1760,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           pickableFields={factorPickerFields}
           existingNames={factorPickerExistingNames}
           emptyPickerMessage={`${(factorPickerNode?.data as { label?: string })?.label || 'This node'} has no fields that can be turned into a factor.`}
+          revealHiddenServers={revealsHiddenMcpServers(nodes)}
           onSave={(factor, field) => {
             if (field) createFactorMutation.mutate({ factor, field })
           }}

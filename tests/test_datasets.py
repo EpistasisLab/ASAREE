@@ -130,7 +130,35 @@ async def test_quick_split_dataset_group_aware_when_group_column_present(owner_i
         train_groups = set(pd.read_parquet(split.train_path)["group"])
         test_groups = set(pd.read_parquet(split.test_path)["group"])
         assert not (train_groups & test_groups)
+        assert split.split_group_column == "group"
 
+        await delete_dataset(db, dataset.id)
+
+
+async def test_quick_split_dataset_records_its_parameters(owner_id: uuid.UUID) -> None:
+    # The parameters are the only record of HOW a split was made -- the hashes
+    # say which files came out, not whether re-running would reproduce them.
+    async with get_session() as db:
+        dataset = await create_dataset(db, name=f"ds-{uuid.uuid4().hex}", csv_bytes=_CSV, owner_id=owner_id)
+        split = await quick_split_dataset(db, dataset=dataset, test_size=0.25, seed=7)
+        assert split.split_method == "quick"
+        assert split.split_test_size == 0.25
+        assert split.split_seed == 7
+        # Stratified, not grouped -- null here is an answer, not a gap.
+        assert split.split_group_column is None
+        await delete_dataset(db, dataset.id)
+
+
+async def test_quick_split_dataset_records_no_group_column_when_the_requested_one_is_absent(
+    owner_id: uuid.UUID,
+) -> None:
+    # _split silently falls back to a stratified split when the named column
+    # isn't in the frame; recording the REQUEST would claim a group-aware
+    # holdout that never happened.
+    async with get_session() as db:
+        dataset = await create_dataset(db, name=f"ds-{uuid.uuid4().hex}", csv_bytes=_CSV, owner_id=owner_id)
+        split = await quick_split_dataset(db, dataset=dataset, group_column="not-a-column", test_size=0.25)
+        assert split.split_group_column is None
         await delete_dataset(db, dataset.id)
 
 
@@ -159,6 +187,23 @@ async def test_register_manual_split_stores_train_test_parquet(owner_id: uuid.UU
         assert len(pd.read_parquet(split.train_path)) == 3
         assert len(pd.read_parquet(split.test_path)) == 1
 
+        await delete_dataset(db, dataset.id)
+
+
+async def test_register_manual_split_clears_a_previous_quick_split_s_parameters(owner_id: uuid.UUID) -> None:
+    # Otherwise the retired quick split's group/test_size/seed would sit
+    # alongside the manual split's hashes, describing a split that no longer
+    # exists.
+    async with get_session() as db:
+        dataset = await create_dataset(db, name=f"ds-{uuid.uuid4().hex}", csv_bytes=_CSV, owner_id=owner_id)
+        await quick_split_dataset(db, dataset=dataset, group_column="group", test_size=0.25, seed=3)
+        split = await register_manual_split(
+            db, dataset=dataset, train_csv_bytes=b"age,label\n10,0\n", test_csv_bytes=b"age,label\n40,1\n"
+        )
+        assert split.split_method == "manual"
+        assert split.split_group_column is None
+        assert split.split_test_size is None
+        assert split.split_seed is None
         await delete_dataset(db, dataset.id)
 
 

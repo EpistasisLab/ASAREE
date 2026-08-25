@@ -1,6 +1,6 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { Database } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { DatasetNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
@@ -10,13 +10,15 @@ import { CircleNode } from './CircleNode'
 // types/protocols.ts), unlike Memory's own "declares intent, no effect yet"
 // status, so NOT dashed. Rendered as a small circle-with-icon (see
 // CircleNode), same as every other connector source. Wires into the Agent's
-// shared Tool connector (handleId="tool", matching CONNECTOR_PANEL_INFO.tool
-// in ProtocolCanvas.tsx and _NODE_TYPE_TO_HANDLE in protocol_execution.py),
-// not a dedicated "dataset" handle -- see AgentNode.tsx's own comment. The
+// Dataset connector (handleId="dataset", matching
+// CONNECTOR_PANEL_INFO.dataset in ProtocolCanvas.tsx and
+// _NODE_TYPE_TO_HANDLE in protocol_execution.py) -- a slot of its own, named
+// after this node type since it's the only member; it used to share the Tool
+// slot with mcp_tool/Script, see AgentNode.tsx's own comment. The
 // hover toolbar's own power icon toggles this same config.enabled
 // _build_user_input already checks before emitting a "Dataset context"
 // block, same as the Switch in its own inspector.
-const ACCENT = hashToChartHue('dataset')
+const ACCENT = nodeAccent('dataset')
 
 export function DatasetNode({ id, data, selected }: NodeProps & { data: DatasetNodeData }) {
   const { updateNodeData } = useReactFlow()
@@ -30,7 +32,10 @@ export function DatasetNode({ id, data, selected }: NodeProps & { data: DatasetN
       icon={Database}
       label={data.label}
       placeholder="Dataset"
-      handleId="tool"
+      handleId="dataset"
+      // Positioned ABOVE its agent (the Dataset connector lives on the
+      // agent's own top edge), same as an Architectural Pattern node.
+      handlePosition="bottom"
       warning={data.config?.dataset_id ? undefined : 'No dataset selected'}
       factorCount={boundFactorCount(data)}
       dimmed={!enabled}

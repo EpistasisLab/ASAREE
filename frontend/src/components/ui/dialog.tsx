@@ -48,10 +48,20 @@ function DialogContent({
   return (
     <DialogPortal>
       <DialogOverlay />
+      {/* grid-cols-[minmax(0,1fr)] is load-bearing, not decoration: an auto
+          grid track never shrinks below its content's min-content width, and a
+          `truncate` (white-space: nowrap) descendant reports its whole
+          untruncated line as min-content. So one long unbroken string -- a
+          literature-paper title in the OKF upload dialog, an MCP endpoint, a
+          model id -- would blow the track past max-w-sm and render as a single
+          wide line spilling outside the popup, with the truncation never
+          kicking in. Naming the column minmax(0,1fr) caps it at the popup's
+          own width so truncate/line-clamp behave. Fixed here rather than with
+          a min-w-0 in each dialog, since every dialog wants it. */}
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}

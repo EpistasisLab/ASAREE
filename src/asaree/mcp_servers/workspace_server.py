@@ -32,16 +32,26 @@ from asaree_workspace_core import (
     WorkspaceError,
     make_workspace_id,
     provenance,
+    resolve_dataset_name_from_ctx,
     resolve_owner_id_from_ctx,
     resolve_workspace_id_from_ctx,
 )
 from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
 
-from asaree.models.database import get_session
-from asaree.services.datasets import get_dataset_by_name
+from asaree.services.dataset_workspaces import WorkspaceSeedError, seed_cell_workspace
 
-mcp = FastMCP("asaree-workspace")
+INSTRUCTIONS = """\
+Version a dataset across a cleaning/feature-engineering/selection pipeline, \
+so each stage is reviewable and reversible.
+
+Open a stage to get a scratch area seeded from the current accepted version, \
+let the matching sklearn server write into it, then accept it to promote the \
+result to the new HEAD -- or discard it and the accepted history is \
+untouched. Everything downstream reads HEAD, so nothing sees a stage that \
+was never accepted."""
+
+mcp = FastMCP("asaree-workspace", instructions=INSTRUCTIONS)
 
 # stderr, never stdout: stdout is the MCP transport itself on a stdio server.
 logger = logging.getLogger(__name__)
@@ -222,76 +232,11 @@ def _structural_checks(
     return checks, errors
 
 
-async def _fetch_owned_registration(
-    name: str, ctx: Context[Any, Any, Any] | None
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Look up a registered dataset by name, scoped to the calling run's owner.
-
-    In-process DB call, not an HTTP round-trip — this server is ASAREE's own
-    code. Returns (registration-as-dict, error); a dataset that exists but
-    belongs to a different owner is reported the same as "not found", matching
-    the HTTP API's own 404-not-403 convention (asaree/api/datasets.py).
-    """
-    owner_id_str = resolve_owner_id_from_ctx(ctx, required=True)
-    owner_id = uuid.UUID(owner_id_str)
-    async with get_session() as db:
-        dataset = await get_dataset_by_name(db, name)
-        if dataset is None or dataset.owner_id != owner_id:
-            return None, f"Dataset '{name}' not found in registry."
-        return {
-            "target_column": dataset.target_column,
-            "train_path": dataset.train_path,
-            "test_path": dataset.test_path,
-            "dictionary_json": dataset.dictionary_json,
-        }, None
-
-
-DATA_DICTIONARY_FILENAME = "data_dictionary.json"
-
-
-def _publish_data_dictionary(ws: Workspace, dictionary_json: str | None) -> bool:
-    """Copy the registration's data dictionary into the cell's workspace.
-
-    The train/test data reaches the domain MCP servers over the shared
-    filesystem, but ``dictionary_json`` lives only in Postgres — and those
-    servers deliberately hold no DB credentials, so the only channel left to
-    them was an authenticated HTTP call back into the API with a token
-    (``ASAREE_INTERNAL_MCP_API_KEY``) that a fresh deployment doesn't have.
-    Writing it here, next to the ``state.json`` they already read, puts the
-    dictionary on the same route as everything else they consume: no token, no
-    network, no per-deployment setup step.
-
-    This server is the right place for it because it's the one with database
-    access (see ``_fetch_owned_registration``), and ``open_workspace`` is the
-    one call every pipeline makes before touching the data. Ownership is
-    already enforced upstream of here, and the file lands inside a workspace
-    named for its own experiment/cell, so it's scoped exactly like the parquet
-    beside it.
-
-    Returns whether a dictionary is available for this cell. A write failure is
-    swallowed on purpose: a dictionary is an aid to an agent, never a
-    precondition for the run, and the reader falls back to the API anyway.
-    """
-    if not dictionary_json:
-        return False
-    try:
-        ws.dir.mkdir(parents=True, exist_ok=True)
-        path = ws.dir / DATA_DICTIONARY_FILENAME
-        # Atomic, and rewritten on every open so an edited registration can't
-        # leave a resumed cell reading a stale copy.
-        tmp = ws.dir / f"{DATA_DICTIONARY_FILENAME}.tmp"
-        tmp.write_text(dictionary_json)
-        tmp.replace(path)
-    except OSError as e:
-        logger.warning("workspace_data_dictionary_write_failed", extra={"workspace": ws.workspace_id, "error": str(e)})
-    return True
-
-
 @mcp.tool()
 async def open_workspace(
-    experiment_id: str,
-    cell_label: str,
-    name: str,
+    experiment_id: str = "",
+    cell_label: str = "",
+    name: str = "",
     target_column: str = "",
     stage: str = "",
     ctx: Context[Any, Any, Any] | None = None,
@@ -307,11 +252,26 @@ async def open_workspace(
     in ``accepted_stages``. The response describes the TRAINING split only; the
     held-out test rows are never surfaced (leakage guard).
 
+    In a run started by ASAREE with a Dataset wired, you normally do not need to
+    call this at all — ASAREE seeds the cell's workspace before your first turn
+    (``services.dataset_workspaces.seed_cell_workspace``) and your prompt says so.
+    It remains the entry point for everything that isn't that case: calling from
+    outside a run, overriding the target column, picking between several wired
+    datasets, (re)seeding a stage's scratch area, or re-reading the summary below.
+
+    Every argument is optional in a run started by ASAREE: the workspace and the
+    wired dataset both arrive as ambient request ``_meta``, so the usual call is
+    a bare ``open_workspace()``. Pass an argument only to override what the run
+    already knows, or when calling from outside a run.
+
     Args:
         experiment_id: The experiment this cell belongs to (workspace namespace).
-        cell_label: Safe per-cell label.
+            Optional — with cell_label, resolved from the ambient workspace_id.
+        cell_label: Safe per-cell label. Optional, as above.
         name: Registered dataset name (must be a pre-split train/test registration,
-            and owned by the user who started this run).
+            and owned by the user who started this run). Optional — resolved from
+            _meta when the run has exactly one dataset wired; with several, this
+            picks between them and the error lists the candidates.
         target_column: Override target column; defaults to the registry's.
         stage: For a stage migrated to the scratch-folder handoff (see
             SCRATCH_STAGES) — one of "dc"/"fte"/"fs" — (re)materializes that
@@ -319,26 +279,57 @@ async def open_workspace(
             calling domain server's tools have a clean starting point. Omit for
             stages still on the old shared-library flow.
     """
+    # Both halves of the workspace id, or neither: a half-specified pair would
+    # have to be reconciled against the ambient id, and there is no sensible
+    # answer when they disagree.
+    if experiment_id and cell_label:
+        composed = ""
+    elif experiment_id or cell_label:
+        return json.dumps({"error": "pass experiment_id and cell_label together, or neither (both come from _meta)."})
+    else:
+        composed = "resolve"
     try:
-        reg, err = await _fetch_owned_registration(name, ctx)
+        if composed:
+            workspace_id = resolve_workspace_id_from_ctx("", ctx)
+        else:
+            workspace_id = make_workspace_id(experiment_id, cell_label)
+    except WorkspaceError as e:
+        return json.dumps({"error": f"workspace: {e}"})
+
+    resolved_name, candidates = resolve_dataset_name_from_ctx(name, ctx)
+    if not resolved_name:
+        return json.dumps(
+            {
+                "error": "name not provided and not resolvable from _meta"
+                + (
+                    f"; this run has {len(candidates)} datasets wired ({', '.join(candidates)}) "
+                    "— pass the one this cell should use."
+                    if candidates
+                    else " (no dataset is wired into this run)."
+                )
+            }
+        )
+
+    try:
+        owner_id = uuid.UUID(resolve_owner_id_from_ctx(ctx, required=True))
     except WorkspaceError as e:
         return json.dumps({"error": f"owner resolution: {e}"})
-    if err is not None:
-        return json.dumps({"error": err})
-    assert reg is not None
 
-    resolved_target = target_column or reg.get("target_column") or ""
-    if not resolved_target:
-        return json.dumps({"error": "target_column not provided and not set in registry."})
-
+    # The seeding itself is shared with ASAREE's own pre-seeding at run start
+    # (protocol_execution._resolve_node_dataset), so a run that never
+    # calls this tool still lands in exactly the same on-disk state.
     try:
-        workspace_id = make_workspace_id(experiment_id, cell_label)
-        ws = Workspace.open(
-            workspace_id,
-            target_column=resolved_target,
-            seed_train_path=reg["train_path"],
-            seed_test_path=reg["test_path"],
+        seeded = await seed_cell_workspace(
+            workspace_id=workspace_id,
+            dataset_name=resolved_name,
+            owner_id=owner_id,
+            target_column=target_column,
         )
+    except WorkspaceSeedError as e:
+        return json.dumps({"error": str(e), "workspace_id": workspace_id})
+
+    ws, resolved_target = seeded.workspace, seeded.target_column
+    try:
         X_train, y_train, X_test, y_test = ws.read_head()  # noqa: N806 — matches sklearn convention throughout
         if stage in SCRATCH_STAGES:
             _seed_scratch(ws, stage, resolved_target)
@@ -351,6 +342,9 @@ async def open_workspace(
     accepted_stages = [s for s in _STAGES if ws.has_accepted(s)]
     response: dict[str, object] = {
         "workspace_id": workspace_id,
+        # Echoed because both may have been resolved from ambient _meta rather
+        # than passed: the caller should be able to see what it actually opened.
+        "dataset_name": resolved_name,
         "head": ws.load_state().get("head"),
         "target_column": resolved_target,
         "n_train": int(len(X_train)),
@@ -365,10 +359,12 @@ async def open_workspace(
         "note": "Workspace opened. The test split is held out and never returned. "
         "Downstream stages read/write this workspace_id on disk (ambient _meta).",
     }
-    has_dict = _publish_data_dictionary(ws, reg.get("dictionary_json"))
+    has_dict = seeded.data_dictionary_available
     response["data_dictionary_available"] = has_dict
     if has_dict:
-        response["data_dictionary_hint"] = f"Call get_data_dictionary(name='{name}', columns='col1,col2') for detail."
+        response["data_dictionary_hint"] = (
+            f"Call get_data_dictionary(name='{resolved_name}', columns='col1,col2') for detail."
+        )
     return json.dumps(response)
 
 

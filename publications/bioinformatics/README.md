@@ -12,14 +12,15 @@ protocol shape, on a dataset anyone can download.
 
 | File | |
 | --- | --- |
-| `myocardial-anthropic.json` | The experiment, wired to an **Anthropic** LLM node |
-| `myocardial-openai.json` | The same, wired to **OpenAI** |
-| `myocardial-azure-foundry.json` | The same, wired to **Azure Foundry** — what the paper's runs used |
+| `myocardial-azure-foundry-latest.json` | The experiment, wired to **Azure Foundry** — what `import_use_case.py` imports by default |
+| `myocardial-anthropic-latest.json` | The same, wired to **Anthropic** |
+| `myocardial-openai-latest.json` | The same, wired to **OpenAI** |
+| `myocardial-*-v0.2.0.json` | Those three graphs frozen as the paper's runs used them — see "Versions" below |
 | `mi_ZSN.csv` | The dataset — 1700 admissions × 111 features, target `mi_ZSN` |
 | `dict_ZSN.json` | The data dictionary for those 111 columns |
 | `stats/` | The paper's analysis scripts and outputs for the spinal runs (not part of this walkthrough) |
 
-The three JSON files are the same protocol graph — identical agents, prompts,
+The provider variants are the same protocol graph — identical agents, prompts,
 critic gates, and tool wiring. They differ only in the shared LLM node and the
 factors bound to it, because a node's provider is fixed when the node is
 created and can't be switched afterwards. Pick the one matching the API key you
@@ -27,9 +28,9 @@ have:
 
 | File | Model factor | Effort factor | Cells |
 | --- | --- | --- | --- |
-| `myocardial-anthropic.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 80 |
-| `myocardial-openai.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 80 |
-| `myocardial-azure-foundry.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 80 |
+| `myocardial-anthropic-latest.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 80 |
+| `myocardial-openai-latest.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 80 |
+| `myocardial-azure-foundry-latest.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 80 |
 
 All three are 2 × 2 × 2 designs (model × effort × critic on/off) at 10
 replicates, with the smaller/larger model of a family at the middle and top of
@@ -43,6 +44,43 @@ for. Whether a model gets an Effort or a Temperature control is a per-model fact
 declared in `motoro.services.model_capabilities`, not a per-provider one, so if
 you swap a model in, check which of the two the node then offers: an effort
 factor bound to a temperature-based model varies nothing at runtime, silently.
+
+## Versions
+
+Each provider variant ships twice. `-v0.2.0` is the graph as the paper's runs
+used it, frozen. Don't modernize it: its value is that it's the exact artifact
+behind the published numbers, and a graph that drifts can't reproduce them.
+
+`-latest` is the maintained copy — the same design (same factors, replicates,
+metrics, agents and critic gates), brought up to today's canvas:
+
+- **Dataset connector.** Its edges use the current `dataset` handle rather than
+  the legacy `resource` spelling, and the Dataset node now sits *above* the
+  agents, since that connector lives on the agent's top edge (Pattern, Skill,
+  Dataset, Knowledge above; AI, Memory, Tool below).
+- **No workspace Tool nodes.** An agent with a Dataset wired is granted the
+  workspace tools implicitly (`_resolve_dataset_tool_config`), so the three
+  `Workspace (open_workspace, accept_stage)` nodes were redundant and are gone.
+- **Prompts stopped dictating what the run now binds.** ASAREE seeds the cell's
+  workspace before the agent's first turn, and a wired Script reaches
+  `run_model_script` as a path in ambient `_meta` — so DC/FTE/FS call a bare
+  `open_workspace(stage=...)` instead of passing `experiment_id`/`cell_label`/
+  `name`, and Score calls `run_model_script` with **no** `code` argument
+  instead of retyping the wired script.
+
+That `open_workspace(stage=...)` call is deliberately kept: seeding the
+workspace materializes `v0_raw`, but *not* a stage's `.scratch` input, which is
+what the `asaree-sklearn-*` servers read. The run context the agent receives
+says "do not call open_workspace" — true for the data, not for the scratch
+staging — so each prompt says so explicitly.
+
+Nothing else about how a cell runs or scores changed. The workspace tools the
+deleted nodes allow-listed (`open_workspace`, `accept_stage`) are still
+reachable — implicitly, along with the rest of `WORKSPACE_AGENT_TOOLS` — and
+metric promotion is topology-independent: `services.metric_promotion` scans
+every agent run for a successful `run_model_script` call and lifts
+`test_metrics` out of the tool result itself, so it neither knows nor cares
+whether `code` was passed as an argument or read from the wired script's path.
 
 ## The dataset
 

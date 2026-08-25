@@ -1,5 +1,41 @@
+import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
-import type { AgentNodeData, CriticGateNodeData, McpToolNodeData, ProtocolGraph } from '@/types/protocols'
+import type { AgentNodeData, CriticGateNodeData, McpToolNodeData, Protocol, ProtocolGraph } from '@/types/protocols'
+
+// The name the canvas gives a protocol it auto-creates for an experiment.
+// The "[shortid]" suffix is load-bearing: protocol names are unique per owner
+// (uq_protocols_owner_name) and two experiments sharing a name is the normal
+// case (every new one starts as "Untitled Experiment"), so a plain name would
+// 409 forever. Mirrors the server's services/protocols.py
+// generated_protocol_name -- change both together.
+export function generatedProtocolName(experimentName: string, experimentId: string) {
+  return `Protocol: ${experimentName} [${experimentId.slice(0, 8)}]`
+}
+
+// Whether a protocol still carries its auto-generated name (matched by shape,
+// so a protocol created under an older experiment name still counts) rather
+// than one a user typed deliberately, which must never be overwritten.
+export function isGeneratedProtocolName(name: string, experimentId: string) {
+  return new RegExp(`^Protocol: .*\\[${experimentId.slice(0, 8)}\\]$`).test(name ?? '')
+}
+
+// Renaming an experiment re-syncs its auto-named protocols server-side (see
+// the PATCH /experiments/{id} handler); this applies the same rename to the
+// cached protocol row so the canvas doesn't keep showing the old name until
+// the next reload. Written with setQueryData rather than invalidateQueries on
+// purpose: a refetch of this key re-seeds the canvas's nodes/edges, which can
+// race a still-in-flight autosave (see protocolForExperimentQueryKey above).
+export function applyExperimentRenameToProtocolCache(
+  queryClient: QueryClient,
+  experimentId: string,
+  experimentName: string,
+) {
+  queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), (prev: Protocol | undefined) =>
+    prev && isGeneratedProtocolName(prev.name, experimentId)
+      ? { ...prev, name: generatedProtocolName(experimentName, experimentId) }
+      : prev,
+  )
+}
 
 // The shared react-query key ProtocolCanvas.tsx mirrors its own live
 // nodes/edges into on every change (no debounce -- a pure in-memory cache

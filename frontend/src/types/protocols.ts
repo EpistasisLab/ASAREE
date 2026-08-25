@@ -25,6 +25,9 @@ export interface ProtocolNode {
     | MemoryNodeData
     | DatasetNodeData
     | ScriptNodeData
+    | SkillNodeData
+    | OkfBundleNodeData
+    | OkfDocumentNodeData
     | ReasonActPatternNodeData
     | SingleAgentBaselinePatternNodeData
 }
@@ -400,6 +403,136 @@ export interface ScriptNodeData {
 export function defaultScriptNodeData(label = 'Script'): ScriptNodeData {
   return { label, config: { name: 'script', language: 'python', code: '' } }
 }
+
+// A "Skill" node -- names one registered Agent Skill for the Agent it's wired
+// into. An Agent Skill is a *directory* whose entry point is SKILL.md (YAML
+// frontmatter carrying a `name` and a `description` of what it does AND when
+// to use it, then a Markdown body of instructions), optionally bundling
+// reference files the agent reads on demand. ASAREE registers either shape:
+// POST /skills/upload-folder for the directory, POST /skills/upload for a
+// skill that bundles nothing and so IS exactly one .md.
+//
+// skill_id/skill_name mirrors DatasetNodeConfig's own dataset_id/dataset_name
+// pairing, and for the same reason: the document itself lives in the skill
+// library, not in the graph, so editing a registered skill takes effect on
+// the next run without touching a single protocol. Unlike Dataset, this
+// resolves into a REAL Motoro config slot -- _resolve_skill_config collects
+// every wired node's id into the agent's `skill_config`, and Motoro's engine
+// decides how to disclose them (an index of names+descriptions up front, each
+// body only on the model's own `load_skill` call, and a bundled file only on
+// its `read_skill_file` call).
+export interface SkillNodeConfig {
+  skill_id: string | null
+  skill_name: string | null
+  // Cached off the registered skill purely so the node/inspector can show
+  // what this skill is for without a fetch -- the run always reads the
+  // server's own copy by id, never this.
+  skill_description?: string | null
+  // Absent means enabled, matching every other connector's own convention.
+  enabled?: boolean
+}
+
+export interface SkillNodeData {
+  label: string
+  config: SkillNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+// No defaultSkillNodeData counterpart to the factories above, deliberately:
+// a Skill node is never created blank. skillCatalog.ts's nodeDataForSkill
+// builds it from the skill picked in the browser, since a node whose whole
+// identity is one skill would be meaningless without it -- same as the
+// server-dedicated MCP node types.
+
+// An "OKF Bundle" node. Names a registered OKF bundle: a directory of Markdown
+// concept files (Open Knowledge Format) that the wired agent can read from and
+// write back to during a run. In the GUI that directory is ASAREE's copy of a
+// folder the user uploaded (POST /okf/bundles/upload); over the API it can
+// instead point at a folder the server already has (POST /okf/bundles).
+//
+// Either way registration happens before this node exists, rather than being a
+// path typed onto it, because the OKF MCP server jails itself to one directory
+// read from its own process environment -- so each bundle is its own MCP server
+// process (see services/okf_bundles.py). That makes `server_name` the field a run
+// actually reads: _resolve_knowledge_config namespaces the tool names against
+// it and merges them into the agent's tool_config, exactly like an MCP Tool
+// node. The Knowledge/Tool split is about what the user is DECLARING -- a
+// knowledge base versus a capability -- not about how the engine consumes it.
+export interface OkfBundleNodeConfig {
+  // The registered MCP server row (GET /okf/bundles). Cached so the inspector
+  // can refresh tools / preview concepts without re-resolving from the name.
+  bundle_id: string | null
+  // What a run keys off -- the generated okf-bundle-* server name. Without it
+  // the node contributes nothing, since its tools can't be namespaced.
+  server_name: string | null
+  // Display only: where the bundle lives on the machine running ASAREE, and
+  // the folder's own name.
+  bundle_path: string | null
+  bundle_label: string | null
+  // The bundle server's tools, BARE (e.g. "read_concept"), cached at
+  // registration. Namespaced "{server_name}.{tool}" at resolve time, matching
+  // McpToolNodeConfig. No per-tool picker in V1: a bundle's tools are a fixed
+  // read/write set that only makes sense together.
+  tool_names: string[]
+  // Absent means enabled, matching every other connector's own convention.
+  enabled?: boolean
+}
+
+export interface OkfBundleNodeData {
+  label: string
+  config: OkfBundleNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+// No default factory, same reasoning as Skill: the bundle IS the node, so it's
+// built from the one picked in the browser -- see okfCatalog.ts.
+
+// An "OKF Document" node -- the Knowledge connector's other node type. Names
+// one UPLOADED single-concept OKF document: a .md file with YAML frontmatter
+// (`title`, optionally `type`/`description`/`tags`) that the user handed over
+// from their own machine, exactly the way a Skill is registered, rather than a
+// folder they pointed the server at.
+//
+// Underneath it IS a bundle of one concept -- ASAREE stores the upload in its
+// own directory and serves it with the same per-bundle OKF MCP server (see
+// services/okf_documents.py) -- so this config carries the same server_name/
+// tool_names as OkfBundleNodeConfig and _resolve_knowledge_config reads the
+// two identically. The node types are separate because the question they
+// answer differs: "use knowledge the server already has" vs. "here's a concept
+// file from my machine". A run's agent can still WRITE to it -- an uploaded
+// document is a living concept, not a frozen attachment.
+export interface OkfDocumentNodeConfig {
+  // The registered document (GET /okf/documents). Cached so the inspector can
+  // refresh tools / read the current text back without re-resolving.
+  document_id: string | null
+  // What a run keys off -- the generated okf-doc-* server name. Without it the
+  // node contributes nothing, since its tools can't be namespaced.
+  server_name: string | null
+  // Display only, and deliberately a SNAPSHOT of upload time: the agent may
+  // rewrite the document's frontmatter mid-run, and the canvas card shouldn't
+  // silently rename itself. The inspector shows the live values.
+  document_title: string | null
+  document_path: string | null
+  // The document server's tools, BARE, cached at registration -- namespaced
+  // "{server_name}.{tool}" at resolve time. No per-tool picker, same reason as
+  // OkfBundleNodeConfig: reading and writing a concept only makes sense
+  // together.
+  tool_names: string[]
+  // Absent means enabled, matching every other connector's own convention.
+  enabled?: boolean
+}
+
+export interface OkfDocumentNodeData {
+  label: string
+  config: OkfDocumentNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+// No default factory, same reasoning as Skill and OKF Bundle -- see
+// nodeDataForDocument in okfCatalog.ts.
 
 // The Architectural Pattern connector's node family -- UNLIKE Memory (see
 // MemoryNodeData's own comment), wiring one into an Agent's Architectural

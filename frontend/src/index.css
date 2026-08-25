@@ -107,6 +107,44 @@
     --chart-3: oklch(0.7 0.16 150);
     --chart-4: oklch(0.74 0.17 60);
     --chart-5: oklch(0.7 0.18 25);
+    /* Protocol-canvas node palette -- the EXTRA hues, beyond the five
+       --chart-* ones, that the thirteen node kinds need in order not to
+       repeat. Five kinds keep a --chart-* hue and eight get a slot here;
+       which is which lives in lib/nodeAccent.ts, and these are deliberately
+       numbered rather than named after node types so that mapping stays in
+       one place instead of two.
+
+       Eight because the canvas used to hash a node kind into the five chart
+       hues, which made repeats arithmetic rather than unlucky: thirteen kinds
+       across five hues left buckets of three and four, so Skill and AI came
+       out the same color, as did Dataset/Knowledge and Pattern/Script. The
+       fix keeps one kind per bucket on its familiar chart hue (the canvas
+       shouldn't recolor itself wholesale over a collision) and moves the rest
+       here. Slots sit in the gaps between the chart hues, and each was picked
+       next to the hue its kind is moving OFF of where that was possible
+       (Memory 307 beside Dataset's 280, OKF bundle 359 beside Critic's 25),
+       so a moved node still lands somewhere near where the eye expects it.
+
+       Lightness/chroma vary between neighbouring slots on purpose: the gaps
+       only allow ~25deg of hue between some of these, which is not enough on
+       its own at the size of a node card. */
+    --node-1: oklch(0.86 0.17 105);
+    --node-2: oklch(0.79 0.17 128);
+    --node-3: oklch(0.72 0.13 175);
+    --node-4: oklch(0.78 0.13 227);
+    --node-5: oklch(0.66 0.18 253);
+    --node-6: oklch(0.7 0.2 307);
+    --node-7: oklch(0.74 0.2 333);
+    --node-8: oklch(0.68 0.2 359);
+    /* Connector captions (Pattern/Skill/Dataset/Knowledge/AI/Memory/Tool on
+       AgentNode and CriticGateNode). One fixed yellow rather than the host
+       node's own accent: these sit outside the card on the canvas backdrop,
+       where they have to be found rather than merely read, and yellow is the
+       one warm hue no node kind above owns. Kept lighter and less saturated
+       than --node-1 (the nearest node hue) so a caption doesn't read as a
+       tiny Skill node -- and dimmer than a caption's first pass at it
+       (0.91/0.15), which read as brighter than the node it belonged to. */
+    --node-label: oklch(0.83 0.12 92);
     --radius: 0.5rem;
     --sidebar: oklch(0.27 0.014 254);
     --sidebar-foreground: oklch(0.95 0.004 254);

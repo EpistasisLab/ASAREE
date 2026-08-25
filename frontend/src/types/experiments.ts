@@ -5,7 +5,17 @@ export interface DesignFactor {
   // working unchanged. Drives which control the factor editor renders per
   // level (see components/protocol/factorLevels.ts); purely a frontend/UX
   // concern, not enforced by the backend (design_spec is opaque JSONB).
-  level_type?: 'string' | 'text' | 'number' | 'boolean' | 'llm_config' | 'tool_config' | 'pattern' | 'script_config'
+  level_type?:
+    | 'string'
+    | 'text'
+    | 'number'
+    | 'boolean'
+    | 'llm_config'
+    | 'tool_config'
+    | 'pattern'
+    | 'script_config'
+    | 'dataset_config'
+    | 'tool_names'
 }
 
 export interface DesignMetric {
@@ -114,6 +124,11 @@ export interface Experiment {
   design_type: string
   task_brief: Record<string, unknown> | null
   design_spec: DesignSpec | null
+  // Every dataset attached to this experiment, in canvas wiring order -- an
+  // experiment can run against several since the Dataset connector was
+  // uncapped. `dataset_id` is a read-only view of the first one, kept for
+  // code written before that; it is no longer a stored column.
+  dataset_ids: string[]
   dataset_id: string | null
   created_at: string
   archived_at: string | null

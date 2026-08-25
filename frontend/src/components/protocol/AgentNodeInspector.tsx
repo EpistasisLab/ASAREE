@@ -1,9 +1,9 @@
 import { Bot } from 'lucide-react'
+import { nodeAccent } from '@/lib/nodeAccent'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { hashToChartHue } from '@/lib/utils'
 import { defaultSystemPrompt } from './defaultSystemPrompt'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
@@ -13,7 +13,7 @@ import { OutputContractEditor } from './OutputContractEditor'
 import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import type { AgentNodeConfig, AgentNodeData, NodeRunState, ProtocolNode } from '@/types/protocols'
 
-const ACCENT = hashToChartHue('agent')
+const ACCENT = nodeAccent('agent')
 
 // A node's setup opens as a large centered floating window over the dimmed
 // canvas, not a sidebar or an edge-to-edge takeover.

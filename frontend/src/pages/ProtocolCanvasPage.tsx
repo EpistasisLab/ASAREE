@@ -12,7 +12,11 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { bestMetric, cellsStatusAccent, formatMetricLabel, metricValueSuffix, scaledMetricValue } from '@/lib/experiment'
-import { protocolForExperimentQueryKey } from '@/lib/protocolGraph'
+import {
+  applyExperimentRenameToProtocolCache,
+  generatedProtocolName,
+  protocolForExperimentQueryKey,
+} from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import type { Cell, Experiment } from '@/types/experiments'
 import type { ProtocolRun } from '@/types/protocols'
@@ -29,8 +33,9 @@ function EditableExperimentName({ experiment }: { experiment: Experiment }) {
 
   const renameMutation = useMutation({
     mutationFn: (name: string) => experimentsApi.update(experiment.id, { name }),
-    onSuccess: () => {
+    onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ['experiments'] })
+      applyExperimentRenameToProtocolCache(queryClient, experiment.id, updated.name)
     },
   })
 
@@ -260,17 +265,11 @@ export function ProtocolCanvasPage() {
       const existing = await protocolsApi.list(experimentId!)
       if (existing.length > 0) return existing[0]
       const experiment = await experimentsApi.get(experimentId!)
-      // Protocol names are unique per owner (uq_protocols_owner_name) --
-      // two experiments sharing a name (trivially true for the "Untitled
-      // Experiment" default every new one starts with) would otherwise
-      // collide here and 409 forever, since a plain-name retry hits the
-      // exact same conflict every time. The experiment's own id is unique
-      // by construction, so suffixing it (matching the "[shortid]"
-      // disambiguation convention already used elsewhere, e.g. a real
-      // protocol named "...Benchmark [079976db]") makes this create call
-      // collision-proof.
+      // See generatedProtocolName for why the name is suffixed with the
+      // experiment's shortid. Renaming the experiment later re-syncs this
+      // name server-side, so it stays a live label rather than a snapshot.
       return protocolsApi.create({
-        name: `Protocol: ${experiment.name} [${experimentId!.slice(0, 8)}]`,
+        name: generatedProtocolName(experiment.name, experimentId!),
         experiment_id: experimentId!,
       })
     },

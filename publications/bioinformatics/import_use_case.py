@@ -3,14 +3,15 @@
 
     ASAREE_BASE_URL=http://localhost:8000 ASAREE_API_KEY=... \
         uv run --with ./sdk python publications/bioinformatics/import_use_case.py \
-        [myocardial-anthropic.json]
+        [myocardial-anthropic-latest.json]
 
 The API-side equivalent of README.md's GUI walkthrough, for rebuilding the
 experiment from scratch repeatedly; the GUI is the documented path. Takes any
-of the three provider variants in this directory, defaulting to the Azure
-Foundry one the paper's runs used. Idempotent: run it again and it reuses
-whatever already exists under the same names rather than creating a second
-copy.
+of the variants in this directory, defaulting to the Azure Foundry one the
+paper's runs used -- in its `-latest` form; pass a `-v0.2.0` file explicitly to
+import the frozen graph behind the published numbers (see README's "Versions").
+Idempotent: run it again and it reuses whatever already exists under the same
+names rather than creating a second copy.
 
 What it does, in order (the order matters -- an experiment has to exist before
 a protocol can attach to it, and the dataset has to be registered before the
@@ -37,7 +38,10 @@ from asaree_client.exceptions import AsareeNotFoundError
 
 HERE = Path(__file__).resolve().parent
 
-DEFAULT_USE_CASE_FILE = HERE / "myocardial-azure-foundry.json"
+# The maintained one, not the frozen one: `-v0.2.0` is the exact graph the
+# paper's runs used and is kept byte-stable for reproduction, while `-latest`
+# tracks the current canvas (see README.md).
+DEFAULT_USE_CASE_FILE = HERE / "myocardial-azure-foundry-latest.json"
 DATA_FILE = HERE / "mi_ZSN.csv"
 DICTIONARY_FILE = HERE / "dict_ZSN.json"
 

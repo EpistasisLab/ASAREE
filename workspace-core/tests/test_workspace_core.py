@@ -158,10 +158,28 @@ def test_owner_id_resolution() -> None:
     check("resolve_owner_id_from_ctx(required=True) raises when absent", raised)
 
 
+def test_dataset_name_resolution() -> None:
+    print("=== dataset name ambient resolution ===")
+    one = {core.META_KEY_DATASET_NAMES: ["spinal"]}
+    many = {core.META_KEY_DATASET_NAMES: ["cohort-a", "cohort-b"]}
+    check("names read off the key", core.dataset_names_from_meta(many) == ["cohort-a", "cohort-b"])
+    check("absent -> empty list", core.dataset_names_from_meta({}) == [])
+    check("malformed -> empty list", core.dataset_names_from_meta({core.META_KEY_DATASET_NAMES: "spinal"}) == [])
+    check("non-string entries dropped", core.dataset_names_from_meta({core.META_KEY_DATASET_NAMES: [1, "a", ""]}) == ["a"])
+
+    check("explicit wins", core.resolve_dataset_name("chosen", many) == "chosen")
+    check("one wired -> ambient fallback", core.resolve_dataset_name("", one) == "spinal")
+    # The whole point of the len==1 guard: with a real choice to make, refuse
+    # rather than silently read whichever happens to be first.
+    check("several wired -> no guess", core.resolve_dataset_name("", many) == "")
+    check("none wired -> empty", core.resolve_dataset_name("", None) == "")
+
+
 def main() -> int:
     test_context_resolution()
     test_provenance()
     test_owner_id_resolution()
+    test_dataset_name_resolution()
     print(f"\nResults: {_PASS}/{_PASS + _FAIL} passed, {_FAIL} failed")
     return 1 if _FAIL else 0
 

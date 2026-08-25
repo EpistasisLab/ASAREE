@@ -10,11 +10,12 @@ import { HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
 import type { Dataset } from '@/types/datasets'
 import { FileDropInput } from './FileDropInput'
 
-// Registers a dataset directly from wherever a Dataset node needs one
-// (DatasetNodeInspector) -- there's no dedicated Datasets page/route in this
-// app (unlike Experiments' own tile grid), and nothing else references a
-// dataset outside a protocol today, so a plain dialog at the one place this
-// comes up is the right scope, not a new top-level resource.
+// Registers a dataset from wherever one is needed -- the dataset browser
+// (DatasetBrowserPanel, where the library is listed) and a Dataset node's own
+// inspector. There's no dedicated Datasets page/route in this app (unlike
+// Experiments' own tile grid), and nothing references a dataset outside a
+// protocol today, so a dialog at the two places this comes up is the right
+// scope, not a new top-level section.
 //
 // This ONLY stores the raw uploaded file -- it never splits it (see
 // RegisteredDataset's own comment in the backend model for why: scientific

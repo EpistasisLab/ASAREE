@@ -74,14 +74,31 @@ rather than doing it silently as a routine part of coding:
 
 # Experiment data model
 
-- **`ResearchExperiment.dataset_id` is a real, nullable FK** to `registered_datasets`
-  (migration `a1b2c3d4e5f6`), unlike agents below — a dataset genuinely is a first-class,
-  one-to-one property of an experiment worth a real relationship, matching what ARES does.
-  It's set via `PATCH /experiments/{id}`, not at creation: the notebook's Step 1 (create the
-  experiment) runs *before* Step 2 (register the dataset), so there's nothing to attach yet
-  at create time — see the `client.experiments.update(...)` call added right after Step 2 in
-  `spinal_pipeline.ipynb`. Experiments created before this migration simply have
-  `dataset_id: null` — that's an expected, permanent state for them, not a bug to backfill.
+- **Datasets are a real, stored many-to-many** — the `experiment_datasets` join table
+  (`models/experiment_dataset.py`, migration `d5a3b90c71e4`), unlike agents below: a dataset
+  genuinely is a first-class property of an experiment worth a real relationship, matching
+  what ARES does. It started as a scalar `ResearchExperiment.dataset_id` FK (migration
+  `a1b2c3d4e5f6`); that column is **dropped** — uncapping the Dataset connector means one
+  experiment can run against several, so a single winner would have been a lie. Read/write it
+  through `services/experiments.py`'s `set_experiment_datasets` /
+  `get_experiment_dataset_ids` / `get_dataset_ids_by_experiment` (the batch one — use it on
+  list endpoints to avoid an N+1), never by touching the model.
+  - `position` on the join row preserves **canvas wiring order**, which is the order the
+    agent's prompt lists the datasets in, so it's user-visible, not cosmetic.
+  - `dataset_ids` is a **full replacement**, not a merge (`[]` detaches everything). The API
+    and SDK still accept and return the old scalar `dataset_id`: on write it's the
+    one-dataset shorthand, on read a view of `dataset_ids[0]`. Don't add a second source of
+    truth — the join table is it.
+  - It's set via `PATCH /experiments/{id}`, not at creation: the notebook's Step 1 (create the
+    experiment) runs *before* Step 2 (register the dataset), so there's nothing to attach yet
+    at create time — see the `client.experiments.update(...)` call after Step 2 in
+    `spinal_pipeline.ipynb`. In the GUI it's `ProtocolCanvas.tsx`'s `syncExperimentDatasets`
+    effect, which PATCHes whenever the canvas's set of Dataset nodes changes. That effect's
+    ref is deliberately **seeded from the graph as loaded so it never fires on mount** — a
+    mount-time "reconcile" would see zero Dataset nodes on a notebook-driven experiment and
+    detach its dataset. Keep that property if you touch it.
+  - An experiment with no datasets attached is an expected, permanent state (everything
+    created before the FK existed) — not a bug to backfill.
 - **Agents are deliberately NOT a stored relationship** — there's no `experiment_agents` join
   table, and none is planned. Agents are reusable per-user templates, not something an
   experiment "owns"; asking "which agents ran in this experiment" is answered by scanning the
@@ -113,8 +130,23 @@ sake.
   status but real category variety — e.g. `AgentCard` tints by `model_config.model`, so agents
   sharing an LLM visually match without a hardcoded model→color table that goes stale the moment
   a new model ships. Same input always produces the same one of the five `--chart-*` hues.
+  **Not for protocol-canvas nodes** — see the table below.
+- **Table-driven tint** (`lib/nodeAccent.ts`'s `nodeAccent(kind)`): protocol-canvas nodes only.
+  Thirteen node kinds against five `--chart-*` hues made collisions arithmetic, and they landed
+  on the confusable pairs (Skill/AI, Dataset/Knowledge, Pattern/Script), so every kind now has an
+  explicit entry. Five keep the `--chart-*` hue the old hash gave them (agent, dataset,
+  reason+act, critic gate, and the LLM family) and the other eight moved to a `--node-1`…`--node-8`
+  slot in `index.css`'s `.dark` block — **fixing a repeat means moving the bucket-mates, not
+  repainting the canvas**, so don't reassign an anchor's hue without being asked. Both the node
+  card and its inspector call `nodeAccent` with the same key so they can't drift; a kind with no
+  entry falls back to `--primary` rather than a hashed hue, so a new node type visibly asks for a
+  slot. Adjacent hues are assigned to related kinds on purpose (the two MCP kinds, the two OKF
+  kinds). Note LLM nodes are one hue for the whole family, not one per provider.
+  - `--node-label` (yellow) is separate from all of them: it's the connector captions on
+    `AgentNode`/`CriticGateNode`, which are meant to stand out *from* their node, so they
+    deliberately don't follow `--card-accent` the way everything else inside a card does.
 - **Don't hash/rotate a tint just to break up visual monotony** with no underlying meaning (e.g.
-  cycling colors by array index) — that was considered and rejected in favor of the two schemes
+  cycling colors by array index) — that was considered and rejected in favor of the schemes
   above. If a new list of things genuinely has no status or category worth encoding in color,
   it's fine for it to stay a single accent.
 

@@ -15,8 +15,10 @@ import type { Dataset } from '@/types/datasets'
 import type { Cell, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
+import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
+import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -185,9 +187,15 @@ export const experimentsApi = {
       design_spec?: DesignSpec | null
       // A timestamp to archive, null to unarchive -- canvas menu's Archive/Unarchive action.
       archived_at?: string | null
-      // Set from the canvas's own Dataset node (DatasetNodeInspector) the
-      // moment a user picks a dataset there -- keeps the node's own config
-      // and this experiment's real dataset_id FK from drifting apart.
+      // The experiment's whole attached-dataset list, in canvas wiring order
+      // -- a full replacement, not a merge ([] detaches everything). Sent
+      // whenever the canvas's set of Dataset nodes changes (ProtocolCanvas's
+      // syncExperimentDatasets effect), so the nodes' own configs and the
+      // experiment_datasets rows can't drift apart.
+      dataset_ids?: string[]
+      // The one-dataset shorthand, kept for callers written before the
+      // connector was uncapped -- the server turns it into a single-element
+      // dataset_ids (or [] for null). Prefer dataset_ids.
       dataset_id?: string | null
     },
   ) => request<Experiment>(`/experiments/${id}`, { method: 'PATCH', body: data }),
@@ -244,8 +252,9 @@ export const protocolsApi = {
 }
 
 export const datasetsApi = {
-  // Owner-scoped, same convention as mcpServersApi.list -- backs the
-  // Dataset node's own Server-select-style picker (DatasetNodeInspector).
+  // Owner-scoped, same convention as mcpServersApi.list -- backs the canvas's
+  // dataset browser (DatasetBrowserPanel) and the Dataset node inspector's
+  // read-out of whichever dataset the node is bound to.
   list: () => request<Dataset[]>('/datasets'),
   get: (id: string) => request<Dataset>(`/datasets/${id}`),
   // POST /datasets is a multipart upload -- stores ONLY the raw file,
@@ -284,6 +293,11 @@ export const datasetsApi = {
     form.set('test_file', data.testFile)
     return request<Dataset>(`/datasets/${id}/split/manual`, { method: 'POST', body: form })
   },
+  // Drops the row AND the uploaded files (services.datasets.delete_dataset) --
+  // irreversible, unlike okfApi.remove, which only forgets a registration.
+  // Offered from DatasetBrowserPanel, the one place the whole library is
+  // listed.
+  remove: (id: string) => request<void>(`/datasets/${id}`, { method: 'DELETE' }),
 }
 
 export const agentsApi = {
@@ -302,6 +316,138 @@ export const mcpServersApi = {
   // existing scope (system servers like asaree-workspace aren't listed here
   // either; not something the MCP Tool node picker widens).
   list: () => request<McpServer[]>('/mcp-servers'),
+  // Registers a connection the user typed in themselves -- backs the MCP
+  // Client Tool node (ConnectMcpServerDialog). The response already carries
+  // the discovered tools: core connects and lists them synchronously during
+  // registration, so a 201 whose `status` is 'error' means "row saved, server
+  // unreachable", not a failure to save. 409 on a duplicate `name`, 422 when
+  // the stdio allowlist or the SSRF guard rejects it.
+  create: (data: { name: string; transport: string; command?: string | null; url?: string | null; headers?: Record<string, string> | null }) =>
+    request<McpServer>('/mcp-servers', { method: 'POST', body: data }),
+  // Re-dials and re-discovers tools. The repair path for a server registered
+  // while it happened to be down.
+  reconnect: (id: string) => request<McpServer>(`/mcp-servers/${id}/reconnect`, { method: 'POST' }),
+  remove: (id: string) => request<void>(`/mcp-servers/${id}`, { method: 'DELETE' }),
+}
+
+export const skillsApi = {
+  // The caller's own skills plus any global system skill -- GET /skills
+  // returns {items,total}, unwrapped here so callers get a plain array like
+  // datasetsApi.list()/mcpServersApi.list() do.
+  list: () => request<SkillListResponse>('/skills').then((r) => r.items),
+  get: (id: string) => request<Skill>(`/skills/${id}`),
+  // A skill is registered by uploading it, not by filling in a form: the
+  // document IS the skill (see SkillNodeData in types/protocols.ts), and its
+  // frontmatter already carries the name/description. This is the single-file
+  // shape, for a skill that bundles no reference files; createFromFolder
+  // below is the directory shape. `name`/`description` are overrides for a
+  // file whose frontmatter is missing or wrong -- omit them for the normal
+  // path.
+  create: (data: { file: File; name?: string; description?: string }) => {
+    const form = new FormData()
+    form.set('file', data.file)
+    if (data.name) form.set('name', data.name)
+    if (data.description) form.set('description', data.description)
+    return request<Skill>('/skills/upload', { method: 'POST', body: form })
+  },
+  // The other upload shape: a whole skill *directory*, which is what the
+  // Agent Skills format actually specifies -- code-simplification/SKILL.md
+  // plus whatever level-3 reference files it bundles. Sent the same way
+  // okfApi.createFromUpload sends a bundle, under each file's
+  // webkitRelativePath, because that is the only thing a browser will say
+  // about where a picked folder came from; the server strips the leading
+  // folder segment. 422 if there's no SKILL.md, or if the folder carries a
+  // script (no shell to run one in -- register an MCP server instead).
+  createFromFolder: (files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file, file.webkitRelativePath || file.name)
+    return request<Skill>('/skills/upload-folder', { method: 'POST', body: form })
+  },
+  // The third acquisition shape: skills are *distributed* as GitHub repos, and
+  // the `npx` installers in the wild do nothing but copy a repo's SKILL.md and
+  // its bundled files somewhere an agent can see them -- which is what the
+  // skill library already is. Two calls, not one, because a skills repo is
+  // usually a collection of a dozen: preview lists what's in there, and each
+  // ticked skill is its own createFromUrl. Both 422 on a non-GitHub host, a
+  // repo with no SKILL.md anywhere, or a skill core refuses to parse.
+  previewFromUrl: (url: string) => request<SkillUrlPreview>('/skills/from-url/preview', { method: 'POST', body: { url } }),
+  // `subdirectory` is repo-relative and comes straight back from a preview
+  // entry -- not something the caller composes. Registering N skills is N of
+  // these, so one malformed skill in a repo fails alone instead of taking the
+  // rest of the batch with it.
+  createFromUrl: (url: string, subdirectory: string) =>
+    request<Skill>('/skills/from-url', { method: 'POST', body: { url, subdirectory } }),
+  // The stored skill rendered back out as a SKILL.md document, so what a
+  // user uploaded is also what they can read back and re-upload.
+  markdown: (id: string) => request<{ markdown: string }>(`/skills/${id}/markdown`),
+  update: (id: string, data: { name?: string; description?: string; body?: string }) =>
+    request<Skill>(`/skills/${id}`, { method: 'PATCH', body: data }),
+  replaceFromFile: (id: string, file: File) => {
+    const form = new FormData()
+    form.set('file', file)
+    return request<Skill>(`/skills/${id}/markdown`, { method: 'PUT', body: form })
+  },
+  // Replaces the whole directory, unlike replaceFromFile which only touches
+  // the SKILL.md: a re-upload that drops FORMS.md drops it, rather than
+  // leaving the skill holding a file its own instructions no longer mention.
+  replaceFromFolder: (id: string, files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file, file.webkitRelativePath || file.name)
+    return request<Skill>(`/skills/${id}/folder`, { method: 'PUT', body: form })
+  },
+  // Soft-deletes server-side: an agent still holding this id keeps running,
+  // just without the skill (Motoro's resolve_skills skips and logs it).
+  remove: (id: string) => request<void>(`/skills/${id}`, { method: 'DELETE' }),
+}
+
+export const okfApi = {
+  list: () => request<OkfBundle[]>('/okf/bundles'),
+  // Uploads a folder the user picked with <input webkitdirectory>. Each file
+  // is sent under its own `webkitRelativePath`, which is the ONLY thing a
+  // browser will say about where it came from -- the server strips the
+  // leading folder segment back off and uses it to name the storage.
+  //
+  // Spawns the OKF server during registration, so a folder it can't actually
+  // serve 422s here rather than failing mid-run. Not idempotent: re-uploading
+  // the same folder is a second bundle, since the first copy may have been
+  // rewritten by an agent since.
+  createFromUpload: (files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file, file.webkitRelativePath || file.name)
+    return request<OkfBundle>('/okf/bundles/upload', { method: 'POST', body: form })
+  },
+  // Re-discover the bundle server's tools, and clear a stale connection error.
+  refresh: (id: string) => request<OkfBundle>(`/okf/bundles/${id}/refresh`, { method: 'POST' }),
+  // Deletes the stored copy for an uploaded bundle (`uploaded: true`), and
+  // only forgets the registration for one that points at a folder already on
+  // the server. Check the flag before wording a confirmation.
+  remove: (id: string) => request<void>(`/okf/bundles/${id}`, { method: 'DELETE' }),
+  // The bundle server's own list_concepts output, verbatim, for the inspector's
+  // preview -- what's in there is the server's answer, not one reconstructed
+  // from a directory listing.
+  concepts: (id: string) => request<{ is_error: boolean; content: string }>(`/okf/bundles/${id}/concepts`),
+
+  // --- Uploaded single-concept documents (the other half of Knowledge) ---
+  // Same relationship to bundles as skillsApi.create has to a form: the file
+  // IS the document. ASAREE stores it server-side as a one-concept bundle, so
+  // the response looks like a bundle's and the node it backs resolves through
+  // the same path -- see OkfDocument in types/okf.ts.
+  listDocuments: () => request<OkfDocument[]>('/okf/documents'),
+  // 422 when the file isn't UTF-8, has no YAML frontmatter, or its
+  // frontmatter has no `title` -- the checks live server-side (api/okf.py),
+  // and RegisterOkfDocumentDialog only previews them.
+  createDocument: (file: File) => {
+    const form = new FormData()
+    form.set('file', file)
+    return request<OkfDocument>('/okf/documents', { method: 'POST', body: form })
+  },
+  refreshDocument: (id: string) => request<OkfDocument>(`/okf/documents/${id}/refresh`, { method: 'POST' }),
+  // Genuinely destructive, unlike remove() above: this deletes the stored
+  // file, which only ever existed inside ASAREE.
+  removeDocument: (id: string) => request<void>(`/okf/documents/${id}`, { method: 'DELETE' }),
+  // The stored concept's CURRENT text -- an agent may have rewritten it since
+  // upload, which is the whole reason the inspector shows it.
+  documentMarkdown: (id: string) => request<{ markdown: string }>(`/okf/documents/${id}/markdown`),
 }
 
 export const llmSettingsApi = {
@@ -322,6 +468,13 @@ export const llmSettingsApi = {
   // one outbound request per provider against a rate-limited endpoint.
   // 404s when no credential is saved for the provider.
   testConnection: (provider: LLMProvider) => request<LLMConnectionCheck>(`/llm-settings/${provider}/connection`),
+}
+
+export const versionApi = {
+  // Unauthenticated, so the badge also renders on the login screen -- and it
+  // goes through `request` anyway, which just means an Authorization header
+  // rides along when there happens to be a token.
+  get: () => request<{ version: string }>('/version'),
 }
 
 export { tryRefreshToken }

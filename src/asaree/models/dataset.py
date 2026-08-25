@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -58,6 +58,32 @@ class RegisteredDataset(Base, TimestampMixin):
     test_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     train_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     test_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # HOW the split above was produced. A hash proves two files are the ones
+    # that were used; it says nothing about whether the holdout was grouped,
+    # how big it was, or whether re-running would reproduce it -- which is
+    # exactly what someone reading the experiment months later needs, and the
+    # one part of the split that was previously accepted as an argument and
+    # then thrown away.
+    #
+    # ``"quick"`` (``quick_split_dataset``) or ``"manual"``
+    # (``register_manual_split``); null for a split produced before these
+    # columns existed, a permanently valid state in the same way
+    # ``train_path`` is null for a never-split dataset. A manual split has a
+    # method and nothing else -- ASAREE didn't compute it and has no honest
+    # answer for its parameters, so the three below stay null rather than
+    # being guessed at from the resulting row counts.
+    split_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # The column actually GROUPED on, not the one requested: _split silently
+    # falls back to a stratified split when the named column isn't in the
+    # frame, and recording the request rather than the outcome would make
+    # this field lie in precisely the case it's most needed. Null means the
+    # split was stratified (or unstratified, if there was no target).
+    split_group_column: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The requested test fraction, not the realised one -- a group-aware
+    # split lands near it, never exactly on it, and the parameter is what a
+    # re-run would need.
+    split_test_size: Mapped[float | None] = mapped_column(Float, nullable=True)
+    split_seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     target_column: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Opaque, matching ARES's own dictionary_json contract exactly: a JSON-encoded

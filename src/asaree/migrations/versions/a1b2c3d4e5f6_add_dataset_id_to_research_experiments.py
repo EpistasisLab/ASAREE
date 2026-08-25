@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from alembic import op
 import sqlalchemy as sa
 
+from asaree.migrations.guards import create_foreign_key, drop_column
+
 revision: str = 'a1b2c3d4e5f6'
 down_revision: str | None = 'ce86ecab27a1'
 branch_labels: str | Sequence[str] | None = None
@@ -23,8 +25,8 @@ def upgrade() -> None:
     # column existed (or whose dataset was later removed) simply has no
     # dataset attached -- not an error condition, not a reason to lose the
     # experiment or its cell results.
-    op.add_column('research_experiments', sa.Column('dataset_id', sa.UUID(), nullable=True))
-    op.create_foreign_key(
+    op.add_column('research_experiments', sa.Column('dataset_id', sa.UUID(), nullable=True), if_not_exists=True)
+    create_foreign_key(
         'research_experiments_dataset_id_fkey',
         'research_experiments',
         'registered_datasets',
@@ -33,11 +35,14 @@ def upgrade() -> None:
         ondelete='SET NULL',
     )
     op.create_index(
-        op.f('ix_research_experiments_dataset_id'), 'research_experiments', ['dataset_id'], unique=False
+        op.f('ix_research_experiments_dataset_id'), 'research_experiments', ['dataset_id'], unique=False,
+        if_not_exists=True,
     )
 
 
 def downgrade() -> None:
-    op.drop_index(op.f('ix_research_experiments_dataset_id'), table_name='research_experiments')
-    op.drop_constraint('research_experiments_dataset_id_fkey', 'research_experiments', type_='foreignkey')
-    op.drop_column('research_experiments', 'dataset_id')
+    op.drop_index(op.f('ix_research_experiments_dataset_id'), table_name='research_experiments', if_exists=True)
+    op.drop_constraint(
+        'research_experiments_dataset_id_fkey', 'research_experiments', type_='foreignkey', if_exists=True
+    )
+    drop_column('research_experiments', 'dataset_id')

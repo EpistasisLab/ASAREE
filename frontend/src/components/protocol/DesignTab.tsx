@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
-import { unboundBindableFields, type UnboundField } from './bindableFields'
+import { revealsHiddenMcpServers, toolFactorServerId, unboundBindableFields, type UnboundField } from './bindableFields'
 import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import { InfoTooltip } from './InfoTooltip'
@@ -46,6 +46,28 @@ import {
 // popover before it) -- a canvas can realistically have a large number of
 // bindable fields to search through, and the dialog already has the room a
 // cramped popover wouldn't.
+// The canvas's live nodes/edges, read from the same shared query cache
+// ProtocolCanvas mirrors its own state into on every change. Used by both
+// halves of the factors editor: AddFactorButton needs the list of bindable
+// fields, FactorsEditor needs to resolve a tool_names factor's pinned MCP
+// server (toolFactorServerId) before opening its level editor.
+function useProtocolGraph(protocolId: string | undefined) {
+  return useQuery({
+    queryKey: protocolGraphQueryKey(protocolId ?? 'none'),
+    queryFn: async () => {
+      if (!protocolId) return { nodes: [] as Node[], edges: [] as Edge[] }
+      const protocol = await protocolsApi.get(protocolId)
+      return { nodes: protocol.graph.nodes as Node[], edges: protocol.graph.edges as Edge[] }
+    },
+    enabled: !!protocolId,
+    // Only ever a fallback for before ProtocolCanvas has mounted and mirrored
+    // its own live state into this same key -- once it has, this key is only
+    // ever updated by that mirror (a pure in-memory write), never a real
+    // background refetch racing it with a stale server snapshot.
+    staleTime: Infinity,
+  })
+}
+
 function AddFactorButton({
   experiment,
   protocolId,
@@ -60,20 +82,7 @@ function AddFactorButton({
   const [dialogOpen, setDialogOpen] = useState(false)
   const queryClient = useQueryClient()
 
-  const graphQuery = useQuery({
-    queryKey: protocolGraphQueryKey(protocolId ?? 'none'),
-    queryFn: async () => {
-      if (!protocolId) return { nodes: [] as Node[], edges: [] as Edge[] }
-      const protocol = await protocolsApi.get(protocolId)
-      return { nodes: protocol.graph.nodes as Node[], edges: protocol.graph.edges as Edge[] }
-    },
-    enabled: !!protocolId,
-    // Only ever a fallback for before ProtocolCanvas has mounted and mirrored
-    // its own live state into this same key -- once it has, this key is only
-    // ever updated by that mirror (a pure in-memory write), never a real
-    // background refetch racing it with a stale server snapshot.
-    staleTime: Infinity,
-  })
+  const graphQuery = useProtocolGraph(protocolId)
 
   const createMutation = useMutation({
     mutationFn: async ({ factor, field }: { factor: DesignFactor; field: UnboundField }) => {
@@ -106,6 +115,7 @@ function AddFactorButton({
           open
           onOpenChange={setDialogOpen}
           factor={{ name: '', levels: [], level_type: 'string' }}
+          revealHiddenServers={revealsHiddenMcpServers(graphQuery.data?.nodes ?? [])}
           pickableFields={fields}
           existingNames={existingNames}
           onSave={(factor, field) => {
@@ -154,6 +164,7 @@ function FactorsEditor({
 }) {
   const [editingFactor, setEditingFactor] = useState<{ index: number; draft: DesignFactor } | null>(null)
   const queryClient = useQueryClient()
+  const graphQuery = useProtocolGraph(protocolId)
 
   const deleteMutation = useMutation({
     mutationFn: async (name: string) => {
@@ -223,6 +234,11 @@ function FactorsEditor({
             if (!open) setEditingFactor(null)
           }}
           factor={editingFactor.draft}
+          // Only read for a tool_names factor -- a level there is a bare
+          // allow-list, so the editor needs the bound node to know whose
+          // tools to offer (see bindableFields.ts's toolFactorServerId).
+          toolServerId={toolFactorServerId(graphQuery.data?.nodes ?? [], editingFactor.draft.name)}
+          revealHiddenServers={revealsHiddenMcpServers(graphQuery.data?.nodes ?? [])}
           onSave={(next) => editMutation.mutate({ oldName: editingFactor.draft.name, next })}
         />
       )}

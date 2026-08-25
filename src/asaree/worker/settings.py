@@ -30,7 +30,7 @@ from asaree.config import get_settings
 from asaree.models.database import dispose_engine
 from asaree.redis_client import dispose_redis
 from asaree.services.credential_resolver import resolve as resolve_credentials
-from asaree.services.system_mcp_servers import ensure_system_servers
+from asaree.services.system_mcp_servers import ensure_system_servers, refresh_system_server_capabilities
 from asaree.worker.tasks import check_stale_runs, execute_protocol_run_task, execute_run_task
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,8 @@ async def on_startup(ctx: dict[str, Any]) -> None:
     failed = await hydrate_registry()
     if failed:
         logger.warning("worker_mcp_servers_failed_to_reconnect", extra={"servers": failed})
+    # After hydration -- it reads the live clients. See the API lifespan.
+    await refresh_system_server_capabilities()
 
 
 async def on_shutdown(ctx: dict[str, Any]) -> None:

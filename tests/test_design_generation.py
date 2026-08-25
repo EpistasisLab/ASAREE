@@ -82,6 +82,41 @@ def test_cell_label_for_dict_valued_level_prefers_identifying_key() -> None:
     assert cell_label_for(combo) == "llm_claude-sonnet-5"
 
 
+def test_cell_label_for_dataset_level_names_the_dataset_not_its_enabled_flag() -> None:
+    """A dataset_config level is a whole Dataset node config -- and that config
+    carries `enabled`, which is also a slug priority key. If `enabled` won,
+    every level of a dataset factor would slug to "true" and the whole design
+    would collapse onto one cell label."""
+    combo_a = {"data": {"dataset_id": str(uuid.uuid4()), "dataset_name": "Spine 2024", "enabled": True}}
+    combo_b = {"data": {"dataset_id": str(uuid.uuid4()), "dataset_name": "Spine 2025", "enabled": True}}
+    assert cell_label_for(combo_a) == "data_spine-2024"
+    assert cell_label_for(combo_b) == "data_spine-2025"
+
+
+def test_cell_label_for_list_valued_level_names_its_items() -> None:
+    """A "Tools allowed" (tool_names) level is a list of bare tool names --
+    Python's own list repr would slug into unreadable punctuation, so the
+    items name the label directly."""
+    assert cell_label_for({"tools": ["read_file", "write_file"]}) == "tools_read-file-write-file"
+
+
+def test_cell_label_for_empty_list_level_reads_as_none() -> None:
+    """An empty allow-list is a deliberate level ("this server's tools
+    withheld for this cell"), not an unset value -- it must not fall through
+    to _slugify's generic "x" placeholder."""
+    assert cell_label_for({"tools": []}) == "tools_none"
+
+
+def test_cell_label_for_long_list_level_is_truncated_with_a_count() -> None:
+    """A cell label concatenates every factor, so one long allow-list can't be
+    allowed to grow it without bound -- and the truncation still has to keep
+    two different long levels distinguishable."""
+    a = cell_label_for({"tools": ["alpha", "beta", "gamma", "delta", "epsilon"]})
+    b = cell_label_for({"tools": ["alpha", "beta", "zeta", "delta", "epsilon"]})
+    assert a == "tools_alpha-beta-gamma-plus2"
+    assert a != b
+
+
 def test_cell_label_for_dict_valued_level_falls_back_to_stable_hash() -> None:
     combo = {"weird": {"foo": "bar", "baz": 1}}
     label = cell_label_for(combo)

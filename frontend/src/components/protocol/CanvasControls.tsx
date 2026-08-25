@@ -1,4 +1,4 @@
-import { Maximize2, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
+import { Maximize2, RotateCcw, Wand2, ZoomIn, ZoomOut } from 'lucide-react'
 import { useReactFlow, useViewport } from '@xyflow/react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -27,7 +27,7 @@ function ControlIconButton({
   )
 }
 
-export function CanvasControls() {
+export function CanvasControls({ onTidy }: { onTidy?: () => void }) {
   const { zoomIn, zoomOut, fitView, zoomTo } = useReactFlow()
   const { zoom } = useViewport()
   // A "reset zoom" button that only appears once the user has actually
@@ -60,6 +60,15 @@ export function CanvasControls() {
         <ControlIconButton label="Fit view" onClick={() => fitView({ maxZoom: DEFAULT_ZOOM })}>
           <Maximize2 className="size-4" />
         </ControlIconButton>
+        {/* Last, and below Fit view, because it's the one control here that
+            CHANGES the graph rather than just the camera -- it's also the
+            only one that's optional, and a bottom-anchored stack tolerates a
+            missing last row without shifting anything above it. */}
+        {onTidy && (
+          <ControlIconButton label="Tidy up" onClick={onTidy}>
+            <Wand2 className="size-4" />
+          </ControlIconButton>
+        )}
       </div>
     </TooltipProvider>
   )

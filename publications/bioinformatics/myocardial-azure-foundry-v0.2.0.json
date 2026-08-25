@@ -1,27 +1,27 @@
 {
-  "name": "Myocardial Infarction Use Case (OpenAI)",
+  "name": "Myocardial Infarction Use Case (Azure Foundry)",
   "description": "MI-DC -> MI-FTE -> MI-FS -> MI-MLM -> MI-Score: five agents in series on the UCI Myocardial Infarction Complications (ZSN) dataset, each handing a versioned dataset workspace to the next, the first four behind a Critic Gate (MI-Score is intentionally ungated -- it only executes a fixed scoring script, so there is no design decision left to review). The pipeline's methodology (cleaning, feature engineering, selection, hyperparameter planning, scoring) and the critics' review criteria are dataset-agnostic; everything dataset-specific lives in each worker's own task_brief block. Three facts are stated there rather than left for an agent to discover cold: (1) the dataset carries an explicit ID column (role=id, 1..1700, all-unique) that must be dropped as a non-feature record identifier; (2) every feature is RAW -- a mix of integer/real/binary/ordinal/categorical types with real missingness -- so DC's and FTE's inspect-first instructions do real work here; (3) the column names are short Russian-derived codes (nr11, np01, zab_leg_01), not descriptive English, so every column's meaning must be resolved via get_data_dictionary rather than guessed from its name. expected_positive_rate (0.232) is 394 positive of 1700. See README.md in this directory for how to import and run this.",
   "graph": {
     "nodes": [
       {
         "id": "llm-shared",
-        "type": "llm_openai",
+        "type": "llm_azure_foundry",
         "position": {
           "x": 1140,
           "y": 680
         },
         "data": {
-          "label": "OpenAI (shared)",
+          "label": "Azure Foundry (shared)",
           "config": {
-            "provider": "openai",
-            "model": "gpt-5-mini",
+            "provider": "azure_foundry",
+            "model": "claude-sonnet-5",
             "temperature": null,
             "effort": "medium",
             "max_tokens": 128000
           },
           "factor_bindings": {
-            "config.model": "OpenAI:Model",
-            "config.effort": "OpenAI:Effort"
+            "config.model": "Azure Foundry:Model",
+            "config.effort": "Azure Foundry:Effort"
           }
         }
       },
@@ -766,57 +766,57 @@
         "id": "e-llm-dc",
         "source": "llm-shared",
         "target": "agent-dc",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-fte",
         "source": "llm-shared",
         "target": "agent-fte",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-fs",
         "source": "llm-shared",
         "target": "agent-fs",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-mlm",
         "source": "llm-shared",
         "target": "agent-mlm",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-gatedc",
         "source": "llm-shared",
         "target": "gate-dc",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-gatefte",
         "source": "llm-shared",
         "target": "gate-fte",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-gatefs",
         "source": "llm-shared",
         "target": "gate-fs",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-llm-gatemlm",
         "source": "llm-shared",
         "target": "gate-mlm",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-pattern-dc",
@@ -913,22 +913,22 @@
         "id": "e-dataset-agent-dc",
         "source": "dataset-mi",
         "target": "agent-dc",
-        "sourceHandle": "tool",
-        "targetHandle": "tool"
+        "sourceHandle": "resource",
+        "targetHandle": "resource"
       },
       {
         "id": "e-dataset-agent-fte",
         "source": "dataset-mi",
         "target": "agent-fte",
-        "sourceHandle": "tool",
-        "targetHandle": "tool"
+        "sourceHandle": "resource",
+        "targetHandle": "resource"
       },
       {
         "id": "e-dataset-agent-fs",
         "source": "dataset-mi",
         "target": "agent-fs",
-        "sourceHandle": "tool",
-        "targetHandle": "tool"
+        "sourceHandle": "resource",
+        "targetHandle": "resource"
       },
       {
         "id": "e-gatemlm-to-score",
@@ -939,8 +939,8 @@
         "id": "e-llm-score",
         "source": "llm-shared",
         "target": "agent-score",
-        "sourceHandle": "llm",
-        "targetHandle": "llm"
+        "sourceHandle": "ai",
+        "targetHandle": "ai"
       },
       {
         "id": "e-pattern-score",
@@ -968,18 +968,18 @@
   "design_spec": {
     "factors": [
       {
-        "name": "OpenAI:Model",
+        "name": "Azure Foundry:Model",
         "levels": [
-          "gpt-5-mini",
-          "gpt-5"
+          "claude-sonnet-5",
+          "claude-opus-5"
         ],
         "level_type": "string"
       },
       {
-        "name": "OpenAI:Effort",
+        "name": "Azure Foundry:Effort",
         "levels": [
           "medium",
-          "high"
+          "xhigh"
         ],
         "level_type": "string"
       },

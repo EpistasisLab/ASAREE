@@ -1,7 +1,8 @@
 import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
 import { ShieldCheck, ShieldOff } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import { cardAccent, hashToChartHue } from '@/lib/utils'
+import { cardAccent } from '@/lib/utils'
+import { nodeAccent } from '@/lib/nodeAccent'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { CriticGateNodeData, NodeRunStatus } from '@/types/protocols'
 import { boundFactorCount, hasBoundFactor } from '../bindableFields'
@@ -11,9 +12,9 @@ import { ConnectorHandleLabel } from './ConnectorHandleLabel'
 import { NodeFactorBadge } from './NodeFactorBadge'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 
-// A third hue, distinct from "agent"/"mcp_tool" -- real category variety
-// (CLAUDE.md's hash-driven tint rule), all critic_gate nodes share this one.
-const ACCENT = hashToChartHue('critic_gate')
+// All critic_gate nodes share this one hue -- a warm red, the only node whose
+// job is to stop a run (see lib/nodeAccent.ts).
+const ACCENT = nodeAccent('critic_gate')
 
 export function CriticGateNode({ id, data, selected }: NodeProps & { data: CriticGateNodeData & { runStatus?: NodeRunStatus } }) {
   const enabled = data.config?.enabled ?? true
@@ -48,7 +49,7 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
       )}
       {hasBoundFactor(data) && <NodeFactorBadge count={boundFactorCount(data)} className="-top-3 -right-3" />}
       {/* Main pipeline flow is left-to-right -- input on the left, output on
-          the right, same convention as AgentNode. The LLM sub-connector
+          the right, same convention as AgentNode. The AI sub-connector
           stays on the bottom edge regardless. */}
       <Handle
         type="target"
@@ -65,18 +66,20 @@ export function CriticGateNode({ id, data, selected }: NodeProps & { data: Criti
       <p className="truncate font-mono text-[0.65rem] text-muted-foreground" title={summary}>
         {summary}
       </p>
-      {/* Same required LLM connector an agent node has -- no Tool/Memory
-          slots here, gates never use tools and are always single-pass. */}
+      {/* Same required AI connector an agent node has (handle id `ai`, see
+          AgentNode.tsx's own note on the pre-rename `llm` spelling) -- no
+          Tool/Memory slots here, gates never use tools and are always
+          single-pass. */}
       <Handle
         type="target"
-        id="llm"
+        id="ai"
         position={Position.Bottom}
         style={{ left: '50%' }}
-        title="LLM (required)"
+        title="AI (required)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="50%">LLM</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="llm" left="50%" />
+      <ConnectorHandleLabel left="50%">AI</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="ai" left="50%" />
       <Handle
         type="source"
         position={Position.Right}

@@ -25,14 +25,18 @@ from asaree.services.experiments import (
     create_experiment,
     create_untitled_experiment,
     delete_experiment,
+    get_dataset_ids_by_experiment,
     get_experiment,
     get_experiment_by_name,
+    get_experiment_dataset_ids,
     list_experiments,
+    set_experiment_datasets,
     update_experiment,
 )
 from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_experiment_design, analyze_factorial
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
 from asaree.services.protocol_runs import list_experiment_trials
+from asaree.services.protocols import sync_protocol_names_to_experiment
 
 # For a Content-Disposition filename only -- never touches the experiment's
 # own stored name, just what the browser offers to save the download as.
@@ -61,7 +65,10 @@ class CreateExperimentRequest(BaseModel):
     # Usable when the dataset is already registered before the experiment is
     # created; the notebook's own flow registers it AFTER (Step 2 follows
     # Step 1), so it attaches this later via PATCH instead — see
-    # UpdateExperimentRequest.
+    # UpdateExperimentRequest. ``dataset_ids`` is the real field;
+    # ``dataset_id`` is the one-dataset shorthand kept for the SDK/notebook
+    # (see _resolved_dataset_ids).
+    dataset_ids: list[uuid.UUID] | None = None
     dataset_id: uuid.UUID | None = None
 
 
@@ -69,20 +76,23 @@ class UpdateExperimentRequest(BaseModel):
     """All fields optional; only the ones actually set are written -- same
     "unset vs. null" convention ``UpsertCellRequest`` uses below. ``name``
     is how the GUI renames an experiment created with a placeholder name
-    straight from the Experiments page; ``dataset_id`` (including explicit
-    ``null``, to detach) is the notebook's Step 2 attach-after-create flow.
-    ``design_spec`` is a full replacement, not a merge -- the protocol
-    canvas's "+ Make experimental factor" flow reads the current value,
-    upserts-by-name into ``factors`` client-side, and PATCHes the whole
-    dict back, same as how ``Protocol.graph`` is PATCHed. ``archived_at``
-    (a timestamp to archive, ``null`` to unarchive) is set by the canvas
-    menu's Archive/Unarchive action."""
+    straight from the Experiments page; ``dataset_ids`` (a full replacement,
+    ``[]`` to detach everything) is what the protocol canvas sends whenever
+    its set of Dataset nodes changes, and ``dataset_id`` is the same thing
+    for exactly one dataset -- the notebook's Step 2 attach-after-create
+    flow, unchanged. ``design_spec`` is a full replacement, not a merge --
+    the protocol canvas's "+ Make experimental factor" flow reads the current
+    value, upserts-by-name into ``factors`` client-side, and PATCHes the
+    whole dict back, same as how ``Protocol.graph`` is PATCHed.
+    ``archived_at`` (a timestamp to archive, ``null`` to unarchive) is set by
+    the canvas menu's Archive/Unarchive action."""
 
     name: str | None = None
     description: str | None = None
     # Free text, edited from the Design tab -- same "unset vs. null"
     # convention as every other field here.
     hypothesis: str | None = None
+    dataset_ids: list[uuid.UUID] | None = None
     dataset_id: uuid.UUID | None = None
     design_spec: dict[str, Any] | None = None
     archived_at: datetime | None = None
@@ -96,12 +106,17 @@ class ExperimentResponse(BaseModel):
     design_type: str
     task_brief: dict[str, Any] | None
     design_spec: dict[str, Any] | None
+    # Every dataset wired into this experiment's canvas, in wiring order (see
+    # models/experiment_dataset.py). ``dataset_id`` is a read-only view of the
+    # first one, kept so existing SDK/notebook callers that predate multiple
+    # datasets keep working unchanged -- it is NOT a stored column any more.
+    dataset_ids: list[uuid.UUID]
     dataset_id: uuid.UUID | None
     archived_at: datetime | None
     created_at: datetime
 
 
-def _experiment_response(e: Any) -> ExperimentResponse:
+def _experiment_response(e: Any, dataset_ids: list[uuid.UUID]) -> ExperimentResponse:
     return ExperimentResponse(
         id=e.id,
         name=e.name,
@@ -110,19 +125,36 @@ def _experiment_response(e: Any) -> ExperimentResponse:
         design_type=e.design_type,
         task_brief=e.task_brief,
         design_spec=e.design_spec,
-        dataset_id=e.dataset_id,
+        dataset_ids=dataset_ids,
+        dataset_id=dataset_ids[0] if dataset_ids else None,
         archived_at=e.archived_at,
         created_at=e.created_at,
     )
 
 
-async def _validated_dataset_id(dataset_id: uuid.UUID | None, db: DbSession, user: CurrentUser) -> uuid.UUID | None:
-    if dataset_id is None:
-        return None
-    dataset = await get_dataset(db, dataset_id)
-    if dataset is None or dataset.owner_id != user.id:
-        raise HTTPException(status_code=404, detail="No such dataset")
-    return dataset_id
+async def _validated_dataset_ids(dataset_ids: list[uuid.UUID], db: DbSession, user: CurrentUser) -> list[uuid.UUID]:
+    for dataset_id in dataset_ids:
+        dataset = await get_dataset(db, dataset_id)
+        if dataset is None or dataset.owner_id != user.id:
+            raise HTTPException(status_code=404, detail="No such dataset")
+    return dataset_ids
+
+
+def _resolved_dataset_ids(fields: dict[str, Any]) -> list[uuid.UUID] | None:
+    """The dataset list a request is asking for, or ``None`` to leave the
+    experiment's datasets alone.
+
+    ``dataset_ids`` wins when both are given. ``dataset_id`` is the
+    one-dataset shorthand: a value means "exactly this one", and an explicit
+    ``null`` means "none" -- the same detach it always meant, now expressed as
+    emptying the list. *Unset* is what leaves things untouched, which is why
+    this reads an ``exclude_unset`` dump rather than the model itself.
+    """
+    if fields.get("dataset_ids") is not None:
+        return list(fields["dataset_ids"])
+    if "dataset_id" in fields:
+        return [fields["dataset_id"]] if fields["dataset_id"] is not None else []
+    return None
 
 
 class UpsertCellRequest(BaseModel):
@@ -172,13 +204,15 @@ async def create_experiment_endpoint(
     name = (body.name or "").strip()
     if name and await get_experiment_by_name(db, name, owner_id=user.id) is not None:
         raise HTTPException(status_code=409, detail="An experiment with this name already exists")
-    dataset_id = await _validated_dataset_id(body.dataset_id, db, user)
+    dataset_ids = await _validated_dataset_ids(
+        _resolved_dataset_ids(body.model_dump(exclude_unset=True)) or [], db, user
+    )
     fields: dict[str, Any] = {
         "description": body.description,
         "design_type": body.design_type,
         "task_brief": body.task_brief,
         "design_spec": {"factors": [f.model_dump() for f in body.factors]} if body.factors else None,
-        "dataset_id": dataset_id,
+        "dataset_ids": dataset_ids,
     }
     # No name given -> the server names it, and the 409 above is unreachable:
     # allocation and insert share this request's transaction, so there is no
@@ -188,7 +222,7 @@ async def create_experiment_endpoint(
         if not name
         else await create_experiment(db, name=name, owner_id=user.id, **fields)
     )
-    return _experiment_response(experiment)
+    return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment.id))
 
 
 @router.get("", response_model=list[ExperimentResponse])
@@ -196,13 +230,15 @@ async def list_experiments_endpoint(
     user: CurrentUser, db: DbSession, include_archived: bool = False
 ) -> list[ExperimentResponse]:
     experiments = await list_experiments(db, owner_id=user.id, include_archived=include_archived)
-    return [_experiment_response(e) for e in experiments]
+    # One query for every experiment's datasets, not one per experiment.
+    by_experiment = await get_dataset_ids_by_experiment(db, [e.id for e in experiments])
+    return [_experiment_response(e, by_experiment.get(e.id, [])) for e in experiments]
 
 
 @router.get("/{experiment_id}", response_model=ExperimentResponse)
 async def get_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ExperimentResponse:
     experiment = await _get_owned_experiment(db, experiment_id, user)
-    return _experiment_response(experiment)
+    return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment_id))
 
 
 @router.patch("/{experiment_id}", response_model=ExperimentResponse)
@@ -215,12 +251,26 @@ async def update_experiment_endpoint(
         existing = await get_experiment_by_name(db, fields["name"], owner_id=user.id)
         if existing is not None and existing.id != experiment_id:
             raise HTTPException(status_code=409, detail="An experiment with this name already exists")
-    if "dataset_id" in fields:
-        fields["dataset_id"] = await _validated_dataset_id(fields["dataset_id"], db, user)
+    # Datasets are join-table rows, so they're written separately from the
+    # plain-column setattr path below -- and popped out of `fields` first, or
+    # update_experiment would reject them as not settable.
+    requested_dataset_ids = _resolved_dataset_ids(fields)
+    fields.pop("dataset_ids", None)
+    fields.pop("dataset_id", None)
+    if requested_dataset_ids is not None:
+        await _validated_dataset_ids(requested_dataset_ids, db, user)
+        await set_experiment_datasets(db, experiment_id, requested_dataset_ids)
     if fields:
         experiment = await update_experiment(db, experiment_id, fields=fields)
         assert experiment is not None  # existence already checked above
-    return _experiment_response(experiment)
+    if fields.get("name"):
+        # A protocol's name is a snapshot of the experiment's name at the
+        # moment the canvas created it; re-sync it here, server-side, so an
+        # SDK/notebook rename fixes it up too and not just the GUI's.
+        await sync_protocol_names_to_experiment(
+            db, experiment_id=experiment_id, experiment_name=experiment.name, owner_id=user.id
+        )
+    return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment_id))
 
 
 @router.delete("/{experiment_id}", status_code=204)

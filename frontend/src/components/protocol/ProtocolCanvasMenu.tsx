@@ -10,7 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { toPersistedGraph } from '@/lib/protocolGraph'
+import { applyExperimentRenameToProtocolCache, toPersistedGraph } from '@/lib/protocolGraph'
 import { sanitizeFilename } from '@/lib/utils'
 import type { ProtocolGraph } from '@/types/protocols'
 import type { DesignSpec } from '@/types/experiments'
@@ -37,9 +37,10 @@ function RenameDialog({
 
   const mutation = useMutation({
     mutationFn: () => experimentsApi.update(experimentId, { name }),
-    onSuccess: () => {
+    onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
       queryClient.invalidateQueries({ queryKey: ['experiments'] })
+      applyExperimentRenameToProtocolCache(queryClient, experimentId, updated.name)
       onOpenChange(false)
     },
   })
@@ -219,12 +220,12 @@ export function ProtocolCanvasMenu({
 
   async function handleDownload() {
     const protocol = await protocolsApi.get(protocolId)
-    // Protocol.name is set once at creation ("Protocol: {experiment name
-    // at the time}") and never kept in sync when the experiment is renamed
-    // afterward -- the experiment's CURRENT name (already loaded above for
-    // the Archive/Delete/etc. actions) is what the user actually calls this
-    // thing, so that's what both the exported payload's name and the
-    // downloaded filename should reflect, not the stale internal one.
+    // Protocol.name is "Protocol: {experiment name} [{shortid}]" -- an
+    // internal, collision-proofed label (renames now keep it in sync, but the
+    // shape stays). What the user actually calls this thing is the
+    // experiment's own name, already loaded above for the Archive/Delete/etc.
+    // actions, so that's what the exported payload and the downloaded
+    // filename use.
     const displayName = experiment?.name ?? protocol.name
     // Serializes the canvas's own LIVE nodes/edges (props passed down from
     // ProtocolCanvas.tsx), not protocolsApi.get's possibly-stale graph --

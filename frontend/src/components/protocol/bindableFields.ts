@@ -1,10 +1,78 @@
 import type { Edge, Node } from '@xyflow/react'
 import type { LevelType } from './factorLevels'
+import type { McpServer } from '@/types/mcpServers'
 
 export interface BindableFieldSpec {
   fieldPath: string
   label: string
   levelType: LevelType
+}
+
+// The bundled system servers (see the backend's
+// services/system_mcp_servers.py) that are hidden from every MCP Tool server
+// picker -- they're still registered, still connected, and still usable by
+// anything that already references them; they're just not offered as a fresh
+// pick in the canvas.
+//
+// Two different reasons, same treatment. The six asaree-sklearn-* servers are
+// the myocardial pipeline's stages -- deployment plumbing, not something to
+// browse. `asaree-workspace` and `asaree-script` are hidden because adding
+// either by hand is REDUNDANT: every agent with a Dataset connector wired
+// already gets the workspace tools implicitly, and every agent with a Script
+// node wired gets run_wired_script (the backend's WORKSPACE_AGENT_TOOLS /
+// SCRIPT_AGENT_TOOLS and _resolve_dataset_tool_config /
+// _resolve_script_tool_config), so a node for either is at best a no-op and at
+// worst a second, divergent allow-list over the same tools.
+const HIDDEN_SERVER_NAME_PREFIXES = ['asaree-sklearn-', 'asaree-workspace', 'asaree-script']
+
+function isHiddenServerName(name: string): boolean {
+  return HIDDEN_SERVER_NAME_PREFIXES.some((prefix) => name.startsWith(prefix))
+}
+
+// ...unless THIS canvas is already one of the pipelines built on them (the
+// myocardial use cases in publications/bioinformatics), in which case hiding
+// them stops being tidiness and becomes a trap: delete one of the six sklearn
+// Tool nodes and there'd be no way to add it back.
+//
+// Derived from the graph rather than stored as a flag on the protocol, so
+// there's nothing to set, migrate, or leave stale -- a canvas that wires one
+// of these servers reveals them; a canvas that doesn't, doesn't.
+//
+// Matched on `server_name`, not `server_id`: the name is what an exported
+// protocol JSON carries and what import_use_case.py's own `_localize` matches
+// on, so this is already true of an imported graph before its ids have been
+// rewritten to this deployment's.
+//
+// Revealing ALL of them (not just the ones this graph happens to reference) is
+// deliberate: these servers are the stages of one pipeline, and a canvas
+// holding the DC stage is exactly the canvas that might want to add the FS one.
+// The same goes for the pre-modernization use-case graphs, which still wire
+// asaree-workspace explicitly.
+export function revealsHiddenMcpServers(nodes: Node[]): boolean {
+  return nodes.some((n) => {
+    const name = (n.data as { config?: { server_name?: string | null } })?.config?.server_name
+    return typeof name === 'string' && isHiddenServerName(name)
+  })
+}
+
+// The servers an MCP Tool node's Server select should offer -- shared by
+// McpToolNodeInspector and FactorEditorDialog's tool_config level rows so
+// both hide the same set. A currently-selected server is always kept, even
+// if hidden: dropping it would render the picker blank and silently make an
+// existing node's config uneditable.
+//
+// `revealHidden` is the caller's answer to revealsHiddenMcpServers for the
+// canvas it's showing -- passed in rather than computed here because the two
+// callers reach the nodes differently (the canvas has them in hand; DesignTab
+// is a sibling of the ReactFlowProvider and reads them off the shared graph
+// query).
+export function selectableMcpServers(
+  servers: McpServer[],
+  currentServerId?: string | null,
+  revealHidden = false,
+): McpServer[] {
+  if (revealHidden) return servers
+  return servers.filter((s) => !isHiddenServerName(s.name) || s.id === currentServerId)
 }
 
 // Picking a server for an MCP Tool node's Tool connector -- shared by
@@ -111,13 +179,29 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
         { fieldPath: 'config', label: 'Provider & model', levelType: 'llm_config' },
       ]
     case 'mcp_tool':
+    case 'mcp_scikit_learn':
+    case 'mcp_client_tool':
       return [
         { fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' },
-        // The whole node as a factor -- levels can be entirely different MCP
-        // servers (each with their own allowed tools). _resolve_tool_config
-        // reads each wired mcp_tool node's own config fresh, so this already
-        // works with zero backend changes.
-        { fieldPath: 'config', label: 'Server & tools', levelType: 'tool_config' },
+        // The allow-list, and ONLY the allow-list -- the node's server stays
+        // pinned across every level. This replaced the whole-config "Server &
+        // tools" (tool_config) factor these node types used to offer, whose
+        // levels were each a server + allow-list pair and so let a cell swap
+        // the node onto a DIFFERENT server. Every MCP node is created by
+        // picking one server in the MCP Servers browser and stands for that
+        // server alone (see McpToolNodeInspector's header comment), and the
+        // canvas node prints that server's name as its own summary, so a
+        // per-cell reassignment would make the canvas lie about what half the
+        // cells ran. An experiment comparing two servers uses two nodes. The
+        // tool_config level type itself is kept in FactorEditorDialog so
+        // experiments that already have such a factor still render.
+        //
+        // No backend change: _resolve_tool_config reads each wired node's
+        // own (already factor-patched) config.tool_names and namespaces it
+        // against the node's server_name. A level of [] contributes nothing,
+        // which is "this server withheld for this cell" without also having
+        // to bind config.enabled.
+        { fieldPath: 'config.tool_names', label: 'Tools allowed', levelType: 'tool_names' },
       ]
     case 'memory':
       // No runtime effect yet (Memory execution isn't implemented at all) --
@@ -144,10 +228,44 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
         { fieldPath: 'config.stop_on_first_success', label: 'Stop on first success', levelType: 'boolean' },
       ]
     case 'dataset':
-      // No runtime effect from `enabled` beyond skipping the Dataset-context
-      // block in _build_user_input -- no whole-node "swap the whole dataset
-      // per cell" factor kind yet (a real, separable future capability,
-      // deliberately deferred).
+      return [
+        // No runtime effect beyond skipping the Dataset-context block in
+        // _build_user_input.
+        { fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' },
+        // The whole node as a factor -- levels are entirely different
+        // datasets, which is the ONLY supported way to run one experiment
+        // across several of them. The Dataset connector is capped at one
+        // node per agent (see AgentNode.tsx) precisely because a cell's
+        // workspace is keyed by experiment_id/cell_label and therefore holds
+        // exactly one dataset; varying it per CELL is the shape that fits,
+        // and wiring several at once never was.
+        //
+        // Unlike skill/okf_bundle above -- whose configs are also just
+        // per-account pointers -- this one earns a structured level type
+        // because the pointer is what the executor actually consumes:
+        // _resolve_dataset_configs reads the (already factor-patched)
+        // node config verbatim and seeds the cell's workspace from
+        // `dataset_name`, so a substituted level needs no backend change.
+        { fieldPath: 'config', label: 'Dataset', levelType: 'dataset_config' },
+      ]
+    case 'skill':
+      // Only `enabled` -- the natural "which skill" factor is the WHOLE node
+      // (levels = different skills), but unlike script/llm/tool_config, a
+      // skill node's config is just an id pointing at a row in the skill
+      // library, so a level would carry a per-account id rather than the
+      // thing itself. Comparing two skills today means two nodes, one
+      // enabled per cell; a real skill_config level type is deferred until
+      // the level editor can pick from the library the way the inspector
+      // does.
+      return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
+    case 'okf_bundle':
+    case 'okf_document':
+      // Only `enabled`, same reasoning as skill above: the node's config is a
+      // pointer at a per-account registration (a server name plus a path on
+      // the server), not the knowledge itself, so a level would carry a
+      // reference rather than the thing being compared. Comparing "with the
+      // knowledge vs. without" -- the question actually worth an experiment
+      // here -- is exactly what toggling `enabled` per cell does.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     case 'script':
       // The whole node as a factor -- levels are entirely different scripts.
@@ -175,6 +293,28 @@ export interface UnboundField {
   // value under `data`), this is instead derived from whichever pattern
   // node the agent currently has wired (see derivePatternOverrideCurrentValue).
   currentValue: unknown
+  // Only set for a `tool_names` field -- the owning MCP node's pinned
+  // server, so the level editor knows whose tools to offer. See
+  // toolFactorServerId below for why the level value can't say this itself.
+  serverId?: string | null
+}
+
+// The MCP server whose tool list a "Tools allowed" (tool_names) factor's
+// levels should be picked from -- found by scanning for whichever node binds
+// `config.tool_names` to this factor. Needed because a tool_names level is a
+// BARE allow-list, not a server + list pair (the binding substitutes only
+// `config.tool_names`, leaving `server_id` alone), so a level can't say which
+// server's tools it's choosing among on its own. Returns null when nothing
+// binds the factor -- e.g. the node was deleted, or the factor came in with
+// an imported design_spec -- and FactorEditorDialog then shows the stored
+// names verbatim rather than an empty toggle list that would look like "no
+// tools selected".
+export function toolFactorServerId(nodes: Node[], factorName: string): string | null {
+  for (const node of nodes) {
+    const data = node.data as { factor_bindings?: Record<string, string>; config?: { server_id?: string | null } }
+    if (data?.factor_bindings?.['config.tool_names'] === factorName) return data.config?.server_id ?? null
+  }
+  return null
 }
 
 function getPath(data: Record<string, unknown>, dottedPath: string): unknown {
@@ -211,7 +351,12 @@ function isConnectorNodeType(type: string | undefined): boolean {
   return (
     type === 'memory' ||
     type === 'mcp_tool' ||
+    type === 'mcp_scikit_learn' ||
+    type === 'mcp_client_tool' ||
     type === 'dataset' ||
+    type === 'skill' ||
+    type === 'okf_bundle' ||
+    type === 'okf_document' ||
     type === 'script' ||
     LLM_NODE_TYPES.has(type ?? '') ||
     (type ?? '').startsWith('pattern_')
@@ -276,6 +421,10 @@ export function unboundBindableFields(nodes: Node[], edges: Edge[]): UnboundFiel
         fieldLabel: field.label,
         levelType: field.levelType,
         currentValue,
+        serverId:
+          field.levelType === 'tool_names'
+            ? ((node.data as { config?: { server_id?: string | null } })?.config?.server_id ?? null)
+            : undefined,
       })
     }
   }

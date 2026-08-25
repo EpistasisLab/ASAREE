@@ -1,13 +1,13 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { Wrench } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { McpToolNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
 
-// A different hue from "agent" -- real category variety (CLAUDE.md's
-// hash-driven tint rule), all mcp_tool nodes still share this one hue.
-const ACCENT = hashToChartHue('mcp_tool')
+// One hue for the kind, not per instance: all mcp_tool nodes share this, and
+// it's a slot of its own next to mcp_client_tool's (see lib/nodeAccent.ts).
+const ACCENT = nodeAccent('mcp_tool')
 
 // Always an Agent's Tool-connector source -- one MCP server connection,
 // allow-listing a subset of its tools (McpToolNodeConfig.tool_names) --
@@ -24,6 +24,14 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
   const summary = toolNames.length > 0 ? `${data.config.server_name ?? '?'}: ${toolNames.join(', ')}` : null
   const { updateNodeData } = useReactFlow()
   const enabled = data.config?.enabled ?? true
+  // Every MCP node already HAS its server (picked in the browser at creation
+  // time), so telling its user to go pick one would send them looking for a
+  // dropdown that isn't there -- only the allow-list can be empty. Not shown
+  // once the allow-list is a factor: each cell brings its own, and an empty
+  // base value is then expected rather than unconfigured (same call as
+  // nodeConfigIssues.ts makes for the Run pre-flight).
+  const allowListIsFactor = !!data.factor_bindings?.['config.tool_names']
+  const warning = allowListIsFactor ? undefined : 'Not configured -- allow at least one tool'
 
   return (
     <CircleNode
@@ -34,7 +42,7 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
       label={data.label}
       placeholder="MCP Tool"
       handleId="tool"
-      warning={summary ? undefined : 'Not configured -- pick a server and at least one tool'}
+      warning={summary ? undefined : warning}
       factorCount={boundFactorCount(data)}
       dimmed={!enabled}
       isActive={enabled}

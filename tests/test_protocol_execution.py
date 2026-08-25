@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -59,8 +60,11 @@ def _llm_node(node_id: str = "llm", config: dict | None = None) -> dict:
     return {"id": node_id, "type": "llm_anthropic", "data": {"label": "", "config": config or {}}}
 
 
-def _llm_edge(source: str, target: str) -> dict:
-    return {"id": f"{source}-{target}-llm", "source": source, "target": target, "targetHandle": "llm"}
+def _llm_edge(source: str, target: str, handle: str = "ai") -> dict:
+    # `handle` is only ever overridden to exercise the pre-rename "llm"
+    # spelling that migration 3f1a7c9b2e04 rewrites -- see
+    # test_legacy_llm_handle_still_resolves.
+    return {"id": f"{source}-{target}-ai", "source": source, "target": target, "targetHandle": handle}
 
 
 def _memory_node(node_id: str = "memory") -> dict:
@@ -101,19 +105,21 @@ def _tool_edge(source: str, target: str) -> dict:
     return {"id": f"{source}-{target}-tool", "source": source, "target": target, "targetHandle": "tool"}
 
 
-def _dataset_node(node_id: str = "dataset1", dataset_name: str = "spinal-fusion-v1") -> dict:
+def _dataset_node(node_id: str = "dataset1", dataset_name: str = "spinal-fusion-v1", dataset_id: str = "d1") -> dict:
     return {
         "id": node_id,
         "type": "dataset",
-        "data": {"label": "", "config": {"dataset_id": "d1", "dataset_name": dataset_name}},
+        "data": {"label": "", "config": {"dataset_id": dataset_id, "dataset_name": dataset_name}},
     }
 
 
-def _dataset_edge(source: str, target: str) -> dict:
-    # Dataset shares the Tool connector handle (see _NODE_TYPE_TO_HANDLE) --
-    # its source node's own `type` is what identifies it as a Dataset, not
-    # the handle.
-    return {"id": f"{source}-{target}-dataset", "source": source, "target": target, "targetHandle": "tool"}
+def _dataset_edge(source: str, target: str, handle: str = "dataset") -> dict:
+    # Dataset has its own connector handle (see _NODE_TYPE_TO_HANDLE).
+    # `handle="resource"` reproduces a graph saved while that slot was still
+    # called Resource, and `handle="tool"` one saved before it existed at all,
+    # when it shared the Tool handle -- both still accepted, see
+    # _LEGACY_DATASET_HANDLES.
+    return {"id": f"{source}-{target}-dataset", "source": source, "target": target, "targetHandle": handle}
 
 
 def _script_node(node_id: str = "script1", code: str = "print('hi')") -> dict:
@@ -130,10 +136,83 @@ def _script_edge(source: str, target: str) -> dict:
     return {"id": f"{source}-{target}-script", "source": source, "target": target, "targetHandle": "tool"}
 
 
+def _skill_node(node_id: str = "skill1", skill_id: str = "s1", name: str = "spinal-scoring") -> dict:
+    return {
+        "id": node_id,
+        "type": "skill",
+        "data": {"label": "", "config": {"skill_id": skill_id, "skill_name": name}},
+    }
+
+
+def _skill_edge(source: str, target: str) -> dict:
+    # Skill gets its own connector handle rather than sharing Tool's, because
+    # core has a real slot for it (Agent.skill_config) -- see
+    # _resolve_skill_config.
+    return {"id": f"{source}-{target}-skill", "source": source, "target": target, "targetHandle": "skill"}
+
+
+def _okf_bundle_node(
+    node_id: str = "okf1",
+    server_name: str = "okf-bundle-spine-abc12345",
+    tool_names: list[str] | None = None,
+) -> dict:
+    return {
+        "id": node_id,
+        "type": "okf_bundle",
+        "data": {
+            "label": "",
+            "config": {
+                "bundle_id": "b1",
+                "server_name": server_name,
+                "bundle_path": "/home/r/okf/spine",
+                "bundle_label": "spine",
+                "tool_names": ["list_concepts", "read_concept"] if tool_names is None else tool_names,
+            },
+        },
+    }
+
+
+def _okf_document_node(
+    node_id: str = "doc1",
+    server_name: str = "okf-doc-spinal-cord-def45678",
+    tool_names: list[str] | None = None,
+) -> dict:
+    # The Knowledge connector's other source type. Structurally a bundle of
+    # one concept -- ASAREE stores the upload in its own directory and serves
+    # it with the same per-bundle OKF server -- so it carries the same
+    # server_name/tool_names and resolves identically.
+    return {
+        "id": node_id,
+        "type": "okf_document",
+        "data": {
+            "label": "",
+            "config": {
+                "document_id": "d1",
+                "server_name": server_name,
+                "document_path": "/data/okf-documents/u/spinal-cord/spinal-cord.md",
+                "document_title": "Spinal cord",
+                "tool_names": ["list_concepts", "read_concept"] if tool_names is None else tool_names,
+            },
+        },
+    }
+
+
+def _knowledge_edge(source: str, target: str) -> dict:
+    # OKF Bundle gets its own connector handle rather than sharing Tool's:
+    # what it declares is a knowledge base, not one more capability. It still
+    # resolves into the same tool allow-list -- see _resolve_knowledge_config.
+    return {
+        "id": f"{source}-{target}-knowledge",
+        "source": source,
+        "target": target,
+        "targetHandle": "knowledge",
+    }
+
+
 def _agent_with_llm(node_id: str, llm_id: str = "llm") -> tuple[dict, dict]:
     """A minimal valid agent + its required LLM connector edge -- the
     boilerplate every connector-validation test below needs just to get
-    past the "every agent needs exactly one LLM connection" rule so it can
+    past the "every agent needs exactly one AI connection" rule so it can
     test the thing it actually cares about."""
     return _node(node_id, "agent"), _llm_edge(llm_id, node_id)
 
@@ -245,7 +324,11 @@ def test_build_user_input_appends_upstream_context_after_prompt() -> None:
     assert result == "Polish the draft\n\nUpstream context:\n[u]: draft text here"
 
 
-def test_build_user_input_appends_dataset_context_when_wired() -> None:
+def test_build_user_input_cues_dataset_without_dictating_ids() -> None:
+    # The ids the prompt used to spell out -- experiment_id, cell_label, the
+    # dataset name -- all reach open_workspace as ambient _meta now. Anything
+    # the model has to retype is something it can retype wrong, so the prompt
+    # keeps only the part _meta can't carry: that there IS a dataset waiting.
     agent, agent_llm_edge = _agent_with_llm("a")
     dataset = _dataset_node(dataset_name="spinal-fusion-v1")
     graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
@@ -253,9 +336,305 @@ def test_build_user_input_appends_dataset_context_when_wired() -> None:
         agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
     )
     assert "Dataset context:" in result
-    assert 'name="spinal-fusion-v1"' in result
-    assert f'experiment_id="{uuid.UUID(int=1)}"' in result
-    assert 'cell_label="tier_a__rep_0"' in result
+    assert "open_workspace()" in result
+    assert "spinal-fusion-v1" not in result
+    assert str(uuid.UUID(int=1)) not in result
+    assert "tier_a__rep_0" not in result
+
+
+def test_ambient_meta_carries_every_wired_dataset_name() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [
+            agent,
+            _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1"),
+            _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2"),
+        ],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
+    }
+    assert pe._ambient_meta_for(graph, "a") == {"dataset_names": ["cohort-a", "cohort-b"]}
+
+
+def test_ambient_meta_empty_without_a_dataset() -> None:
+    # Motoro skips an absent/empty ambient_meta, so a node with no references
+    # must produce nothing rather than an empty-list key.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    assert pe._ambient_meta_for({"nodes": [agent], "edges": [agent_llm_edge]}, "a") == {}
+
+
+def test_build_user_input_names_every_wired_dataset() -> None:
+    # With several wired, `name` is the one id that stays in the prompt: the
+    # ambient fallback refuses to guess among them (see resolve_dataset_name),
+    # so the model has to choose. experiment_id/cell_label still don't appear.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [
+            agent,
+            _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1"),
+            _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2"),
+        ],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
+    }
+    result = pe._build_user_input(
+        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
+    )
+    assert "2 datasets are registered for this run:" in result
+    assert '- "cohort-a"' in result
+    assert '- "cohort-b"' in result
+    assert str(uuid.UUID(int=1)) not in result
+    assert "tier_a__rep_0" not in result
+
+
+def test_build_user_input_states_the_dataset_is_already_open_when_preseeded() -> None:
+    # ASAREE seeds the cell workspace before the agent's first turn, so the
+    # Dataset block stops asking for a tool call. A step the agent can't skip
+    # is a step it can't get wrong -- and a new user never has to learn that
+    # "open a workspace" was a thing their agent had to be told to do.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="spinal-fusion-v1")
+    graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
+    result = pe._build_user_input(
+        agent,
+        graph,
+        {},
+        experiment_id=uuid.UUID(int=1),
+        effective_cell_label="tier_a__rep_0",
+        seeded_dataset="spinal-fusion-v1",
+    )
+    assert "already open" in result
+    assert "spinal-fusion-v1" in result  # named, so the transcript shows what it worked on
+    assert "Do NOT call open_workspace" in result
+    assert str(uuid.UUID(int=1)) not in result
+    assert "tier_a__rep_0" not in result
+
+
+def _registration(**overrides: object) -> dict[str, object]:
+    """A split registration as ``fetch_owned_registration`` returns one."""
+    return {
+        "target_column": "outcome",
+        "raw_path": "/data/raw.csv",
+        "train_path": "/data/train.parquet",
+        "test_path": "/data/test.parquet",
+        "dictionary_json": None,
+        **overrides,
+    }
+
+
+async def test_preseed_skipped_without_a_workspace_or_with_several_datasets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An unlinked protocol run has no cell workspace to seed, and several wired
+    # datasets are a real choice with no defensible default (mirrors
+    # resolve_dataset_name's own len == 1 rule) -- those keep the agent-driven
+    # open_workspace(name=...).
+    async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
+        return _registration()
+
+    monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
+    agent, agent_llm_edge = _agent_with_llm("a")
+    one = {
+        "nodes": [agent, _dataset_node(dataset_name="solo")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    assert await pe._resolve_node_dataset(one, "a", None, uuid.UUID(int=7)) == pe.NodeDataset()
+
+    many = {
+        "nodes": [
+            agent,
+            _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1"),
+            _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2"),
+        ],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
+    }
+    # Still before any DB access at all: the len == 1 rule is checked first.
+    assert await pe._resolve_node_dataset(many, "a", "exp/cell", uuid.UUID(int=7)) == pe.NodeDataset()
+
+
+async def test_preseed_failure_falls_back_to_the_agent_driven_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A broken registration must not kill the run before its first turn: the
+    # seeding error is logged, an empty NodeDataset comes back, and
+    # _build_user_input reverts to asking the agent to call open_workspace --
+    # which surfaces the real error where someone is actually reading it.
+    async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
+        return _registration()
+
+    async def _boom(**_kwargs: object) -> None:
+        raise pe.WorkspaceSeedError("Dataset 'gone' not found in registry.")
+
+    monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
+    monkeypatch.setattr(pe, "seed_cell_workspace", _boom)
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="gone")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    assert await pe._resolve_node_dataset(graph, "a", "exp/cell", uuid.UUID(int=7)) == pe.NodeDataset()
+
+    result = pe._build_user_input(
+        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0", seeded_dataset=""
+    )
+    assert "Call open_workspace()" in result
+
+
+async def test_an_unsplit_dataset_binds_its_raw_file_instead_of_a_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Splitting in ASAREE is optional, so a registration can be a raw file with
+    # no train/test pair. There is no workspace to seed for one -- the staged
+    # pipeline is defined over a frozen split -- so the raw file itself becomes
+    # the run's data_path and the agent splits it with the sklearn tools.
+    async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
+        return _registration(train_path=None, test_path=None, raw_path="/data/spine/raw.csv")
+
+    def _no_workspace(workspace_id: str) -> tuple[str, str]:
+        return "", ""
+
+    async def _never(**_kwargs: object) -> None:
+        raise AssertionError("an unsplit dataset must not attempt to seed a workspace")
+
+    monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
+    monkeypatch.setattr(pe, "head_data_locator", _no_workspace)
+    monkeypatch.setattr(pe, "seed_cell_workspace", _never)
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spine-raw")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+
+    ambient, dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
+    assert dataset.unsplit_name == "spine-raw"
+    assert dataset.seeded_name == ""
+    assert ambient["data_path"] == "/data/spine/raw.csv"
+    assert ambient["target_column"] == "outcome"
+
+    # And the prompt says so, because a model left to infer it reaches for
+    # open_workspace -- which has nothing to open.
+    result = pe._build_user_input(
+        agent,
+        graph,
+        {},
+        experiment_id=uuid.UUID(int=1),
+        effective_cell_label="tier_a__rep_0",
+        unsplit_dataset=dataset.unsplit_name,
+    )
+    assert "has NOT been split" in result
+    assert "Do NOT call open_workspace" in result
+    assert "train_test_split" in result
+
+
+async def test_a_workspace_head_wins_over_an_unsplit_raw_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The raw file is a fallback, never an override: a cell with a workspace has
+    # already moved past the upload, and a Score step must fit the engineered
+    # matrix at HEAD rather than the raw CSV.
+    async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
+        return _registration(train_path=None, test_path=None)
+
+    monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
+    monkeypatch.setattr(pe, "head_data_locator", lambda wid: ("/ws/v2_fte/train.parquet", "outcome"))
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spine-raw")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    ambient, _dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
+    assert ambient["data_path"] == "/ws/v2_fte/train.parquet"
+
+
+def test_dataset_connector_grants_the_workspace_tools() -> None:
+    # Wiring a Dataset node is the whole gesture: the tools that make working
+    # on that data possible follow from it, with no second asaree-workspace
+    # Tool node to know about. Namespaced, since gather_tools matches against
+    # Motoro's registry (see test_resolve_tool_config_namespaces_tool_names_*).
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spinal-fusion-v1")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    resolved = pe._resolve_dataset_tool_config(graph, "a")
+    assert resolved["server_names"] == ["asaree-workspace"]
+    assert "asaree-workspace.open_workspace" in resolved["tool_names"]
+    assert "asaree-workspace.accept_stage" in resolved["tool_names"]
+    # A health check and a no-op shim are noise in an agent's tool list.
+    assert "asaree-workspace.ping" not in resolved["tool_names"]
+
+    # No Dataset wired -> no implicit grant.
+    bare = {"nodes": [agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_dataset_tool_config(bare, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_script_connector_grants_the_script_runner() -> None:
+    # Wiring a Script node is the whole gesture, exactly like Dataset above:
+    # before this, a script was only runnable if the user ALSO wired one of the
+    # two sklearn servers whose script tools read the ambient path -- and both
+    # reject a script that isn't fitting a model.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hello')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+    resolved = pe._resolve_script_tool_config(graph, "a")
+    assert resolved["server_names"] == ["asaree-script"]
+    assert resolved["tool_names"] == ["asaree-script.run_wired_script"]
+
+    # No Script wired -> no implicit grant.
+    bare = {"nodes": [agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_script_tool_config(bare, "a") == {"server_names": [], "tool_names": []}
+
+    # An empty Script node publishes no ambient path either, so the tool would
+    # only be there to report its own absence.
+    empty = {
+        "nodes": [agent, _script_node(code="")],
+        "edges": [agent_llm_edge, _script_edge("script1", "a")],
+    }
+    assert pe._resolve_script_tool_config(empty, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_merge_tool_configs_does_not_double_an_explicitly_wired_workspace() -> None:
+    # A user who also wired an asaree-workspace Tool node would otherwise
+    # contribute the same namespaced names twice, now that one grant is implicit.
+    explicit = {"server_names": ["asaree-workspace"], "tool_names": ["asaree-workspace.open_workspace"]}
+    implicit = {
+        "server_names": ["asaree-workspace"],
+        "tool_names": ["asaree-workspace.open_workspace", "asaree-workspace.accept_stage"],
+    }
+    assert pe._merge_tool_configs(explicit, implicit) == {
+        "server_names": ["asaree-workspace"],
+        "tool_names": ["asaree-workspace.open_workspace", "asaree-workspace.accept_stage"],
+    }
+
+
+def test_dataset_resolves_from_legacy_tool_handle() -> None:
+    # A graph saved before the Dataset connector existed still has its
+    # dataset edge on the Tool handle (see _LEGACY_DATASET_HANDLES) -- it
+    # keeps resolving identically, so an old protocol runs unchanged even if
+    # it's never opened in the canvas (which would rewrite the handle).
+    # Asserted against the ambient meta, which is where the name goes now.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="spinal-fusion-v1")
+    graph = {
+        "nodes": [_llm_node(), agent, dataset],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a", handle="tool")],
+    }
+    topological_order(graph)  # legacy handle is still a valid wiring, not a validation error
+    assert pe._ambient_meta_for(graph, "a") == {"dataset_names": ["spinal-fusion-v1"]}
+    assert "Dataset context:" in pe._build_user_input(
+        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
+    )
+
+
+def test_dataset_resolves_from_legacy_resource_handle() -> None:
+    # Ditto for the intermediate spelling: the slot existed but was called
+    # "Resource" (migration 3f1a7c9b2e04) before being renamed after the only
+    # node type it accepts (b7c2d9e14a35).
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="spinal-fusion-v1")
+    graph = {
+        "nodes": [_llm_node(), agent, dataset],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a", handle="resource")],
+    }
+    topological_order(graph)
+    assert pe._ambient_meta_for(graph, "a") == {"dataset_names": ["spinal-fusion-v1"]}
+    assert "Dataset context:" in pe._build_user_input(
+        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
+    )
 
 
 def test_build_user_input_omits_dataset_context_when_disabled() -> None:
@@ -291,11 +670,28 @@ def test_build_user_input_omits_dataset_context_without_experiment_id() -> None:
     assert "Dataset context" not in result
 
 
-def test_build_user_input_appends_script_block_when_wired() -> None:
+def test_build_user_input_cues_bound_script_without_inlining_it() -> None:
+    # The script reached the tool as a path, so the source stays out of the
+    # prompt -- it would otherwise cost tokens on every turn of the loop and
+    # be only as faithful as the model's retyping.
     agent, agent_llm_edge = _agent_with_llm("a")
     script = _script_node(code="print('hello')")
     graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
-    result = pe._build_user_input(agent, graph, {})
+    result = pe._build_user_input(agent, graph, {}, script_bound=True)
+    assert "Script context:" in result
+    assert "print('hello')" not in result
+    # And it names the tool that is actually granted with the Script node, not
+    # a sklearn harness the agent may well not have.
+    assert "run_wired_script()" in result
+
+
+def test_build_user_input_inlines_script_when_it_could_not_be_bound() -> None:
+    # No workspace to write it to (an unlinked protocol run): a prompt the
+    # model can copy from beats no script at all.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hello')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+    result = pe._build_user_input(agent, graph, {}, script_bound=False)
     assert "Script to pass verbatim" in result
     assert "print('hello')" in result
 
@@ -304,6 +700,82 @@ def test_build_user_input_omits_script_block_when_unwired() -> None:
     node = _node("a", "agent", {"goal": "do the work"}, label="Worker")
     result = pe._build_user_input(node, {"nodes": [node], "edges": []}, {})
     assert "Script to pass verbatim" not in result
+    assert "Script context:" not in result
+
+
+def test_ambient_meta_writes_the_wired_script_and_carries_its_path(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(pe, "WORKSPACE_ROOT", str(tmp_path))
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hello')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+
+    meta = pe._ambient_meta_for(graph, "a", "exp1/cellA")
+    assert Path(meta["script_path"]).read_text() == "print('hello')"
+
+    # An edited Script node must not leave the previous run's copy behind for
+    # a rerun to execute -- the graph is the source of truth, not the file.
+    script["data"]["config"]["code"] = "print('edited')"
+    assert Path(pe._ambient_meta_for(graph, "a", "exp1/cellA")["script_path"]).read_text() == "print('edited')"
+
+
+def test_ambient_meta_carries_the_workspace_head_as_a_data_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    # For scikit-learn-mcp, which takes its dataset as a path instead of
+    # reading the workspace: without this the only dataset identity the agent
+    # could see was the workspace id, and it passed THAT as data_path.
+    monkeypatch.setattr(pe, "head_data_locator", lambda wid: (f"/ws/{wid}/v1_dc/train.parquet", "outcome"))
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spinal-fusion-v1")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    meta = pe._ambient_meta_for(graph, "a", "exp1/cellA")
+    assert meta["data_path"] == "/ws/exp1/cellA/v1_dc/train.parquet"
+    assert meta["target_column"] == "outcome"
+
+    # Keyed off the workspace, NOT off a wired Dataset connector: the spinal
+    # graph wires the dataset into DC/FTE/FS only, and the nodes that actually
+    # want a path are the model-fitting ones (MLM, Score) that have none.
+    bare = {"nodes": [agent], "edges": [agent_llm_edge]}
+    assert pe._ambient_meta_for(bare, "a", "exp1/cellA")["data_path"] == "/ws/exp1/cellA/v1_dc/train.parquet"
+
+    # No workspace at all (an unlinked protocol run): nothing to name, and the
+    # tool asking for an explicit data_path is the correct outcome.
+    assert "data_path" not in pe._ambient_meta_for(graph, "a", None)
+
+
+async def test_node_run_context_seeds_before_reading_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ordering is the whole point: the ambient data_path names the workspace's
+    # HEAD version, which doesn't exist until the pre-seed has created it.
+    calls: list[str] = []
+
+    async def _seed(graph: dict, node_id: str, workspace_id: str | None, owner_id: uuid.UUID) -> pe.NodeDataset:
+        calls.append("seed")
+        return pe.NodeDataset(seeded_name="spinal-fusion-v1")
+
+    def _locator(workspace_id: str) -> tuple[str, str]:
+        calls.append("locator")
+        return "/ws/train.parquet", "outcome"
+
+    monkeypatch.setattr(pe, "_resolve_node_dataset", _seed)
+    monkeypatch.setattr(pe, "head_data_locator", _locator)
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spinal-fusion-v1")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    ambient, dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
+    assert calls == ["seed", "locator"]
+    assert dataset.seeded_name == "spinal-fusion-v1"
+    assert ambient["data_path"] == "/ws/train.parquet"
+
+
+def test_ambient_meta_omits_script_path_without_a_workspace() -> None:
+    # Nowhere to write it, so no path -- and _build_user_input falls back to
+    # inlining rather than cueing a file that doesn't exist.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hello')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+    assert pe._ambient_meta_for(graph, "a", None) == {}
 
 
 # --- _run_gated_worker (mocked -- no real LLM calls) -------------------------
@@ -614,6 +1086,57 @@ def test_apply_factor_bindings_substitutes_critic_enabled_boolean() -> None:
     assert patched["nodes"][0]["data"]["config"]["enabled"] is False
 
 
+def test_apply_factor_bindings_swaps_the_whole_dataset_per_cell() -> None:
+    """The dataset-as-factor path end to end, on the pure half: a Dataset
+    node's whole `config` bound to a 'dataset_config' factor resolves to
+    exactly ONE dataset per cell -- which is what keeps a cell's single
+    workspace (keyed by experiment_id/cell_label) holding a single dataset,
+    and what lets _resolve_node_dataset's len == 1 rule fire."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="cohort-a", dataset_id="d1")
+    dataset["data"]["factor_bindings"] = {"config": "Agent:Dataset:Dataset"}
+    graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
+
+    for name, dataset_id in (("cohort-a", "d1"), ("cohort-b", "d2")):
+        level = {"dataset_id": dataset_id, "dataset_name": name, "enabled": True}
+        patched = apply_factor_bindings(graph, {"Agent:Dataset:Dataset": level})
+        configs = pe._resolve_dataset_configs(patched, "a")
+        assert [c["dataset_name"] for c in configs] == [name]
+
+    # And the base graph is untouched, so the next cell starts from the same
+    # place (apply_factor_bindings deep-copies).
+    assert [c["dataset_name"] for c in pe._resolve_dataset_configs(graph, "a")] == ["cohort-a"]
+
+
+def test_apply_factor_bindings_varies_the_tool_allow_list_but_not_the_server() -> None:
+    """The tools-as-factor path on the pure half: an MCP node's
+    `config.tool_names` bound to a 'tool_names' factor changes which of that
+    ONE server's tools reach the agent, still namespaced, while server_names
+    stays put across every level -- that invariant is what lets the canvas
+    keep printing one server name for the node."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    tool = _tool_node(server_name="srv", tool_names=["do_thing", "do_other"])
+    tool["data"]["factor_bindings"] = {"config.tool_names": "Agent:Tool:Tools allowed"}
+    graph = {"nodes": [agent, tool], "edges": [agent_llm_edge, _tool_edge("tool1", "a")]}
+
+    both = apply_factor_bindings(graph, {"Agent:Tool:Tools allowed": ["do_thing", "do_other"]})
+    assert pe._resolve_tool_config(both, "a") == {
+        "server_names": ["srv"],
+        "tool_names": ["srv.do_thing", "srv.do_other"],
+    }
+
+    one = apply_factor_bindings(graph, {"Agent:Tool:Tools allowed": ["do_thing"]})
+    assert pe._resolve_tool_config(one, "a") == {"server_names": ["srv"], "tool_names": ["srv.do_thing"]}
+
+    # An empty allow-list is a real level: the server still connects (so
+    # server_names is unchanged), it just contributes no tools to that cell.
+    none = apply_factor_bindings(graph, {"Agent:Tool:Tools allowed": []})
+    assert pe._resolve_tool_config(none, "a") == {"server_names": ["srv"], "tool_names": []}
+
+    # And the base graph is untouched (apply_factor_bindings deep-copies).
+    assert pe._resolve_tool_config(graph, "a")["tool_names"] == ["srv.do_thing", "srv.do_other"]
+
+
 def test_sink_node_ids_linear_chain_single_sink() -> None:
     graph = _graph(["a", "b", "c"], [("a", "b"), ("b", "c")])
     assert sink_node_ids(graph) == ["c"]
@@ -844,7 +1367,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
                     },
                     {"id": "worker", "type": "agent", "data": {"config": {}}},
                 ],
-                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "llm"}],
+                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "ai"}],
             },
         )
         protocol_id = protocol.id
@@ -898,7 +1421,7 @@ async def _run_single_cell_protocol(owner_id: uuid.UUID) -> tuple[uuid.UUID, str
                     {"id": "llm1", "type": "llm_anthropic", "data": {"config": {}}},
                     {"id": "worker", "type": "agent", "data": {"config": {}}},
                 ],
-                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "llm"}],
+                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "ai"}],
             },
         )
         protocol_id = protocol.id
@@ -1256,7 +1779,7 @@ async def test_poll_cancel_flag_sets_event_once_cancellation_requested(owner_id:
 
 def test_agent_missing_llm_connection_raises() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    with pytest.raises(ProtocolValidationError, match="exactly one LLM connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
         topological_order(graph)
 
 
@@ -1266,7 +1789,7 @@ def test_agent_duplicate_llm_connection_raises() -> None:
         "nodes": [llm1, llm2, _node("a", "agent")],
         "edges": [_llm_edge("llm1", "a"), _llm_edge("llm2", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="exactly one LLM connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
         topological_order(graph)
 
 
@@ -1277,16 +1800,33 @@ def test_critic_gate_missing_llm_connection_raises() -> None:
         "nodes": [llm, worker, _node("g1", "critic_gate")],
         "edges": [worker_llm_edge, {"id": "w1-g1", "source": "w1", "target": "g1"}],
     }
-    with pytest.raises(ProtocolValidationError, match="exactly one LLM connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
         topological_order(graph)
+
+
+def test_legacy_llm_handle_still_resolves() -> None:
+    # The AI connector's handle id was "llm" before it was renamed to "ai"
+    # (migration 3f1a7c9b2e04 rewrites stored graphs). An un-migrated edge --
+    # or one autosaved by a browser tab still running the pre-rename JS --
+    # must resolve identically: same wiring, same model config, no "exactly
+    # one AI connection" error from the edge being read as a main pipeline
+    # edge instead.
+    llm = _llm_node(config={"provider": "anthropic", "model": "claude-sonnet-4-5"})
+    agent = _node("a", "agent")
+    graph = {
+        "nodes": [llm, agent],
+        "edges": [_llm_edge("llm", "a", handle="llm")],
+    }
+    assert [n["id"] for n in topological_order(graph)] == ["llm", "a"]
+    assert pe._resolve_llm_config(graph, "a")["model"] == "claude-sonnet-4-5"
 
 
 def test_llm_connection_from_non_llm_source_raises() -> None:
     graph = {
         "nodes": [_node("t1", "step"), _node("a", "agent")],
-        "edges": [{"id": "t1-a-llm", "source": "t1", "target": "a", "targetHandle": "llm"}],
+        "edges": [{"id": "t1-a-ai", "source": "t1", "target": "a", "targetHandle": "ai"}],
     }
-    with pytest.raises(ProtocolValidationError, match="must come from an LLM node"):
+    with pytest.raises(ProtocolValidationError, match="must come from an AI node"):
         topological_order(graph)
 
 
@@ -1297,7 +1837,7 @@ def test_tool_connection_from_non_mcp_tool_source_raises() -> None:
         "nodes": [llm, agent, _node("b", "agent")],
         "edges": [agent_llm_edge, _tool_edge("b", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="must come from an MCP Tool, Dataset, or Script node"):
+    with pytest.raises(ProtocolValidationError, match="must come from an MCP Tool or Script node"):
         topological_order(graph)
 
 
@@ -1317,7 +1857,7 @@ def test_tool_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
     ):
         topological_order(graph)
 
@@ -1368,7 +1908,7 @@ def test_llm_node_with_plain_outgoing_edge_raises() -> None:
         "nodes": [llm, agent, _node("b", "agent")],
         "edges": [agent_llm_edge, {"id": "llm-b", "source": "llm", "target": "b"}],
     }
-    with pytest.raises(ProtocolValidationError, match="LLM node .* can only connect to a node's LLM slot"):
+    with pytest.raises(ProtocolValidationError, match="AI node .* can only connect to a node's AI slot"):
         topological_order(graph)
 
 
@@ -1384,16 +1924,34 @@ def test_memory_node_with_plain_outgoing_edge_raises() -> None:
         topological_order(graph)
 
 
-def test_multiple_dataset_connections_raises() -> None:
+def test_multiple_dataset_connections_are_allowed() -> None:
+    # Uncapped, like Skill and Knowledge: comparing a model across datasets
+    # (or joining two tables) is ordinary science, and the old one-dataset cap
+    # made it unexpressible.
     llm = _llm_node()
     agent, agent_llm_edge = _agent_with_llm("a")
-    ds1, ds2 = _dataset_node("ds1"), _dataset_node("ds2")
+    ds1 = _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1")
+    ds2 = _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2")
     graph = {
         "nodes": [llm, agent, ds1, ds2],
         "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="at most one Dataset connection"):
-        topological_order(graph)
+    assert [n["id"] for n in topological_order(graph)] == ["llm", "ds1", "ds2", "a"]
+
+
+def test_dataset_connections_split_across_legacy_and_current_handles_are_allowed() -> None:
+    # A half-migrated graph (one old Tool-handle edge, one new Dataset one)
+    # resolves to both datasets rather than tripping a cap.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    ds1 = _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1")
+    ds2 = _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2")
+    graph = {
+        "nodes": [llm, agent, ds1, ds2],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a", handle="tool")],
+    }
+    topological_order(graph)
+    assert [c["dataset_name"] for c in pe._resolve_dataset_configs(graph, "a")] == ["cohort-a", "cohort-b"]
 
 
 def test_dataset_connection_from_non_dataset_source_raises() -> None:
@@ -1403,7 +1961,7 @@ def test_dataset_connection_from_non_dataset_source_raises() -> None:
         "nodes": [llm, agent, _node("b", "agent")],
         "edges": [agent_llm_edge, _dataset_edge("b", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="must come from an MCP Tool, Dataset, or Script node"):
+    with pytest.raises(ProtocolValidationError, match="Dataset connection must come from a Dataset node"):
         topological_order(graph)
 
 
@@ -1423,7 +1981,7 @@ def test_dataset_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
     ):
         topological_order(graph)
 
@@ -1440,7 +1998,7 @@ def test_dataset_node_with_plain_outgoing_edge_raises() -> None:
             {"id": "dataset1-b", "source": "dataset1", "target": "b"},
         ],
     }
-    with pytest.raises(ProtocolValidationError, match="Dataset node .* can only connect to a node's Tool slot"):
+    with pytest.raises(ProtocolValidationError, match="Dataset node .* can only connect to a node's Dataset slot"):
         topological_order(graph)
 
 
@@ -1463,7 +2021,7 @@ def test_script_connection_from_non_script_source_raises() -> None:
         "nodes": [llm, agent, _node("b", "agent")],
         "edges": [agent_llm_edge, _script_edge("b", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="must come from an MCP Tool, Dataset, or Script node"):
+    with pytest.raises(ProtocolValidationError, match="must come from an MCP Tool or Script node"):
         topological_order(graph)
 
 
@@ -1483,7 +2041,7 @@ def test_script_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
     ):
         topological_order(graph)
 
@@ -1501,6 +2059,298 @@ def test_script_node_with_plain_outgoing_edge_raises() -> None:
         ],
     }
     with pytest.raises(ProtocolValidationError, match="Script node .* can only connect to a node's Tool slot"):
+        topological_order(graph)
+
+
+def test_skill_connector_is_repeatable_and_uncapped() -> None:
+    # Unlike Memory/Dataset/Script (max 1) and the execution pattern (max 1),
+    # the Skill connector is uncapped -- several skills on one agent is the
+    # normal case, since each costs ~100 tokens of level-1 metadata until the
+    # model actually opens it.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    s1, s2, s3 = _skill_node("s1", "id1"), _skill_node("s2", "id2"), _skill_node("s3", "id3")
+    graph = {
+        "nodes": [llm, agent, s1, s2, s3],
+        "edges": [agent_llm_edge, _skill_edge("s1", "a"), _skill_edge("s2", "a"), _skill_edge("s3", "a")],
+    }
+    assert {n["id"] for n in topological_order(graph)} == {"llm", "a", "s1", "s2", "s3"}
+
+
+def test_skill_connection_from_non_skill_node_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _script_node()],
+        "edges": [agent_llm_edge, _skill_edge("script1", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="Skill connection must come from a Skill node"):
+        topological_order(graph)
+
+
+def test_skill_connection_on_critic_gate_raises() -> None:
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate"), _skill_node()],
+        "edges": [
+            worker_llm_edge,
+            _llm_edge("llm", "g1"),
+            {"id": "w1-g1", "source": "w1", "target": "g1"},
+            _skill_edge("skill1", "g1"),
+        ],
+    }
+    with pytest.raises(
+        ProtocolValidationError,
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
+    ):
+        topological_order(graph)
+
+
+def test_skill_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _skill_node(), _node("b", "agent")],
+        "edges": [
+            agent_llm_edge,
+            _skill_edge("skill1", "a"),
+            {"id": "skill1-b", "source": "skill1", "target": "b"},
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="Skill node .* can only connect to a node's Skill slot"):
+        topological_order(graph)
+
+
+def test_skill_node_is_not_a_sink() -> None:
+    # A pure config source never counts as a pipeline's final output, even
+    # unwired -- otherwise a dangling Skill node breaks the one-sink rule.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [llm, agent, _skill_node()], "edges": [agent_llm_edge, _skill_edge("skill1", "a")]}
+    assert pe.sink_node_ids(graph) == ["a"]
+
+
+def test_resolve_skill_config_collects_ids_in_wiring_order() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _skill_node("s1", "id-a"), _skill_node("s2", "id-b")],
+        "edges": [agent_llm_edge, _skill_edge("s1", "a"), _skill_edge("s2", "a")],
+    }
+    assert pe._resolve_skill_config(graph, "a") == {"skill_ids": ["id-a", "id-b"]}
+
+
+def test_resolve_skill_config_dedupes_and_skips_disabled_and_unset() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    duplicate = _skill_node("s2", "id-a")
+    disabled = _skill_node("s3", "id-c")
+    disabled["data"]["config"]["enabled"] = False
+    unset = _skill_node("s4", "")
+    graph = {
+        "nodes": [llm, agent, _skill_node("s1", "id-a"), duplicate, disabled, unset],
+        "edges": [
+            agent_llm_edge,
+            _skill_edge("s1", "a"),
+            _skill_edge("s2", "a"),
+            _skill_edge("s3", "a"),
+            _skill_edge("s4", "a"),
+        ],
+    }
+    assert pe._resolve_skill_config(graph, "a") == {"skill_ids": ["id-a"]}
+
+
+def test_resolve_skill_config_empty_with_nothing_wired() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_skill_config(graph, "a") == {}
+
+
+def test_knowledge_connector_is_repeatable_and_uncapped() -> None:
+    # Uncapped like Skill/Tool: reading a shared team bundle while writing to
+    # a personal one is a normal setup, not an ambiguity to resolve.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    b1 = _okf_bundle_node("b1", "okf-bundle-one-11111111")
+    b2 = _okf_bundle_node("b2", "okf-bundle-two-22222222")
+    graph = {
+        "nodes": [llm, agent, b1, b2],
+        "edges": [agent_llm_edge, _knowledge_edge("b1", "a"), _knowledge_edge("b2", "a")],
+    }
+    assert {n["id"] for n in topological_order(graph)} == {"llm", "a", "b1", "b2"}
+
+
+def test_knowledge_connection_from_non_bundle_node_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _skill_node()],
+        "edges": [agent_llm_edge, _knowledge_edge("skill1", "a")],
+    }
+    with pytest.raises(
+        ProtocolValidationError, match="Knowledge connection must come from an OKF Bundle or OKF Document node"
+    ):
+        topological_order(graph)
+
+
+def test_knowledge_connection_on_critic_gate_raises() -> None:
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate"), _okf_bundle_node()],
+        "edges": [
+            worker_llm_edge,
+            _llm_edge("llm", "g1"),
+            {"id": "w1-g1", "source": "w1", "target": "g1"},
+            _knowledge_edge("okf1", "g1"),
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="Only Agent nodes can have a Tool, Memory"):
+        topological_order(graph)
+
+
+def test_okf_bundle_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _okf_bundle_node(), _node("b", "agent")],
+        "edges": [
+            agent_llm_edge,
+            _knowledge_edge("okf1", "a"),
+            {"id": "okf1-b", "source": "okf1", "target": "b"},
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="OKF Bundle node .* can only connect to a node's Knowledge slot"):
+        topological_order(graph)
+
+
+def test_okf_bundle_node_is_not_a_sink() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _okf_bundle_node()],
+        "edges": [agent_llm_edge, _knowledge_edge("okf1", "a")],
+    }
+    assert pe.sink_node_ids(graph) == ["a"]
+
+
+def test_resolve_knowledge_config_namespaces_tool_names() -> None:
+    # The whole point of the resolver: gather_tools matches on
+    # "{server}.{tool}", so a bare name silently starves the agent instead of
+    # erroring.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _okf_bundle_node("b1", "okf-bundle-spine-abc12345")],
+        "edges": [agent_llm_edge, _knowledge_edge("b1", "a")],
+    }
+    assert pe._resolve_knowledge_config(graph, "a") == {
+        "server_names": ["okf-bundle-spine-abc12345"],
+        "tool_names": [
+            "okf-bundle-spine-abc12345.list_concepts",
+            "okf-bundle-spine-abc12345.read_concept",
+        ],
+    }
+
+
+def test_resolve_knowledge_config_dedupes_and_skips_disabled_and_unset() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    duplicate = _okf_bundle_node("b2", "okf-bundle-spine-abc12345")
+    disabled = _okf_bundle_node("b3", "okf-bundle-other-99999999")
+    disabled["data"]["config"]["enabled"] = False
+    unset = _okf_bundle_node("b4", "")
+    graph = {
+        "nodes": [
+            llm,
+            agent,
+            _okf_bundle_node("b1", "okf-bundle-spine-abc12345"),
+            duplicate,
+            disabled,
+            unset,
+        ],
+        "edges": [
+            agent_llm_edge,
+            _knowledge_edge("b1", "a"),
+            _knowledge_edge("b2", "a"),
+            _knowledge_edge("b3", "a"),
+            _knowledge_edge("b4", "a"),
+        ],
+    }
+    assert pe._resolve_knowledge_config(graph, "a")["server_names"] == ["okf-bundle-spine-abc12345"]
+
+
+def test_resolve_knowledge_config_empty_with_nothing_wired() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_knowledge_config(graph, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_okf_document_node_fills_the_knowledge_connector() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _okf_document_node()],
+        "edges": [agent_llm_edge, _knowledge_edge("doc1", "a")],
+    }
+    assert {n["id"] for n in topological_order(graph)} == {"llm", "a", "doc1"}
+    assert pe.sink_node_ids(graph) == ["a"]
+
+
+def test_resolve_knowledge_config_mixes_bundles_and_documents() -> None:
+    # The two node types are interchangeable on this connector: both resolve
+    # to a per-directory OKF server, so an agent can hold a shared bundle and
+    # one uploaded concept at once.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [
+            llm,
+            agent,
+            _okf_bundle_node("b1", "okf-bundle-spine-abc12345"),
+            _okf_document_node("d1", "okf-doc-spinal-cord-def45678", ["read_concept"]),
+        ],
+        "edges": [agent_llm_edge, _knowledge_edge("b1", "a"), _knowledge_edge("d1", "a")],
+    }
+    assert pe._resolve_knowledge_config(graph, "a") == {
+        "server_names": ["okf-bundle-spine-abc12345", "okf-doc-spinal-cord-def45678"],
+        "tool_names": [
+            "okf-bundle-spine-abc12345.list_concepts",
+            "okf-bundle-spine-abc12345.read_concept",
+            "okf-doc-spinal-cord-def45678.read_concept",
+        ],
+    }
+
+
+def test_resolve_knowledge_config_skips_disabled_document() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    disabled = _okf_document_node("d1", "okf-doc-spinal-cord-def45678")
+    disabled["data"]["config"]["enabled"] = False
+    graph = {
+        "nodes": [llm, agent, disabled],
+        "edges": [agent_llm_edge, _knowledge_edge("d1", "a")],
+    }
+    assert pe._resolve_knowledge_config(graph, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_okf_document_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _okf_document_node(), _node("b", "agent")],
+        "edges": [
+            agent_llm_edge,
+            _knowledge_edge("doc1", "a"),
+            {"id": "doc1-b", "source": "doc1", "target": "b"},
+        ],
+    }
+    with pytest.raises(
+        ProtocolValidationError, match="OKF Document node .* can only connect to a node's Knowledge slot"
+    ):
         topological_order(graph)
 
 
@@ -1545,7 +2395,7 @@ def test_architectural_pattern_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
     ):
         topological_order(graph)
 
@@ -1625,16 +2475,49 @@ def test_resolve_llm_config_empty_when_unconnected() -> None:
     assert pe._resolve_llm_config(graph, "a") == {}
 
 
-def test_resolve_dataset_config_returns_connected_node_config() -> None:
+def test_resolve_dataset_configs_returns_connected_node_config() -> None:
     agent, agent_llm_edge = _agent_with_llm("a")
     dataset = _dataset_node(dataset_name="spinal-fusion-v1")
     graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
-    assert pe._resolve_dataset_config(graph, "a") == {"dataset_id": "d1", "dataset_name": "spinal-fusion-v1"}
+    assert pe._resolve_dataset_configs(graph, "a") == [{"dataset_id": "d1", "dataset_name": "spinal-fusion-v1"}]
 
 
-def test_resolve_dataset_config_empty_when_unconnected() -> None:
+def test_resolve_dataset_configs_empty_when_unconnected() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    assert pe._resolve_dataset_config(graph, "a") == {}
+    assert pe._resolve_dataset_configs(graph, "a") == []
+
+
+def test_resolve_dataset_configs_keeps_wiring_order_and_dedupes() -> None:
+    # Two nodes naming the same registered dataset is a legal graph -- it
+    # would just tell the agent to open one workspace twice, so the second is
+    # dropped rather than rejected (same call _resolve_skill_config makes).
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [
+            agent,
+            _dataset_node("ds1", dataset_name="cohort-b", dataset_id="d2"),
+            _dataset_node("ds2", dataset_name="cohort-a", dataset_id="d1"),
+            _dataset_node("ds3", dataset_name="cohort-a", dataset_id="d1"),
+        ],
+        "edges": [
+            agent_llm_edge,
+            _dataset_edge("ds1", "a"),
+            _dataset_edge("ds2", "a"),
+            _dataset_edge("ds3", "a"),
+        ],
+    }
+    assert [c["dataset_name"] for c in pe._resolve_dataset_configs(graph, "a")] == ["cohort-b", "cohort-a"]
+
+
+def test_resolve_dataset_configs_skips_disabled_nodes() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    disabled = _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2")
+    disabled["data"]["config"]["enabled"] = False
+    graph = {
+        "nodes": [agent, _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1"), disabled],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
+    }
+    assert [c["dataset_name"] for c in pe._resolve_dataset_configs(graph, "a")] == ["cohort-a"]
 
 
 def test_resolve_script_config_returns_connected_node_config() -> None:
@@ -1669,6 +2552,21 @@ def test_resolve_tool_config_collects_all_connected_tool_nodes() -> None:
     assert resolved == {"server_names": ["srv-a", "srv-b"], "tool_names": ["srv-a.fn_a", "srv-b.fn_b"]}
 
 
+def test_resolve_tool_config_treats_a_client_tool_node_like_any_other() -> None:
+    """A user-registered server (the MCP Client Tool node) is a Tool source
+    like any other: same config shape, same resolution, no special case. Only
+    the node type differs, and only to record where the server came from."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    client = _tool_node("tool1", server_name="my-search", tool_names=["search"])
+    client["type"] = "mcp_client_tool"
+    graph = {"nodes": [_llm_node(), agent, client], "edges": [agent_llm_edge, _tool_edge("tool1", "a")]}
+    assert topological_order(graph)  # accepted on the Tool connector at all
+    assert pe._resolve_tool_config(graph, "a") == {
+        "server_names": ["my-search"],
+        "tool_names": ["my-search.search"],
+    }
+
+
 def test_resolve_tool_config_empty_when_no_tool_connections() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
     assert pe._resolve_tool_config(graph, "a") == {"server_names": [], "tool_names": []}
@@ -1682,8 +2580,6 @@ def test_resolve_tool_config_allows_multiple_tools_from_one_server() -> None:
     graph = {"nodes": [agent, tool], "edges": [agent_llm_edge, _tool_edge("tool1", "a")]}
     resolved = pe._resolve_tool_config(graph, "a")
     assert resolved == {"server_names": ["srv-a"], "tool_names": ["srv-a.fn_a", "srv-a.fn_b", "srv-a.fn_c"]}
-
-
 
 
 def test_resolve_tool_config_skips_disabled_tool_node() -> None:
@@ -1928,7 +2824,7 @@ def test_validate_single_node_runnable_rejects_a_node_with_upstream_input() -> N
 
 def test_validate_single_node_runnable_rejects_zero_llm_connections() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    with pytest.raises(ProtocolValidationError, match="must have exactly one LLM connection"):
+    with pytest.raises(ProtocolValidationError, match="must have exactly one AI connection"):
         pe.validate_single_node_runnable(graph, "a")
 
 
@@ -1936,7 +2832,7 @@ def test_validate_single_node_runnable_rejects_llm_edge_from_wrong_node_type() -
     agent = _node("a", "agent")
     not_an_llm = _node("x", "agent")
     graph = {"nodes": [agent, not_an_llm], "edges": [_llm_edge("x", "a")]}
-    with pytest.raises(ProtocolValidationError, match="must come from an LLM node"):
+    with pytest.raises(ProtocolValidationError, match="must come from an AI node"):
         pe.validate_single_node_runnable(graph, "a")
 
 

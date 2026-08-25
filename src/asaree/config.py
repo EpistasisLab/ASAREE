@@ -50,6 +50,37 @@ class AsareeSettings(CoreSettings):
     # deliberately deferred decision.
     dataset_storage_dir: str = "./data/datasets"
 
+    # The one directory a user may browse and register OKF bundles under
+    # (GET /okf/browse, POST /okf/bundles -- services/okf_bundles.py). Every
+    # path is jailed inside this root, so it is the whole reach of that API
+    # and of the per-bundle MCP servers it spawns.
+    #
+    # "~" (the home directory of whoever runs the server process) is the
+    # default because the case this exists for is a researcher running ASAREE
+    # on their own machine: there, the server's filesystem IS their
+    # filesystem, so their bundle is already reachable and typing a path is
+    # enough. Narrow it on any deployment where that isn't true -- under
+    # compose the API/worker containers see only their own mounts, so this
+    # points at the bundle mount instead (see compose.yml). A bundle on a
+    # laptop with the server somewhere else is out of reach either way, and
+    # deliberately so: nothing here tunnels to a client machine.
+    okf_bundle_root: str = "~"
+
+    # Where UPLOADED single-concept OKF documents are stored (POST
+    # /okf/documents -- services/okf_documents.py). Deliberately NOT inside
+    # okf_bundle_root: that root is the jail for paths a user *picks*, and
+    # these are storage ASAREE owns and creates on the user's behalf, the same
+    # way dataset_storage_dir is. Keeping them apart also means an uploaded
+    # document never shows up as a stray folder in the bundle browser.
+    okf_document_dir: str = "./data/okf-documents"
+
+    # Where UPLOADED bundles are stored (POST /okf/bundles/upload) -- a whole
+    # folder the user picked in their BROWSER, which the server has no path to
+    # and so must be given a copy of. Same reasoning as okf_document_dir for
+    # keeping it out of okf_bundle_root, and separate from it only so the two
+    # kinds of upload stay tellable apart on disk.
+    okf_bundle_upload_dir: str = "./data/okf-bundles"
+
     # Encrypts per-user LLM provider API keys at rest (user_llm_settings).
     # Deliberately ASAREE's own — core's services.encryption is explicitly a
     # single server-side secret with no user in the picture at all, the

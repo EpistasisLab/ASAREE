@@ -1,6 +1,6 @@
+import { nodeAccent } from '@/lib/nodeAccent'
 import { useNodeConnections, type NodeProps } from '@xyflow/react'
 import { ArrowRight } from 'lucide-react'
-import { hashToChartHue } from '@/lib/utils'
 import type { SingleAgentBaselinePatternNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
@@ -11,7 +11,7 @@ import { CircleNode } from './CircleNode'
 // Rendered as a small circle-with-icon (see CircleNode) -- see
 // ReasonActPatternNode.tsx's own comment for why this is NOT dashed and is
 // positioned above its agent with a bottom-facing connector.
-const ACCENT = hashToChartHue('pattern_single_agent_baseline')
+const ACCENT = nodeAccent('pattern_single_agent_baseline')
 
 export function SingleAgentBaselinePatternNode({
   id,

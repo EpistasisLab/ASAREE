@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Check, LoaderCircle, PlugZap, Sparkles } from 'lucide-react'
+import { nodeAccent } from '@/lib/nodeAccent'
 import { Button } from '@/components/ui/button'
 import { ConnectionStatusBadge, useConnectionCheck } from '@/components/LlmConnectionCheck'
 import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
@@ -8,7 +9,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { hashToChartHue } from '@/lib/utils'
 import { FactorBindableField } from './FactorBindableField'
 import { ModelField } from './ModelField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
@@ -103,7 +103,7 @@ export function LlmNodeInspector({
   const bindings = data.factor_bindings ?? {}
   const meta = PROVIDER_META[provider!] ?? { label: provider, icon: Sparkles }
   const Icon = meta.icon
-  const ACCENT = hashToChartHue(provider || 'llm')
+  const ACCENT = nodeAccent('llm')
 
   // Unrecognized model (list still loading, discovery failed, or a
   // hand-typed value not in the catalog) -- default to temperature-only,

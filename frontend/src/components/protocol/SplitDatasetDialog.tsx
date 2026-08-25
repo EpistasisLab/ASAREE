@@ -35,19 +35,25 @@ export function SplitDatasetDialog({
   // caller (DatasetNodeInspector) can refresh its own view of it.
   onSplit?: (dataset: Dataset) => void
 }) {
+  // Prefilled from the split that currently exists, same as targetColumn
+  // already was: a re-split usually changes ONE thing (a different seed, a
+  // group column that was forgotten), and opening on 0.2/0 would silently
+  // revert the rest. Falls back to the service's own defaults when there's
+  // nothing to prefill from -- a never-split dataset, a manual split, or one
+  // made before these were recorded.
   const [targetColumn, setTargetColumn] = useState(dataset.target_column ?? '')
-  const [groupColumn, setGroupColumn] = useState('')
-  const [testSize, setTestSize] = useState(0.2)
-  const [seed, setSeed] = useState(0)
+  const [groupColumn, setGroupColumn] = useState(dataset.split_group_column ?? '')
+  const [testSize, setTestSize] = useState(dataset.split_test_size ?? 0.2)
+  const [seed, setSeed] = useState(dataset.split_seed ?? 0)
   const [trainFile, setTrainFile] = useState<File | null>(null)
   const [testFile, setTestFile] = useState<File | null>(null)
   const queryClient = useQueryClient()
 
   function reset() {
     setTargetColumn(dataset.target_column ?? '')
-    setGroupColumn('')
-    setTestSize(0.2)
-    setSeed(0)
+    setGroupColumn(dataset.split_group_column ?? '')
+    setTestSize(dataset.split_test_size ?? 0.2)
+    setSeed(dataset.split_seed ?? 0)
     setTrainFile(null)
     setTestFile(null)
     quickSplitMutation.reset()

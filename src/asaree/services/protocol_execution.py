@@ -23,19 +23,29 @@ import copy
 import logging
 import re
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+from asaree_workspace_core import WORKSPACE_ROOT
 from motoro.mcp.registry import get_registry
 from motoro.models.run import RunStatus
 from motoro.runner import create_agent, create_run, execute_run, get_agent_by_name, get_run, update_agent
 from motoro.schemas.agent import ModelConfig
 from motoro.schemas.output import parse_envelope
 from motoro.schemas.pattern import PatternConfig
+from motoro.services.mcp_service import hydrate_registry
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.dataset_workspaces import (
+    WorkspaceSeedError,
+    fetch_owned_registration,
+    head_data_locator,
+    seed_cell_workspace,
+)
 from asaree.services.experiments import get_experiment
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
 from asaree.services.metric_promotion import promote_cell_score_metrics
@@ -48,6 +58,12 @@ from asaree.services.protocol_runs import (
 )
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
+from asaree.services.system_mcp_servers import (
+    SCRIPT_AGENT_TOOLS,
+    SCRIPT_SERVER_NAME,
+    WORKSPACE_AGENT_TOOLS,
+    WORKSPACE_SERVER_NAME,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,16 +129,72 @@ class ProtocolValidationError(Exception):
     """The graph can't be run as-is (empty, a cycle, or a malformed critic-gate topology)."""
 
 
-# The connector-typed slots on an agent/critic_gate node. llm/tool/memory are
-# a deliberately closed set; architectural_pattern is ASAREE-specific, added
-# for ARES's pluggable architectural patterns -- visual/
+# ---------------------------------------------------------------------------
+# Adding a connector? Pick its route first.
+# ---------------------------------------------------------------------------
+# Every connector contributes exactly one of three things, and which one it is
+# decides where it goes. Getting this wrong is how something ends up narrated
+# into a prompt that should never have been in the context window at all. The
+# same three routes are written up from the engine's side in Motoro's
+# ``engine/sense.py`` -- read that docstring alongside this one.
+#
+# 1. CAPABILITY -- what the agent can DO: the model, the execution pattern, the
+#    tool allow-list, knowledge servers, skills. Route: resolve it into the
+#    agent's stored config (``_resolve_llm_config``, ``_resolve_tool_config``,
+#    ``_resolve_pattern_config``, ``_resolve_skill_config``, ...) and let
+#    Motoro carry it on ``RunContext``. Never prompt text: a capability is
+#    something the runtime arranges, not something the model is told about.
+#
+# 2. REFERENCE -- an id pointing at data held somewhere else: the workspace,
+#    a registered dataset, an artifact path. Route: ``_ambient_meta_for``, which
+#    Motoro binds into every MCP tool call's request ``_meta``. The model never
+#    sees it and so can never mistype it; the tool loads the contents on demand.
+#    The Dataset connector is the worked example -- it used to spell out an
+#    ``open_workspace(...)`` call in the prompt and hope for a clean
+#    transcription, and now the tool takes no arguments at all.
+#
+# 3. CONTENT -- text that genuinely belongs in the prompt and is small enough to
+#    live there: the node's own prompt, an upstream node's ``output_text``.
+#    Route: ``_build_user_input``. This is the only route that costs context
+#    window on every single turn, so it is the last resort, not the default.
+#
+# A new connector is almost always 1 or 2. If it seems to be 3, check whether
+# what you actually have is a reference to something a tool could fetch.
+#
+# One connector may take more than one route -- Dataset takes all three. It is a
+# REFERENCE (its name, bound ambiently), it implies a CAPABILITY (the
+# asaree-workspace tools, granted by ``_resolve_dataset_tool_config`` -- wiring
+# the data is what declares that this agent works on data, so the user should
+# not also have to wire the tools to do it), and it leaves one line of CONTENT
+# behind: the fact that the data is there, which no tool call can tell an agent
+# that never thinks to look.
+#
+# Script works the same way, for the same reason: a REFERENCE (its code written
+# to disk and bound ambiently, so what runs never passes through the model) plus
+# the CAPABILITY that reference is useless without -- ``asaree-script``'s
+# ``run_wired_script``, granted by ``_resolve_script_tool_config``. Wiring a
+# script is what declares that the agent should run one.
+#
+# The connector-typed slots on an agent/critic_gate node. ai/tool/memory are
+# a deliberately closed set; architectural_pattern and dataset are
+# ASAREE-specific -- architectural_pattern for ARES's pluggable
+# architectural patterns, dataset for the data an agent operates ON as
+# opposed to the capabilities it operates WITH -- visual/
 # validation scaffolding only for now, same deliberate non-implementation as
 # "memory" (see ArchitecturalPatternNodeData on the frontend). Reuses
 # ProtocolEdge's existing sourceHandle/targetHandle fields rather than adding
 # a new "connection type" concept. A "main" edge (today's plain pipeline
 # data-flow) is any edge whose targetHandle is one of these -- everything
 # else. The type marker always lives on the target side of an edge.
-_CONNECTOR_HANDLES = frozenset({"llm", "tool", "memory", "architectural_pattern"})
+#
+# "llm" and "resource" are in here purely as pre-rename spellings of "ai" and
+# "dataset" (see _LEGACY_AI_HANDLES/_LEGACY_DATASET_HANDLES): an un-migrated
+# edge must still be recognised as a connector, or it would be misread as a
+# main pipeline edge and turn a perfectly good graph into a cycle/ordering
+# error.
+_CONNECTOR_HANDLES = frozenset(
+    {"ai", "llm", "tool", "memory", "architectural_pattern", "dataset", "resource", "skill", "knowledge"}
+)
 
 # Each connector slot accepts a FAMILY of node types, not one exact type --
 # mirrors how "tool" already accepts any mcp_tool node. LLM and Architectural
@@ -147,22 +219,74 @@ _LLM_NODE_TYPES = frozenset({"llm_anthropic", "llm_openai", "llm_azure_foundry"}
 # cap, coexisting freely with one connected execution-pattern node.
 _EXECUTION_PATTERN_NODE_TYPES = frozenset({"pattern_reason_act", "pattern_single_agent_baseline"})
 _MEMORY_NODE_TYPES = frozenset({"memory"})  # one today; kept as a set for symmetry with the other two families
-# One today; an mcp_tool node is always a Tool-connector source (one server
-# connection, allow-listing a subset of its tools) -- it never gets its own
-# execution turn, matching every other connector-source family. There's no
-# more "standalone pipeline step" role: calling one tool directly with no
-# agent isn't supported (a real, deliberate feature removal -- see the
-# removed _run_mcp_tool_node).
-_MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool"})
+# An MCP-tool node is always a Tool-connector source (one server connection,
+# allow-listing a subset of its tools) -- it never gets its own execution
+# turn, matching every other connector-source family. There's no more
+# "standalone pipeline step" role: calling one tool directly with no agent
+# isn't supported (a real, deliberate feature removal -- see the removed
+# _run_mcp_tool_node).
+#
+# Two types, one identical config shape (McpToolNodeConfig on the frontend:
+# server_id/server_name/tool_names/enabled), so everything downstream --
+# _resolve_tool_config included -- treats them interchangeably and only this
+# set has to know both exist. They differ purely in how the server gets
+# chosen: "mcp_tool" is the generic node whose inspector has a server
+# dropdown, "mcp_scikit_learn" is a node dedicated to one specific server,
+# picked from the canvas's MCP Servers browser and pinned at creation, and
+# "mcp_client_tool" is a server the user REGISTERED from that browser (a
+# stdio command or a streamable-HTTP URL they typed) rather than one the
+# deployment already had. A future dedicated node for another server joins
+# this set the same way.
+_MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool", "mcp_scikit_learn", "mcp_client_tool"})
 # One today each; kept as sets for symmetry with the other connector
 # families. Dataset declares which registered dataset an agent's workspace
-# tools operate on (_resolve_dataset_config, folded into _build_user_input's
+# tools operate on (_resolve_dataset_configs, folded into _build_user_input's
 # own "Dataset context" block); Script carries a fixed piece of code an
 # agent passes verbatim as some tool's own code-shaped argument (e.g.
 # run_model_script's `code`) -- neither is executed by ASAREE itself, same
 # "pure config source" status as every other connector.
 _DATASET_NODE_TYPES = frozenset({"dataset"})
 _SCRIPT_NODE_TYPES = frozenset({"script"})
+# A Skill node names one registered Agent Skill (a SKILL.md document stored in
+# core -- see motoro.models.skill.Skill and asaree.api.skills). Unlike Dataset
+# and Script it gets its OWN connector slot rather than sharing Tool's, because
+# core has a real slot for it: skill_config is an agent capability axis
+# alongside model/tool/memory/pattern, resolved by Motoro into the run's own
+# skill index (_resolve_skill_config below), not folded into the prompt by
+# ASAREE. Repeatable and uncapped, like Tool -- carrying five skills is the
+# normal case, since level-1 metadata is ~100 tokens each and a body only
+# loads when the model asks for it.
+_SKILL_NODE_TYPES = frozenset({"skill"})
+# An OKF Bundle node names one registered OKF bundle -- a directory of
+# markdown concepts the user pointed ASAREE at, served by its own MCP server
+# process (see asaree.services.okf_bundles for why it's a server per bundle
+# and not a path argument). It gets its own Knowledge connector rather than
+# sharing Tool's, because what it contributes is a *knowledge base the agent
+# reads and writes*, not one more capability: the distinction the canvas is
+# making is the same one OKF itself makes, and burying a bundle among five
+# MCP servers on the Tool slot would lose it.
+#
+# Mechanically, though, it IS an MCP server, so it resolves into the very same
+# tool_config as the Tool connector (_resolve_knowledge_config, merged in
+# _run_agent_node) -- the split is at the level of what the user is saying,
+# not how the run consumes it. Repeatable and uncapped, like Skill and Tool:
+# an agent may legitimately read from a shared team bundle and write to its
+# own.
+_OKF_BUNDLE_NODE_TYPES = frozenset({"okf_bundle"})
+# An OKF Document node names one UPLOADED single-concept document (see
+# asaree.services.okf_documents). Mechanically identical to a bundle node --
+# ASAREE stores the upload as a one-concept bundle directory and serves it
+# with the same per-bundle OKF server, so the node carries the same
+# server_name/tool_names and resolves through the same code path. It's a
+# separate node type purely because the two answer different questions on the
+# canvas: "point at knowledge the server already has" versus "here is a
+# concept file from my machine". Same split, same reason, as picking a
+# registered MCP server versus registering your own.
+_OKF_DOCUMENT_NODE_TYPES = frozenset({"okf_document"})
+# The Knowledge connector's whole family -- what that slot accepts, and what
+# _resolve_knowledge_config reads. Everything downstream treats the two
+# interchangeably, so only this union has to know both exist.
+_KNOWLEDGE_NODE_TYPES = _OKF_BUNDLE_NODE_TYPES | _OKF_DOCUMENT_NODE_TYPES
 
 # Every node type that's a pure config source -- never gets its own execution
 # turn, never a pipeline "final output" (see sink_node_ids/run_protocol's
@@ -175,6 +299,8 @@ _PURE_CONFIG_SOURCE_TYPES = (
     | _MCP_TOOL_NODE_TYPES
     | _DATASET_NODE_TYPES
     | _SCRIPT_NODE_TYPES
+    | _SKILL_NODE_TYPES
+    | _KNOWLEDGE_NODE_TYPES
 )
 
 # Which connector handle each pure-config-source node type may exclusively
@@ -183,27 +309,74 @@ _PURE_CONFIG_SOURCE_TYPES = (
 # adding to _LLM_NODE_TYPES/_EXECUTION_PATTERN_NODE_TYPES above, not a
 # second lookup.
 _NODE_TYPE_TO_HANDLE: dict[str, str] = {
-    **{t: "llm" for t in _LLM_NODE_TYPES},
+    **{t: "ai" for t in _LLM_NODE_TYPES},
     **{t: "architectural_pattern" for t in _EXECUTION_PATTERN_NODE_TYPES},
     **{t: "memory" for t in _MEMORY_NODE_TYPES},
-    # Dataset/Script share the Tool connector rather than getting their own
-    # slot -- one connector accepting a FAMILY of node types (see this dict's
-    # own docstring above _LLM_NODE_TYPES). All
-    # three are pure config sources an agent's Tool "+" panel can add
-    # (AddNodePanel filters its catalog by CONNECTOR_PANEL_INFO.tool's
-    # allowedTypes on the frontend); which one a given wired node actually IS
-    # is recovered by checking the source node's own `type`, not by which
-    # handle it's on (see _resolve_tool_config/_resolve_dataset_config/
+    # Script still shares the Tool connector rather than getting its own slot
+    # -- one connector accepting a FAMILY of node types (see this dict's own
+    # docstring above _LLM_NODE_TYPES). Both are pure config sources an
+    # agent's Tool "+" panel can add (AddNodePanel filters its catalog by
+    # CONNECTOR_PANEL_INFO.tool's allowedTypes on the frontend); which one a
+    # given wired node actually IS is recovered by checking the source node's
+    # own `type`, not by which handle it's on (see _resolve_tool_config/
     # _resolve_script_config, and the per-agent validation block below).
+    #
+    # Dataset used to be in that same shared bucket and no longer is: it has
+    # its own slot, named after the node type itself since `dataset` is the
+    # only member of the family.
     **{t: "tool" for t in _MCP_TOOL_NODE_TYPES},
-    **{t: "tool" for t in _DATASET_NODE_TYPES},
+    **{t: "dataset" for t in _DATASET_NODE_TYPES},
     **{t: "tool" for t in _SCRIPT_NODE_TYPES},
+    **{t: "skill" for t in _SKILL_NODE_TYPES},
+    **{t: "knowledge" for t in _KNOWLEDGE_NODE_TYPES},
 }
+# The user-facing name of each connector slot -- mirrors
+# CONNECTOR_SLOT_LABELS on the frontend, so a validation error always names
+# the connector by the caption printed next to it on the canvas.
 _HANDLE_LABELS: dict[str, str] = {
-    "llm": "LLM",
+    "ai": "AI",
+    "llm": "AI",  # pre-rename spelling, same slot -- see _LEGACY_AI_HANDLES
     "memory": "Memory",
     "architectural_pattern": "Architectural Pattern",
     "tool": "Tool",
+    "dataset": "Dataset",
+    "resource": "Dataset",  # pre-rename spelling, same slot -- see _LEGACY_DATASET_HANDLES
+    "skill": "Skill",
+    "knowledge": "Knowledge",
+}
+
+# Connector slots have been renamed twice since graphs started being saved,
+# and a stored graph is an opaque JSONB blob, so every spelling has to keep
+# resolving:
+#
+#   "llm" -> "ai"       the AI connector (its caption was renamed first, the
+#                       handle id after -- migration 3f1a7c9b2e04)
+#   "tool" -> "resource" for a Dataset source, when Dataset stopped sharing
+#                       the Tool slot (same migration)
+#   "resource" -> "dataset"  when that slot, whose only member is the Dataset
+#                       node, was renamed after it and moved next to Skill
+#                       (migration b7c2d9e14a35)
+#
+# Those migrations rewrite every stored graph, and the canvas rewrites any
+# graph it opens (migrateLegacyHandles in ProtocolCanvas.tsx), so these sets
+# are not load-bearing for data at rest. They exist so the deploy is
+# ORDER-INDEPENDENT: a browser still running pre-rename JS keeps autosaving
+# old-spelling edges at whatever moment the new backend goes live, and an
+# SDK/notebook caller pinned to an older graph shape keeps working. Nothing
+# creates an old-spelling edge going forward -- isValidConnection won't.
+_LEGACY_AI_HANDLES = frozenset({"ai", "llm"})
+_LEGACY_DATASET_HANDLES = frozenset({"dataset", "resource", "tool"})
+# Keyed by the CURRENT slot id -- every spelling an edge into that slot may
+# legitimately still carry *on the handle alone*, i.e. every rename that was
+# TOTAL. "llm" and "resource" both qualify: no other slot has ever used
+# either, so an old-spelling edge can be resolved without looking at its
+# source node. "tool" does not -- it still means the Tool slot for
+# mcp_tool/Script sources, so a pre-Resource dataset edge can only be picked
+# out by ALSO checking its source node's type, which is why the wider
+# _LEGACY_DATASET_HANDLES is applied at its own call sites instead.
+_LEGACY_HANDLES_BY_SLOT: dict[str, frozenset[str]] = {
+    "ai": _LEGACY_AI_HANDLES,
+    "dataset": frozenset({"dataset", "resource"}),
 }
 
 # node type -> Motoro PatternConfig slug, for _resolve_pattern_config.
@@ -263,9 +436,14 @@ _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "agent": "Agent",
     "critic_gate": "Critic Gate",
     "mcp_tool": "MCP Tool",
+    "mcp_scikit_learn": "Scikit-learn MCP",
+    "mcp_client_tool": "MCP Client Tool",
     "memory": "Memory",
     "dataset": "Dataset",
     "script": "Script",
+    "skill": "Skill",
+    "okf_bundle": "OKF Bundle",
+    "okf_document": "OKF Document",
     "pattern_reason_act": "Reason + Act",
     "pattern_single_agent_baseline": "Single-Agent Baseline",
     "llm_anthropic": "Anthropic",
@@ -381,35 +559,63 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
         name = _node_display_name(node)
 
         if node_type in ("agent", "critic_gate"):
-            llm_edges = _edges_with_handle(graph, nid, "llm", direction="incoming")
+            llm_edges = _edges_with_handle(graph, nid, "ai", direction="incoming")
             if len(llm_edges) != 1:
                 raise ProtocolValidationError(
-                    f"Node {name!r} must have exactly one LLM connection (found {len(llm_edges)})."
+                    f"Node {name!r} must have exactly one AI connection (found {len(llm_edges)})."
                 )
             llm_source = nodes.get(llm_edges[0]["source"])
             if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
-                raise ProtocolValidationError(f"Node {name!r}'s LLM connection must come from an LLM node.")
+                raise ProtocolValidationError(f"Node {name!r}'s AI connection must come from an AI node.")
 
         tool_edges = _edges_with_handle(graph, nid, "tool", direction="incoming")
         memory_edges = _edges_with_handle(graph, nid, "memory", direction="incoming")
         pattern_edges = _edges_with_handle(graph, nid, "architectural_pattern", direction="incoming")
+        dataset_slot_edges = _edges_with_handle(graph, nid, "dataset", direction="incoming")
+        skill_edges = _edges_with_handle(graph, nid, "skill", direction="incoming")
+        knowledge_edges = _edges_with_handle(graph, nid, "knowledge", direction="incoming")
         if node_type == "agent":
             # The Tool connector accepts a family of source types -- an
             # mcp_tool node contributes a callable capability, while a
-            # Dataset/Script node contributes declarative config/context
-            # (see _resolve_tool_config/_resolve_dataset_config/
-            # _resolve_script_config) -- so which sub-kind a given edge is
-            # can only be recovered from its source node's own `type`, not
-            # the (now-shared) handle.
-            dataset_edges = [e for e in tool_edges if (nodes.get(e["source"]) or {}).get("type") in _DATASET_NODE_TYPES]
-            script_edges = [e for e in tool_edges if (nodes.get(e["source"]) or {}).get("type") in _SCRIPT_NODE_TYPES]
+            # Script node contributes declarative config/context (see
+            # _resolve_tool_config/_resolve_script_config) -- so which
+            # sub-kind a given edge is can only be recovered from its source
+            # node's own `type`, not the (shared) handle. (A pre-Dataset-
+            # connector graph still has its dataset edges on "tool" -- see
+            # _LEGACY_DATASET_HANDLES -- which is why a Dataset source is
+            # accepted on this handle too; _resolve_dataset_configs scans
+            # every legacy spelling when it comes to actually reading them.)
             for edge in tool_edges:
                 tool_source = nodes.get(edge["source"])
                 source_type = tool_source.get("type") if tool_source else None
                 if source_type not in (_MCP_TOOL_NODE_TYPES | _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES):
                     raise ProtocolValidationError(
-                        f"Node {name!r}'s Tool connection must come from an MCP Tool, Dataset, or Script node."
+                        f"Node {name!r}'s Tool connection must come from an MCP Tool or Script node."
                     )
+            for edge in dataset_slot_edges:
+                dataset_source = nodes.get(edge["source"])
+                if dataset_source is None or dataset_source.get("type") not in _DATASET_NODE_TYPES:
+                    raise ProtocolValidationError(f"Node {name!r}'s Dataset connection must come from a Dataset node.")
+            # Deliberately uncapped, like Tool/Dataset and unlike Memory/
+            # Script: several skills on one agent is the normal case, not an
+            # ambiguity to resolve -- each contributes ~100 tokens of level-1
+            # metadata and its body only loads if the model asks. Duplicates
+            # aren't rejected either; _resolve_skill_config de-dupes.
+            for edge in skill_edges:
+                skill_source = nodes.get(edge["source"])
+                if skill_source is None or skill_source.get("type") not in _SKILL_NODE_TYPES:
+                    raise ProtocolValidationError(f"Node {name!r}'s Skill connection must come from a Skill node.")
+            # Uncapped for the same reason as Skill: reading a shared team
+            # bundle while writing to a personal one is a normal setup, not an
+            # ambiguity. _resolve_knowledge_config de-dupes by server name, so
+            # two nodes naming the same bundle cost nothing.
+            for edge in knowledge_edges:
+                knowledge_source = nodes.get(edge["source"])
+                if knowledge_source is None or knowledge_source.get("type") not in _KNOWLEDGE_NODE_TYPES:
+                    raise ProtocolValidationError(
+                        f"Node {name!r}'s Knowledge connection must come from an OKF Bundle or OKF Document node."
+                    )
+            script_edges = [e for e in tool_edges if (nodes.get(e["source"]) or {}).get("type") in _SCRIPT_NODE_TYPES]
             if len(memory_edges) > 1:
                 raise ProtocolValidationError(
                     f"Node {name!r} can have at most one Memory connection (found {len(memory_edges)})."
@@ -418,10 +624,14 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 memory_source = nodes.get(edge["source"])
                 if memory_source is None or memory_source.get("type") != "memory":
                     raise ProtocolValidationError(f"Node {name!r}'s Memory connection must come from a Memory node.")
-            if len(dataset_edges) > 1:
-                raise ProtocolValidationError(
-                    f"Node {name!r} can have at most one Dataset connection (found {len(dataset_edges)})."
-                )
+            # Uncapped, like Skill and Knowledge above. It used to be capped
+            # at one, on the assumption that an agent operates on "the"
+            # dataset -- but comparing a model across several datasets, or
+            # joining a cohort table to a measurements table, is ordinary
+            # science, and the cap made it unexpressible. Each wired dataset
+            # is named in the agent's Dataset-context block and opened as its
+            # own workspace; duplicates aren't rejected because
+            # _resolve_dataset_configs de-dupes by dataset_id.
             if len(script_edges) > 1:
                 raise ProtocolValidationError(
                     f"Node {name!r} can have at most one Script connection (found {len(script_edges)})."
@@ -446,28 +656,37 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                         f"Node {name!r}'s Architectural Pattern connection must come from an Architectural "
                         "Pattern node."
                     )
-        elif tool_edges or memory_edges or pattern_edges:
+        elif tool_edges or memory_edges or pattern_edges or dataset_slot_edges or skill_edges or knowledge_edges:
             raise ProtocolValidationError(
-                f"Only Agent nodes can have a Tool, Memory, or Architectural Pattern connection (node {name!r})."
+                f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or "
+                f"Knowledge connection (node {name!r})."
             )
 
         if node_type in _NODE_TYPE_TO_HANDLE:
             expected_handle = _NODE_TYPE_TO_HANDLE[node_type]
+            allowed_handles = (
+                _LEGACY_DATASET_HANDLES
+                if node_type in _DATASET_NODE_TYPES
+                else _LEGACY_HANDLES_BY_SLOT.get(expected_handle, frozenset({expected_handle}))
+            )
             outgoing_wrong_handle = [
                 e
                 for e in graph.get("edges") or []
-                if e.get("source") == nid and e.get("targetHandle") != expected_handle
+                if e.get("source") == nid and e.get("targetHandle") not in allowed_handles
             ]
             if outgoing_wrong_handle:
                 handle_label = _HANDLE_LABELS[expected_handle]
-                # Dataset/Script share the Tool handle but aren't literally
-                # "Tool" nodes -- use their own display name as the leading
-                # noun (e.g. "Dataset node 'X' can only connect to a node's
-                # Tool slot") while every other family's leading noun still
-                # matches its handle label 1:1, unchanged.
+                # Script shares the Tool handle and the OKF node types own
+                # Knowledge, but none is literally a "Tool"/"Knowledge" node --
+                # use their own display name as the leading noun (e.g. "Script
+                # node 'X' can only connect to a node's Tool slot") while every
+                # other family's leading noun still matches its handle label
+                # 1:1, unchanged. Dataset is in the list for symmetry only:
+                # its slot is now named after it, so both halves read
+                # "Dataset" either way.
                 leading_label = (
                     _NODE_TYPE_DISPLAY_NAMES[node_type]
-                    if node_type in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES
+                    if node_type in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES | _KNOWLEDGE_NODE_TYPES
                     else handle_label
                 )
                 raise ProtocolValidationError(
@@ -479,13 +698,18 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _edges_with_handle(graph: dict[str, Any], node_id: str, handle: str, *, direction: str) -> list[dict[str, Any]]:
-    """Edges into/out of *node_id* whose ``targetHandle`` matches *handle*
-    -- the connector-type marker always lives on the target side of an edge
+    """Edges into/out of *node_id* wired into the *handle* connector slot --
+    the connector-type marker always lives on the target side of an edge
     (see ``_CONNECTOR_HANDLES``), regardless of which end is being queried.
     ``direction`` is ``"incoming"`` (*node_id* is the edge's target) or
-    ``"outgoing"`` (*node_id* is the edge's source)."""
+    ``"outgoing"`` (*node_id* is the edge's source).
+
+    Matches every spelling that slot has ever been saved under, not just its
+    current id (see ``_LEGACY_HANDLES_BY_SLOT``), so callers can name the
+    current slot and never think about the rename again."""
     key = "target" if direction == "incoming" else "source"
-    return [e for e in graph.get("edges") or [] if e.get(key) == node_id and e.get("targetHandle") == handle]
+    handles = _LEGACY_HANDLES_BY_SLOT.get(handle, frozenset({handle}))
+    return [e for e in graph.get("edges") or [] if e.get(key) == node_id and e.get("targetHandle") in handles]
 
 
 def sink_node_ids(graph: dict[str, Any]) -> list[str]:
@@ -499,9 +723,7 @@ def sink_node_ids(graph: dict[str, Any]) -> list[str]:
     sink)."""
     nodes, downstream, _upstream = _adjacency(graph)
     return [
-        nid
-        for nid, node in nodes.items()
-        if not downstream[nid] and node.get("type") not in _PURE_CONFIG_SOURCE_TYPES
+        nid for nid, node in nodes.items() if not downstream[nid] and node.get("type") not in _PURE_CONFIG_SOURCE_TYPES
     ]
 
 
@@ -609,13 +831,220 @@ def _compute_workspace_id(
     return f"{experiment_id}/{_effective_cell_label(cell_label, protocol_run_id)}"
 
 
+def _materialize_script(workspace_id: str | None, node_id: str, code: str) -> str:
+    """Write a wired Script node's code next to the run's workspace; return its path.
+
+    ``""`` when there's nowhere to put it -- no workspace id (an unlinked
+    protocol run) or the write failed. The caller falls back to inlining the
+    code in the prompt, which is what this replaces.
+
+    The file lives under the run's own workspace directory because that
+    directory is already the shared surface between this process and the MCP
+    subprocesses: no new mount, no new configuration, and it is cleaned up with
+    the workspace it belongs to. Rewritten on every run rather than reused --
+    the graph is the source of truth, and an edited Script node must not leave
+    a stale copy behind for a rerun to execute.
+    """
+    if not workspace_id:
+        return ""
+    safe_node = _UNSAFE_WORKSPACE_LABEL_CHAR.sub("_", node_id)
+    try:
+        root = Path(WORKSPACE_ROOT).resolve()
+        directory = (root / workspace_id / "scripts").resolve()
+        if root not in directory.parents:  # workspace_id is already sanitized; belt and braces
+            return ""
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{safe_node}.py"
+        # Atomic: a tool reading this concurrently must never see a half-write.
+        tmp = directory / f"{safe_node}.py.tmp"
+        tmp.write_text(code)
+        tmp.replace(path)
+    except OSError:
+        logger.warning("script_materialize_failed", extra={"workspace_id": workspace_id, "node_id": node_id})
+        return ""
+    return str(path)
+
+
+def _ambient_meta_for(graph: dict[str, Any], node_id: str, workspace_id: str | None = None) -> dict[str, Any]:
+    """The node's Reference-route values, for Motoro's caller-ambient ``_meta``.
+
+    Motoro lifts ``run_metadata["ambient_meta"]`` onto every MCP tool call as
+    ``motoro.ambient.<key>`` (see its ``mcp/adapters``), which is the product's
+    own half of the channel ``workspace_id`` already uses -- the model never
+    sees these and so can never mistype one.
+
+    Four keys today, all Reference-route (see the three routes at the top of
+    this module, and Motoro's ``engine/sense.py``):
+
+    * ``dataset_names`` -- the wired Dataset connectors' names, which is what
+      lets ``open_workspace`` be called with no arguments at all.
+    * ``data_path`` / ``target_column`` -- the cell workspace's HEAD train
+      parquet and its outcome column (``head_data_locator``), for the tools
+      that take a dataset as a path rather than reading the workspace
+      themselves (``scikit-learn-mcp``). Keyed off ``workspace_id`` alone, NOT
+      off this node having a Dataset connector: the workspace belongs to the
+      cell, and the nodes most likely to want a path are the ones with no
+      Dataset node wired. In the spinal graph the connector is on DC/FTE/FS
+      while the model-fitting steps (MLM, Score) ride on the ambient
+      workspace_id -- gating this on a wired dataset left exactly those two
+      with no path, which is the whole reason a path is bound at all.
+      ``head_data_locator`` is total, so a run whose workspace was never
+      seeded contributes nothing here -- and ``_node_run_context`` then falls
+      back to the wired dataset's own raw file, which is how an unsplit
+      dataset (one that has no workspace at all) reaches those tools.
+    * ``script_path`` -- where the wired Script node's code was written. The
+      code used to be pasted into the prompt for the model to copy back out
+      into a tool argument; a script-running tool reads the file instead, so
+      what executes is byte-for-byte what the user wrote. ``run_model_script``
+      hashes its ``code`` for exactly this reason -- a hash detects a mangled
+      transcription after the fact, while a path removes the transcription.
+
+    Add to this rather than to the prompt whenever a new connector contributes
+    an id or a path pointing at something held elsewhere.
+
+    ``{}`` when nothing is wired -- Motoro skips an absent/empty dict, so the
+    wire call is unchanged for a node with no references.
+    """
+    meta: dict[str, Any] = {}
+    dataset_names = [str(c["dataset_name"]) for c in _resolve_dataset_configs(graph, node_id) if c.get("dataset_name")]
+    if dataset_names:
+        meta["dataset_names"] = dataset_names
+    if workspace_id:
+        data_path, target_column = head_data_locator(workspace_id)
+        if data_path:
+            meta["data_path"] = data_path
+        if target_column:
+            meta["target_column"] = target_column
+    code = (_resolve_script_config(graph, node_id) or {}).get("code")
+    if code:
+        script_path = _materialize_script(workspace_id, node_id, str(code))
+        if script_path:
+            meta["script_path"] = script_path
+    return meta
+
+
+@dataclass(frozen=True)
+class NodeDataset:
+    """How this node's wired Dataset reached the agent, if one did at all.
+
+    Three outcomes, and the prompt says something different for each (see
+    ``_build_user_input``):
+
+    * *seeded* -- the registration has a frozen train/test split, so this
+      cell's workspace was opened at HEAD before the turn started and there is
+      nothing for the agent to call.
+    * *unsplit* -- the registration is a raw file with no split. There is no
+      workspace, and ``data_path``/``target_column`` name that file so the
+      agent can split it itself with ``scikit-learn-mcp``. Splitting in ASAREE
+      is optional by design, so this is an ordinary state, not a broken one.
+    * neither -- no Dataset wired, several wired, or the seeding failed; the
+      prompt falls back to asking for an ``open_workspace`` call.
+    """
+
+    seeded_name: str = ""
+    unsplit_name: str = ""
+    data_path: str = ""
+    target_column: str = ""
+
+
+async def _resolve_node_dataset(
+    graph: dict[str, Any], node_id: str, workspace_id: str | None, owner_id: uuid.UUID
+) -> NodeDataset:
+    """Seed this cell's workspace from the wired dataset before the agent runs.
+
+    Returns which dataset is now open at HEAD, or an empty
+    :class:`NodeDataset` if nothing was seeded. That return value is what turns
+    ``_build_user_input``'s Dataset block from an instruction ("call
+    open_workspace() first") into a statement of fact ("your data is already
+    open") -- the point of doing this here is that opening a workspace is not a
+    decision an agent should be making. It's a consequence of the user having
+    wired a Dataset node, and ASAREE knows that at run start.
+
+    Idempotent and safe to call on every turn: ``Workspace.open`` resumes a
+    cell that already has accepted stages rather than resetting it.
+
+    Deliberately seeds only when EXACTLY ONE dataset is wired, mirroring
+    ``asaree_workspace_core.resolve_dataset_name``'s own rule. A cell workspace
+    is keyed by ``experiment_id/cell_label`` alone, so several wired datasets
+    are a real choice with no defensible default -- picking the first would be
+    a guess dressed up as automation. Those runs keep the old flow: the prompt
+    lists the candidates and the agent calls ``open_workspace(name=...)``,
+    which reports the collision if it opens a second one.
+
+    A failure here is logged and swallowed, never raised: a run whose dataset
+    registration is broken should still start and let the agent surface the
+    real error from its own ``open_workspace`` call, rather than dying before
+    its first turn with a message no one is watching for.
+    A dataset registered without a split takes the other route entirely and is
+    reported as *unsplit* rather than seeded -- see :class:`NodeDataset`.
+    """
+    names = [str(c["dataset_name"]) for c in _resolve_dataset_configs(graph, node_id) if c.get("dataset_name")]
+    if len(names) != 1:
+        return NodeDataset()
+    name = names[0]
+
+    reg = await fetch_owned_registration(name, owner_id)
+    if reg is None:
+        logger.warning("workspace_preseed_failed", extra={"node_id": node_id, "dataset": name, "error": "not found"})
+        return NodeDataset()
+    if not (reg.get("train_path") and reg.get("test_path")):
+        # Unsplit: no workspace to seed (``seed_cell_workspace`` says why), so
+        # the raw file itself becomes the run's dataset and the agent makes its
+        # own split with the sklearn tools. Not a failure and not logged as one
+        # -- registration stores only a raw file, and splitting is a separate
+        # optional action a researcher is entitled to skip.
+        return NodeDataset(
+            unsplit_name=name,
+            data_path=str(reg.get("raw_path") or ""),
+            target_column=str(reg.get("target_column") or ""),
+        )
+
+    if not workspace_id:
+        return NodeDataset()
+    try:
+        seeded = await seed_cell_workspace(workspace_id=workspace_id, dataset_name=name, owner_id=owner_id)
+    except WorkspaceSeedError as e:
+        logger.warning(
+            "workspace_preseed_failed",
+            extra={"workspace_id": workspace_id, "node_id": node_id, "dataset": name, "error": str(e)},
+        )
+        return NodeDataset()
+    return NodeDataset(seeded_name=seeded.dataset_name)
+
+
+async def _node_run_context(
+    graph: dict[str, Any], node_id: str, workspace_id: str | None, owner_id: uuid.UUID
+) -> tuple[dict[str, Any], NodeDataset]:
+    """``(ambient_meta, dataset)`` for one node -- everything the node's
+    References contribute, resolved together so the three call sites (gated
+    worker, single-node play, main loop) can't drift apart on which half they
+    remembered to do.
+
+    Seeding runs FIRST: the ambient ``data_path`` names the workspace's HEAD
+    version, which does not exist until the workspace does. For a node with no
+    Dataset connector the seeding is a no-op and the path comes from whatever
+    an earlier node in the run already seeded.
+
+    An unsplit dataset supplies that path itself, and only as a fallback: a
+    workspace HEAD always wins, because a cell that has one has already moved
+    past the raw file (and a later Score step must fit on the engineered
+    matrix, not on the upload)."""
+    dataset = await _resolve_node_dataset(graph, node_id, workspace_id, owner_id)
+    ambient_meta = _ambient_meta_for(graph, node_id, workspace_id)
+    if dataset.data_path and "data_path" not in ambient_meta:
+        ambient_meta["data_path"] = dataset.data_path
+        if dataset.target_column:
+            ambient_meta["target_column"] = dataset.target_column
+    return ambient_meta, dataset
+
+
 def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """The node's connected ``llm`` node's own config -- agent/critic_gate
     nodes no longer carry ``model_config_data`` themselves, it's resolved
     from the required LLM connector instead (``topological_order`` already
     validated it exists exactly once)."""
     nodes, _downstream, _upstream = _adjacency(graph)
-    edges = _edges_with_handle(graph, node_id, "llm", direction="incoming")
+    edges = _edges_with_handle(graph, node_id, "ai", direction="incoming")
     if not edges:
         return {}
     source = nodes.get(edges[0]["source"])
@@ -624,32 +1053,63 @@ def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     return (source.get("data") or {}).get("config") or {}
 
 
-def _resolve_dataset_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
-    """``{"dataset_id": ..., "dataset_name": ...}`` from the node's connected
-    Dataset node, or ``{}`` if none is connected -- optional, like Memory
-    (``topological_order`` caps it at one, doesn't require it). Dataset
-    shares the Tool connector with mcp_tool/Script nodes (see
-    ``_NODE_TYPE_TO_HANDLE``), so this scans every incoming Tool-handle edge
-    for the one (if any) whose source is actually a Dataset node, rather than
-    querying a dedicated handle. Read by ``_build_user_input`` to fold a
-    "Dataset context" block into the wired agent's own instruction; never
-    resolved into any Motoro config, since a dataset isn't something
-    Motoro's own ModelConfig/PatternConfig/ToolConfig has a slot for --
-    it's purely prompt context an agent uses to call ``open_workspace``
-    itself."""
+def _resolve_dataset_configs(graph: dict[str, Any], node_id: str) -> list[dict[str, Any]]:
+    """Every Dataset node wired into this agent, as a list of
+    ``{"dataset_id": ..., "dataset_name": ...}`` configs in canvas wiring
+    order -- ``[]`` when none is connected.
+
+    A list rather than a single config for compatibility, not because several
+    is the intended shape: the Dataset connector was briefly uncapped and
+    graphs saved in that window can still carry two or more. It is capped at
+    one again (see ``AgentNode.tsx``), because a cell's workspace is keyed by
+    ``experiment_id/cell_label`` alone and therefore holds exactly one dataset
+    -- ``seed_cell_workspace`` rejects a second. Comparing datasets is a
+    ``dataset_config`` FACTOR instead: ``apply_factor_bindings`` replaces this
+    node's whole ``data.config`` per cell (it runs before anything here), so
+    each cell resolves to a one-element list naming its own dataset.
+
+    Scans the Dataset handle plus both spellings it has been saved under
+    before -- the short-lived ``resource`` one and the Tool handle it
+    originally shared with mcp_tool/Script (see ``_LEGACY_DATASET_HANDLES``)
+    -- matching on the source node's own ``type`` rather than trusting the
+    handle alone. Nodes with ``enabled: False`` or no ``dataset_name`` are
+    skipped and duplicates de-duped by ``dataset_id``, matching
+    ``_resolve_skill_config``: two nodes naming one dataset would otherwise
+    tell the agent to open the same workspace twice.
+
+    Read by ``_build_user_input`` to fold a "Dataset context" block into the
+    wired agent's own instruction; never resolved into any Motoro config,
+    since a dataset isn't something Motoro's own ModelConfig/PatternConfig/
+    ToolConfig has a slot for -- it's purely prompt context an agent uses to
+    call ``open_workspace`` itself."""
     nodes, _downstream, _upstream = _adjacency(graph)
-    for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
-        source = nodes.get(edge["source"])
-        if source is not None and source.get("type") in _DATASET_NODE_TYPES:
-            return (source.get("data") or {}).get("config") or {}
-    return {}
+    configs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    # Edges first, handles second: an agent's Dataset nodes should come out in
+    # the order they were wired, not grouped by which handle spelling they
+    # happen to be saved under.
+    for edge in graph.get("edges") or []:
+        if edge.get("target") != node_id or edge.get("targetHandle") not in _LEGACY_DATASET_HANDLES:
+            continue
+        source = nodes.get(edge.get("source"))
+        if source is None or source.get("type") not in _DATASET_NODE_TYPES:
+            continue
+        config = (source.get("data") or {}).get("config") or {}
+        if not config.get("enabled", True) or not config.get("dataset_name"):
+            continue
+        key = str(config.get("dataset_id") or config["dataset_name"])
+        if key in seen:
+            continue
+        seen.add(key)
+        configs.append(config)
+    return configs
 
 
 def _resolve_script_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """``{"name": ..., "language": ..., "code": ...}`` from the node's
     connected Script node, or ``{}`` if none is connected -- optional, like
-    Dataset, and likewise sharing the Tool connector rather than a dedicated
-    handle (see ``_resolve_dataset_config``'s own docstring). Read by
+    Dataset, and sharing the Tool connector with mcp_tool rather than
+    getting a dedicated handle (see ``_NODE_TYPE_TO_HANDLE``). Read by
     ``_build_user_input`` to fold the script's own code verbatim into the
     wired agent's instruction, for it to pass as some tool's own code-shaped
     argument (e.g. run_model_script's ``code``) -- ASAREE itself never
@@ -661,6 +1121,37 @@ def _resolve_script_config(graph: dict[str, Any], node_id: str) -> dict[str, Any
         if source is not None and source.get("type") in _SCRIPT_NODE_TYPES:
             return (source.get("data") or {}).get("config") or {}
     return {}
+
+
+def _resolve_skill_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """``{"skill_ids": [...]}`` -- every Skill node wired into this agent's
+    Skill connector, in a stable order -- or ``{}`` when none is connected.
+
+    Ids, not bodies: the skill document itself lives in core
+    (:mod:`motoro.services.skill_service`), and the node only names it, so
+    editing a registered skill takes effect on the next run without touching
+    a single graph. Unlike Dataset/Script this is a real Motoro config slot
+    (``Agent.skill_config``), so ASAREE hands the ids over and lets the engine
+    do progressive disclosure -- it never folds a skill body into the prompt
+    itself.
+
+    Order is the canvas wiring order (which is the order the agent's skill
+    index lists them in), de-duplicated: two nodes naming the same registered
+    skill would otherwise index it twice. A node with ``enabled: False`` or no
+    resolved ``skill_id`` is skipped, matching ``_resolve_tool_config``."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    skill_ids: list[str] = []
+    for edge in _edges_with_handle(graph, node_id, "skill", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") not in _SKILL_NODE_TYPES:
+            continue
+        skill_node_config = (source.get("data") or {}).get("config") or {}
+        if not skill_node_config.get("enabled", True):
+            continue
+        skill_id = skill_node_config.get("skill_id")
+        if skill_id and str(skill_id) not in skill_ids:
+            skill_ids.append(str(skill_id))
+    return {"skill_ids": skill_ids} if skill_ids else {}
 
 
 def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
@@ -705,9 +1196,10 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     represents one MCP server connection and can allow-list *several* of
     that server's tools (``config.tool_names``, plural) -- a per-server node
     with a tools filter, deliberately not a node per tool. The Tool
-    connector also accepts Dataset/Script source
-    nodes (see ``_NODE_TYPE_TO_HANDLE``) -- those are skipped here entirely,
-    since they're read by ``_resolve_dataset_config``/``_resolve_script_config``
+    connector also accepts Script source nodes (plus, on a graph saved
+    before the Resource connector existed, Dataset ones -- see
+    ``_LEGACY_DATASET_HANDLES``) -- those are skipped here entirely, since
+    they're read by ``_resolve_script_config``/``_resolve_dataset_configs``
     instead, not folded into this allow-list.
 
     ``tool_names`` MUST be namespaced as ``"{server_name}.{tool_name}"`` --
@@ -721,7 +1213,16 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     then sees as having only ``final_answer`` available -- no error, just an
     agent that can't do anything and falls back to reporting the blocker in
     its final answer. A node without a resolved ``server_name`` can't be
-    namespaced at all, so its tools are skipped rather than smuggled in bare."""
+    namespaced at all, so its tools are skipped rather than smuggled in bare.
+
+    A node's ``config.tool_names`` is read here as-is, so it needs nothing
+    extra to be an experimental factor: the frontend's ``tool_names`` level
+    type binds exactly that path, and ``apply_factor_bindings`` has already
+    substituted this cell's allow-list by the time this runs (the node's
+    ``server_id``/``server_name`` are untouched -- a level varies which of ONE
+    server's tools are offered, never which server). An empty allow-list is a
+    meaningful level: the server still connects (its ``server_name`` is still
+    reported) but contributes no tools to that cell."""
     nodes, _downstream, _upstream = _adjacency(graph)
     server_names: list[str] = []
     tool_names: list[str] = []
@@ -737,6 +1238,120 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
         if server_name:
             server_names.append(server_name)
             tool_names.extend(f"{server_name}.{name}" for name in node_tool_names)
+    return {"server_names": server_names, "tool_names": tool_names}
+
+
+def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """The Knowledge connector's contribution to the agent's tool allow-list,
+    shaped exactly like ``_resolve_tool_config``'s so the two can be merged.
+
+    Every knowledge source -- a folder-picked OKF bundle
+    (:mod:`asaree.services.okf_bundles`) or an uploaded single-concept OKF
+    document (:mod:`asaree.services.okf_documents`) -- is served by a real MCP
+    server, one process per directory, so at run time "knowledge" is just more
+    tools: the split between this connector and Tool is about what the user is
+    declaring, not about how the engine consumes it. Hence the identical shape
+    rather than a separate Motoro config slot -- unlike Skill, core has no
+    ``knowledge_config`` to hand this to. The bundle/document distinction
+    doesn't survive to here at all: both node types carry a ``server_name``
+    and a cached ``tool_names``, and this reads them the same way.
+
+    Namespaced ``"{server_name}.{tool}"`` for the same non-negotiable reason
+    as ``_resolve_tool_config``: bare names match nothing in
+    ``run_tools.gather_tools`` and would silently leave the agent with no
+    tools at all. A node with no ``tool_names`` cached (a bundle whose server
+    failed to spawn, so nothing was ever discovered) contributes its server
+    name but no tools -- the run then behaves as if the bundle weren't wired,
+    which is the honest outcome for a bundle that isn't actually reachable.
+
+    De-duplicated by server: two nodes pointing at the same bundle are one
+    server, and listing it twice would just double every tool name."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    server_names: list[str] = []
+    tool_names: list[str] = []
+    for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
+            continue
+        bundle_config = (source.get("data") or {}).get("config") or {}
+        if not bundle_config.get("enabled", True):
+            continue
+        server_name = bundle_config.get("server_name")
+        if not server_name or server_name in server_names:
+            continue
+        server_names.append(server_name)
+        tool_names.extend(f"{server_name}.{name}" for name in bundle_config.get("tool_names") or [])
+    return {"server_names": server_names, "tool_names": tool_names}
+
+
+def _resolve_dataset_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """The Dataset connector's contribution to the tool allow-list: ASAREE's
+    own ``asaree-workspace`` server, shaped like ``_resolve_tool_config``'s
+    output so it merges with the rest.
+
+    A Dataset node declares "this agent operates on data"; the tools that
+    make that possible should follow from the declaration rather than from a
+    second, differently-shaped node the user has to know to also wire. Before
+    this, an agent with only a Dataset wired was told (by ``_build_user_input``)
+    to call ``open_workspace`` and then handed an allow-list that didn't
+    contain it -- the run's system prompts in the original spinal use case
+    covered the gap, and nothing else did.
+
+    Unlike Tool and Knowledge, the grant is implicit, so the tools are a fixed
+    list (``WORKSPACE_AGENT_TOOLS``) rather than whatever a node cached: there
+    is no node here whose checkboxes could express a narrower choice.
+    """
+    if not _resolve_dataset_configs(graph, node_id):
+        return {"server_names": [], "tool_names": []}
+    return {
+        "server_names": [WORKSPACE_SERVER_NAME],
+        "tool_names": [f"{WORKSPACE_SERVER_NAME}.{name}" for name in WORKSPACE_AGENT_TOOLS],
+    }
+
+
+def _resolve_script_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """The Script connector's contribution to the tool allow-list: ASAREE's own
+    ``asaree-script`` server, on exactly the same terms as
+    ``_resolve_dataset_tool_config`` above.
+
+    Wiring a script is the gesture that means "run this", so the executor
+    follows from it. Before this, a Script node was inert unless the user ALSO
+    wired ``asaree-sklearn-model`` or ``scikit-learn-mcp`` -- the only two
+    servers whose script tools read the ambient script path, and both
+    model-fitting harnesses that reject a script which doesn't define a
+    ``predict_proba``/``predict``. A script that merely computed and printed
+    something had nowhere at all to run, while the prompt went on telling the
+    agent one was waiting.
+
+    Granted on the code, not on the node: a Script node wired with an empty
+    ``code`` has nothing to execute, and ``_ambient_meta_for`` publishes no path
+    for it either, so the tool would only be there to report its own absence.
+    """
+    if not (_resolve_script_config(graph, node_id) or {}).get("code"):
+        return {"server_names": [], "tool_names": []}
+    return {
+        "server_names": [SCRIPT_SERVER_NAME],
+        "tool_names": [f"{SCRIPT_SERVER_NAME}.{name}" for name in SCRIPT_AGENT_TOOLS],
+    }
+
+
+def _merge_tool_configs(*configs: dict[str, Any]) -> dict[str, Any]:
+    """Union of several ``{"server_names", "tool_names"}`` allow-lists, order
+    preserved, duplicates dropped.
+
+    De-duplication matters now that one of them is implicit: a user who *did*
+    wire an ``asaree-workspace`` Tool node alongside a Dataset would otherwise
+    contribute the same namespaced names twice.
+    """
+    server_names: list[str] = []
+    tool_names: list[str] = []
+    for config in configs:
+        for name in config.get("server_names") or []:
+            if name not in server_names:
+                server_names.append(name)
+        for name in config.get("tool_names") or []:
+            if name not in tool_names:
+                tool_names.append(name)
     return {"server_names": server_names, "tool_names": tool_names}
 
 
@@ -771,23 +1386,46 @@ def _build_user_input(
     *,
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
+    script_bound: bool = False,
+    seeded_dataset: str = "",
+    unsplit_dataset: str = "",
 ) -> str:
     """The node's own prompt (falling back to its goal, then its canvas
     label), plus (flat, unstructured -- a deliberate V1 simplification) each
-    already-completed upstream node's output_text as context, plus a
-    Dataset-context block when this node has a Dataset connector wired
-    (naming the registered dataset and this run's own experiment_id/
-    cell_label, so the agent can call ``open_workspace`` itself -- the one
-    workspace tool with no ambient ``_meta`` fallback, confirmed directly
-    against its real signature), plus a Script block (the wired Script
-    node's own code, verbatim, for the agent to pass as some tool's own
-    code-shaped argument) when one is wired. `prompt` is the one field meant
-    to change per run (the per-invocation user message); `goal` is a
-    persistent objective, only used here as
-    prompt's own fallback when the user hasn't set one. Real structured
+    already-completed upstream node's output_text as context, plus a Dataset
+    cue when this node has a Dataset connector wired, plus a Script cue when
+    one is wired. `prompt` is the one field meant to change per run (the
+    per-invocation user message); `goal` is a persistent objective, only used
+    here as prompt's own fallback when the user hasn't set one. Real structured
     handoff via output_contract.payload is a fast-follow, the same way the
-    source notebook's own stage-report-block pattern could graduate to
-    using it."""
+    source notebook's own stage-report-block pattern could graduate to using
+    it.
+
+    Both the Dataset and the Script block used to be dictation: the exact
+    ``open_workspace(experiment_id=..., cell_label=..., name=...)`` call, and
+    the script's entire source pasted in for the model to copy back out into a
+    tool argument. Neither is now. Both are References, and a Reference is
+    bound into ambient request ``_meta``, not narrated (see the three routes at
+    the top of this module, and Motoro's ``engine/sense.py``) -- ``_meta`` is
+    out of the model's reach, so there is nothing to mistype. What stays here
+    is only what ``_meta`` genuinely cannot supply: the *fact* that a dataset
+    or a script is waiting, and the dataset name to disambiguate with when
+    more than one is wired.
+
+    *script_bound* says the wired script reached ``_meta`` as a path
+    (``_ambient_meta_for``). When it didn't -- an unlinked protocol run has no
+    workspace directory to write it to -- the code is inlined here as before,
+    because a prompt the model can copy from beats no script at all.
+
+    *seeded_dataset* says ASAREE already opened the cell's workspace on the
+    agent's behalf (``_resolve_node_dataset``). When it did, the Dataset
+    block stops asking for a tool call at all and just says the data is there
+    -- opening a workspace was never a decision worth spending an agent turn
+    on, and a step the agent can't skip is a step it can't get wrong.
+
+    *unsplit_dataset* is the same resolver's other outcome: a registration with
+    no train/test split, bound as a plain file. Mutually exclusive with
+    *seeded_dataset* -- a dataset has a split or it doesn't."""
     data: dict[str, Any] = node.get("data") or {}
     config: dict[str, Any] = data.get("config", {})
     seed: str = config.get("prompt") or config.get("goal") or data.get("label", "")
@@ -795,34 +1433,103 @@ def _build_user_input(
 
     upstream_ids = _upstream_ids(graph, node["id"])
     upstream_context = [
-        f"[{uid}]: {node_runs[uid]['output_text']}"
-        for uid in upstream_ids
-        if node_runs.get(uid, {}).get("output_text")
+        f"[{uid}]: {node_runs[uid]['output_text']}" for uid in upstream_ids if node_runs.get(uid, {}).get("output_text")
     ]
     if upstream_context:
         parts.append("Upstream context:\n" + "\n\n".join(upstream_context))
 
-    dataset_config = _resolve_dataset_config(graph, node["id"])
-    dataset_name = dataset_config.get("dataset_name")
-    if (
-        dataset_name
-        and dataset_config.get("enabled", True)
-        and experiment_id is not None
-        and effective_cell_label is not None
-    ):
-        parts.append(
-            "Dataset context:\n"
-            f'A dataset named "{dataset_name}" is registered for this run. Call open_workspace '
-            f'with experiment_id="{experiment_id}", cell_label="{effective_cell_label}", '
-            f'name="{dataset_name}" before doing any data work.'
-        )
+    dataset_configs = _resolve_dataset_configs(graph, node["id"])
+    if dataset_configs and experiment_id is not None and effective_cell_label is not None:
+        dataset_names = [str(c["dataset_name"]) for c in dataset_configs]
+        if seeded_dataset:
+            # Nothing to call: the workspace was seeded before this turn, and
+            # every workspace/domain tool resolves it from ambient _meta. Named
+            # rather than left implicit so the agent can report what it worked
+            # on, and so a wrong wiring is visible in the transcript.
+            parts.append(
+                "Dataset context:\n"
+                f"Your data is already open: the dataset {seeded_dataset!r} is loaded into this "
+                "cell's workspace at HEAD. Do NOT call open_workspace -- the workspace tools and "
+                "the sklearn tools all resolve it from ambient run context, so omit any "
+                "data_path/workspace_id/target_column argument and never build one out of an id "
+                "another tool reported (a workspace id is not a file path). Start with the "
+                "analysis itself. (workspace_status() reports the current state if you need it.)"
+            )
+        elif unsplit_dataset:
+            # No workspace and no frozen split -- the raw file is bound as the
+            # run's data_path instead. The agent has to make the split, so the
+            # prompt says so outright: left to infer it, a model reaches for
+            # open_workspace (which will refuse) or invents a test_path.
+            parts.append(
+                "Dataset context:\n"
+                f"The dataset {unsplit_dataset!r} is bound to this step as a file, and it has NOT "
+                "been split into train/test. Do NOT call open_workspace -- there is no workspace "
+                "for an unsplit dataset, and the staged workspace tools have nothing to work on. "
+                "Use the sklearn tools: they resolve the file and its target column from ambient "
+                "run context, so omit data_path/target_column, and they hold out their own test "
+                "split on every call. Making the split is your job here -- start with "
+                "describe_dataset, then describe_split (or train_test_split, which writes the two "
+                "halves out) to check it isn't leaking before you fit."
+            )
+        elif len(dataset_names) == 1:
+            # Pre-seeding was skipped or failed (an unlinked protocol run has
+            # no workspace id; a broken registration logs and falls through) --
+            # so fall back to asking for the call. Still no arguments: with one
+            # dataset wired, open_workspace resolves them all from ambient _meta.
+            parts.append(
+                "Dataset context:\n"
+                "A dataset is registered for this run. Call open_workspace() before doing any data "
+                "work -- it takes no arguments here; which dataset and which workspace both arrive "
+                "as ambient run context. Its response names what it opened."
+            )
+        else:
+            # `name` is the one thing _meta can't decide for the agent: the
+            # ambient fallback deliberately refuses to guess among several, so
+            # the names stay in the prompt. experiment_id/cell_label still do
+            # not -- they come from the ambient workspace_id.
+            #
+            # And that ambient workspace_id is exactly why this says "pick
+            # one": a cell's workspace is keyed by experiment_id/cell_label
+            # alone, so all of these would resolve to the same directory.
+            # open_workspace now refuses the second one rather than silently
+            # returning the first one's data (it used to claim, wrongly, that
+            # each name got its own workspace).
+            #
+            # A LEGACY path now: the connector is capped at one again, and
+            # the real fix landed as the per-dataset cell -- a
+            # ``dataset_config`` factor, whose levels are whole Dataset
+            # configs, so each cell gets its own dataset in its own
+            # workspace. Only a graph saved while the connector was uncapped
+            # still reaches this branch.
+            listed = "\n".join(f'- "{n}"' for n in dataset_names)
+            parts.append(
+                "Dataset context:\n"
+                f"{len(dataset_names)} datasets are registered for this run:\n{listed}\n"
+                "Call open_workspace(name=...) with the ONE this cell should work on, before doing "
+                "any data work. `name` is the only argument to pass; the rest arrives as ambient "
+                "run context. This cell has a single workspace, so it holds a single dataset -- "
+                "opening a second here is an error, not a second workspace."
+            )
 
     script_config = _resolve_script_config(graph, node["id"])
     script_code = script_config.get("code")
-    if script_code:
+    if script_code and script_bound:
         parts.append(
-            "Script to pass verbatim as the relevant tool's own code argument (e.g. run_model_script's "
-            f"`code`):\n```python\n{script_code}\n```"
+            "Script context:\n"
+            "A script is wired into this step. Call run_wired_script() -- no arguments -- and it "
+            "executes exactly what the user wrote; read its stdout for the result. Do not retype or "
+            "paraphrase the script. (A sklearn script tool, e.g. run_model_script, picks the same "
+            "script up the same way if this step is about fitting a model.)"
+        )
+    elif script_code:
+        # No workspace directory to write it to (see _materialize_script), so
+        # fall back to what this did before: paste it and ask for a verbatim
+        # copy. Costs prompt tokens on every turn and is only as faithful as
+        # the model's transcription -- which is the whole reason the path
+        # above exists.
+        parts.append(
+            "Script to pass verbatim as the relevant tool's own code argument (run_wired_script's or "
+            f"run_model_script's `code`):\n```python\n{script_code}\n```"
         )
 
     return "\n\n".join(parts)
@@ -898,6 +1605,7 @@ async def _run_agent_node(
     user_input: str,
     graph: dict[str, Any],
     workspace_id: str | None = None,
+    ambient_meta: dict[str, Any] | None = None,
 ) -> tuple[str | None, str | None, uuid.UUID | None]:
     """Create-or-sync the real agent and run it to completion. Returns
     ``(output_text, error, run_id)`` -- exactly one of output_text/error is
@@ -919,12 +1627,29 @@ async def _run_agent_node(
     # connector instead (topological_order already validated their shape).
     model_config_data = {k: v for k, v in _resolve_llm_config(graph, node["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
-    tool_config = _resolve_tool_config(graph, node["id"])
+    # Four connectors feed one allow-list. The Knowledge connector's OKF
+    # bundles and documents are MCP servers like any other, so they land here
+    # rather than in a slot of their own (see _resolve_knowledge_config), and
+    # the Dataset and Script connectors imply ASAREE's own workspace and
+    # script-running tools (see _resolve_dataset_tool_config /
+    # _resolve_script_tool_config) -- the split between the four is about
+    # what the user is declaring, not about how the engine consumes it.
+    tool_config = _merge_tool_configs(
+        _resolve_tool_config(graph, node["id"]),
+        _resolve_knowledge_config(graph, node["id"]),
+        _resolve_dataset_tool_config(graph, node["id"]),
+        _resolve_script_tool_config(graph, node["id"]),
+    )
     pattern_config_data = _resolve_pattern_config(graph, node["id"])
     pattern_config = PatternConfig(
         execution_pattern=pattern_config_data.get("execution_pattern"),
         pattern_params=pattern_config_data.get("pattern_params") or {},
     ).model_dump()
+    # Always a dict, never None, even with nothing wired: Motoro's update_agent
+    # reads None as "leave unchanged", so an agent that had skills and then had
+    # them unwired on the canvas would silently keep running with them. An
+    # explicit empty list is how you detach.
+    skill_config = _resolve_skill_config(graph, node["id"]) or {"skill_ids": []}
     description = config.get("description") or ""
     label = node.get("data", {}).get("label")
     if label:
@@ -945,6 +1670,7 @@ async def _run_agent_node(
             model_config=model_config,
             pattern_config=pattern_config,
             tool_config=tool_config,
+            skill_config=skill_config,
             output_contract=config.get("output_contract"),
             budget_limit_usd=config.get("budget_limit_usd"),
             max_run_duration_seconds=config.get("max_run_duration_seconds"),
@@ -958,6 +1684,7 @@ async def _run_agent_node(
             model_config=model_config,
             pattern_config=pattern_config,
             tool_config=tool_config,
+            skill_config=skill_config,
             output_contract=config.get("output_contract"),
             budget_limit_usd=config.get("budget_limit_usd"),
             max_run_duration_seconds=config.get("max_run_duration_seconds"),
@@ -974,6 +1701,20 @@ async def _run_agent_node(
             "protocol_run_id": str(protocol_run_id),
             "node_id": node["id"],
             **({"workspace_id": workspace_id} if workspace_id else {}),
+            # Precomputed by the caller when it also needed to know whether the
+            # script got bound (_build_user_input's script_bound); recomputed
+            # here only for a caller that didn't care.
+            **(
+                {"ambient_meta": resolved_ambient}
+                if (
+                    resolved_ambient := (
+                        ambient_meta
+                        if ambient_meta is not None
+                        else _ambient_meta_for(graph, node["id"], workspace_id)
+                    )
+                )
+                else {}
+            ),
         },
     )
     timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
@@ -1117,8 +1858,19 @@ async def _run_gated_worker(
     gate_config = gate["data"]["config"]
     max_revisions = max(int(gate_config.get("max_revisions") or 0), 0)
     enabled = bool(gate_config.get("enabled", True))
+    # Computed once for the whole revision loop: every attempt reruns the same
+    # worker against the same references, so re-materializing the script per
+    # attempt would only rewrite an identical file.
+    worker_ambient, worker_dataset = await _node_run_context(graph, worker["id"], workspace_id, owner_id)
     base_instruction = _build_user_input(
-        worker, graph, node_runs, experiment_id=experiment_id, effective_cell_label=effective_cell_label
+        worker,
+        graph,
+        node_runs,
+        experiment_id=experiment_id,
+        effective_cell_label=effective_cell_label,
+        script_bound="script_path" in worker_ambient,
+        seeded_dataset=worker_dataset.seeded_name,
+        unsplit_dataset=worker_dataset.unsplit_name,
     )
     instruction = base_instruction
     # Tracks the most recent critic verdict/run across attempts so the
@@ -1138,6 +1890,7 @@ async def _run_gated_worker(
             user_input=instruction,
             graph=graph,
             workspace_id=workspace_id,
+            ambient_meta=worker_ambient,
         )
         run_id_str = str(run_id) if run_id else None
         if error == _AGENT_CANCELLED:
@@ -1272,7 +2025,7 @@ async def plan_cell_runs(
     owner_id: uuid.UUID,
     graph: dict[str, Any],
 ) -> tuple[list[ProtocolRun], int]:
-    """"Run all cells": creates one pending :class:`ProtocolRun` per
+    """ "Run all cells": creates one pending :class:`ProtocolRun` per
     not-yet-scored :class:`FactorialCellResult` under *experiment_id*, each
     carrying that cell's own ``factor_values`` for ``run_protocol`` to
     substitute at execution time via ``apply_factor_bindings``. Returns
@@ -1375,14 +2128,14 @@ def validate_single_node_runnable(graph: dict[str, Any], node_id: str) -> dict[s
             "This agent has upstream input from another node -- running it alone isn't supported yet. "
             "Use the canvas's main Run button to run the whole pipeline."
         )
-    llm_edges = _edges_with_handle(graph, node_id, "llm", direction="incoming")
+    llm_edges = _edges_with_handle(graph, node_id, "ai", direction="incoming")
     if len(llm_edges) != 1:
         raise ProtocolValidationError(
-            f"Node {_node_display_name(node)!r} must have exactly one LLM connection (found {len(llm_edges)})."
+            f"Node {_node_display_name(node)!r} must have exactly one AI connection (found {len(llm_edges)})."
         )
     llm_source = nodes.get(llm_edges[0]["source"])
     if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
-        raise ProtocolValidationError(f"Node {_node_display_name(node)!r}'s LLM connection must come from an LLM node.")
+        raise ProtocolValidationError(f"Node {_node_display_name(node)!r}'s AI connection must come from an AI node.")
     return node
 
 
@@ -1415,8 +2168,16 @@ async def _run_single_node(
     # synthetic per-run label (see _effective_cell_label).
     effective_cell_label = _effective_cell_label(None, protocol_run_id)
     workspace_id = _compute_workspace_id(experiment_id, None, protocol_run_id)
+    ambient_meta, node_dataset = await _node_run_context(graph, node["id"], workspace_id, owner_id)
     user_input = _build_user_input(
-        node, graph, {}, experiment_id=experiment_id, effective_cell_label=effective_cell_label
+        node,
+        graph,
+        {},
+        experiment_id=experiment_id,
+        effective_cell_label=effective_cell_label,
+        script_bound="script_path" in ambient_meta,
+        seeded_dataset=node_dataset.seeded_name,
+        unsplit_dataset=node_dataset.unsplit_name,
     )
     output_text, error, run_id = await _run_agent_node(
         node,
@@ -1426,6 +2187,7 @@ async def _run_single_node(
         user_input=user_input,
         graph=graph,
         workspace_id=workspace_id,
+        ambient_meta=ambient_meta,
     )
     node_run = {
         "status": "failed" if error else "completed",
@@ -1439,6 +2201,19 @@ async def _run_single_node(
 
 
 async def run_protocol(protocol_run_id: uuid.UUID) -> None:
+    # The worker hydrates its MCP registry once, at startup (worker/settings.py),
+    # so any server registered SINCE then -- an OKF bundle the user added
+    # mid-session being the case this exists for -- isn't live in this process
+    # and its tools would silently be missing from gather_tools' allow-list
+    # match. Re-hydrating here picks those up; it's a cheap no-op for servers
+    # already in the registry, which is every one of them on the common path.
+    # Best-effort: a hydration failure costs the run whatever servers weren't
+    # already live (surfacing as a normal "tool not available" at agent level),
+    # which is a far better outcome than refusing to start the run at all.
+    try:
+        await hydrate_registry()
+    except Exception:
+        logger.warning("MCP registry hydration failed; continuing with the registry as-is", exc_info=True)
     async with get_session() as db:
         run = await get_protocol_run(db, protocol_run_id)
         if run is None:
@@ -1543,8 +2318,15 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         if node_id in gated_by:
             gate = gated_by[node_id]
             worker_run, gate_run = await _run_gated_worker(
-                node, gate, protocol_id=protocol_id, protocol_run_id=protocol_run_id, owner_id=owner_id,
-                graph=graph, node_runs=node_runs, workspace_id=workspace_id, experiment_id=experiment_id,
+                node,
+                gate,
+                protocol_id=protocol_id,
+                protocol_run_id=protocol_run_id,
+                owner_id=owner_id,
+                graph=graph,
+                node_runs=node_runs,
+                workspace_id=workspace_id,
+                experiment_id=experiment_id,
                 effective_cell_label=effective_cell_label,
             )
             node_runs[node_id] = worker_run
@@ -1571,8 +2353,16 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             # applies to a plain agent node.
             output_text, error, run_id = _upstream_output_text(graph, node_id, node_runs), None, None
         else:
+            ambient_meta, node_dataset = await _node_run_context(graph, node_id, workspace_id, owner_id)
             user_input = _build_user_input(
-                node, graph, node_runs, experiment_id=experiment_id, effective_cell_label=effective_cell_label
+                node,
+                graph,
+                node_runs,
+                experiment_id=experiment_id,
+                effective_cell_label=effective_cell_label,
+                script_bound="script_path" in ambient_meta,
+                seeded_dataset=node_dataset.seeded_name,
+                unsplit_dataset=node_dataset.unsplit_name,
             )
             output_text, error, run_id = await _run_agent_node(
                 node,
@@ -1582,6 +2372,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 user_input=user_input,
                 graph=graph,
                 workspace_id=workspace_id,
+                ambient_meta=ambient_meta,
             )
 
         if error == _AGENT_CANCELLED:

@@ -1,9 +1,15 @@
 import type { DesignFactor } from '@/types/experiments'
 
-// llm_config/tool_config/pattern/script_config are the "whole node as a
-// factor" kinds (see bindableFields.ts) -- their levels are OBJECTS (a
-// whole LLM/Tool/Script node config, or a {execution_pattern,
+// llm_config/tool_config/pattern/script_config/dataset_config are the "whole
+// node as a factor" kinds (see bindableFields.ts) -- their levels are OBJECTS
+// (a whole LLM/Tool/Script/Dataset node config, or a {execution_pattern,
 // pattern_params} payload), never strings, unlike every other kind here.
+//
+// tool_names is the odd one out: its levels are ARRAYS of bare tool names,
+// not objects and not a whole node config -- it binds one MCP node's
+// `config.tool_names` allow-list, leaving the node's own server pinned. It
+// groups with the structured kinds below only because its levels aren't
+// strings either (see isStructuredLevelType).
 export type LevelType =
   | 'string'
   | 'text'
@@ -13,6 +19,8 @@ export type LevelType =
   | 'tool_config'
   | 'pattern'
   | 'script_config'
+  | 'dataset_config'
+  | 'tool_names'
 
 export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   string: 'String',
@@ -23,13 +31,24 @@ export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   tool_config: 'Server & tools',
   pattern: 'Execution pattern',
   script_config: 'Script',
+  dataset_config: 'Dataset',
+  tool_names: 'Tools allowed',
 }
 
-// Whether a level of this kind is a structured object rather than a plain
-// string -- FactorEditorDialog's `levels` state switches its element type
-// based on this.
+// Whether a level of this kind is a structured value (an object, or -- for
+// tool_names -- a list) rather than a plain string. FactorEditorDialog's
+// `levels` state switches its element type based on this, and
+// FactorBindableField uses it to escalate straight to that dialog instead of
+// its own one-line-Input popover.
 export function isStructuredLevelType(type: LevelType): boolean {
-  return type === 'llm_config' || type === 'tool_config' || type === 'pattern' || type === 'script_config'
+  return (
+    type === 'llm_config' ||
+    type === 'tool_config' ||
+    type === 'pattern' ||
+    type === 'script_config' ||
+    type === 'dataset_config' ||
+    type === 'tool_names'
+  )
 }
 
 export function levelTypeOf(factor: DesignFactor): LevelType {
@@ -74,6 +93,19 @@ export function emptyStructuredLevel(type: LevelType): unknown {
       return { execution_pattern: 'reason_act', pattern_params: { reason_act: {} } }
     case 'script_config':
       return { name: 'script', language: 'python', code: '' }
+    // Both id and name, because both are read: the executor resolves the
+    // dataset by NAME (_resolve_dataset_configs -> seed_cell_workspace),
+    // while the canvas's own syncExperimentDatasets records the ID on the
+    // experiment_datasets join row. DatasetConfigLevelRow's picker always
+    // writes the pair together, never one alone.
+    case 'dataset_config':
+      return { dataset_id: null, dataset_name: null, enabled: true }
+    // An empty allow-list, not a copy of the node's current one: _resolve_tool_config
+    // contributes nothing for a node whose tool_names is empty, so a blank level
+    // is the meaningful "this server's tools withheld for this cell" baseline
+    // rather than an unconfigured placeholder.
+    case 'tool_names':
+      return []
     default:
       return ''
   }

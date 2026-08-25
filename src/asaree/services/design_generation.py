@@ -59,16 +59,44 @@ def generate_design(factors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [dict(zip(names, values, strict=True)) for values in itertools.product(*levels_lists)]
 
 
-# Checked in order for a dict-valued level (e.g. a whole LLM/Tool node config
-# or a pattern-override payload bound as a single factor) -- whichever of
-# these identifying keys is present first names the slug, since one of them
+# Checked in order for a dict-valued level (e.g. a whole LLM/Tool/Dataset node
+# config or a pattern-override payload bound as a single factor) -- whichever
+# of these identifying keys is present first names the slug, since one of them
 # is always the thing a human actually wants to see in a cell label
-# ("claude-sonnet-5", "reason_act", "search-mcp"). Falls back to a short
-# stable hash when none match, rather than Python's own unstable dict repr.
-_DICT_SLUG_PRIORITY_KEYS = ("model", "provider", "execution_pattern", "server_name", "enabled")
+# ("claude-sonnet-5", "reason_act", "search-mcp", "spine-2024"). Falls back to
+# a short stable hash when none match, rather than Python's own unstable dict
+# repr.
+#
+# ``dataset_name`` must stay AHEAD of ``enabled``: a Dataset node's config is
+# ``{dataset_id, dataset_name, enabled}``, so with ``enabled`` matching first
+# every level of a dataset factor would slug to "true" and the whole design
+# would collapse onto one cell label. ``dataset_id`` is deliberately absent --
+# it's a uuid, unreadable in a label, and the name already identifies the row.
+_DICT_SLUG_PRIORITY_KEYS = ("model", "provider", "execution_pattern", "server_name", "dataset_name", "enabled")
+
+# How many items of a list-valued level (an MCP node's ``tool_names``
+# allow-list, bound as a "Tools allowed" factor) name the slug before it's
+# truncated. A cell label already concatenates every factor, so an unbounded
+# join would let one 20-tool level produce a label no filesystem or table
+# column wants; three names plus a count says which subset this is without
+# growing without limit. Order is left as declared rather than sorted -- the
+# level is stored verbatim in ``design_spec``, so its label is stable across
+# regenerations either way, and sorting would only hide the (already
+# meaningless) case of two levels holding the same set.
+_MAX_LIST_SLUG_ITEMS = 3
 
 
 def _slugify(value: Any) -> str:
+    if isinstance(value, list | tuple):
+        # "none", not the empty string's "x" fallback: an empty allow-list is
+        # a real, deliberate level ("this server's tools withheld for this
+        # cell"), and it's the one most worth reading off a cell label.
+        if not value:
+            return "none"
+        slugs = [_slugify(v) for v in value]
+        head = "-".join(slugs[:_MAX_LIST_SLUG_ITEMS])
+        extra = len(slugs) - _MAX_LIST_SLUG_ITEMS
+        return head if extra <= 0 else f"{head}-plus{extra}"
     if isinstance(value, dict):
         for key in _DICT_SLUG_PRIORITY_KEYS:
             if key in value and value[key] not in (None, ""):

@@ -1,8 +1,9 @@
 """The MCP servers ASAREE ships and registers for itself, on every boot.
 
 Both processes that spawn MCP subprocesses run :func:`ensure_system_servers`
-before ``hydrate_registry`` -- the API (``asaree.app``'s lifespan) and the run
-worker (``asaree.worker.settings.on_startup``). It lives here rather than in
+before ``hydrate_registry`` and :func:`refresh_system_server_capabilities`
+after it -- the API (``asaree.app``'s lifespan) and the run worker
+(``asaree.worker.settings.on_startup``). It lives here rather than in
 ``app.py`` so the worker can call it without importing the FastAPI app and
 every router with it.
 
@@ -22,7 +23,8 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from motoro.services.mcp_service import get_server_by_name, register_server, update_server
+from motoro.mcp.registry import get_registry
+from motoro.services.mcp_service import get_server_by_name, refresh_server, register_server, update_server
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,45 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 WORKSPACE_SERVER_NAME = "asaree-workspace"
+SCRIPT_SERVER_NAME = "asaree-script"
 OKF_SERVER_NAME = "motoro-okf"
+SCIKIT_LEARN_SERVER_NAME = "scikit-learn-mcp"
+
+# The workspace tools every agent with a Dataset connector wired gets, without
+# the user having to also drag an asaree-workspace Tool node onto the canvas
+# (see protocol_execution._resolve_dataset_tool_config). Wiring a dataset is
+# the gesture that means "this agent works on data"; needing to know that a
+# second, differently-shaped node grants the tools to actually do so is
+# knowledge the spinal use case's system prompts supplied and a new user has
+# no way to guess.
+#
+# Listed explicitly rather than derived from the live registry (every
+# "asaree-workspace.*" tool) because the run allow-list fails closed by design
+# -- see run_tools.gather_tools -- and a tool added to that server later should
+# become an implicit grant to every dataset-wired agent only on purpose.
+# ``ping``/``reset_session`` are omitted: a health check and a no-op
+# compatibility shim are noise in an agent's tool list.
+WORKSPACE_AGENT_TOOLS: Final[tuple[str, ...]] = (
+    "open_workspace",
+    "workspace_status",
+    "accept_stage",
+    "reset_stage",
+    "check_stage_gate",
+    "read_stage_manifest",
+    "read_scratch_learned",
+)
+
+# The same implicit-grant arrangement for the Script connector: wiring a Script
+# node is the gesture that means "run this", so the tool that can is granted
+# with it (``protocol_execution._resolve_script_tool_config``). Without this a
+# Script node was inert unless the user also wired one of the two sklearn
+# servers whose script tools happen to read the ambient script path -- both
+# model-fitting harnesses, so a script that wasn't fitting a model had nowhere
+# to run at all.
+#
+# ``ping`` omitted for the same reason as above: a health check is noise in an
+# agent's tool list.
+SCRIPT_AGENT_TOOLS: Final[tuple[str, ...]] = ("run_wired_script",)
 
 # (server name, module to run). Every module here is importable from this
 # repo's own venv -- asaree.* is ASAREE, motoro.* comes from the pinned Motoro
@@ -50,6 +90,7 @@ OKF_SERVER_NAME = "motoro-okf"
 # reason compose.yml used to need a bind mount replaying that exact path.
 SYSTEM_MCP_SERVERS: Final[tuple[tuple[str, str], ...]] = (
     (WORKSPACE_SERVER_NAME, "asaree.mcp_servers.workspace_server"),
+    (SCRIPT_SERVER_NAME, "asaree.mcp_servers.script_server"),
     # Motoro's own bundled OKF server, not ASAREE's code. Registered
     # unconditionally, even if AGENTIC_OKF_BUNDLE_DIR is unset -- connecting
     # needs no bundle to exist yet; a tool call without one just returns a
@@ -61,6 +102,13 @@ SYSTEM_MCP_SERVERS: Final[tuple[tuple[str, str], ...]] = (
     ("asaree-sklearn-fte", "asaree_sklearn_fte"),
     ("asaree-sklearn-model", "asaree_sklearn_model"),
     ("asaree-sklearn-stats", "asaree_sklearn_stats"),
+    # Not part of the asaree-sklearn-* family despite the subject matter: it
+    # imports nothing from this repo and takes its dataset as a path/URI
+    # argument instead of reading the workspace layout, so it stands alone as a
+    # publishable server. Registered here for the same reason as the rest --
+    # this is the process that spawns it -- and it is the one server the canvas
+    # currently offers, the six above being hidden from the picker.
+    (SCIKIT_LEARN_SERVER_NAME, "scikit_learn_mcp"),
 )
 
 
@@ -147,3 +195,65 @@ async def ensure_system_servers() -> None:
     """Register/repair every server in :data:`SYSTEM_MCP_SERVERS`."""
     for name, module in SYSTEM_MCP_SERVERS:
         await _ensure_system_server(name, command_for(module))
+
+
+async def refresh_system_server_capabilities() -> None:
+    """Re-persist ``capabilities`` for any system server whose self-description moved.
+
+    **Must run after** ``hydrate_registry``, unlike everything above: it reads
+    the live client, which only exists once the server is in the registry.
+
+    The gap this closes: ``capabilities.tools`` is written exactly once, by
+    ``register_server`` at first registration. ``hydrate_registry`` reconnects
+    on every boot but never writes the discovered tools back, and
+    :func:`_ensure_system_server` only reconciles when the stored *command*
+    differs -- which it doesn't when a bundled server gains or loses a tool in
+    a code change, since the command is ``python -m <module>`` either way. So
+    the row keeps advertising the tool list from whenever the deployment first
+    booted. Nothing at *run* time notices (an agent's tools come from the live
+    registry), but the canvas reads this column: a new tool is missing from the
+    MCP node's allow-list, and a removed one lingers as a checkbox for a tool
+    that no longer exists.
+
+    ``instructions`` -- the server's own description of itself, from the
+    initialize handshake -- goes stale the same way and is compared here for
+    the same reason. It matters more than it looks: editing a bundled server's
+    blurb changes no tool name at all, so a tools-only comparison would never
+    fire and the new text would never reach a row that already exists.
+
+    Scoped to :data:`SYSTEM_MCP_SERVERS` because those are the ones whose code
+    ships with ASAREE and therefore changes underneath a live database. A
+    user-registered server is theirs to ``POST /mcp-servers/{id}/refresh``.
+    Compared before writing so the ordinary boot -- nothing changed -- costs one
+    in-memory set comparison per server and no database round-trip at all.
+    """
+    registry = get_registry().servers
+    for name, _ in SYSTEM_MCP_SERVERS:
+        try:
+            entry = registry.get(name)
+            if entry is None or not entry.client.connected:
+                continue
+            config = await get_server_by_name(name)
+            if config is None:
+                continue
+            capabilities = config.capabilities or {}
+            live = sorted(t.name for t in entry.client.tools)
+            stored = sorted(t.get("name", "") for t in capabilities.get("tools") or [])
+            live_instructions = getattr(entry.client, "instructions", "") or ""
+            stored_instructions = capabilities.get("instructions") or ""
+            if live == stored and live_instructions == stored_instructions:
+                continue
+            logger.warning(
+                "system_mcp_server_capabilities_refreshed",
+                extra={
+                    "server": name,
+                    "added": sorted(set(live) - set(stored)),
+                    "removed": sorted(set(stored) - set(live)),
+                    "instructions_changed": live_instructions != stored_instructions,
+                },
+            )
+            await refresh_server(config.id)
+        except Exception:
+            # Per server, for the same reason _ensure_system_server swallows:
+            # a stale tool list is a cosmetic problem and must not fail a boot.
+            logger.exception("system_mcp_server_capability_refresh_failed", extra={"server": name})

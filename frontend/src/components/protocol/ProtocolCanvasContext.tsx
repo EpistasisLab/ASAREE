@@ -1,6 +1,21 @@
 import { createContext, useContext } from 'react'
 
-export type ConnectorSlot = 'llm' | 'tool' | 'memory' | 'architectural_pattern'
+export type ConnectorSlot = 'ai' | 'tool' | 'memory' | 'architectural_pattern' | 'skill' | 'dataset' | 'knowledge'
+
+// What each slot is CALLED in the UI, as opposed to the handle id it's
+// stored under -- the multi-word ones would otherwise surface raw,
+// snake_cased, in the tooltip/aria-label on their own "+" stub. Keep in
+// sync with the captions AgentNode/CriticGateNode render next to each
+// handle.
+export const CONNECTOR_SLOT_LABELS: Record<ConnectorSlot, string> = {
+  ai: 'AI',
+  tool: 'Tool',
+  memory: 'Memory',
+  architectural_pattern: 'Architectural Pattern',
+  skill: 'Skill',
+  dataset: 'Dataset',
+  knowledge: 'Knowledge',
+}
 
 export interface ConnectorAddRequest {
   nodeId: string

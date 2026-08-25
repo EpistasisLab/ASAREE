@@ -1,7 +1,7 @@
 """Tests for services.experiments' update_experiment -- covers the rename
-capability just added (name/description), alongside the pre-existing
-dataset_id attach/detach. Same real-Postgres, throwaway-user fixture as
-tests/test_protocols.py."""
+capability just added (name/description), alongside attaching datasets
+(now a many-to-many, see models/experiment_dataset.py). Same real-Postgres,
+throwaway-user fixture as tests/test_protocols.py."""
 
 from __future__ import annotations
 
@@ -16,11 +16,15 @@ import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for 
 import asaree.services.experiments as experiments_service
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.user import User
+from asaree.services.datasets import create_dataset, delete_dataset
 from asaree.services.experiments import (
     create_experiment,
     create_untitled_experiment,
+    get_dataset_ids_by_experiment,
     get_experiment,
+    get_experiment_dataset_ids,
     list_experiments,
+    set_experiment_datasets,
     update_experiment,
 )
 
@@ -86,6 +90,67 @@ async def test_set_design_spec(owner_id: uuid.UUID) -> None:
         assert fetched is not None
         assert fetched.design_spec == spec
         await db.delete(fetched)
+
+
+_CSV = b"age,label,group\n10,0,a\n20,1,a\n30,0,b\n40,1,b\n"
+
+
+async def test_experiment_holds_several_datasets_in_wiring_order(owner_id: uuid.UUID) -> None:
+    async with get_session() as db:
+        first = await create_dataset(db, name=f"ds-{uuid.uuid4().hex}", csv_bytes=_CSV, owner_id=owner_id)
+        second = await create_dataset(db, name=f"ds-{uuid.uuid4().hex}", csv_bytes=_CSV, owner_id=owner_id)
+        experiment = await create_experiment(
+            db, name=f"multi-{uuid.uuid4().hex}", owner_id=owner_id, dataset_ids=[second.id, first.id]
+        )
+        experiment_id, first_id, second_id = experiment.id, first.id, second.id
+
+    try:
+        async with get_session() as db:
+            # Order is the caller's, not the rows' -- position, not insertion luck.
+            assert await get_experiment_dataset_ids(db, experiment_id) == [second_id, first_id]
+            assert await get_dataset_ids_by_experiment(db, [experiment_id]) == {experiment_id: [second_id, first_id]}
+
+        async with get_session() as db:
+            # A full replacement, matching how the canvas PATCHes design_spec:
+            # this both detaches `second` and reorders what's left.
+            assert await set_experiment_datasets(db, experiment_id, [first_id]) == [first_id]
+
+        async with get_session() as db:
+            assert await get_experiment_dataset_ids(db, experiment_id) == [first_id]
+            # Deleting a dataset cascades the link away rather than orphaning it.
+            await delete_dataset(db, first_id)
+
+        async with get_session() as db:
+            assert await get_experiment_dataset_ids(db, experiment_id) == []
+    finally:
+        async with get_session() as db:
+            for dataset_id in (first_id, second_id):
+                await delete_dataset(db, dataset_id)
+            e = await get_experiment(db, experiment_id)
+            if e is not None:
+                await db.delete(e)
+
+
+async def test_set_experiment_datasets_dedupes(owner_id: uuid.UUID) -> None:
+    # Two Dataset nodes naming the same registered dataset is a legal graph;
+    # the composite PK would reject the second row, so it's dropped up front.
+    async with get_session() as db:
+        dataset = await create_dataset(db, name=f"ds-{uuid.uuid4().hex}", csv_bytes=_CSV, owner_id=owner_id)
+        experiment = await create_experiment(db, name=f"dupe-{uuid.uuid4().hex}", owner_id=owner_id)
+        assert await set_experiment_datasets(db, experiment.id, [dataset.id, dataset.id]) == [dataset.id]
+        assert await get_experiment_dataset_ids(db, experiment.id) == [dataset.id]
+        await db.delete(experiment)
+        await delete_dataset(db, dataset.id)
+
+
+async def test_dataset_id_is_no_longer_a_settable_field(owner_id: uuid.UUID) -> None:
+    # It's join-table rows now, so the generic setattr path must refuse it
+    # rather than silently writing an attribute the model no longer has.
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"legacy-{uuid.uuid4().hex}", owner_id=owner_id)
+        with pytest.raises(ValueError, match="not settable"):
+            await update_experiment(db, experiment.id, fields={"dataset_id": uuid.uuid4()})
+        await db.delete(experiment)
 
 
 async def test_update_unknown_field_rejected(owner_id: uuid.UUID) -> None:

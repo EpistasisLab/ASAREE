@@ -1,14 +1,14 @@
 import { BrainCircuit } from 'lucide-react'
+import { nodeAccent } from '@/lib/nodeAccent'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { MemoryNodeConfig, MemoryNodeData, ProtocolNode } from '@/types/protocols'
 
-const ACCENT = hashToChartHue('memory')
+const ACCENT = nodeAccent('memory')
 
 // Deliberately minimal -- there's nothing real to configure yet. Connecting
 // this node into an agent declares intent for a future phase (porting

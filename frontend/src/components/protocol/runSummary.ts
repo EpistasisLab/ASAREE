@@ -1,11 +1,37 @@
 import type { Edge, Node } from '@xyflow/react'
-import type { DatasetNodeData, LlmNodeData, McpToolNodeData } from '@/types/protocols'
+import type {
+  DatasetNodeData,
+  LlmNodeData,
+  McpToolNodeData,
+  OkfBundleNodeData,
+  OkfDocumentNodeData,
+  SkillNodeData,
+} from '@/types/protocols'
 
 // Plain duplicate of ProtocolCanvas.tsx's own LLM_NODE_TYPES rather than a
 // shared import -- same reasoning as nodeConfigIssues.ts's own comment:
 // keeps this module from being coupled to that component's internals.
 const LLM_NODE_TYPES = new Set(['llm_anthropic', 'llm_openai', 'llm_azure_foundry'])
-const DEPENDENCY_HANDLES = new Set(['llm', 'tool', 'memory', 'architectural_pattern'])
+// Ditto for the MCP-tool family (mcpServerCatalog.ts's MCP_TOOL_NODE_TYPES)
+// -- every type in it carries the same config, so a run summary reads the
+// server name off any of them identically.
+const MCP_TOOL_NODE_TYPES = ['mcp_tool', 'mcp_scikit_learn', 'mcp_client_tool']
+// "llm" and "resource" are the pre-rename spellings of "ai" and "dataset"
+// (see migrateLegacyHandles in ProtocolCanvas.tsx) -- kept here, as in that
+// file's CONNECTOR_HANDLES, so this stays a question of "is this a connector
+// edge at all" rather than one that silently answers no for a graph that
+// hasn't been normalised yet.
+const DEPENDENCY_HANDLES = new Set([
+  'ai',
+  'llm',
+  'tool',
+  'memory',
+  'architectural_pattern',
+  'skill',
+  'dataset',
+  'resource',
+  'knowledge',
+])
 
 export type RunScope = { type: 'graph' } | { type: 'cell'; label: string } | { type: 'node'; nodeId: string; label: string }
 
@@ -15,6 +41,11 @@ export interface RunSummary {
   datasets: string[]
   models: string[]
   toolServers: string[]
+  skills: string[]
+  // Bundles and uploaded documents together -- the confirm dialog asks "what
+  // knowledge does this run get", and which kind of node supplied it doesn't
+  // change the answer.
+  knowledgeSources: string[]
 }
 
 // Builds a plain-language summary of what a Run click will actually
@@ -24,7 +55,7 @@ export interface RunSummary {
 // scope "node" (the per-node Play icon) only that node's own directly-wired
 // dependencies count, mirroring the one-level connector traversal
 // services.protocol_execution's _resolve_llm_config/_resolve_tool_config/
-// _resolve_dataset_config do server-side -- kept as a client-side duplicate
+// _resolve_dataset_configs do server-side -- kept as a client-side duplicate
 // for the same reason nodeConfigIssues.ts already is.
 export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): RunSummary {
   const relevantNodes = scope.type === 'node' ? nodesWiredTo(nodes, edges, scope.nodeId) : nodes
@@ -33,6 +64,41 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
     relevantNodes
       .filter((n) => n.type === 'dataset')
       .map((n) => (n.data as DatasetNodeData).config?.dataset_name)
+      .filter((name): name is string => !!name),
+  )
+  // Disabled skill nodes are dropped here, matching _resolve_skill_config's
+  // own `enabled is False` skip -- an off skill genuinely doesn't reach the
+  // run, so listing it would overstate what's about to happen. (Datasets
+  // above don't filter the same way: `enabled` there only skips a prompt
+  // block, and the dataset stays attached to the experiment either way.)
+  const skills = uniq(
+    relevantNodes
+      .filter((n) => n.type === 'skill')
+      .map((n) => (n.data as SkillNodeData).config)
+      .filter((config) => config?.enabled ?? true)
+      .map((config) => config?.skill_name)
+      .filter((name): name is string => !!name),
+  )
+  // Same `enabled` filter and same reason as skills: off knowledge never
+  // reaches the agent's allow-list (_resolve_knowledge_config skips it).
+  // Labelled by folder / concept title, not by the generated okf-bundle-<hash>
+  // or okf-doc-<hash> server name -- those are what the user recognises.
+  const knowledgeSources = uniq(
+    relevantNodes
+      .filter((n) => n.type === 'okf_bundle' || n.type === 'okf_document')
+      .map((n) =>
+        n.type === 'okf_bundle'
+          ? (() => {
+              const config = (n.data as OkfBundleNodeData).config
+              return { config, label: config?.bundle_label ?? config?.bundle_path ?? config?.server_name }
+            })()
+          : (() => {
+              const config = (n.data as OkfDocumentNodeData).config
+              return { config, label: config?.document_title ?? config?.document_path ?? config?.server_name }
+            })(),
+      )
+      .filter(({ config }) => (config?.enabled ?? true) && !!config?.server_name)
+      .map(({ label }) => label)
       .filter((name): name is string => !!name),
   )
   const models = uniq(
@@ -46,7 +112,7 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
   )
   const toolServers = uniq(
     relevantNodes
-      .filter((n) => n.type === 'mcp_tool')
+      .filter((n) => MCP_TOOL_NODE_TYPES.includes(n.type ?? ''))
       .map((n) => (n.data as McpToolNodeData).config)
       .filter((config) => (config?.enabled ?? true) && (config?.tool_names?.length ?? 0) > 0)
       .map((config) => config.server_name)
@@ -61,6 +127,8 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
     datasets,
     models,
     toolServers,
+    skills,
+    knowledgeSources,
   }
 }
 

@@ -6,7 +6,7 @@ registration is; see Motoro's `docs/DESIGN.md` §"Skills: a directory, stored as
 rows". ASAREE's job is to resolve ``owner_id`` from ``CurrentUser`` and call
 through.
 
-Two upload shapes, because an Agent Skill is a *directory* whose only required
+Three upload shapes, because an Agent Skill is a *directory* whose only required
 member is `SKILL.md`:
 
 - ``POST /skills/upload`` takes that one file, for a skill with no bundled
@@ -15,6 +15,14 @@ member is `SKILL.md`:
   `POST /okf/bundles/upload` does, since a browser never reveals a real path:
   each part's ``filename`` carries its ``webkitRelativePath``, and the leading
   folder segment is stripped here rather than trusted from a separate field.
+- ``POST /skills/from-url/preview`` then ``POST /skills/from-url`` pull the same
+  directory out of a public GitHub repo (`services/skill_sources.py`). Two calls
+  rather than one because a skills repo is usually a *collection*: the preview
+  says what is in there, the user ticks the ones they want, and each tick is a
+  register. Where the bytes came from is an acquisition concern only — all three
+  shapes end at the same ``create_skill_from_bundle`` and produce the same rows,
+  so nothing downstream (the Skill node, the canvas, the engine) can tell them
+  apart.
 
 Bundled *scripts* are the part core genuinely can't run: an agent's only
 side-channel is an MCP tool call, so a skill that needs to execute code should
@@ -35,8 +43,11 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from motoro.schemas.skill import SkillCreate, SkillListResponse, SkillResponse, SkillUpdate
 from motoro.services import skill_service
 from motoro.services.skill_service import SkillFormatError
+from pydantic import BaseModel, Field
 
 from asaree.deps import CurrentUser
+from asaree.services import skill_sources
+from asaree.services.skill_sources import SkillSourceError
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 
@@ -145,9 +156,7 @@ async def upload_skill_folder_endpoint(
     payload = await _folder_payload(files)
     folder = (files[0].filename or "").replace("\\", "/").split("/")[0] if files else None
     try:
-        skill = await skill_service.create_skill_from_bundle(
-            payload, owner_id=user.id, source_filename=folder
-        )
+        skill = await skill_service.create_skill_from_bundle(payload, owner_id=user.id, source_filename=folder)
     except SkillFormatError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return SkillResponse.model_validate(skill)
@@ -174,6 +183,84 @@ async def replace_skill_folder_endpoint(
     except SkillFormatError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     assert skill is not None
+    return SkillResponse.model_validate(skill)
+
+
+class SkillUrlRequest(BaseModel):
+    """A pasted GitHub URL, and optionally which skill inside it."""
+
+    url: str = Field(description="A github.com repo URL, or the URL of one skill's folder inside it.")
+    # Repo-relative, and only ever a value the preview call handed back. Empty
+    # means "the one the URL already points at", which is the single-skill case.
+    subdirectory: str = ""
+
+
+class DiscoveredSkillResponse(BaseModel):
+    """One skill found in a repo — enough to tick a checkbox by, not the files."""
+
+    subdirectory: str
+    name: str
+    description: str
+    file_count: int
+
+
+class SkillUrlPreviewResponse(BaseModel):
+    """What a repo turned out to hold, plus the ref that actually answered.
+
+    ``source`` is shown back because a bare repo URL resolves its own default
+    branch here, and the user should see which one they are about to register
+    from rather than find out later.
+    """
+
+    source: str
+    ref: str
+    skills: list[DiscoveredSkillResponse]
+
+
+@router.post("/from-url/preview", response_model=SkillUrlPreviewResponse)
+async def preview_skills_from_url_endpoint(body: SkillUrlRequest, user: CurrentUser) -> SkillUrlPreviewResponse:
+    """List the skills in a public GitHub repo without registering any.
+
+    Read-only and stores nothing, so it needs no ownership check beyond being
+    signed in. Not a GET with a query string: the URL is a URL, and nesting one
+    in another is a percent-encoding trap for no gain.
+    """
+    try:
+        source, discovered = await skill_sources.discover_skills(body.url)
+    except (SkillSourceError, SkillFormatError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return SkillUrlPreviewResponse(
+        source=f"{source.owner}/{source.repo}",
+        ref=source.ref or "",
+        skills=[DiscoveredSkillResponse(**vars(item)) for item in discovered],
+    )
+
+
+@router.post("/from-url", response_model=SkillResponse, status_code=201)
+async def create_skill_from_url_endpoint(body: SkillUrlRequest, user: CurrentUser) -> SkillResponse:
+    """Register one skill out of a public GitHub repo.
+
+    The archive is re-fetched rather than carried over from the preview call:
+    it is capped small, and a server-side cache keyed by URL is state with a TTL
+    to get wrong for no gain at this size. Registering N ticked skills is N
+    calls, which also means one malformed skill in a repo fails on its own
+    instead of taking the others with it.
+
+    ``source_filename`` records ``owner/repo/path@ref`` — the same slot the
+    folder upload puts the picked folder in, and the only provenance kept: the
+    skill is its rows from here on, not a live link to a repo that can change
+    underneath it.
+    """
+    try:
+        source, bundle = await skill_sources.fetch_skill_bundle(body.url, body.subdirectory)
+        # Truncated because ``source_filename`` is a String(255) and a deeply
+        # nested path in a long-named repo can pass core's own path check and
+        # still overflow the column. Provenance is display text, so losing the
+        # tail of it beats a 500 on an otherwise valid skill.
+        provenance = f"{source.label}@{source.ref}"[:255]
+        skill = await skill_service.create_skill_from_bundle(bundle, owner_id=user.id, source_filename=provenance)
+    except (SkillSourceError, SkillFormatError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return SkillResponse.model_validate(skill)
 
 
@@ -212,9 +299,7 @@ async def update_skill_endpoint(skill_id: uuid.UUID, body: SkillUpdate, user: Cu
     if existing is None or existing.owner_id != user.id:
         raise HTTPException(status_code=404, detail="No such skill")
     try:
-        skill = await skill_service.update_skill(
-            skill_id, name=body.name, description=body.description, body=body.body
-        )
+        skill = await skill_service.update_skill(skill_id, name=body.name, description=body.description, body=body.body)
     except SkillFormatError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     assert skill is not None  # existence already checked above

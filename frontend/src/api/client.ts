@@ -18,7 +18,7 @@ import type { McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
-import type { Skill, SkillListResponse } from '@/types/skills'
+import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -363,6 +363,20 @@ export const skillsApi = {
     for (const file of files) form.append('files', file, file.webkitRelativePath || file.name)
     return request<Skill>('/skills/upload-folder', { method: 'POST', body: form })
   },
+  // The third acquisition shape: skills are *distributed* as GitHub repos, and
+  // the `npx` installers in the wild do nothing but copy a repo's SKILL.md and
+  // its bundled files somewhere an agent can see them -- which is what the
+  // skill library already is. Two calls, not one, because a skills repo is
+  // usually a collection of a dozen: preview lists what's in there, and each
+  // ticked skill is its own createFromUrl. Both 422 on a non-GitHub host, a
+  // repo with no SKILL.md anywhere, or a skill core refuses to parse.
+  previewFromUrl: (url: string) => request<SkillUrlPreview>('/skills/from-url/preview', { method: 'POST', body: { url } }),
+  // `subdirectory` is repo-relative and comes straight back from a preview
+  // entry -- not something the caller composes. Registering N skills is N of
+  // these, so one malformed skill in a repo fails alone instead of taking the
+  // rest of the batch with it.
+  createFromUrl: (url: string, subdirectory: string) =>
+    request<Skill>('/skills/from-url', { method: 'POST', body: { url, subdirectory } }),
   // The stored skill rendered back out as a SKILL.md document, so what a
   // user uploaded is also what they can read back and re-upload.
   markdown: (id: string) => request<{ markdown: string }>(`/skills/${id}/markdown`),

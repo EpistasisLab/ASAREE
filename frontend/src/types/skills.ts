@@ -27,3 +27,24 @@ export interface SkillListResponse {
   items: Skill[]
   total: number
 }
+
+// One skill found inside a GitHub repo, before anything is registered. Not a
+// Skill: it has no id and no body, because nothing was stored -- it exists to
+// be listed and ticked. `subdirectory` is repo-relative and gets handed back
+// verbatim to skillsApi.createFromUrl.
+export interface DiscoveredSkill {
+  subdirectory: string
+  name: string
+  description: string
+  // Bundled level-3 files, not counting the SKILL.md itself.
+  file_count: number
+}
+
+// What a pasted GitHub URL turned out to hold. `ref` is echoed because a bare
+// repo URL resolves its own default branch server-side (main, then master),
+// and the user should see which one they're registering from.
+export interface SkillUrlPreview {
+  source: string
+  ref: string
+  skills: DiscoveredSkill[]
+}

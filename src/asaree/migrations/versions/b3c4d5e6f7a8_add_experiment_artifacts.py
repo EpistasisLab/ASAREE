@@ -30,12 +30,14 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
         sa.ForeignKeyConstraint(['experiment_id'], ['research_experiments.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id'),
+        if_not_exists=True,
     )
     op.create_index(
-        op.f('ix_experiment_artifacts_experiment_id'), 'experiment_artifacts', ['experiment_id'], unique=False
+        op.f('ix_experiment_artifacts_experiment_id'), 'experiment_artifacts', ['experiment_id'], unique=False,
+        if_not_exists=True,
     )
 
 
 def downgrade() -> None:
-    op.drop_index(op.f('ix_experiment_artifacts_experiment_id'), table_name='experiment_artifacts')
-    op.drop_table('experiment_artifacts')
+    op.drop_index(op.f('ix_experiment_artifacts_experiment_id'), table_name='experiment_artifacts', if_exists=True)
+    op.drop_table('experiment_artifacts', if_exists=True)

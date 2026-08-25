@@ -27,7 +27,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
+
+from asaree.migrations.guards import create_foreign_key, drop_column
 
 revision: str = 'd5a3b90c71e4'
 down_revision: str | None = 'c4e8f1a70d92'
@@ -46,24 +49,27 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["experiment_id"], ["research_experiments.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["dataset_id"], ["registered_datasets.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("experiment_id", "dataset_id"),
+        if_not_exists=True,
     )
-    op.create_index("ix_experiment_datasets_dataset_id", "experiment_datasets", ["dataset_id"])
+    op.create_index("ix_experiment_datasets_dataset_id", "experiment_datasets", ["dataset_id"], if_not_exists=True)
 
     op.execute(
         """
         INSERT INTO experiment_datasets (experiment_id, dataset_id, position)
         SELECT id, dataset_id, 0 FROM research_experiments WHERE dataset_id IS NOT NULL
+        ON CONFLICT DO NOTHING
         """
     )
-    op.drop_column("research_experiments", "dataset_id")
+    drop_column("research_experiments", "dataset_id")
 
 
 def downgrade() -> None:
     op.add_column(
         "research_experiments",
         sa.Column("dataset_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
+        if_not_exists=True,
     )
-    op.create_foreign_key(
+    create_foreign_key(
         "research_experiments_dataset_id_fkey",
         "research_experiments",
         "registered_datasets",
@@ -71,7 +77,7 @@ def downgrade() -> None:
         ["id"],
         ondelete="SET NULL",
     )
-    op.create_index("ix_research_experiments_dataset_id", "research_experiments", ["dataset_id"])
+    op.create_index("ix_research_experiments_dataset_id", "research_experiments", ["dataset_id"], if_not_exists=True)
     # Lossy on purpose: only the first-wired dataset survives a collapse back
     # to a scalar column.
     op.execute(
@@ -86,5 +92,5 @@ def downgrade() -> None:
         WHERE d.experiment_id = e.id
         """
     )
-    op.drop_index("ix_experiment_datasets_dataset_id", table_name="experiment_datasets")
-    op.drop_table("experiment_datasets")
+    op.drop_index("ix_experiment_datasets_dataset_id", table_name="experiment_datasets", if_exists=True)
+    op.drop_table("experiment_datasets", if_exists=True)

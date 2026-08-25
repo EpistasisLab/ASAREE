@@ -11,6 +11,8 @@ from collections.abc import Sequence
 
 from alembic import op
 import sqlalchemy as sa
+
+from asaree.migrations.guards import drop_column
 from sqlalchemy.dialects import postgresql
 
 revision: str = '083bbfcb4692'
@@ -20,10 +22,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column('protocol_runs', sa.Column('cell_label', sa.String(length=255), nullable=True))
-    op.add_column('protocol_runs', sa.Column('factor_values', postgresql.JSONB(astext_type=sa.Text()), nullable=True))
+    op.add_column('protocol_runs', sa.Column('cell_label', sa.String(length=255), nullable=True), if_not_exists=True)
+    op.add_column('protocol_runs', sa.Column('factor_values', postgresql.JSONB(astext_type=sa.Text()), nullable=True), if_not_exists=True)
 
 
 def downgrade() -> None:
-    op.drop_column('protocol_runs', 'factor_values')
-    op.drop_column('protocol_runs', 'cell_label')
+    drop_column('protocol_runs', 'factor_values')
+    drop_column('protocol_runs', 'cell_label')

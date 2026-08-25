@@ -30,12 +30,13 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.drop_index("ix_research_experiments_name", table_name="research_experiments")
+    op.drop_index("ix_research_experiments_name", table_name="research_experiments", if_exists=True)
     op.create_index(
-        "uq_research_experiments_owner_name", "research_experiments", ["owner_id", "name"], unique=True
+        "uq_research_experiments_owner_name", "research_experiments", ["owner_id", "name"], unique=True,
+        if_not_exists=True,
     )
 
 
 def downgrade() -> None:
-    op.drop_index("uq_research_experiments_owner_name", table_name="research_experiments")
-    op.create_index("ix_research_experiments_name", "research_experiments", ["name"], unique=True)
+    op.drop_index("uq_research_experiments_owner_name", table_name="research_experiments", if_exists=True)
+    op.create_index("ix_research_experiments_name", "research_experiments", ["name"], unique=True, if_not_exists=True)

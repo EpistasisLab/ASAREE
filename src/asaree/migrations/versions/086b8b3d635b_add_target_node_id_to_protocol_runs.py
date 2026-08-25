@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from alembic import op
 import sqlalchemy as sa
 
+from asaree.migrations.guards import drop_column
+
 revision: str = '086b8b3d635b'
 down_revision: str | None = '308e54c0539f'
 branch_labels: str | Sequence[str] | None = None
@@ -19,8 +21,8 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column('protocol_runs', sa.Column('target_node_id', sa.String(length=255), nullable=True))
+    op.add_column('protocol_runs', sa.Column('target_node_id', sa.String(length=255), nullable=True), if_not_exists=True)
 
 
 def downgrade() -> None:
-    op.drop_column('protocol_runs', 'target_node_id')
+    drop_column('protocol_runs', 'target_node_id')

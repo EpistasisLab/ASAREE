@@ -30,6 +30,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
+from asaree.migrations.guards import drop_column
 from alembic import op
 
 revision: str = 'c4e8f1a70d92'
@@ -39,14 +41,14 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("registered_datasets", sa.Column("split_method", sa.String(length=16), nullable=True))
-    op.add_column("registered_datasets", sa.Column("split_group_column", sa.String(length=255), nullable=True))
-    op.add_column("registered_datasets", sa.Column("split_test_size", sa.Float(), nullable=True))
-    op.add_column("registered_datasets", sa.Column("split_seed", sa.Integer(), nullable=True))
+    op.add_column("registered_datasets", sa.Column("split_method", sa.String(length=16), nullable=True), if_not_exists=True)
+    op.add_column("registered_datasets", sa.Column("split_group_column", sa.String(length=255), nullable=True), if_not_exists=True)
+    op.add_column("registered_datasets", sa.Column("split_test_size", sa.Float(), nullable=True), if_not_exists=True)
+    op.add_column("registered_datasets", sa.Column("split_seed", sa.Integer(), nullable=True), if_not_exists=True)
 
 
 def downgrade() -> None:
-    op.drop_column("registered_datasets", "split_seed")
-    op.drop_column("registered_datasets", "split_test_size")
-    op.drop_column("registered_datasets", "split_group_column")
-    op.drop_column("registered_datasets", "split_method")
+    drop_column("registered_datasets", "split_seed")
+    drop_column("registered_datasets", "split_test_size")
+    drop_column("registered_datasets", "split_group_column")
+    drop_column("registered_datasets", "split_method")

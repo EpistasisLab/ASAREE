@@ -470,4 +470,11 @@ export const llmSettingsApi = {
   testConnection: (provider: LLMProvider) => request<LLMConnectionCheck>(`/llm-settings/${provider}/connection`),
 }
 
+export const versionApi = {
+  // Unauthenticated, so the badge also renders on the login screen -- and it
+  // goes through `request` anyway, which just means an Authorization header
+  // rides along when there happens to be a token.
+  get: () => request<{ version: string }>('/version'),
+}
+
 export { tryRefreshToken }

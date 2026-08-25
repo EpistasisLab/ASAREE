@@ -1148,6 +1148,28 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
   }
 
+  // The third way a binding can disappear, alongside unbinding a field in an
+  // inspector (updateNodeData) and deleting the factor in the Design tab
+  // (DesignTab's own sweep): deleting the NODE that carried it. Without this,
+  // the factor outlived the only thing that referenced it -- still listed in
+  // the Design tab, still multiplying the cell count, and no longer reachable
+  // from any node's inspector to unbind.
+  //
+  // Runs for both delete paths (deleteNode and xyflow's onNodesDelete), and
+  // deliberately reuses pruneOrphanedFactors rather than deleting outright,
+  // so a factor shared across several nodes survives losing just one of them.
+  function pruneFactorsForDeletedNodes(deleted: Node[]) {
+    const deletedIds = new Set(deleted.map((n) => n.id))
+    const removedFactorNames = deleted.flatMap((n) =>
+      Object.values((n.data as { factor_bindings?: Record<string, string> } | undefined)?.factor_bindings ?? {}),
+    )
+    if (removedFactorNames.length === 0) return
+    void pruneOrphanedFactors(
+      nodes.filter((n) => !deletedIds.has(n.id)),
+      removedFactorNames,
+    )
+  }
+
   function updateNodeData(
     nodeId: string,
     data:
@@ -1243,9 +1265,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   )
 
   function deleteNode(nodeId: string) {
+    const node = nodes.find((n) => n.id === nodeId)
     setNodes((nds) => nds.filter((n) => n.id !== nodeId))
     setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId))
     setSelectedNodeId(null)
+    if (node) pruneFactorsForDeletedNodes([node])
   }
 
   // The node inspector's own Delete button calls deleteNode directly --
@@ -1330,6 +1354,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onPaneClick={() => setSelectedNodeId(null)}
             onNodesDelete={(deleted) => {
               if (deleted.some((n) => n.id === selectedNodeId)) setSelectedNodeId(null)
+              pruneFactorsForDeletedNodes(deleted)
             }}
             fitView
             fitViewOptions={{ maxZoom: DEFAULT_ZOOM }}

@@ -214,6 +214,69 @@ def test_predefined_split(tmp: Path, clf_path: str) -> None:
     check("split column excluded from features", "split" not in out["feature_columns"])
 
 
+def test_train_test_split_writes_the_halves(tmp: Path, clf_path: str, grouped_path: str, reg_path: str) -> None:
+    print("\ntrain_test_split")
+    out = json.loads(server.train_test_split(data_path=clf_path, target_column="outcome", test_size=0.25))
+    check("no error", "error" not in out, str(out)[:200])
+    train_path, test_path = out.get("train_path", ""), out.get("test_path", "")
+    check("both files exist", Path(train_path).is_file() and Path(test_path).is_file(), f"{train_path} {test_path}")
+    check("sides sum to the source", out["train"]["n_rows"] + out["test"]["n_rows"] == 400, str(out["split"]))
+    check("test side honors test_size", out["test"]["n_rows"] == 100, str(out["test"]))
+
+    # WHOLE rows, not the feature matrix: a written half that had dropped the
+    # target (or the group column) would be unusable for the fit it exists for.
+    written = pd.read_parquet(train_path)
+    check("target column is written out", "outcome" in written.columns, str(list(written.columns)))
+    check("every source column is written out", set(written.columns) == set(pd.read_csv(clf_path).columns))
+    check("the audit rides along", "warnings" in out.get("split", {}), str(out.get("split"))[:200])
+
+    # Idempotent: the output directory is named for the split's own hash, so
+    # re-running the same spec rewrites its own files instead of piling up.
+    again = json.loads(server.train_test_split(data_path=clf_path, target_column="outcome", test_size=0.25))
+    check("same spec, same destination", again["train_path"] == train_path)
+    check("same spec, same rows", again["train"]["sha256"] == out["train"]["sha256"])
+    differing = json.loads(server.train_test_split(data_path=clf_path, target_column="outcome", test_size=0.4))
+    check("a different spec writes elsewhere", differing["train_path"] != train_path)
+
+    # The whole point of materializing: fitting on the pair reproduces exactly
+    # this division rather than re-splitting the training file.
+    fit = json.loads(
+        server.fit_logistic_regression(
+            data_path=train_path,
+            target_column="outcome",
+            split_json=json.dumps({"strategy": "predefined", "test_path": test_path}),
+        )
+    )
+    refit = fit.get("split", {})
+    check("the fit reuses the written split", refit.get("n_test") == out["test"]["n_rows"], str(fit)[:300])
+
+    # A group split's bookkeeping column has to survive into the files, or the
+    # predefined re-read can't exclude it from the features either.
+    grouped = json.loads(
+        server.train_test_split(
+            data_path=grouped_path,
+            target_column="outcome",
+            split_json='{"strategy": "group", "group_column": "patient_id"}',
+            output_dir=str(tmp / "grouped_split"),
+        )
+    )
+    where = grouped.get("train_path", "")
+    check("output_dir is honored", where.startswith(str(tmp / "grouped_split")), where)
+    check("group column survives", "patient_id" in pd.read_parquet(grouped["train_path"]).columns)
+    check("groups stay on one side", grouped["split"].get("groups_in_both_splits") == 0, str(grouped["split"]))
+
+    # Splitting doesn't care what will be modelled, so a continuous target --
+    # which every fit tool here rejects -- is fine.
+    cont = json.loads(server.train_test_split(data_path=reg_path, target_column="price"))
+    check("a continuous target splits", "error" not in cont and cont.get("task_type") == "regression", str(cont)[:200])
+
+    missing = json.loads(server.train_test_split(data_path=clf_path, target_column="nope"))
+    check("an unknown target is reported", "not in dataset" in missing.get("error", ""), str(missing)[:200])
+    remote = json.loads(server.train_test_split(data_path="s3://bucket/d.csv", target_column="outcome"))
+    err = remote.get("error", "")
+    check("a remote dataset asks for output_dir", "output_dir is required" in err, err[:200])
+
+
 def test_fit_logistic_regression(clf_path: str) -> None:
     print("\nfit_logistic_regression -- binary")
     out = json.loads(server.fit_logistic_regression(data_path=clf_path, target_column="outcome"))
@@ -769,6 +832,7 @@ def test_tool_schemas_survive_the_guard() -> None:
     expected = {
         "describe_dataset",
         "describe_split",
+        "train_test_split",
         "fit_logistic_regression",
         "cross_validate_logistic_regression",
         "tune_logistic_regression",
@@ -802,6 +866,7 @@ def main() -> int:
         test_describe_split(clf_path)
         test_split_strategies(grouped_path)
         test_predefined_split(tmp, clf_path)
+        test_train_test_split_writes_the_halves(tmp, clf_path, grouped_path, reg_path)
         test_fit_logistic_regression(clf_path)
         test_fit_options(clf_path)
         test_fit_multiclass(multi_path)

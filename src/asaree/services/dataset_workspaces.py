@@ -2,7 +2,7 @@
 
 Extracted from ``mcp_servers/workspace_server.py``'s ``open_workspace`` so
 that ASAREE itself can seed a workspace *before* an agent's first turn --
-see ``protocol_execution._preseed_dataset_workspace``. Wiring a Dataset node
+see ``protocol_execution._resolve_node_dataset``. Wiring a Dataset node
 onto the canvas is meant to be the whole user-facing gesture; a researcher
 should not also have to know that a workspace is a thing an agent opens.
 
@@ -70,6 +70,7 @@ async def fetch_owned_registration(name: str, owner_id: uuid.UUID) -> dict[str, 
             return None
         return {
             "target_column": dataset.target_column,
+            "raw_path": dataset.raw_path,
             "train_path": dataset.train_path,
             "test_path": dataset.test_path,
             "dictionary_json": dataset.dictionary_json,
@@ -132,6 +133,25 @@ async def seed_cell_workspace(
     resolved_target = target_column or reg.get("target_column") or ""
     if not resolved_target:
         raise WorkspaceSeedError("target_column not provided and not set in registry.")
+
+    # A registration with no split can't seed a workspace, and saying so is
+    # better than the alternative: ``Workspace.open`` doesn't touch the files it
+    # is handed, so nulls here would create a workspace whose v0_raw names no
+    # data -- and ``open`` is idempotent, so that broken seed would survive
+    # every later re-open, including one made after the user finally splits the
+    # dataset. An unsplit dataset is a supported, expected state (registration
+    # stores only the raw file; splitting is a separate optional action), it
+    # just takes the other route: ``protocol_execution`` binds the raw file as
+    # the run's ambient ``data_path`` and the agent splits it itself with
+    # ``scikit-learn-mcp``'s ``train_test_split``. The staged workspace
+    # pipeline (DC/FTE/FS) is defined over a frozen train/test pair and has
+    # nothing to operate on until one exists.
+    if not (reg.get("train_path") and reg.get("test_path")):
+        raise WorkspaceSeedError(
+            f"Dataset '{dataset_name}' has no train/test split, so it has no workspace to open. "
+            "Work from the dataset file directly -- the sklearn tools resolve it from run context "
+            "and can make their own split (train_test_split) -- or split the dataset in ASAREE first."
+        )
 
     try:
         ws = Workspace.open(

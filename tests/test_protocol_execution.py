@@ -408,17 +408,35 @@ def test_build_user_input_states_the_dataset_is_already_open_when_preseeded() ->
     assert "tier_a__rep_0" not in result
 
 
-async def test_preseed_skipped_without_a_workspace_or_with_several_datasets() -> None:
-    # Both return "" before any DB or disk access: an unlinked protocol run
-    # has no cell workspace to seed, and several wired datasets are a real
-    # choice with no defensible default (mirrors resolve_dataset_name's own
-    # len == 1 rule) -- those keep the agent-driven open_workspace(name=...).
+def _registration(**overrides: object) -> dict[str, object]:
+    """A split registration as ``fetch_owned_registration`` returns one."""
+    return {
+        "target_column": "outcome",
+        "raw_path": "/data/raw.csv",
+        "train_path": "/data/train.parquet",
+        "test_path": "/data/test.parquet",
+        "dictionary_json": None,
+        **overrides,
+    }
+
+
+async def test_preseed_skipped_without_a_workspace_or_with_several_datasets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An unlinked protocol run has no cell workspace to seed, and several wired
+    # datasets are a real choice with no defensible default (mirrors
+    # resolve_dataset_name's own len == 1 rule) -- those keep the agent-driven
+    # open_workspace(name=...).
+    async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
+        return _registration()
+
+    monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
     agent, agent_llm_edge = _agent_with_llm("a")
     one = {
         "nodes": [agent, _dataset_node(dataset_name="solo")],
         "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
     }
-    assert await pe._preseed_dataset_workspace(one, "a", None, uuid.UUID(int=7)) == ""
+    assert await pe._resolve_node_dataset(one, "a", None, uuid.UUID(int=7)) == pe.NodeDataset()
 
     many = {
         "nodes": [
@@ -428,29 +446,98 @@ async def test_preseed_skipped_without_a_workspace_or_with_several_datasets() ->
         ],
         "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
     }
-    assert await pe._preseed_dataset_workspace(many, "a", "exp/cell", uuid.UUID(int=7)) == ""
+    # Still before any DB access at all: the len == 1 rule is checked first.
+    assert await pe._resolve_node_dataset(many, "a", "exp/cell", uuid.UUID(int=7)) == pe.NodeDataset()
 
 
 async def test_preseed_failure_falls_back_to_the_agent_driven_open(monkeypatch: pytest.MonkeyPatch) -> None:
     # A broken registration must not kill the run before its first turn: the
-    # seeding error is logged, "" comes back, and _build_user_input reverts to
-    # asking the agent to call open_workspace -- which surfaces the real error
-    # where someone is actually reading it.
+    # seeding error is logged, an empty NodeDataset comes back, and
+    # _build_user_input reverts to asking the agent to call open_workspace --
+    # which surfaces the real error where someone is actually reading it.
+    async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
+        return _registration()
+
     async def _boom(**_kwargs: object) -> None:
         raise pe.WorkspaceSeedError("Dataset 'gone' not found in registry.")
 
+    monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
     monkeypatch.setattr(pe, "seed_cell_workspace", _boom)
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {
         "nodes": [agent, _dataset_node(dataset_name="gone")],
         "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
     }
-    assert await pe._preseed_dataset_workspace(graph, "a", "exp/cell", uuid.UUID(int=7)) == ""
+    assert await pe._resolve_node_dataset(graph, "a", "exp/cell", uuid.UUID(int=7)) == pe.NodeDataset()
 
     result = pe._build_user_input(
         agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0", seeded_dataset=""
     )
     assert "Call open_workspace()" in result
+
+
+async def test_an_unsplit_dataset_binds_its_raw_file_instead_of_a_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Splitting in ASAREE is optional, so a registration can be a raw file with
+    # no train/test pair. There is no workspace to seed for one -- the staged
+    # pipeline is defined over a frozen split -- so the raw file itself becomes
+    # the run's data_path and the agent splits it with the sklearn tools.
+    async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
+        return _registration(train_path=None, test_path=None, raw_path="/data/spine/raw.csv")
+
+    def _no_workspace(workspace_id: str) -> tuple[str, str]:
+        return "", ""
+
+    async def _never(**_kwargs: object) -> None:
+        raise AssertionError("an unsplit dataset must not attempt to seed a workspace")
+
+    monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
+    monkeypatch.setattr(pe, "head_data_locator", _no_workspace)
+    monkeypatch.setattr(pe, "seed_cell_workspace", _never)
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spine-raw")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+
+    ambient, dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
+    assert dataset.unsplit_name == "spine-raw"
+    assert dataset.seeded_name == ""
+    assert ambient["data_path"] == "/data/spine/raw.csv"
+    assert ambient["target_column"] == "outcome"
+
+    # And the prompt says so, because a model left to infer it reaches for
+    # open_workspace -- which has nothing to open.
+    result = pe._build_user_input(
+        agent,
+        graph,
+        {},
+        experiment_id=uuid.UUID(int=1),
+        effective_cell_label="tier_a__rep_0",
+        unsplit_dataset=dataset.unsplit_name,
+    )
+    assert "has NOT been split" in result
+    assert "Do NOT call open_workspace" in result
+    assert "train_test_split" in result
+
+
+async def test_a_workspace_head_wins_over_an_unsplit_raw_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The raw file is a fallback, never an override: a cell with a workspace has
+    # already moved past the upload, and a Score step must fit the engineered
+    # matrix at HEAD rather than the raw CSV.
+    async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
+        return _registration(train_path=None, test_path=None)
+
+    monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
+    monkeypatch.setattr(pe, "head_data_locator", lambda wid: ("/ws/v2_fte/train.parquet", "outcome"))
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spine-raw")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    ambient, _dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
+    assert ambient["data_path"] == "/ws/v2_fte/train.parquet"
 
 
 def test_dataset_connector_grants_the_workspace_tools() -> None:
@@ -661,24 +748,24 @@ async def test_node_run_context_seeds_before_reading_head(monkeypatch: pytest.Mo
     # HEAD version, which doesn't exist until the pre-seed has created it.
     calls: list[str] = []
 
-    async def _seed(graph: dict, node_id: str, workspace_id: str | None, owner_id: uuid.UUID) -> str:
+    async def _seed(graph: dict, node_id: str, workspace_id: str | None, owner_id: uuid.UUID) -> pe.NodeDataset:
         calls.append("seed")
-        return "spinal-fusion-v1"
+        return pe.NodeDataset(seeded_name="spinal-fusion-v1")
 
     def _locator(workspace_id: str) -> tuple[str, str]:
         calls.append("locator")
         return "/ws/train.parquet", "outcome"
 
-    monkeypatch.setattr(pe, "_preseed_dataset_workspace", _seed)
+    monkeypatch.setattr(pe, "_resolve_node_dataset", _seed)
     monkeypatch.setattr(pe, "head_data_locator", _locator)
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {
         "nodes": [agent, _dataset_node(dataset_name="spinal-fusion-v1")],
         "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
     }
-    ambient, seeded = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
+    ambient, dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
     assert calls == ["seed", "locator"]
-    assert seeded == "spinal-fusion-v1"
+    assert dataset.seeded_name == "spinal-fusion-v1"
     assert ambient["data_path"] == "/ws/train.parquet"
 
 
@@ -1004,7 +1091,7 @@ def test_apply_factor_bindings_swaps_the_whole_dataset_per_cell() -> None:
     node's whole `config` bound to a 'dataset_config' factor resolves to
     exactly ONE dataset per cell -- which is what keeps a cell's single
     workspace (keyed by experiment_id/cell_label) holding a single dataset,
-    and what lets _preseed_dataset_workspace's len == 1 rule fire."""
+    and what lets _resolve_node_dataset's len == 1 rule fire."""
     agent, agent_llm_edge = _agent_with_llm("a")
     dataset = _dataset_node(dataset_name="cohort-a", dataset_id="d1")
     dataset["data"]["factor_bindings"] = {"config": "Agent:Dataset:Dataset"}

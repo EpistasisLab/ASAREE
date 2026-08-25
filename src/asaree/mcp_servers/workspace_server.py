@@ -316,7 +316,7 @@ async def open_workspace(
         return json.dumps({"error": f"owner resolution: {e}"})
 
     # The seeding itself is shared with ASAREE's own pre-seeding at run start
-    # (protocol_execution._preseed_dataset_workspace), so a run that never
+    # (protocol_execution._resolve_node_dataset), so a run that never
     # calls this tool still lands in exactly the same on-disk state.
     try:
         seeded = await seed_cell_workspace(

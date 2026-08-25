@@ -38,7 +38,7 @@ _READERS = {
 }
 
 
-def _is_remote(locator: str) -> bool:
+def is_remote(locator: str) -> bool:
     return urlparse(locator).scheme in {"s3", "gs", "gcs", "http", "https", "abfs", "az"}
 
 
@@ -47,7 +47,7 @@ def load_frame(data_path: str) -> pd.DataFrame:
     locator = data_path.strip()
     if not locator:
         raise DataError("data_path is required")
-    if not _is_remote(locator) and not Path(locator).is_file():
+    if not is_remote(locator) and not Path(locator).is_file():
         raise DataError(f"no such file: {locator!r}")
     reader = _READERS.get(Path(urlparse(locator).path).suffix.lower(), pd.read_csv)
     try:

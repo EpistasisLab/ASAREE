@@ -29,6 +29,10 @@ untouched until the final scorecard.
 than an implicit ``test_size``. A random split of non-independent rows inflates
 an AUC and looks *better* for it, so grouped and temporal strategies are
 available and the realized split is checked for the known leaks on every call.
+It is also a *value*, so an unsplit file is a complete input: every tool cuts
+its own holdout from whatever it is handed, and nothing here requires a
+pre-split dataset. ``train_test_split`` exists for the one thing that spec
+can't be -- two files somebody else can read -- and is optional everywhere.
 
 Nothing here imports ASAREE. The dataset arrives as a path or URI
 (:mod:`data`) -- either as an argument or, when the client binds one for the
@@ -53,7 +57,7 @@ from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
 
 from scikit_learn_mcp import forest, logistic, profile, scoring, splitting
-from scikit_learn_mcp.data import DataError, frame_sha256, load_frame, split_xy
+from scikit_learn_mcp.data import DataError, frame_sha256, is_remote, load_frame, split_xy
 
 # What this server tells a client it is, during the initialize handshake --
 # the server-level counterpart to each tool's own description. Written for the
@@ -66,7 +70,10 @@ computed on data the model never saw.
 
 Start with describe_dataset to see the columns and pick a target, then \
 describe_split to check the split isn't leaking (grouped or temporal data \
-needs a strategy other than random). Then fit: logistic_regression and \
+needs a strategy other than random). The dataset does NOT need to be split \
+beforehand: every tool holds out its own test set from the file it is given, \
+and train_test_split is only for when you need the two halves to exist as \
+files. Then fit: logistic_regression and \
 random_forest each have a fit_/cross_validate_/tune_ trio, and they share \
 their split, scoring and provenance blocks, so running both gives directly \
 comparable results.
@@ -437,6 +444,137 @@ def describe_split(
             "feature_columns": [str(c) for c in prep.split.x_train.columns],
             "data_sha256": prep.data_sha256,
             "split_sha256": splitting.spec_sha256(prep.spec, prep.data_sha256),
+        }
+    )
+
+
+def _split_output_dir(data_path: str, output_dir: str, split_sha256: str) -> Path:
+    """Where ``train_test_split`` writes, defaulting to beside the source file.
+
+    Named for the split's own hash, so re-running the same spec on the same
+    file overwrites its own output instead of accumulating near-duplicate
+    directories, while a different spec is visibly a different split rather
+    than a silent overwrite of the last one.
+    """
+    if output_dir.strip():
+        return Path(output_dir.strip())
+    return Path(data_path).resolve().parent / f"split_{split_sha256[:12]}"
+
+
+def _require_writable_destination(data_path: str, output_dir: str) -> None:
+    """Reject a remote dataset with nowhere to write, before reading anything.
+
+    Up front rather than after the load: fetching the file and computing the
+    split only to find there is no destination wastes the expensive part of the
+    call, and buries the real problem under whatever the remote read said.
+    """
+    if not output_dir.strip() and is_remote(data_path):
+        raise DataError(
+            f"output_dir is required when the dataset is remote ({data_path!r}) -- "
+            "there is nowhere local to write the split beside it."
+        )
+
+
+def _write_side(frame: pd.DataFrame, index: Any, directory: Path, name: str) -> dict[str, Any]:
+    rows = frame.loc[index].drop(columns=[splitting.MARKER_COLUMN], errors="ignore").reset_index(drop=True)
+    path = directory / f"{name}.parquet"
+    rows.to_parquet(path, index=False)
+    return {"path": str(path), "n_rows": int(len(rows)), "sha256": frame_sha256(rows)}
+
+
+@mcp.tool()
+@_guarded
+def train_test_split(
+    data_path: str = "",
+    target_column: str = "",
+    split_json: str = "",
+    test_size: float = 0.2,
+    random_seed: int = 42,
+    stratify: bool = True,
+    output_dir: str = "",
+    ctx: Context | None = None,
+) -> str:
+    """Divide a dataset into train/test files, audited, and report where they landed.
+
+    You do NOT need this to fit a model: every tool here already holds out its
+    own test split from whatever file it is given, so a raw, never-split
+    dataset is a perfectly good ``data_path``. Reach for this when the two
+    halves have to *exist as files* -- to hand the training set to another
+    tool, to score several runs on one frozen holdout, or to keep the split as
+    an artifact of the experiment.
+
+    Writes ``train.parquet`` and ``test.parquet`` (whole rows, every column,
+    not the feature matrix) and returns their paths, row counts and hashes
+    alongside the same leakage audit ``describe_split`` reports. Re-running the
+    same spec on the same file rewrites the same two files rather than making
+    new ones.
+
+    To fit on exactly this division afterwards, pass the training file as
+    ``data_path`` and ``split_json='{"strategy": "predefined", "test_path":
+    "<the test path>"}'`` -- the response spells that out. Fitting on the
+    training file alone would instead split *it* again, scoring on a slice of
+    training data while the real holdout sits unused.
+
+    Works for a continuous target too, unlike the fit tools here: splitting
+    doesn't care what will be modelled (the audit just omits the
+    classification-only checks).
+
+    Args:
+        data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
+            Optional when the client bound this step's dataset ambiently -- omit it
+            there rather than guessing; a workspace or session id is not a path.
+        target_column: Column to predict. Optional when bound ambiently. Needed
+            even here: it drives stratification and the class-balance audit.
+        split_json: Split spec, exactly as ``describe_split`` documents it --
+            use ``group``/``time`` for repeated-measures or time-ordered data.
+        test_size: Held-out fraction, strictly between 0 and 1.
+        random_seed: Seed for the split.
+        stratify: Keep the class balance equal across sides (classification).
+        output_dir: Where to write. Defaults to a ``split_<hash>`` directory
+            beside the dataset; required for a remote dataset.
+    """
+    data_path, target_column = _resolve_dataset(data_path, target_column, ctx)
+    _require_writable_destination(data_path, output_dir)
+    spec = splitting.parse_spec(split_json, test_size=test_size, random_seed=random_seed, stratify=stratify)
+    frame, spec = splitting.load_for_spec(data_path, spec)
+    if target_column not in frame.columns:
+        cols = ", ".join(map(str, frame.columns[:25]))
+        raise DataError(f"target column {target_column!r} not in dataset; columns are: {cols}")
+
+    # Unlike the fit tools, a continuous target is fine here -- it only decides
+    # whether stratification and the class-balance checks apply.
+    task_type = profile.infer_task_type(frame[target_column])
+    classification = task_type in _CLASSIFICATION
+    split = splitting.apply_spec(frame, target_column, spec, classification=classification)
+    audit = splitting.audit(split, spec, classification=classification)
+
+    data_sha256 = frame_sha256(frame)
+    split_sha256 = splitting.spec_sha256(spec, data_sha256)
+    directory = _split_output_dir(data_path, output_dir, split_sha256)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        train = _write_side(frame, split.train_index, directory, "train")
+        test = _write_side(frame, split.test_index, directory, "test")
+    except OSError as e:
+        raise DataError(f"could not write the split to {str(directory)!r}: {e}") from e
+
+    return scoring.dumps(
+        {
+            "train_path": train["path"],
+            "test_path": test["path"],
+            "train": train,
+            "test": test,
+            "task_type": task_type,
+            "target_column": target_column,
+            "split": {**spec.as_dict(), **audit},
+            "data_sha256": data_sha256,
+            "split_sha256": split_sha256,
+            "next": (
+                f"To fit on this exact division, call a fit_/cross_validate_/tune_ tool with "
+                f"data_path='{train['path']}' and "
+                f'split_json=\'{{"strategy": "predefined", "test_path": "{test["path"]}"}}\'. '
+                "Passing the training file on its own would split it again and leave this holdout unused."
+            ),
         }
     )
 

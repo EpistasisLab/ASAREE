@@ -16,7 +16,10 @@ their AUCs are not comparable however close they look.
 
 The spec stays a value, not a stored artifact: a small JSON object that
 deterministically reproduces the same split from the same file, so nothing has
-to be materialized to disk or carried between calls as an id.
+to be materialized to disk or carried between calls as an id. ``server``'s
+``train_test_split`` tool can write the two halves out anyway, for a caller who
+needs the split as files it can hand elsewhere -- but that is an export of this
+value, not a second source of truth, and the fit tools never require it.
 """
 
 from __future__ import annotations
@@ -41,7 +44,7 @@ from scikit_learn_mcp import profile
 from scikit_learn_mcp.data import DataError, load_frame
 
 STRATEGIES = ("random", "group", "time", "predefined")
-_MARKER = "__split__"
+MARKER_COLUMN = "__split__"
 
 
 class SplitError(Exception):
@@ -71,7 +74,7 @@ class SplitSpec:
         }
         for key in ("group_column", "time_column", "split_column", "test_path"):
             value = getattr(self, key)
-            if value and value != _MARKER:
+            if value and value != MARKER_COLUMN:
                 base[key] = value
         return base
 
@@ -87,6 +90,15 @@ class Split:
     groups_train: pd.Series | None
     groups_test: pd.Series | None
     info: dict[str, Any] = field(default_factory=dict)
+    # Labels into the frame this split was cut from, kept so a caller can
+    # recover the WHOLE rows on each side rather than the modeling view above:
+    # ``x_train`` has already had the target and the split's bookkeeping
+    # columns removed, and writing that out as "the training set" would silently
+    # drop the group/time column a downstream reader needs to reproduce the
+    # same division. Only ``train_test_split`` uses these; every fit path reads
+    # x/y.
+    train_index: np.ndarray | None = None
+    test_index: np.ndarray | None = None
 
 
 def parse_spec(
@@ -175,12 +187,12 @@ def load_for_spec(data_path: str, spec: SplitSpec) -> tuple[pd.DataFrame, SplitS
         raise SplitError(f"test_path is missing column(s) present in the training file: {missing[:10]}")
     combined = pd.concat(
         [
-            frame.assign(**{_MARKER: "train"}),
-            test_frame.reindex(columns=frame.columns).assign(**{_MARKER: "test"}),
+            frame.assign(**{MARKER_COLUMN: "train"}),
+            test_frame.reindex(columns=frame.columns).assign(**{MARKER_COLUMN: "test"}),
         ],
         ignore_index=True,
     )
-    return combined, replace(spec, split_column=_MARKER)
+    return combined, replace(spec, split_column=MARKER_COLUMN)
 
 
 def _column(frame: pd.DataFrame, name: str, role: str) -> pd.Series:
@@ -241,6 +253,8 @@ def apply_spec(frame: pd.DataFrame, target_column: str, spec: SplitSpec, *, clas
         groups_train=None if groups is None else groups.loc[train_idx].reset_index(drop=True),
         groups_test=None if groups is None else groups.loc[test_idx].reset_index(drop=True),
         info=info,
+        train_index=train_idx,
+        test_index=test_idx,
     )
 
 
@@ -353,7 +367,7 @@ def _predefined(
         index[(marker == "test").to_numpy()],
         {
             "strategy": "predefined",
-            "source": "test_path" if spec.split_column == _MARKER else spec.split_column,
+            "source": "test_path" if spec.split_column == MARKER_COLUMN else spec.split_column,
             "stratified": False,
         },
     )

@@ -1224,7 +1224,14 @@ def _run_script(
     family: str,
     include_curves: bool = False,
 ) -> str:
-    """Shared body of both script tools: load, split, exec on train, score on test."""
+    """Body of the script tool: load, split, exec on train, score on test.
+
+    Kept separate from the tool that calls it, and parameterised by
+    ``extra_names``/``family`` rather than hardcoding either, because nothing
+    in here is specific to an estimator. That is the reason there is one
+    script tool and not one per model family -- a second would differ only in
+    which names it pre-binds as a convenience.
+    """
     code_sha256 = hashlib.sha256(code.encode("utf-8")).hexdigest()
     base = {"model_family": family, "code_sha256": code_sha256}
 

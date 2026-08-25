@@ -27,11 +27,13 @@ from typing import Any
 
 import pandas as pd
 from asaree_workspace_core import (
+    SEED_VERSION,
     STAGE_VERSION,
     Workspace,
     WorkspaceError,
     make_workspace_id,
     provenance,
+    resolve_dataset_name_from_ctx,
     resolve_owner_id_from_ctx,
     resolve_workspace_id_from_ctx,
 )
@@ -299,9 +301,9 @@ def _publish_data_dictionary(ws: Workspace, dictionary_json: str | None) -> bool
 
 @mcp.tool()
 async def open_workspace(
-    experiment_id: str,
-    cell_label: str,
-    name: str,
+    experiment_id: str = "",
+    cell_label: str = "",
+    name: str = "",
     target_column: str = "",
     stage: str = "",
     ctx: Context[Any, Any, Any] | None = None,
@@ -317,11 +319,19 @@ async def open_workspace(
     in ``accepted_stages``. The response describes the TRAINING split only; the
     held-out test rows are never surfaced (leakage guard).
 
+    Every argument is optional in a run started by ASAREE: the workspace and the
+    wired dataset both arrive as ambient request ``_meta``, so the usual call is
+    a bare ``open_workspace()``. Pass an argument only to override what the run
+    already knows, or when calling from outside a run.
+
     Args:
         experiment_id: The experiment this cell belongs to (workspace namespace).
-        cell_label: Safe per-cell label.
+            Optional — with cell_label, resolved from the ambient workspace_id.
+        cell_label: Safe per-cell label. Optional, as above.
         name: Registered dataset name (must be a pre-split train/test registration,
-            and owned by the user who started this run).
+            and owned by the user who started this run). Optional — resolved from
+            _meta when the run has exactly one dataset wired; with several, this
+            picks between them and the error lists the candidates.
         target_column: Override target column; defaults to the registry's.
         stage: For a stage migrated to the scratch-folder handoff (see
             SCRATCH_STAGES) — one of "dc"/"fte"/"fs" — (re)materializes that
@@ -329,8 +339,39 @@ async def open_workspace(
             calling domain server's tools have a clean starting point. Omit for
             stages still on the old shared-library flow.
     """
+    # Both halves of the workspace id, or neither: a half-specified pair would
+    # have to be reconciled against the ambient id, and there is no sensible
+    # answer when they disagree.
+    if experiment_id and cell_label:
+        composed = ""
+    elif experiment_id or cell_label:
+        return json.dumps({"error": "pass experiment_id and cell_label together, or neither (both come from _meta)."})
+    else:
+        composed = "resolve"
     try:
-        reg, err = await _fetch_owned_registration(name, ctx)
+        if composed:
+            workspace_id = resolve_workspace_id_from_ctx("", ctx)
+        else:
+            workspace_id = make_workspace_id(experiment_id, cell_label)
+    except WorkspaceError as e:
+        return json.dumps({"error": f"workspace: {e}"})
+
+    resolved_name, candidates = resolve_dataset_name_from_ctx(name, ctx)
+    if not resolved_name:
+        return json.dumps(
+            {
+                "error": "name not provided and not resolvable from _meta"
+                + (
+                    f"; this run has {len(candidates)} datasets wired ({', '.join(candidates)}) "
+                    "— pass the one this cell should use."
+                    if candidates
+                    else " (no dataset is wired into this run)."
+                )
+            }
+        )
+
+    try:
+        reg, err = await _fetch_owned_registration(resolved_name, ctx)
     except WorkspaceError as e:
         return json.dumps({"error": f"owner resolution: {e}"})
     if err is not None:
@@ -342,13 +383,29 @@ async def open_workspace(
         return json.dumps({"error": "target_column not provided and not set in registry."})
 
     try:
-        workspace_id = make_workspace_id(experiment_id, cell_label)
         ws = Workspace.open(
             workspace_id,
             target_column=resolved_target,
             seed_train_path=reg["train_path"],
             seed_test_path=reg["test_path"],
         )
+        # Workspace.open is idempotent by design (a resumed cell must keep its
+        # accepted versions), which means a SECOND dataset opened into the same
+        # cell silently gets the first one's data back. A cell workspace is
+        # keyed by experiment_id/cell_label only -- `name` is not part of the
+        # id -- so two datasets cannot both live here, and the ambient
+        # workspace_id every downstream stage tool resolves is a single value
+        # anyway. Report the collision instead of handing back a workspace
+        # holding data the caller didn't ask for.
+        seeded = next((v for v in ws.load_state().get("versions", []) if v.get("id") == SEED_VERSION), None)
+        if seeded is not None and seeded.get("train") not in (None, reg["train_path"]):
+            return json.dumps(
+                {
+                    "error": f"workspace {workspace_id!r} is already seeded from a different dataset. "
+                    f"A cell workspace holds one dataset; {resolved_name!r} needs its own cell.",
+                    "workspace_id": workspace_id,
+                }
+            )
         X_train, y_train, X_test, y_test = ws.read_head()  # noqa: N806 — matches sklearn convention throughout
         if stage in SCRATCH_STAGES:
             _seed_scratch(ws, stage, resolved_target)
@@ -361,6 +418,9 @@ async def open_workspace(
     accepted_stages = [s for s in _STAGES if ws.has_accepted(s)]
     response: dict[str, object] = {
         "workspace_id": workspace_id,
+        # Echoed because both may have been resolved from ambient _meta rather
+        # than passed: the caller should be able to see what it actually opened.
+        "dataset_name": resolved_name,
         "head": ws.load_state().get("head"),
         "target_column": resolved_target,
         "n_train": int(len(X_train)),
@@ -378,7 +438,9 @@ async def open_workspace(
     has_dict = _publish_data_dictionary(ws, reg.get("dictionary_json"))
     response["data_dictionary_available"] = has_dict
     if has_dict:
-        response["data_dictionary_hint"] = f"Call get_data_dictionary(name='{name}', columns='col1,col2') for detail."
+        response["data_dictionary_hint"] = (
+            f"Call get_data_dictionary(name='{resolved_name}', columns='col1,col2') for detail."
+        )
     return json.dumps(response)
 
 

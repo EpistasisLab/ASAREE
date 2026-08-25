@@ -37,9 +37,13 @@ class CreateRunRequest(BaseModel):
     agent_id: uuid.UUID
     user_input: str
     pattern_overrides: dict[str, Any] | None = None
-    # e.g. {"workspace_id": "..."} — the orchestrator lifts workspace_id out of
-    # this into every MCP tool call's ambient _meta (Motoro runner.py
-    # docstring). Anything else here is just carried, not interpreted.
+    # Two keys the orchestrator lifts out of this into every MCP tool call's
+    # ambient _meta (Motoro runner.py docstring): "workspace_id", and
+    # "ambient_meta" — a dict of ASAREE's own references, sent under
+    # motoro.ambient.<key>, e.g. {"dataset_names": [...]}. Both exist so a tool
+    # receives an id out-of-band instead of the model retyping it out of its
+    # prompt; see _ambient_meta_for in services/protocol_execution.py.
+    # Anything else here is just carried, not interpreted.
     metadata: dict[str, Any] | None = None
     # Shallow-merged onto the agent's own model_config_data at execute time —
     # e.g. {"model": "claude-opus-5", "effort": "xhigh"} to vary the model/

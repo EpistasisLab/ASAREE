@@ -323,7 +323,11 @@ def test_build_user_input_appends_upstream_context_after_prompt() -> None:
     assert result == "Polish the draft\n\nUpstream context:\n[u]: draft text here"
 
 
-def test_build_user_input_appends_dataset_context_when_wired() -> None:
+def test_build_user_input_cues_dataset_without_dictating_ids() -> None:
+    # The ids the prompt used to spell out -- experiment_id, cell_label, the
+    # dataset name -- all reach open_workspace as ambient _meta now. Anything
+    # the model has to retype is something it can retype wrong, so the prompt
+    # keeps only the part _meta can't carry: that there IS a dataset waiting.
     agent, agent_llm_edge = _agent_with_llm("a")
     dataset = _dataset_node(dataset_name="spinal-fusion-v1")
     graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
@@ -331,12 +335,36 @@ def test_build_user_input_appends_dataset_context_when_wired() -> None:
         agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
     )
     assert "Dataset context:" in result
-    assert 'name="spinal-fusion-v1"' in result
-    assert f'experiment_id="{uuid.UUID(int=1)}"' in result
-    assert 'cell_label="tier_a__rep_0"' in result
+    assert "open_workspace()" in result
+    assert "spinal-fusion-v1" not in result
+    assert str(uuid.UUID(int=1)) not in result
+    assert "tier_a__rep_0" not in result
+
+
+def test_ambient_meta_carries_every_wired_dataset_name() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [
+            agent,
+            _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1"),
+            _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2"),
+        ],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
+    }
+    assert pe._ambient_meta_for(graph, "a") == {"dataset_names": ["cohort-a", "cohort-b"]}
+
+
+def test_ambient_meta_empty_without_a_dataset() -> None:
+    # Motoro skips an absent/empty ambient_meta, so a node with no references
+    # must produce nothing rather than an empty-list key.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    assert pe._ambient_meta_for({"nodes": [agent], "edges": [agent_llm_edge]}, "a") == {}
 
 
 def test_build_user_input_names_every_wired_dataset() -> None:
+    # With several wired, `name` is the one id that stays in the prompt: the
+    # ambient fallback refuses to guess among them (see resolve_dataset_name),
+    # so the model has to choose. experiment_id/cell_label still don't appear.
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {
         "nodes": [
@@ -352,17 +380,16 @@ def test_build_user_input_names_every_wired_dataset() -> None:
     assert "2 datasets are registered for this run:" in result
     assert '- "cohort-a"' in result
     assert '- "cohort-b"' in result
-    # One experiment_id/cell_label for all of them -- `name` is what separates
-    # the workspaces.
-    assert f'experiment_id="{uuid.UUID(int=1)}"' in result
-    assert 'cell_label="tier_a__rep_0"' in result
+    assert str(uuid.UUID(int=1)) not in result
+    assert "tier_a__rep_0" not in result
 
 
-def test_build_user_input_appends_dataset_context_from_legacy_tool_handle() -> None:
+def test_dataset_resolves_from_legacy_tool_handle() -> None:
     # A graph saved before the Dataset connector existed still has its
     # dataset edge on the Tool handle (see _LEGACY_DATASET_HANDLES) -- it
     # keeps resolving identically, so an old protocol runs unchanged even if
     # it's never opened in the canvas (which would rewrite the handle).
+    # Asserted against the ambient meta, which is where the name goes now.
     agent, agent_llm_edge = _agent_with_llm("a")
     dataset = _dataset_node(dataset_name="spinal-fusion-v1")
     graph = {
@@ -370,13 +397,13 @@ def test_build_user_input_appends_dataset_context_from_legacy_tool_handle() -> N
         "edges": [agent_llm_edge, _dataset_edge("dataset1", "a", handle="tool")],
     }
     topological_order(graph)  # legacy handle is still a valid wiring, not a validation error
-    result = pe._build_user_input(
+    assert pe._ambient_meta_for(graph, "a") == {"dataset_names": ["spinal-fusion-v1"]}
+    assert "Dataset context:" in pe._build_user_input(
         agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
     )
-    assert 'name="spinal-fusion-v1"' in result
 
 
-def test_build_user_input_appends_dataset_context_from_legacy_resource_handle() -> None:
+def test_dataset_resolves_from_legacy_resource_handle() -> None:
     # Ditto for the intermediate spelling: the slot existed but was called
     # "Resource" (migration 3f1a7c9b2e04) before being renamed after the only
     # node type it accepts (b7c2d9e14a35).
@@ -387,10 +414,10 @@ def test_build_user_input_appends_dataset_context_from_legacy_resource_handle() 
         "edges": [agent_llm_edge, _dataset_edge("dataset1", "a", handle="resource")],
     }
     topological_order(graph)
-    result = pe._build_user_input(
+    assert pe._ambient_meta_for(graph, "a") == {"dataset_names": ["spinal-fusion-v1"]}
+    assert "Dataset context:" in pe._build_user_input(
         agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0"
     )
-    assert 'name="spinal-fusion-v1"' in result
 
 
 def test_build_user_input_omits_dataset_context_when_disabled() -> None:

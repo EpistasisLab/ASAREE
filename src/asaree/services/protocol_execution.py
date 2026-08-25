@@ -114,6 +114,38 @@ class ProtocolValidationError(Exception):
     """The graph can't be run as-is (empty, a cycle, or a malformed critic-gate topology)."""
 
 
+# ---------------------------------------------------------------------------
+# Adding a connector? Pick its route first.
+# ---------------------------------------------------------------------------
+# Every connector contributes exactly one of three things, and which one it is
+# decides where it goes. Getting this wrong is how something ends up narrated
+# into a prompt that should never have been in the context window at all. The
+# same three routes are written up from the engine's side in Motoro's
+# ``engine/sense.py`` -- read that docstring alongside this one.
+#
+# 1. CAPABILITY -- what the agent can DO: the model, the execution pattern, the
+#    tool allow-list, knowledge servers, skills. Route: resolve it into the
+#    agent's stored config (``_resolve_llm_config``, ``_resolve_tool_config``,
+#    ``_resolve_pattern_config``, ``_resolve_skill_config``, ...) and let
+#    Motoro carry it on ``RunContext``. Never prompt text: a capability is
+#    something the runtime arranges, not something the model is told about.
+#
+# 2. REFERENCE -- an id pointing at data held somewhere else: the workspace,
+#    a registered dataset, an artifact path. Route: ``_ambient_meta_for``, which
+#    Motoro binds into every MCP tool call's request ``_meta``. The model never
+#    sees it and so can never mistype it; the tool loads the contents on demand.
+#    The Dataset connector is the worked example -- it used to spell out an
+#    ``open_workspace(...)`` call in the prompt and hope for a clean
+#    transcription, and now the tool takes no arguments at all.
+#
+# 3. CONTENT -- text that genuinely belongs in the prompt and is small enough to
+#    live there: the node's own prompt, an upstream node's ``output_text``.
+#    Route: ``_build_user_input``. This is the only route that costs context
+#    window on every single turn, so it is the last resort, not the default.
+#
+# A new connector is almost always 1 or 2. If it seems to be 3, check whether
+# what you actually have is a reference to something a tool could fetch.
+#
 # The connector-typed slots on an agent/critic_gate node. ai/tool/memory are
 # a deliberately closed set; architectural_pattern and dataset are
 # ASAREE-specific -- architectural_pattern for ARES's pluggable
@@ -770,6 +802,27 @@ def _compute_workspace_id(
     return f"{experiment_id}/{_effective_cell_label(cell_label, protocol_run_id)}"
 
 
+def _ambient_meta_for(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """The node's Reference-route values, for Motoro's caller-ambient ``_meta``.
+
+    Motoro lifts ``run_metadata["ambient_meta"]`` onto every MCP tool call as
+    ``motoro.ambient.<key>`` (see its ``mcp/adapters``), which is the product's
+    own half of the channel ``workspace_id`` already uses -- the model never
+    sees these and so can never mistype one.
+
+    Today that is the wired Dataset connectors' names, which is what lets
+    ``open_workspace`` be called with no arguments at all. Add to this rather
+    than to the prompt whenever a new connector contributes an *id* pointing at
+    data that lives elsewhere; a prompt is for content, not for references (the
+    three routes are written up in Motoro's ``engine/sense.py``).
+
+    ``{}`` when nothing is wired -- Motoro skips an absent/empty dict, so the
+    wire call is unchanged for a node with no references.
+    """
+    dataset_names = [str(c["dataset_name"]) for c in _resolve_dataset_configs(graph, node_id) if c.get("dataset_name")]
+    return {"dataset_names": dataset_names} if dataset_names else {}
+
+
 def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """The node's connected ``llm`` node's own config -- agent/critic_gate
     nodes no longer carry ``model_config_data`` themselves, it's resolved
@@ -1036,20 +1089,26 @@ def _build_user_input(
 ) -> str:
     """The node's own prompt (falling back to its goal, then its canvas
     label), plus (flat, unstructured -- a deliberate V1 simplification) each
-    already-completed upstream node's output_text as context, plus a
-    Dataset-context block when this node has a Dataset connector wired
-    (naming the registered dataset and this run's own experiment_id/
-    cell_label, so the agent can call ``open_workspace`` itself -- the one
-    workspace tool with no ambient ``_meta`` fallback, confirmed directly
-    against its real signature), plus a Script block (the wired Script
-    node's own code, verbatim, for the agent to pass as some tool's own
-    code-shaped argument) when one is wired. `prompt` is the one field meant
-    to change per run (the per-invocation user message); `goal` is a
-    persistent objective, only used here as
-    prompt's own fallback when the user hasn't set one. Real structured
-    handoff via output_contract.payload is a fast-follow, the same way the
-    source notebook's own stage-report-block pattern could graduate to
-    using it."""
+    already-completed upstream node's output_text as context, plus a Dataset
+    cue when this node has a Dataset connector wired, plus a Script block (the
+    wired Script node's own code, verbatim, for the agent to pass as some
+    tool's own code-shaped argument) when one is wired. `prompt` is the one
+    field meant to change per run (the per-invocation user message); `goal` is
+    a persistent objective, only used here as prompt's own fallback when the
+    user hasn't set one. Real structured handoff via output_contract.payload is
+    a fast-follow, the same way the source notebook's own stage-report-block
+    pattern could graduate to using it.
+
+    On the Dataset block specifically: this used to dictate the exact
+    ``open_workspace(experiment_id=..., cell_label=..., name=...)`` call and
+    hope the model transcribed three ids correctly. It no longer does. All
+    three now reach the tool as ambient request ``_meta``
+    (``_ambient_meta_for``, plus the workspace_id ASAREE already bound), so
+    what stays here is only the part ``_meta`` genuinely cannot supply: the
+    *fact* that a dataset is waiting, and the name to disambiguate with when
+    more than one is wired. An id the model has to retype is an id it can get
+    wrong -- see the three routes in Motoro's ``engine/sense.py``: a dataset is
+    a Reference, and a Reference is bound, not narrated."""
     data: dict[str, Any] = node.get("data") or {}
     config: dict[str, Any] = data.get("config", {})
     seed: str = config.get("prompt") or config.get("goal") or data.get("label", "")
@@ -1066,23 +1125,36 @@ def _build_user_input(
     if dataset_configs and experiment_id is not None and effective_cell_label is not None:
         dataset_names = [str(c["dataset_name"]) for c in dataset_configs]
         if len(dataset_names) == 1:
+            # No arguments named at all: with one dataset wired, open_workspace
+            # resolves every one of them from ambient _meta.
             parts.append(
                 "Dataset context:\n"
-                f'A dataset named "{dataset_names[0]}" is registered for this run. Call open_workspace '
-                f'with experiment_id="{experiment_id}", cell_label="{effective_cell_label}", '
-                f'name="{dataset_names[0]}" before doing any data work.'
+                "A dataset is registered for this run. Call open_workspace() before doing any data "
+                "work -- it takes no arguments here; which dataset and which workspace both arrive "
+                "as ambient run context. Its response names what it opened."
             )
         else:
-            # Same experiment_id/cell_label for all of them -- open_workspace's
-            # `name` is what distinguishes the workspaces, so the agent makes
-            # one call per dataset rather than one call listing several.
+            # `name` is the one thing _meta can't decide for the agent: the
+            # ambient fallback deliberately refuses to guess among several, so
+            # the names stay in the prompt. experiment_id/cell_label still do
+            # not -- they come from the ambient workspace_id.
+            #
+            # And that ambient workspace_id is exactly why this says "pick
+            # one": a cell's workspace is keyed by experiment_id/cell_label
+            # alone, so all of these would resolve to the same directory.
+            # open_workspace now refuses the second one rather than silently
+            # returning the first one's data (it used to claim, wrongly, that
+            # each name got its own workspace). Several datasets per cell needs
+            # a real fix -- either a name-keyed workspace id or a per-dataset
+            # cell -- not a prompt that talks the model into a collision.
             listed = "\n".join(f'- "{n}"' for n in dataset_names)
             parts.append(
                 "Dataset context:\n"
                 f"{len(dataset_names)} datasets are registered for this run:\n{listed}\n"
-                f'Call open_workspace with experiment_id="{experiment_id}", '
-                f'cell_label="{effective_cell_label}" and name= each dataset you need, once per '
-                "dataset, before doing any data work -- each one is a separate workspace."
+                "Call open_workspace(name=...) with the ONE this cell should work on, before doing "
+                "any data work. `name` is the only argument to pass; the rest arrives as ambient "
+                "run context. This cell has a single workspace, so it holds a single dataset -- "
+                "opening a second here is an error, not a second workspace."
             )
 
     script_config = _resolve_script_config(graph, node["id"])
@@ -1261,6 +1333,7 @@ async def _run_agent_node(
             "protocol_run_id": str(protocol_run_id),
             "node_id": node["id"],
             **({"workspace_id": workspace_id} if workspace_id else {}),
+            **({"ambient_meta": ambient_meta} if (ambient_meta := _ambient_meta_for(graph, node["id"])) else {}),
         },
     )
     timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds

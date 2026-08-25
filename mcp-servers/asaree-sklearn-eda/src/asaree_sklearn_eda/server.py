@@ -43,6 +43,11 @@ _ASAREE_API_URL = os.environ.get("ASAREE_API_URL", "http://localhost:8000")
 _ASAREE_MCP_API_KEY = os.environ.get("ASAREE_INTERNAL_MCP_API_KEY", "")
 
 _META_KEY_WORKSPACE_ID = "motoro.workspace_id"
+# The names of the datasets wired into this run, published by ASAREE under
+# Motoro's caller-ambient prefix. Mirrors asaree_workspace_core's
+# META_KEY_DATASET_NAMES as a literal, for the same reason the key above is one:
+# this server takes no dependency on that package (see the module docstring).
+_META_KEY_DATASET_NAMES = "motoro.ambient.dataset_names"
 
 
 class HeadNotReadyError(Exception):
@@ -62,6 +67,28 @@ def _workspace_id_from_ctx(explicit: str, ctx: Context | None) -> str:
         except Exception:  # noqa: BLE001 — no ambient meta available outside a request
             pass
     raise HeadNotReadyError("workspace_id missing: pass it explicitly or via ambient _meta")
+
+
+def _dataset_name_from_ctx(explicit: str, ctx: Context | None) -> str:
+    """Resolve which registered dataset a call means, explicit argument first.
+
+    Falls back to the ambient names only when exactly one dataset is wired into
+    the run — with several there is a real choice, and guessing the first would
+    silently read the wrong dataset.
+    """
+    if explicit.strip():
+        return explicit.strip()
+    if ctx is None:
+        return ""
+    try:
+        extra = getattr(ctx.request_context.meta, "model_extra", None) or {}
+    except Exception:  # noqa: BLE001 — no ambient meta available outside a request
+        return ""
+    names = extra.get(_META_KEY_DATASET_NAMES)
+    if not isinstance(names, list):
+        return ""
+    names = [n for n in names if isinstance(n, str) and n]
+    return names[0] if len(names) == 1 else ""
 
 
 def _read_head(workspace_id: str) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series, str]:
@@ -137,17 +164,25 @@ def _dictionary_from_api(name: str) -> tuple[str | None, str | None]:
 
 
 @mcp.tool()
-def get_data_dictionary(name: str, columns: str = "", ctx: Context | None = None) -> str:
+def get_data_dictionary(name: str = "", columns: str = "", ctx: Context | None = None) -> str:
     """Fetch the data dictionary for a registered dataset, on demand.
 
     Args:
-        name: Dataset name as registered via POST /api/datasets.
+        name: Dataset name as registered via POST /api/datasets. Optional —
+            resolved from the ambient request _meta when the run has exactly one
+            dataset wired, and unused entirely when the open workspace already
+            carries a published copy (the usual case).
         columns: Comma-separated column names to return in FULL detail. If empty,
             returns a COMPACT INDEX (name + type + truncated description) so you can
             scan what exists, then call again for the few you need.
     """
     raw = _dictionary_from_workspace(ctx)
     if raw is None:
+        # Only the API fallback needs a name at all; resolving lazily keeps the
+        # common workspace path from failing over an argument it never reads.
+        name = _dataset_name_from_ctx(name, ctx)
+        if not name:
+            return json.dumps({"error": "name not provided and not resolvable from the run's ambient _meta."})
         raw, error = _dictionary_from_api(name)
         if raw is None:
             return json.dumps({"error": error})

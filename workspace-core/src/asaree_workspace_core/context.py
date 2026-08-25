@@ -110,6 +110,57 @@ def resolve_owner_id_from_ctx(ctx: Any, *, required: bool = False) -> str:
     return owner_id
 
 
+# Motoro's open extension point for a *product's* own ambient references
+# (``META_AMBIENT_PREFIX`` in ``motoro.mcp.adapters``), as opposed to the run
+# identity keys above that core itself owns. ASAREE puts the names of the
+# datasets wired into the protocol here, so ``open_workspace`` — the one
+# workspace tool that needs to know *which* dataset, and so the one the
+# workspace_id above cannot fully serve — can resolve it without the model
+# retyping a name it read out of its prompt.
+META_KEY_DATASET_NAMES = "motoro.ambient.dataset_names"
+
+
+def dataset_names_from_meta(meta: Mapping[str, Any] | None) -> list[str]:
+    """Read the run's wired dataset names from an ambient ``_meta`` mapping.
+
+    Returns ``[]`` when absent or malformed — never raises, because a run with
+    no datasets wired is an ordinary, expected state.
+    """
+    if not meta:
+        return []
+    value = meta.get(META_KEY_DATASET_NAMES)
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, str) and v]
+
+
+def resolve_dataset_name(explicit: str, meta: Mapping[str, Any] | None) -> str:
+    """Resolve which registered dataset a call means (issue #1455 follow-on).
+
+    Precedence matches :func:`resolve_workspace_id`: an explicit argument wins,
+    otherwise the ambient value. The ambient fallback applies *only when exactly
+    one* dataset is wired into the run — with several, there is a real choice to
+    make and silently picking the first would be a guess dressed up as context.
+    In that case this returns "" and the caller reports the candidates so the
+    model can choose deliberately.
+    """
+    explicit = (explicit or "").strip()
+    if explicit:
+        return explicit
+    names = dataset_names_from_meta(meta)
+    return names[0] if len(names) == 1 else ""
+
+
+def resolve_dataset_name_from_ctx(explicit: str, ctx: Any) -> tuple[str, list[str]]:
+    """Convenience: :func:`resolve_dataset_name` against a FastMCP ctx's meta.
+
+    Returns ``(resolved_name, ambient_candidates)`` — the candidates let a
+    caller name the actual options in its error rather than a bare "missing".
+    """
+    meta = meta_mapping_from_ctx(ctx)
+    return resolve_dataset_name(explicit, meta), dataset_names_from_meta(meta)
+
+
 def resolve_workspace_id(
     explicit: str,
     meta: Mapping[str, Any] | None,

@@ -130,19 +130,28 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
     case 'mcp_tool':
     case 'mcp_scikit_learn':
     case 'mcp_client_tool':
-      // Deliberately WITHOUT a whole-config "Server & tools" (tool_config)
-      // factor, which these node types used to offer: its levels are each a
-      // server + allow-list pair, so binding it would let a cell swap the
-      // node onto a DIFFERENT server. Every MCP node is now created by
-      // picking one server in the MCP Servers browser and stands for that
-      // server alone (see McpToolNodeInspector's header comment), so
-      // reassigning it -- by dropdown or by factor level -- is out of the
-      // model. Varying the allow-list alone would need its own level type;
-      // until then, an experiment that wants two different tool sets uses
-      // two nodes. The tool_config level type itself is kept in
-      // FactorEditorDialog so experiments that already have such a factor
-      // still render.
-      return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
+      return [
+        { fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' },
+        // The allow-list, and ONLY the allow-list -- the node's server stays
+        // pinned across every level. This replaced the whole-config "Server &
+        // tools" (tool_config) factor these node types used to offer, whose
+        // levels were each a server + allow-list pair and so let a cell swap
+        // the node onto a DIFFERENT server. Every MCP node is created by
+        // picking one server in the MCP Servers browser and stands for that
+        // server alone (see McpToolNodeInspector's header comment), and the
+        // canvas node prints that server's name as its own summary, so a
+        // per-cell reassignment would make the canvas lie about what half the
+        // cells ran. An experiment comparing two servers uses two nodes. The
+        // tool_config level type itself is kept in FactorEditorDialog so
+        // experiments that already have such a factor still render.
+        //
+        // No backend change: _resolve_tool_config reads each wired node's
+        // own (already factor-patched) config.tool_names and namespaces it
+        // against the node's server_name. A level of [] contributes nothing,
+        // which is "this server withheld for this cell" without also having
+        // to bind config.enabled.
+        { fieldPath: 'config.tool_names', label: 'Tools allowed', levelType: 'tool_names' },
+      ]
     case 'memory':
       // No runtime effect yet (Memory execution isn't implemented at all) --
       // ships as declared capability only, matching Memory's existing
@@ -233,6 +242,28 @@ export interface UnboundField {
   // value under `data`), this is instead derived from whichever pattern
   // node the agent currently has wired (see derivePatternOverrideCurrentValue).
   currentValue: unknown
+  // Only set for a `tool_names` field -- the owning MCP node's pinned
+  // server, so the level editor knows whose tools to offer. See
+  // toolFactorServerId below for why the level value can't say this itself.
+  serverId?: string | null
+}
+
+// The MCP server whose tool list a "Tools allowed" (tool_names) factor's
+// levels should be picked from -- found by scanning for whichever node binds
+// `config.tool_names` to this factor. Needed because a tool_names level is a
+// BARE allow-list, not a server + list pair (the binding substitutes only
+// `config.tool_names`, leaving `server_id` alone), so a level can't say which
+// server's tools it's choosing among on its own. Returns null when nothing
+// binds the factor -- e.g. the node was deleted, or the factor came in with
+// an imported design_spec -- and FactorEditorDialog then shows the stored
+// names verbatim rather than an empty toggle list that would look like "no
+// tools selected".
+export function toolFactorServerId(nodes: Node[], factorName: string): string | null {
+  for (const node of nodes) {
+    const data = node.data as { factor_bindings?: Record<string, string>; config?: { server_id?: string | null } }
+    if (data?.factor_bindings?.['config.tool_names'] === factorName) return data.config?.server_id ?? null
+  }
+  return null
 }
 
 function getPath(data: Record<string, unknown>, dottedPath: string): unknown {
@@ -339,6 +370,10 @@ export function unboundBindableFields(nodes: Node[], edges: Edge[]): UnboundFiel
         fieldLabel: field.label,
         levelType: field.levelType,
         currentValue,
+        serverId:
+          field.levelType === 'tool_names'
+            ? ((node.data as { config?: { server_id?: string | null } })?.config?.server_id ?? null)
+            : undefined,
       })
     }
   }

@@ -1118,7 +1118,16 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     then sees as having only ``final_answer`` available -- no error, just an
     agent that can't do anything and falls back to reporting the blocker in
     its final answer. A node without a resolved ``server_name`` can't be
-    namespaced at all, so its tools are skipped rather than smuggled in bare."""
+    namespaced at all, so its tools are skipped rather than smuggled in bare.
+
+    A node's ``config.tool_names`` is read here as-is, so it needs nothing
+    extra to be an experimental factor: the frontend's ``tool_names`` level
+    type binds exactly that path, and ``apply_factor_bindings`` has already
+    substituted this cell's allow-list by the time this runs (the node's
+    ``server_id``/``server_name`` are untouched -- a level varies which of ONE
+    server's tools are offered, never which server). An empty allow-list is a
+    meaningful level: the server still connects (its ``server_name`` is still
+    reported) but contributes no tools to that cell."""
     nodes, _downstream, _upstream = _adjacency(graph)
     server_names: list[str] = []
     tool_names: list[str] = []

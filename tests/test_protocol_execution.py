@@ -942,6 +942,35 @@ def test_apply_factor_bindings_swaps_the_whole_dataset_per_cell() -> None:
     assert [c["dataset_name"] for c in pe._resolve_dataset_configs(graph, "a")] == ["cohort-a"]
 
 
+def test_apply_factor_bindings_varies_the_tool_allow_list_but_not_the_server() -> None:
+    """The tools-as-factor path on the pure half: an MCP node's
+    `config.tool_names` bound to a 'tool_names' factor changes which of that
+    ONE server's tools reach the agent, still namespaced, while server_names
+    stays put across every level -- that invariant is what lets the canvas
+    keep printing one server name for the node."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    tool = _tool_node(server_name="srv", tool_names=["do_thing", "do_other"])
+    tool["data"]["factor_bindings"] = {"config.tool_names": "Agent:Tool:Tools allowed"}
+    graph = {"nodes": [agent, tool], "edges": [agent_llm_edge, _tool_edge("tool1", "a")]}
+
+    both = apply_factor_bindings(graph, {"Agent:Tool:Tools allowed": ["do_thing", "do_other"]})
+    assert pe._resolve_tool_config(both, "a") == {
+        "server_names": ["srv"],
+        "tool_names": ["srv.do_thing", "srv.do_other"],
+    }
+
+    one = apply_factor_bindings(graph, {"Agent:Tool:Tools allowed": ["do_thing"]})
+    assert pe._resolve_tool_config(one, "a") == {"server_names": ["srv"], "tool_names": ["srv.do_thing"]}
+
+    # An empty allow-list is a real level: the server still connects (so
+    # server_names is unchanged), it just contributes no tools to that cell.
+    none = apply_factor_bindings(graph, {"Agent:Tool:Tools allowed": []})
+    assert pe._resolve_tool_config(none, "a") == {"server_names": ["srv"], "tool_names": []}
+
+    # And the base graph is untouched (apply_factor_bindings deep-copies).
+    assert pe._resolve_tool_config(graph, "a")["tool_names"] == ["srv.do_thing", "srv.do_other"]
+
+
 def test_sink_node_ids_linear_chain_single_sink() -> None:
     graph = _graph(["a", "b", "c"], [("a", "b"), ("b", "c")])
     assert sink_node_ids(graph) == ["c"]

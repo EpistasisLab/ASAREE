@@ -65,9 +65,10 @@ export function MakeNodeFactorButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-// 'text' levelType (a long-form value, e.g. a full system prompt) and the 3
-// structured "whole node as a factor" kinds (llm_config/tool_config/pattern
-// -- see factorLevels.ts) escalate straight to FactorEditorDialog instead of
+// 'text' levelType (a long-form value, e.g. a full system prompt) and every
+// structured kind (isStructuredLevelType -- the "whole node as a factor"
+// ones plus tool_names, see factorLevels.ts) escalate straight to
+// FactorEditorDialog instead of
 // this popover's own one-line Input rows -- string/number/boolean keep the
 // popover, since it's already adequate for short values and a handful of
 // levels; rebuilding a UI that already works for the common case would be
@@ -83,6 +84,7 @@ export function FactorBindableField({
   levelType,
   currentValue,
   levelOptions,
+  toolServerId,
   boundFactorName,
   onBind,
   onUnbind,
@@ -109,6 +111,10 @@ export function FactorBindableField({
   // to the plain Input, e.g. Temperature, or Model before any credential
   // exists to discover models from).
   levelOptions?: { value: string; label: string }[]
+  // Only for a `tool_names` field (McpToolNodeInspector's "Tools allowed"):
+  // the owning node's pinned MCP server, so each level can toggle that
+  // server's real tools instead of asking for hand-typed names.
+  toolServerId?: string | null
   boundFactorName?: string
   onBind: (factorName: string) => void
   onUnbind: () => void
@@ -174,9 +180,15 @@ export function FactorBindableField({
     )
   }
 
-  const tooltipText = isStructuredLevelType(levelType)
-    ? `Vary this node's whole configuration across this experiment's cells`
-    : "Vary this field across this experiment's cells"
+  // tool_names is structured but is NOT the whole node (the server stays
+  // pinned; only the allow-list varies), so it needs its own wording rather
+  // than the shared whole-configuration one.
+  const tooltipText =
+    levelType === 'tool_names'
+      ? "Vary which of this server's tools the agent may call across this experiment's cells"
+      : isStructuredLevelType(levelType)
+        ? `Vary this node's whole configuration across this experiment's cells`
+        : "Vary this field across this experiment's cells"
 
   if (levelType === 'text' || isStructuredLevelType(levelType)) {
     const structured = isStructuredLevelType(levelType)
@@ -198,6 +210,7 @@ export function FactorBindableField({
         <FactorEditorDialog
           open={open}
           onOpenChange={setOpen}
+          toolServerId={toolServerId}
           factor={{
             name: factorName,
             levels: structured ? seedStructuredLevels(currentValue, levelType) : seedLevels(currentValue),

@@ -94,7 +94,14 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
         const config = (node.data as McpToolNodeData).config
         // Same wording as McpToolNode's own badge -- an MCP node's server is
         // fixed at creation, so the allow-list is the only thing to fix.
-        if (!((config?.tool_names?.length ?? 0) > 0)) {
+        // Skipped once the allow-list is a factor: the node's own tool_names
+        // is then just a base value every cell overrides, and an empty
+        // allow-list is a legitimate level ("this server withheld here"), so
+        // flagging it would block a Run that's correctly configured.
+        const allowListIsFactor = !!(node.data as { factor_bindings?: Record<string, string> })?.factor_bindings?.[
+          'config.tool_names'
+        ]
+        if (!allowListIsFactor && !((config?.tool_names?.length ?? 0) > 0)) {
           issues.push('Not configured -- allow at least one tool')
         }
         break

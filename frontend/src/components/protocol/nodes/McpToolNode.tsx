@@ -26,8 +26,12 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
   const enabled = data.config?.enabled ?? true
   // Every MCP node already HAS its server (picked in the browser at creation
   // time), so telling its user to go pick one would send them looking for a
-  // dropdown that isn't there -- only the allow-list can be empty.
-  const warning = 'Not configured -- allow at least one tool'
+  // dropdown that isn't there -- only the allow-list can be empty. Not shown
+  // once the allow-list is a factor: each cell brings its own, and an empty
+  // base value is then expected rather than unconfigured (same call as
+  // nodeConfigIssues.ts makes for the Run pre-flight).
+  const allowListIsFactor = !!data.factor_bindings?.['config.tool_names']
+  const warning = allowListIsFactor ? undefined : 'Not configured -- allow at least one tool'
 
   return (
     <CircleNode

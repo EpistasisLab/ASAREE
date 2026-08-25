@@ -40,6 +40,7 @@ const LEVEL_TYPES: LevelType[] = [
   'pattern',
   'script_config',
   'dataset_config',
+  'tool_names',
 ]
 const EFFORT_LEVELS_FALLBACK = ['low', 'medium', 'high', 'xhigh', 'max']
 const PATTERN_OPTIONS = [
@@ -396,6 +397,91 @@ function DatasetConfigLevelRow({
   )
 }
 
+// One row of a "tool_names" factor's levels -- an allow-list of BARE tool
+// names for one MCP node, i.e. exactly what McpToolNodeInspector's own "Tools
+// allowed" toggle list writes into config.tool_names (protocol_execution.py's
+// _resolve_tool_config namespaces them against the node's own server_name at
+// run time, so the level never carries the server).
+//
+// Which server's tools to offer therefore can't come from the level value --
+// it's threaded in from the node that binds this factor (see bindableFields.ts's
+// toolFactorServerId). When that can't be resolved (the node was deleted, or
+// the factor arrived with an imported design_spec) the level falls back to
+// listing its stored names read-only, so an unresolvable server never looks
+// like "no tools selected".
+function ToolNamesLevelRow({
+  value,
+  serverId,
+  onChange,
+}: {
+  value: string[]
+  serverId: string | null | undefined
+  onChange: (next: string[]) => void
+}) {
+  const serversQuery = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list() })
+  const server = serversQuery.data?.find((s) => s.id === serverId)
+  const tools = server?.capabilities?.tools ?? []
+
+  function toggleTool(name: string, allowed: boolean) {
+    onChange(allowed ? [...value, name] : value.filter((t) => t !== name))
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border p-2">
+      <div className="flex items-center justify-between gap-2">
+        {/* Stated outright rather than left to be counted off the switches --
+            "0 of 7" is the level worth noticing (this server contributes
+            nothing to that cell), and it's indistinguishable from an
+            unconfigured row otherwise. */}
+        <Badge variant="outline" className={cn('font-mono text-xs', value.length === 0 && 'text-muted-foreground')}>
+          {tools.length > 0 ? `${value.length} of ${tools.length} tools` : `${value.length} tool${value.length === 1 ? '' : 's'}`}
+        </Badge>
+        {tools.length > 0 && (
+          <div className="flex gap-3 text-xs text-muted-foreground">
+            <button type="button" className="cursor-pointer hover:text-foreground" onClick={() => onChange(tools.map((t) => t.name))}>
+              All
+            </button>
+            <button type="button" className="cursor-pointer hover:text-foreground" onClick={() => onChange([])}>
+              None
+            </button>
+          </div>
+        )}
+      </div>
+      {serversQuery.isLoading ? (
+        <p className="text-xs text-muted-foreground">Loading tools…</p>
+      ) : tools.length > 0 ? (
+        <div className="max-h-40 space-y-0.5 overflow-y-auto rounded-md border p-1">
+          {tools.map((tool) => (
+            <div key={tool.name} className="flex items-center justify-between gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted">
+              <span className="truncate font-mono" title={tool.description ?? tool.name}>
+                {tool.name}
+              </span>
+              <Switch size="sm" checked={value.includes(tool.name)} onCheckedChange={(allowed) => toggleTool(tool.name, allowed)} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-1 rounded-md border border-dashed p-2">
+          <p className="text-xs text-muted-foreground">
+            {server
+              ? 'This server has no tools.'
+              : "Can't reach the node this factor is bound to, so its server's tools aren't listed. These names are kept as-is:"}
+          </p>
+          {!server && value.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {value.map((name) => (
+                <Badge key={name} variant="outline" className="font-mono text-xs">
+                  {name}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // A per-factor editor with real room -- reuses the node inspector's own
 // fixed near-fullscreen frame sizing (NODE_INSPECTOR_CONTENT_CLASSNAME) and
 // HUD glow/ring/corner-brackets (HUD_ACCENT_RING_CLASSNAME), but is built
@@ -414,11 +500,19 @@ export function FactorEditorDialog({
   pickableFields,
   existingNames,
   emptyPickerMessage,
+  toolServerId,
   onSave,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   factor: DesignFactor
+  // Only meaningful for a `tool_names` factor: the pinned server whose tools
+  // its levels choose among. Supplied by whichever caller can see the bound
+  // node -- McpToolNodeInspector passes its own node's, DesignTab resolves it
+  // off the canvas graph (toolFactorServerId). In field-picker mode the
+  // picked field's own `serverId` wins over this, since that's the node the
+  // factor is about to be bound to.
+  toolServerId?: string | null
   // Only passed by DesignTab's "Add factor" entry point or a node's own
   // hover-toolbar "Make experimental factor" icon -- every bindable field
   // (on the whole canvas, or scoped to just that one node) that isn't
@@ -630,6 +724,12 @@ export function FactorEditorDialog({
                           ) : levelType === 'pattern' ? (
                             <PatternLevelRow
                               value={level as StructuredLevel}
+                              onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
+                            />
+                          ) : levelType === 'tool_names' ? (
+                            <ToolNamesLevelRow
+                              value={(level as string[] | null) ?? []}
+                              serverId={selectedField?.serverId ?? toolServerId}
                               onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
                             />
                           ) : levelType === 'dataset_config' ? (

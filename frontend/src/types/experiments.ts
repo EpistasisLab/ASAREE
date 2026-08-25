@@ -15,6 +15,7 @@ export interface DesignFactor {
     | 'pattern'
     | 'script_config'
     | 'dataset_config'
+    | 'tool_names'
 }
 
 export interface DesignMetric {

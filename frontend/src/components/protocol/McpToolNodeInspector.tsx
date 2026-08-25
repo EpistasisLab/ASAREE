@@ -38,7 +38,9 @@ const TRANSPORT_LABELS: Record<string, string> = { stdio: 'stdio', http: 'Stream
 // dropdown -- and the whole-config "Server & tools" factor binding that hung
 // off it -- are gone deliberately: reassigning a node's server after the
 // fact contradicts the one-node-per-server model. Use a second MCP Servers
-// node instead.
+// node instead. What DID survive that removal is varying the allow-list
+// alone: "Tools allowed" is bindable as a `tool_names` factor whose levels
+// are each a subset of this one server's tools.
 export function McpToolNodeInspector({
   node,
   experimentId,
@@ -204,19 +206,44 @@ export function McpToolNodeInspector({
       )}
 
       <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <Label>Tools allowed</Label>
-          {tools.length > 0 && (
-            <div className="flex gap-3 text-xs text-muted-foreground">
-              <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: tools.map((t) => t.name) })}>
-                All
-              </button>
-              <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: [] })}>
-                None
-              </button>
+        {/* The one factor this node type offers beyond Enabled: which of THIS
+            server's tools the agent may call, varied per cell. The node's
+            server stays pinned across every level -- see bindableFields.ts's
+            mcp_tool case for why swapping it isn't offered. The toggle list
+            below stays live even once bound (it's still this node's base
+            config, and every other inspector leaves its own bound control
+            editable too); the levels just override it per cell. */}
+        <FactorBindableField
+          experimentId={experimentId}
+          fieldPath="config.tool_names"
+          defaultLabel="Tools allowed"
+          nodeLabel={factorNodeLabel}
+          levelType="tool_names"
+          currentValue={selectedTools}
+          toolServerId={config.server_id}
+          boundFactorName={bindings['config.tool_names']}
+          onBind={(name) => bindFactor('config.tool_names', name)}
+          onUnbind={() => unbindFactor('config.tool_names')}
+        >
+          {(trigger) => (
+            <div className="flex items-center justify-between gap-2">
+              <Label className="flex items-center gap-1.5">
+                Tools allowed
+                {trigger}
+              </Label>
+              {tools.length > 0 && (
+                <div className="flex shrink-0 gap-3 text-xs text-muted-foreground">
+                  <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: tools.map((t) => t.name) })}>
+                    All
+                  </button>
+                  <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: [] })}>
+                    None
+                  </button>
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </FactorBindableField>
         {serversQuery.isLoading ? (
           <Skeleton className="h-16 w-full" />
         ) : serversQuery.isError ? (

@@ -74,8 +74,29 @@ def generate_design(factors: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # it's a uuid, unreadable in a label, and the name already identifies the row.
 _DICT_SLUG_PRIORITY_KEYS = ("model", "provider", "execution_pattern", "server_name", "dataset_name", "enabled")
 
+# How many items of a list-valued level (an MCP node's ``tool_names``
+# allow-list, bound as a "Tools allowed" factor) name the slug before it's
+# truncated. A cell label already concatenates every factor, so an unbounded
+# join would let one 20-tool level produce a label no filesystem or table
+# column wants; three names plus a count says which subset this is without
+# growing without limit. Order is left as declared rather than sorted -- the
+# level is stored verbatim in ``design_spec``, so its label is stable across
+# regenerations either way, and sorting would only hide the (already
+# meaningless) case of two levels holding the same set.
+_MAX_LIST_SLUG_ITEMS = 3
+
 
 def _slugify(value: Any) -> str:
+    if isinstance(value, list | tuple):
+        # "none", not the empty string's "x" fallback: an empty allow-list is
+        # a real, deliberate level ("this server's tools withheld for this
+        # cell"), and it's the one most worth reading off a cell label.
+        if not value:
+            return "none"
+        slugs = [_slugify(v) for v in value]
+        head = "-".join(slugs[:_MAX_LIST_SLUG_ITEMS])
+        extra = len(slugs) - _MAX_LIST_SLUG_ITEMS
+        return head if extra <= 0 else f"{head}-plus{extra}"
     if isinstance(value, dict):
         for key in _DICT_SLUG_PRIORITY_KEYS:
             if key in value and value[key] not in (None, ""):

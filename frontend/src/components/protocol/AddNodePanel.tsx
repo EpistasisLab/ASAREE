@@ -106,18 +106,17 @@ const NODE_CATALOG = [
   },
   // Not a node type either -- picking this opens the OKF bundle browser
   // (OkfBundleBrowserPanel), same reasoning as MCP Servers and Skills above.
-  // That browser is also the only place bundles are registered, since one
-  // means picking a directory on the server rather than uploading anything.
+  // That browser is also the only place bundles are uploaded.
   {
     type: OKF_BUNDLE_BROWSE,
     label: 'OKF Bundles',
-    description: 'A folder of Markdown concepts on the server that an Agent reads and writes as it works',
+    description: 'Upload a folder of Markdown concepts an Agent reads and writes as it works',
     icon: BookMarked,
   },
   // The Knowledge connector's other half, and a separate entry rather than a
-  // mode of the one above because the user's starting point differs: a bundle
-  // is knowledge the server already has, a document is a file on their own
-  // machine -- so this one uploads, exactly like Skills.
+  // mode of the one above because the unit differs, not the source: both
+  // upload from the user's own machine, but a bundle is a whole folder of
+  // concepts and a document is a single one -- exactly like Skills.
   {
     type: OKF_DOCUMENT_BROWSE,
     label: 'OKF Documents',

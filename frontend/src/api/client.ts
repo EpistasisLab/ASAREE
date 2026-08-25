@@ -15,7 +15,7 @@ import type { Dataset } from '@/types/datasets'
 import type { Cell, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
-import type { OkfBrowseResponse, OkfBundle, OkfDocument } from '@/types/okf'
+import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse } from '@/types/skills'
@@ -364,17 +364,26 @@ export const skillsApi = {
 }
 
 export const okfApi = {
-  // Browse the SERVER's disk, jailed to its configured bundle root. There is
-  // no client-machine file access anywhere in this feature -- on the local
-  // single-machine install this is built for, the server's disk IS the user's.
-  browse: (path = '') => request<OkfBrowseResponse>(`/okf/browse?path=${encodeURIComponent(path)}`),
   list: () => request<OkfBundle[]>('/okf/bundles'),
-  // Spawns an OKF MCP server jailed to `path` and persists the registration,
-  // so a bad path fails here rather than mid-run. Idempotent per (user, path).
-  create: (path: string) => request<OkfBundle>('/okf/bundles', { method: 'POST', body: { path } }),
+  // Uploads a folder the user picked with <input webkitdirectory>. Each file
+  // is sent under its own `webkitRelativePath`, which is the ONLY thing a
+  // browser will say about where it came from -- the server strips the
+  // leading folder segment back off and uses it to name the storage.
+  //
+  // Spawns the OKF server during registration, so a folder it can't actually
+  // serve 422s here rather than failing mid-run. Not idempotent: re-uploading
+  // the same folder is a second bundle, since the first copy may have been
+  // rewritten by an agent since.
+  createFromUpload: (files: File[]) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file, file.webkitRelativePath || file.name)
+    return request<OkfBundle>('/okf/bundles/upload', { method: 'POST', body: form })
+  },
   // Re-discover the bundle server's tools, and clear a stale connection error.
   refresh: (id: string) => request<OkfBundle>(`/okf/bundles/${id}/refresh`, { method: 'POST' }),
-  // Forgets the registration only -- never touches the directory itself.
+  // Deletes the stored copy for an uploaded bundle (`uploaded: true`), and
+  // only forgets the registration for one that points at a folder already on
+  // the server. Check the flag before wording a confirmation.
   remove: (id: string) => request<void>(`/okf/bundles/${id}`, { method: 'DELETE' }),
   // The bundle server's own list_concepts output, verbatim, for the inspector's
   // preview -- what's in there is the server's answer, not one reconstructed

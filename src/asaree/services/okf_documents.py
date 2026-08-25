@@ -49,7 +49,13 @@ import yaml
 from motoro.services import mcp_service
 
 from asaree.config import get_settings
-from asaree.services.okf_bundles import bundle_path_from_command, command_for_bundle, ensure_command_safe
+from asaree.services.okf_bundles import (
+    allocate_storage_dir,
+    bundle_path_from_command,
+    command_for_bundle,
+    ensure_command_safe,
+)
+from asaree.services.okf_bundles import slugify as _base_slugify
 
 # Distinct from BUNDLE_SERVER_NAME_PREFIX so the two registries stay separable
 # with a string check: ``/okf/bundles`` must not list (or delete, or refresh) a
@@ -69,11 +75,6 @@ _RESERVED_STEMS = frozenset({"index", "log"})
 MAX_DOCUMENT_BYTES = 1_000_000
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?\n)---\s*\n?(.*)\Z", re.S)
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
-# How many "-2", "-3" ... suffixes to try before giving up on de-duplicating a
-# slug. A user with 200 documents whose titles all slug identically has a
-# naming problem this module can't fix.
-_MAX_SLUG_ATTEMPTS = 200
 
 
 class OkfDocumentError(ValueError):
@@ -148,11 +149,8 @@ def meta_from_frontmatter(frontmatter: dict[str, Any]) -> DocumentMeta:
 
 
 def slugify(value: str) -> str:
-    slug = _SLUG_RE.sub("-", value.lower()).strip("-")
-    # Trimmed because the slug becomes both a directory name and a file name,
-    # and a 300-character title would otherwise push the whole path near the
-    # filesystem's own limit.
-    slug = slug[:64].strip("-") or "concept"
+    """``okf_bundles.slugify`` plus this module's own reserved-stem rule."""
+    slug = _base_slugify(value, fallback="concept")
     return f"{slug}-concept" if slug in _RESERVED_STEMS else slug
 
 
@@ -245,27 +243,6 @@ async def list_documents(owner_id: uuid.UUID) -> list[Any]:
     return [s for s in servers if is_document_server(s) and s.owner_id == owner_id]
 
 
-def _allocate_directory(owner_id: uuid.UUID, slug: str) -> Path:
-    """A fresh, empty directory for one document.
-
-    A taken slug gets ``-2``, ``-3`` ... rather than replacing what's there:
-    the existing document may already have been edited by an agent, and
-    "upload a file" should never be a destructive act. Deleting the duplicate
-    is one click in the documents panel.
-    """
-    base = owner_root(owner_id)
-    for attempt in range(1, _MAX_SLUG_ATTEMPTS + 1):
-        candidate = base / (slug if attempt == 1 else f"{slug}-{attempt}")
-        try:
-            candidate.mkdir(parents=True, exist_ok=False)
-        except FileExistsError:
-            continue
-        except OSError as exc:
-            raise OkfDocumentError(f"Could not create document storage at {candidate}: {exc}") from exc
-        return candidate
-    raise OkfDocumentError(f"Too many documents already stored under the name {slug!r} -- delete some first.")
-
-
 async def register_document(*, owner_id: uuid.UUID, text: str, filename: str | None = None) -> Any:
     """Store an uploaded concept and spawn an OKF server over it.
 
@@ -286,7 +263,7 @@ async def register_document(*, owner_id: uuid.UUID, text: str, filename: str | N
     stem = frontmatter.get("title") or (Path(filename).stem if filename else "")
     slug = slugify(str(stem))
 
-    directory = _allocate_directory(owner_id, slug)
+    directory = allocate_storage_dir(owner_root(owner_id), slug)
     try:
         ensure_command_safe(directory)
         (directory / f"{slug}.md").write_text(text, encoding="utf-8")

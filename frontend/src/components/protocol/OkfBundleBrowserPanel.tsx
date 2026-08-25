@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, BookMarked, Plus, Trash2, X } from 'lucide-react'
+import { ArrowLeft, BookMarked, FolderUp, Trash2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -13,11 +13,13 @@ import type { OkfBundle } from '@/types/okf'
 // SkillBrowserPanel: AddNodePanel's "OKF Bundle" entry swaps this in, and
 // picking a bundle here creates a node already bound to it (nodeDataForBundle).
 //
-// It doubles as the management surface (register, delete), since a bundle isn't
-// reachable from anywhere else in the app. Deleting only forgets the
-// registration -- the directory and everything the agent wrote into it stay
-// exactly where they are, which is worth saying out loud in the confirmation
-// since "delete" next to a folder path reads alarmingly otherwise.
+// It doubles as the management surface (upload, delete), since a bundle isn't
+// reachable from anywhere else in the app. What deleting DOES depends on
+// bundle.uploaded, and the confirmation has to say which one it is: an
+// uploaded bundle is ASAREE's own copy, so removing it destroys those files
+// (and anything the agent wrote into them); a bundle registered over the API
+// by path is the user's own folder, so removing it only forgets the
+// registration.
 //
 // No search box, unlike the skill and MCP-server browsers: a user has a handful
 // of bundles, not a library of them, and filtering three rows is noise.
@@ -60,13 +62,13 @@ export function OkfBundleBrowserPanel({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        A folder of Markdown concepts on the machine running ASAREE, which the wired agent reads and writes as it works.
+        A folder of Markdown concepts, uploaded from your machine, which the wired agent reads and writes as it works.
       </p>
 
       {/* Outside every branch below, same as SkillBrowserPanel's: an empty or
           failed list is exactly when you most need the way to add one. */}
       <Button variant="outline" size="sm" onClick={() => setRegisterDialogOpen(true)}>
-        <Plus className="size-3.5" /> Register a folder
+        <FolderUp className="size-3.5" /> Upload a folder
       </Button>
 
       {bundlesQuery.isLoading ? (
@@ -93,8 +95,18 @@ export function OkfBundleBrowserPanel({
                 {confirmingDeleteId === bundle.id ? (
                   <div className="space-y-2">
                     <p className="text-xs text-muted-foreground">
-                      Stop using <span className="font-mono">{folder}</span>? The folder and its files stay on disk --
-                      only the registration is removed.
+                      {bundle.uploaded ? (
+                        <>
+                          Delete <span className="font-mono">{folder}</span>? ASAREE&rsquo;s copy of these concepts, and
+                          any edits the agent made to them, are removed for good. The folder you uploaded from is
+                          untouched.
+                        </>
+                      ) : (
+                        <>
+                          Stop using <span className="font-mono">{folder}</span>? The folder and its files stay on disk
+                          -- only the registration is removed.
+                        </>
+                      )}
                     </p>
                     <div className="flex items-center gap-1.5">
                       <Button
@@ -103,7 +115,7 @@ export function OkfBundleBrowserPanel({
                         disabled={deleteMutation.isPending}
                         onClick={() => deleteMutation.mutate(bundle.id)}
                       >
-                        {deleteMutation.isPending ? 'Removing…' : 'Remove'}
+                        {deleteMutation.isPending ? 'Removing…' : bundle.uploaded ? 'Delete' : 'Remove'}
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => setConfirmingDeleteId(null)}>
                         Cancel

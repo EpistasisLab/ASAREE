@@ -444,15 +444,16 @@ export interface SkillNodeData {
 // identity is one skill would be meaningless without it -- same as the
 // server-dedicated MCP node types.
 
-// An "OKF Bundle" node -- the Knowledge connector's one node type. Names a
-// registered OKF bundle: a directory of Markdown concept files (Open Knowledge
-// Format) on the SERVER's disk that the user pointed ASAREE at, and that the
-// wired agent can read from and write back to during a run.
+// An "OKF Bundle" node. Names a registered OKF bundle: a directory of Markdown
+// concept files (Open Knowledge Format) that the wired agent can read from and
+// write back to during a run. In the GUI that directory is ASAREE's copy of a
+// folder the user uploaded (POST /okf/bundles/upload); over the API it can
+// instead point at a folder the server already has (POST /okf/bundles).
 //
-// Registration is a server-side act (POST /okf/bundles), not a path typed onto
-// this node, because the OKF MCP server jails itself to one directory read from
-// its own process environment -- so each bundle is its own MCP server process
-// (see services/okf_bundles.py). That makes `server_name` the field a run
+// Either way registration happens before this node exists, rather than being a
+// path typed onto it, because the OKF MCP server jails itself to one directory
+// read from its own process environment -- so each bundle is its own MCP server
+// process (see services/okf_bundles.py). That makes `server_name` the field a run
 // actually reads: _resolve_knowledge_config namespaces the tool names against
 // it and merges them into the agent's tool_config, exactly like an MCP Tool
 // node. The Knowledge/Tool split is about what the user is DECLARING -- a
@@ -464,7 +465,8 @@ export interface OkfBundleNodeConfig {
   // What a run keys off -- the generated okf-bundle-* server name. Without it
   // the node contributes nothing, since its tools can't be namespaced.
   server_name: string | null
-  // Display only: the absolute path on the server, and the folder's own name.
+  // Display only: where the bundle lives on the machine running ASAREE, and
+  // the folder's own name.
   bundle_path: string | null
   bundle_label: string | null
   // The bundle server's tools, BARE (e.g. "read_concept"), cached at

@@ -74,6 +74,13 @@ class AsareeSettings(CoreSettings):
     # document never shows up as a stray folder in the bundle browser.
     okf_document_dir: str = "./data/okf-documents"
 
+    # Where UPLOADED bundles are stored (POST /okf/bundles/upload) -- a whole
+    # folder the user picked in their BROWSER, which the server has no path to
+    # and so must be given a copy of. Same reasoning as okf_document_dir for
+    # keeping it out of okf_bundle_root, and separate from it only so the two
+    # kinds of upload stay tellable apart on disk.
+    okf_bundle_upload_dir: str = "./data/okf-bundles"
+
     # Encrypts per-user LLM provider API keys at rest (user_llm_settings).
     # Deliberately ASAREE's own — core's services.encryption is explicitly a
     # single server-side secret with no user in the picture at all, the

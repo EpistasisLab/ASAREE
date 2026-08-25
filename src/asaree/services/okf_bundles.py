@@ -15,13 +15,26 @@ row whose ``command`` runs :mod:`asaree.mcp_servers.okf_bundle` with
 ``--bundle <path>`` -- persisted in a column, so the worker's own
 ``hydrate_registry`` spawns it too.
 
-Everything is jailed inside ``settings.okf_bundle_root``. That single knob is
-the whole reach of this feature: browsing can't see outside it, and a
-registration can't point outside it, so an agent's OKF tools can't either.
-The path is the *server's* -- there is no client-machine filesystem access
-here, which is why the browse endpoint exists at all: on a single-machine
-install the server's filesystem is the user's, and picking from what the
-server can see beats typing a path it can't resolve.
+There are two ways to get such a directory, and they differ in *who owns it*:
+
+**Uploaded** (``register_uploaded_bundle``, what the GUI does). The user picks
+a folder in their browser and its ``.md`` files are copied into
+``settings.okf_bundle_upload_dir``. A browser never reveals a real path, so a
+copy is the only thing crossing the wire -- which means the agent reads and
+writes ASAREE's copy, and the user's own folder is untouched from the moment
+of upload. Deleting one really removes the stored copy, since nothing else
+points at it.
+
+**Pointed at** (``register_bundle``, path-based, jailed inside
+``settings.okf_bundle_root``). No copy: the server holds a path to a directory
+that already exists on its own disk, so an agent's edits land in the user's
+real folder and survive as a live, shared knowledge base. Deleting only
+forgets the registration. There's no folder browser in front of this any more
+-- ``list_directories`` still backs ``GET /okf/browse`` for API/SDK callers,
+who can name a server-side path directly.
+
+``okf_bundle_root`` remains the whole reach of the pointed-at half: a
+registration can't resolve outside it, so an agent's OKF tools can't either.
 """
 
 from __future__ import annotations
@@ -30,6 +43,7 @@ import hashlib
 import os
 import re
 import shlex
+import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,6 +85,14 @@ _SLUG_RE = re.compile(r"[^a-z0-9]+")
 # letting register_server raise a generic MCPCommandError about a "command
 # token".
 _PATH_META_RE = re.compile(r"[;&|`$<>()\\\n\r]")
+
+# Caps on one uploaded folder. Generous for hand-written knowledge -- they
+# exist because a directory picker hands over whatever the user clicked, and
+# "my whole Documents folder" is one misclick away.
+MAX_UPLOAD_FILES = 500
+MAX_UPLOAD_BYTES = 20_000_000
+# How many "-2", "-3" ... suffixes to try when a folder name is already taken.
+_MAX_SLUG_ATTEMPTS = 200
 
 
 class OkfBundleError(ValueError):
@@ -156,6 +178,151 @@ def relative_to_root(path: Path) -> str:
     return "" if path == root else str(path.relative_to(root))
 
 
+def slugify(value: str, fallback: str = "bundle") -> str:
+    """A filesystem- and server-name-safe stem for a user-supplied name.
+
+    Shared with :mod:`asaree.services.okf_documents`, which adds its own
+    reserved-stem rule on top -- the lowercase/hyphenate/trim part is the same
+    question in both places.
+    """
+    slug = _SLUG_RE.sub("-", value.lower()).strip("-")
+    # Trimmed because the slug becomes a directory name inside a path that
+    # already has a root and an owner id in it.
+    return slug[:64].strip("-") or fallback
+
+
+def allocate_storage_dir(base: Path, slug: str) -> Path:
+    """A fresh, empty directory under *base*, suffixing a taken *slug*.
+
+    ``-2``, ``-3`` ... rather than reusing or replacing what's there: existing
+    storage may already have been rewritten by an agent, and an upload should
+    never be a destructive act. Shared with
+    :mod:`asaree.services.okf_documents`, whose storage works the same way.
+    """
+    for attempt in range(1, _MAX_SLUG_ATTEMPTS + 1):
+        candidate = base / (slug if attempt == 1 else f"{slug}-{attempt}")
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise OkfBundleError(f"Could not create storage at {candidate}: {exc}") from exc
+        return candidate
+    raise OkfBundleError(f"Too many folders already stored under the name {slug!r} -- delete some first.")
+
+
+def upload_root() -> Path:
+    """Where uploaded bundles live. ASAREE-owned, unlike ``bundle_root``."""
+    return Path(get_settings().okf_bundle_upload_dir).expanduser().resolve()
+
+
+def owner_upload_root(owner_id: uuid.UUID) -> Path:
+    return upload_root() / str(owner_id)
+
+
+def is_uploaded_path(path: Path | None) -> bool:
+    """Whether a bundle directory is a copy ASAREE stored.
+
+    Decides whether deleting the registration also deletes the files: storage
+    this module created has no original behind it, while a pointed-at folder
+    is the user's own and predates ASAREE entirely.
+    """
+    if path is None:
+        return False
+    try:
+        return path.resolve().is_relative_to(upload_root())
+    except OSError:  # pragma: no cover -- e.g. a symlink loop
+        return False
+
+
+def normalise_upload_paths(names: list[str]) -> tuple[str, list[str]]:
+    """``(folder name, per-file paths inside it)`` for one directory upload.
+
+    A browser's ``webkitRelativePath`` is always ``<picked folder>/...``, so
+    the leading segment is the folder's name and is stripped here rather than
+    trusted from a separate field -- one source for both, and no way for the
+    two to disagree.
+
+    Everything else is rejected outright rather than sanitised: ``..``, hidden
+    segments, absolute paths and non-``.md`` files are all either an attempt to
+    write outside the bundle or a file the OKF server would never read, and
+    quietly renaming a user's file is worse than telling them about it.
+    """
+    if not names:
+        raise OkfBundleError("That folder has no Markdown files in it -- an OKF bundle is a folder of .md files.")
+    if len(names) > MAX_UPLOAD_FILES:
+        raise OkfBundleError(f"That folder has more than {MAX_UPLOAD_FILES} files -- pick the bundle folder itself.")
+
+    folder: str | None = None
+    relatives: list[str] = []
+    for raw in names:
+        parts = [p for p in raw.replace("\\", "/").split("/") if p != ""]
+        if len(parts) < 2:
+            raise OkfBundleError(f"{raw!r} doesn't look like it came from a folder -- pick a folder, not loose files.")
+        if any(p in (".", "..") or p.startswith(".") for p in parts):
+            raise OkfBundleError(f"{raw!r} contains a hidden or relative path segment, which can't be stored.")
+        if not parts[-1].lower().endswith(".md"):
+            raise OkfBundleError(f"{parts[-1]!r} isn't a .md file -- an OKF bundle holds Markdown concepts.")
+        if folder is None:
+            folder = parts[0]
+        elif parts[0] != folder:
+            raise OkfBundleError("Those files came from more than one folder -- upload one bundle at a time.")
+        relatives.append("/".join(parts[1:]))
+    assert folder is not None
+    if len(set(relatives)) != len(relatives):
+        raise OkfBundleError("That folder has two files with the same path, which can't both be stored.")
+    return folder, relatives
+
+
+async def register_uploaded_bundle(*, owner_id: uuid.UUID, files: list[tuple[str, str]]) -> Any:
+    """Store an uploaded folder of concepts and spawn an OKF server over it.
+
+    *files* is ``(webkitRelativePath, text)`` pairs. Not idempotent, unlike
+    :func:`register_bundle`: re-uploading the same folder is a second bundle,
+    because whatever the first copy has since become is not what's being
+    uploaded now.
+    """
+    total = sum(len(text.encode("utf-8")) for _name, text in files)
+    if total > MAX_UPLOAD_BYTES:
+        raise OkfBundleError(f"That folder is larger than the {MAX_UPLOAD_BYTES // 1_000_000}MB upload limit.")
+    folder, relatives = normalise_upload_paths([name for name, _text in files])
+
+    directory = allocate_storage_dir(owner_upload_root(owner_id), slugify(folder))
+    try:
+        ensure_command_safe(directory)
+        for relative, (_name, text) in zip(relatives, files, strict=True):
+            destination = directory / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(text, encoding="utf-8")
+        return await mcp_service.register_server(
+            name=server_name_for(owner_id, directory),
+            transport="stdio",
+            command=command_for_bundle(directory),
+            owner_id=owner_id,
+        )
+    except Exception:
+        # The directory only exists because this call created it, so a failure
+        # anywhere after mkdir leaves nothing behind -- otherwise a rejected
+        # upload would burn the folder name and push the next try to "-2".
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+
+
+async def delete_bundle(config: Any) -> None:
+    """Forget the registration, and delete the files if ASAREE stored them.
+
+    The one place the two halves of this module diverge on destruction: an
+    uploaded bundle's directory is a copy nothing else points at, so leaving it
+    would accumulate orphans no screen can reach, while a pointed-at folder is
+    the user's own and must survive being un-registered.
+    """
+    path = bundle_path_from_command(config.command)
+    directory = Path(path) if path else None
+    await mcp_service.delete_server(config.id)
+    if is_uploaded_path(directory) and directory is not None and directory.is_dir():
+        shutil.rmtree(directory, ignore_errors=True)
+
+
 def server_name_for(owner_id: uuid.UUID, path: Path) -> str:
     """A unique, readable server name for one owner's bundle.
 
@@ -164,7 +331,7 @@ def server_name_for(owner_id: uuid.UUID, path: Path) -> str:
     across the whole deployment and two users may well each have a
     ``~/okf`` -- or one user two bundles both called ``knowledge``.
     """
-    slug = _SLUG_RE.sub("-", path.name.lower()).strip("-") or "bundle"
+    slug = slugify(path.name)
     digest = hashlib.sha256(f"{owner_id}:{path}".encode()).hexdigest()[:8]
     return f"{BUNDLE_SERVER_NAME_PREFIX}{slug}-{digest}"
 

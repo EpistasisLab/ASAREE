@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
@@ -63,6 +64,10 @@ class BundleResponse(BaseModel):
     id: uuid.UUID
     name: str
     path: str | None
+    # Whether the files are a copy ASAREE stored (an upload) rather than a
+    # folder on the server the registration merely points at. Drives what
+    # deleting means, so the UI has to be able to say which one this is.
+    uploaded: bool
     status: str
     error_message: str | None
     # Bare tool names. The canvas namespaces them "{server}.{tool}" when it
@@ -100,10 +105,12 @@ class RegisterBundleRequest(BaseModel):
 
 
 def _to_response(config: Any) -> BundleResponse:
+    path = okf_bundles.bundle_path_from_command(config.command)
     return BundleResponse(
         id=config.id,
         name=config.name,
-        path=okf_bundles.bundle_path_from_command(config.command),
+        path=path,
+        uploaded=okf_bundles.is_uploaded_path(Path(path) if path else None),
         status=config.status.value,
         error_message=config.error_message,
         tool_names=okf_bundles.tool_names_for(config),
@@ -177,6 +184,36 @@ async def register_bundle_endpoint(body: RegisterBundleRequest, user: CurrentUse
     return _to_response(config)
 
 
+@router.post("/bundles/upload", response_model=BundleResponse, status_code=201)
+async def upload_bundle_endpoint(user: CurrentUser, files: Annotated[list[UploadFile], File()]) -> BundleResponse:
+    """Store a folder of concepts the user picked in their browser.
+
+    What the GUI uses, because a browser never reveals a real path: a
+    ``<input webkitdirectory>`` hands over the folder's files and their
+    relative paths, and nothing else. So this copies them — the agent then
+    reads and writes ASAREE's copy, and the user's own folder stops being
+    involved the moment the upload finishes.
+
+    Each file's ``filename`` carries its ``webkitRelativePath``; the leading
+    folder segment is stripped server-side rather than taken from a separate
+    field, so the two can't disagree (see ``normalise_upload_paths``).
+    """
+    payload: list[tuple[str, str]] = []
+    for upload in files:
+        try:
+            text = (await upload.read()).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"{upload.filename or 'A file'} isn't UTF-8 text, so it isn't a concept."
+            ) from exc
+        payload.append((upload.filename or "", text))
+    try:
+        config = await okf_bundles.register_uploaded_bundle(owner_id=user.id, files=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _to_response(config)
+
+
 @router.post("/bundles/{bundle_id}/refresh", response_model=BundleResponse)
 async def refresh_bundle_endpoint(bundle_id: uuid.UUID, user: CurrentUser) -> BundleResponse:
     """Re-discover the bundle server's tools (and clear a stale error)."""
@@ -187,9 +224,15 @@ async def refresh_bundle_endpoint(bundle_id: uuid.UUID, user: CurrentUser) -> Bu
 
 @router.delete("/bundles/{bundle_id}", status_code=204)
 async def delete_bundle_endpoint(bundle_id: uuid.UUID, user: CurrentUser) -> None:
-    """Forget the registration. The directory itself is never touched."""
+    """Forget the registration, and delete the files if they were uploaded.
+
+    Destructive for an uploaded bundle (ASAREE's copy is the only one) and not
+    for a pointed-at one (the user's folder predates the registration) — see
+    ``okf_bundles.delete_bundle``. The ``uploaded`` flag on every response is
+    there so the UI can say which of those is about to happen.
+    """
     config = await _owned_bundle(bundle_id, user)
-    await mcp_service.delete_server(config.id)
+    await okf_bundles.delete_bundle(config)
 
 
 @router.get("/bundles/{bundle_id}/concepts")

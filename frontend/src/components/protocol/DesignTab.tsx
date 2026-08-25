@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
-import { toolFactorServerId, unboundBindableFields, type UnboundField } from './bindableFields'
+import { revealsHiddenMcpServers, toolFactorServerId, unboundBindableFields, type UnboundField } from './bindableFields'
 import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import { InfoTooltip } from './InfoTooltip'
@@ -115,6 +115,7 @@ function AddFactorButton({
           open
           onOpenChange={setDialogOpen}
           factor={{ name: '', levels: [], level_type: 'string' }}
+          revealHiddenServers={revealsHiddenMcpServers(graphQuery.data?.nodes ?? [])}
           pickableFields={fields}
           existingNames={existingNames}
           onSave={(factor, field) => {
@@ -237,6 +238,7 @@ function FactorsEditor({
           // allow-list, so the editor needs the bound node to know whose
           // tools to offer (see bindableFields.ts's toolFactorServerId).
           toolServerId={toolFactorServerId(graphQuery.data?.nodes ?? [], editingFactor.draft.name)}
+          revealHiddenServers={revealsHiddenMcpServers(graphQuery.data?.nodes ?? [])}
           onSave={(next) => editMutation.mutate({ oldName: editingFactor.draft.name, next })}
         />
       )}

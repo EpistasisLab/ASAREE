@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react'
+import { useNodes } from '@xyflow/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Split, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -9,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { experimentsApi } from '@/api/client'
+import { revealsHiddenMcpServers } from './bindableFields'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import {
   computeFactorName,
@@ -125,6 +127,9 @@ export function FactorBindableField({
   const [open, setOpen] = useState(false)
   const [levels, setLevels] = useState<string[]>(() => seedLevels(currentValue))
   const queryClient = useQueryClient()
+  // This component only ever renders inside a node inspector on the canvas,
+  // so the graph is right there in context -- no prop-drilling needed.
+  const nodes = useNodes()
 
   const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
@@ -211,6 +216,7 @@ export function FactorBindableField({
           open={open}
           onOpenChange={setOpen}
           toolServerId={toolServerId}
+          revealHiddenServers={revealsHiddenMcpServers(nodes)}
           factor={{
             name: factorName,
             levels: structured ? seedStructuredLevels(currentValue, levelType) : seedLevels(currentValue),

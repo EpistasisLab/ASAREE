@@ -60,7 +60,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { Skill } from '@/types/skills'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
-import { agentTracedLabel, unboundBindableFields, type UnboundField } from './bindableFields'
+import { agentTracedLabel, revealsHiddenMcpServers, unboundBindableFields, type UnboundField } from './bindableFields'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { DatasetNodeInspector } from './DatasetNodeInspector'
@@ -1453,6 +1453,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onConnect={addClientToolNode}
             onBack={() => setServerBrowserOpen(false)}
             onClose={closeAddPanel}
+            revealHiddenServers={revealsHiddenMcpServers(nodes)}
           />
         ) : addPanelOpen && skillBrowserOpen ? (
           <SkillBrowserPanel onPick={addSkillNode} onBack={() => setSkillBrowserOpen(false)} onClose={closeAddPanel} />
@@ -1654,6 +1655,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           pickableFields={factorPickerFields}
           existingNames={factorPickerExistingNames}
           emptyPickerMessage={`${(factorPickerNode?.data as { label?: string })?.label || 'This node'} has no fields that can be turned into a factor.`}
+          revealHiddenServers={revealsHiddenMcpServers(nodes)}
           onSave={(factor, field) => {
             if (field) createFactorMutation.mutate({ factor, field })
           }}

@@ -32,6 +32,7 @@ export function McpServerBrowserPanel({
   onConnect,
   onBack,
   onClose,
+  revealHiddenServers = false,
 }: {
   onPick: (server: McpServer) => void
   // Fires with a server the user just registered through the connect dialog,
@@ -40,11 +41,14 @@ export function McpServerBrowserPanel({
   onConnect: (server: McpServer) => void
   onBack: () => void
   onClose: () => void
+  // True when the canvas that opened this panel already wires one of the
+  // hidden system servers -- see bindableFields' revealsHiddenMcpServers.
+  revealHiddenServers?: boolean
 }) {
   const [query, setQuery] = useState('')
   const [connectOpen, setConnectOpen] = useState(false)
   const serversQuery = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list() })
-  const servers = selectableMcpServers(serversQuery.data ?? [])
+  const servers = selectableMcpServers(serversQuery.data ?? [], undefined, revealHiddenServers)
   const term = query.trim().toLowerCase()
   const filtered = servers.filter(
     (s) => s.name.toLowerCase().includes(term) || presetForServer(s).label.toLowerCase().includes(term),

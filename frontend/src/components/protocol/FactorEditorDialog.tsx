@@ -142,9 +142,21 @@ function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChan
 // own Server/Tools-allowed fields; a level here is a whole mcp_tool node's
 // config (protocol_execution.py's _resolve_tool_config reads each wired
 // node's own config fresh).
-function ToolConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+function ToolConfigLevelRow({
+  value,
+  revealHiddenServers,
+  onChange,
+}: {
+  value: StructuredLevel
+  revealHiddenServers?: boolean
+  onChange: (next: StructuredLevel) => void
+}) {
   const serversQuery = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list() })
-  const servers = selectableMcpServers(serversQuery.data ?? [], value.server_id as string | undefined)
+  const servers = selectableMcpServers(
+    serversQuery.data ?? [],
+    value.server_id as string | undefined,
+    revealHiddenServers,
+  )
   const selectedServer = servers.find((s) => s.id === value.server_id)
   const tools = selectedServer?.capabilities?.tools ?? []
   const selectedTools = (value.tool_names as string[] | undefined) ?? []
@@ -501,6 +513,7 @@ export function FactorEditorDialog({
   existingNames,
   emptyPickerMessage,
   toolServerId,
+  revealHiddenServers,
   onSave,
 }: {
   open: boolean
@@ -513,6 +526,12 @@ export function FactorEditorDialog({
   // picked field's own `serverId` wins over this, since that's the node the
   // factor is about to be bound to.
   toolServerId?: string | null
+  // Only meaningful for a `tool_config` factor, whose levels each pick their
+  // own server: whether this canvas already wires one of the hidden system
+  // servers, and so should be offered all of them (revealsHiddenMcpServers).
+  // `tool_names` levels don't need it -- they resolve their one pinned server
+  // by id straight off the server list, hidden or not.
+  revealHiddenServers?: boolean
   // Only passed by DesignTab's "Add factor" entry point or a node's own
   // hover-toolbar "Make experimental factor" icon -- every bindable field
   // (on the whole canvas, or scoped to just that one node) that isn't
@@ -719,6 +738,7 @@ export function FactorEditorDialog({
                           ) : levelType === 'tool_config' ? (
                             <ToolConfigLevelRow
                               value={level as StructuredLevel}
+                              revealHiddenServers={revealHiddenServers}
                               onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
                             />
                           ) : levelType === 'pattern' ? (

@@ -15,12 +15,47 @@ export interface BindableFieldSpec {
 // pick in the canvas.
 const HIDDEN_SERVER_NAME_PREFIX = 'asaree-sklearn-'
 
+// ...unless THIS canvas is already one of the pipelines built on them (the
+// myocardial use cases in publications/bioinformatics), in which case hiding
+// them stops being tidiness and becomes a trap: delete one of the six sklearn
+// Tool nodes and there'd be no way to add it back.
+//
+// Derived from the graph rather than stored as a flag on the protocol, so
+// there's nothing to set, migrate, or leave stale -- a canvas that wires one
+// of these servers reveals them; a canvas that doesn't, doesn't.
+//
+// Matched on `server_name`, not `server_id`: the name is what an exported
+// protocol JSON carries and what import_use_case.py's own `_localize` matches
+// on, so this is already true of an imported graph before its ids have been
+// rewritten to this deployment's.
+//
+// Revealing ALL of them (not just the ones this graph happens to reference) is
+// deliberate: these servers are the stages of one pipeline, and a canvas
+// holding the DC stage is exactly the canvas that might want to add the FS one.
+export function revealsHiddenMcpServers(nodes: Node[]): boolean {
+  return nodes.some((n) => {
+    const name = (n.data as { config?: { server_name?: string | null } })?.config?.server_name
+    return typeof name === 'string' && name.startsWith(HIDDEN_SERVER_NAME_PREFIX)
+  })
+}
+
 // The servers an MCP Tool node's Server select should offer -- shared by
 // McpToolNodeInspector and FactorEditorDialog's tool_config level rows so
 // both hide the same set. A currently-selected server is always kept, even
 // if hidden: dropping it would render the picker blank and silently make an
 // existing node's config uneditable.
-export function selectableMcpServers(servers: McpServer[], currentServerId?: string | null): McpServer[] {
+//
+// `revealHidden` is the caller's answer to revealsHiddenMcpServers for the
+// canvas it's showing -- passed in rather than computed here because the two
+// callers reach the nodes differently (the canvas has them in hand; DesignTab
+// is a sibling of the ReactFlowProvider and reads them off the shared graph
+// query).
+export function selectableMcpServers(
+  servers: McpServer[],
+  currentServerId?: string | null,
+  revealHidden = false,
+): McpServer[] {
+  if (revealHidden) return servers
   return servers.filter((s) => !s.name.startsWith(HIDDEN_SERVER_NAME_PREFIX) || s.id === currentServerId)
 }
 

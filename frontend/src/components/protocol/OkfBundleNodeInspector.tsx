@@ -10,6 +10,7 @@ import { hashToChartHue } from '@/lib/utils'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
+import { OkfConceptList } from './OkfConceptList'
 import type { OkfBundleNodeData, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = hashToChartHue('okf_bundle')
@@ -208,21 +209,23 @@ export function OkfBundleNodeInspector({
               </div>
             </div>
 
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">Concepts currently in this bundle</p>
-              {conceptsQuery.isLoading ? (
+            {conceptsQuery.isLoading ? (
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">Concepts currently in this bundle</p>
                 <Skeleton className="h-20 w-full" />
-              ) : conceptsQuery.isError ? (
-                <p className="text-xs text-destructive">Could not reach this bundle&rsquo;s server.</p>
-              ) : (
-                // Rendered verbatim: the OKF tools' output shape belongs to
-                // Motoro, and parsing it here would be a second place to keep
-                // in sync with it for no gain in a preview.
-                <pre className="max-h-[calc(100vh-30rem)] min-h-24 overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-[0.7rem] whitespace-pre-wrap">
-                  {conceptsQuery.data?.content || '(empty)'}
-                </pre>
-              )}
-            </div>
+              </div>
+            ) : conceptsQuery.isError ? (
+              <p className="text-xs text-destructive">Could not reach this bundle&rsquo;s server.</p>
+            ) : (
+              // is_error is passed through, not just the transport failure
+              // above it: the server can answer while the tool itself failed
+              // (its text is then the exception, not a payload), and that reads
+              // as an empty bundle unless it is shown as the error it is.
+              <OkfConceptList
+                content={conceptsQuery.data?.content ?? ''}
+                isError={conceptsQuery.data?.is_error ?? false}
+              />
+            )}
           </div>
         )}
       </div>

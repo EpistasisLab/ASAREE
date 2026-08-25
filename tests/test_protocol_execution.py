@@ -475,6 +475,31 @@ def test_dataset_connector_grants_the_workspace_tools() -> None:
     assert pe._resolve_dataset_tool_config(bare, "a") == {"server_names": [], "tool_names": []}
 
 
+def test_script_connector_grants_the_script_runner() -> None:
+    # Wiring a Script node is the whole gesture, exactly like Dataset above:
+    # before this, a script was only runnable if the user ALSO wired one of the
+    # two sklearn servers whose script tools read the ambient path -- and both
+    # reject a script that isn't fitting a model.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hello')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+    resolved = pe._resolve_script_tool_config(graph, "a")
+    assert resolved["server_names"] == ["asaree-script"]
+    assert resolved["tool_names"] == ["asaree-script.run_wired_script"]
+
+    # No Script wired -> no implicit grant.
+    bare = {"nodes": [agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_script_tool_config(bare, "a") == {"server_names": [], "tool_names": []}
+
+    # An empty Script node publishes no ambient path either, so the tool would
+    # only be there to report its own absence.
+    empty = {
+        "nodes": [agent, _script_node(code="")],
+        "edges": [agent_llm_edge, _script_edge("script1", "a")],
+    }
+    assert pe._resolve_script_tool_config(empty, "a") == {"server_names": [], "tool_names": []}
+
+
 def test_merge_tool_configs_does_not_double_an_explicitly_wired_workspace() -> None:
     # A user who also wired an asaree-workspace Tool node would otherwise
     # contribute the same namespaced names twice, now that one grant is implicit.
@@ -568,6 +593,9 @@ def test_build_user_input_cues_bound_script_without_inlining_it() -> None:
     result = pe._build_user_input(agent, graph, {}, script_bound=True)
     assert "Script context:" in result
     assert "print('hello')" not in result
+    # And it names the tool that is actually granted with the Script node, not
+    # a sklearn harness the agent may well not have.
+    assert "run_wired_script()" in result
 
 
 def test_build_user_input_inlines_script_when_it_could_not_be_bound() -> None:

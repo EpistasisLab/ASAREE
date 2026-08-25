@@ -660,6 +660,53 @@ def predict_proba(X):
     check("payload hashed", len(out.get("payload_sha256", "")) == 64)
 
 
+class _FakeMeta:
+    def __init__(self, extra: dict[str, str]) -> None:
+        self.model_extra = extra
+
+
+class _FakeRequestContext:
+    def __init__(self, extra: dict[str, str]) -> None:
+        self.meta = _FakeMeta(extra)
+
+
+class _FakeCtx:
+    """Stands in for FastMCP's Context -- only the ambient _meta is read."""
+
+    def __init__(self, extra: dict[str, str]) -> None:
+        self.request_context = _FakeRequestContext(extra)
+
+
+def test_ambient_script_path(clf_path: str, tmp: Path) -> None:
+    print("\nambient script_path")
+    code = """
+result = {"from": "ambient"}
+def predict_proba(X):
+    return np.zeros(len(X))
+"""
+    script = tmp / "wired.py"
+    script.write_text(code)
+    ctx = _FakeCtx({"motoro.ambient.script_path": str(script)})
+
+    # The whole point: no `code`, no `code_path`, and it still runs the script.
+    out = json.loads(server.run_script(data_path=clf_path, target_column="outcome", ctx=ctx))
+    check("ambient script ran", out.get("model_decisions", {}).get("from") == "ambient", out.get("error", ""))
+
+    # An explicit argument still wins -- a genuine one-off is not overridden.
+    explicit = code.replace('"ambient"', '"explicit"')
+    out = json.loads(server.run_script(code=explicit, data_path=clf_path, target_column="outcome", ctx=ctx))
+    check("explicit code wins", out.get("model_decisions", {}).get("from") == "explicit", out.get("error", ""))
+
+    # No ctx, no ambient key, unreadable path: each degrades to a clear error.
+    out = json.loads(server.run_script(data_path=clf_path, target_column="outcome"))
+    check("no script at all is reported", "no script" in out.get("error", ""), out.get("error", ""))
+    out = json.loads(server.run_script(data_path=clf_path, target_column="outcome", ctx=_FakeCtx({})))
+    check("empty ambient meta is reported", "no script" in out.get("error", ""), out.get("error", ""))
+    missing = _FakeCtx({"motoro.ambient.script_path": str(tmp / "gone.py")})
+    out = json.loads(server.run_script(data_path=clf_path, target_column="outcome", ctx=missing))
+    check("unreadable ambient path is reported", "could not read" in out.get("error", ""), out.get("error", ""))
+
+
 def test_tool_schemas_survive_the_guard() -> None:
     print("\nFastMCP schema generation")
     import asyncio
@@ -720,6 +767,7 @@ def main() -> int:
         test_test_labels_are_not_reachable(clf_path)
         test_error_paths(clf_path, tmp)
         test_payload_is_bound(clf_path)
+        test_ambient_script_path(clf_path, tmp)
         test_tool_schemas_survive_the_guard()
 
     print(f"\n{_PASS} passed, {_FAIL} failed")

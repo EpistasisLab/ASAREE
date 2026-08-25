@@ -16,12 +16,14 @@ export interface BindableFieldSpec {
 //
 // Two different reasons, same treatment. The six asaree-sklearn-* servers are
 // the myocardial pipeline's stages -- deployment plumbing, not something to
-// browse. `asaree-workspace` is hidden because adding it by hand is
-// REDUNDANT: every agent with a Dataset connector wired already gets the
-// workspace tools implicitly (the backend's WORKSPACE_AGENT_TOOLS /
-// _resolve_dataset_tool_config), so a node for it is at best a no-op and at
+// browse. `asaree-workspace` and `asaree-script` are hidden because adding
+// either by hand is REDUNDANT: every agent with a Dataset connector wired
+// already gets the workspace tools implicitly, and every agent with a Script
+// node wired gets run_wired_script (the backend's WORKSPACE_AGENT_TOOLS /
+// SCRIPT_AGENT_TOOLS and _resolve_dataset_tool_config /
+// _resolve_script_tool_config), so a node for either is at best a no-op and at
 // worst a second, divergent allow-list over the same tools.
-const HIDDEN_SERVER_NAME_PREFIXES = ['asaree-sklearn-', 'asaree-workspace']
+const HIDDEN_SERVER_NAME_PREFIXES = ['asaree-sklearn-', 'asaree-workspace', 'asaree-script']
 
 function isHiddenServerName(name: string): boolean {
   return HIDDEN_SERVER_NAME_PREFIXES.some((prefix) => name.startsWith(prefix))

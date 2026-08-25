@@ -52,7 +52,12 @@ from asaree.services.protocol_runs import (
 )
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
-from asaree.services.system_mcp_servers import WORKSPACE_AGENT_TOOLS, WORKSPACE_SERVER_NAME
+from asaree.services.system_mcp_servers import (
+    SCRIPT_AGENT_TOOLS,
+    SCRIPT_SERVER_NAME,
+    WORKSPACE_AGENT_TOOLS,
+    WORKSPACE_SERVER_NAME,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +162,12 @@ class ProtocolValidationError(Exception):
 # not also have to wire the tools to do it), and it leaves one line of CONTENT
 # behind: the fact that the data is there, which no tool call can tell an agent
 # that never thinks to look.
+#
+# Script works the same way, for the same reason: a REFERENCE (its code written
+# to disk and bound ambiently, so what runs never passes through the model) plus
+# the CAPABILITY that reference is useless without -- ``asaree-script``'s
+# ``run_wired_script``, granted by ``_resolve_script_tool_config``. Wiring a
+# script is what declares that the agent should run one.
 #
 # The connector-typed slots on an agent/critic_gate node. ai/tool/memory are
 # a deliberately closed set; architectural_pattern and dataset are
@@ -1214,6 +1225,32 @@ def _resolve_dataset_tool_config(graph: dict[str, Any], node_id: str) -> dict[st
     }
 
 
+def _resolve_script_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """The Script connector's contribution to the tool allow-list: ASAREE's own
+    ``asaree-script`` server, on exactly the same terms as
+    ``_resolve_dataset_tool_config`` above.
+
+    Wiring a script is the gesture that means "run this", so the executor
+    follows from it. Before this, a Script node was inert unless the user ALSO
+    wired ``asaree-sklearn-model`` or ``scikit-learn-mcp`` -- the only two
+    servers whose script tools read the ambient script path, and both
+    model-fitting harnesses that reject a script which doesn't define a
+    ``predict_proba``/``predict``. A script that merely computed and printed
+    something had nowhere at all to run, while the prompt went on telling the
+    agent one was waiting.
+
+    Granted on the code, not on the node: a Script node wired with an empty
+    ``code`` has nothing to execute, and ``_ambient_meta_for`` publishes no path
+    for it either, so the tool would only be there to report its own absence.
+    """
+    if not (_resolve_script_config(graph, node_id) or {}).get("code"):
+        return {"server_names": [], "tool_names": []}
+    return {
+        "server_names": [SCRIPT_SERVER_NAME],
+        "tool_names": [f"{SCRIPT_SERVER_NAME}.{name}" for name in SCRIPT_AGENT_TOOLS],
+    }
+
+
 def _merge_tool_configs(*configs: dict[str, Any]) -> dict[str, Any]:
     """Union of several ``{"server_names", "tool_names"}`` allow-lists, order
     preserved, duplicates dropped.
@@ -1372,9 +1409,10 @@ def _build_user_input(
     if script_code and script_bound:
         parts.append(
             "Script context:\n"
-            "A script is wired into this step. The script-running tool (e.g. run_model_script) picks "
-            "it up from ambient run context -- call it WITHOUT a `code` argument and it executes the "
-            "wired script exactly as written. Do not retype or paraphrase it."
+            "A script is wired into this step. Call run_wired_script() -- no arguments -- and it "
+            "executes exactly what the user wrote; read its stdout for the result. Do not retype or "
+            "paraphrase the script. (A sklearn script tool, e.g. run_model_script, picks the same "
+            "script up the same way if this step is about fitting a model.)"
         )
     elif script_code:
         # No workspace directory to write it to (see _materialize_script), so
@@ -1383,8 +1421,8 @@ def _build_user_input(
         # the model's transcription -- which is the whole reason the path
         # above exists.
         parts.append(
-            "Script to pass verbatim as the relevant tool's own code argument (e.g. run_model_script's "
-            f"`code`):\n```python\n{script_code}\n```"
+            "Script to pass verbatim as the relevant tool's own code argument (run_wired_script's or "
+            f"run_model_script's `code`):\n```python\n{script_code}\n```"
         )
 
     return "\n\n".join(parts)
@@ -1482,16 +1520,18 @@ async def _run_agent_node(
     # connector instead (topological_order already validated their shape).
     model_config_data = {k: v for k, v in _resolve_llm_config(graph, node["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
-    # Three connectors feed one allow-list. The Knowledge connector's OKF
+    # Four connectors feed one allow-list. The Knowledge connector's OKF
     # bundles and documents are MCP servers like any other, so they land here
     # rather than in a slot of their own (see _resolve_knowledge_config), and
-    # the Dataset connector implies ASAREE's own workspace tools (see
-    # _resolve_dataset_tool_config) -- the split between the three is about
+    # the Dataset and Script connectors imply ASAREE's own workspace and
+    # script-running tools (see _resolve_dataset_tool_config /
+    # _resolve_script_tool_config) -- the split between the four is about
     # what the user is declaring, not about how the engine consumes it.
     tool_config = _merge_tool_configs(
         _resolve_tool_config(graph, node["id"]),
         _resolve_knowledge_config(graph, node["id"]),
         _resolve_dataset_tool_config(graph, node["id"]),
+        _resolve_script_tool_config(graph, node["id"]),
     )
     pattern_config_data = _resolve_pattern_config(graph, node["id"])
     pattern_config = PatternConfig(

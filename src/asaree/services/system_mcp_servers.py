@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 WORKSPACE_SERVER_NAME = "asaree-workspace"
+SCRIPT_SERVER_NAME = "asaree-script"
 OKF_SERVER_NAME = "motoro-okf"
 SCIKIT_LEARN_SERVER_NAME = "scikit-learn-mcp"
 
@@ -60,6 +61,18 @@ WORKSPACE_AGENT_TOOLS: Final[tuple[str, ...]] = (
     "read_scratch_learned",
 )
 
+# The same implicit-grant arrangement for the Script connector: wiring a Script
+# node is the gesture that means "run this", so the tool that can is granted
+# with it (``protocol_execution._resolve_script_tool_config``). Without this a
+# Script node was inert unless the user also wired one of the two sklearn
+# servers whose script tools happen to read the ambient script path -- both
+# model-fitting harnesses, so a script that wasn't fitting a model had nowhere
+# to run at all.
+#
+# ``ping`` omitted for the same reason as above: a health check is noise in an
+# agent's tool list.
+SCRIPT_AGENT_TOOLS: Final[tuple[str, ...]] = ("run_wired_script",)
+
 # (server name, module to run). Every module here is importable from this
 # repo's own venv -- asaree.* is ASAREE, motoro.* comes from the pinned Motoro
 # dependency, and the asaree_sklearn_* packages are the mcp-servers/ path
@@ -77,6 +90,7 @@ WORKSPACE_AGENT_TOOLS: Final[tuple[str, ...]] = (
 # reason compose.yml used to need a bind mount replaying that exact path.
 SYSTEM_MCP_SERVERS: Final[tuple[tuple[str, str], ...]] = (
     (WORKSPACE_SERVER_NAME, "asaree.mcp_servers.workspace_server"),
+    (SCRIPT_SERVER_NAME, "asaree.mcp_servers.script_server"),
     # Motoro's own bundled OKF server, not ASAREE's code. Registered
     # unconditionally, even if AGENTIC_OKF_BUNDLE_DIR is unset -- connecting
     # needs no bundle to exist yet; a tool call without one just returns a

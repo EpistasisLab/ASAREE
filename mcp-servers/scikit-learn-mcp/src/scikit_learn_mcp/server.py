@@ -48,6 +48,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from mcp.server import FastMCP
+from mcp.server.fastmcp import Context
 
 from scikit_learn_mcp import forest, logistic, profile, scoring, splitting
 from scikit_learn_mcp.data import DataError, frame_sha256, load_frame, split_xy
@@ -76,6 +77,13 @@ mcp = FastMCP("scikit-learn-mcp", instructions=INSTRUCTIONS)
 
 _CLASSIFICATION = {"binary", "multiclass"}
 _TASK_TYPES = _CLASSIFICATION | {"regression"}
+# A client may bind the script it wants run as a path in the request's ambient
+# ``_meta`` instead of passing it as an argument, under Motoro's caller-ambient
+# prefix (ASAREE's Script node takes this route -- see its
+# ``_ambient_meta_for``). Still no ASAREE import and nothing product-specific
+# in here: this is one more place `code_path` can come from, honoured when the
+# call names no script of its own, and absent outside such a client.
+_META_KEY_SCRIPT_PATH = "motoro.ambient.script_path"
 # Truncation budgets. A tool result is read by a model, so an unbounded
 # traceback or a script that prints in a loop would otherwise cost more context
 # than the metrics the call was made for.
@@ -86,6 +94,23 @@ _STDOUT_CHARS = 4000
 # --------------------------------------------------------------------------
 # Shared plumbing
 # --------------------------------------------------------------------------
+
+
+def _ambient_script_path(ctx: Context | None) -> str:
+    """The script path the caller bound ambiently, or ``""`` when there is none.
+
+    Deliberately total: no ambient ``_meta`` at all (a direct call, a client
+    that doesn't use the convention) is the normal case outside an agent run,
+    not an error.
+    """
+    if ctx is None:
+        return ""
+    try:
+        extra = getattr(ctx.request_context.meta, "model_extra", None) or {}
+    except Exception:  # noqa: BLE001 -- no request context outside a live call
+        return ""
+    path = extra.get(_META_KEY_SCRIPT_PATH)
+    return path if isinstance(path, str) else ""
 
 
 class _Prepared:
@@ -1370,10 +1395,11 @@ def _score_script(
 def run_script(
     # data_path/target_column lead because they are the only two genuinely
     # required arguments: `code` became optional when `code_path` joined it
-    # (exactly one is needed, which no signature can express), and Python
-    # forbids a required parameter after an optional one. MCP calls arrive as a
-    # JSON object, so the order is invisible on the wire -- only the
-    # required/optional split it encodes is.
+    # (exactly one is needed, which no signature can express -- and neither is,
+    # when the caller binds the script ambiently), and Python forbids a required
+    # parameter after an optional one. MCP calls arrive as a JSON object, so the
+    # order is invisible on the wire -- only the required/optional split it
+    # encodes is.
     data_path: str,
     target_column: str,
     code: str = "",
@@ -1384,6 +1410,7 @@ def run_script(
     random_seed: int = 42,
     payload_json: str = "",
     include_curves: bool = False,
+    ctx: Context | None = None,
 ) -> str:
     """Fit a model with your own script, then score it on a held-out split.
 
@@ -1425,7 +1452,9 @@ def run_script(
         data_path: Path or URI to the dataset (.csv/.parquet/.json/.jsonl).
         target_column: Column to predict; every other column is a feature.
         code: Python source defining predict_proba(X) or predict(X) as above.
-            Pass this OR ``code_path``, not both.
+            Pass this OR ``code_path``, not both. Omit both when a script is
+            already wired into this step -- it arrives as ambient run context
+            and is executed exactly as written; retyping it can only mangle it.
         code_path: A file to read the source from instead. Prefer this whenever
             the script already exists as a file: what runs is then byte-for-byte
             what is on disk, with nothing retyping it in between.
@@ -1445,13 +1474,20 @@ def run_script(
 
     if code.strip() and code_path.strip():
         return json.dumps({"error": "pass `code` or `code_path`, not both."})
+    # An explicit argument always wins (the caller may have a genuine one-off),
+    # but a script bound ambiently is the normal source when there is one: the
+    # point of that channel is that what runs never passes through the model.
+    if not code.strip() and not code_path.strip():
+        code_path = _ambient_script_path(ctx)
     if code_path.strip():
         try:
             code = Path(code_path).read_text()
         except OSError as e:
             return json.dumps({"error": f"could not read code_path {code_path!r}: {e}"})
     if not code.strip():
-        return json.dumps({"error": "no script: pass `code` or `code_path`."})
+        return json.dumps(
+            {"error": "no script: pass `code` or `code_path`, and no script is wired into this step."}
+        )
 
     return _run_script(
         code=code,

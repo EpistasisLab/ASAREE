@@ -174,7 +174,7 @@ def target_summary(target: pd.Series, target_column: str) -> dict[str, Any]:
             "std": _round(numeric.std()),
         }
         notes.append(
-            "continuous target -- ROC-AUC does not apply; use run_logistic_regression_script "
+            "continuous target -- ROC-AUC does not apply; use run_script "
             "with task_type='regression'"
         )
     elif task_type == "degenerate":

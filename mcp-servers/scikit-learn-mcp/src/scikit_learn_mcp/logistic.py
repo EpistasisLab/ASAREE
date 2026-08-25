@@ -11,7 +11,7 @@ raising at predict time, a threshold tuned on the test split). Exposing the
 recipe's *decisions* as typed arguments keeps the interesting choices in the
 caller's hands and the mechanical ones here.
 
-``run_logistic_regression_script`` remains for the cases this can't express.
+``run_script`` remains for the cases this can't express.
 """
 
 from __future__ import annotations

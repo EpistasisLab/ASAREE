@@ -293,7 +293,7 @@ def test_fit_rejects_regression(reg_path: str) -> None:
     print("\nfit_logistic_regression -- continuous target")
     out = json.loads(server.fit_logistic_regression(data_path=reg_path, target_column="price"))
     check("continuous target refused", "continuous" in out.get("error", ""), out.get("error", ""))
-    check("points at the script tool", "run_logistic_regression_script" in out.get("error", ""))
+    check("points at the script tool", "run_script" in out.get("error", ""))
 
 
 def test_cross_validate(clf_path: str) -> None:
@@ -535,7 +535,7 @@ def test_regression_script(reg_path: str) -> None:
     # The script tool is the only route to a continuous target now that the
     # linear-regression tool is gone -- and the estimator has to be imported,
     # since only the classification names are pre-bound.
-    print("\nrun_logistic_regression_script -- task_type='regression'")
+    print("\nrun_script -- task_type='regression'")
     code = """
 from sklearn.linear_model import LinearRegression
 model = LinearRegression()
@@ -545,7 +545,7 @@ def predict(X):
 result = {"coef": model.coef_.tolist(), "intercept": float(model.intercept_)}
 """
     out = json.loads(
-        server.run_logistic_regression_script(
+        server.run_script(
             code=code, data_path=reg_path, target_column="price", task_type="regression"
         )
     )
@@ -562,7 +562,7 @@ result = {"coef": model.coef_.tolist(), "intercept": float(model.intercept_)}
 
 
 def test_logistic_script(clf_path: str) -> None:
-    print("\nrun_logistic_regression_script")
+    print("\nrun_script")
     code = """
 numeric = X_train.select_dtypes("number")
 model = LogisticRegression(max_iter=500).fit(numeric, y_train)
@@ -571,13 +571,15 @@ def predict_proba(X):
 chosen_threshold = 0.4
 result = {"n_features": numeric.shape[1]}
 """
-    out = json.loads(server.run_logistic_regression_script(code=code, data_path=clf_path, target_column="outcome"))
+    out = json.loads(server.run_script(code=code, data_path=clf_path, target_column="outcome"))
     check("no error", "error" not in out, out.get("error", ""))
     check("roc_auc is strong", (out["test_metrics"].get("roc_auc") or 0) > 0.9, str(out["test_metrics"]))
     check("chosen_threshold honored", out["test_metrics"]["threshold"] == 0.4)
     check("operating points returned", "youden_j" in out.get("test_curves", {}).get("best_thresholds", {}))
     check("decisions echoed back", out.get("model_decisions") == {"n_features": 2})
-    check("family recorded", out.get("model_family") == "logistic_regression")
+    # "script" even for a classification run that used the pre-bound
+    # LogisticRegression -- the code, not the tool, chose the estimator.
+    check("family recorded", out.get("model_family") == "script")
 
 
 def test_test_labels_are_not_reachable(clf_path: str) -> None:
@@ -587,7 +589,7 @@ result = {"saw": sorted(n for n in ("X_test", "y_test") if n in dir())}
 def predict_proba(X):
     return np.zeros(len(X))
 """
-    out = json.loads(server.run_logistic_regression_script(code=code, data_path=clf_path, target_column="outcome"))
+    out = json.loads(server.run_script(code=code, data_path=clf_path, target_column="outcome"))
     check("no error", "error" not in out, out.get("error", ""))
     check("X_test/y_test unbound in the script namespace", out.get("model_decisions", {}).get("saw") == [])
     check("train split is bound", (out.get("n_train") or 0) > 0)
@@ -617,25 +619,25 @@ def test_error_paths(clf_path: str, tmp: Path) -> None:
     check("malformed split_json rejected", "not valid JSON" in out.get("error", ""), out.get("error", ""))
 
     out = json.loads(
-        server.run_logistic_regression_script(
+        server.run_script(
             code="raise ValueError('boom')", data_path=clf_path, target_column="outcome"
         )
     )
     check("script exception is captured", "boom" in out.get("error", ""), out.get("error", ""))
     check("traceback returned", "traceback" in out)
 
-    out = json.loads(server.run_logistic_regression_script(code="x = 1", data_path=clf_path, target_column="outcome"))
+    out = json.loads(server.run_script(code="x = 1", data_path=clf_path, target_column="outcome"))
     check("missing predict_proba is reported", "predict_proba" in out.get("error", ""), out.get("error", ""))
 
     out = json.loads(
-        server.run_logistic_regression_script(
+        server.run_script(
             code=ok, data_path=clf_path, target_column="outcome", task_type="nonsense"
         )
     )
     check("bad task_type rejected", "task_type" in out.get("error", ""), out.get("error", ""))
 
     out = json.loads(
-        server.run_logistic_regression_script(
+        server.run_script(
             code=ok, data_path=clf_path, target_column="outcome", payload_json="{oops"
         )
     )
@@ -650,7 +652,7 @@ def predict_proba(X):
     return np.zeros(len(X))
 """
     out = json.loads(
-        server.run_logistic_regression_script(
+        server.run_script(
             code=code, data_path=clf_path, target_column="outcome", payload_json='{"max_iter": 700}'
         )
     )
@@ -673,12 +675,16 @@ def test_tool_schemas_survive_the_guard() -> None:
         "fit_random_forest",
         "cross_validate_random_forest",
         "tune_random_forest",
-        "run_logistic_regression_script",
+        "run_script",
         "ping",
     }
     check("every tool registered", names == expected, str(sorted(names ^ expected)))
     check("xgboost tool is gone", "run_xgboost_script" not in names)
     check("linear-regression script tool is gone", "run_linear_regression_script" not in names)
+    # Renamed from run_logistic_regression_script: one script tool covering
+    # every family, so a name promising a single one is worse than no promise.
+    check("the old logistic-branded name is gone", "run_logistic_regression_script" not in names)
+    check("no per-family script tools", not any(n.endswith("_script") and n != "run_script" for n in names))
     params = set(inspect.signature(server.fit_logistic_regression).parameters)
     check("the guard preserves real signatures", "target_column" in params and "kwargs" not in params, str(params))
 

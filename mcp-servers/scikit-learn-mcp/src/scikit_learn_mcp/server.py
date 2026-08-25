@@ -13,9 +13,11 @@ buys nothing but new ways to get it wrong: unscaled features quietly wrecking a
 penalized fit, an unseen category raising at predict time, a threshold tuned on
 the test split. The two families share their split, scoring and provenance
 blocks, so their results are directly comparable -- run both.
-``run_logistic_regression_script`` remains for what the arguments can't express,
-and is also the only way to fit a continuous target, since every declarative
-tool here is a classifier.
+``run_script`` remains for what those arguments can't express, and is also the
+only way to fit a continuous target, since every declarative tool here is a
+classifier. One script tool, not one per family: its body is estimator-agnostic
+(see ``_run_script``), so a per-family split would differ only in which names
+came pre-bound.
 
 **Nothing is scored on data the model was fit on.** Every metric comes from a
 held-out split (or out-of-fold predictions), computed by :mod:`scoring` from
@@ -66,7 +68,7 @@ their split, scoring and provenance blocks, so running both gives directly \
 comparable results.
 
 Every declarative tool here is a classifier. A continuous target needs \
-run_logistic_regression_script with task_type='regression', which is also the \
+run_script with task_type='regression', which is also the \
 escape hatch for any pipeline the typed arguments can't express."""
 
 mcp = FastMCP("scikit-learn-mcp", instructions=INSTRUCTIONS)
@@ -137,7 +139,7 @@ def _prepare(
     if resolved == "regression":
         raise DataError(
             f"target {target_column!r} looks continuous ({frame[target_column].nunique()} distinct values). "
-            "Every declarative tool here is a classifier -- use run_logistic_regression_script with "
+            "Every declarative tool here is a classifier -- use run_script with "
             "task_type='regression', or pass task_type='multiclass' if these really are class labels."
         )
 
@@ -1364,7 +1366,7 @@ def _score_script(
 
 
 @mcp.tool()
-def run_logistic_regression_script(
+def run_script(
     code: str,
     data_path: str,
     target_column: str,
@@ -1377,11 +1379,16 @@ def run_logistic_regression_script(
 ) -> str:
     """Fit a model with your own script, then score it on a held-out split.
 
-    The escape hatch for what ``fit_logistic_regression``'s arguments can't
-    express -- a custom ColumnTransformer, an interaction basis, a calibrated
-    or stacked estimator, a different classifier entirely. Prefer the
-    declarative tool when it covers the case: it handles preprocessing,
+    The escape hatch for what the declarative tools' arguments can't express --
+    a custom ColumnTransformer, an interaction basis, a calibrated or stacked
+    estimator, an estimator from outside the two families here. Prefer a
+    declarative tool when one covers the case: those handle preprocessing,
     threshold selection and the split audit for you.
+
+    Not per-family (there is no ``run_random_forest_script``): the estimator is
+    whatever your code constructs, so one tool covers every family. The
+    pre-bound names below are a convenience for the commonest case, not a
+    restriction -- import anything you need.
 
     It is also the ONLY route to a regression target: every declarative tool
     here is a classifier, so ``task_type='regression'`` plus a ``predict(X)``
@@ -1444,12 +1451,13 @@ def run_logistic_regression_script(
             "OneHotEncoder": OneHotEncoder,
             "SimpleImputer": SimpleImputer,
         },
-        # Not a flat "logistic_regression": with the linear-regression script
-        # tool gone this is also the regression route, and a run whose target
-        # was continuous is not a logistic fit however it got here. The script
-        # decides the estimator, so task_type is the most honest label
-        # available.
-        family="script" if task_type == "regression" else "logistic_regression",
+        # Flatly "script", never the family of whatever happens to be
+        # pre-bound: the caller's code picks the estimator, and it is free to
+        # import a random forest, a stacked ensemble or a Ridge. Recording
+        # "logistic_regression" here -- as this did while the tool still
+        # carried that name -- mislabels every run that used the escape hatch
+        # to escape.
+        family="script",
     )
 
 

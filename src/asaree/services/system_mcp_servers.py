@@ -36,6 +36,30 @@ WORKSPACE_SERVER_NAME = "asaree-workspace"
 OKF_SERVER_NAME = "motoro-okf"
 SCIKIT_LEARN_SERVER_NAME = "scikit-learn-mcp"
 
+# The workspace tools every agent with a Dataset connector wired gets, without
+# the user having to also drag an asaree-workspace Tool node onto the canvas
+# (see protocol_execution._resolve_dataset_tool_config). Wiring a dataset is
+# the gesture that means "this agent works on data"; needing to know that a
+# second, differently-shaped node grants the tools to actually do so is
+# knowledge the spinal use case's system prompts supplied and a new user has
+# no way to guess.
+#
+# Listed explicitly rather than derived from the live registry (every
+# "asaree-workspace.*" tool) because the run allow-list fails closed by design
+# -- see run_tools.gather_tools -- and a tool added to that server later should
+# become an implicit grant to every dataset-wired agent only on purpose.
+# ``ping``/``reset_session`` are omitted: a health check and a no-op
+# compatibility shim are noise in an agent's tool list.
+WORKSPACE_AGENT_TOOLS: Final[tuple[str, ...]] = (
+    "open_workspace",
+    "workspace_status",
+    "accept_stage",
+    "reset_stage",
+    "check_stage_gate",
+    "read_stage_manifest",
+    "read_scratch_learned",
+)
+
 # (server name, module to run). Every module here is importable from this
 # repo's own venv -- asaree.* is ASAREE, motoro.* comes from the pinned Motoro
 # dependency, and the asaree_sklearn_* packages are the mcp-servers/ path

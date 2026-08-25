@@ -385,6 +385,110 @@ def test_build_user_input_names_every_wired_dataset() -> None:
     assert "tier_a__rep_0" not in result
 
 
+def test_build_user_input_states_the_dataset_is_already_open_when_preseeded() -> None:
+    # ASAREE seeds the cell workspace before the agent's first turn, so the
+    # Dataset block stops asking for a tool call. A step the agent can't skip
+    # is a step it can't get wrong -- and a new user never has to learn that
+    # "open a workspace" was a thing their agent had to be told to do.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="spinal-fusion-v1")
+    graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
+    result = pe._build_user_input(
+        agent,
+        graph,
+        {},
+        experiment_id=uuid.UUID(int=1),
+        effective_cell_label="tier_a__rep_0",
+        seeded_dataset="spinal-fusion-v1",
+    )
+    assert "already open" in result
+    assert "spinal-fusion-v1" in result  # named, so the transcript shows what it worked on
+    assert "Do NOT call open_workspace" in result
+    assert str(uuid.UUID(int=1)) not in result
+    assert "tier_a__rep_0" not in result
+
+
+async def test_preseed_skipped_without_a_workspace_or_with_several_datasets() -> None:
+    # Both return "" before any DB or disk access: an unlinked protocol run
+    # has no cell workspace to seed, and several wired datasets are a real
+    # choice with no defensible default (mirrors resolve_dataset_name's own
+    # len == 1 rule) -- those keep the agent-driven open_workspace(name=...).
+    agent, agent_llm_edge = _agent_with_llm("a")
+    one = {
+        "nodes": [agent, _dataset_node(dataset_name="solo")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    assert await pe._preseed_dataset_workspace(one, "a", None, uuid.UUID(int=7)) == ""
+
+    many = {
+        "nodes": [
+            agent,
+            _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1"),
+            _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2"),
+        ],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
+    }
+    assert await pe._preseed_dataset_workspace(many, "a", "exp/cell", uuid.UUID(int=7)) == ""
+
+
+async def test_preseed_failure_falls_back_to_the_agent_driven_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A broken registration must not kill the run before its first turn: the
+    # seeding error is logged, "" comes back, and _build_user_input reverts to
+    # asking the agent to call open_workspace -- which surfaces the real error
+    # where someone is actually reading it.
+    async def _boom(**_kwargs: object) -> None:
+        raise pe.WorkspaceSeedError("Dataset 'gone' not found in registry.")
+
+    monkeypatch.setattr(pe, "seed_cell_workspace", _boom)
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="gone")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    assert await pe._preseed_dataset_workspace(graph, "a", "exp/cell", uuid.UUID(int=7)) == ""
+
+    result = pe._build_user_input(
+        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0", seeded_dataset=""
+    )
+    assert "Call open_workspace()" in result
+
+
+def test_dataset_connector_grants_the_workspace_tools() -> None:
+    # Wiring a Dataset node is the whole gesture: the tools that make working
+    # on that data possible follow from it, with no second asaree-workspace
+    # Tool node to know about. Namespaced, since gather_tools matches against
+    # Motoro's registry (see test_resolve_tool_config_namespaces_tool_names_*).
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spinal-fusion-v1")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    resolved = pe._resolve_dataset_tool_config(graph, "a")
+    assert resolved["server_names"] == ["asaree-workspace"]
+    assert "asaree-workspace.open_workspace" in resolved["tool_names"]
+    assert "asaree-workspace.accept_stage" in resolved["tool_names"]
+    # A health check and a no-op shim are noise in an agent's tool list.
+    assert "asaree-workspace.ping" not in resolved["tool_names"]
+
+    # No Dataset wired -> no implicit grant.
+    bare = {"nodes": [agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_dataset_tool_config(bare, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_merge_tool_configs_does_not_double_an_explicitly_wired_workspace() -> None:
+    # A user who also wired an asaree-workspace Tool node would otherwise
+    # contribute the same namespaced names twice, now that one grant is implicit.
+    explicit = {"server_names": ["asaree-workspace"], "tool_names": ["asaree-workspace.open_workspace"]}
+    implicit = {
+        "server_names": ["asaree-workspace"],
+        "tool_names": ["asaree-workspace.open_workspace", "asaree-workspace.accept_stage"],
+    }
+    assert pe._merge_tool_configs(explicit, implicit) == {
+        "server_names": ["asaree-workspace"],
+        "tool_names": ["asaree-workspace.open_workspace", "asaree-workspace.accept_stage"],
+    }
+
+
 def test_dataset_resolves_from_legacy_tool_handle() -> None:
     # A graph saved before the Dataset connector existed still has its
     # dataset edge on the Tool handle (see _LEGACY_DATASET_HANDLES) -- it

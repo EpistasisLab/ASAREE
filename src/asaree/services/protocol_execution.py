@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.dataset_workspaces import WorkspaceSeedError, seed_cell_workspace
 from asaree.services.experiments import get_experiment
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
 from asaree.services.metric_promotion import promote_cell_score_metrics
@@ -51,6 +52,7 @@ from asaree.services.protocol_runs import (
 )
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
+from asaree.services.system_mcp_servers import WORKSPACE_AGENT_TOOLS, WORKSPACE_SERVER_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +149,14 @@ class ProtocolValidationError(Exception):
 #
 # A new connector is almost always 1 or 2. If it seems to be 3, check whether
 # what you actually have is a reference to something a tool could fetch.
+#
+# One connector may take more than one route -- Dataset takes all three. It is a
+# REFERENCE (its name, bound ambiently), it implies a CAPABILITY (the
+# asaree-workspace tools, granted by ``_resolve_dataset_tool_config`` -- wiring
+# the data is what declares that this agent works on data, so the user should
+# not also have to wire the tools to do it), and it leaves one line of CONTENT
+# behind: the fact that the data is there, which no tool call can tell an agent
+# that never thinks to look.
 #
 # The connector-typed slots on an agent/critic_gate node. ai/tool/memory are
 # a deliberately closed set; architectural_pattern and dataset are
@@ -876,6 +886,63 @@ def _ambient_meta_for(graph: dict[str, Any], node_id: str, workspace_id: str | N
     return meta
 
 
+async def _preseed_dataset_workspace(
+    graph: dict[str, Any], node_id: str, workspace_id: str | None, owner_id: uuid.UUID
+) -> str:
+    """Seed this cell's workspace from the wired dataset before the agent runs.
+
+    Returns the dataset name that is now open at HEAD, or ``""`` if nothing was
+    seeded. That return value is what turns ``_build_user_input``'s Dataset
+    block from an instruction ("call open_workspace() first") into a statement
+    of fact ("your data is already open") -- the point of doing this here is
+    that opening a workspace is not a decision an agent should be making. It's
+    a consequence of the user having wired a Dataset node, and ASAREE knows
+    that at run start.
+
+    Idempotent and safe to call on every turn: ``Workspace.open`` resumes a
+    cell that already has accepted stages rather than resetting it.
+
+    Deliberately seeds only when EXACTLY ONE dataset is wired, mirroring
+    ``asaree_workspace_core.resolve_dataset_name``'s own rule. A cell workspace
+    is keyed by ``experiment_id/cell_label`` alone, so several wired datasets
+    are a real choice with no defensible default -- picking the first would be
+    a guess dressed up as automation. Those runs keep the old flow: the prompt
+    lists the candidates and the agent calls ``open_workspace(name=...)``,
+    which reports the collision if it opens a second one.
+
+    A failure here is logged and swallowed, never raised: a run whose dataset
+    registration is broken should still start and let the agent surface the
+    real error from its own ``open_workspace`` call, rather than dying before
+    its first turn with a message no one is watching for.
+    """
+    if not workspace_id:
+        return ""
+    names = [str(c["dataset_name"]) for c in _resolve_dataset_configs(graph, node_id) if c.get("dataset_name")]
+    if len(names) != 1:
+        return ""
+    try:
+        seeded = await seed_cell_workspace(workspace_id=workspace_id, dataset_name=names[0], owner_id=owner_id)
+    except WorkspaceSeedError as e:
+        logger.warning(
+            "workspace_preseed_failed",
+            extra={"workspace_id": workspace_id, "node_id": node_id, "dataset": names[0], "error": str(e)},
+        )
+        return ""
+    return seeded.dataset_name
+
+
+async def _node_run_context(
+    graph: dict[str, Any], node_id: str, workspace_id: str | None, owner_id: uuid.UUID
+) -> tuple[dict[str, Any], str]:
+    """``(ambient_meta, seeded_dataset_name)`` for one node -- everything the
+    node's References contribute, resolved together so the three call sites
+    (gated worker, single-node play, main loop) can't drift apart on which
+    half they remembered to do."""
+    ambient_meta = _ambient_meta_for(graph, node_id, workspace_id)
+    seeded_dataset = await _preseed_dataset_workspace(graph, node_id, workspace_id, owner_id)
+    return ambient_meta, seeded_dataset
+
+
 def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """The node's connected ``llm`` node's own config -- agent/critic_gate
     nodes no longer carry ``model_config_data`` themselves, it's resolved
@@ -1108,6 +1175,51 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
     return {"server_names": server_names, "tool_names": tool_names}
 
 
+def _resolve_dataset_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """The Dataset connector's contribution to the tool allow-list: ASAREE's
+    own ``asaree-workspace`` server, shaped like ``_resolve_tool_config``'s
+    output so it merges with the rest.
+
+    A Dataset node declares "this agent operates on data"; the tools that
+    make that possible should follow from the declaration rather than from a
+    second, differently-shaped node the user has to know to also wire. Before
+    this, an agent with only a Dataset wired was told (by ``_build_user_input``)
+    to call ``open_workspace`` and then handed an allow-list that didn't
+    contain it -- the run's system prompts in the original spinal use case
+    covered the gap, and nothing else did.
+
+    Unlike Tool and Knowledge, the grant is implicit, so the tools are a fixed
+    list (``WORKSPACE_AGENT_TOOLS``) rather than whatever a node cached: there
+    is no node here whose checkboxes could express a narrower choice.
+    """
+    if not _resolve_dataset_configs(graph, node_id):
+        return {"server_names": [], "tool_names": []}
+    return {
+        "server_names": [WORKSPACE_SERVER_NAME],
+        "tool_names": [f"{WORKSPACE_SERVER_NAME}.{name}" for name in WORKSPACE_AGENT_TOOLS],
+    }
+
+
+def _merge_tool_configs(*configs: dict[str, Any]) -> dict[str, Any]:
+    """Union of several ``{"server_names", "tool_names"}`` allow-lists, order
+    preserved, duplicates dropped.
+
+    De-duplication matters now that one of them is implicit: a user who *did*
+    wire an ``asaree-workspace`` Tool node alongside a Dataset would otherwise
+    contribute the same namespaced names twice.
+    """
+    server_names: list[str] = []
+    tool_names: list[str] = []
+    for config in configs:
+        for name in config.get("server_names") or []:
+            if name not in server_names:
+                server_names.append(name)
+        for name in config.get("tool_names") or []:
+            if name not in tool_names:
+                tool_names.append(name)
+    return {"server_names": server_names, "tool_names": tool_names}
+
+
 def _is_node_active(node: dict[str, Any]) -> bool:
     """Whether this node's own logic actually runs -- a deactivated node
     passes its upstream input straight through as its own output instead
@@ -1140,6 +1252,7 @@ def _build_user_input(
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
     script_bound: bool = False,
+    seeded_dataset: str = "",
 ) -> str:
     """The node's own prompt (falling back to its goal, then its canvas
     label), plus (flat, unstructured -- a deliberate V1 simplification) each
@@ -1166,7 +1279,13 @@ def _build_user_input(
     *script_bound* says the wired script reached ``_meta`` as a path
     (``_ambient_meta_for``). When it didn't -- an unlinked protocol run has no
     workspace directory to write it to -- the code is inlined here as before,
-    because a prompt the model can copy from beats no script at all."""
+    because a prompt the model can copy from beats no script at all.
+
+    *seeded_dataset* says ASAREE already opened the cell's workspace on the
+    agent's behalf (``_preseed_dataset_workspace``). When it did, the Dataset
+    block stops asking for a tool call at all and just says the data is there
+    -- opening a workspace was never a decision worth spending an agent turn
+    on, and a step the agent can't skip is a step it can't get wrong."""
     data: dict[str, Any] = node.get("data") or {}
     config: dict[str, Any] = data.get("config", {})
     seed: str = config.get("prompt") or config.get("goal") or data.get("label", "")
@@ -1182,9 +1301,23 @@ def _build_user_input(
     dataset_configs = _resolve_dataset_configs(graph, node["id"])
     if dataset_configs and experiment_id is not None and effective_cell_label is not None:
         dataset_names = [str(c["dataset_name"]) for c in dataset_configs]
-        if len(dataset_names) == 1:
-            # No arguments named at all: with one dataset wired, open_workspace
-            # resolves every one of them from ambient _meta.
+        if seeded_dataset:
+            # Nothing to call: the workspace was seeded before this turn, and
+            # every workspace/domain tool resolves it from ambient _meta. Named
+            # rather than left implicit so the agent can report what it worked
+            # on, and so a wrong wiring is visible in the transcript.
+            parts.append(
+                "Dataset context:\n"
+                f"Your data is already open: the dataset {seeded_dataset!r} is loaded into this "
+                "cell's workspace at HEAD. Do NOT call open_workspace -- the workspace tools and "
+                "the sklearn tools all resolve it from ambient run context. Start with the "
+                "analysis itself. (workspace_status() reports the current state if you need it.)"
+            )
+        elif len(dataset_names) == 1:
+            # Pre-seeding was skipped or failed (an unlinked protocol run has
+            # no workspace id; a broken registration logs and falls through) --
+            # so fall back to asking for the call. Still no arguments: with one
+            # dataset wired, open_workspace resolves them all from ambient _meta.
             parts.append(
                 "Dataset context:\n"
                 "A dataset is registered for this run. Call open_workspace() before doing any data "
@@ -1330,19 +1463,17 @@ async def _run_agent_node(
     # connector instead (topological_order already validated their shape).
     model_config_data = {k: v for k, v in _resolve_llm_config(graph, node["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
-    tool_config = _resolve_tool_config(graph, node["id"])
-    # The Knowledge connector's OKF bundles and documents are MCP servers like
-    # any other, so they land in this same allow-list rather than a slot of
-    # their own -- see _resolve_knowledge_config. Appended, not merged
-    # key-by-key: both halves are already namespaced and de-duplicated within
-    # themselves, and neither can collide with a Tool-connector server (their
-    # names are generated, okf-bundle-/okf-doc-prefixed, and unique per
-    # owner+path).
-    knowledge_config = _resolve_knowledge_config(graph, node["id"])
-    tool_config = {
-        "server_names": tool_config["server_names"] + knowledge_config["server_names"],
-        "tool_names": tool_config["tool_names"] + knowledge_config["tool_names"],
-    }
+    # Three connectors feed one allow-list. The Knowledge connector's OKF
+    # bundles and documents are MCP servers like any other, so they land here
+    # rather than in a slot of their own (see _resolve_knowledge_config), and
+    # the Dataset connector implies ASAREE's own workspace tools (see
+    # _resolve_dataset_tool_config) -- the split between the three is about
+    # what the user is declaring, not about how the engine consumes it.
+    tool_config = _merge_tool_configs(
+        _resolve_tool_config(graph, node["id"]),
+        _resolve_knowledge_config(graph, node["id"]),
+        _resolve_dataset_tool_config(graph, node["id"]),
+    )
     pattern_config_data = _resolve_pattern_config(graph, node["id"])
     pattern_config = PatternConfig(
         execution_pattern=pattern_config_data.get("execution_pattern"),
@@ -1564,7 +1695,7 @@ async def _run_gated_worker(
     # Computed once for the whole revision loop: every attempt reruns the same
     # worker against the same references, so re-materializing the script per
     # attempt would only rewrite an identical file.
-    worker_ambient = _ambient_meta_for(graph, worker["id"], workspace_id)
+    worker_ambient, worker_seeded_dataset = await _node_run_context(graph, worker["id"], workspace_id, owner_id)
     base_instruction = _build_user_input(
         worker,
         graph,
@@ -1572,6 +1703,7 @@ async def _run_gated_worker(
         experiment_id=experiment_id,
         effective_cell_label=effective_cell_label,
         script_bound="script_path" in worker_ambient,
+        seeded_dataset=worker_seeded_dataset,
     )
     instruction = base_instruction
     # Tracks the most recent critic verdict/run across attempts so the
@@ -1869,7 +2001,7 @@ async def _run_single_node(
     # synthetic per-run label (see _effective_cell_label).
     effective_cell_label = _effective_cell_label(None, protocol_run_id)
     workspace_id = _compute_workspace_id(experiment_id, None, protocol_run_id)
-    ambient_meta = _ambient_meta_for(graph, node["id"], workspace_id)
+    ambient_meta, seeded_dataset = await _node_run_context(graph, node["id"], workspace_id, owner_id)
     user_input = _build_user_input(
         node,
         graph,
@@ -1877,6 +2009,7 @@ async def _run_single_node(
         experiment_id=experiment_id,
         effective_cell_label=effective_cell_label,
         script_bound="script_path" in ambient_meta,
+        seeded_dataset=seeded_dataset,
     )
     output_text, error, run_id = await _run_agent_node(
         node,
@@ -2052,7 +2185,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             # applies to a plain agent node.
             output_text, error, run_id = _upstream_output_text(graph, node_id, node_runs), None, None
         else:
-            ambient_meta = _ambient_meta_for(graph, node_id, workspace_id)
+            ambient_meta, seeded_dataset = await _node_run_context(graph, node_id, workspace_id, owner_id)
             user_input = _build_user_input(
                 node,
                 graph,
@@ -2060,6 +2193,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 experiment_id=experiment_id,
                 effective_cell_label=effective_cell_label,
                 script_bound="script_path" in ambient_meta,
+                seeded_dataset=seeded_dataset,
             )
             output_text, error, run_id = await _run_agent_node(
                 node,

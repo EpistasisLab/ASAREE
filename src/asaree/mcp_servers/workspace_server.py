@@ -27,7 +27,6 @@ from typing import Any
 
 import pandas as pd
 from asaree_workspace_core import (
-    SEED_VERSION,
     STAGE_VERSION,
     Workspace,
     WorkspaceError,
@@ -40,8 +39,7 @@ from asaree_workspace_core import (
 from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
 
-from asaree.models.database import get_session
-from asaree.services.datasets import get_dataset_by_name
+from asaree.services.dataset_workspaces import WorkspaceSeedError, seed_cell_workspace
 
 INSTRUCTIONS = """\
 Version a dataset across a cleaning/feature-engineering/selection pipeline, \
@@ -234,71 +232,6 @@ def _structural_checks(
     return checks, errors
 
 
-async def _fetch_owned_registration(
-    name: str, ctx: Context[Any, Any, Any] | None
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Look up a registered dataset by name, scoped to the calling run's owner.
-
-    In-process DB call, not an HTTP round-trip — this server is ASAREE's own
-    code. Returns (registration-as-dict, error); a dataset that exists but
-    belongs to a different owner is reported the same as "not found", matching
-    the HTTP API's own 404-not-403 convention (asaree/api/datasets.py).
-    """
-    owner_id_str = resolve_owner_id_from_ctx(ctx, required=True)
-    owner_id = uuid.UUID(owner_id_str)
-    async with get_session() as db:
-        dataset = await get_dataset_by_name(db, name)
-        if dataset is None or dataset.owner_id != owner_id:
-            return None, f"Dataset '{name}' not found in registry."
-        return {
-            "target_column": dataset.target_column,
-            "train_path": dataset.train_path,
-            "test_path": dataset.test_path,
-            "dictionary_json": dataset.dictionary_json,
-        }, None
-
-
-DATA_DICTIONARY_FILENAME = "data_dictionary.json"
-
-
-def _publish_data_dictionary(ws: Workspace, dictionary_json: str | None) -> bool:
-    """Copy the registration's data dictionary into the cell's workspace.
-
-    The train/test data reaches the domain MCP servers over the shared
-    filesystem, but ``dictionary_json`` lives only in Postgres — and those
-    servers deliberately hold no DB credentials, so the only channel left to
-    them was an authenticated HTTP call back into the API with a token
-    (``ASAREE_INTERNAL_MCP_API_KEY``) that a fresh deployment doesn't have.
-    Writing it here, next to the ``state.json`` they already read, puts the
-    dictionary on the same route as everything else they consume: no token, no
-    network, no per-deployment setup step.
-
-    This server is the right place for it because it's the one with database
-    access (see ``_fetch_owned_registration``), and ``open_workspace`` is the
-    one call every pipeline makes before touching the data. Ownership is
-    already enforced upstream of here, and the file lands inside a workspace
-    named for its own experiment/cell, so it's scoped exactly like the parquet
-    beside it.
-
-    Returns whether a dictionary is available for this cell. A write failure is
-    swallowed on purpose: a dictionary is an aid to an agent, never a
-    precondition for the run, and the reader falls back to the API anyway.
-    """
-    if not dictionary_json:
-        return False
-    try:
-        ws.dir.mkdir(parents=True, exist_ok=True)
-        path = ws.dir / DATA_DICTIONARY_FILENAME
-        # Atomic, and rewritten on every open so an edited registration can't
-        # leave a resumed cell reading a stale copy.
-        tmp = ws.dir / f"{DATA_DICTIONARY_FILENAME}.tmp"
-        tmp.write_text(dictionary_json)
-        tmp.replace(path)
-    except OSError as e:
-        logger.warning("workspace_data_dictionary_write_failed", extra={"workspace": ws.workspace_id, "error": str(e)})
-    return True
-
-
 @mcp.tool()
 async def open_workspace(
     experiment_id: str = "",
@@ -318,6 +251,13 @@ async def open_workspace(
     same versions. Idempotent: re-opening resumes — completed stages are reported
     in ``accepted_stages``. The response describes the TRAINING split only; the
     held-out test rows are never surfaced (leakage guard).
+
+    In a run started by ASAREE with a Dataset wired, you normally do not need to
+    call this at all — ASAREE seeds the cell's workspace before your first turn
+    (``services.dataset_workspaces.seed_cell_workspace``) and your prompt says so.
+    It remains the entry point for everything that isn't that case: calling from
+    outside a run, overriding the target column, picking between several wired
+    datasets, (re)seeding a stage's scratch area, or re-reading the summary below.
 
     Every argument is optional in a run started by ASAREE: the workspace and the
     wired dataset both arrive as ambient request ``_meta``, so the usual call is
@@ -371,41 +311,25 @@ async def open_workspace(
         )
 
     try:
-        reg, err = await _fetch_owned_registration(resolved_name, ctx)
+        owner_id = uuid.UUID(resolve_owner_id_from_ctx(ctx, required=True))
     except WorkspaceError as e:
         return json.dumps({"error": f"owner resolution: {e}"})
-    if err is not None:
-        return json.dumps({"error": err})
-    assert reg is not None
 
-    resolved_target = target_column or reg.get("target_column") or ""
-    if not resolved_target:
-        return json.dumps({"error": "target_column not provided and not set in registry."})
-
+    # The seeding itself is shared with ASAREE's own pre-seeding at run start
+    # (protocol_execution._preseed_dataset_workspace), so a run that never
+    # calls this tool still lands in exactly the same on-disk state.
     try:
-        ws = Workspace.open(
-            workspace_id,
-            target_column=resolved_target,
-            seed_train_path=reg["train_path"],
-            seed_test_path=reg["test_path"],
+        seeded = await seed_cell_workspace(
+            workspace_id=workspace_id,
+            dataset_name=resolved_name,
+            owner_id=owner_id,
+            target_column=target_column,
         )
-        # Workspace.open is idempotent by design (a resumed cell must keep its
-        # accepted versions), which means a SECOND dataset opened into the same
-        # cell silently gets the first one's data back. A cell workspace is
-        # keyed by experiment_id/cell_label only -- `name` is not part of the
-        # id -- so two datasets cannot both live here, and the ambient
-        # workspace_id every downstream stage tool resolves is a single value
-        # anyway. Report the collision instead of handing back a workspace
-        # holding data the caller didn't ask for.
-        seeded = next((v for v in ws.load_state().get("versions", []) if v.get("id") == SEED_VERSION), None)
-        if seeded is not None and seeded.get("train") not in (None, reg["train_path"]):
-            return json.dumps(
-                {
-                    "error": f"workspace {workspace_id!r} is already seeded from a different dataset. "
-                    f"A cell workspace holds one dataset; {resolved_name!r} needs its own cell.",
-                    "workspace_id": workspace_id,
-                }
-            )
+    except WorkspaceSeedError as e:
+        return json.dumps({"error": str(e), "workspace_id": workspace_id})
+
+    ws, resolved_target = seeded.workspace, seeded.target_column
+    try:
         X_train, y_train, X_test, y_test = ws.read_head()  # noqa: N806 — matches sklearn convention throughout
         if stage in SCRATCH_STAGES:
             _seed_scratch(ws, stage, resolved_target)
@@ -435,7 +359,7 @@ async def open_workspace(
         "note": "Workspace opened. The test split is held out and never returned. "
         "Downstream stages read/write this workspace_id on disk (ambient _meta).",
     }
-    has_dict = _publish_data_dictionary(ws, reg.get("dictionary_json"))
+    has_dict = seeded.data_dictionary_available
     response["data_dictionary_available"] = has_dict
     if has_dict:
         response["data_dictionary_hint"] = (

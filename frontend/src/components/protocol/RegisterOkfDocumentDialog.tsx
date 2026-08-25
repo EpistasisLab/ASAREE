@@ -113,16 +113,22 @@ export function RegisterOkfDocumentDialog({
           </div>
 
           {preview && (
-            <div className="space-y-1.5 rounded-lg border px-3 py-2 text-sm">
+            <div className="min-w-0 space-y-1.5 rounded-lg border px-3 py-2 text-sm">
               {preview.title ? (
                 <>
-                  <p className="truncate font-mono text-xs" title={preview.title}>
+                  {/* Clamped over truncated, and wrapping over nowrap: a real
+                      concept title is often a full paper title, which one
+                      ellipsized line at this width shows almost none of. Full
+                      text stays available as the hover tooltip. */}
+                  <p className="line-clamp-2 font-mono text-xs break-words" title={preview.title}>
                     {preview.title}
                   </p>
                   {preview.conceptType && (
-                    <p className="font-mono text-[11px] text-muted-foreground/70">type={preview.conceptType}</p>
+                    <p className="truncate font-mono text-[11px] text-muted-foreground/70">type={preview.conceptType}</p>
                   )}
-                  <p className="text-xs text-muted-foreground">{preview.description ?? 'No description in the frontmatter.'}</p>
+                  <p className="line-clamp-4 text-xs break-words text-muted-foreground" title={preview.description}>
+                    {preview.description ?? 'No description in the frontmatter.'}
+                  </p>
                 </>
               ) : (
                 <p className="text-xs text-muted-foreground">

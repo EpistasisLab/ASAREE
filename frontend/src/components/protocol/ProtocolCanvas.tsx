@@ -67,7 +67,7 @@ import { DatasetNodeInspector } from './DatasetNodeInspector'
 import { DeleteNodeConfirmDialog } from './DeleteNodeConfirmDialog'
 import { DEFAULT_ZOOM } from './constants'
 import { FactorEditorDialog } from './FactorEditorDialog'
-import { CONNECTOR_CHILD_CLEARANCE, connectorNodeOffsetX, findFreePosition } from './layout'
+import { CONNECTOR_CHILD_CLEARANCE, connectorNodeOffsetX, findFreePosition, tidyLayout } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
 import { DatasetBrowserPanel } from './DatasetBrowserPanel'
 import { DATASET_BROWSE, nodeDataForDataset } from './datasetCatalog'
@@ -486,7 +486,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     enabled: !!experimentId && cellPickerOpen,
   })
   const paneRef = useRef<HTMLDivElement>(null)
-  const { screenToFlowPosition } = useReactFlow()
+  const { screenToFlowPosition, fitView } = useReactFlow()
 
   // The canvas's "resting" viewport isn't a fixed constant -- fitView (set
   // below) recomputes x/y/zoom from the actual node layout on mount, so we
@@ -503,6 +503,23 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const isAtRest = !restingViewportRef.current || isNearViewport(currentViewport, restingViewportRef.current)
 
   const onConnect = useCallback((connection: Connection) => setEdges((eds) => addEdge(connection, eds)), [setEdges])
+
+  // "Tidy up" -- reposition every node into a generated layout (see
+  // layout.ts's tidyLayout). Goes through this component's own setNodes
+  // rather than useReactFlow().setNodes because the flow is controlled, and
+  // that's also what lets the existing debounced autosave pick the new
+  // positions up with no extra request wiring. fitView waits a frame so it
+  // measures the moved nodes, not the ones they replaced.
+  const tidyUp = useCallback(() => {
+    setNodes((nds) => {
+      const positions = tidyLayout(nds, edges)
+      return nds.map((n) => {
+        const position = positions.get(n.id)
+        return position ? { ...n, position } : n
+      })
+    })
+    requestAnimationFrame(() => fitView({ maxZoom: DEFAULT_ZOOM, duration: 300 }))
+  }, [edges, fitView, setNodes])
 
   const runMutation = useMutation({
     mutationFn: () => protocolsApi.run(protocolId, selectedCellLabel),
@@ -1391,7 +1408,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               <MiniMap pannable zoomable className="!bg-card" maskColor="color-mix(in oklch, var(--background), transparent 40%)" />
             )}
           </ReactFlow>
-          <CanvasControls />
+          <CanvasControls onTidy={tidyUp} />
           {(() => {
             // runMutation.error/runNodeMutation.error is the real validation
             // message (e.g. topological_order/validate_single_node_runnable

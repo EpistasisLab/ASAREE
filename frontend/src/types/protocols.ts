@@ -27,6 +27,7 @@ export interface ProtocolNode {
     | ScriptNodeData
     | SkillNodeData
     | OkfBundleNodeData
+    | OkfDocumentNodeData
     | ReasonActPatternNodeData
     | SingleAgentBaselinePatternNodeData
 }
@@ -484,6 +485,51 @@ export interface OkfBundleNodeData {
 
 // No default factory, same reasoning as Skill: the bundle IS the node, so it's
 // built from the one picked in the browser -- see okfCatalog.ts.
+
+// An "OKF Document" node -- the Knowledge connector's other node type. Names
+// one UPLOADED single-concept OKF document: a .md file with YAML frontmatter
+// (`title`, optionally `type`/`description`/`tags`) that the user handed over
+// from their own machine, exactly the way a Skill is registered, rather than a
+// folder they pointed the server at.
+//
+// Underneath it IS a bundle of one concept -- ASAREE stores the upload in its
+// own directory and serves it with the same per-bundle OKF MCP server (see
+// services/okf_documents.py) -- so this config carries the same server_name/
+// tool_names as OkfBundleNodeConfig and _resolve_knowledge_config reads the
+// two identically. The node types are separate because the question they
+// answer differs: "use knowledge the server already has" vs. "here's a concept
+// file from my machine". A run's agent can still WRITE to it -- an uploaded
+// document is a living concept, not a frozen attachment.
+export interface OkfDocumentNodeConfig {
+  // The registered document (GET /okf/documents). Cached so the inspector can
+  // refresh tools / read the current text back without re-resolving.
+  document_id: string | null
+  // What a run keys off -- the generated okf-doc-* server name. Without it the
+  // node contributes nothing, since its tools can't be namespaced.
+  server_name: string | null
+  // Display only, and deliberately a SNAPSHOT of upload time: the agent may
+  // rewrite the document's frontmatter mid-run, and the canvas card shouldn't
+  // silently rename itself. The inspector shows the live values.
+  document_title: string | null
+  document_path: string | null
+  // The document server's tools, BARE, cached at registration -- namespaced
+  // "{server_name}.{tool}" at resolve time. No per-tool picker, same reason as
+  // OkfBundleNodeConfig: reading and writing a concept only makes sense
+  // together.
+  tool_names: string[]
+  // Absent means enabled, matching every other connector's own convention.
+  enabled?: boolean
+}
+
+export interface OkfDocumentNodeData {
+  label: string
+  config: OkfDocumentNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+// No default factory, same reasoning as Skill and OKF Bundle -- see
+// nodeDataForDocument in okfCatalog.ts.
 
 // The Architectural Pattern connector's node family -- UNLIKE Memory (see
 // MemoryNodeData's own comment), wiring one into an Agent's Architectural

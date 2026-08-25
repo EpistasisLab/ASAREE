@@ -1,5 +1,12 @@
 import type { Edge, Node } from '@xyflow/react'
-import type { DatasetNodeData, LlmNodeData, McpToolNodeData, OkfBundleNodeData, SkillNodeData } from '@/types/protocols'
+import type {
+  DatasetNodeData,
+  LlmNodeData,
+  McpToolNodeData,
+  OkfBundleNodeData,
+  OkfDocumentNodeData,
+  SkillNodeData,
+} from '@/types/protocols'
 
 // Plain duplicate of ProtocolCanvas.tsx's own LLM_NODE_TYPES rather than a
 // shared import -- same reasoning as nodeConfigIssues.ts's own comment:
@@ -35,7 +42,10 @@ export interface RunSummary {
   models: string[]
   toolServers: string[]
   skills: string[]
-  knowledgeBundles: string[]
+  // Bundles and uploaded documents together -- the confirm dialog asks "what
+  // knowledge does this run get", and which kind of node supplied it doesn't
+  // change the answer.
+  knowledgeSources: string[]
 }
 
 // Builds a plain-language summary of what a Run click will actually
@@ -69,16 +79,26 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
       .map((config) => config?.skill_name)
       .filter((name): name is string => !!name),
   )
-  // Same `enabled` filter and same reason as skills: an off bundle's tools
-  // never reach the agent's allow-list (_resolve_knowledge_config skips it).
-  // Labelled by folder, not by the generated okf-bundle-<hash> server name --
-  // the folder is what the user recognises.
-  const knowledgeBundles = uniq(
+  // Same `enabled` filter and same reason as skills: off knowledge never
+  // reaches the agent's allow-list (_resolve_knowledge_config skips it).
+  // Labelled by folder / concept title, not by the generated okf-bundle-<hash>
+  // or okf-doc-<hash> server name -- those are what the user recognises.
+  const knowledgeSources = uniq(
     relevantNodes
-      .filter((n) => n.type === 'okf_bundle')
-      .map((n) => (n.data as OkfBundleNodeData).config)
-      .filter((config) => (config?.enabled ?? true) && !!config?.server_name)
-      .map((config) => config.bundle_label ?? config.bundle_path ?? config.server_name)
+      .filter((n) => n.type === 'okf_bundle' || n.type === 'okf_document')
+      .map((n) =>
+        n.type === 'okf_bundle'
+          ? (() => {
+              const config = (n.data as OkfBundleNodeData).config
+              return { config, label: config?.bundle_label ?? config?.bundle_path ?? config?.server_name }
+            })()
+          : (() => {
+              const config = (n.data as OkfDocumentNodeData).config
+              return { config, label: config?.document_title ?? config?.document_path ?? config?.server_name }
+            })(),
+      )
+      .filter(({ config }) => (config?.enabled ?? true) && !!config?.server_name)
+      .map(({ label }) => label)
       .filter((name): name is string => !!name),
   )
   const models = uniq(
@@ -108,7 +128,7 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
     models,
     toolServers,
     skills,
-    knowledgeBundles,
+    knowledgeSources,
   }
 }
 

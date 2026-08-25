@@ -212,6 +212,20 @@ _SKILL_NODE_TYPES = frozenset({"skill"})
 # an agent may legitimately read from a shared team bundle and write to its
 # own.
 _OKF_BUNDLE_NODE_TYPES = frozenset({"okf_bundle"})
+# An OKF Document node names one UPLOADED single-concept document (see
+# asaree.services.okf_documents). Mechanically identical to a bundle node --
+# ASAREE stores the upload as a one-concept bundle directory and serves it
+# with the same per-bundle OKF server, so the node carries the same
+# server_name/tool_names and resolves through the same code path. It's a
+# separate node type purely because the two answer different questions on the
+# canvas: "point at knowledge the server already has" versus "here is a
+# concept file from my machine". Same split, same reason, as picking a
+# registered MCP server versus registering your own.
+_OKF_DOCUMENT_NODE_TYPES = frozenset({"okf_document"})
+# The Knowledge connector's whole family -- what that slot accepts, and what
+# _resolve_knowledge_config reads. Everything downstream treats the two
+# interchangeably, so only this union has to know both exist.
+_KNOWLEDGE_NODE_TYPES = _OKF_BUNDLE_NODE_TYPES | _OKF_DOCUMENT_NODE_TYPES
 
 # Every node type that's a pure config source -- never gets its own execution
 # turn, never a pipeline "final output" (see sink_node_ids/run_protocol's
@@ -225,7 +239,7 @@ _PURE_CONFIG_SOURCE_TYPES = (
     | _DATASET_NODE_TYPES
     | _SCRIPT_NODE_TYPES
     | _SKILL_NODE_TYPES
-    | _OKF_BUNDLE_NODE_TYPES
+    | _KNOWLEDGE_NODE_TYPES
 )
 
 # Which connector handle each pure-config-source node type may exclusively
@@ -253,7 +267,7 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "dataset" for t in _DATASET_NODE_TYPES},
     **{t: "tool" for t in _SCRIPT_NODE_TYPES},
     **{t: "skill" for t in _SKILL_NODE_TYPES},
-    **{t: "knowledge" for t in _OKF_BUNDLE_NODE_TYPES},
+    **{t: "knowledge" for t in _KNOWLEDGE_NODE_TYPES},
 }
 # The user-facing name of each connector slot -- mirrors
 # CONNECTOR_SLOT_LABELS on the frontend, so a validation error always names
@@ -368,6 +382,7 @@ _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "script": "Script",
     "skill": "Skill",
     "okf_bundle": "OKF Bundle",
+    "okf_document": "OKF Document",
     "pattern_reason_act": "Reason + Act",
     "pattern_single_agent_baseline": "Single-Agent Baseline",
     "llm_anthropic": "Anthropic",
@@ -535,9 +550,9 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             # two nodes naming the same bundle cost nothing.
             for edge in knowledge_edges:
                 knowledge_source = nodes.get(edge["source"])
-                if knowledge_source is None or knowledge_source.get("type") not in _OKF_BUNDLE_NODE_TYPES:
+                if knowledge_source is None or knowledge_source.get("type") not in _KNOWLEDGE_NODE_TYPES:
                     raise ProtocolValidationError(
-                        f"Node {name!r}'s Knowledge connection must come from an OKF Bundle node."
+                        f"Node {name!r}'s Knowledge connection must come from an OKF Bundle or OKF Document node."
                     )
             script_edges = [e for e in tool_edges if (nodes.get(e["source"]) or {}).get("type") in _SCRIPT_NODE_TYPES]
             if len(memory_edges) > 1:
@@ -600,17 +615,17 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
             ]
             if outgoing_wrong_handle:
                 handle_label = _HANDLE_LABELS[expected_handle]
-                # Script shares the Tool handle and OKF Bundle owns Knowledge,
-                # but neither is literally a "Tool"/"Knowledge" node -- use
-                # their own display name as the leading noun (e.g. "Script node
-                # 'X' can only connect to a node's Tool slot") while every
+                # Script shares the Tool handle and the OKF node types own
+                # Knowledge, but none is literally a "Tool"/"Knowledge" node --
+                # use their own display name as the leading noun (e.g. "Script
+                # node 'X' can only connect to a node's Tool slot") while every
                 # other family's leading noun still matches its handle label
                 # 1:1, unchanged. Dataset is in the list for symmetry only:
                 # its slot is now named after it, so both halves read
                 # "Dataset" either way.
                 leading_label = (
                     _NODE_TYPE_DISPLAY_NAMES[node_type]
-                    if node_type in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES | _OKF_BUNDLE_NODE_TYPES
+                    if node_type in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES | _KNOWLEDGE_NODE_TYPES
                     else handle_label
                 )
                 raise ProtocolValidationError(
@@ -948,12 +963,16 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
     """The Knowledge connector's contribution to the agent's tool allow-list,
     shaped exactly like ``_resolve_tool_config``'s so the two can be merged.
 
-    An OKF bundle is served by a real MCP server (one process per bundle --
-    see :mod:`asaree.services.okf_bundles`), so at run time "knowledge" is
-    just more tools: the split between this connector and Tool is about what
-    the user is declaring, not about how the engine consumes it. Hence the
-    identical shape rather than a separate Motoro config slot -- unlike Skill,
-    core has no ``knowledge_config`` to hand this to.
+    Every knowledge source -- a folder-picked OKF bundle
+    (:mod:`asaree.services.okf_bundles`) or an uploaded single-concept OKF
+    document (:mod:`asaree.services.okf_documents`) -- is served by a real MCP
+    server, one process per directory, so at run time "knowledge" is just more
+    tools: the split between this connector and Tool is about what the user is
+    declaring, not about how the engine consumes it. Hence the identical shape
+    rather than a separate Motoro config slot -- unlike Skill, core has no
+    ``knowledge_config`` to hand this to. The bundle/document distinction
+    doesn't survive to here at all: both node types carry a ``server_name``
+    and a cached ``tool_names``, and this reads them the same way.
 
     Namespaced ``"{server_name}.{tool}"`` for the same non-negotiable reason
     as ``_resolve_tool_config``: bare names match nothing in
@@ -970,7 +989,7 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
     tool_names: list[str] = []
     for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
         source = nodes.get(edge["source"])
-        if source is None or source.get("type") not in _OKF_BUNDLE_NODE_TYPES:
+        if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
             continue
         bundle_config = (source.get("data") or {}).get("config") or {}
         if not bundle_config.get("enabled", True):
@@ -1169,12 +1188,13 @@ async def _run_agent_node(
     model_config_data = {k: v for k, v in _resolve_llm_config(graph, node["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
     tool_config = _resolve_tool_config(graph, node["id"])
-    # The Knowledge connector's OKF bundles are MCP servers like any other, so
-    # they land in this same allow-list rather than a slot of their own -- see
-    # _resolve_knowledge_config. Appended, not merged key-by-key: both halves
-    # are already namespaced and de-duplicated within themselves, and a bundle
-    # can't collide with a Tool-connector server (its name is generated,
-    # okf-bundle-prefixed, and unique per owner+path).
+    # The Knowledge connector's OKF bundles and documents are MCP servers like
+    # any other, so they land in this same allow-list rather than a slot of
+    # their own -- see _resolve_knowledge_config. Appended, not merged
+    # key-by-key: both halves are already namespaced and de-duplicated within
+    # themselves, and neither can collide with a Tool-connector server (their
+    # names are generated, okf-bundle-/okf-doc-prefixed, and unique per
+    # owner+path).
     knowledge_config = _resolve_knowledge_config(graph, node["id"])
     tool_config = {
         "server_names": tool_config["server_names"] + knowledge_config["server_names"],

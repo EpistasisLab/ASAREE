@@ -214,13 +214,23 @@ def validate_bundle_path(relative: str | None) -> Path:
         raise OkfBundleError(f"{path} is not a directory -- an OKF bundle is a folder of .md files.")
     if not os.access(path, os.W_OK | os.X_OK):
         raise OkfBundleError(f"{path} is not writable by the server -- an agent could read it but never update it.")
+    ensure_command_safe(path)
+    return path
+
+
+def ensure_command_safe(path: Path) -> None:
+    """Raise unless *path* can survive being embedded in a stored MCP command.
+
+    Shared with :mod:`asaree.services.okf_documents`, which builds the same
+    ``--bundle <path>`` command for a directory ASAREE created itself -- the
+    rule belongs to the command shape, not to who chose the path.
+    """
     meta = _PATH_META_RE.search(str(path))
     if meta:
         raise OkfBundleError(
             f"{path} contains the character {meta.group()!r}, which isn't allowed in an MCP server command. "
             "Rename or move the folder, or symlink it somewhere without it."
         )
-    return path
 
 
 def is_bundle_server(config: Any) -> bool:

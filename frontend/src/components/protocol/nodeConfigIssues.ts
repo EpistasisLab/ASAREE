@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import type { LLMSettingModelsResponse } from '@/types/llmSettings'
-import type { OkfBundle } from '@/types/okf'
+import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { Skill } from '@/types/skills'
 import type {
   DatasetNodeData,
@@ -10,6 +10,7 @@ import type {
   ReasonActPatternNodeData,
   ScriptNodeData,
   OkfBundleNodeData,
+  OkfDocumentNodeData,
   SkillNodeData,
 } from '@/types/protocols'
 import { PROVIDER_META } from './nodes/LlmNode'
@@ -139,6 +140,24 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
           const cached = queryClient.getQueryData<OkfBundle[]>(['okf-bundles'])
           if (cached && !cached.some((b) => b.id === config.bundle_id)) {
             issues.push(`OKF bundle is no longer registered${config.bundle_path ? ` ("${config.bundle_path}")` : ''}`)
+          }
+        }
+        break
+      }
+      case 'okf_document': {
+        const config = (node.data as OkfDocumentNodeData).config
+        // The bundle case's checks, against the document registry -- same
+        // wording as OkfDocumentNode's own badge.
+        if (!config?.server_name) {
+          issues.push('No document selected')
+        } else if ((config.tool_names?.length ?? 0) === 0) {
+          issues.push('No tools discovered -- the document server may have failed to start')
+        } else {
+          const cached = queryClient.getQueryData<OkfDocument[]>(['okf-documents'])
+          if (cached && !cached.some((d) => d.id === config.document_id)) {
+            issues.push(
+              `OKF document is no longer stored${config.document_title ? ` ("${config.document_title}")` : ''}`,
+            )
           }
         }
         break

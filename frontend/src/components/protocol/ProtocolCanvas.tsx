@@ -45,6 +45,7 @@ import type {
   McpToolNodeData,
   MemoryNodeData,
   OkfBundleNodeData,
+  OkfDocumentNodeData,
   ProtocolGraph,
   ProtocolNode,
   ReasonActPatternNodeData,
@@ -55,7 +56,7 @@ import type {
 import type { Dataset } from '@/types/datasets'
 import type { DesignFactor } from '@/types/experiments'
 import type { McpServer } from '@/types/mcpServers'
-import type { OkfBundle } from '@/types/okf'
+import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { Skill } from '@/types/skills'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
@@ -95,8 +96,10 @@ import { ScriptNodeInspector } from './ScriptNodeInspector'
 import { SelectCellDialog } from './SelectCellDialog'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
 import { OkfBundleBrowserPanel } from './OkfBundleBrowserPanel'
-import { OKF_BUNDLE_BROWSE, nodeDataForBundle } from './okfCatalog'
+import { OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE, nodeDataForBundle, nodeDataForDocument } from './okfCatalog'
 import { OkfBundleNodeInspector } from './OkfBundleNodeInspector'
+import { OkfDocumentBrowserPanel } from './OkfDocumentBrowserPanel'
+import { OkfDocumentNodeInspector } from './OkfDocumentNodeInspector'
 import { SkillBrowserPanel } from './SkillBrowserPanel'
 import { SKILL_BROWSE, nodeDataForSkill } from './skillCatalog'
 import { SkillNodeInspector } from './SkillNodeInspector'
@@ -112,6 +115,7 @@ import { ReasonActPatternNode } from './nodes/ReasonActPatternNode'
 import { ScriptNode } from './nodes/ScriptNode'
 import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatternNode'
 import { OkfBundleNode } from './nodes/OkfBundleNode'
+import { OkfDocumentNode } from './nodes/OkfDocumentNode'
 import { SkillNode } from './nodes/SkillNode'
 import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 
@@ -121,6 +125,10 @@ import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 // how the "tool" slot already accepts any mcp_tool node.
 const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry', 'llm_openrouter', 'llm_local']
 const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
+// The Knowledge slot's family, mirroring _KNOWLEDGE_NODE_TYPES in
+// services/protocol_execution.py: a server-side folder or an uploaded single
+// concept, both resolved identically into the agent's tool allow-list.
+const KNOWLEDGE_NODE_TYPES = ['okf_bundle', 'okf_document']
 // Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
 // whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
 // Includes the pre-rename "llm" and "resource" spellings for the same reason
@@ -166,6 +174,7 @@ const NODE_TYPES = {
   dataset: DatasetNode,
   skill: SkillNode,
   okf_bundle: OkfBundleNode,
+  okf_document: OkfDocumentNode,
   script: ScriptNode,
   pattern_reason_act: ReasonActPatternNode,
   pattern_single_agent_baseline: SingleAgentBaselinePatternNode,
@@ -194,11 +203,12 @@ function isNearViewport(a: Viewport, b: Viewport): boolean {
 }
 
 function defaultDataFor(nodeType: string): ProtocolNode['data'] {
-  // mcp_scikit_learn, mcp_client_tool, skill and okf_bundle aren't here: none
-  // is ever created blank -- addServerNode/addClientToolNode/addSkillNode/
-  // addBundleNode build the data from the picked or just-connected
-  // server/skill/bundle, since a node whose whole identity is one of those
-  // would be meaningless without it.
+  // mcp_scikit_learn, mcp_client_tool, skill, okf_bundle and okf_document
+  // aren't here: none is ever created blank -- addServerNode/
+  // addClientToolNode/addSkillNode/addBundleNode/addDocumentNode build the
+  // data from the picked or just-connected server/skill/bundle/document, since
+  // a node whose whole identity is one of those would be meaningless without
+  // it.
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData()
   if (nodeType === 'critic_gate') return defaultCriticGateNodeData()
   if (nodeType === 'llm_anthropic') return defaultAnthropicLlmNodeData()
@@ -245,7 +255,10 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
   dataset: { allowedTypes: [DATASET_BROWSE], title: 'Add Dataset' },
-  knowledge: { allowedTypes: [OKF_BUNDLE_BROWSE], title: 'Add Knowledge' },
+  // The one slot with two entries in its panel: knowledge arrives either as a
+  // folder already on the server (bundle) or as a file the user uploads
+  // (document), and which of those you have is the question the panel asks.
+  knowledge: { allowedTypes: [OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE], title: 'Add Knowledge' },
 }
 
 // Connector slots have been renamed since graphs started being saved, and a
@@ -388,6 +401,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const [serverBrowserOpen, setServerBrowserOpen] = useState(false)
   const [skillBrowserOpen, setSkillBrowserOpen] = useState(false)
   const [bundleBrowserOpen, setBundleBrowserOpen] = useState(false)
+  const [documentBrowserOpen, setDocumentBrowserOpen] = useState(false)
   const [datasetBrowserOpen, setDatasetBrowserOpen] = useState(false)
   // A pending node deletion awaiting user confirmation -- populated either
   // by onBeforeDelete (Backspace/Delete key, the hover toolbar's trash
@@ -621,6 +635,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     setServerBrowserOpen(false)
     setSkillBrowserOpen(false)
     setBundleBrowserOpen(false)
+    setDocumentBrowserOpen(false)
     setDatasetBrowserOpen(false)
     setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(null)
@@ -769,6 +784,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     // Ditto for OKF bundles -- see OKF_BUNDLE_BROWSE in okfCatalog.ts.
     if (nodeType === OKF_BUNDLE_BROWSE) {
       setBundleBrowserOpen(true)
+      return
+    }
+    // Ditto for uploaded OKF documents -- see OKF_DOCUMENT_BROWSE.
+    if (nodeType === OKF_DOCUMENT_BROWSE) {
+      setDocumentBrowserOpen(true)
       return
     }
     // Ditto for datasets -- see DATASET_BROWSE in datasetCatalog.ts.
@@ -920,6 +940,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   function addBundleNode(bundle: OkfBundle) {
     setBundleBrowserOpen(false)
     addNode('okf_bundle', nodeDataForBundle(bundle))
+  }
+
+  // Same shape again, for the Knowledge connector's other node type.
+  function addDocumentNode(document: OkfDocument) {
+    setDocumentBrowserOpen(false)
+    addNode('okf_document', nodeDataForDocument(document))
   }
 
   // Same shape as addServerNode: the node is created with the skill already
@@ -1087,6 +1113,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | DatasetNodeData
       | SkillNodeData
       | OkfBundleNodeData
+      | OkfDocumentNodeData
       | ScriptNodeData
       | ReasonActPatternNodeData
       | SingleAgentBaselinePatternNodeData,
@@ -1132,10 +1159,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         case 'dataset':
           return sourceNode.type === 'dataset' && targetNode.type === 'agent'
         case 'knowledge':
-          return sourceNode.type === 'okf_bundle' && targetNode.type === 'agent'
+          // The one connector with two source types -- bundles and uploaded
+          // documents are interchangeable here, since both resolve to the same
+          // per-directory OKF server.
+          return KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
         default:
           // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool/
-          // dataset/skill/okf_bundle/script nodes have no main handle to drag from in
+          // dataset/skill/knowledge/script nodes have no main handle to drag from in
           // the first place, so this mostly guards against a stray
           // connection, not real interactive use.
           return (
@@ -1144,7 +1174,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'dataset' &&
             sourceNode.type !== 'skill' &&
-            sourceNode.type !== 'okf_bundle' &&
+            !KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'script' &&
             !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '')
           )
@@ -1373,6 +1403,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onBack={() => setBundleBrowserOpen(false)}
             onClose={closeAddPanel}
           />
+        ) : addPanelOpen && documentBrowserOpen ? (
+          <OkfDocumentBrowserPanel
+            onPick={addDocumentNode}
+            onBack={() => setDocumentBrowserOpen(false)}
+            onClose={closeAddPanel}
+          />
         ) : addPanelOpen && datasetBrowserOpen ? (
           <DatasetBrowserPanel
             onPick={addDatasetNode}
@@ -1457,6 +1493,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : selectedNode?.type === 'okf_bundle' ? (
           <OkfBundleNodeInspector
             node={{ id: selectedNode.id, type: 'okf_bundle', position: selectedNode.position, data: selectedNode.data as OkfBundleNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'okf_document' ? (
+          <OkfDocumentNodeInspector
+            node={{ id: selectedNode.id, type: 'okf_document', position: selectedNode.position, data: selectedNode.data as OkfDocumentNodeData }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}

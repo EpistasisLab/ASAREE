@@ -184,11 +184,12 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       // does.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     case 'okf_bundle':
+    case 'okf_document':
       // Only `enabled`, same reasoning as skill above: the node's config is a
       // pointer at a per-account registration (a server name plus a path on
       // the server), not the knowledge itself, so a level would carry a
       // reference rather than the thing being compared. Comparing "with the
-      // bundle vs. without" -- the question actually worth an experiment
+      // knowledge vs. without" -- the question actually worth an experiment
       // here -- is exactly what toggling `enabled` per cell does.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     case 'script':
@@ -258,6 +259,7 @@ function isConnectorNodeType(type: string | undefined): boolean {
     type === 'dataset' ||
     type === 'skill' ||
     type === 'okf_bundle' ||
+    type === 'okf_document' ||
     type === 'script' ||
     LLM_NODE_TYPES.has(type ?? '') ||
     (type ?? '').startsWith('pattern_')

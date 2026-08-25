@@ -1,28 +1,41 @@
-"""OKF bundles — browse the server's disk, register one as an MCP server.
+"""OKF knowledge — two ways to give an agent Markdown concepts.
 
-Thin over :mod:`asaree.services.okf_bundles`, which holds every rule about
-which paths are reachable; this layer only resolves ``owner_id`` and maps that
-module's :class:`OkfBundleError` to a 422, the same way ``api/mcp_servers.py``
-maps core's own ``ValueError``s.
+``/okf/browse`` + ``/okf/bundles`` are the *bundle* half: the knowledge is
+already a directory on the server's disk, and the user picks it. Thin over
+:mod:`asaree.services.okf_bundles`, which holds every rule about which paths
+are reachable; this layer only resolves ``owner_id`` and maps that module's
+:class:`OkfBundleError` to a 422, the same way ``api/mcp_servers.py`` maps
+core's own ``ValueError``s.
 
-A registered bundle IS an ``mcp_server_configs`` row, so it's also visible and
-deletable through ``/mcp-servers``. This router exists anyway because the two
-things a user does with a bundle — find the folder, and turn it into a server
-without composing a ``uv run ...`` command by hand — aren't expressible there.
+``/okf/documents`` is the *document* half: the user has one concept ``.md``
+file on their own machine and uploads it, exactly the way an Agent Skill is
+registered. :mod:`asaree.services.okf_documents` stores it as a one-concept
+bundle and owns the storage; see that module for why an upload still becomes
+its own directory and its own server process.
+
+Either way the registration IS an ``mcp_server_configs`` row, so it's also
+visible and deletable through ``/mcp-servers``. This router exists anyway
+because what a user actually does — find the folder or hand over the file, and
+turn it into a server without composing a ``uv run ...`` command by hand —
+isn't expressible there. The two halves never cross: a document id 404s on
+every ``/bundles`` route and vice versa (see ``_owned_bundle``/
+``_owned_document``), since bundle semantics applied to ASAREE-owned storage
+(or document semantics — including a real ``rmtree`` — applied to a user's own
+folder) would be a surprise in both directions.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from motoro.services import mcp_service
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser
-from asaree.services import okf_bundles
+from asaree.services import okf_bundles, okf_documents
 
 router = APIRouter(prefix="/okf", tags=["okf"])
 
@@ -58,6 +71,28 @@ class BundleResponse(BaseModel):
     created_at: datetime
 
 
+class DocumentResponse(BaseModel):
+    id: uuid.UUID
+    # The generated okf-doc-* server name — what a run's tool allow-list is
+    # namespaced against, exactly as for a bundle.
+    name: str
+    # Read out of the stored file's frontmatter on every request, never
+    # cached: the agent rewrites this file during a run, so a stored copy
+    # would show the document as it was uploaded rather than as it now is.
+    title: str | None
+    description: str | None
+    concept_type: str | None
+    tags: list[str]
+    # Absolute path to the stored .md, display-only. Answers "where did my
+    # upload actually go" on a local install, and is the only way to reach the
+    # file outside ASAREE.
+    path: str | None
+    status: str
+    error_message: str | None
+    tool_names: list[str]
+    created_at: datetime
+
+
 class RegisterBundleRequest(BaseModel):
     # Root-relative, as returned by /okf/browse. "" is the root itself, which
     # is a legitimate bundle location on a deployment whose root IS the mount.
@@ -72,6 +107,24 @@ def _to_response(config: Any) -> BundleResponse:
         status=config.status.value,
         error_message=config.error_message,
         tool_names=okf_bundles.tool_names_for(config),
+        created_at=config.created_at,
+    )
+
+
+def _to_document_response(config: Any) -> DocumentResponse:
+    meta = okf_documents.meta_for(config)
+    concept_file = okf_documents.concept_file_for(config)
+    return DocumentResponse(
+        id=config.id,
+        name=config.name,
+        title=meta.title,
+        description=meta.description,
+        concept_type=meta.concept_type,
+        tags=meta.tags,
+        path=str(concept_file) if concept_file else None,
+        status=config.status.value,
+        error_message=config.error_message,
+        tool_names=okf_documents.tool_names_for(config),
         created_at=config.created_at,
     )
 
@@ -161,6 +214,68 @@ async def list_concepts_endpoint(bundle_id: uuid.UUID, user: CurrentUser) -> dic
     return {"is_error": is_error, "content": content}
 
 
+@router.get("/documents", response_model=list[DocumentResponse])
+async def list_documents_endpoint(user: CurrentUser) -> list[DocumentResponse]:
+    return [_to_document_response(c) for c in await okf_documents.list_documents(user.id)]
+
+
+@router.post("/documents", response_model=DocumentResponse, status_code=201)
+async def upload_document_endpoint(user: CurrentUser, file: Annotated[UploadFile, File()]) -> DocumentResponse:
+    """Store one uploaded concept ``.md`` and serve it over MCP.
+
+    No ``title``/``description`` form overrides, unlike ``POST
+    /skills/upload``: a skill's frontmatter is metadata ABOUT a document
+    ASAREE stores in columns, so overriding it is editing a field. An OKF
+    concept's frontmatter is part of the file the agent reads and rewrites,
+    so an override would mean silently editing the user's document on the way
+    in.
+    """
+    try:
+        text = (await file.read()).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=422, detail="An OKF concept file must be UTF-8 text") from exc
+    try:
+        config = await okf_documents.register_document(owner_id=user.id, text=text, filename=file.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _to_document_response(config)
+
+
+@router.post("/documents/{document_id}/refresh", response_model=DocumentResponse)
+async def refresh_document_endpoint(document_id: uuid.UUID, user: CurrentUser) -> DocumentResponse:
+    """Re-discover the document server's tools (and clear a stale error)."""
+    config = await _owned_document(document_id, user)
+    refreshed = await mcp_service.refresh_server(config.id)
+    return _to_document_response(refreshed or config)
+
+
+@router.delete("/documents/{document_id}", status_code=204)
+async def delete_document_endpoint(document_id: uuid.UUID, user: CurrentUser) -> None:
+    """Forget the registration and delete the stored file.
+
+    Genuinely destructive, unlike deleting a bundle: this file only ever
+    existed inside ASAREE's own storage, so there's no original left on disk
+    once it's gone.
+    """
+    config = await _owned_document(document_id, user)
+    await okf_documents.delete_document(config)
+
+
+@router.get("/documents/{document_id}/markdown")
+async def read_document_endpoint(document_id: uuid.UUID, user: CurrentUser) -> dict[str, Any]:
+    """The stored concept's current text, straight off disk.
+
+    Read rather than reconstructed, and not cached anywhere, because the agent
+    rewrites this file during a run -- the point of showing it in the node
+    inspector is to see what the knowledge has BECOME, not what was uploaded.
+    """
+    config = await _owned_document(document_id, user)
+    markdown = okf_documents.read_document(config)
+    if markdown is None:
+        raise HTTPException(status_code=404, detail="This document's file is missing from the server's storage.")
+    return {"markdown": markdown}
+
+
 async def _owned_bundle(bundle_id: uuid.UUID, user: Any) -> Any:
     """The caller's bundle row, or a 404.
 
@@ -172,4 +287,18 @@ async def _owned_bundle(bundle_id: uuid.UUID, user: Any) -> Any:
     config = await mcp_service.get_server(bundle_id)
     if config is None or config.owner_id != user.id or not okf_bundles.is_bundle_server(config):
         raise HTTPException(status_code=404, detail="No such bundle")
+    return config
+
+
+async def _owned_document(document_id: uuid.UUID, user: Any) -> Any:
+    """The caller's document row, or a 404.
+
+    The mirror of ``_owned_bundle``, and strict for a sharper reason: this
+    router's delete removes the served directory outright, so letting a
+    folder-picked bundle (or any hand-registered server) through here would
+    ``rmtree`` a directory the user owns and never agreed to hand over.
+    """
+    config = await mcp_service.get_server(document_id)
+    if config is None or config.owner_id != user.id or not okf_documents.is_document_server(config):
+        raise HTTPException(status_code=404, detail="No such document")
     return config

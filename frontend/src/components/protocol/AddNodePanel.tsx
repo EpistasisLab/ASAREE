@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { ArrowRight, Atom, BookMarked, Bot, BrainCircuit, Cloud, Code2, Database, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
+import { ArrowRight, Atom, BookMarked, Bot, BrainCircuit, Cloud, Code2, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DATASET_BROWSE } from './datasetCatalog'
 import { MCP_SERVER_BROWSE } from './mcpServerCatalog'
-import { OKF_BUNDLE_BROWSE } from './okfCatalog'
+import { OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE } from './okfCatalog'
 import { SKILL_BROWSE } from './skillCatalog'
 
 // Every entry here earns its place: GET /api/mcp-servers already backs the
@@ -113,6 +113,16 @@ const NODE_CATALOG = [
     label: 'OKF Bundles',
     description: 'A folder of Markdown concepts on the server that an Agent reads and writes as it works',
     icon: BookMarked,
+  },
+  // The Knowledge connector's other half, and a separate entry rather than a
+  // mode of the one above because the user's starting point differs: a bundle
+  // is knowledge the server already has, a document is a file on their own
+  // machine -- so this one uploads, exactly like Skills.
+  {
+    type: OKF_DOCUMENT_BROWSE,
+    label: 'OKF Documents',
+    description: 'Upload a single Markdown concept an Agent reads and rewrites as it works',
+    icon: FileText,
   },
   {
     type: 'script',

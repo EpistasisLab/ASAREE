@@ -66,6 +66,14 @@ class AsareeSettings(CoreSettings):
     # deliberately so: nothing here tunnels to a client machine.
     okf_bundle_root: str = "~"
 
+    # Where UPLOADED single-concept OKF documents are stored (POST
+    # /okf/documents -- services/okf_documents.py). Deliberately NOT inside
+    # okf_bundle_root: that root is the jail for paths a user *picks*, and
+    # these are storage ASAREE owns and creates on the user's behalf, the same
+    # way dataset_storage_dir is. Keeping them apart also means an uploaded
+    # document never shows up as a stray folder in the bundle browser.
+    okf_document_dir: str = "./data/okf-documents"
+
     # Encrypts per-user LLM provider API keys at rest (user_llm_settings).
     # Deliberately ASAREE's own — core's services.encryption is explicitly a
     # single server-side secret with no user in the picture at all, the

@@ -15,7 +15,7 @@ import type { Dataset } from '@/types/datasets'
 import type { Cell, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
-import type { OkfBrowseResponse, OkfBundle } from '@/types/okf'
+import type { OkfBrowseResponse, OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse } from '@/types/skills'
@@ -380,6 +380,28 @@ export const okfApi = {
   // preview -- what's in there is the server's answer, not one reconstructed
   // from a directory listing.
   concepts: (id: string) => request<{ is_error: boolean; content: string }>(`/okf/bundles/${id}/concepts`),
+
+  // --- Uploaded single-concept documents (the other half of Knowledge) ---
+  // Same relationship to bundles as skillsApi.create has to a form: the file
+  // IS the document. ASAREE stores it server-side as a one-concept bundle, so
+  // the response looks like a bundle's and the node it backs resolves through
+  // the same path -- see OkfDocument in types/okf.ts.
+  listDocuments: () => request<OkfDocument[]>('/okf/documents'),
+  // 422 when the file isn't UTF-8, has no YAML frontmatter, or its
+  // frontmatter has no `title` -- the checks live server-side (api/okf.py),
+  // and RegisterOkfDocumentDialog only previews them.
+  createDocument: (file: File) => {
+    const form = new FormData()
+    form.set('file', file)
+    return request<OkfDocument>('/okf/documents', { method: 'POST', body: form })
+  },
+  refreshDocument: (id: string) => request<OkfDocument>(`/okf/documents/${id}/refresh`, { method: 'POST' }),
+  // Genuinely destructive, unlike remove() above: this deletes the stored
+  // file, which only ever existed inside ASAREE.
+  removeDocument: (id: string) => request<void>(`/okf/documents/${id}`, { method: 'DELETE' }),
+  // The stored concept's CURRENT text -- an agent may have rewritten it since
+  // upload, which is the whole reason the inspector shows it.
+  documentMarkdown: (id: string) => request<{ markdown: string }>(`/okf/documents/${id}/markdown`),
 }
 
 export const llmSettingsApi = {

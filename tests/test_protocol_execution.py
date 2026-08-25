@@ -171,6 +171,31 @@ def _okf_bundle_node(
     }
 
 
+def _okf_document_node(
+    node_id: str = "doc1",
+    server_name: str = "okf-doc-spinal-cord-def45678",
+    tool_names: list[str] | None = None,
+) -> dict:
+    # The Knowledge connector's other source type. Structurally a bundle of
+    # one concept -- ASAREE stores the upload in its own directory and serves
+    # it with the same per-bundle OKF server -- so it carries the same
+    # server_name/tool_names and resolves identically.
+    return {
+        "id": node_id,
+        "type": "okf_document",
+        "data": {
+            "label": "",
+            "config": {
+                "document_id": "d1",
+                "server_name": server_name,
+                "document_path": "/data/okf-documents/u/spinal-cord/spinal-cord.md",
+                "document_title": "Spinal cord",
+                "tool_names": ["list_concepts", "read_concept"] if tool_names is None else tool_names,
+            },
+        },
+    }
+
+
 def _knowledge_edge(source: str, target: str) -> dict:
     # OKF Bundle gets its own connector handle rather than sharing Tool's:
     # what it declares is a knowledge base, not one more capability. It still
@@ -1776,7 +1801,9 @@ def test_knowledge_connection_from_non_bundle_node_raises() -> None:
         "nodes": [llm, agent, _skill_node()],
         "edges": [agent_llm_edge, _knowledge_edge("skill1", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="Knowledge connection must come from an OKF Bundle node"):
+    with pytest.raises(
+        ProtocolValidationError, match="Knowledge connection must come from an OKF Bundle or OKF Document node"
+    ):
         topological_order(graph)
 
 
@@ -1872,6 +1899,71 @@ def test_resolve_knowledge_config_empty_with_nothing_wired() -> None:
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
     assert pe._resolve_knowledge_config(graph, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_okf_document_node_fills_the_knowledge_connector() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _okf_document_node()],
+        "edges": [agent_llm_edge, _knowledge_edge("doc1", "a")],
+    }
+    assert {n["id"] for n in topological_order(graph)} == {"llm", "a", "doc1"}
+    assert pe.sink_node_ids(graph) == ["a"]
+
+
+def test_resolve_knowledge_config_mixes_bundles_and_documents() -> None:
+    # The two node types are interchangeable on this connector: both resolve
+    # to a per-directory OKF server, so an agent can hold a shared bundle and
+    # one uploaded concept at once.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [
+            llm,
+            agent,
+            _okf_bundle_node("b1", "okf-bundle-spine-abc12345"),
+            _okf_document_node("d1", "okf-doc-spinal-cord-def45678", ["read_concept"]),
+        ],
+        "edges": [agent_llm_edge, _knowledge_edge("b1", "a"), _knowledge_edge("d1", "a")],
+    }
+    assert pe._resolve_knowledge_config(graph, "a") == {
+        "server_names": ["okf-bundle-spine-abc12345", "okf-doc-spinal-cord-def45678"],
+        "tool_names": [
+            "okf-bundle-spine-abc12345.list_concepts",
+            "okf-bundle-spine-abc12345.read_concept",
+            "okf-doc-spinal-cord-def45678.read_concept",
+        ],
+    }
+
+
+def test_resolve_knowledge_config_skips_disabled_document() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    disabled = _okf_document_node("d1", "okf-doc-spinal-cord-def45678")
+    disabled["data"]["config"]["enabled"] = False
+    graph = {
+        "nodes": [llm, agent, disabled],
+        "edges": [agent_llm_edge, _knowledge_edge("d1", "a")],
+    }
+    assert pe._resolve_knowledge_config(graph, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_okf_document_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _okf_document_node(), _node("b", "agent")],
+        "edges": [
+            agent_llm_edge,
+            _knowledge_edge("doc1", "a"),
+            {"id": "doc1-b", "source": "doc1", "target": "b"},
+        ],
+    }
+    with pytest.raises(
+        ProtocolValidationError, match="OKF Document node .* can only connect to a node's Knowledge slot"
+    ):
+        topological_order(graph)
 
 
 def test_multiple_execution_pattern_connections_raises() -> None:

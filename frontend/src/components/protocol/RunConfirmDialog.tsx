@@ -83,14 +83,15 @@ export function RunConfirmDialog({
               <dt className="inline font-medium text-foreground">Skills: </dt>
               <dd className="inline">{summary.skills.length > 0 ? summary.skills.join(', ') : 'none wired'}</dd>
             </div>
-            {/* Worth its own line rather than folding into "MCP tools": a
-                bundle is a directory the agent will WRITE to, so a run is
-                about to modify something on disk outside ASAREE -- the one
-                side effect in this list that outlives the run. */}
+            {/* Worth its own line rather than folding into "MCP tools":
+                knowledge is something the agent will WRITE to -- a directory
+                for a bundle, a stored file for an uploaded document -- so a
+                run is about to modify something that outlives it, the one
+                such side effect in this list. */}
             <div>
               <dt className="inline font-medium text-foreground">Knowledge: </dt>
               <dd className="inline">
-                {summary.knowledgeBundles.length > 0 ? summary.knowledgeBundles.join(', ') : 'none wired'}
+                {summary.knowledgeSources.length > 0 ? summary.knowledgeSources.join(', ') : 'none wired'}
               </dd>
             </div>
           </dl>

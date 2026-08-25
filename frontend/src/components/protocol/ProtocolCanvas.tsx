@@ -67,7 +67,7 @@ import { DatasetNodeInspector } from './DatasetNodeInspector'
 import { DeleteNodeConfirmDialog } from './DeleteNodeConfirmDialog'
 import { DEFAULT_ZOOM } from './constants'
 import { FactorEditorDialog } from './FactorEditorDialog'
-import { findFreePosition } from './layout'
+import { CONNECTOR_CHILD_CLEARANCE, connectorNodeOffsetX, findFreePosition } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
 import { DatasetBrowserPanel } from './DatasetBrowserPanel'
 import { DATASET_BROWSE, nodeDataForDataset } from './datasetCatalog'
@@ -781,7 +781,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     // faces down into it (CircleNode's own handlePosition="bottom" for this
     // node type) for a short, direct edge instead of one looping around the
     // whole card.
-    const patternPosition = findFreePosition([...otherPositions, agentPosition], { x: agentPosition.x, y: agentPosition.y - 160 })
+    const patternPosition = findFreePosition(
+      [...otherPositions, agentPosition],
+      { x: agentPosition.x + connectorNodeOffsetX('agent', 'architectural_pattern'), y: agentPosition.y - 160 },
+      CONNECTOR_CHILD_CLEARANCE,
+    )
     const patternNode: Node = {
       id: patternId,
       type: 'pattern_reason_act',
@@ -839,10 +843,20 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       // every other slot from below -- matches agentDefaultPattern's own
       // placement, so a swapped-in replacement pattern node lands in the
       // same spot the auto-created default one did.
+      // x is the connector's OWN position along the host's edge, not the
+      // host's left corner: with all seven slots dropping their node at the
+      // same x, a Tool node could land above the AI connector and every one
+      // after the first got shoved onto a ring around that same point, which
+      // read as nodes scattered at random rather than as "this one belongs to
+      // that connector". findFreePosition then prefers the same row when the
+      // spot is taken, so a second Tool sits beside the first.
       const desired = originNode
-        ? { x: originNode.position.x, y: originNode.position.y + (TOP_EDGE_SLOTS.has(slot) ? -160 : 160) }
+        ? {
+            x: originNode.position.x + connectorNodeOffsetX(originNode.type, slot),
+            y: originNode.position.y + (TOP_EDGE_SLOTS.has(slot) ? -160 : 160),
+          }
         : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
-      const position = findFreePosition(nodes.map((n) => n.position), desired)
+      const position = findFreePosition(nodes.map((n) => n.position), desired, CONNECTOR_CHILD_CLEARANCE)
       const newId = newNodeId()
       // Execution pattern is capped at one but must never go to zero (see
       // AgentNode.tsx's own comment) -- its "+" stays visible even once

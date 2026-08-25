@@ -6,6 +6,7 @@ import { nodeAccent } from '@/lib/nodeAccent'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { AgentNodeData, NodeRunStatus } from '@/types/protocols'
 import { boundFactorCount, hasBoundFactor } from '../bindableFields'
+import { connectorLefts } from '../layout'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
@@ -20,6 +21,12 @@ import { NodeSummaryLine } from './NodeSummaryLine'
 // does NOT follow --card-accent: they're yellow, to be found against the node
 // rather than to match it (ConnectorHandleLabel).
 const ACCENT = nodeAccent('agent')
+
+// Every connector's handle, caption and "+" stub reads its x from here, and so
+// does the placement of whatever node the connector's own "+" creates (see
+// layout.ts) -- otherwise a node can land under a connector that isn't the one
+// that asked for it.
+const CONNECTOR_LEFT = connectorLefts('agent')
 
 export function AgentNode({
   id,
@@ -104,8 +111,10 @@ export function AgentNode({
           w-72 rather than the w-60 it was with three: at 240px the margins are
           64px each, which two centered captions won't fit in; at 288px they're
           88px. Hence a Pattern/Skill pair in the left margin (5% / 18%) and a
-          Dataset/Knowledge pair in the right (71% / 90%), each spaced so
-          neither their ~26px stubs nor their centered captions collide. Every
+          Dataset/Knowledge pair in the right (71% / 90%) -- the numbers
+          themselves live in layout.ts's CONNECTOR_X, because addNode() has to
+          place a connector's node at that same x -- each spaced so neither
+          their ~26px stubs nor their centered captions collide. Every
           caption is centered directly above its own handle, mirroring the
           bottom row (see ConnectorHandleLabel's side="top" branch).
 
@@ -132,11 +141,11 @@ export function AgentNode({
         type="target"
         id="architectural_pattern"
         position={Position.Top}
-        style={{ left: '5%' }}
+        style={{ left: CONNECTOR_LEFT.architectural_pattern }}
         title="Architectural Pattern -- always exactly one; pick a node here to swap it"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="5%" side="top">Pattern</ConnectorHandleLabel>
+      <ConnectorHandleLabel left={CONNECTOR_LEFT.architectural_pattern} side="top">Pattern</ConnectorHandleLabel>
       {/* Never hides once connected (unlike AI/Memory) -- an execution
           pattern must never go to zero (Motoro silently falls back
           to reason_act if left unconnected, undoing the whole point of
@@ -145,7 +154,7 @@ export function AgentNode({
           addNode()'s own pendingConnectorAdd branch for the replace logic,
           and ProtocolCanvas.tsx's nodesWithRunStatus for why the connected
           pattern node itself can't be deleted directly either. */}
-      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left="5%" side="top" alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="architectural_pattern" left={CONNECTOR_LEFT.architectural_pattern} side="top" alwaysVisible />
       {/* Skill -- registered Agent Skills, one skill directory each, stored
           server-side and referenced by id (see SkillNodeData). Repeatable and
           UNCAPPED, like Tool and unlike everything else on this edge:
@@ -157,12 +166,12 @@ export function AgentNode({
         type="target"
         id="skill"
         position={Position.Top}
-        style={{ left: '18%' }}
+        style={{ left: CONNECTOR_LEFT.skill }}
         title="Skill -- Agent Skills this agent can open; add as many as you like"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="18%" side="top">Skill</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="skill" left="18%" side="top" alwaysVisible />
+      <ConnectorHandleLabel left={CONNECTOR_LEFT.skill} side="top">Skill</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="skill" left={CONNECTOR_LEFT.skill} side="top" alwaysVisible />
       {/* Dataset -- the data an agent works ON, as opposed to the Tool
           connector's "capabilities it works WITH". CAPPED at one, unlike
           Skill/Knowledge/Tool: a cell's workspace is keyed by
@@ -190,12 +199,12 @@ export function AgentNode({
         type="target"
         id="dataset"
         position={Position.Top}
-        style={{ left: '71%' }}
+        style={{ left: CONNECTOR_LEFT.dataset }}
         title="Dataset -- the registered dataset this agent operates on (one; make it a factor to compare several)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="71%" side="top">Dataset</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="dataset" left="71%" side="top" />
+      <ConnectorHandleLabel left={CONNECTOR_LEFT.dataset} side="top">Dataset</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="dataset" left={CONNECTOR_LEFT.dataset} side="top" />
       {/* Knowledge -- registered OKF bundles, each a directory of Markdown
           concepts on the SERVER's disk that the agent reads AND writes as it
           works (see OkfBundleNodeData). Its own slot rather than sharing
@@ -220,12 +229,12 @@ export function AgentNode({
         type="target"
         id="knowledge"
         position={Position.Top}
-        style={{ left: '90%' }}
+        style={{ left: CONNECTOR_LEFT.knowledge }}
         title="Knowledge -- OKF bundles this agent can read and write; add as many as you like"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="90%" side="top">Knowledge</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="knowledge" left="90%" side="top" alwaysVisible />
+      <ConnectorHandleLabel left={CONNECTOR_LEFT.knowledge} side="top">Knowledge</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="knowledge" left={CONNECTOR_LEFT.knowledge} side="top" alwaysVisible />
       {/* Handle id `ai`; graphs saved before the rename carry these edges on
           `llm` -- ProtocolCanvas.tsx rewrites those on load
           (migrateLegacyHandles) and the backend keeps accepting both (see
@@ -235,32 +244,32 @@ export function AgentNode({
         type="target"
         id="ai"
         position={Position.Bottom}
-        style={{ left: '20%' }}
+        style={{ left: CONNECTOR_LEFT.ai }}
         title="AI (required)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="20%">AI</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="ai" left="20%" />
+      <ConnectorHandleLabel left={CONNECTOR_LEFT.ai}>AI</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="ai" left={CONNECTOR_LEFT.ai} />
       <Handle
         type="target"
         id="memory"
         position={Position.Bottom}
-        style={{ left: '50%' }}
+        style={{ left: CONNECTOR_LEFT.memory }}
         title="Memory (not yet functional)"
         className="!size-2 !border-2 !border-dashed !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="50%">Memory</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="memory" left="50%" />
+      <ConnectorHandleLabel left={CONNECTOR_LEFT.memory}>Memory</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="memory" left={CONNECTOR_LEFT.memory} />
       <Handle
         type="target"
         id="tool"
         position={Position.Bottom}
-        style={{ left: '80%' }}
+        style={{ left: CONNECTOR_LEFT.tool }}
         title="Tool -- MCP server, Dataset, or Script"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="80%">Tool</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="tool" left="80%" alwaysVisible />
+      <ConnectorHandleLabel left={CONNECTOR_LEFT.tool}>Tool</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="tool" left={CONNECTOR_LEFT.tool} alwaysVisible />
       <Handle
         type="source"
         position={Position.Right}

@@ -16,6 +16,10 @@
 // captions on AgentNode are only ~30px apart (see its own comment on why
 // those x-positions are forced), so horizontal padding here is the one
 // dimension that can't grow without them colliding.
+//
+// Offset a step further out than the handle needs (top/bottom-5, right-10)
+// so the chip clears the connector's own 8px dot rather than crowding it --
+// the caption names the connector, it isn't part of it.
 const LABEL_CLASSNAME =
   'absolute rounded bg-background/70 px-0.5 text-[0.6rem] font-semibold whitespace-nowrap text-[color:var(--node-label)]'
 
@@ -35,7 +39,7 @@ export function ConnectorHandleLabel({
 }) {
   if (side === 'right') {
     return (
-      <span className={`${LABEL_CLASSNAME} -right-9 -translate-y-1/2`} style={{ top: top ?? '50%' }}>
+      <span className={`${LABEL_CLASSNAME} -right-10 -translate-y-1/2`} style={{ top: top ?? '50%' }}>
         {children}
       </span>
     )
@@ -50,13 +54,13 @@ export function ConnectorHandleLabel({
     // centering makes the caption belong unambiguously to the dot below it,
     // which is what a label on a connector is for.
     return (
-      <span className={`${LABEL_CLASSNAME} -top-4 -translate-x-1/2`} style={{ left }}>
+      <span className={`${LABEL_CLASSNAME} -top-5 -translate-x-1/2`} style={{ left }}>
         {children}
       </span>
     )
   }
   return (
-    <span className={`${LABEL_CLASSNAME} -bottom-4 -translate-x-1/2`} style={{ left }}>
+    <span className={`${LABEL_CLASSNAME} -bottom-5 -translate-x-1/2`} style={{ left }}>
       {children}
     </span>
   )

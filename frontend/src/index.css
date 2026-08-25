@@ -142,8 +142,9 @@
        where they have to be found rather than merely read, and yellow is the
        one warm hue no node kind above owns. Kept lighter and less saturated
        than --node-1 (the nearest node hue) so a caption doesn't read as a
-       tiny Skill node. */
-    --node-label: oklch(0.91 0.15 92);
+       tiny Skill node -- and dimmer than a caption's first pass at it
+       (0.91/0.15), which read as brighter than the node it belonged to. */
+    --node-label: oklch(0.83 0.12 92);
     --radius: 0.5rem;
     --sidebar: oklch(0.27 0.014 254);
     --sidebar-foreground: oklch(0.95 0.004 254);

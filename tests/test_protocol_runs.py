@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
 
@@ -20,6 +21,7 @@ from asaree.services.protocol_runs import (
     get_protocol_run,
     list_experiment_trials,
     list_protocol_runs,
+    list_stale_protocol_runs,
     request_protocol_run_cancellation,
     update_node_run,
 )
@@ -158,6 +160,86 @@ async def test_list_protocol_runs_scoped_to_protocol(owner_id: uuid.UUID, protoc
         runs = await list_protocol_runs(db, protocol_id=protocol_id)
         assert [r.id for r in runs] == [run_a.id]
         await delete_protocol(db, other_protocol_id)
+
+
+async def test_list_stale_protocol_runs_applies_a_separate_cutoff_per_status(
+    owner_id: uuid.UUID, protocol_id: uuid.UUID
+) -> None:
+    """The reason "pending" needs its own, much longer cutoff: a run waiting
+    its turn behind the worker's max_jobs looks exactly like one whose task
+    was cancelled before it could write a status. Failing the former would be
+    worse than the stranded rows this reaps."""
+    now = datetime.now(UTC)
+
+    async with get_session() as db:
+        # running, last heartbeat 10 minutes ago -- past the running cutoff.
+        dead_running = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        dead_running.status = "running"
+        dead_running.last_heartbeat_at = now - timedelta(minutes=10)
+
+        # running, heartbeat seconds ago -- alive.
+        live_running = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        live_running.status = "running"
+        live_running.last_heartbeat_at = now - timedelta(seconds=5)
+
+        # pending for 10 minutes: past the *running* cutoff but nowhere near
+        # the pending one, so it must survive -- this is the queued-and-waiting
+        # case, and it shares "no heartbeat" with the dead one below.
+        queued = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        queued.created_at = now - timedelta(minutes=10)
+
+        # pending for 2 days -- past the pending cutoff too.
+        stranded = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        stranded.created_at = now - timedelta(days=2)
+
+        # Terminal rows are never candidates however old.
+        done = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        done.status = "completed"
+        done.created_at = now - timedelta(days=2)
+
+        await db.flush()
+        ids = {
+            "dead_running": dead_running.id,
+            "live_running": live_running.id,
+            "queued": queued.id,
+            "stranded": stranded.id,
+            "done": done.id,
+        }
+
+    async with get_session() as db:
+        stale = await list_stale_protocol_runs(
+            db,
+            running_cutoff=now - timedelta(minutes=5),
+            pending_cutoff=now - timedelta(hours=12),
+        )
+        # Other tests share this database, so assert on membership rather than
+        # on the size of the result set.
+        stale_ids = {r.id for r in stale}
+
+    assert ids["dead_running"] in stale_ids
+    assert ids["stranded"] in stale_ids
+    assert ids["live_running"] not in stale_ids
+    assert ids["queued"] not in stale_ids
+    assert ids["done"] not in stale_ids
+
+
+async def test_list_stale_protocol_runs_falls_back_to_created_at(owner_id: uuid.UUID, protocol_id: uuid.UUID) -> None:
+    """A run that died before its first status write has no heartbeat at all;
+    without the coalesce it would never be a candidate."""
+    now = datetime.now(UTC)
+    async with get_session() as db:
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run.status = "running"
+        run.last_heartbeat_at = None
+        run.created_at = now - timedelta(minutes=10)
+        await db.flush()
+        run_id = run.id
+
+    async with get_session() as db:
+        stale = await list_stale_protocol_runs(
+            db, running_cutoff=now - timedelta(minutes=5), pending_cutoff=now - timedelta(hours=12)
+        )
+        assert run_id in {r.id for r in stale}
 
 
 async def test_list_experiment_trials_reflects_queued_running_and_completed(

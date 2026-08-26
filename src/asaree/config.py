@@ -104,6 +104,28 @@ class AsareeSettings(CoreSettings):
     # response should never trip this on a run that is actually still alive.
     run_heartbeat_stale_seconds: int = 300
 
+    # Same idea for a ProtocolRun still sitting at "pending" — but it can't
+    # reuse the value above. A run that was cancelled before its first status
+    # write never leaves "pending", and so is indistinguishable from one that
+    # is legitimately queued behind the worker's max_jobs waiting its turn.
+    # Since a single protocol run can occupy a slot for hours, the cutoff has
+    # to clear a realistic backlog: failing runs that were only ever waiting
+    # would be worse than the stranded rows this reaps. A pending run that is
+    # genuinely dead is normally closed out by execute_protocol_run_task's own
+    # cancellation handler within seconds; this is only the backstop for when
+    # that couldn't run (hard kill, lost DB connection).
+    protocol_run_pending_stale_seconds: int = 60 * 60 * 12
+
+    # How many jobs one arq worker process runs at once (asaree.worker.
+    # settings.WorkerSettings.max_jobs). Each job is a whole agent loop with
+    # its own MCP subprocesses and LLM calls, and "Run all cells" enqueues one
+    # per cell in a single click, so this is what actually bounds the burst.
+    # 4 rather than arq's default 10: the ceiling that matters in practice is
+    # the LLM provider's rate limit, not this box's CPU, and a job that waits
+    # its turn in the queue costs nothing while a rate-limited one burns
+    # retries. Raise it if runs sit queued while the provider has headroom.
+    worker_max_concurrent_jobs: int = 4
+
 
 _instance: AsareeSettings | None = None
 

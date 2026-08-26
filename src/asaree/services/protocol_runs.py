@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.factorial_cell_result import FactorialCellResult
@@ -54,9 +54,7 @@ async def create_protocol_run(
 
 
 async def get_protocol_run(db: AsyncSession, protocol_run_id: uuid.UUID) -> ProtocolRun | None:
-    return (
-        await db.execute(select(ProtocolRun).where(ProtocolRun.id == protocol_run_id))
-    ).scalar_one_or_none()
+    return (await db.execute(select(ProtocolRun).where(ProtocolRun.id == protocol_run_id))).scalar_one_or_none()
 
 
 async def get_cancel_requested_at(db: AsyncSession, protocol_run_id: uuid.UUID) -> datetime | None:
@@ -79,6 +77,50 @@ async def list_protocol_runs(db: AsyncSession, *, protocol_id: uuid.UUID) -> Seq
                 select(ProtocolRun)
                 .where(ProtocolRun.protocol_id == protocol_id)
                 .order_by(ProtocolRun.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def list_stale_protocol_runs(
+    db: AsyncSession, *, running_cutoff: datetime, pending_cutoff: datetime
+) -> Sequence[ProtocolRun]:
+    """Non-terminal runs that have shown no sign of life for long enough to
+    call their worker dead.
+
+    The backstop for a run whose worker died mid-flight, or whose task was
+    cancelled somewhere it could not record why (``worker.tasks`` makes a
+    best-effort attempt, but a hard kill or a lost DB connection defeats it).
+    Without this nothing ever reconciled ``protocol_runs`` -- ``check_stale_runs``
+    only covered Motoro's agent ``Run``s -- so a run interrupted early enough
+    sat at "pending" forever, indistinguishable from one never picked up.
+
+    ``pending`` is included, not just ``running``, because a run cancelled
+    before its first status write never leaves "pending" -- that is exactly the
+    case that stranded rows. It gets its own, far more generous cutoff: a
+    pending run with no heartbeat is equally consistent with "queued behind
+    max_jobs, waiting its turn", and failing those would be worse than the bug.
+    (A precise version would ask arq whether the job is still in Redis; that
+    couples this to the queue's internals, and the timing here only decides how
+    long a genuinely dead row lingers.)
+
+    Both arms key on ``last_heartbeat_at`` where there is one (written by every
+    ``set_status``/``update_node_run``), falling back to ``created_at``.
+    """
+    last_seen = func.coalesce(ProtocolRun.last_heartbeat_at, ProtocolRun.created_at)
+    return (
+        (
+            await db.execute(
+                select(ProtocolRun)
+                .where(
+                    or_(
+                        and_(ProtocolRun.status == "running", last_seen < running_cutoff),
+                        and_(ProtocolRun.status == "pending", last_seen < pending_cutoff),
+                    )
+                )
+                .order_by(ProtocolRun.created_at)
             )
         )
         .scalars()

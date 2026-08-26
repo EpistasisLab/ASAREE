@@ -63,3 +63,19 @@ class WorkerSettings:
     on_startup = on_startup
     on_shutdown = on_shutdown
     job_timeout = get_settings().worker_job_timeout_seconds * 2
+
+    # Both task functions already treat their own failures as terminal: they
+    # catch, force-fail the run row, and return, precisely so arq never gets a
+    # chance to re-run a half-executed agent loop (real tool calls, real side
+    # effects -- see each task's own boundary comment). A retry only happens
+    # for something they cannot catch and record, i.e. a hard worker kill, and
+    # re-running the graph from the top is the wrong answer there too. Making
+    # that explicit rather than silently inheriting arq's default of 5.
+    max_tries = 1
+
+    # "Run all cells" enqueues one job per cell at once, so the queue depth is
+    # user-controlled and the concurrency cap is the only thing bounding how
+    # many agent loops (each with its own MCP subprocesses and LLM calls) run
+    # in one worker process. arq's default is 10; keeping it explicit so the
+    # limit is a decision rather than a default nobody chose.
+    max_jobs = get_settings().worker_max_concurrent_jobs

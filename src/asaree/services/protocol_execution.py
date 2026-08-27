@@ -2053,6 +2053,8 @@ async def plan_cell_runs(
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(graph)))
 
+    # Current design only -- list_cells scopes to the experiment's current
+    # revision, so a superseded design's cells are neither counted nor run.
     cells = await list_cells(db, experiment_id=experiment_id)
     pending = [c for c in cells if not c.metric_values]
     runs = [
@@ -2062,6 +2064,7 @@ async def plan_cell_runs(
             owner_id=owner_id,
             cell_label=cell.cell_label,
             factor_values=cell.factor_values or {},
+            design_revision_id=cell.design_revision_id,
         )
         for cell in pending
     ]
@@ -2108,6 +2111,7 @@ async def plan_single_cell_run(
         owner_id=owner_id,
         cell_label=cell.cell_label,
         factor_values=cell.factor_values or {},
+        design_revision_id=cell.design_revision_id,
     )
 
 
@@ -2224,6 +2228,13 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             return
         protocol_id, owner_id, graph = protocol.id, run.owner_id, protocol.graph
         experiment_id, cell_label, factor_values = protocol.experiment_id, run.cell_label, run.factor_values
+        # Pinned when the run was planned, so a design regenerated while this
+        # was in flight can't redirect the write-backs below onto a different
+        # generation's cell (or mint a stray one for a combination the current
+        # design no longer has). Null for a run planned before this column
+        # existed -- upsert_cell then falls back to the current revision,
+        # which is the old behavior and the best available answer.
+        design_revision_id = run.design_revision_id
         target_node_id = run.target_node_id
         experiment = await get_experiment(db, experiment_id) if experiment_id else None
         design_spec = experiment.design_spec if experiment is not None else None
@@ -2272,6 +2283,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 experiment_id=experiment_id,
                 cell_label=cell_label,
                 fields={"run_id": protocol_run_id, "factor_values": factor_values or {}, "workspace_id": workspace_id},
+                revision_id=design_revision_id,
             )
 
     node_runs: dict[str, Any] = {}
@@ -2426,6 +2438,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                                 "protocol_run_id": str(protocol_run_id),
                             }
                         },
+                        revision_id=design_revision_id,
                     )
                 # Best-effort: matches the Score/run_model_script shape ->
                 # writes metric_values; doesn't match (or anything else goes

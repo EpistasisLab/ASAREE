@@ -20,6 +20,12 @@ from asaree.deps import CurrentUser, DbSession
 from asaree.services.csv_export import cells_that_ran, cells_to_csv
 from asaree.services.datasets import get_dataset
 from asaree.services.design_generation import DesignValidationError, generate_design_cells
+from asaree.services.design_revisions import (
+    DesignRevisionError,
+    delete_revision,
+    get_revision,
+    list_revision_summaries,
+)
 from asaree.services.experiment_artifacts import create_artifact, delete_artifact, get_artifact, list_artifacts
 from asaree.services.experiments import (
     create_experiment,
@@ -177,6 +183,9 @@ class UpsertCellRequest(BaseModel):
 
 class CellResponse(BaseModel):
     id: uuid.UUID
+    # Which generation of the design this cell belongs to. Cells returned by
+    # the default (unfiltered) reads are always the current revision's.
+    design_revision_id: uuid.UUID
     cell_label: str
     run_id: uuid.UUID | None
     workspace_id: str | None
@@ -282,9 +291,13 @@ async def delete_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser
 @router.post("/{experiment_id}/generate-design", response_model=list[CellResponse])
 async def generate_design_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> list[CellResponse]:
     """Materialize one cell per combination of the experiment's declared
-    factors — the cross product, computed fresh each call. Safe to call again
-    after widening a factor's levels: existing cells' results are untouched,
-    only the new combinations get created (see ``generate_design_cells``)."""
+    factors — the cross product, computed fresh each call.
+
+    Safe to call again: a design producing the same set of cells merges into
+    the current revision, and one producing a different set opens a new
+    revision, carrying forward the results of every combination the two share.
+    The previous design's cells become history rather than lingering in the
+    current view (see ``generate_design_cells``)."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
     design_spec = experiment.design_spec or {}
     factors = design_spec.get("factors")
@@ -297,10 +310,67 @@ async def generate_design_endpoint(experiment_id: uuid.UUID, user: CurrentUser, 
             factors=factors,
             replicates=design_spec.get("replicates") or 1,
             randomization_seed=design_spec.get("randomization_seed"),
+            design_spec=experiment.design_spec,
         )
     except DesignValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return [CellResponse.model_validate(c) for c in cells]
+
+
+class DesignRevisionResponse(BaseModel):
+    id: uuid.UUID
+    revision: int
+    # Null = this is the experiment's current design; a timestamp = when it
+    # was replaced. The frontend keys "current vs history" off this.
+    superseded_at: datetime | None
+    # The design_spec snapshot that produced this revision, so a superseded
+    # revision's numbers stay interpretable after the experiment's own spec
+    # has moved on.
+    design_spec: dict[str, Any] | None
+    cell_count: int
+    scored_count: int
+    created_at: datetime
+
+
+@router.get("/{experiment_id}/design-revisions", response_model=list[DesignRevisionResponse])
+async def list_design_revisions_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> list[DesignRevisionResponse]:
+    """Every generation of this experiment's design, current one first."""
+    await _get_owned_experiment(db, experiment_id, user)
+    summaries = await list_revision_summaries(db, experiment_id=experiment_id)
+    return [
+        DesignRevisionResponse(
+            id=s.revision.id,
+            revision=s.revision.revision,
+            superseded_at=s.revision.superseded_at,
+            design_spec=s.revision.design_spec,
+            cell_count=s.cell_count,
+            scored_count=s.scored_count,
+            created_at=s.revision.created_at,
+        )
+        for s in summaries
+    ]
+
+
+@router.delete("/{experiment_id}/design-revisions/{revision_id}", status_code=204)
+async def delete_design_revision_endpoint(
+    experiment_id: uuid.UUID, revision_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> None:
+    """Permanently delete a superseded design and every cell under it.
+
+    409 for the current design: replacing it is what generate-design does, and
+    deleting it would leave the experiment with no design at all. 404 if the
+    revision belongs to a different experiment, so a revision id from one
+    experiment can't be used to delete through another."""
+    await _get_owned_experiment(db, experiment_id, user)
+    revision = await get_revision(db, revision_id)
+    if revision is None or revision.experiment_id != experiment_id:
+        raise HTTPException(status_code=404, detail="No such design revision")
+    try:
+        await delete_revision(db, revision_id)
+    except DesignRevisionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 class AnalyzeFactorialRequest(BaseModel):
@@ -401,9 +471,13 @@ async def get_cell_endpoint(
 
 
 @router.get("/{experiment_id}/cells", response_model=list[CellResponse])
-async def list_cells_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> list[CellResponse]:
+async def list_cells_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession, revision_id: uuid.UUID | None = None
+) -> list[CellResponse]:
+    """The current design's cells. Pass ``revision_id`` to read a superseded
+    design's instead -- see GET /design-revisions for the ids."""
     await _get_owned_experiment(db, experiment_id, user)
-    cells = await list_cells(db, experiment_id=experiment_id)
+    cells = await list_cells(db, experiment_id=experiment_id, revision_id=revision_id)
     return [CellResponse.model_validate(c) for c in cells]
 
 

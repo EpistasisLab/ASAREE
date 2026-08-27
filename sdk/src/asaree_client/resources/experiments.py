@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from asaree_client.models import Cell, Experiment, ExperimentArtifact
+from asaree_client.models import Cell, DesignRevision, Experiment, ExperimentArtifact
 
 ResourceId = uuid.UUID | str
 # Distinguishes "omit this kwarg" (leave unchanged) from "pass None"
@@ -108,9 +108,29 @@ class Experiments:
 
     def generate_design(self, experiment_id: ResourceId) -> builtins.list[Cell]:
         """Materialize one cell per combination of the experiment's declared
-        factors. Safe to call again after widening a factor's levels."""
+        factors, returning the current design's cells.
+
+        Safe to call again after changing the factors. If the new design
+        produces a different set of cells than the current one, the current
+        design revision is superseded and a new one opened: results for cells
+        that survive the change carry forward, and the rest stay behind in the
+        superseded revision as history (see ``list_design_revisions``). Nothing
+        is deleted, and the returned list is always exactly the new design.
+        """
         data = self._client._post(f"/experiments/{experiment_id}/generate-design")
         return [Cell(**c) for c in data]
+
+    def list_design_revisions(self, experiment_id: ResourceId) -> builtins.list[DesignRevision]:
+        """Every generation of this experiment's design, newest first. The
+        first entry (``superseded_at is None``) is the current design."""
+        data = self._client._get(f"/experiments/{experiment_id}/design-revisions")
+        return [DesignRevision(**r) for r in data]
+
+    def delete_design_revision(self, experiment_id: ResourceId, revision_id: ResourceId) -> None:
+        """Permanently delete a superseded design revision and all of its
+        cells, including any results scored in them. Refuses (409) on the
+        current revision -- regenerate the design to replace that instead."""
+        self._client._delete(f"/experiments/{experiment_id}/design-revisions/{revision_id}")
 
     def upsert_cell(
         self,
@@ -144,8 +164,12 @@ class Experiments:
         data = self._client._get(f"/experiments/{experiment_id}/cells/{cell_label}")
         return Cell(**data)
 
-    def list_cells(self, experiment_id: ResourceId) -> builtins.list[Cell]:
-        data = self._client._get(f"/experiments/{experiment_id}/cells")
+    def list_cells(self, experiment_id: ResourceId, *, revision_id: ResourceId | None = None) -> builtins.list[Cell]:
+        """The experiment's current design cells, or -- with *revision_id* --
+        a superseded revision's, to read results scored under an older
+        design."""
+        params = {"revision_id": str(revision_id)} if revision_id is not None else None
+        data = self._client._get(f"/experiments/{experiment_id}/cells", params=params)
         return [Cell(**c) for c in data]
 
     def analyze(

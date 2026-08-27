@@ -15,6 +15,7 @@ import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for 
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.user import User
 from asaree.services import protocol_execution as pe
+from asaree.services.design_generation import generate_design_cells
 from asaree.services.experiments import create_experiment, delete_experiment
 from asaree.services.factorial_cells import get_cell, upsert_cell
 from asaree.services.protocol_execution import (
@@ -1228,6 +1229,41 @@ async def test_plan_cell_runs_creates_one_run_per_pending_cell_skips_scored(owne
         by_label = {r.cell_label: r for r in runs}
         assert by_label["cell-1"].factor_values == {"x": 1}
         assert by_label["cell-2"].factor_values == {"x": 2}
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)  # cascades the created ProtocolRuns
+            await delete_experiment(db, experiment_id)
+
+
+async def test_plan_cell_runs_ignores_a_superseded_design(owner_id: uuid.UUID) -> None:
+    """The bug this whole revision model exists for: a design shrunk from 6
+    cells to 2 used to launch 6 runs, because the 4 the new design dropped
+    were still sitting under the experiment."""
+    graph = _graph(["a", "b"], [("a", "b")])
+    factors_wide = [{"name": "tier", "levels": ["s", "l"]}, {"name": "effort", "levels": ["lo", "mid", "hi"]}]
+    factors_narrow = [{"name": "tier", "levels": ["s", "l"]}, {"name": "effort", "levels": ["lo"]}]
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"cell-run-superseded-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db, name=f"cell-run-superseded-protocol-{uuid.uuid4().hex}", owner_id=owner_id, experiment_id=experiment_id
+        )
+        protocol_id = protocol.id
+        await generate_design_cells(db, experiment_id=experiment_id, factors=factors_wide)
+    async with get_session() as db:
+        await generate_design_cells(db, experiment_id=experiment_id, factors=factors_narrow)
+
+    try:
+        async with get_session() as db:
+            runs, skipped = await plan_cell_runs(
+                db, protocol_id=protocol_id, experiment_id=experiment_id, owner_id=owner_id, graph=graph
+            )
+        assert len(runs) == 2  # not 6
+        assert skipped == 0
+        # Every run is pinned to the design it was planned under, so a
+        # regenerate mid-flight can't redirect where its result lands.
+        assert len({r.design_revision_id for r in runs}) == 1
+        assert runs[0].design_revision_id is not None
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRuns

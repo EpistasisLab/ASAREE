@@ -8,6 +8,7 @@ import { sanitizeFilename } from '@/lib/utils'
 import type { Cell, Experiment } from '@/types/experiments'
 import { CellsHeatmap } from './CellsHeatmap'
 import { CellsTable } from './CellsTable'
+import { DesignHistory } from './DesignHistory'
 
 // `@container` so the heatmap inside sizes itself against THIS box rather
 // than the viewport -- the same component renders in a drag-resizable ~320-
@@ -52,14 +53,20 @@ function CellsBody({ experiment, cells }: { experiment: Experiment; cells: Cell[
  */
 export function CellsTab({ experiment }: { experiment: Experiment }) {
   const [fullscreen, setFullscreen] = useState(false)
+  // null = the current design. Set from DesignHistory to inspect a superseded
+  // revision's cells; owned here so the heatmap, the table, the scored tally
+  // and the CSV button can't disagree about which design they're showing.
+  const [revisionId, setRevisionId] = useState<string | null>(null)
 
-  // Same query key the canvas page itself uses, so this shares one cache
-  // entry with the top bar's cells readout and DesignTab's own invalidation
-  // after generating a design -- no second fetch, no chance of the two
-  // disagreeing about how many cells exist.
+  // For the current design this is the same query key the canvas page itself
+  // uses, so it shares one cache entry with the top bar's cells readout and
+  // DesignTab's own invalidation after generating a design -- no second fetch,
+  // no chance of the two disagreeing about how many cells exist. A superseded
+  // revision gets its own key: it's a different set of rows, and it must not
+  // overwrite the shared entry every other reader is looking at.
   const cellsQuery = useQuery({
-    queryKey: ['experiments', experiment.id, 'cells'],
-    queryFn: () => experimentsApi.listCells(experiment.id),
+    queryKey: revisionId ? ['experiments', experiment.id, 'cells', revisionId] : ['experiments', experiment.id, 'cells'],
+    queryFn: () => experimentsApi.listCells(experiment.id, revisionId ?? undefined),
   })
 
   useEffect(() => {
@@ -106,32 +113,47 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
   }
 
   const cells = cellsQuery.data
+  const scored = cells?.filter((c) => c.metric_values).length ?? 0
+  const viewingHistory = revisionId !== null
+
+  // The history list stays mounted through the error/empty cases below: an
+  // experiment whose current design generated nothing still has history worth
+  // seeing (and getting back out of), and hiding it would strand a user who
+  // selected a revision that has since been deleted.
+  const history = (
+    <DesignHistory experimentId={experiment.id} selectedRevisionId={revisionId} onSelect={setRevisionId} />
+  )
+
+  let body
   if (cellsQuery.isError || !cells) {
-    return (
-      <div className="p-3">
-        <p className="text-sm text-muted-foreground">Could not load this experiment's cells.</p>
-      </div>
+    body = <p className="text-sm text-muted-foreground">Could not load this experiment's cells.</p>
+  } else if (cells.length === 0) {
+    body = (
+      <p className="text-sm text-muted-foreground">
+        {viewingHistory
+          ? 'This design revision has no cells.'
+          : 'No cells yet — generate this experiment’s design from the Design tab first.'}
+      </p>
     )
+  } else {
+    body = <CellsBody experiment={experiment} cells={cells} />
   }
 
-  if (cells.length === 0) {
-    return (
-      <div className="p-3">
-        <p className="text-sm text-muted-foreground">
-          No cells yet — generate this experiment's design from the Design tab first.
-        </p>
-      </div>
-    )
-  }
-
-  const scored = cells.filter((c) => c.metric_values).length
+  // A superseded revision is a record of what was, not something to keep
+  // working in -- say so plainly, since every control around it (CSV, the
+  // canvas's own Run buttons) still acts on the current design.
+  const historyBanner = viewingHistory ? (
+    <p className="rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
+      Viewing a superseded design revision — read-only history. The canvas and CSV export still use the current design.
+    </p>
+  ) : null
 
   if (fullscreen) {
     return (
       <div className="fixed inset-0 z-50 flex flex-col bg-background p-4">
         <div className="mb-3 flex items-center justify-between">
           <p className="text-sm font-semibold">
-            Cells — <span className="font-mono text-muted-foreground">{scored}/{cells.length} scored</span>
+            Cells — <span className="font-mono text-muted-foreground">{scored}/{cells?.length ?? 0} scored</span>
           </p>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => void handleDownloadCsv()}>
@@ -142,8 +164,10 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
             </Button>
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto text-sm">
-          <CellsBody experiment={experiment} cells={cells} />
+        <div className="flex-1 space-y-3 overflow-y-auto text-sm">
+          {historyBanner}
+          {body}
+          {history}
         </div>
       </div>
     )
@@ -153,7 +177,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
     <div className="flex flex-col gap-3 p-3 text-sm">
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-xs text-muted-foreground">
-          {scored}/{cells.length} scored
+          {scored}/{cells?.length ?? 0} scored
         </span>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="icon-sm" aria-label="Download cells CSV" onClick={() => void handleDownloadCsv()}>
@@ -164,7 +188,9 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
           </Button>
         </div>
       </div>
-      <CellsBody experiment={experiment} cells={cells} />
+      {historyBanner}
+      {body}
+      {history}
     </div>
   )
 }

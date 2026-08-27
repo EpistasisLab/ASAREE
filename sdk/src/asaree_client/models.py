@@ -89,6 +89,11 @@ class Experiment(BaseModel):
 class Cell(BaseModel):
     id: uuid.UUID
     cell_label: str
+    # Which generation of the experiment's design this observation was made
+    # under. Cells from a superseded design stay in the database as history,
+    # so a cell is only part of the live design if this matches the
+    # experiment's current DesignRevision.
+    design_revision_id: uuid.UUID
     run_id: uuid.UUID | None
     workspace_id: str | None
     factor_values: dict[str, Any] | None
@@ -96,6 +101,24 @@ class Cell(BaseModel):
     artifacts: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime
+
+
+class DesignRevision(BaseModel):
+    """One generation of an experiment's factorial design.
+
+    Regenerating a design that no longer produces the same set of cells
+    supersedes the current revision and opens a new one; the old cells (and
+    whatever was scored in them) are kept as history rather than deleted.
+    ``superseded_at is None`` marks the one revision that is current.
+    """
+
+    id: uuid.UUID
+    revision: int
+    superseded_at: datetime | None
+    design_spec: dict[str, Any] | None
+    cell_count: int
+    scored_count: int
+    created_at: datetime
 
 
 class ExperimentArtifact(BaseModel):

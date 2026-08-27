@@ -219,6 +219,10 @@ export interface ExperimentResults {
 export interface Cell {
   id: string
   cell_label: string
+  // Which generation of the design this observation was made under. Cells
+  // from a superseded revision stay in the database as history, so listCells
+  // returns only the current revision's unless asked for another one.
+  design_revision_id: string
   run_id: string | null
   workspace_id: string | null
   factor_values: Record<string, unknown> | null
@@ -226,4 +230,18 @@ export interface Cell {
   artifacts: Record<string, unknown> | null
   created_at: string
   updated_at: string
+}
+
+// One generation of an experiment's design. Regenerating a design whose set
+// of cells has changed supersedes the current revision and opens a new one,
+// keeping the old cells (and anything scored in them) as history rather than
+// deleting them -- `superseded_at === null` marks the one that is current.
+export interface DesignRevision {
+  id: string
+  revision: number
+  superseded_at: string | null
+  design_spec: DesignSpec | null
+  cell_count: number
+  scored_count: number
+  created_at: string
 }

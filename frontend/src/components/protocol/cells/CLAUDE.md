@@ -101,4 +101,18 @@ earns its place.
   relative last-used) since it's a footnote to the trial table in a narrow column, not its own
   page section. The model-hash tint is the part that carries meaning and must survive any
   further restyling; don't go back to ARES's plain name/role/added thin table either.
+- **Design history is a collapsed footnote, not a peer of the table** (`DesignHistory.tsx`):
+  regenerating a design that would drop cells supersedes the whole revision rather than editing
+  or deleting the old cells (see the root `CLAUDE.md`'s "Cells belong to a design revision"),
+  so an experiment quietly accumulates results the current view doesn't show. The list renders
+  **only once there are ≥2 revisions** — a permanent "1 revision" row is noise in a 320px
+  column, and a single current revision is just "the design", which is already the whole rest
+  of the tab. Selecting a superseded revision swaps the heatmap/table onto its cells with an
+  explicit read-only banner; that selection lives in `CellsTab` so the tally, the CSV button and
+  the grid can't disagree about which design they're showing, and a superseded revision gets its
+  own query key so it never overwrites the `['experiments', id, 'cells']` entry the canvas top
+  bar and `DesignTab` share. Deleting one is permanent and cascades to its results, so it goes
+  through a `Dialog` that names the counts (the `DeleteNodeConfirmDialog` convention), not the
+  lighter inline two-click confirm — and the current revision has no delete affordance at all,
+  since the server refuses it (409).
 - Paginate client-side once a list can realistically exceed ~10-20 rows.

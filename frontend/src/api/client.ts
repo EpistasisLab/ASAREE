@@ -12,7 +12,7 @@ import type {
 } from '@/types/auth'
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
-import type { Cell, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
+import type { Cell, DesignRevision, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
@@ -200,14 +200,27 @@ export const experimentsApi = {
     },
   ) => request<Experiment>(`/experiments/${id}`, { method: 'PATCH', body: data }),
   remove: (id: string) => request<void>(`/experiments/${id}`, { method: 'DELETE' }),
-  listCells: (id: string) => request<Cell[]>(`/experiments/${id}/cells`),
+  // The experiment's current design cells; pass a revisionId to read a
+  // superseded revision's instead (the design-history drill-down).
+  listCells: (id: string, revisionId?: string) =>
+    request<Cell[]>(revisionId ? `/experiments/${id}/cells?revision_id=${revisionId}` : `/experiments/${id}/cells`),
+  // Every generation of this experiment's design, newest first -- the first
+  // entry (superseded_at === null) is the current one.
+  listDesignRevisions: (id: string) => request<DesignRevision[]>(`/experiments/${id}/design-revisions`),
+  // Permanently deletes a superseded revision and every cell in it, results
+  // included (409 on the current revision -- regenerate to replace that).
+  deleteDesignRevision: (id: string, revisionId: string) =>
+    request<void>(`/experiments/${id}/design-revisions/${revisionId}`, { method: 'DELETE' }),
   // One row per cell, one column per factor_values/metric_values key seen
   // anywhere in the experiment (see services.csv_export.cells_to_csv) --
   // a Blob, not JSON, so callers hand it straight to URL.createObjectURL.
   downloadCellsCsv: (id: string) => requestBlob(`/experiments/${id}/cells.csv`),
   // Materializes one FactorialCellResult per combination of the experiment's
-  // declared factors -- safe to call again after widening a factor's levels,
-  // existing cells are untouched (see services.design_generation).
+  // declared factors, returning the current design's cells. If the new design
+  // isn't the same set of cells as the current one, the current design
+  // revision is superseded and a new one opened -- results for surviving cell
+  // labels carry forward, the rest stay in history (see
+  // services.design_generation). Nothing is ever deleted here.
   generateDesign: (id: string) => request<Cell[]>(`/experiments/${id}/generate-design`, { method: 'POST' }),
   // One row per cell (a "trial"), not per ProtocolRun -- a cell that's never
   // been run is still listed, with status "queued" (see TrialResponse /

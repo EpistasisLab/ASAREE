@@ -136,7 +136,16 @@ async def promote_cell_score_metrics(
     if metrics is None:
         return PromotionResult(cell_label, False, "run_model_script never returned test_metrics (see its own error)")
 
-    await upsert_cell(db, experiment_id=experiment_id, cell_label=cell_label, fields={"metric_values": metrics})
+    # Written back to the design revision the run was planned under, not
+    # whatever is current now -- see ProtocolRun.design_revision_id. Null on a
+    # run predating that column, which falls back to the current revision.
+    await upsert_cell(
+        db,
+        experiment_id=experiment_id,
+        cell_label=cell_label,
+        fields={"metric_values": metrics},
+        revision_id=run.design_revision_id,
+    )
     return PromotionResult(cell_label, True, "")
 
 

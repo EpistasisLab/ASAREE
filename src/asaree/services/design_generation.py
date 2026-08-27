@@ -5,11 +5,11 @@ use-case-specific assumptions. The other half (orchestration — the
 critic-gating loop, workspace staging) stays notebook-side, deliberately.
 
 Two responsibilities, kept separate: computing the design (pure, no I/O) and
-materializing it as ``FactorialCellResult`` rows (via the existing
-``upsert_cell`` merge, so generating a design twice — e.g. after adding a
-replicate level — only creates the new combinations; already-populated cells
-are untouched, since the merge only ever sets ``factor_values`` and nothing
-else).
+materializing it as ``FactorialCellResult`` rows under a *design revision*
+(see services.design_revisions). Generation used to be purely additive, which
+meant a design that shrank left the old design's cells behind to pollute every
+count and every "run all cells"; a design whose cell set changes now opens a
+new revision and carries forward the results of any combination the two share.
 """
 
 from __future__ import annotations
@@ -25,7 +25,8 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.factorial_cell_result import FactorialCellResult
-from asaree.services.factorial_cells import upsert_cell
+from asaree.services.design_revisions import get_current_revision, supersede_and_create
+from asaree.services.factorial_cells import list_cells, upsert_cell
 
 
 class DesignValidationError(ValueError):
@@ -118,6 +119,9 @@ def cell_label_for(combination: dict[str, Any], *, replicate: int = 1) -> str:
     return base if replicate <= 1 else f"{base}__rep{replicate}"
 
 
+_CARRIED_FORWARD_FIELDS = ("run_id", "workspace_id", "factor_values", "metric_values", "artifacts")
+
+
 async def generate_design_cells(
     db: AsyncSession,
     *,
@@ -125,14 +129,29 @@ async def generate_design_cells(
     factors: list[dict[str, Any]],
     replicates: int = 1,
     randomization_seed: int | None = None,
+    design_spec: dict[str, Any] | None = None,
 ) -> list[FactorialCellResult]:
     """Compute the design and materialize ``replicates`` cell rows per
-    combination (default 1 — today's exact behavior, unchanged).
+    combination (default 1), under the experiment's current design revision.
 
-    Idempotent: re-running this (e.g. after widening a factor's levels or
-    raising ``replicates``) only creates the new combinations/replicates —
-    ``upsert_cell`` merges ``factor_values`` onto an existing row rather than
-    resetting it, so a cell that already has results is left alone.
+    A new revision is opened exactly when the new design would *drop* a cell
+    the current revision has — not on every change. Re-clicking generate,
+    changing ``randomization_seed``, widening a factor's levels or raising
+    ``replicates`` all leave every existing cell part of the new design, so
+    they keep the current revision and merge into its rows: no near-empty
+    duplicate revisions pile up, and (as before) the cells you already scored
+    are untouched, right down to their row ids.
+
+    Dropping a cell is the case that needs a revision (see
+    services.design_revisions). This is the fix for cells outliving the design
+    that created them: shrinking a design from 6 cells to 2 used to leave all 6
+    in place — still counted in "0/6 scored", still picked up by "run all
+    cells" — because generation was purely additive and nothing ever removed a
+    combination. The old cells now stay under their own superseded revision,
+    where they remain readable as history but are invisible to every
+    current-design reader. Results for a label the two revisions share are
+    carried forward into the new one, so shrinking a design only costs you the
+    combinations you actually removed.
 
     ``randomization_seed``, when set, only shuffles the *order* of the
     returned list (assignment-order independence, standard factorial-design
@@ -142,16 +161,62 @@ async def generate_design_cells(
     if replicates < 1:
         raise DesignValidationError(f"replicates must be at least 1, got {replicates}")
     combinations = generate_design(factors)
+    planned = [
+        (cell_label_for(combo, replicate=replicate), combo)
+        for combo in combinations
+        for replicate in range(1, replicates + 1)
+    ]
+    planned_labels = {label for label, _ in planned}
+
+    current = await get_current_revision(db, experiment_id)
+    existing = (
+        {c.cell_label: c for c in await list_cells(db, experiment_id=experiment_id, revision_id=current.id)}
+        if current is not None
+        else {}
+    )
+
+    # Only a design that leaves cells behind needs a new revision; one that
+    # adds to (or exactly matches) the current design has nothing to orphan.
+    dropped = set(existing) - planned_labels
+
+    if current is not None and not dropped:
+        # Keep the revision and merge into its rows -- factor_values is
+        # re-merged because a level's *value* can change without changing its
+        # slugified label.
+        revision_id = current.id
+        carry_over: dict[str, FactorialCellResult] = {}
+        if current.design_spec != design_spec:
+            current.design_spec = design_spec
+            await db.flush()
+    else:
+        revision = await supersede_and_create(db, experiment_id=experiment_id, design_spec=design_spec)
+        revision_id = revision.id
+        carry_over = existing
+
     cells = []
-    for combo in combinations:
-        for replicate in range(1, replicates + 1):
-            cell = await upsert_cell(
-                db,
-                experiment_id=experiment_id,
-                cell_label=cell_label_for(combo, replicate=replicate),
-                fields={"factor_values": combo},
-            )
-            cells.append(cell)
+    for label, combo in planned:
+        fields: dict[str, Any] = {"factor_values": combo}
+        previous = carry_over.get(label)
+        if previous is not None:
+            # Same combination, same label -- the observation is as valid
+            # under the new design as it was under the old one, so it moves
+            # across rather than being re-run and re-billed.
+            for field in _CARRIED_FORWARD_FIELDS:
+                value = getattr(previous, field)
+                if value:
+                    fields[field] = value
+            # factor_values from the new design wins: it's what was actually
+            # planned this time, and the carried dict is the same combination
+            # anyway.
+            fields["factor_values"] = combo
+        cell = await upsert_cell(
+            db,
+            experiment_id=experiment_id,
+            cell_label=label,
+            fields=fields,
+            revision_id=revision_id,
+        )
+        cells.append(cell)
     if randomization_seed is not None:
         random.Random(randomization_seed).shuffle(cells)
     return cells

@@ -107,6 +107,32 @@ rather than doing it silently as a routine part of coding:
   association. `GET /runs` has no server-side `experiment_id` filter (only `agent_id`) — this
   fetches every run for the user and filters client-side, which is fine at today's scale but
   is the place to add a real filter if a user's run history grows large enough to matter.
+- **Cells belong to a design revision, not to the experiment** — `experiment_design_revisions`
+  (`models/experiment_design_revision.py`, migration `e2f7c4a91b60`). The current design is the
+  one revision with `superseded_at IS NULL` (a partial unique index enforces "at most one",
+  rather than convention). This exists because generation used to be purely additive: a design
+  shrunk from 6 cells to 2 left all 6 behind, so the experiment still read "0/6 scored" and
+  "run all cells" still launched 6.
+  - **Never query `FactorialCellResult` filtered on `experiment_id` alone** — that sees every
+    superseded design's cells, which is exactly the bug. Go through
+    `services/factorial_cells.py`'s `get_cell`/`list_cells`/`upsert_cell`, which scope to the
+    current revision by default and take an explicit `revision_id` only to read history on
+    purpose. `experiment_id` stays denormalized on the cell (most queries are per-experiment)
+    and both filters are applied together, since `revision_id` can arrive from a query string.
+  - `generate_design_cells` opens a new revision **only when the new design would drop a cell
+    the current one has**. Re-clicking generate, changing the seed, widening a factor's levels
+    or raising `replicates` all keep the current revision and its row ids — history entries are
+    meant to mark designs that actually discarded something, not every edit. Results for a
+    label the two revisions share are copied forward; the originals stay in history.
+  - `ProtocolRun.design_revision_id` **pins** which design a run's result belongs to, so a
+    regenerate mid-flight can't redirect the write-back (`plan_cell_runs` →
+    `run_protocol`/`promote_cell_score_metrics`). It's `ondelete="SET NULL"` — run history
+    outlives the design; cells are `ondelete="CASCADE"` so deleting a revision really does
+    delete its results.
+  - Deleting the **current** revision is refused (409) — that's a reset, not a deletion;
+    regenerating is how you replace it. Revision numbers are `max()+1` over every revision ever,
+    so a deleted number is never reused. The history UI is `components/protocol/cells/
+    DesignHistory.tsx`.
 
 # Color — meaningful variation, not decoration
 

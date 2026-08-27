@@ -20,6 +20,7 @@ from asaree_client.exceptions import (
 from asaree_client.models import (
     Agent,
     Cell,
+    DesignRevision,
     Experiment,
     ExperimentArtifact,
     LLMSetting,
@@ -55,6 +56,7 @@ __all__ = [
     "AsareeUnprocessableEntityError",
     "AsareeUpstreamError",
     "Cell",
+    "DesignRevision",
     "Experiment",
     "ExperimentArtifact",
     "LLMSetting",

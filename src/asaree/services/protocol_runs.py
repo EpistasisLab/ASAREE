@@ -17,8 +17,8 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from asaree.models.factorial_cell_result import FactorialCellResult
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.factorial_cells import list_cells
 
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
@@ -31,10 +31,14 @@ async def create_protocol_run(
     cell_label: str | None = None,
     factor_values: dict[str, Any] | None = None,
     target_node_id: str | None = None,
+    design_revision_id: uuid.UUID | None = None,
 ) -> ProtocolRun:
-    """``cell_label``/``factor_values`` are set together only for a run
-    created by "run all cells" (``services.protocol_execution.plan_cell_runs``)
-    -- both stay ``None`` for a plain graph run, the existing behavior.
+    """``cell_label``/``factor_values``/``design_revision_id`` are set together
+    only for a run created by "run all cells"
+    (``services.protocol_execution.plan_cell_runs``) -- all stay ``None`` for a
+    plain graph run, the existing behavior. ``design_revision_id`` pins which
+    generation of the design this run's result belongs to, so a regenerate
+    mid-flight can't redirect the write-back (see the model's own comment).
     ``target_node_id`` is set only for a single-node "Play" run (see
     ``ProtocolRun`` model's own comment) -- mutually exclusive with
     cell_label/factor_values in practice, though nothing enforces that here."""
@@ -46,6 +50,7 @@ async def create_protocol_run(
         cell_label=cell_label,
         factor_values=factor_values,
         target_node_id=target_node_id,
+        design_revision_id=design_revision_id,
     )
     db.add(run)
     await db.flush()
@@ -208,26 +213,23 @@ class ExperimentTrial:
     updated_at: datetime
 
 
-async def list_experiment_trials(db: AsyncSession, *, experiment_id: uuid.UUID) -> list[ExperimentTrial]:
-    """Every cell under *experiment_id*, cross-referenced with its most
-    recent run (``FactorialCellResult.run_id`` is kept pointing at the
-    latest ``ProtocolRun`` that touched the cell -- see
-    ``run_protocol``'s pre-write in services.protocol_execution) for
-    status/error/timestamp. A cell can be scored without ever having gone
-    through a ProtocolRun at all (e.g. upserted directly by a notebook) --
-    such a cell has no run_id but real metric_values, and is reported
-    "completed" rather than "queued"."""
-    cells = (
-        (
-            await db.execute(
-                select(FactorialCellResult)
-                .where(FactorialCellResult.experiment_id == experiment_id)
-                .order_by(FactorialCellResult.cell_label)
-            )
-        )
-        .scalars()
-        .all()
-    )
+async def list_experiment_trials(
+    db: AsyncSession, *, experiment_id: uuid.UUID, revision_id: uuid.UUID | None = None
+) -> list[ExperimentTrial]:
+    """Every cell of *experiment_id*'s current design (or of *revision_id*,
+    to inspect a superseded one), cross-referenced with its most recent run
+    (``FactorialCellResult.run_id`` is kept pointing at the latest
+    ``ProtocolRun`` that touched the cell -- see ``run_protocol``'s pre-write
+    in services.protocol_execution) for status/error/timestamp. A cell can be
+    scored without ever having gone through a ProtocolRun at all (e.g.
+    upserted directly by a notebook) -- such a cell has no run_id but real
+    metric_values, and is reported "completed" rather than "queued".
+
+    Goes through ``factorial_cells.list_cells`` rather than querying
+    ``FactorialCellResult`` on experiment_id directly: that query would also
+    return every superseded design's cells, which is exactly what design
+    revisions exist to keep out of the current view."""
+    cells = await list_cells(db, experiment_id=experiment_id, revision_id=revision_id)
     run_ids = [c.run_id for c in cells if c.run_id is not None]
     runs_by_id: dict[uuid.UUID, ProtocolRun] = {}
     if run_ids:

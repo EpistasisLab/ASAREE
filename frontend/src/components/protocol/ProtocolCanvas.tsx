@@ -831,6 +831,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     onSuccess: ({ factor, field }) => {
       bindFactorOnNode(field.nodeId, field.fieldPath, factor.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
       setFactorPickerNodeId(null)
     },
   })
@@ -1199,57 +1200,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // shows the node's own plain label, unaffected.
   const factorNodeLabel = selectedNode ? agentTracedLabel(selectedNode, edges, nodes) : ''
 
-  // The mirror image of FactorsEditor's own delete/rename cleanup
-  // (DesignTab.tsx): removing a factor there sweeps every node's
-  // factor_bindings via removeFactorBindings/renameFactorBindings, but
-  // nothing swept the OTHER direction -- unbinding a field from its factor
-  // in a node's own inspector (the "Factor: {name}" badge's X) only ever
-  // cleared that one node's own factor_bindings entry, leaving the factor
-  // itself sitting in design_spec.factors forever with nothing left to bind
-  // it to, invisible until the user separately opened the Design tab and
-  // deleted it there by hand. Only prunes a factor once NO node/field
-  // anywhere still references it -- a factor deliberately shared across
-  // several nodes (e.g. spinal-use-case.json's "Critic enabled" spanning
-  // all 4 Critic Gate nodes) survives unbinding just one of them.
-  async function pruneOrphanedFactors(nextNodes: Node[], removedFactorNames: string[]) {
-    if (!experimentId || removedFactorNames.length === 0) return
-    const stillReferenced = new Set<string>()
-    for (const n of nextNodes) {
-      const bindings = (n.data as { factor_bindings?: Record<string, string> } | undefined)?.factor_bindings ?? {}
-      for (const name of Object.values(bindings)) stillReferenced.add(name)
-    }
-    const orphaned = removedFactorNames.filter((name) => !stillReferenced.has(name))
-    if (orphaned.length === 0) return
-    const fresh = await experimentsApi.get(experimentId)
-    const existingFactors = fresh.design_spec?.factors ?? []
-    const nextFactors = existingFactors.filter((f) => !orphaned.includes(f.name))
-    if (nextFactors.length === existingFactors.length) return
-    await experimentsApi.update(experimentId, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
-    queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
-  }
-
-  // The third way a binding can disappear, alongside unbinding a field in an
-  // inspector (updateNodeData) and deleting the factor in the Design tab
-  // (DesignTab's own sweep): deleting the NODE that carried it. Without this,
-  // the factor outlived the only thing that referenced it -- still listed in
-  // the Design tab, still multiplying the cell count, and no longer reachable
-  // from any node's inspector to unbind.
-  //
-  // Runs for both delete paths (deleteNode and xyflow's onNodesDelete), and
-  // deliberately reuses pruneOrphanedFactors rather than deleting outright,
-  // so a factor shared across several nodes survives losing just one of them.
-  function pruneFactorsForDeletedNodes(deleted: Node[]) {
-    const deletedIds = new Set(deleted.map((n) => n.id))
-    const removedFactorNames = deleted.flatMap((n) =>
-      Object.values((n.data as { factor_bindings?: Record<string, string> } | undefined)?.factor_bindings ?? {}),
-    )
-    if (removedFactorNames.length === 0) return
-    void pruneOrphanedFactors(
-      nodes.filter((n) => !deletedIds.has(n.id)),
-      removedFactorNames,
-    )
-  }
-
   function updateNodeData(
     nodeId: string,
     data:
@@ -1266,16 +1216,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | ReasonActPatternNodeData
       | SingleAgentBaselinePatternNodeData,
   ) {
-    const oldBindings =
-      (nodes.find((n) => n.id === nodeId)?.data as { factor_bindings?: Record<string, string> } | undefined)
-        ?.factor_bindings ?? {}
-    const newBindings = (data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {}
-    const removedFactorNames = Object.entries(oldBindings)
-      .filter(([path, name]) => newBindings[path] !== name)
-      .map(([, name]) => name)
-    const nextNodes = nodes.map((n) => (n.id === nodeId ? { ...n, data } : n))
-    setNodes(nextNodes)
-    if (removedFactorNames.length > 0) void pruneOrphanedFactors(nextNodes, removedFactorNames)
+    setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, data } : node)))
   }
 
   // Client-side guardrail mirroring the backend's own connector validation
@@ -1345,11 +1286,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   )
 
   function deleteNode(nodeId: string) {
-    const node = nodes.find((n) => n.id === nodeId)
     setNodes((nds) => nds.filter((n) => n.id !== nodeId))
     setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId))
     setSelectedNodeId(null)
-    if (node) pruneFactorsForDeletedNodes([node])
   }
 
   // The node inspector's own Delete button calls deleteNode directly --
@@ -1434,7 +1373,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onPaneClick={() => setSelectedNodeId(null)}
             onNodesDelete={(deleted) => {
               if (deleted.some((n) => n.id === selectedNodeId)) setSelectedNodeId(null)
-              pruneFactorsForDeletedNodes(deleted)
             }}
             fitView
             fitViewOptions={{ maxZoom: DEFAULT_ZOOM }}

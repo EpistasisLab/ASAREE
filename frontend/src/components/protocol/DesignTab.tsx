@@ -9,12 +9,14 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { experimentsApi, protocolsApi } from '@/api/client'
+import { unboundFactorNames } from '@/lib/factorBindings'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import { revealsHiddenMcpServers, toolFactorServerId, unboundBindableFields, type UnboundField } from './bindableFields'
 import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import { InfoTooltip } from './InfoTooltip'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
+import type { ProtocolGraph } from '@/types/protocols'
 import {
   COORDINATION_STRATEGY_CATALOG,
   type CoordinationStrategySlug,
@@ -98,6 +100,7 @@ function AddFactorButton({
     onSuccess: ({ factor, field }) => {
       canvasRef.current?.bindFactor(field.nodeId, field.fieldPath, factor.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id] })
+      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })
       setDialogOpen(false)
     },
   })
@@ -176,6 +179,7 @@ function FactorsEditor({
     onSuccess: (name) => {
       canvasRef.current?.removeFactorBindings(name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id] })
+      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })
     },
   })
 
@@ -189,6 +193,7 @@ function FactorsEditor({
     onSuccess: ({ oldName, next }) => {
       if (next.name !== oldName) canvasRef.current?.renameFactorBindings(oldName, next.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id] })
+      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })
       setEditingFactor(null)
     },
   })
@@ -312,6 +317,11 @@ export function DesignTab({
   canvasRef: RefObject<ProtocolCanvasHandle | null>
 }) {
   const queryClient = useQueryClient()
+  const graphQuery = useProtocolGraph(protocolId)
+  const impactQuery = useQuery({
+    queryKey: ['experiments', experiment.id, 'design-impact'],
+    queryFn: () => experimentsApi.getDesignImpact(experiment.id),
+  })
 
   const [hypothesis, setHypothesis] = useState(experiment.hypothesis ?? '')
   const [factors, setFactors] = useState<DesignFactor[]>(experiment.design_spec?.factors ?? [])
@@ -354,6 +364,7 @@ export function DesignTab({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id] })
       queryClient.invalidateQueries({ queryKey: ['experiments'] })
+      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })
     },
   })
 
@@ -365,6 +376,7 @@ export function DesignTab({
       // revision and opens a new one, so the Cells tab's history list is stale
       // too -- not just the cell rows.
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-revisions'] })
+      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })
     },
   })
 
@@ -373,6 +385,13 @@ export function DesignTab({
   const totalTrials = validFactors.length > 0 ? combinations * Math.max(replicates ?? 1, 1) : 0
 
   const selectedStrategy = COORDINATION_STRATEGY_CATALOG.find((s) => s.slug === coordinationSlug)
+  const unboundFactors = unboundFactorNames(
+    experiment.design_spec,
+    graphQuery.data
+      ? ({ nodes: graphQuery.data.nodes, edges: graphQuery.data.edges } as unknown as ProtocolGraph)
+      : undefined,
+  )
+  const impact = impactQuery.data
 
   const isDirty =
     hypothesis !== (experiment.hypothesis ?? '') ||
@@ -381,6 +400,9 @@ export function DesignTab({
     randomizationSeed !== (experiment.design_spec?.randomization_seed ?? null) ||
     JSON.stringify(metrics) !== JSON.stringify(experiment.design_spec?.metrics ?? []) ||
     coordinationSlug !== (experiment.design_spec?.coordination_strategy?.slug ?? 'sequential')
+  const matrixDraftChanged =
+    JSON.stringify(factors) !== JSON.stringify(experiment.design_spec?.factors ?? []) ||
+    replicates !== (experiment.design_spec?.replicates ?? 1)
 
   return (
     <div className="flex flex-col gap-5 p-3 text-sm">
@@ -511,8 +533,33 @@ export function DesignTab({
             trials.
           </InfoTooltip>
         </p>
-        <Button size="sm" variant="outline" disabled={generateMutation.isPending || isDirty || validFactors.length === 0} onClick={() => generateMutation.mutate()}>
-          {generateMutation.isPending ? 'Generating…' : 'Generate design'}
+        {matrixDraftChanged && isDirty && (
+          <div className="rounded-md border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/10 px-2.5 py-2 text-xs text-muted-foreground">
+            <p className="font-medium text-foreground">Design changed — regeneration required.</p>
+            <p className="mt-1">Save these changes to review their impact and regenerate the current design.</p>
+          </div>
+        )}
+        {impact?.regeneration_required && !isDirty && (
+          <div className="rounded-md border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/10 px-2.5 py-2 text-xs text-muted-foreground">
+            <p className="font-medium text-foreground">Design changed — regeneration required.</p>
+            <p className="mt-1">
+              {impact.current_cell_count} current → {impact.proposed_cell_count} proposed: {impact.added_count} added, {impact.retained_count} retained
+              {impact.removed_count ? `, ${impact.removed_count} moved to history` : ''}.
+            </p>
+          </div>
+        )}
+        {unboundFactors.length > 0 && (
+          <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
+            Unbound factor{unboundFactors.length === 1 ? '' : 's'}: {unboundFactors.join(', ')}. Rebind on the canvas or remove from this design.
+          </p>
+        )}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={generateMutation.isPending || isDirty || validFactors.length === 0 || unboundFactors.length > 0}
+          onClick={() => generateMutation.mutate()}
+        >
+          {generateMutation.isPending ? 'Generating…' : impact?.regeneration_required ? 'Review & regenerate' : 'Generate design'}
         </Button>
         {isDirty && <p className="text-xs text-muted-foreground">Save your changes before generating.</p>}
         {generateMutation.data && <p className="text-xs text-muted-foreground">{generateMutation.data.length} cell(s) total</p>}

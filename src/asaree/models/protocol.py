@@ -36,6 +36,17 @@ class Protocol(Base, TimestampMixin):
     # (selected, dragging, measured dimensions) is stripped by the frontend
     # before saving.
     graph: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # The revision production executions use. ``graph`` above remains the
+    # freely autosaved draft, so editing a canvas never hot-patches a queued
+    # or running protocol run.
+    published_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "protocol_revisions.id", ondelete="SET NULL", use_alter=True, name="protocols_published_revision_id_fkey"
+        ),
+        nullable=True,
+        index=True,
+    )
     # RESTRICT, not CASCADE: same reasoning as ResearchExperiment.owner_id --
     # deleting a user shouldn't silently discard the protocols they built.
     owner_id: Mapped[uuid.UUID] = mapped_column(

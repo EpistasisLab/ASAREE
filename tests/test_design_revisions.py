@@ -21,7 +21,7 @@ from asaree.models.database import dispose_engine, get_session
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.factorial_cell_result import FactorialCellResult
 from asaree.models.user import User
-from asaree.services.design_generation import generate_design_cells
+from asaree.services.design_generation import generate_design_cells, get_design_impact
 from asaree.services.design_revisions import (
     DesignRevisionError,
     delete_revision,
@@ -156,6 +156,23 @@ async def test_widening_a_design_reuses_the_current_revision(experiment_id: uuid
 
     async with get_session() as db:
         assert [r.revision for r in await list_revisions(db, experiment_id=experiment_id)] == [1]
+
+
+async def test_design_impact_previews_an_expansion_before_regeneration(experiment_id: uuid.UUID) -> None:
+    async with get_session() as db:
+        await generate_design_cells(
+            db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec={"factors": _TWO_BY_ONE}
+        )
+
+    async with get_session() as db:
+        impact = await get_design_impact(
+            db, experiment_id=experiment_id, design_spec={"factors": _TWO_BY_THREE, "replicates": 1}
+        )
+
+    assert impact.has_generated_design is True
+    assert impact.regeneration_required is True
+    assert (impact.current_cell_count, impact.proposed_cell_count) == (2, 6)
+    assert (impact.added_count, impact.retained_count, impact.removed_count) == (4, 2, 0)
 
 
 async def test_regenerating_an_unchanged_design_reuses_the_current_revision(experiment_id: uuid.UUID) -> None:

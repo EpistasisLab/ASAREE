@@ -30,6 +30,7 @@ from motoro.runner import execute_run, fail_run, get_agent, get_run, list_runs
 import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for Protocol->experiment's FK
 import asaree.models.experiment  # noqa: F401 -- registers research_experiments for Protocol's FK
 import asaree.models.experiment_design_revision  # noqa: F401 -- ProtocolRun.design_revision_id's FK target
+import asaree.models.protocol_revision  # noqa: F401 -- ProtocolRun.protocol_revision_id's FK target
 import asaree.models.user  # noqa: F401 -- registers users for Protocol/ProtocolRun's owner_id FK
 from asaree.config import get_settings
 from asaree.models.database import get_session

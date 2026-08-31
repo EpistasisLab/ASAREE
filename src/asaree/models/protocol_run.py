@@ -69,6 +69,14 @@ class ProtocolRun(Base, TimestampMixin):
         nullable=True,
         index=True,
     )
+    # The immutable published canvas revision this execution uses.  Null is
+    # retained only for runs created before protocol revisions existed.
+    protocol_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("protocol_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # Set only for a canvas "Play" run on one Agent node in isolation (the
     # node's own hover-toolbar icon, not the top-level Run button) -- null
     # for both a plain graph run and a "run all cells" run. run_protocol

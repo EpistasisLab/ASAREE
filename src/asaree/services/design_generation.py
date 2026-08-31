@@ -20,6 +20,7 @@ import json
 import random
 import re
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,6 +123,66 @@ def cell_label_for(combination: dict[str, Any], *, replicate: int = 1) -> str:
 _CARRIED_FORWARD_FIELDS = ("run_id", "workspace_id", "factor_values", "metric_values", "artifacts")
 
 
+@dataclass(frozen=True)
+class DesignImpact:
+    """The non-mutating comparison shown before a user regenerates cells."""
+
+    has_generated_design: bool
+    regeneration_required: bool
+    current_cell_count: int
+    proposed_cell_count: int
+    added_count: int
+    retained_count: int
+    removed_count: int
+
+
+def material_design_spec(design_spec: dict[str, Any] | None) -> dict[str, Any]:
+    """Return only the declaration fields that determine which cells exist."""
+    spec = design_spec or {}
+    return {"factors": spec.get("factors") or [], "replicates": spec.get("replicates") or 1}
+
+
+def _planned_cells(factors: list[dict[str, Any]], replicates: int) -> list[tuple[str, dict[str, Any]]]:
+    if replicates < 1:
+        raise DesignValidationError(f"replicates must be at least 1, got {replicates}")
+    return [
+        (cell_label_for(combo, replicate=replicate), combo)
+        for combo in generate_design(factors)
+        for replicate in range(1, replicates + 1)
+    ]
+
+
+async def get_design_impact(
+    db: AsyncSession, *, experiment_id: uuid.UUID, design_spec: dict[str, Any] | None
+) -> DesignImpact:
+    """Compare the declared factorial matrix to its materialized revision."""
+    material = material_design_spec(design_spec)
+    planned = _planned_cells(material["factors"], material["replicates"]) if material["factors"] else []
+    planned_labels = {label for label, _ in planned}
+    current = await get_current_revision(db, experiment_id)
+    if current is None:
+        return DesignImpact(
+            has_generated_design=False,
+            regeneration_required=bool(planned),
+            current_cell_count=0,
+            proposed_cell_count=len(planned),
+            added_count=len(planned),
+            retained_count=0,
+            removed_count=0,
+        )
+    current_cells = await list_cells(db, experiment_id=experiment_id, revision_id=current.id)
+    current_labels = {cell.cell_label for cell in current_cells}
+    return DesignImpact(
+        has_generated_design=True,
+        regeneration_required=material_design_spec(current.design_spec) != material or current_labels != planned_labels,
+        current_cell_count=len(current_cells),
+        proposed_cell_count=len(planned),
+        added_count=len(planned_labels - current_labels),
+        retained_count=len(planned_labels & current_labels),
+        removed_count=len(current_labels - planned_labels),
+    )
+
+
 async def generate_design_cells(
     db: AsyncSession,
     *,
@@ -158,14 +219,7 @@ async def generate_design_cells(
     practice) — it never affects which combinations/replicates are generated
     or their (deterministic) cell_label.
     """
-    if replicates < 1:
-        raise DesignValidationError(f"replicates must be at least 1, got {replicates}")
-    combinations = generate_design(factors)
-    planned = [
-        (cell_label_for(combo, replicate=replicate), combo)
-        for combo in combinations
-        for replicate in range(1, replicates + 1)
-    ]
+    planned = _planned_cells(factors, replicates)
     planned_labels = {label for label, _ in planned}
 
     current = await get_current_revision(db, experiment_id)

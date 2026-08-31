@@ -32,6 +32,7 @@ async def create_protocol_run(
     factor_values: dict[str, Any] | None = None,
     target_node_id: str | None = None,
     design_revision_id: uuid.UUID | None = None,
+    protocol_revision_id: uuid.UUID | None = None,
 ) -> ProtocolRun:
     """``cell_label``/``factor_values``/``design_revision_id`` are set together
     only for a run created by "run all cells"
@@ -51,6 +52,7 @@ async def create_protocol_run(
         factor_values=factor_values,
         target_node_id=target_node_id,
         design_revision_id=design_revision_id,
+        protocol_revision_id=protocol_revision_id,
     )
     db.add(run)
     await db.flush()

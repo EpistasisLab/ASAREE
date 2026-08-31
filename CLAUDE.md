@@ -133,6 +133,18 @@ rather than doing it silently as a routine part of coding:
     regenerating is how you replace it. Revision numbers are `max()+1` over every revision ever,
     so a deleted number is never reused. The history UI is `components/protocol/cells/
     DesignHistory.tsx`.
+- **A protocol canvas is a draft; production runs use a published revision** — `Protocol.graph`
+  remains the autosaved draft while `protocol_revisions` stores immutable graph snapshots. A
+  `ProtocolRun` carries both `design_revision_id` and `protocol_revision_id`; `run_protocol`
+  loads the latter, so a canvas edit can never hot-patch queued, running, or resumed work. Never
+  create a production run from `Protocol.graph` directly: publish first and pass the resulting
+  revision through the planning path. The top bar deliberately says when a visible canvas has
+  unpublished changes and which published revision production currently uses.
+- **A declared factor must bind to at least one canvas field before a cell batch can run** —
+  deleting/unbinding a node field leaves the factor declared but *unbound*, rather than silently
+  deleting the experimental treatment. The user must rebind it or remove it, then review the
+  design impact and regenerate. `services.factor_bindings` is the shared backend guard; the
+  Design tab shows the same state before generation.
 
 # Color — meaningful variation, not decoration
 

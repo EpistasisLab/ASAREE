@@ -143,6 +143,9 @@ class Protocol(BaseModel):
     description: str | None
     experiment_id: uuid.UUID | None
     graph: dict[str, Any]
+    published_revision_id: uuid.UUID | None = None
+    published_revision: int | None = None
+    has_unpublished_changes: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -155,9 +158,19 @@ class ProtocolRun(BaseModel):
     error: str | None
     cell_label: str | None = None
     factor_values: dict[str, Any] | None = None
+    design_revision_id: uuid.UUID | None = None
+    protocol_revision_id: uuid.UUID | None = None
     target_node_id: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ProtocolRevision(BaseModel):
+    id: uuid.UUID
+    protocol_id: uuid.UUID
+    revision: int
+    graph: dict[str, Any]
+    published_at: datetime
 
 
 class CellRunBatch(BaseModel):
@@ -168,6 +181,8 @@ class CellRunBatch(BaseModel):
     protocol_run_ids: list[uuid.UUID]
     cell_labels: list[str]
     skipped: int
+    protocol_revision_id: uuid.UUID | None = None
+    protocol_revision: int | None = None
 
 
 class RegisteredDataset(BaseModel):

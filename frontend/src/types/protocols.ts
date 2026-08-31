@@ -4,6 +4,9 @@ export interface Protocol {
   description: string | null
   experiment_id: string | null
   graph: ProtocolGraph
+  published_revision_id: string | null
+  published_revision: number | null
+  has_unpublished_changes: boolean
   created_at: string
   updated_at: string
 }
@@ -75,6 +78,8 @@ export interface ProtocolRun {
   // result gets written back to.
   cell_label: string | null
   factor_values: Record<string, unknown> | null
+  design_revision_id: string | null
+  protocol_revision_id: string | null
   // Set only for a per-node "Play" run (POST /protocols/{id}/nodes/{nodeId}/run)
   // -- null for both a plain graph run and a "run all cells" run.
   target_node_id: string | null
@@ -88,6 +93,14 @@ export interface ProtocolRun {
   updated_at: string
 }
 
+export interface ProtocolRevision {
+  id: string
+  protocol_id: string
+  revision: number
+  graph: ProtocolGraph
+  published_at: string
+}
+
 // One "run all cells" trigger fans out into these -- one ProtocolRun per
 // not-yet-scored cell. skipped is how many cells already had metric_values
 // and were left alone (resume semantics, same as generate-design's own
@@ -96,6 +109,8 @@ export interface CellRunBatch {
   protocol_run_ids: string[]
   cell_labels: string[]
   skipped: number
+  protocol_revision_id: string
+  protocol_revision: number
 }
 
 // Mirrors CreateAgentRequest (src/asaree/api/agents.py) field-for-field so a

@@ -245,3 +245,13 @@ export interface DesignRevision {
   scored_count: number
   created_at: string
 }
+
+export interface DesignImpact {
+  has_generated_design: boolean
+  regeneration_required: boolean
+  current_cell_count: number
+  proposed_cell_count: number
+  added_count: number
+  retained_count: number
+  removed_count: number
+}

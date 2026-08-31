@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Bot } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -55,11 +55,19 @@ function TrialDetailDialog({
   protocolId: string
   onClose: () => void
 }) {
+  const [showSnapshot, setShowSnapshot] = useState(false)
   const runQuery = useQuery({
     queryKey: ['protocols', protocolId, 'runs', trial?.run_id],
     queryFn: () => protocolsApi.getRun(protocolId, trial!.run_id!),
     enabled: !!trial?.run_id,
   })
+  const revisionQuery = useQuery({
+    queryKey: ['protocols', protocolId, 'revisions', runQuery.data?.protocol_revision_id],
+    queryFn: () => protocolsApi.getRevision(protocolId, runQuery.data!.protocol_revision_id!),
+    enabled: showSnapshot && !!runQuery.data?.protocol_revision_id,
+  })
+
+  useEffect(() => setShowSnapshot(false), [trial?.run_id])
 
   return (
     <Dialog open={!!trial} onOpenChange={(open) => !open && onClose()}>
@@ -85,6 +93,31 @@ function TrialDetailDialog({
               <p className="text-xs text-muted-foreground">Could not load this trial's run detail.</p>
             ) : (
               <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {runQuery.data.design_revision_id && (
+                    <Badge variant="outline" className="font-mono text-xs">Design revision pinned</Badge>
+                  )}
+                  {runQuery.data.protocol_revision_id && (
+                    <>
+                      <Badge variant="outline" className="font-mono text-xs">Published canvas pinned</Badge>
+                      <Button size="xs" variant="outline" onClick={() => setShowSnapshot((shown) => !shown)}>
+                        {showSnapshot ? 'Hide canvas used' : 'View canvas used'}
+                      </Button>
+                    </>
+                  )}
+                </div>
+                {showSnapshot && (
+                  revisionQuery.isLoading ? <Skeleton className="h-24 w-full" /> : revisionQuery.isError || !revisionQuery.data ? (
+                    <p className="text-xs text-muted-foreground">Could not load the immutable canvas snapshot.</p>
+                  ) : (
+                    <div className="space-y-1">
+                      <p className="font-mono text-xs text-muted-foreground">Published canvas v{revisionQuery.data.revision}</p>
+                      <pre className="max-h-48 overflow-auto rounded-md border bg-muted/30 p-2 text-[0.65rem] leading-relaxed">
+                        {JSON.stringify(revisionQuery.data.graph, null, 2)}
+                      </pre>
+                    </div>
+                  )
+                )}
                 <p className="text-xs font-medium text-muted-foreground">Agent activity</p>
                 {Object.entries(runQuery.data.node_runs).map(([nodeId, node]) => (
                   <div key={nodeId} className="rounded-md border px-2.5 py-1.5">

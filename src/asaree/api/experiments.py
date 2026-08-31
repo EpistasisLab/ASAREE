@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.csv_export import cells_that_ran, cells_to_csv
 from asaree.services.datasets import get_dataset
-from asaree.services.design_generation import DesignValidationError, generate_design_cells
+from asaree.services.design_generation import DesignValidationError, generate_design_cells, get_design_impact
 from asaree.services.design_revisions import (
     DesignRevisionError,
     delete_revision,
@@ -330,6 +330,27 @@ class DesignRevisionResponse(BaseModel):
     cell_count: int
     scored_count: int
     created_at: datetime
+
+
+class DesignImpactResponse(BaseModel):
+    has_generated_design: bool
+    regeneration_required: bool
+    current_cell_count: int
+    proposed_cell_count: int
+    added_count: int
+    retained_count: int
+    removed_count: int
+
+
+@router.get("/{experiment_id}/design-impact", response_model=DesignImpactResponse)
+async def design_impact_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> DesignImpactResponse:
+    """Preview the cell-set change regeneration would make, without writing it."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    try:
+        impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=experiment.design_spec)
+    except DesignValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return DesignImpactResponse(**impact.__dict__)
 
 
 @router.get("/{experiment_id}/design-revisions", response_model=list[DesignRevisionResponse])

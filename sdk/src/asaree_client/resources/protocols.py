@@ -6,7 +6,7 @@ import builtins
 import uuid
 from typing import Any
 
-from asaree_client.models import CellRunBatch, Protocol, ProtocolRun
+from asaree_client.models import CellRunBatch, Protocol, ProtocolRevision, ProtocolRun
 
 ResourceId = uuid.UUID | str
 
@@ -65,6 +65,16 @@ class Protocols:
 
     def delete(self, protocol_id: ResourceId) -> None:
         self._client._delete(f"/protocols/{protocol_id}")
+
+    def publish(self, protocol_id: ResourceId) -> Protocol:
+        """Freeze the autosaved draft as the version future production runs use."""
+        data = self._client._post(f"/protocols/{protocol_id}/publish")
+        return Protocol(**data)
+
+    def get_revision(self, protocol_id: ResourceId, revision_id: ResourceId) -> ProtocolRevision:
+        """Return the immutable canvas snapshot an execution references."""
+        data = self._client._get(f"/protocols/{protocol_id}/revisions/{revision_id}")
+        return ProtocolRevision(**data)
 
     def run(self, protocol_id: ResourceId, *, cell_label: str | None = None) -> ProtocolRun:
         """Compile and run this protocol's current graph -- 422 if it's

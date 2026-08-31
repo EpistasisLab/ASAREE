@@ -46,9 +46,12 @@ from asaree.services.dataset_workspaces import (
     head_data_locator,
     seed_cell_workspace,
 )
+from asaree.services.design_generation import get_design_impact
 from asaree.services.experiments import get_experiment
+from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
 from asaree.services.metric_promotion import promote_cell_score_metrics
+from asaree.services.protocol_revisions import get_revision
 from asaree.services.protocol_runs import (
     create_protocol_run,
     get_cancel_requested_at,
@@ -2024,6 +2027,7 @@ async def plan_cell_runs(
     experiment_id: uuid.UUID | None,
     owner_id: uuid.UUID,
     graph: dict[str, Any],
+    protocol_revision_id: uuid.UUID | None = None,
 ) -> tuple[list[ProtocolRun], int]:
     """ "Run all cells": creates one pending :class:`ProtocolRun` per
     not-yet-scored :class:`FactorialCellResult` under *experiment_id*, each
@@ -2052,6 +2056,16 @@ async def plan_cell_runs(
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(graph)))
+    try:
+        validate_factor_bindings(design_spec, graph)
+    except ValueError as exc:
+        raise ProtocolValidationError(str(exc)) from exc
+    impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=design_spec)
+    if impact.regeneration_required:
+        raise ProtocolValidationError(
+            "Design changed — review and regenerate before running all cells. "
+            f"Current {impact.current_cell_count}, proposed {impact.proposed_cell_count}."
+        )
 
     # Current design only -- list_cells scopes to the experiment's current
     # revision, so a superseded design's cells are neither counted nor run.
@@ -2065,6 +2079,7 @@ async def plan_cell_runs(
             cell_label=cell.cell_label,
             factor_values=cell.factor_values or {},
             design_revision_id=cell.design_revision_id,
+            protocol_revision_id=protocol_revision_id,
         )
         for cell in pending
     ]
@@ -2079,6 +2094,7 @@ async def plan_single_cell_run(
     owner_id: uuid.UUID,
     graph: dict[str, Any],
     cell_label: str,
+    protocol_revision_id: uuid.UUID | None = None,
 ) -> ProtocolRun:
     """Run one already-generated cell for real, by name -- the single-cell
     counterpart to plan_cell_runs's own "every not-yet-scored cell" batch.
@@ -2112,6 +2128,7 @@ async def plan_single_cell_run(
         cell_label=cell.cell_label,
         factor_values=cell.factor_values or {},
         design_revision_id=cell.design_revision_id,
+        protocol_revision_id=protocol_revision_id,
     )
 
 
@@ -2227,6 +2244,14 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             await set_status(db, protocol_run_id, status="failed", error="protocol no longer exists")
             return
         protocol_id, owner_id, graph = protocol.id, run.owner_id, protocol.graph
+        if run.protocol_revision_id is not None:
+            revision = await get_revision(db, run.protocol_revision_id)
+            if revision is None:
+                await set_status(
+                    db, protocol_run_id, status="failed", error="published protocol revision no longer exists"
+                )
+                return
+            graph = revision.graph
         experiment_id, cell_label, factor_values = protocol.experiment_id, run.cell_label, run.factor_values
         # Pinned when the run was planned, so a design regenerated while this
         # was in flight can't redirect the write-backs below onto a different

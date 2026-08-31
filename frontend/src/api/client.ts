@@ -12,11 +12,11 @@ import type {
 } from '@/types/auth'
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
-import type { Cell, DesignRevision, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
+import type { Cell, DesignImpact, DesignRevision, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
-import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
+import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
 
@@ -211,6 +211,9 @@ export const experimentsApi = {
   // included (409 on the current revision -- regenerate to replace that).
   deleteDesignRevision: (id: string, revisionId: string) =>
     request<void>(`/experiments/${id}/design-revisions/${revisionId}`, { method: 'DELETE' }),
+  // Pure preview of the current declaration against the materialized design;
+  // used to make an explicit regeneration decision before runs are allowed.
+  getDesignImpact: (id: string) => request<DesignImpact>(`/experiments/${id}/design-impact`),
   // One row per cell, one column per factor_values/metric_values key seen
   // anywhere in the experiment (see services.csv_export.cells_to_csv) --
   // a Blob, not JSON, so callers hand it straight to URL.createObjectURL.
@@ -241,6 +244,7 @@ export const protocolsApi = {
     request<Protocol[]>(experimentId ? `/protocols?experiment_id=${experimentId}` : '/protocols'),
   update: (id: string, data: { name?: string; description?: string | null; graph?: ProtocolGraph }) =>
     request<Protocol>(`/protocols/${id}`, { method: 'PATCH', body: data }),
+  publish: (id: string) => request<Protocol>(`/protocols/${id}/publish`, { method: 'POST' }),
   remove: (id: string) => request<void>(`/protocols/${id}`, { method: 'DELETE' }),
   // 422 if the graph is empty or has a cycle -- returns immediately with
   // status "pending"; poll getRun for progress. cellLabel runs that one
@@ -252,6 +256,7 @@ export const protocolsApi = {
   // runnable Agent (see validate_single_node_runnable). Same polling shape
   // as a plain run (getRun), just with node_runs carrying only this one key.
   runNode: (id: string, nodeId: string) => request<ProtocolRun>(`/protocols/${id}/nodes/${nodeId}/run`, { method: 'POST' }),
+  getRevision: (id: string, revisionId: string) => request<ProtocolRevision>(`/protocols/${id}/revisions/${revisionId}`),
   getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
   // Only raises cancel_requested_at -- a no-op (200, unchanged row) once the
   // run is already terminal. run_protocol's own node loop is what actually

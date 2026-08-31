@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Download, Maximize2, Minimize2 } from 'lucide-react'
+import { ArrowLeft, Download, Maximize2, Minimize2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { experimentsApi } from '@/api/client'
@@ -149,7 +149,8 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
         The canvas and CSV export still use the current design.
       </p>
       <Button size="sm" variant="outline" onClick={() => setRevisionId(null)}>
-        View current design
+        <ArrowLeft className="size-3.5" />
+        Back to current design
       </Button>
     </div>
   ) : null

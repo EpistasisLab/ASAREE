@@ -143,8 +143,9 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
   // working in -- say so plainly, since every control around it (CSV, the
   // canvas's own Run buttons) still acts on the current design.
   const historyBanner = viewingHistory ? (
-    <p className="rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
-      Viewing a superseded design revision — read-only history. The canvas and CSV export still use the current design.
+    <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-950 dark:text-amber-200">
+      <span className="font-semibold">Viewing a superseded design revision — read-only history.</span>{' '}
+      The canvas and CSV export still use the current design.
     </p>
   ) : null
 

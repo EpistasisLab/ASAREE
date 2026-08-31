@@ -1510,7 +1510,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                   onClick={() => (designRegenerationRequired ? setDesignRegenerationWarningOpen(true) : setCellPickerOpen(true))}
                 >
                   <span className={`truncate ${selectedCellLabel ? 'font-mono' : ''}`} title={selectedCellLabel ?? undefined}>
-                    {designRegenerationRequired ? 'Review & regenerate' : selectedCellLabel ?? 'Run cell'}
+                    {designRegenerationRequired ? 'Update design' : selectedCellLabel ?? 'Run cell'}
                   </span>
                 </Button>
               </span>
@@ -1534,7 +1534,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               onClick={requestRun}
             >
               <Play className="size-4" />
-              {isRunning ? 'Running…' : designRegenerationRequired ? 'Review & regenerate' : selectedCellLabel ? `Run cell: ${selectedCellLabel}` : 'Run'}
+              {isRunning ? 'Running…' : designRegenerationRequired ? 'Update design' : selectedCellLabel ? `Run cell: ${selectedCellLabel}` : 'Run'}
             </Button>
             {isRunning && (
               <Button

@@ -233,7 +233,7 @@ function RunAllCellsButton({
     : null
   const runBlocked = cellCount === 0 || regenerationRequired || unboundFactors.length > 0 || !protocol.published_revision_id
   const blockedLabel = regenerationRequired
-    ? 'Review & regenerate'
+    ? 'Update design'
     : unboundFactors.length > 0
       ? 'Resolve factors'
       : !protocol.published_revision_id

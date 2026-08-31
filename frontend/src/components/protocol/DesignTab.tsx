@@ -564,7 +564,7 @@ export function DesignTab({
           }
           onClick={() => generateMutation.mutate()}
         >
-          {generateMutation.isPending ? 'Generating…' : impact?.regeneration_required ? 'Review & regenerate' : 'Generate design'}
+          {generateMutation.isPending ? 'Generating…' : impact?.regeneration_required ? 'Update design' : 'Generate design'}
         </Button>
         {isDirty && <p className="text-xs text-muted-foreground">Save your changes before generating.</p>}
         {generateMutation.data && <p className="text-xs text-muted-foreground">{generateMutation.data.length} cell(s) total</p>}

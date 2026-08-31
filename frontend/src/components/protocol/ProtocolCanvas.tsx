@@ -476,7 +476,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     queryFn: () => experimentsApi.listCells(experimentId!),
     enabled: !!experimentId,
   })
+  const designImpactQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'design-impact'],
+    queryFn: () => experimentsApi.getDesignImpact(experimentId!),
+    enabled: !!experimentId,
+  })
   const cellOptions = cellsQuery.data ?? []
+  const designRegenerationRequired = designImpactQuery.data?.regeneration_required ?? false
   // design_spec for SelectCellDialog's own factor-checkbox filter -- fetched
   // only while that dialog is actually open, same "on demand" convention
   // factorPickerExperimentQuery below uses for the same query.
@@ -1435,11 +1441,19 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           })()}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
             {cellOptions.length > 0 && (
-              <Button size="sm" variant="outline" className="max-w-40" onClick={() => setCellPickerOpen(true)}>
-                <span className={`truncate ${selectedCellLabel ? 'font-mono' : ''}`} title={selectedCellLabel ?? undefined}>
-                  {selectedCellLabel ?? 'Run cell'}
-                </span>
-              </Button>
+              <span title={designRegenerationRequired ? 'Design changed — review and regenerate before selecting a cell.' : undefined}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="max-w-40"
+                  disabled={designRegenerationRequired}
+                  onClick={() => setCellPickerOpen(true)}
+                >
+                  <span className={`truncate ${selectedCellLabel ? 'font-mono' : ''}`} title={selectedCellLabel ?? undefined}>
+                    {designRegenerationRequired ? 'Review & regenerate' : selectedCellLabel ?? 'Run cell'}
+                  </span>
+                </Button>
+              </span>
             )}
             {cellPickerOpen && (
               <SelectCellDialog

@@ -2117,6 +2117,13 @@ async def plan_single_cell_run(
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(graph)))
+    try:
+        validate_factor_bindings(design_spec, graph)
+    except ValueError as exc:
+        raise ProtocolValidationError(str(exc)) from exc
+    impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=design_spec)
+    if impact.regeneration_required:
+        raise ProtocolValidationError("Design changed — review and regenerate before running a cell.")
 
     cell = await get_cell(db, experiment_id=experiment_id, cell_label=cell_label)
     if cell is None:

@@ -219,7 +219,12 @@ async def generate_design_cells(
     practice) — it never affects which combinations/replicates are generated
     or their (deterministic) cell_label.
     """
-    planned = _planned_cells(factors, replicates)
+    # An empty factor declaration is a meaningful replacement when an
+    # existing design's final factor was removed: it retires every current
+    # cell into history and leaves an empty current revision.  Do not call
+    # ``generate_design`` in that case -- its non-empty validation remains
+    # correct for callers trying to construct a factorial cross-product.
+    planned = _planned_cells(factors, replicates) if factors else []
     planned_labels = {label for label, _ in planned}
 
     current = await get_current_revision(db, experiment_id)

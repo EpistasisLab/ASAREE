@@ -556,7 +556,12 @@ export function DesignTab({
         <Button
           size="sm"
           variant="outline"
-          disabled={generateMutation.isPending || isDirty || validFactors.length === 0 || unboundFactors.length > 0}
+          disabled={
+            generateMutation.isPending ||
+            isDirty ||
+            (validFactors.length === 0 && !impact?.regeneration_required) ||
+            unboundFactors.length > 0
+          }
           onClick={() => generateMutation.mutate()}
         >
           {generateMutation.isPending ? 'Generating…' : impact?.regeneration_required ? 'Review & regenerate' : 'Generate design'}

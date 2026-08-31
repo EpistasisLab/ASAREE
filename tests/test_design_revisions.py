@@ -175,6 +175,22 @@ async def test_design_impact_previews_an_expansion_before_regeneration(experimen
     assert (impact.added_count, impact.retained_count, impact.removed_count) == (4, 2, 0)
 
 
+async def test_removing_the_final_factor_retires_every_current_cell(experiment_id: uuid.UUID) -> None:
+    async with get_session() as db:
+        await generate_design_cells(
+            db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec={"factors": _TWO_BY_ONE}
+        )
+
+    async with get_session() as db:
+        cleared = await generate_design_cells(db, experiment_id=experiment_id, factors=[], design_spec={"factors": []})
+        assert cleared == []
+
+    async with get_session() as db:
+        assert await list_cells(db, experiment_id=experiment_id) == []
+        summaries = await list_revision_summaries(db, experiment_id=experiment_id)
+        assert [(summary.revision.revision, summary.cell_count) for summary in summaries] == [(2, 0), (1, 2)]
+
+
 async def test_regenerating_an_unchanged_design_reuses_the_current_revision(experiment_id: uuid.UUID) -> None:
     async with get_session() as db:
         await generate_design_cells(db, experiment_id=experiment_id, factors=_TWO_BY_ONE)

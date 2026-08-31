@@ -300,9 +300,7 @@ async def generate_design_endpoint(experiment_id: uuid.UUID, user: CurrentUser, 
     current view (see ``generate_design_cells``)."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
     design_spec = experiment.design_spec or {}
-    factors = design_spec.get("factors")
-    if not factors:
-        raise HTTPException(status_code=422, detail="This experiment has no factors declared (design_spec.factors)")
+    factors = design_spec.get("factors") or []
     try:
         cells = await generate_design_cells(
             db,

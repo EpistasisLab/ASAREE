@@ -70,6 +70,7 @@ import { FactorEditorDialog } from './FactorEditorDialog'
 import { CONNECTOR_CHILD_CLEARANCE, connectorNodeOffsetX, findFreePosition, tidyLayout } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
 import { DatasetBrowserPanel } from './DatasetBrowserPanel'
+import { DesignRegenerationRequiredDialog } from './DesignRegenerationRequiredDialog'
 import { DATASET_BROWSE, nodeDataForDataset } from './datasetCatalog'
 import { McpServerBrowserPanel } from './McpServerBrowserPanel'
 import {
@@ -465,6 +466,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // (billable) run never fires without the user seeing what will actually
   // execute first.
   const [pendingRunConfirm, setPendingRunConfirm] = useState<RunScope | null>(null)
+  const [designRegenerationWarningOpen, setDesignRegenerationWarningOpen] = useState(false)
   const [runId, setRunId] = useState<string | null>(null)
   // null -- today's ad-hoc, un-substituted whole-graph run (the only option
   // before any cells exist). Set -- runs that one already-generated cell for
@@ -560,6 +562,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // nodes failed" AFTER spending a real attempt.
   function requestRun() {
     setRunErrorDismissed(false)
+    if (designRegenerationRequired) {
+      setDesignRegenerationWarningOpen(true)
+      return
+    }
     setPendingRunConfirm(selectedCellLabel ? { type: 'cell', label: selectedCellLabel } : { type: 'graph' })
   }
 
@@ -1139,6 +1145,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           // response so a slow earlier save can't overwrite a later one.
           if (seq !== saveSeqRef.current || !updated.experiment_id) return
           queryClient.setQueryData(protocolForExperimentQueryKey(updated.experiment_id), updated)
+          queryClient.invalidateQueries({ queryKey: ['experiments', updated.experiment_id, 'design-impact'] })
         })
         .catch(() => {
           // Best-effort autosave; a transient failure just means the next
@@ -1500,8 +1507,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                   size="sm"
                   variant="outline"
                   className="max-w-40"
-                  disabled={designRegenerationRequired}
-                  onClick={() => setCellPickerOpen(true)}
+                  onClick={() => (designRegenerationRequired ? setDesignRegenerationWarningOpen(true) : setCellPickerOpen(true))}
                 >
                   <span className={`truncate ${selectedCellLabel ? 'font-mono' : ''}`} title={selectedCellLabel ?? undefined}>
                     {designRegenerationRequired ? 'Review & regenerate' : selectedCellLabel ?? 'Run cell'}
@@ -1521,9 +1527,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 }}
               />
             )}
-            <Button size="sm" disabled={isRunning} onClick={requestRun}>
+            <Button
+              size="sm"
+              disabled={isRunning}
+              title={designRegenerationRequired ? 'Design changed — review and regenerate before running.' : undefined}
+              onClick={requestRun}
+            >
               <Play className="size-4" />
-              {isRunning ? 'Running…' : selectedCellLabel ? `Run cell: ${selectedCellLabel}` : 'Run'}
+              {isRunning ? 'Running…' : designRegenerationRequired ? 'Review & regenerate' : selectedCellLabel ? `Run cell: ${selectedCellLabel}` : 'Run'}
             </Button>
             {isRunning && (
               <Button
@@ -1772,6 +1783,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           onPublishAndRun={() => publishAndRunMutation.mutate()}
         />
       )}
+      {designRegenerationWarningOpen && <DesignRegenerationRequiredDialog onClose={() => setDesignRegenerationWarningOpen(false)} />}
       {factorPickerNodeId && (
         <FactorEditorDialog
           open

@@ -32,6 +32,11 @@ export function RunConfirmDialog({
   queryClient,
   onCancel,
   onConfirm,
+  hasUnpublishedChanges = false,
+  publishedRevision = null,
+  isPublishing = false,
+  publishError = null,
+  onPublishAndRun,
 }: {
   scope: RunScope
   nodes: Node[]
@@ -39,6 +44,11 @@ export function RunConfirmDialog({
   queryClient: QueryClient
   onCancel: () => void
   onConfirm: () => void
+  hasUnpublishedChanges?: boolean
+  publishedRevision?: number | null
+  isPublishing?: boolean
+  publishError?: string | null
+  onPublishAndRun?: () => void
 }) {
   const summary = summarizeRun(nodes, edges, scope)
   const allIssues = findNodeConfigIssues(nodes, edges, queryClient)
@@ -97,6 +107,16 @@ export function RunConfirmDialog({
           </dl>
         </div>
 
+        {hasUnpublishedChanges && (
+          <div className="space-y-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm">
+            <p className="font-medium">Canvas has unpublished changes</p>
+            <p className="text-xs text-muted-foreground">
+              This run will use published canvas v{publishedRevision}. Publish the latest canvas first to run the changes you are viewing.
+            </p>
+            {publishError && <p className="text-xs text-destructive">{publishError}</p>}
+          </div>
+        )}
+
         {issues.length > 0 && (
           <div className="space-y-1.5">
             <p className="text-sm font-medium text-destructive">
@@ -119,7 +139,18 @@ export function RunConfirmDialog({
           <Button variant="outline" onClick={onCancel}>
             Cancel
           </Button>
-          <Button onClick={onConfirm}>{issues.length > 0 ? 'Run anyway' : 'Confirm & run'}</Button>
+          {hasUnpublishedChanges ? (
+            <>
+              <Button variant="outline" disabled={isPublishing} onClick={onConfirm}>
+                Run published v{publishedRevision}
+              </Button>
+              <Button disabled={isPublishing} onClick={onPublishAndRun}>
+                {isPublishing ? 'Publishing…' : 'Publish & run'}
+              </Button>
+            </>
+          ) : (
+            <Button onClick={onConfirm}>{issues.length > 0 ? 'Run anyway' : 'Confirm & run'}</Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -8,6 +8,7 @@ import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
 import { ProtocolCanvas, type ProtocolCanvasHandle } from '@/components/protocol/ProtocolCanvas'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
@@ -158,6 +159,7 @@ function RunAllCellsButton({
   const [triggeredIds, setTriggeredIds] = useState<string[] | null>(null)
   const [batchRevision, setBatchRevision] = useState<number | null>(null)
   const [stopRequested, setStopRequested] = useState(false)
+  const [confirmDraftRun, setConfirmDraftRun] = useState(false)
 
   const triggerMutation = useMutation({
     mutationFn: () => protocolsApi.runCells(protocolId),
@@ -165,6 +167,14 @@ function RunAllCellsButton({
       setTriggeredIds(batch.protocol_run_ids)
       setBatchRevision(batch.protocol_revision)
       setStopRequested(false)
+    },
+  })
+  const publishAndRunMutation = useMutation({
+    mutationFn: () => protocolsApi.publish(protocolId),
+    onSuccess: (published) => {
+      queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
+      setConfirmDraftRun(false)
+      triggerMutation.mutate()
     },
   })
 
@@ -261,10 +271,49 @@ function RunAllCellsButton({
         </Button>
       )}
       <span title={blockedTitle}>
-        <Button size="sm" variant="outline" disabled={isRunning || runBlocked} onClick={() => triggerMutation.mutate()}>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={isRunning || runBlocked}
+          onClick={() => (protocol.has_unpublished_changes ? setConfirmDraftRun(true) : triggerMutation.mutate())}
+        >
           {isRunning ? 'Running…' : blockedLabel}
         </Button>
       </span>
+      {confirmDraftRun && (
+        <Dialog open onOpenChange={(open) => !open && setConfirmDraftRun(false)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Canvas has unpublished changes</DialogTitle>
+              <DialogDescription>
+                Running now uses published canvas v{protocol.published_revision}, not the draft currently on screen.
+              </DialogDescription>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">Publish the latest canvas to run those changes instead.</p>
+            {publishAndRunMutation.isError && (
+              <p className="text-sm text-destructive">
+                {publishAndRunMutation.error instanceof ApiError && typeof publishAndRunMutation.error.detail === 'string'
+                  ? publishAndRunMutation.error.detail
+                  : 'Could not publish the latest canvas.'}
+              </p>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmDraftRun(false)}>
+                Cancel
+              </Button>
+              <Button variant="outline" disabled={publishAndRunMutation.isPending} onClick={() => {
+                setConfirmDraftRun(false)
+                triggerMutation.mutate()
+              }}>
+                Run published v{protocol.published_revision}
+              </Button>
+              <Button disabled={publishAndRunMutation.isPending} onClick={() => publishAndRunMutation.mutate()}>
+                {publishAndRunMutation.isPending ? 'Publishing…' : 'Publish & run'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   )
 }
@@ -403,6 +452,8 @@ export function ProtocolCanvasPage() {
                   protocolId={protocolQuery.data.id}
                   experimentId={protocolQuery.data.experiment_id}
                   initialGraph={protocolQuery.data.graph}
+                  hasUnpublishedChanges={protocolQuery.data.has_unpublished_changes}
+                  publishedRevision={protocolQuery.data.published_revision}
                 />
               </ReactFlowProvider>
             </Card>

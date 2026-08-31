@@ -347,7 +347,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   protocolId: string
   experimentId: string | null
   initialGraph: ProtocolGraph
-}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph }, canvasHandleRef) {
+  hasUnpublishedChanges: boolean
+  publishedRevision: number | null
+}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph, hasUnpublishedChanges, publishedRevision }, canvasHandleRef) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialGraph.nodes as Node[])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateLegacyHandles(initialGraph))
   const queryClient = useQueryClient()
@@ -570,6 +572,19 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     }
     setPendingRunConfirm(null)
   }
+
+  // A run must always use an immutable published snapshot. When the canvas
+  // draft differs, this mutation lets the confirmation dialog make the
+  // user's intended choice explicit: publish the draft, then run it.
+  const publishAndRunMutation = useMutation({
+    mutationFn: () => protocolsApi.publish(protocolId),
+    onSuccess: (published) => {
+      if (published.experiment_id) {
+        queryClient.setQueryData(protocolForExperimentQueryKey(published.experiment_id), published)
+      }
+      confirmPendingRun()
+    },
+  })
 
   // The canvas's per-node Play icon -- reuses the exact same runId/runQuery
   // polling state as the main Run button, since a node-scoped run's
@@ -1728,6 +1743,17 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           queryClient={queryClient}
           onCancel={() => setPendingRunConfirm(null)}
           onConfirm={confirmPendingRun}
+          hasUnpublishedChanges={hasUnpublishedChanges}
+          publishedRevision={publishedRevision}
+          isPublishing={publishAndRunMutation.isPending}
+          publishError={
+            publishAndRunMutation.error instanceof ApiError && typeof publishAndRunMutation.error.detail === 'string'
+              ? publishAndRunMutation.error.detail
+              : publishAndRunMutation.isError
+                ? 'Could not publish the latest canvas.'
+                : null
+          }
+          onPublishAndRun={() => publishAndRunMutation.mutate()}
         />
       )}
       {factorPickerNodeId && (

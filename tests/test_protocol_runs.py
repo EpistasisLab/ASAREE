@@ -242,14 +242,14 @@ async def test_list_stale_protocol_runs_falls_back_to_created_at(owner_id: uuid.
         assert run_id in {r.id for r in stale}
 
 
-async def test_list_experiment_trials_reflects_not_run_running_and_completed(
+async def test_list_experiment_trials_reflects_not_started_running_and_completed(
     owner_id: uuid.UUID, protocol_id: uuid.UUID
 ) -> None:
     async with get_session() as db:
         experiment = await create_experiment(db, name=f"trial-test-{uuid.uuid4().hex}", owner_id=owner_id)
         experiment_id = experiment.id
 
-        # Never run at all -- still a trial, status "not_run".
+        # Never run at all -- still a trial, status "not_started".
         await upsert_cell(db, experiment_id=experiment_id, cell_label="cell-queued", fields={"factor_values": {"x": 1}})
 
         # Has a live ProtocolRun, still going -- status "running".
@@ -274,7 +274,7 @@ async def test_list_experiment_trials_reflects_not_run_running_and_completed(
     async with get_session() as db:
         trials = await list_experiment_trials(db, experiment_id=experiment_id)
         by_label = {t.cell_label: t for t in trials}
-        assert by_label["cell-queued"].status == "not_run"
+        assert by_label["cell-queued"].status == "not_started"
         assert by_label["cell-running"].status == "running"
         assert by_label["cell-scored-externally"].status == "completed"
         assert by_label["cell-scored-externally"].run_id is None

@@ -129,7 +129,7 @@ export function CellsTable({ experiment, cells }: { experiment: Experiment; cell
                   </td>
                 ))}
                 <td className="px-2 py-1.5">
-                  <Badge variant={cell.metric_values ? 'default' : 'secondary'}>{cell.metric_values ? 'Scored' : 'Pending'}</Badge>
+                  <Badge variant={cell.metric_values ? 'default' : 'secondary'}>{cell.metric_values ? 'Scored' : 'Not scored'}</Badge>
                 </td>
                 <td className="px-2 py-1.5 font-mono whitespace-nowrap text-muted-foreground">
                   {new Date(cell.updated_at).toLocaleString()}

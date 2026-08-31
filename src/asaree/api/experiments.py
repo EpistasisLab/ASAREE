@@ -579,9 +579,9 @@ async def delete_artifact_endpoint(
     await delete_artifact(db, artifact_id=artifact_id)
 
 
-# "pending" is ProtocolRun's own internal vocabulary -- the Runs tab shows
-# "queued" instead, matching a cell that has no run at all yet (see
-# ExperimentTrial's own docstring on why "trial" means cell, not ProtocolRun).
+# "pending" is ProtocolRun's own internal vocabulary -- the Runs tab calls a
+# submitted-but-not-started run "queued". A cell with no run at all is kept
+# distinct as "not_run" (see ExperimentTrial's docstring).
 _RUN_STATUS_TO_TRIAL_STATUS = {"pending": "queued"}
 
 
@@ -601,7 +601,7 @@ async def list_experiment_trials_endpoint(
 ) -> list[TrialResponse]:
     """One row per cell (a "trial" -- a factor-level combination x replicate),
     not per ProtocolRun -- a cell that's never been run is still a trial
-    (status "queued"), which listing ProtocolRuns alone would miss. See
+    (status "not_run"), which listing ProtocolRuns alone would miss. See
     services.protocol_runs.list_experiment_trials."""
     await _get_owned_experiment(db, experiment_id, user)
     trials = await list_experiment_trials(db, experiment_id=experiment_id)

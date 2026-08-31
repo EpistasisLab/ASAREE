@@ -203,13 +203,13 @@ async def fail_protocol_run(db: AsyncSession, protocol_run_id: uuid.UUID, *, err
 class ExperimentTrial:
     """One row of the Runs tab's trial list -- "trial" means cell (one
     factor-level combination x replicate), not "ProtocolRun": a cell that's
-    never been run at all is still a trial (status "queued"), which a query
+    never been run at all is still a trial (status "not_run"), which a query
     scoped to ProtocolRun rows alone would miss entirely."""
 
     cell_label: str
     factor_values: dict[str, Any]
     metric_values: dict[str, Any]
-    status: str  # "queued" | "pending" | "running" | "completed" | "failed"
+    status: str  # "not_run" | "pending" | "running" | "completed" | "failed"
     run_id: uuid.UUID | None
     error: str | None
     updated_at: datetime
@@ -225,7 +225,7 @@ async def list_experiment_trials(
     in services.protocol_execution) for status/error/timestamp. A cell can be
     scored without ever having gone through a ProtocolRun at all (e.g.
     upserted directly by a notebook) -- such a cell has no run_id but real
-    metric_values, and is reported "completed" rather than "queued".
+    metric_values, and is reported "completed" rather than "not_run".
 
     Goes through ``factorial_cells.list_cells`` rather than querying
     ``FactorialCellResult`` on experiment_id directly: that query would also
@@ -248,7 +248,7 @@ async def list_experiment_trials(
         elif cell.metric_values:
             status, error, updated_at = "completed", None, cell.updated_at
         else:
-            status, error, updated_at = "queued", None, cell.updated_at
+            status, error, updated_at = "not_run", None, cell.updated_at
         trials.append(
             ExperimentTrial(
                 cell_label=cell.cell_label,

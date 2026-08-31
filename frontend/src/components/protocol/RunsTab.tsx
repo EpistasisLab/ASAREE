@@ -15,9 +15,16 @@ import type { Trial } from '@/types/experiments'
 
 const PAGE_SIZE = 20
 const NON_FACTOR_KEYS = new Set(['replicate', 'seed', 'rep', 'trial', 'iteration'])
-const STATUS_ORDER: Trial['status'][] = ['queued', 'running', 'completed', 'failed']
+const STATUS_ORDER: Trial['status'][] = ['not_run', 'queued', 'running', 'completed', 'failed', 'cancelled']
+
+function statusLabel(status: Trial['status']): string {
+  return status === 'not_run' ? 'Not run' : status === 'queued' ? 'Queued' : `${status[0].toUpperCase()}${status.slice(1)}`
+}
 
 function statusBadge(status: Trial['status']) {
+  if (status === 'not_run') {
+    return { label: 'Not run', className: 'border-transparent bg-muted text-muted-foreground' }
+  }
   return nodeRunBadge(status === 'queued' ? 'pending' : status)
 }
 
@@ -243,6 +250,7 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
 
   const counts = {
     total: trials.length,
+    notRun: trials.filter((t) => t.status === 'not_run').length,
     queued: trials.filter((t) => t.status === 'queued').length,
     running: trials.filter((t) => t.status === 'running').length,
     completed: trials.filter((t) => t.status === 'completed').length,
@@ -285,7 +293,11 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
 
   return (
     <div className="flex flex-col gap-3 p-3 text-sm">
-      <div className="grid grid-cols-4 gap-2 text-center font-mono text-xs">
+      <div className="grid grid-cols-5 gap-2 text-center font-mono text-xs">
+        <div className="rounded-md border px-2 py-1.5">
+          <p className="text-base text-muted-foreground">{counts.notRun}</p>
+          <p className="text-muted-foreground">Not run</p>
+        </div>
         <div className="rounded-md border px-2 py-1.5">
           <p className="text-base">{counts.queued}</p>
           <p className="text-muted-foreground">Queued</p>
@@ -329,7 +341,7 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
             <SelectItem value="all">All statuses</SelectItem>
             {STATUS_ORDER.map((s) => (
               <SelectItem key={s} value={s}>
-                {s}
+                {statusLabel(s)}
               </SelectItem>
             ))}
           </SelectContent>

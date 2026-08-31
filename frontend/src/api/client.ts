@@ -226,7 +226,7 @@ export const experimentsApi = {
   // services.design_generation). Nothing is ever deleted here.
   generateDesign: (id: string) => request<Cell[]>(`/experiments/${id}/generate-design`, { method: 'POST' }),
   // One row per cell (a "trial"), not per ProtocolRun -- a cell that's never
-  // been run is still listed, with status "queued" (see TrialResponse /
+  // been run is still listed, with status "not_run" (see TrialResponse /
   // services.protocol_runs.list_experiment_trials).
   listTrials: (id: string) => request<Trial[]>(`/experiments/${id}/runs`),
   // Derives analyze_factorial's own condition_factors/positive_levels/

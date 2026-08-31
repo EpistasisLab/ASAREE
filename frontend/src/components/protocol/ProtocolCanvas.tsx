@@ -1206,6 +1206,26 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // shows the node's own plain label, unaffected.
   const factorNodeLabel = selectedNode ? agentTracedLabel(selectedNode, edges, nodes) : ''
 
+  // Unbinding a field from the inspector is an explicit decision to stop
+  // varying it. When that was the factor's last binding, remove the factor
+  // declaration too so the Design panel and the materialized matrix cannot
+  // keep advertising a treatment the canvas no longer has.
+  async function removeUnboundFactors(nextNodes: Node[], removedNames: string[]) {
+    if (!experimentId || removedNames.length === 0) return
+    const stillBound = new Set(
+      nextNodes.flatMap((node) => Object.values((node.data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {})),
+    )
+    const orphaned = removedNames.filter((name) => !stillBound.has(name))
+    if (orphaned.length === 0) return
+    const experiment = await experimentsApi.get(experimentId)
+    const factors = experiment.design_spec?.factors ?? []
+    const nextFactors = factors.filter((factor) => !orphaned.includes(factor.name))
+    if (nextFactors.length === factors.length) return
+    await experimentsApi.update(experimentId, { design_spec: { ...experiment.design_spec, factors: nextFactors } })
+    queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+    queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+  }
+
   function updateNodeData(
     nodeId: string,
     data:
@@ -1222,7 +1242,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | ReasonActPatternNodeData
       | SingleAgentBaselinePatternNodeData,
   ) {
-    setNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, data } : node)))
+    const previous = nodes.find((node) => node.id === nodeId)
+    const oldBindings = (previous?.data as { factor_bindings?: Record<string, string> } | undefined)?.factor_bindings ?? {}
+    const nextBindings = (data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {}
+    const removedNames = Object.entries(oldBindings)
+      .filter(([path, name]) => nextBindings[path] !== name)
+      .map(([, name]) => name)
+    const nextNodes = nodes.map((node) => (node.id === nodeId ? { ...node, data } : node))
+    setNodes(nextNodes)
+    void removeUnboundFactors(nextNodes, removedNames)
   }
 
   // Client-side guardrail mirroring the backend's own connector validation

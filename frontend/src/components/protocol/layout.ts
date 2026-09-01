@@ -53,7 +53,7 @@ export function connectorLefts(host: 'agent' | 'critic_gate'): Record<ConnectorS
  * the middle of an agent-sized card. */
 export function connectorNodeOffsetX(hostType: string | undefined, slot: ConnectorSlot): number {
   const table = hostType === 'agent' || hostType === 'critic_gate' ? CONNECTOR_X[hostType] : undefined
-  const width = (hostType && HOST_WIDTH[hostType]) ?? HOST_WIDTH.agent
+  const width = HOST_WIDTH[hostType ?? ''] ?? HOST_WIDTH.agent
   return (table?.[slot] ?? 0.5) * width - NEW_NODE_HALF_WIDTH
 }
 

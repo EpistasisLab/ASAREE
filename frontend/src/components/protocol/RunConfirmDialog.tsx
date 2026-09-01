@@ -10,14 +10,16 @@ function scopeTitle(scope: RunScope): string {
     case 'graph':
       return 'Run the full experiment?'
     case 'cell':
-      return `Run cell "${scope.label}"?`
+      return `Run replicate "${scope.label}"?`
+    case 'all-cells':
+      return `Run all ${scope.cellCount} replicates?`
     case 'node':
       return `Run "${scope.label}" alone?`
   }
 }
 
 // Shown on EVERY Run click -- the main Run button (whole graph or a picked
-// cell) and each agent's own per-node Play icon -- before anything actually
+// cell), Run all cells, and each agent's own per-node Play icon -- before anything actually
 // fires. Real LLM calls cost money, so this is the one chance to catch
 // "this isn't wired the way I think it is" before spending a real attempt
 // on it (see the spinal-fusion experiment trace this session, where a run
@@ -72,9 +74,15 @@ export function RunConfirmDialog({
         </DialogHeader>
 
         <div className="space-y-2 text-sm">
+          {scope.type === 'all-cells' && (
+            <p>
+              The published canvas will run once for each of the {scope.cellCount} replicates.
+            </p>
+          )}
           <p>
             {summary.agentCount} agent{summary.agentCount === 1 ? '' : 's'}
-            {summary.criticGateCount > 0 ? `, ${summary.criticGateCount} critic gate${summary.criticGateCount === 1 ? '' : 's'}` : ''} will run.
+            {summary.criticGateCount > 0 ? `, ${summary.criticGateCount} critic gate${summary.criticGateCount === 1 ? '' : 's'}` : ''} will run
+            {scope.type === 'all-cells' ? ' per replicate' : ''}.
           </p>
           <dl className="space-y-1 text-xs text-muted-foreground">
             <div>

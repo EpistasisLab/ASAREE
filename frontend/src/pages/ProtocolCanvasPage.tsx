@@ -1,14 +1,14 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ReactFlowProvider } from '@xyflow/react'
+import { ReactFlowProvider, type Edge, type Node } from '@xyflow/react'
 import { Square, Target, Trophy, type LucideIcon } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
 import { ProtocolCanvas, type ProtocolCanvasHandle } from '@/components/protocol/ProtocolCanvas'
+import { RunConfirmDialog } from '@/components/protocol/RunConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
@@ -159,7 +159,7 @@ function RunAllCellsButton({
   const [triggeredIds, setTriggeredIds] = useState<string[] | null>(null)
   const [batchRevision, setBatchRevision] = useState<number | null>(null)
   const [stopRequested, setStopRequested] = useState(false)
-  const [confirmDraftRun, setConfirmDraftRun] = useState(false)
+  const [confirmRunAll, setConfirmRunAll] = useState(false)
 
   const triggerMutation = useMutation({
     mutationFn: () => protocolsApi.runCells(protocolId),
@@ -173,7 +173,7 @@ function RunAllCellsButton({
     mutationFn: () => protocolsApi.publish(protocolId),
     onSuccess: (published) => {
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
-      setConfirmDraftRun(false)
+      setConfirmRunAll(false)
       triggerMutation.mutate()
     },
   })
@@ -275,44 +275,34 @@ function RunAllCellsButton({
           size="sm"
           variant="outline"
           disabled={isRunning || runBlocked}
-          onClick={() => (protocol.has_unpublished_changes ? setConfirmDraftRun(true) : triggerMutation.mutate())}
+          onClick={() => setConfirmRunAll(true)}
         >
           {isRunning ? 'Running…' : blockedLabel}
         </Button>
       </span>
-      {confirmDraftRun && (
-        <Dialog open onOpenChange={(open) => !open && setConfirmDraftRun(false)}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Canvas has unpublished changes</DialogTitle>
-              <DialogDescription>
-                Running now uses published canvas v{protocol.published_revision}, not the draft currently on screen.
-              </DialogDescription>
-            </DialogHeader>
-            <p className="text-sm text-muted-foreground">Publish the latest canvas to run those changes instead.</p>
-            {publishAndRunMutation.isError && (
-              <p className="text-sm text-destructive">
-                {publishAndRunMutation.error instanceof ApiError && typeof publishAndRunMutation.error.detail === 'string'
-                  ? publishAndRunMutation.error.detail
-                  : 'Could not publish the latest canvas.'}
-              </p>
-            )}
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setConfirmDraftRun(false)}>
-                Cancel
-              </Button>
-              <Button variant="outline" disabled={publishAndRunMutation.isPending} onClick={() => {
-                setConfirmDraftRun(false)
-                triggerMutation.mutate()
-              }}>
-                Run published v{protocol.published_revision}
-              </Button>
-              <Button disabled={publishAndRunMutation.isPending} onClick={() => publishAndRunMutation.mutate()}>
-                {publishAndRunMutation.isPending ? 'Publishing…' : 'Publish & run'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+      {confirmRunAll && (
+        <RunConfirmDialog
+          scope={{ type: 'all-cells', cellCount }}
+          nodes={protocol.graph.nodes as unknown as Node[]}
+          edges={protocol.graph.edges as Edge[]}
+          queryClient={queryClient}
+          onCancel={() => setConfirmRunAll(false)}
+          onConfirm={() => {
+            setConfirmRunAll(false)
+            triggerMutation.mutate()
+          }}
+          hasUnpublishedChanges={protocol.has_unpublished_changes}
+          publishedRevision={protocol.published_revision}
+          isPublishing={publishAndRunMutation.isPending}
+          publishError={
+            publishAndRunMutation.error instanceof ApiError && typeof publishAndRunMutation.error.detail === 'string'
+              ? publishAndRunMutation.error.detail
+              : publishAndRunMutation.isError
+                ? 'Could not publish the latest canvas.'
+                : null
+          }
+          onPublishAndRun={() => publishAndRunMutation.mutate()}
+        />
       )}
     </div>
   )

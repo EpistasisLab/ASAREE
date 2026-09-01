@@ -1,24 +1,21 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
-import { PanelLeftClose, PencilRuler } from 'lucide-react'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ListChecks, PanelLeftClose, PencilRuler } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
-import { CellsTab } from './cells/CellsTab'
 import { DesignTab } from './DesignTab'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
-import { ResultsTab } from './ResultsTab'
 import { RunsTab } from './RunsTab'
 import type { Experiment } from '@/types/experiments'
 
-// The old fixed w-96 (384px), now only the starting width and what
-// double-clicking the drag handle snaps back to.
-const DEFAULT_PANEL_WIDTH = 384
+// The default full-panel width and what double-clicking the drag handle snaps
+// back to. It includes the labeled navigation rail.
+const DEFAULT_PANEL_WIDTH = 416
+const PANEL_RAIL_WIDTH = 96
 
-// Below ~320px the tab strip wraps and every table in here is unreadable, so
-// the resize handle does not go below this floor. The separate collapse toggle
-// is the compact-view escape hatch when the canvas needs all available room.
-const MIN_PANEL_WIDTH = 320
+// Below ~320px the design controls become hard to use. Keep that much content
+// width beside the labeled rail; collapse is the compact-view escape hatch.
+const MIN_PANEL_WIDTH = PANEL_RAIL_WIDTH + 320
 
 // Two independent ceilings: never wider than this outright, and never so wide
 // that the canvas -- the thing this page is actually for -- has less than a
@@ -33,6 +30,7 @@ const MIN_CANVAS_WIDTH = 420
 // panel is a property of how you work, not of which experiment you opened.
 const PANEL_WIDTH_STORAGE_KEY = 'asaree:experiment-panel-width'
 const PANEL_COLLAPSED_STORAGE_KEY = 'asaree:experiment-panel-collapsed'
+type PanelTab = 'design' | 'runs'
 
 function clampPanelWidth(width: number): number {
   const viewportMax = typeof window !== 'undefined' ? window.innerWidth - MIN_CANVAS_WIDTH : MAX_PANEL_WIDTH
@@ -51,23 +49,13 @@ function readStoredCollapsed(): boolean {
 }
 
 // A fixed left panel on the protocol canvas -- the primary place to build
-// and monitor an experiment (Design/Cells/Runs/Results), replacing the
-// previous edge-to-edge canvas with no persistent experiment context, and
-// now also the only home for what used to be a separate static experiment
-// detail page (the cells heatmap/table, the per-agent run tally). First
-// page-level use of components/ui/tabs.tsx (previously only inside one
-// node's own inspector, AgentNodeInspector.tsx) -- same tab-group idiom,
-// just at the page layout level instead of a floating dialog.
+// and monitor an experiment. Design declares the factorial plan; Runs is the
+// intentionally compact companion view that starts from its unique cells.
 //
 // Drag-resizable by its right edge, because a 384px column is the wrong
-// width for half of what now lives in here: the Design tab is comfortable at
-// it, the Cells table (one column per factor + up to 4 metrics) is not, and
-// which of those you're doing changes minute to minute. The handle lives in
-// the page's existing gap-3 gutter (see the -right-3 w-3 below), so widening
-// the panel is a drag on the seam you'd already aim at, and the width is
-// remembered across sessions. The maximize overlays in the Cells/Results
-// tabs are still the answer for "show me everything at once"; this is for
-// settling on a working width.
+// width for every design. The handle lives in the page's existing gap-3 gutter
+// (see the -right-3 w-3 below), so widening the panel is a drag on the seam
+// you'd already aim at, and the width is remembered across sessions.
 export function ExperimentSidePanel({
   experiment,
   protocolId,
@@ -81,6 +69,7 @@ export function ExperimentSidePanel({
 }) {
   const [width, setWidth] = useState(readStoredPanelWidth)
   const [collapsed, setCollapsed] = useState(readStoredCollapsed)
+  const [activeTab, setActiveTab] = useState<PanelTab>('design')
   const [dragging, setDragging] = useState(false)
   const dragStart = useRef<{ x: number; width: number } | null>(null)
 
@@ -146,96 +135,82 @@ export function ExperimentSidePanel({
     window.localStorage.setItem(PANEL_COLLAPSED_STORAGE_KEY, String(next))
   }
 
-  // A compact left rail preserves a clear way back to the experiment's
-  // declaration without taking working room away from the canvas. The Design
-  // glyph is deliberately a real button rather than a hover-only affordance:
-  // it remains discoverable on touch devices and keyboard reachable.
-  if (collapsed) {
-    return (
-      <div className="flex min-h-0 shrink-0">
-        <Card className="flex h-full w-11 shrink-0 flex-col items-center p-1.5">
-          <button
-            type="button"
-            aria-label="Expand Design panel"
-            title="Expand Design panel"
-            onClick={() => setPanelCollapsed(false)}
-            className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <PencilRuler className="size-4" aria-hidden="true" />
-          </button>
-        </Card>
-      </div>
-    )
+  function openPanel(tab: PanelTab) {
+    setActiveTab(tab)
+    setPanelCollapsed(false)
   }
 
   return (
-    <div className="relative flex min-h-0 shrink-0" style={{ width }}>
-      <Card className="flex min-h-0 w-full flex-col overflow-hidden p-0">
-        {isLoading || !experiment ? (
-          <div className="space-y-3 p-3">
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-32 w-full" />
-          </div>
-        ) : (
-          <Tabs defaultValue="design" className="flex h-full min-h-0 flex-col">
-            <div className="mx-3 mt-3 flex shrink-0 items-center gap-1.5">
-              <TabsList className="min-w-0 flex-1">
-                <TabsTrigger value="design">Design</TabsTrigger>
-                {/* Between Design and Runs, in the order the work actually happens:
-                    declare the design, look at the cells it produced, watch them
-                    run, then read the analysis. Deliberately NOT folded into
-                    Results -- that tab is the statistical analysis OF these
-                    numbers (effects, CIs, non-inferiority), not the raw grid. */}
-                <TabsTrigger value="cells">Cells</TabsTrigger>
-                <TabsTrigger value="runs">Runs</TabsTrigger>
-                <TabsTrigger value="results">Results</TabsTrigger>
-              </TabsList>
-              <button
-                type="button"
-                aria-label="Collapse Design panel"
-                title="Collapse Design panel"
-                onClick={() => setPanelCollapsed(true)}
-                className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <PanelLeftClose className="size-4" aria-hidden="true" />
-              </button>
-            </div>
-
-            {/* min-h-0 is load-bearing here -- without it, a flex item's
-                default min-height:auto keeps this box as tall as its content,
-                so on a short viewport the panel silently overflows the page
-                instead of scrolling. overflow-y-auto lives directly on each
-                TabsContent (the one bounded box), not on a nested div inside
-                it, so there's exactly one scroll container per tab. */}
-            <TabsContent value="design" className="min-h-0 flex-1 overflow-y-auto">
-              <DesignTab experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} />
-            </TabsContent>
-
-            <TabsContent value="cells" className="min-h-0 flex-1 overflow-y-auto">
-              <CellsTab experiment={experiment} />
-            </TabsContent>
-
-            <TabsContent value="runs" className="min-h-0 flex-1 overflow-y-auto">
-              {protocolId ? (
-                <RunsTab experimentId={experiment.id} protocolId={protocolId} />
-              ) : (
-                <p className="p-3 text-sm text-muted-foreground">This experiment has no protocol yet.</p>
-              )}
-            </TabsContent>
-
-            <TabsContent value="results" className="min-h-0 flex-1 overflow-y-auto">
-              <ResultsTab experimentId={experiment.id} />
-            </TabsContent>
-          </Tabs>
-        )}
+    <div className="relative flex h-full min-h-0 shrink-0" style={{ width: collapsed ? PANEL_RAIL_WIDTH : width }}>
+      {/* The rail is always visible: these are the only panel selectors, not
+          duplicate top tabs. Selecting one also restores the content area
+          when it is collapsed. */}
+      <Card className={cn('flex h-full w-24 shrink-0 flex-col gap-1 p-2', !collapsed && 'rounded-r-none border-r-0')}>
+        <button
+          type="button"
+          aria-label="Open Design panel"
+          aria-pressed={activeTab === 'design'}
+          title="Open Design panel"
+          onClick={() => openPanel('design')}
+          className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-xs font-medium transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+            activeTab === 'design' ? 'bg-muted text-foreground' : 'text-muted-foreground'
+          }`}
+        >
+          <PencilRuler className="size-4" aria-hidden="true" />
+          <span>Design</span>
+        </button>
+        <button
+          type="button"
+          aria-label="Open Runs panel"
+          aria-pressed={activeTab === 'runs'}
+          title="Open Runs panel"
+          onClick={() => openPanel('runs')}
+          className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-xs font-medium transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+            activeTab === 'runs' ? 'bg-muted text-foreground' : 'text-muted-foreground'
+          }`}
+        >
+          <ListChecks className="size-4" aria-hidden="true" />
+          <span>Runs</span>
+        </button>
       </Card>
+
+      {!collapsed && (
+        <Card className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-l-none p-0">
+          <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
+            <span className="text-sm font-medium">{activeTab === 'design' ? 'Design' : 'Runs'}</span>
+            <button
+              type="button"
+              aria-label="Collapse experiment panel"
+              title="Collapse experiment panel"
+              onClick={() => setPanelCollapsed(true)}
+              className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <PanelLeftClose className="size-4" aria-hidden="true" />
+            </button>
+          </div>
+          {isLoading || !experiment ? (
+            <div className="space-y-3 p-3">
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-32 w-full" />
+            </div>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {activeTab === 'design' ? (
+                <DesignTab experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} />
+              ) : (
+                <RunsTab experimentId={experiment.id} />
+              )}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Sits in the page's own 12px gutter between panel and canvas (-right-3
           w-3), so it costs no layout width and lands exactly where the eye
           already reads a seam. A separator role rather than a button: arrow
           keys resize it in 24px steps, which is also the only way to do this
           without a pointer. Double-click snaps back to the default. */}
-      <div
+      {!collapsed && <div
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize the experiment panel"
@@ -272,7 +247,7 @@ export function ExperimentSidePanel({
               : 'bg-border group-hover/resize:w-0.5 group-hover/resize:bg-primary group-hover/resize:shadow-[0_0_8px_var(--primary)] group-focus-visible/resize:w-0.5 group-focus-visible/resize:bg-primary group-focus-visible/resize:shadow-[0_0_8px_var(--primary)]',
           )}
         />
-      </div>
+      </div>}
     </div>
   )
 }

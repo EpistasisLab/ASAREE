@@ -5,7 +5,7 @@ varies, a protocol says what runs. The whole node/edge graph is kept as one
 opaque JSONB blob rather than normalized Node/Edge/Port tables -- nothing in
 ASAREE itself ever queries into the graph's structure, only the canvas UI
 (and later, a protocol executor) ever read it, and both read it whole. Same
-reasoning FactorialCellResult's JSONB-by-role columns already use.
+reasoning FactorialReplicateResult's JSONB-by-role columns use.
 """
 
 from __future__ import annotations

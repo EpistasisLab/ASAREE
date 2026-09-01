@@ -19,9 +19,10 @@ from asaree.services.design_generation import (
     cell_label_for,
     generate_design,
     generate_design_cells,
+    replicate_label_for,
 )
 from asaree.services.experiments import create_experiment
-from asaree.services.factorial_cells import list_cells, list_factorial_cells, split_replicate_label
+from asaree.services.factorial_cells import list_factorial_cells, list_replicates, split_replicate_label
 
 _FACTORS = [{"name": "tier", "levels": ["small", "large"]}, {"name": "effort", "levels": ["low", "high"]}]
 
@@ -63,15 +64,15 @@ def test_generate_design_rejects_empty_factors() -> None:
         generate_design([])
 
 
-def test_cell_label_for_replicate_one_has_no_suffix() -> None:
+def test_replicate_label_for_replicate_one_has_no_suffix() -> None:
     combo = {"tier": "small", "effort": "low"}
-    assert cell_label_for(combo) == cell_label_for(combo, replicate=1)
-    assert "rep" not in cell_label_for(combo, replicate=1)
+    assert cell_label_for(combo) == replicate_label_for(combo, replicate=1)
+    assert "rep" not in replicate_label_for(combo, replicate=1)
 
 
-def test_cell_label_for_replicate_two_gets_suffix() -> None:
+def test_replicate_label_for_replicate_two_gets_suffix() -> None:
     combo = {"tier": "small", "effort": "low"}
-    assert cell_label_for(combo, replicate=2) == f"{cell_label_for(combo)}__rep2"
+    assert replicate_label_for(combo, replicate=2) == f"{cell_label_for(combo)}__rep2"
 
 
 def test_replicate_label_maps_to_its_cell_and_number() -> None:
@@ -138,7 +139,7 @@ async def test_generate_design_cells_default_replicate_matches_today(owner_id: u
     async with get_session() as db:
         cells = await generate_design_cells(db, experiment_id=experiment_id, factors=_FACTORS)
         assert len(cells) == 4
-        assert all("rep" not in c.cell_label for c in cells)
+        assert all("rep" not in replicate.replicate_label for replicate in cells)
 
     async with get_session() as db:
         await db.delete(await db.get(type(experiment), experiment_id))
@@ -152,7 +153,7 @@ async def test_generate_design_cells_with_replicates_creates_n_copies(owner_id: 
     async with get_session() as db:
         cells = await generate_design_cells(db, experiment_id=experiment_id, factors=_FACTORS, replicates=3)
         assert len(cells) == 12  # 4 combinations * 3 replicates
-        labels = {c.cell_label for c in cells}
+        labels = {replicate.replicate_label for replicate in cells}
         assert len(labels) == 12  # every replicate gets a distinct label
         factorial_cells = await list_factorial_cells(db, experiment_id=experiment_id)
         assert len(factorial_cells) == 4
@@ -164,10 +165,10 @@ async def test_generate_design_cells_with_replicates_creates_n_copies(owner_id: 
 
 
 async def _mark_scored(db, cell_id: uuid.UUID) -> None:
-    from asaree.models.factorial_cell_result import FactorialCellResult
+    from asaree.models.factorial_replicate_result import FactorialReplicateResult
 
-    cell = await db.get(FactorialCellResult, cell_id)
-    cell.metric_values = {"scored": True}
+    replicate = await db.get(FactorialReplicateResult, cell_id)
+    replicate.metric_values = {"scored": True}
     await db.flush()
 
 
@@ -218,13 +219,13 @@ async def test_generate_design_cells_randomization_seed_shuffles_order_determini
         cells_a = await generate_design_cells(
             db, experiment_id=experiment_id, factors=_FACTORS, replicates=1, randomization_seed=42
         )
-        order_a = [c.cell_label for c in cells_a]
+        order_a = [replicate.replicate_label for replicate in cells_a]
 
     async with get_session() as db:
         cells_b = await generate_design_cells(
             db, experiment_id=experiment_id, factors=_FACTORS, replicates=1, randomization_seed=42
         )
-        order_b = [c.cell_label for c in cells_b]
+        order_b = [replicate.replicate_label for replicate in cells_b]
 
     assert order_a == order_b  # same seed -> same order
     assert set(order_a) == set(await _labels(experiment_id))
@@ -235,5 +236,5 @@ async def test_generate_design_cells_randomization_seed_shuffles_order_determini
 
 async def _labels(experiment_id: uuid.UUID) -> list[str]:
     async with get_session() as db:
-        cells = await list_cells(db, experiment_id=experiment_id)
-        return [c.cell_label for c in cells]
+        replicates = await list_replicates(db, experiment_id=experiment_id)
+        return [replicate.replicate_label for replicate in replicates]

@@ -6,7 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { experimentsApi } from '@/api/client'
 import { groupReplicatesIntoCells } from '@/lib/experiment'
 import { sanitizeFilename } from '@/lib/utils'
-import type { Cell, Experiment } from '@/types/experiments'
+import type { Experiment, Replicate } from '@/types/experiments'
 import { CellsHeatmap } from './CellsHeatmap'
 import { CellsTable } from './CellsTable'
 import { DesignHistory } from './DesignHistory'
@@ -15,7 +15,7 @@ import { DesignHistory } from './DesignHistory'
 // than the viewport -- the same component renders in a drag-resizable ~320-
 // 1100px panel column and in a full-viewport overlay, and dragging the panel
 // wider has to visibly pay off without a width prop threaded through here.
-function CellsBody({ experiment, cells }: { experiment: Experiment; cells: Cell[] }) {
+function CellsBody({ experiment, cells }: { experiment: Experiment; cells: Replicate[] }) {
   return (
     <div className="@container space-y-4">
       <CellsHeatmap experiment={experiment} cells={cells} />
@@ -38,7 +38,7 @@ function CellsBody({ experiment, cells }: { experiment: Experiment; cells: Cell[
  * which is the statistical analysis (effects, CIs, non-inferiority) computed
  * ON these numbers.
  *
- * Cells/factor_values/metric_values are a FactorialCellResult concept -- the
+ * Cells, replicate results, factor_values, and metric_values are factorial-design concepts -- the
  * only experiment type ASAREE's backend actually implements today
  * (ab_experiments/discoveries/etc. are explicitly out of scope on the model
  * itself), but design_type is a plain string specifically so another type
@@ -65,9 +65,9 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
   // no chance of the two disagreeing about how many cells exist. A superseded
   // revision gets its own key: it's a different set of rows, and it must not
   // overwrite the shared entry every other reader is looking at.
-  const cellsQuery = useQuery({
-    queryKey: revisionId ? ['experiments', experiment.id, 'cells', revisionId] : ['experiments', experiment.id, 'cells'],
-    queryFn: () => experimentsApi.listCells(experiment.id, revisionId ?? undefined),
+  const replicatesQuery = useQuery({
+    queryKey: revisionId ? ['experiments', experiment.id, 'replicates', revisionId] : ['experiments', experiment.id, 'replicates'],
+    queryFn: () => experimentsApi.listReplicates(experiment.id, revisionId ?? undefined),
   })
 
   useEffect(() => {
@@ -85,7 +85,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
   }, [fullscreen])
 
   async function handleDownloadCsv() {
-    const blob = await experimentsApi.downloadCellsCsv(experiment.id)
+    const blob = await experimentsApi.downloadReplicatesCsv(experiment.id)
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -104,7 +104,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
     )
   }
 
-  if (cellsQuery.isLoading) {
+  if (replicatesQuery.isLoading) {
     return (
       <div className="space-y-3 p-3">
         <Skeleton className="h-8 w-full" />
@@ -113,7 +113,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
     )
   }
 
-  const cells = cellsQuery.data
+  const cells = replicatesQuery.data
   const cellCount = cells ? groupReplicatesIntoCells(cells).length : 0
   const scoredReplicates = cells?.filter((replicate) => replicate.metric_values).length ?? 0
   const viewingHistory = revisionId !== null
@@ -127,7 +127,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
   )
 
   let body
-  if (cellsQuery.isError || !cells) {
+  if (replicatesQuery.isError || !cells) {
     body = <p className="text-sm text-muted-foreground">Could not load this experiment's cells.</p>
   } else if (cells.length === 0) {
     body = (

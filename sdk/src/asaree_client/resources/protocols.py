@@ -81,17 +81,13 @@ class Protocols:
         protocol_id: ResourceId,
         *,
         replicate_label: str | None = None,
-        cell_label: str | None = None,
     ) -> ProtocolRun:
         """Compile and run this protocol's current graph -- 422 if it's
         empty or has a cycle. Returns immediately with status "pending";
         poll with get_run. ``replicate_label`` runs that one already-generated
         replicate (its cell's factor_values substituted in) instead of
         today's ad-hoc, un-substituted whole-graph run."""
-        if replicate_label is not None and cell_label is not None and replicate_label != cell_label:
-            raise ValueError("replicate_label and deprecated cell_label disagree")
-        effective_label = replicate_label if replicate_label is not None else cell_label
-        payload = {"replicate_label": effective_label} if effective_label is not None else {}
+        payload = {"replicate_label": replicate_label} if replicate_label is not None else {}
         data = self._client._post(f"/protocols/{protocol_id}/runs", json=payload)
         return ProtocolRun(**data)
 
@@ -103,8 +99,8 @@ class Protocols:
         return ProtocolRun(**data)
 
     def run_cells(self, protocol_id: ResourceId) -> CellRunBatch:
-        """"Run all cells" -- one ProtocolRun per not-yet-scored cell under
-        this protocol's linked experiment, each cell's own factor_values
+        """"Run all cells" -- one ProtocolRun per not-yet-scored replicate under
+        this protocol's linked experiment, each replicate's cell factor_values
         substituted in. 422 if there's no linked experiment or the graph
         doesn't have exactly one final node."""
         data = self._client._post(f"/protocols/{protocol_id}/cell-runs")

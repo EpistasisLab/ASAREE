@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.experiments import get_experiment
@@ -22,7 +22,7 @@ from asaree.services.protocol_execution import (
     ProtocolValidationError,
     find_gated_pairs,
     plan_cell_runs,
-    plan_single_cell_run,
+    plan_single_replicate_run,
     topological_order,
     validate_coordination_strategy,
     validate_single_node_runnable,
@@ -61,7 +61,7 @@ class CreateProtocolRequest(BaseModel):
 
 class UpdateProtocolRequest(BaseModel):
     """All fields optional; only the ones actually set are written -- same
-    "unset vs. null" convention ``UpdateExperimentRequest``/``UpsertCellRequest``
+    "unset vs. null" convention used by the experiment update APIs
     use. ``graph`` is a full replacement, not a merge (see
     ``services.protocols.update_protocol``)."""
 
@@ -116,13 +116,10 @@ class ProtocolRevisionResponse(BaseModel):
 class CreateProtocolRunRequest(BaseModel):
     # Omitted/null -- today's ad-hoc, un-substituted whole-graph run. Set --
     # runs that one already-generated replicate for real, its cell's factor_values
-    # substituted in (see services.protocol_execution.plan_single_cell_run),
+    # substituted in (see services.protocol_execution.plan_single_replicate_run),
     # the same as one entry of "Run all cells" but picked by name instead of
     # running every not-yet-scored replicate at once.
-    replicate_label: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("replicate_label", "cell_label"),
-    )
+    replicate_label: str | None = None
 
 
 class CellRunBatchResponse(BaseModel):
@@ -269,13 +266,13 @@ async def create_protocol_run_endpoint(
     replicate_label = body.replicate_label if body else None
     try:
         if replicate_label:
-            run = await plan_single_cell_run(
+            run = await plan_single_replicate_run(
                 db,
                 protocol_id=protocol_id,
                 experiment_id=protocol.experiment_id,
                 owner_id=user.id,
                 graph=revision.graph,
-                cell_label=replicate_label,
+                replicate_label=replicate_label,
                 protocol_revision_id=revision.id,
             )
         else:

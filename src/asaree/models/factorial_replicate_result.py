@@ -35,8 +35,7 @@ class FactorialReplicateResult(Base, TimestampMixin):
 
     @property
     def cell_label(self) -> str:
-        """Legacy flat-API alias; this identifies a replicate, not a cell."""
-        return self.replicate_label
+        return self.cell.cell_label
 
     @property
     def experiment_id(self) -> uuid.UUID:
@@ -49,10 +48,5 @@ class FactorialReplicateResult(Base, TimestampMixin):
     @property
     def factor_values(self) -> dict[str, Any] | None:
         return self.cell.factor_values
-
-    @property
-    def factorial_cell_label(self) -> str:
-        return self.cell.cell_label
-
 
 __all__ = ["FactorialReplicateResult"]

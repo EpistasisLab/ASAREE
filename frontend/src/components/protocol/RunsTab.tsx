@@ -36,7 +36,7 @@ function deriveFactorNames(trials: Trial[]): string[] {
   return [...names].sort()
 }
 
-type SortKey = 'cell_label' | 'status' | 'updated_at'
+type SortKey = 'replicate_label' | 'status' | 'updated_at'
 
 function sortTrials(trials: Trial[], key: SortKey, direction: 'asc' | 'desc'): Trial[] {
   const sorted = [...trials].sort((a, b) => {
@@ -47,7 +47,7 @@ function sortTrials(trials: Trial[], key: SortKey, direction: 'asc' | 'desc'): T
   return direction === 'asc' ? sorted : sorted.reverse()
 }
 
-// The trial detail drill-in -- cell status/error plus, when the trial has a
+// The trial detail drill-in -- replicate status/error plus, when the trial has a
 // real ProtocolRun (run_id set), each pipeline node's own status/output/
 // error (GET /protocols/{id}/runs/{runId}, already built for the canvas's
 // own run-polling -- no new backend endpoint needed for this).
@@ -78,7 +78,7 @@ function TrialDetailDialog({
     <Dialog open={!!trial} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="font-mono text-sm">{trial?.cell_label}</DialogTitle>
+          <DialogTitle className="font-mono text-sm">{trial?.replicate_label}</DialogTitle>
         </DialogHeader>
         {trial && (
           <div className="space-y-3 text-sm">
@@ -382,8 +382,8 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
         <table className="w-full text-xs">
           <thead className="bg-muted/50 uppercase text-muted-foreground">
             <tr>
-              <th className="cursor-pointer px-2 py-1.5 text-left" onClick={() => onSort('cell_label')}>
-                Replicate {sortKey === 'cell_label' && (sortDirection === 'asc' ? '↑' : '↓')}
+              <th className="cursor-pointer px-2 py-1.5 text-left" onClick={() => onSort('replicate_label')}>
+                Replicate {sortKey === 'replicate_label' && (sortDirection === 'asc' ? '↑' : '↓')}
               </th>
               <th className="cursor-pointer px-2 py-1.5 text-left" onClick={() => onSort('status')}>
                 Status {sortKey === 'status' && (sortDirection === 'asc' ? '↑' : '↓')}
@@ -398,12 +398,12 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
               const badge = statusBadge(t.status)
               return (
                 <tr
-                  key={t.cell_label}
+                  key={t.replicate_label}
                   className={`cursor-pointer hover:bg-muted/50 ${i % 2 === 1 ? 'bg-muted/20' : ''}`}
                   onClick={() => setSelectedTrial(t)}
                 >
-                  <td className="truncate px-2 py-1.5 font-mono" title={t.cell_label}>
-                    {t.cell_label}
+                  <td className="truncate px-2 py-1.5 font-mono" title={t.replicate_label}>
+                    {t.replicate_label}
                   </td>
                   <td className="px-2 py-1.5">{badge && <Badge className={badge.className}>{badge.label}</Badge>}</td>
                   <td className="px-2 py-1.5 font-mono text-muted-foreground">{new Date(t.updated_at).toLocaleString()}</td>

@@ -2,8 +2,8 @@
 
 A ``FactorialCell`` owns one factor combination, while each
 ``FactorialReplicateResult`` is one independently runnable observation.
-Legacy ``*_cell`` functions remain as flat replicate adapters for the public
-``/cells`` API and existing notebooks.
+All result-oriented operations use replicate terminology; cell-oriented
+operations return the parent factor combination.
 """
 
 from __future__ import annotations
@@ -207,44 +207,11 @@ async def upsert_replicate(
     return replicate
 
 
-# Compatibility adapters: the historical flat "cell" resource is now an
-# explicitly modeled replicate result.
-async def upsert_cell(
-    db: AsyncSession,
-    *,
-    experiment_id: uuid.UUID,
-    cell_label: str,
-    fields: dict[str, Any],
-    revision_id: uuid.UUID | None = None,
-) -> FactorialReplicateResult:
-    return await upsert_replicate(
-        db,
-        experiment_id=experiment_id,
-        replicate_label=cell_label,
-        fields=fields,
-        revision_id=revision_id,
-    )
-
-
-async def get_cell(
-    db: AsyncSession, *, experiment_id: uuid.UUID, cell_label: str, revision_id: uuid.UUID | None = None
-) -> FactorialReplicateResult | None:
-    return await get_replicate(
-        db, experiment_id=experiment_id, replicate_label=cell_label, revision_id=revision_id
-    )
-
-
-list_cells = list_replicates
-
-
 __all__ = [
-    "get_cell",
     "get_factorial_cell",
     "get_replicate",
-    "list_cells",
     "list_factorial_cells",
     "list_replicates",
     "split_replicate_label",
-    "upsert_cell",
     "upsert_replicate",
 ]

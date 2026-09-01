@@ -18,7 +18,7 @@ earns its place.
   a real scored cell can have 6-7 numeric keys and showing all of them makes the table
   unreadably wide). One table row is one true cell (a unique factor combination): its metric
   columns are replicate means and its status reports scored/total replicates. The API's legacy
-  `Cell` rows are individual replicate observations and must be grouped first via
+  `Replicate` rows are individual observations and must be grouped first via
   `groupReplicatesIntoCells`. `table-fixed` isn't used since the column set is dynamic; instead:
   `truncate` on free-text cells, a shaded uppercase sortable header row, subtle zebra striping,
   `font-mono` on technical values. It's styled to the side panel's own compact table idiom (a
@@ -57,7 +57,7 @@ earns its place.
     the declared display names (`Azure Foundry:Model`, `Critic enabled`), while the *Spinal
     Fusion* one declares those same-style names but its cells are keyed `tier`/`effort`/
     `critic` from the design generator. Nothing keeps the two in sync. When they diverged,
-    every `cellsMatching()` lookup matched 0 of 80 cells, every square came out `null`, and
+    every `replicatesMatching()` lookup matched 0 of 80 replicates, every square came out `null`, and
     the grid vanished with no error in the console, no failing type, and no visible clue —
     it looked exactly like a broken component. A declared spec now only contributes level
     order and planned-but-unrun levels for names the cells actually use. The metric selector only shows when there's more than one

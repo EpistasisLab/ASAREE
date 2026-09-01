@@ -2,7 +2,7 @@ import { Fragment, useMemo, useState } from 'react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   availableMetricKeys,
-  cellsMatching,
+  replicatesMatching,
   deriveFactors,
   displayFactorValue,
   formatMetricLabel,
@@ -15,7 +15,7 @@ import {
   type FactorSpec,
 } from '@/lib/experiment'
 import { cn } from '@/lib/utils'
-import type { Cell, Experiment } from '@/types/experiments'
+import type { Experiment, Replicate } from '@/types/experiments'
 
 /** Why there's no grid here, said out loud in one dim line rather than
  * rendering nothing at all. The table below still carries every number, so
@@ -48,7 +48,7 @@ function HeatmapUnavailable({ reason }: { reason: string }) {
  * three components to make that happen. The parent marks the container --
  * see CellsTab's own `@container`.
  */
-export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Cell[] }) {
+export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Replicate[] }) {
   const availableMetrics = useMemo(() => availableMetricKeys(cells), [cells])
   const defaultMetric = useMemo(() => pickDefaultMetric(experiment, cells), [experiment, cells])
   const [metricKey, setMetricKey] = useState<string | null>(defaultMetric)
@@ -75,7 +75,7 @@ export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; ce
         const match: Record<string, unknown> = { [rowFactor.name]: rowLevel }
         if (colFactor.name) match[colFactor.name] = colLevel
         if (facetFactor) match[facetFactor.name] = facetLevel
-        const matched = cellsMatching(cells, match)
+        const matched = replicatesMatching(cells, match)
         return { value: meanMetric(matched, activeMetric), count: matched.length }
       }),
     ),

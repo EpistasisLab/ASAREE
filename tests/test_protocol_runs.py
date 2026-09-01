@@ -14,7 +14,7 @@ import asaree.models.experiment  # noqa: F401 -- registers research_experiments 
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.user import User
 from asaree.services.experiments import create_experiment, delete_experiment
-from asaree.services.factorial_cells import upsert_cell
+from asaree.services.factorial_cells import upsert_replicate
 from asaree.services.protocol_runs import (
     create_protocol_run,
     fail_protocol_run,
@@ -250,30 +250,32 @@ async def test_list_experiment_trials_reflects_not_started_running_and_completed
         experiment_id = experiment.id
 
         # Never run at all -- still a trial, status "not_started".
-        await upsert_cell(db, experiment_id=experiment_id, cell_label="cell-queued", fields={"factor_values": {"x": 1}})
+        await upsert_replicate(
+            db, experiment_id=experiment_id, replicate_label="cell-queued", fields={"factor_values": {"x": 1}}
+        )
 
         # Has a live ProtocolRun, still going -- status "running".
         running_run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
         running_run.status = "running"
         await db.flush()
-        await upsert_cell(
+        await upsert_replicate(
             db,
             experiment_id=experiment_id,
-            cell_label="cell-running",
+            replicate_label="cell-running",
             fields={"factor_values": {"x": 2}, "run_id": running_run.id},
         )
 
         # Scored directly (no ProtocolRun at all) -- status "completed".
-        await upsert_cell(
+        await upsert_replicate(
             db,
             experiment_id=experiment_id,
-            cell_label="cell-scored-externally",
+            replicate_label="cell-scored-externally",
             fields={"factor_values": {"x": 3}, "metric_values": {"accuracy": 0.9}},
         )
 
     async with get_session() as db:
         trials = await list_experiment_trials(db, experiment_id=experiment_id)
-        by_label = {t.cell_label: t for t in trials}
+        by_label = {trial.replicate_label: trial for trial in trials}
         assert by_label["cell-queued"].status == "not_started"
         assert by_label["cell-running"].status == "running"
         assert by_label["cell-scored-externally"].status == "completed"

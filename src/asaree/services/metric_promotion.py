@@ -1,12 +1,12 @@
-"""Promotes a completed cell's Score-stage ``run_model_script`` result into
-``FactorialCellResult.metric_values``.
+"""Promotes a completed replicate's Score-stage result into
+``FactorialReplicateResult.metric_values``.
 
 Not automatic: ``services.protocol_execution.run_protocol`` deliberately
 leaves ``metric_values`` unpopulated after a cell's run completes (see its own
 comment on that post-write block) -- there's no generic notion yet of "which
 output_contract field is the metric" for an arbitrary graph, so a user
 promotes ``artifacts`` into ``metric_values`` manually via
-``PUT /experiments/{id}/cells/{cell_label}``, the same manual step the real
+``PUT /experiments/{id}/replicates/{replicate_label}``, the same manual step the real
 notebook's own ``score_payload`` is today.
 
 This module is the deterministic, testable version of that manual step for
@@ -38,7 +38,7 @@ from typing import Any
 from motoro.runner import get_run_steps
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from asaree.services.factorial_cells import upsert_cell
+from asaree.services.factorial_cells import upsert_replicate
 from asaree.services.protocol_runs import get_protocol_run, list_experiment_trials
 
 _TOOL_NAME = "run_model_script"
@@ -51,7 +51,7 @@ _CHOSEN_THRESHOLD_METRICS = ("f1", "balanced_accuracy", "accuracy")
 
 def extract_score_metrics(tool_result: dict[str, Any]) -> dict[str, Any] | None:
     """Flatten one ``run_model_script`` response into the flat shape
-    ``factorial_analysis._cells_to_frame`` reads (it only ever reads
+    ``factorial_analysis._replicates_to_frame`` reads (it only ever reads
     ``metric_values``'s top-level keys, never recurses). Returns ``None``
     when the call never produced ``test_metrics`` at all -- e.g. it returned
     only an ``error`` (an uninitialized workspace, a rejected payload)."""
@@ -96,13 +96,13 @@ def find_score_tool_result(steps: Sequence[Any]) -> dict[str, Any] | None:
 
 @dataclass
 class PromotionResult:
-    cell_label: str
+    replicate_label: str
     promoted: bool
     reason: str  # explains a False `promoted` -- empty when promoted is True
 
 
-async def promote_cell_score_metrics(
-    db: AsyncSession, *, experiment_id: uuid.UUID, cell_label: str, protocol_run_id: uuid.UUID
+async def promote_replicate_score_metrics(
+    db: AsyncSession, *, experiment_id: uuid.UUID, replicate_label: str, protocol_run_id: uuid.UUID
 ) -> PromotionResult:
     """Promote one cell's Score-stage metrics, given the ``ProtocolRun`` that
     scored it. Doesn't assume the Score agent is any particular node id, or
@@ -117,11 +117,11 @@ async def promote_cell_score_metrics(
     survives that."""
     run = await get_protocol_run(db, protocol_run_id)
     if run is None:
-        return PromotionResult(cell_label, False, f"no such protocol run: {protocol_run_id}")
+        return PromotionResult(replicate_label, False, f"no such protocol run: {protocol_run_id}")
 
     candidate_run_ids = [nr.get("run_id") for nr in (run.node_runs or {}).values() if nr.get("run_id")]
     if not candidate_run_ids:
-        return PromotionResult(cell_label, False, "no agent runs recorded on this protocol run")
+        return PromotionResult(replicate_label, False, "no agent runs recorded on this protocol run")
 
     tool_result = None
     for run_id in candidate_run_ids:
@@ -130,23 +130,25 @@ async def promote_cell_score_metrics(
         if tool_result is not None:
             break
     if tool_result is None:
-        return PromotionResult(cell_label, False, "no successful run_model_script call found in any agent run")
+        return PromotionResult(replicate_label, False, "no successful run_model_script call found in any agent run")
 
     metrics = extract_score_metrics(tool_result)
     if metrics is None:
-        return PromotionResult(cell_label, False, "run_model_script never returned test_metrics (see its own error)")
+        return PromotionResult(
+            replicate_label, False, "run_model_script never returned test_metrics (see its own error)"
+        )
 
     # Written back to the design revision the run was planned under, not
     # whatever is current now -- see ProtocolRun.design_revision_id. Null on a
     # run predating that column, which falls back to the current revision.
-    await upsert_cell(
+    await upsert_replicate(
         db,
         experiment_id=experiment_id,
-        cell_label=cell_label,
+        replicate_label=replicate_label,
         fields={"metric_values": metrics},
         revision_id=run.design_revision_id,
     )
-    return PromotionResult(cell_label, True, "")
+    return PromotionResult(replicate_label, True, "")
 
 
 async def promote_experiment_score_metrics(db: AsyncSession, *, experiment_id: uuid.UUID) -> list[PromotionResult]:
@@ -160,14 +162,19 @@ async def promote_experiment_score_metrics(db: AsyncSession, *, experiment_id: u
         if trial.metric_values:
             continue
         if trial.run_id is None:
-            results.append(PromotionResult(trial.cell_label, False, "no ProtocolRun for this cell yet"))
+            results.append(PromotionResult(trial.replicate_label, False, "no ProtocolRun for this replicate yet"))
             continue
         if trial.status != "completed":
-            results.append(PromotionResult(trial.cell_label, False, f"run status is {trial.status!r}, not completed"))
+            results.append(
+                PromotionResult(trial.replicate_label, False, f"run status is {trial.status!r}, not completed")
+            )
             continue
         results.append(
-            await promote_cell_score_metrics(
-                db, experiment_id=experiment_id, cell_label=trial.cell_label, protocol_run_id=trial.run_id
+            await promote_replicate_score_metrics(
+                db,
+                experiment_id=experiment_id,
+                replicate_label=trial.replicate_label,
+                protocol_run_id=trial.run_id,
             )
         )
     return results
@@ -177,6 +184,6 @@ __all__ = [
     "PromotionResult",
     "extract_score_metrics",
     "find_score_tool_result",
-    "promote_cell_score_metrics",
+    "promote_replicate_score_metrics",
     "promote_experiment_score_metrics",
 ]

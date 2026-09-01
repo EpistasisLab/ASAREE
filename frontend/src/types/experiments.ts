@@ -134,12 +134,11 @@ export interface Experiment {
   archived_at: string | null
 }
 
-// One row of the Runs tab's trial list -- "trial" means cell (a
-// factor-level combination x replicate), not ProtocolRun; a cell that's
+// One row of the Runs tab's trial list -- one replicate, not ProtocolRun; a replicate that's
 // never been run at all is still a trial, reported with status "not_started".
 // Matches src/asaree/api/experiments.py's TrialResponse exactly.
 export interface Trial {
-  cell_label: string
+  replicate_label: string
   factor_values: Record<string, unknown>
   metric_values: Record<string, unknown>
   status: 'not_started' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
@@ -216,18 +215,15 @@ export interface ExperimentResults {
   best_condition: EmmCell | null
 }
 
-export interface Cell {
-  // Legacy persistence/API shape: despite the name, one row is one replicate
-  // observation. Group by factor_values for the user-facing experimental cell.
+export interface Replicate {
+  // One independently runnable observation within the owning cell.
   id: string
   cell_id: string
-  factorial_cell_label: string
+  cell_label: string
   replicate_label: string
   replicate_number: number
-  // Deprecated response alias for replicate_label.
-  cell_label: string
-  // Which generation of the design this observation was made under. Cells
-  // from a superseded revision stay in the database as history, so listCells
+  // Which generation of the design this observation was made under. Replicates
+  // from a superseded revision stay in the database as history, so listReplicates
   // returns only the current revision's unless asked for another one.
   design_revision_id: string
   run_id: string | null

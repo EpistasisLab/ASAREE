@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Agent(BaseModel):
@@ -86,16 +86,15 @@ class Experiment(BaseModel):
     created_at: datetime
 
 
-class Cell(BaseModel):
+class Replicate(BaseModel):
     id: uuid.UUID
-    cell_id: uuid.UUID | None = None
-    factorial_cell_label: str | None = None
-    replicate_label: str | None = None
-    replicate_number: int | None = None
+    cell_id: uuid.UUID
     cell_label: str
+    replicate_label: str
+    replicate_number: int
     # Which generation of the experiment's design this observation was made
-    # under. Cells from a superseded design stay in the database as history,
-    # so a cell is only part of the live design if this matches the
+    # under. Replicates from a superseded design stay in the database as history,
+    # so a replicate is only part of the live design if this matches the
     # experiment's current DesignRevision.
     design_revision_id: uuid.UUID
     run_id: uuid.UUID | None
@@ -161,9 +160,7 @@ class ProtocolRun(BaseModel):
     status: str
     node_runs: dict[str, Any]
     error: str | None
-    replicate_label: str | None = Field(
-        default=None, validation_alias=AliasChoices("replicate_label", "cell_label")
-    )
+    replicate_label: str | None = None
     replicate_result_id: uuid.UUID | None = None
     factor_values: dict[str, Any] | None = None
     design_revision_id: uuid.UUID | None = None

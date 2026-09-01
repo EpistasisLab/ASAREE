@@ -78,7 +78,7 @@ async def test_get_artifact_returns_none_for_wrong_experiment(experiment_id: uui
 async def test_list_artifacts_does_not_collapse_same_kind_rows(experiment_id: uuid.UUID) -> None:
     """Proves the deliberate absence of a (experiment_id, name) unique
     constraint is load-bearing -- re-running an analysis should produce a
-    NEW row, never silently overwrite the last one the way upsert_cell's
+    NEW row, never silently overwrite the last one the way upsert_replicate's
     own merge-by-cell_label would."""
     async with get_session() as db:
         await create_artifact(
@@ -108,7 +108,7 @@ async def test_delete_artifact_removes_it(experiment_id: uuid.UUID) -> None:
 
 
 async def test_delete_artifact_is_a_noop_for_unknown_id() -> None:
-    # Matches upsert_cell's own "best-effort, no raise on the missing case"
+    # Matches upsert_replicate's own "best-effort, no raise on the missing case"
     # posture -- deleting something already gone isn't an error.
     async with get_session() as db:
         await delete_artifact(db, artifact_id=uuid.uuid4())

@@ -8,7 +8,7 @@ Two rules worth stating up front, because both are load-bearing elsewhere:
 
 - ``get_or_create_current`` is what makes the notebook flow keep working. A
   client that never calls generate-design and just PUTs cells directly (the
-  SDK's ``upsert_cell``, which the spinal pipeline uses) still needs a
+  SDK's ``upsert_replicate``, which notebook pipelines use) still needs a
   revision to hang them off, so one is created on demand from whatever
   ``design_spec`` the experiment currently declares.
 - ``delete_revision`` refuses the current revision. Deleting history is a

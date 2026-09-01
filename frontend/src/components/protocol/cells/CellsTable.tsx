@@ -13,7 +13,7 @@ import {
   type ExperimentalCell,
 } from '@/lib/experiment'
 import { cn } from '@/lib/utils'
-import type { Cell, Experiment } from '@/types/experiments'
+import type { Experiment, Replicate } from '@/types/experiments'
 
 type CellSort = { key: string; dir: 'asc' | 'desc' }
 
@@ -73,7 +73,7 @@ function SortableCellHead({
  * and can still outgrow even the maximized overlay, so the CALLER wraps this
  * in the horizontal scroll container -- see CellsTab.
  */
-export function CellsTable({ experiment, cells }: { experiment: Experiment; cells: Cell[] }) {
+export function CellsTable({ experiment, cells }: { experiment: Experiment; cells: Replicate[] }) {
   const [sort, setSort] = useState<CellSort>({ key: 'updated_at', dir: 'desc' })
   const [page, setPage] = useState(1)
   const factors = useMemo(() => deriveFactors(cells, experiment.design_spec) ?? [], [cells, experiment.design_spec])

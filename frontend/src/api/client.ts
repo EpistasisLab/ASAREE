@@ -12,7 +12,7 @@ import type {
 } from '@/types/auth'
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
-import type { Cell, DesignImpact, DesignRevision, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
+import type { DesignImpact, DesignRevision, DesignSpec, Experiment, ExperimentResults, Replicate, Trial } from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
@@ -202,8 +202,8 @@ export const experimentsApi = {
   remove: (id: string) => request<void>(`/experiments/${id}`, { method: 'DELETE' }),
   // The experiment's current design cells; pass a revisionId to read a
   // superseded revision's instead (the design-history drill-down).
-  listCells: (id: string, revisionId?: string) =>
-    request<Cell[]>(revisionId ? `/experiments/${id}/cells?revision_id=${revisionId}` : `/experiments/${id}/cells`),
+  listReplicates: (id: string, revisionId?: string) =>
+    request<Replicate[]>(revisionId ? `/experiments/${id}/replicates?revision_id=${revisionId}` : `/experiments/${id}/replicates`),
   // Every generation of this experiment's design, newest first -- the first
   // entry (superseded_at === null) is the current one.
   listDesignRevisions: (id: string) => request<DesignRevision[]>(`/experiments/${id}/design-revisions`),
@@ -214,18 +214,18 @@ export const experimentsApi = {
   // Pure preview of the current declaration against the materialized design;
   // used to make an explicit regeneration decision before runs are allowed.
   getDesignImpact: (id: string) => request<DesignImpact>(`/experiments/${id}/design-impact`),
-  // One row per cell, one column per factor_values/metric_values key seen
-  // anywhere in the experiment (see services.csv_export.cells_to_csv) --
+  // One row per replicate, one column per factor_values/metric_values key seen
+  // anywhere in the experiment (see services.csv_export.replicates_to_csv) --
   // a Blob, not JSON, so callers hand it straight to URL.createObjectURL.
-  downloadCellsCsv: (id: string) => requestBlob(`/experiments/${id}/cells.csv`),
+  downloadReplicatesCsv: (id: string) => requestBlob(`/experiments/${id}/replicates.csv`),
   // Materializes one cell per combination and its replicate-result children.
-  // declared factors, returning the current design's cells. If the new design
+  // declared factors, returning the current design's replicates. If the new design
   // isn't the same set of cells as the current one, the current design
   // revision is superseded and a new one opened -- results for surviving cell
   // labels carry forward, the rest stay in history (see
   // services.design_generation). Nothing is ever deleted here.
-  generateDesign: (id: string) => request<Cell[]>(`/experiments/${id}/generate-design`, { method: 'POST' }),
-  // One row per cell (a "trial"), not per ProtocolRun -- a cell that's never
+  generateDesign: (id: string) => request<Replicate[]>(`/experiments/${id}/generate-design`, { method: 'POST' }),
+  // One row per replicate (a "trial"), not per ProtocolRun -- a replicate that's never
   // been run is still listed, with status "not_started" (see TrialResponse /
   // services.protocol_runs.list_experiment_trials).
   listTrials: (id: string) => request<Trial[]>(`/experiments/${id}/runs`),

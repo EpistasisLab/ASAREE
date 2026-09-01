@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.services.design_revisions import get_current_revision, supersede_and_create
-from asaree.services.factorial_cells import list_cells, upsert_cell
+from asaree.services.factorial_cells import list_replicates, upsert_replicate
 
 
 class DesignValidationError(ValueError):
@@ -111,15 +111,20 @@ def _slugify(value: Any) -> str:
     return slug or "x"
 
 
-def cell_label_for(combination: dict[str, Any], *, replicate: int = 1) -> str:
-    """A deterministic, sorted label for one combination — stable regardless
-    of the order factors were declared in, so the same combination always
-    lands on the same cell. ``replicate`` is 1-indexed; replicate 1's label is
-    left exactly as it always was (no suffix) so existing single-replicate
-    experiments are unaffected and a later replicates increase only adds new
-    replicate rows (2, 3, ...) rather than renaming the original one."""
-    base = "__".join(f"{name}_{_slugify(value)}" for name, value in sorted(combination.items()))
-    return base if replicate <= 1 else f"{base}__rep{replicate}"
+def cell_label_for(combination: dict[str, Any]) -> str:
+    """Return the deterministic label for one unique factor combination."""
+    return "__".join(f"{name}_{_slugify(value)}" for name, value in sorted(combination.items()))
+
+
+def replicate_label_for(combination: dict[str, Any], *, replicate: int = 1) -> str:
+    """Return the label for one replicate within a factor-combination cell.
+
+    Replicate 1 retains the unsuffixed historical label; later replicates use
+    ``__repN``. This keeps existing data stable while making the cell/replicate
+    distinction explicit at every call site.
+    """
+    cell_label = cell_label_for(combination)
+    return cell_label if replicate <= 1 else f"{cell_label}__rep{replicate}"
 
 
 def _cell_key(factor_values: dict[str, Any] | None, label: str) -> str:
@@ -158,7 +163,7 @@ def _planned_replicates(factors: list[dict[str, Any]], replicates: int) -> list[
     if replicates < 1:
         raise DesignValidationError(f"replicates must be at least 1, got {replicates}")
     return [
-        (cell_label_for(combo, replicate=replicate), combo)
+        (replicate_label_for(combo, replicate=replicate), combo)
         for combo in generate_design(factors)
         for replicate in range(1, replicates + 1)
     ]
@@ -188,10 +193,10 @@ async def get_design_impact(
             retained_replicate_count=0,
             removed_replicate_count=0,
         )
-    current_replicates = await list_cells(db, experiment_id=experiment_id, revision_id=current.id)
-    current_labels = {replicate.cell_label for replicate in current_replicates}
+    current_replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=current.id)
+    current_labels = {replicate.replicate_label for replicate in current_replicates}
     current_cell_keys = {
-        _cell_key(replicate.factor_values, replicate.cell_label) for replicate in current_replicates
+        _cell_key(replicate.factor_values, replicate.replicate_label) for replicate in current_replicates
     }
     return DesignImpact(
         has_generated_design=True,
@@ -255,7 +260,10 @@ async def generate_design_cells(
 
     current = await get_current_revision(db, experiment_id)
     existing = (
-        {c.cell_label: c for c in await list_cells(db, experiment_id=experiment_id, revision_id=current.id)}
+        {
+            replicate.replicate_label: replicate
+            for replicate in await list_replicates(db, experiment_id=experiment_id, revision_id=current.id)
+        }
         if current is not None
         else {}
     )
@@ -294,10 +302,10 @@ async def generate_design_cells(
             # planned this time, and the carried dict is the same combination
             # anyway.
             fields["factor_values"] = combo
-        replicate_result = await upsert_cell(
+        replicate_result = await upsert_replicate(
             db,
             experiment_id=experiment_id,
-            cell_label=label,
+            replicate_label=label,
             fields=fields,
             revision_id=revision_id,
         )

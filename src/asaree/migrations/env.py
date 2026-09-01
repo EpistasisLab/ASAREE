@@ -25,7 +25,7 @@ import asaree.models.experiment_artifact  # noqa: F401
 import asaree.models.experiment_dataset  # noqa: F401
 import asaree.models.experiment_design_revision  # noqa: F401
 import asaree.models.factorial_cell  # noqa: F401
-import asaree.models.factorial_cell_result  # noqa: F401
+import asaree.models.factorial_replicate_result  # noqa: F401
 import asaree.models.password_reset_token  # noqa: F401
 import asaree.models.protocol  # noqa: F401
 import asaree.models.protocol_revision  # noqa: F401

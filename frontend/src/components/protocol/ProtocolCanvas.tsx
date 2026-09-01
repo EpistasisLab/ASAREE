@@ -94,7 +94,7 @@ import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
 import { RunConfirmDialog } from './RunConfirmDialog'
 import type { RunScope } from './runSummary'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
-import { SelectCellDialog } from './SelectCellDialog'
+import { SelectReplicateDialog } from './SelectCellDialog'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
 import { OkfBundleBrowserPanel } from './OkfBundleBrowserPanel'
 import { OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE, nodeDataForBundle, nodeDataForDocument } from './okfCatalog'
@@ -469,15 +469,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const [designRegenerationWarningOpen, setDesignRegenerationWarningOpen] = useState(false)
   const [runId, setRunId] = useState<string | null>(null)
   // null -- today's ad-hoc, un-substituted whole-graph run (the only option
-  // before any cells exist). Set -- runs that one already-generated cell for
+  // before any cells exist). Set -- runs one already-generated replicate for
   // real, its own factor_values substituted in (see
-  // services.protocol_execution.plan_single_cell_run), picked from the
+  // services.protocol_execution.plan_single_replicate_run), picked from the
   // dropdown next to the Run button.
-  const [selectedCellLabel, setSelectedCellLabel] = useState<string | null>(null)
+  const [selectedReplicateLabel, setSelectedReplicateLabel] = useState<string | null>(null)
   const [cellPickerOpen, setCellPickerOpen] = useState(false)
-  const cellsQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'cells'],
-    queryFn: () => experimentsApi.listCells(experimentId!),
+  const replicatesQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'replicates'],
+    queryFn: () => experimentsApi.listReplicates(experimentId!),
     enabled: !!experimentId,
   })
   const designImpactQuery = useQuery({
@@ -485,9 +485,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     queryFn: () => experimentsApi.getDesignImpact(experimentId!),
     enabled: !!experimentId,
   })
-  const cellOptions = cellsQuery.data ?? []
+  const replicateOptions = replicatesQuery.data ?? []
   const designRegenerationRequired = designImpactQuery.data?.regeneration_required ?? false
-  // design_spec for SelectCellDialog's own factor-checkbox filter -- fetched
+  // design_spec for SelectReplicateDialog's own factor-checkbox filter -- fetched
   // only while that dialog is actually open, same "on demand" convention
   // factorPickerExperimentQuery below uses for the same query.
   const cellPickerExperimentQuery = useQuery({
@@ -532,7 +532,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   }, [edges, fitView, setNodes])
 
   const runMutation = useMutation({
-    mutationFn: () => protocolsApi.run(protocolId, selectedCellLabel),
+    mutationFn: () => protocolsApi.run(protocolId, selectedReplicateLabel),
     onSuccess: (run) => setRunId(run.id),
   })
 
@@ -566,7 +566,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       setDesignRegenerationWarningOpen(true)
       return
     }
-    setPendingRunConfirm(selectedCellLabel ? { type: 'replicate', label: selectedCellLabel } : { type: 'graph' })
+    setPendingRunConfirm(selectedReplicateLabel ? { type: 'replicate', label: selectedReplicateLabel } : { type: 'graph' })
   }
 
   function confirmPendingRun() {
@@ -1501,7 +1501,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             )
           })()}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
-            {cellOptions.length > 0 && (
+            {replicateOptions.length > 0 && (
               <span title={designRegenerationRequired ? 'Design changed — review and regenerate before selecting a cell.' : undefined}>
                 <Button
                   size="sm"
@@ -1509,20 +1509,20 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                   className="max-w-40"
                   onClick={() => (designRegenerationRequired ? setDesignRegenerationWarningOpen(true) : setCellPickerOpen(true))}
                 >
-                  <span className={`truncate ${selectedCellLabel ? 'font-mono' : ''}`} title={selectedCellLabel ?? undefined}>
-                    {designRegenerationRequired ? 'Update design' : selectedCellLabel ?? 'Run replicate'}
+                  <span className={`truncate ${selectedReplicateLabel ? 'font-mono' : ''}`} title={selectedReplicateLabel ?? undefined}>
+                    {designRegenerationRequired ? 'Update design' : selectedReplicateLabel ?? 'Run replicate'}
                   </span>
                 </Button>
               </span>
             )}
             {cellPickerOpen && (
-              <SelectCellDialog
-                cells={cellOptions}
+              <SelectReplicateDialog
+                replicates={replicateOptions}
                 designSpec={cellPickerExperimentQuery.data?.design_spec}
-                selectedCellLabel={selectedCellLabel}
+                selectedReplicateLabel={selectedReplicateLabel}
                 onCancel={() => setCellPickerOpen(false)}
-                onSelect={(cellLabel) => {
-                  setSelectedCellLabel(cellLabel)
+                onSelect={(replicateLabel) => {
+                  setSelectedReplicateLabel(replicateLabel)
                   setCellPickerOpen(false)
                 }}
               />
@@ -1534,7 +1534,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               onClick={requestRun}
             >
               <Play className="size-4" />
-              {isRunning ? 'Running…' : designRegenerationRequired ? 'Update design' : selectedCellLabel ? `Run replicate: ${selectedCellLabel}` : 'Run'}
+              {isRunning ? 'Running…' : designRegenerationRequired ? 'Update design' : selectedReplicateLabel ? `Run replicate: ${selectedReplicateLabel}` : 'Run'}
             </Button>
             {isRunning && (
               <Button

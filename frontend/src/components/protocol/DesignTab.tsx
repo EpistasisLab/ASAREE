@@ -371,7 +371,7 @@ export function DesignTab({
   const generateMutation = useMutation({
     mutationFn: () => experimentsApi.generateDesign(experiment.id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'cells'] })
+      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'replicates'] })
       // A generate that changes the design's shape supersedes the current
       // revision and opens a new one, so the Cells tab's history list is stale
       // too -- not just the cell rows.

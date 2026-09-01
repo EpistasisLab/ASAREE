@@ -13,7 +13,7 @@ completely differently and neither is something ASAREE itself interprets.
 
 No ``owner_id`` column, unlike ``RegisteredDataset`` -- access is mediated
 entirely through ``experiment_id -> research_experiments.owner_id`` (the
-same shape ``FactorialCellResult`` already uses, which also has no
+same shape ``FactorialReplicateResult`` uses, which also has no
 ``owner_id`` of its own). No unique constraint on ``(experiment_id, name)``
 either: an artifact is create-once/append-style, never an upsert target the
 way a cell is -- re-running ``analyze`` after adding more cells should

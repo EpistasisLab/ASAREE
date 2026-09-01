@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { formatDate, formatRelative } from '@/lib/format'
-import { cellsStatusAccent, factorCount } from '@/lib/experiment'
+import { factorCount, replicatesStatusAccent } from '@/lib/experiment'
 import { cardAccent } from '@/lib/utils'
 import { experimentsApi } from '@/api/client'
 import type { Experiment } from '@/types/experiments'
@@ -67,18 +67,18 @@ export function ExperimentsPage() {
   const currentPage = Math.min(page, totalPages)
   const paged = sorted?.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
-  // One cells fetch per visible tile, to tint each by completion status --
+  // One replicate-list fetch per visible tile, to tint each by completion status --
   // the same N+1 tradeoff already accepted for the Agents section on the
   // detail page. Fine at a page size of 9; revisit with a real aggregate
   // endpoint if this page ever needs to show many more at once.
-  const cellsQueries = useQueries({
+  const replicateQueries = useQueries({
     queries: (paged ?? []).map((experiment) => ({
-      queryKey: ['experiments', experiment.id, 'cells'],
-      queryFn: () => experimentsApi.listCells(experiment.id),
+      queryKey: ['experiments', experiment.id, 'replicates'],
+      queryFn: () => experimentsApi.listReplicates(experiment.id),
     })),
   })
   const accentByExperiment = new Map(
-    (paged ?? []).map((experiment, i) => [experiment.id, cellsStatusAccent(cellsQueries[i]?.data)]),
+    (paged ?? []).map((experiment, i) => [experiment.id, replicatesStatusAccent(replicateQueries[i]?.data)]),
   )
 
   return (

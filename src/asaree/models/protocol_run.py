@@ -15,7 +15,7 @@ from typing import Any
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, synonym
+from sqlalchemy.orm import Mapped, mapped_column
 
 from asaree.models.base import Base, TimestampMixin, generate_uuid
 
@@ -53,10 +53,8 @@ class ProtocolRun(Base, TimestampMixin):
     # factor_values is that cell's own factor_values, substituted into the
     # graph's factor_bindings-tagged fields before execution
     # (apply_factor_bindings), and replicate_label is where the result gets
-    # written back. ``cell_label`` remains a temporary ORM alias for callers
-    # using the pre-normalization API vocabulary.
+    # written back.
     replicate_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    cell_label = synonym("replicate_label")
     factor_values: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     replicate_result_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

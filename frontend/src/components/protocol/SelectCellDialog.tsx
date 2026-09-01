@@ -3,48 +3,38 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { deriveFactors, displayFactorValue, factorValueKey, replicateNumberForLabel } from '@/lib/experiment'
-import type { Cell, Experiment } from '@/types/experiments'
+import { deriveFactors, displayFactorValue, factorValueKey } from '@/lib/experiment'
+import type { Experiment, Replicate } from '@/types/experiments'
 
-// The combination's own label with any "__repN" suffix stripped -- every
-// replicate of one combination shares this, so sorting by it first groups
-// same-combination cells together before replicateNumberFor orders them
-// within the group.
-function baseLabelFor(cellLabel: string): string {
-  return cellLabel.replace(/__rep\d+$/, '')
-}
-
-// list_cells (services/factorial_cells.py) orders by the raw cell_label
-// column, i.e. plain string sort -- "...__rep10" sorts before "...__rep2"
-// there, since '1' < '2' lexicographically. Re-sorted here by (base label,
-// replicate number) instead, so a combination's replicates read 1, 2, ..., 10.
-function sortByReplicateOrder(cells: Cell[]): Cell[] {
-  return [...cells].sort((a, b) => {
-    const baseCompare = baseLabelFor(a.cell_label).localeCompare(baseLabelFor(b.cell_label))
+// The API already supplies explicit cell labels and replicate numbers; sort
+// by both so each cell's replicates read 1, 2, ..., 10.
+function sortByReplicateOrder(replicates: Replicate[]): Replicate[] {
+  return [...replicates].sort((a, b) => {
+    const baseCompare = a.cell_label.localeCompare(b.cell_label)
     if (baseCompare !== 0) return baseCompare
-    return replicateNumberForLabel(a.cell_label) - replicateNumberForLabel(b.cell_label)
+    return a.replicate_number - b.replicate_number
   })
 }
 
-// Replaces a plain <Select> for the canvas Run button's cell picker
+// Replaces a plain <Select> for the canvas Run button's replicate picker
 // (ProtocolCanvas.tsx) -- a dropdown truncates a real cell_label plus its
 // factor summary the moment there's more than a couple of short factors,
 // and base-ui's Select popup width is driven by its trigger, not its
 // content. A full dialog has room for the whole label and a per-factor
 // summary, plus a filter once a sweep has more than a handful of cells.
 // Matches RunConfirmDialog/DeleteNodeConfirmDialog's own shell.
-export function SelectCellDialog({
-  cells,
+export function SelectReplicateDialog({
+  replicates,
   designSpec,
-  selectedCellLabel,
+  selectedReplicateLabel,
   onCancel,
   onSelect,
 }: {
-  cells: Cell[]
+  replicates: Replicate[]
   designSpec: Experiment['design_spec'] | undefined
-  selectedCellLabel: string | null
+  selectedReplicateLabel: string | null
   onCancel: () => void
-  onSelect: (cellLabel: string | null) => void
+  onSelect: (replicateLabel: string | null) => void
 }) {
   const [filter, setFilter] = useState('')
   // factor name -> set of checked levels' factorValueKey. A factor with an
@@ -59,8 +49,8 @@ export function SelectCellDialog({
 
   // `?? null` because this prop is optional here but deriveFactors takes
   // `DesignSpec | null` -- an absent spec and an explicitly null one mean the
-  // same thing to it (derive the factors from the cells instead).
-  const factors = useMemo(() => deriveFactors(cells, designSpec ?? null) ?? [], [cells, designSpec])
+  // same thing to it (derive the factors from the replicates instead).
+  const factors = useMemo(() => deriveFactors(replicates, designSpec ?? null) ?? [], [replicates, designSpec])
 
   function toggleLevel(factorName: string, levelKey: string) {
     setCheckedLevels((prev) => {
@@ -74,18 +64,18 @@ export function SelectCellDialog({
   const anyChecked = Object.values(checkedLevels).some((s) => s.size > 0)
   const needle = filter.trim().toLowerCase()
 
-  const sortedCells = useMemo(() => sortByReplicateOrder(cells), [cells])
+  const sortedReplicates = useMemo(() => sortByReplicateOrder(replicates), [replicates])
 
-  const filtered = sortedCells.filter((cell) => {
+  const filtered = sortedReplicates.filter((replicate) => {
     for (const [factorName, levels] of Object.entries(checkedLevels)) {
       if (levels.size === 0) continue
-      if (!levels.has(factorValueKey(cell.factor_values?.[factorName]))) return false
+      if (!levels.has(factorValueKey(replicate.factor_values?.[factorName]))) return false
     }
     if (!needle) return true
-    const summary = Object.entries(cell.factor_values ?? {})
+    const summary = Object.entries(replicate.factor_values ?? {})
       .map(([k, v]) => `${k}=${displayFactorValue(v)}`)
       .join(' ')
-    return cell.cell_label.toLowerCase().includes(needle) || summary.toLowerCase().includes(needle)
+    return replicate.replicate_label.toLowerCase().includes(needle) || summary.toLowerCase().includes(needle)
   })
 
   return (
@@ -138,7 +128,7 @@ export function SelectCellDialog({
             ))}
           </div>
         )}
-        {cells.length > 6 && (
+        {replicates.length > 6 && (
           <Input autoFocus placeholder="Filter replicates…" value={filter} onChange={(e) => setFilter(e.target.value)} />
         )}
         <ul className="max-h-80 space-y-1.5 overflow-y-auto text-sm">
@@ -147,50 +137,50 @@ export function SelectCellDialog({
               type="button"
               onClick={() => onSelect(null)}
               className={`w-full cursor-pointer rounded-md border px-2.5 py-1.5 text-left hover:bg-muted ${
-                selectedCellLabel === null ? 'border-primary ring-1 ring-primary/40' : ''
+                selectedReplicateLabel === null ? 'border-primary ring-1 ring-primary/40' : ''
               }`}
             >
               <p className="font-medium">Ad-hoc run</p>
               <p className="text-xs text-muted-foreground">Today's whole-graph pass, no factor substitution.</p>
             </button>
           </li>
-          {filtered.map((cell) => {
-            const hasFactors = cell.factor_values && Object.keys(cell.factor_values).length > 0
+          {filtered.map((replicateResult) => {
+            const hasFactors = replicateResult.factor_values && Object.keys(replicateResult.factor_values).length > 0
             const summary = hasFactors
-              ? Object.entries(cell.factor_values!)
+              ? Object.entries(replicateResult.factor_values!)
                   .map(([k, v]) => `${k}: ${displayFactorValue(v)}`)
                   .join(' · ')
               : null
-            const replicate = replicateNumberForLabel(cell.cell_label)
+            const replicateNumber = replicateResult.replicate_number
             return (
-              <li key={cell.cell_label}>
+              <li key={replicateResult.replicate_label}>
                 <button
                   type="button"
-                  onClick={() => onSelect(cell.cell_label)}
+                  onClick={() => onSelect(replicateResult.replicate_label)}
                   className={`w-full cursor-pointer rounded-md border px-2.5 py-1.5 text-left hover:bg-muted ${
-                    selectedCellLabel === cell.cell_label ? 'border-primary ring-1 ring-primary/40' : ''
+                    selectedReplicateLabel === replicateResult.replicate_label ? 'border-primary ring-1 ring-primary/40' : ''
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
                     {/* The human-readable factor summary is the headline -- the raw
-                        cell_label (SF-DC-Effort_medium__...__rep3-shaped, not meant for
+                        replicate_label (SF-DC-Effort_medium__...__rep3-shaped, not meant for
                         reading) drops to a small font-mono line below, kept for anyone
                         cross-referencing the Cells table/CSV export by that exact string. */}
-                    <p className="truncate font-medium" title={summary ?? cell.cell_label}>
-                      {summary ?? cell.cell_label}
+                    <p className="truncate font-medium" title={summary ?? replicateResult.replicate_label}>
+                      {summary ?? replicateResult.replicate_label}
                     </p>
                     <span
                       className="shrink-0 text-[10px] tracking-wide uppercase"
-                      style={{ color: cell.metric_values ? 'var(--chart-3)' : 'var(--chart-4)' }}
+                      style={{ color: replicateResult.metric_values ? 'var(--chart-3)' : 'var(--chart-4)' }}
                     >
-                      {cell.metric_values ? 'Scored' : 'Pending'}
+                      {replicateResult.metric_values ? 'Scored' : 'Pending'}
                     </span>
                   </div>
                   <div className="flex items-center justify-between gap-2">
-                    <p className="truncate font-mono text-[11px] text-muted-foreground/70" title={cell.cell_label}>
-                      {cell.cell_label}
+                    <p className="truncate font-mono text-[11px] text-muted-foreground/70" title={replicateResult.replicate_label}>
+                      {replicateResult.replicate_label}
                     </p>
-                    {hasFactors && <span className="shrink-0 text-[11px] text-muted-foreground">Replicate {replicate}</span>}
+                    {hasFactors && <span className="shrink-0 text-[11px] text-muted-foreground">Replicate {replicateNumber}</span>}
                   </div>
                 </button>
               </li>

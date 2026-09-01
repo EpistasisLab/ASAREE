@@ -31,7 +31,7 @@ from asaree.services.design_revisions import (
     list_revisions,
 )
 from asaree.services.experiments import create_experiment
-from asaree.services.factorial_cells import list_cells, upsert_cell
+from asaree.services.factorial_cells import list_replicates, upsert_replicate
 
 _TWO_BY_THREE = [
     {"name": "tier", "levels": ["small", "large"]},
@@ -100,7 +100,7 @@ async def test_shrinking_a_design_leaves_the_old_cells_in_history(experiment_id:
         await generate_design_cells(db, experiment_id=experiment_id, factors=_TWO_BY_THREE)
 
     async with get_session() as db:
-        assert len(await list_cells(db, experiment_id=experiment_id)) == 6
+        assert len(await list_replicates(db, experiment_id=experiment_id)) == 6
 
     async with get_session() as db:
         cells = await generate_design_cells(db, experiment_id=experiment_id, factors=_TWO_BY_ONE)
@@ -108,7 +108,7 @@ async def test_shrinking_a_design_leaves_the_old_cells_in_history(experiment_id:
 
     async with get_session() as db:
         # The current design is 2 cells...
-        assert len(await list_cells(db, experiment_id=experiment_id)) == 2
+        assert len(await list_replicates(db, experiment_id=experiment_id)) == 2
         # ...and the 6 old ones are still on disk, under the superseded revision.
         summaries = await list_revision_summaries(db, experiment_id=experiment_id)
         assert [(s.revision.revision, s.cell_count) for s in summaries] == [(2, 2), (1, 6)]
@@ -120,20 +120,33 @@ async def test_results_for_surviving_cells_carry_forward(experiment_id: uuid.UUI
     async with get_session() as db:
         cells = await generate_design_cells(db, experiment_id=experiment_id, factors=_TWO_BY_THREE)
         survivor = next(c for c in cells if c.factor_values == {"tier": "small", "effort": "low"})
-        survivor_label = survivor.cell_label
-        dropped_label = next(c for c in cells if c.factor_values == {"tier": "small", "effort": "high"}).cell_label
-        await upsert_cell(
-            db, experiment_id=experiment_id, cell_label=survivor_label, fields={"metric_values": {"roc_auc": 0.9}}
+        survivor_label = survivor.replicate_label
+        dropped_label = next(
+            replicate.replicate_label
+            for replicate in cells
+            if replicate.factor_values == {"tier": "small", "effort": "high"}
         )
-        await upsert_cell(
-            db, experiment_id=experiment_id, cell_label=dropped_label, fields={"metric_values": {"roc_auc": 0.1}}
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label=survivor_label,
+            fields={"metric_values": {"roc_auc": 0.9}},
+        )
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label=dropped_label,
+            fields={"metric_values": {"roc_auc": 0.1}},
         )
 
     async with get_session() as db:
         await generate_design_cells(db, experiment_id=experiment_id, factors=_TWO_BY_ONE)
 
     async with get_session() as db:
-        current = {c.cell_label: c for c in await list_cells(db, experiment_id=experiment_id)}
+        current = {
+            replicate.replicate_label: replicate
+            for replicate in await list_replicates(db, experiment_id=experiment_id)
+        }
         assert current[survivor_label].metric_values == {"roc_auc": 0.9}
         assert dropped_label not in current
         summaries = await list_revision_summaries(db, experiment_id=experiment_id)
@@ -213,7 +226,7 @@ async def test_removing_the_final_factor_retires_every_current_cell(experiment_i
         assert cleared == []
 
     async with get_session() as db:
-        assert await list_cells(db, experiment_id=experiment_id) == []
+        assert await list_replicates(db, experiment_id=experiment_id) == []
         summaries = await list_revision_summaries(db, experiment_id=experiment_id)
         assert [(summary.revision.revision, summary.cell_count) for summary in summaries] == [(2, 0), (1, 2)]
 
@@ -232,15 +245,18 @@ async def test_upsert_without_a_design_creates_revision_one(experiment_id: uuid.
     """The notebook path: cells written directly, generate-design never called.
     They still need a revision to hang off, created on demand."""
     async with get_session() as db:
-        cell = await upsert_cell(
-            db, experiment_id=experiment_id, cell_label="tier_small", fields={"metric_values": {"roc_auc": 0.5}}
+        replicate = await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="tier_small",
+            fields={"metric_values": {"roc_auc": 0.5}},
         )
-        assert cell.design_revision_id is not None
+        assert replicate.design_revision_id is not None
 
     async with get_session() as db:
         current = await get_current_revision(db, experiment_id)
         assert current is not None and current.revision == 1
-        assert len(await list_cells(db, experiment_id=experiment_id)) == 1
+        assert len(await list_replicates(db, experiment_id=experiment_id)) == 1
 
 
 async def test_deleting_a_superseded_revision_cascades_to_its_cells(experiment_id: uuid.UUID) -> None:
@@ -263,7 +279,7 @@ async def test_deleting_a_superseded_revision_cascades_to_its_cells(experiment_i
         ]
         assert orphans == []
         # The current design is untouched by its history being cleared.
-        assert len(await list_cells(db, experiment_id=experiment_id)) == 2
+        assert len(await list_replicates(db, experiment_id=experiment_id)) == 2
 
 
 async def test_deleting_the_current_revision_is_refused(experiment_id: uuid.UUID) -> None:

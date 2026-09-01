@@ -5,7 +5,7 @@ import type { NodeRunStatus, ProtocolRun } from '@/types/protocols'
 export const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>(['completed', 'failed', 'cancelled'])
 
 // Same status-color language the app already uses for cell-scoring progress
-// (cellsStatusAccent in lib/experiment.ts): amber = in progress/queued, cyan
+// (replicatesStatusAccent in lib/experiment.ts): amber = in progress/queued, cyan
 // = actively running, emerald = done, dim = not started/skipped, red =
 // failed. A different status domain, but the same color meanings everywhere
 // reads as one consistent system rather than two competing ones.

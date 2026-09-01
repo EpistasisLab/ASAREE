@@ -12,7 +12,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
-import { bestMetric, cellsStatusAccent, formatMetricLabel, groupReplicatesIntoCells, metricValueSuffix, scaledMetricValue } from '@/lib/experiment'
+import { bestMetric, formatMetricLabel, groupReplicatesIntoCells, metricValueSuffix, replicatesStatusAccent, scaledMetricValue } from '@/lib/experiment'
 import { unboundFactorNames } from '@/lib/factorBindings'
 import {
   applyExperimentRenameToProtocolCache,
@@ -20,7 +20,7 @@ import {
   protocolForExperimentQueryKey,
 } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
-import type { Cell, Experiment } from '@/types/experiments'
+import type { Experiment, Replicate } from '@/types/experiments'
 import type { Protocol, ProtocolRun } from '@/types/protocols'
 
 const RUN_POLL_MS = 2000
@@ -92,7 +92,7 @@ function EditableExperimentName({ experiment }: { experiment: Experiment }) {
 // Inline chips, not Cards: the top bar shares a single row with the name and
 // the run controls, and a stat CARD in a 40px-tall row isn't a card, it's a
 // bordered word. Tint carries the same meaning it does everywhere else --
-// cellsStatusAccent for progress (amber unscored / cyan partial / emerald
+// replicatesStatusAccent for progress (amber unscored / cyan partial / emerald
 // done), --chart-3 for a best result.
 function TopBarStat({ icon: Icon, value, title, accent }: { icon: LucideIcon; value: string; title: string; accent: string }) {
   return (
@@ -110,7 +110,7 @@ function TopBarStat({ icon: Icon, value, title, accent }: { icon: LucideIcon; va
 // Same design_type gate the Cells tab uses -- cells/metric_values are a
 // factorial concept, so a future non-factorial experiment gets no chips
 // rather than a nonsensical "0/0 scored".
-function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Cell[] | undefined }) {
+function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Replicate[] | undefined }) {
   if (experiment.design_type !== 'factorial' || !cells) return null
   const scored = cells.filter((c) => c.metric_values).length
   const cellCount = groupReplicatesIntoCells(cells).length
@@ -121,7 +121,7 @@ function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Cel
         icon={Target}
         value={`${cellCount} ${cellCount === 1 ? 'cell' : 'cells'} · ${scored}/${cells.length} replicates scored`}
         title="Replicates with a recorded metric, out of every planned replicate in this design"
-        accent={cellsStatusAccent(cells)}
+        accent={replicatesStatusAccent(cells)}
       />
       {best && (
         <TopBarStat
@@ -193,7 +193,7 @@ function RunAllCellsButton({
       const triggered = runs.filter((r) => triggeredIds.includes(r.id))
       const allTerminal = triggered.length === triggeredIds.length && triggered.every((r) => TERMINAL_RUN_STATUSES.has(r.status))
       if (allTerminal) {
-        queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'cells'] })
+        queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'replicates'] })
         return false
       }
       return RUN_POLL_MS
@@ -386,9 +386,9 @@ export function ProtocolCanvasPage() {
     enabled: !!experimentId,
   })
 
-  const cellsQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'cells'],
-    queryFn: () => experimentsApi.listCells(experimentId!),
+  const replicatesQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'replicates'],
+    queryFn: () => experimentsApi.listReplicates(experimentId!),
     enabled: !!experimentId,
   })
   const impactQuery = useQuery({
@@ -412,7 +412,7 @@ export function ProtocolCanvasPage() {
             ← Experiments
           </Link>
           {experimentQuery.data && <EditableExperimentName experiment={experimentQuery.data} />}
-          {experimentQuery.data && <TopBarStats experiment={experimentQuery.data} cells={cellsQuery.data} />}
+          {experimentQuery.data && <TopBarStats experiment={experimentQuery.data} cells={replicatesQuery.data} />}
           <div className="flex-1" />
           {protocolQuery.data && experimentId && (
             <>
@@ -420,9 +420,9 @@ export function ProtocolCanvasPage() {
               <RunAllCellsButton
                 protocol={protocolQuery.data}
                 experimentId={experimentId}
-                cellCount={groupReplicatesIntoCells(cellsQuery.data ?? []).length}
-                replicateCount={cellsQuery.data?.length ?? 0}
-                pendingReplicateCount={cellsQuery.data?.filter((replicate) => !replicate.metric_values).length ?? 0}
+                cellCount={groupReplicatesIntoCells(replicatesQuery.data ?? []).length}
+                replicateCount={replicatesQuery.data?.length ?? 0}
+                pendingReplicateCount={replicatesQuery.data?.filter((replicate) => !replicate.metric_values).length ?? 0}
                 regenerationRequired={impactQuery.data?.regeneration_required ?? false}
                 unboundFactors={unboundFactors}
               />

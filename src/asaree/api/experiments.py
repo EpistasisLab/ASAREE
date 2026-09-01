@@ -104,6 +104,19 @@ class UpdateExperimentRequest(BaseModel):
     archived_at: datetime | None = None
 
 
+class GenerateDesignRequest(BaseModel):
+    """An optional declaration to persist as part of generating cells.
+
+    Keeping this small and purpose-specific prevents the Design panel's
+    "apply" action from needing a PATCH followed by a POST in separate
+    transactions.  When a declaration is supplied, generation sees that very
+    declaration in the same database session.
+    """
+
+    hypothesis: str | None = None
+    design_spec: dict[str, Any] | None = None
+
+
 class ExperimentResponse(BaseModel):
     id: uuid.UUID
     name: str
@@ -295,7 +308,7 @@ async def delete_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser
 
 @router.post("/{experiment_id}/generate-design", response_model=list[ReplicateResponse])
 async def generate_design_endpoint(
-    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession, body: GenerateDesignRequest | None = None
 ) -> list[ReplicateResponse]:
     """Materialize one result row per replicate of every cell in the
     experiment's declared factor cross product.
@@ -306,6 +319,11 @@ async def generate_design_endpoint(
     The previous design's cells become history rather than lingering in the
     current view (see ``generate_design_cells``)."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
+    if body is not None:
+        fields = body.model_dump(exclude_unset=True)
+        if fields:
+            experiment = await update_experiment(db, experiment_id, fields=fields)
+            assert experiment is not None  # existence already checked above
     design_spec = experiment.design_spec or {}
     factors = design_spec.get("factors") or []
     try:

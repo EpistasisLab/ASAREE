@@ -224,7 +224,8 @@ export const experimentsApi = {
   // revision is superseded and a new one opened -- results for surviving cell
   // labels carry forward, the rest stay in history (see
   // services.design_generation). Nothing is ever deleted here.
-  generateDesign: (id: string) => request<Replicate[]>(`/experiments/${id}/generate-design`, { method: 'POST' }),
+  generateDesign: (id: string, declaration?: { hypothesis?: string | null; design_spec?: DesignSpec | null }) =>
+    request<Replicate[]>(`/experiments/${id}/generate-design`, { method: 'POST', body: declaration }),
   // One row per replicate (a "trial"), not per ProtocolRun -- a replicate that's never
   // been run is still listed, with status "not_started" (see TrialResponse /
   // services.protocol_runs.list_experiment_trials).
@@ -264,9 +265,18 @@ export const protocolsApi = {
   cancelRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}/cancel`, { method: 'POST' }),
   listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
   // "Run all cells" -- 422 if there's no linked experiment or the graph
-  // doesn't have exactly one final node; fans out one ProtocolRun per
-  // not-yet-scored replicate result, each polled via listRuns.
-  runCells: (id: string) => request<CellRunBatch>(`/protocols/${id}/cell-runs`, { method: 'POST' }),
+  // doesn't have exactly one final node; fans out one ProtocolRun per pending
+  // replicate. The optional list explicitly re-runs selected scored rows.
+  runCells: (id: string, options?: { replicateLabels?: string[]; rerunReplicateLabels?: string[] }) =>
+    request<CellRunBatch>(`/protocols/${id}/cell-runs`, {
+      method: 'POST',
+      body: options
+        ? {
+            replicate_labels: options.replicateLabels,
+            rerun_replicate_labels: options.rerunReplicateLabels ?? [],
+          }
+        : undefined,
+    }),
 }
 
 export const datasetsApi = {

@@ -122,6 +122,19 @@ class CreateProtocolRunRequest(BaseModel):
     replicate_label: str | None = None
 
 
+class CellRunBatchRequest(BaseModel):
+    """Previously scored replicates the user explicitly chose to run again.
+
+    Omit this body for the normal resume behavior: every unscored replicate
+    runs, while scored ones remain skipped.
+    """
+
+    # When omitted, this is the whole current design. Supplying labels scopes
+    # a run from one cell to just that cell's replicates.
+    replicate_labels: list[str] | None = None
+    rerun_replicate_labels: list[str] = []
+
+
 class CellRunBatchResponse(BaseModel):
     """One "run all cells" trigger fans out into these -- one ProtocolRun per
     not-yet-scored replicate. ``skipped`` is how many replicates already had
@@ -313,12 +326,9 @@ async def run_single_node_endpoint(
 
 @router.post("/{protocol_id}/cell-runs", response_model=CellRunBatchResponse, status_code=201)
 async def create_cell_runs_endpoint(
-    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession
+    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession, body: CellRunBatchRequest | None = None
 ) -> CellRunBatchResponse:
-    """ "Run all cells": one ProtocolRun per not-yet-scored replicate result
-    under this protocol's linked experiment, each with its cell's
-    factor_values substituted into the graph's factor-bound fields at
-    execution time (see services.protocol_execution.run_protocol)."""
+    """Run every pending replicate plus any explicitly selected reruns."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
     revision = await _require_published_revision(db, protocol)
     try:
@@ -329,6 +339,8 @@ async def create_cell_runs_endpoint(
             owner_id=user.id,
             graph=revision.graph,
             protocol_revision_id=revision.id,
+            replicate_labels=set(body.replicate_labels) if body and body.replicate_labels is not None else None,
+            rerun_replicate_labels=set(body.rerun_replicate_labels) if body is not None else None,
         )
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

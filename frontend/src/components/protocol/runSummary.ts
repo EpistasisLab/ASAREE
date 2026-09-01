@@ -37,6 +37,14 @@ export type RunScope =
   | { type: 'graph' }
   | { type: 'replicate'; label: string }
   | { type: 'all-cells'; cellCount: number; replicateCount: number; pendingReplicateCount: number }
+  | {
+      type: 'selected-cells'
+      cellCount: number
+      replicateCount: number
+      pendingReplicateCount: number
+      rerunReplicateCount: number
+      title?: string
+    }
   | { type: 'node'; nodeId: string; label: string }
 
 export interface RunSummary {

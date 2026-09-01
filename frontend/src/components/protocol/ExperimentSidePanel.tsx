@@ -7,6 +7,7 @@ import { DesignTab } from './DesignTab'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import { RunsTab } from './RunsTab'
 import type { Experiment } from '@/types/experiments'
+import type { Protocol } from '@/types/protocols'
 
 // The default full-panel width and what double-clicking the drag handle snaps
 // back to. It includes the labeled navigation rail.
@@ -59,17 +60,26 @@ function readStoredCollapsed(): boolean {
 export function ExperimentSidePanel({
   experiment,
   protocolId,
+  protocol,
   canvasRef,
   isLoading,
+  needsInitialGeneration,
+  regenerationRequired,
+  unboundFactors,
 }: {
   experiment: Experiment | undefined
   protocolId: string | undefined
+  protocol: Protocol | undefined
   canvasRef: RefObject<ProtocolCanvasHandle | null>
   isLoading: boolean
+  needsInitialGeneration: boolean
+  regenerationRequired: boolean
+  unboundFactors: string[]
 }) {
   const [width, setWidth] = useState(readStoredPanelWidth)
   const [collapsed, setCollapsed] = useState(readStoredCollapsed)
   const [activeTab, setActiveTab] = useState<PanelTab>('design')
+  const [hasPendingDesignUpdate, setHasPendingDesignUpdate] = useState(false)
   const [dragging, setDragging] = useState(false)
   const dragStart = useRef<{ x: number; width: number } | null>(null)
 
@@ -140,12 +150,17 @@ export function ExperimentSidePanel({
     setPanelCollapsed(false)
   }
 
+  const showDesignAttentionBorder = activeTab === 'design' && (needsInitialGeneration || hasPendingDesignUpdate)
+
   return (
     <div className="relative flex h-full min-h-0 shrink-0" style={{ width: collapsed ? PANEL_RAIL_WIDTH : width }}>
       {/* The rail is always visible: these are the only panel selectors, not
           duplicate top tabs. Selecting one also restores the content area
           when it is collapsed. */}
-      <Card className={cn('flex h-full w-24 shrink-0 flex-col gap-1 p-2', !collapsed && 'rounded-r-none border-r-0')}>
+      <Card className={cn(
+        'flex h-full w-24 shrink-0 flex-col gap-1 p-2',
+        !collapsed && 'rounded-r-none border-r-0',
+      )}>
         <button
           type="button"
           aria-label="Open Design panel"
@@ -154,6 +169,8 @@ export function ExperimentSidePanel({
           onClick={() => openPanel('design')}
           className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-xs font-medium transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
             activeTab === 'design' ? 'bg-muted text-foreground' : 'text-muted-foreground'
+          } ${
+            showDesignAttentionBorder ? 'border border-[color:var(--chart-4)]/60' : ''
           }`}
         >
           <PencilRuler className="size-4" aria-hidden="true" />
@@ -175,18 +192,23 @@ export function ExperimentSidePanel({
       </Card>
 
       {!collapsed && (
-        <Card className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-l-none p-0">
+        <Card className={cn(
+          'flex min-h-0 flex-1 flex-col overflow-hidden rounded-l-none p-0',
+          showDesignAttentionBorder && 'border border-[color:var(--chart-4)]/60',
+        )}>
           <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
             <span className="text-sm font-medium">{activeTab === 'design' ? 'Design' : 'Runs'}</span>
-            <button
-              type="button"
-              aria-label="Collapse experiment panel"
-              title="Collapse experiment panel"
-              onClick={() => setPanelCollapsed(true)}
-              className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <PanelLeftClose className="size-4" aria-hidden="true" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="Collapse experiment panel"
+                title="Collapse experiment panel"
+                onClick={() => setPanelCollapsed(true)}
+                className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <PanelLeftClose className="size-4" aria-hidden="true" />
+              </button>
+            </div>
           </div>
           {isLoading || !experiment ? (
             <div className="space-y-3 p-3">
@@ -196,9 +218,19 @@ export function ExperimentSidePanel({
           ) : (
             <div className="min-h-0 flex-1 overflow-y-auto">
               {activeTab === 'design' ? (
-                <DesignTab experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} />
+                <DesignTab
+                  experiment={experiment}
+                  protocolId={protocolId}
+                  canvasRef={canvasRef}
+                  onDesignUpdatePendingChange={setHasPendingDesignUpdate}
+                />
               ) : (
-                <RunsTab experimentId={experiment.id} />
+                <RunsTab
+                  experimentId={experiment.id}
+                  protocol={protocol}
+                  regenerationRequired={regenerationRequired}
+                  unboundFactors={unboundFactors}
+                />
               )}
             </div>
           )}

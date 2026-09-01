@@ -37,7 +37,7 @@ class ResearchExperiment(Base, TimestampMixin):
     task_brief: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # {"factors": [{"name": ..., "levels": [...]}, ...]} — what
     # services.design_generation.generate_design_cells reads to materialize
-    # FactorialCellResult rows. A declaration, not a computed design — the
+    # FactorialCell parents and their replicate children. A declaration, not a computed design — the
     # actual cross product is never stored here, only regenerated on demand.
     #
     # Also holds these optional keys (all absent = today's exact behavior,
@@ -80,7 +80,7 @@ class ResearchExperiment(Base, TimestampMixin):
     # storage.
     #
     # Null = active. A safer alternative to delete_experiment (which cascades
-    # every FactorialCellResult under it) -- archiving just hides the
+    # every FactorialCell and replicate result under it) -- archiving just hides the
     # experiment from the default list (see list_experiments's
     # include_archived kwarg), reversible by clearing this back to null. A
     # timestamp rather than a bool gives "when" for free, same reasoning as

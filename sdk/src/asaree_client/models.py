@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class Agent(BaseModel):
@@ -88,6 +88,10 @@ class Experiment(BaseModel):
 
 class Cell(BaseModel):
     id: uuid.UUID
+    cell_id: uuid.UUID | None = None
+    factorial_cell_label: str | None = None
+    replicate_label: str | None = None
+    replicate_number: int | None = None
     cell_label: str
     # Which generation of the experiment's design this observation was made
     # under. Cells from a superseded design stay in the database as history,
@@ -117,7 +121,8 @@ class DesignRevision(BaseModel):
     superseded_at: datetime | None
     design_spec: dict[str, Any] | None
     cell_count: int
-    scored_count: int
+    replicate_count: int
+    scored_replicate_count: int
     created_at: datetime
 
 
@@ -156,7 +161,10 @@ class ProtocolRun(BaseModel):
     status: str
     node_runs: dict[str, Any]
     error: str | None
-    cell_label: str | None = None
+    replicate_label: str | None = Field(
+        default=None, validation_alias=AliasChoices("replicate_label", "cell_label")
+    )
+    replicate_result_id: uuid.UUID | None = None
     factor_values: dict[str, Any] | None = None
     design_revision_id: uuid.UUID | None = None
     protocol_revision_id: uuid.UUID | None = None
@@ -174,12 +182,12 @@ class ProtocolRevision(BaseModel):
 
 
 class CellRunBatch(BaseModel):
-    """"Run all cells" fanout result -- one ProtocolRun id per not-yet-scored
-    cell; ``skipped`` is how many cells already had metric_values and were
+    """ "Run all cells" fanout result -- one ProtocolRun id per not-yet-scored
+    replicate; ``skipped`` is how many replicates already had metric_values and were
     left alone (resume semantics)."""
 
     protocol_run_ids: list[uuid.UUID]
-    cell_labels: list[str]
+    replicate_labels: list[str]
     skipped: int
     protocol_revision_id: uuid.UUID | None = None
     protocol_revision: int | None = None

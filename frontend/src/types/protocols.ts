@@ -74,9 +74,10 @@ export interface ProtocolRun {
   // Both null for a plain graph run. Set together only for a run created by
   // "run all cells" (POST /protocols/{id}/cell-runs) -- factor_values is the
   // cell's own factor_values, substituted into the graph's factor-bound
-  // fields before execution; cell_label is which FactorialCellResult the
-  // result gets written back to.
-  cell_label: string | null
+  // fields before execution; replicate_label identifies the exact result row
+  // the run writes back to.
+  replicate_label: string | null
+  replicate_result_id: string | null
   factor_values: Record<string, unknown> | null
   design_revision_id: string | null
   protocol_revision_id: string | null
@@ -102,12 +103,12 @@ export interface ProtocolRevision {
 }
 
 // One "run all cells" trigger fans out into these -- one ProtocolRun per
-// not-yet-scored cell. skipped is how many cells already had metric_values
+// not-yet-scored replicate. skipped is how many replicates already had metric_values
 // and were left alone (resume semantics, same as generate-design's own
 // idempotency).
 export interface CellRunBatch {
   protocol_run_ids: string[]
-  cell_labels: string[]
+  replicate_labels: string[]
   skipped: number
   protocol_revision_id: string
   protocol_revision: number

@@ -15,7 +15,7 @@ from typing import Any
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, synonym
 
 from asaree.models.base import Base, TimestampMixin, generate_uuid
 
@@ -49,15 +49,23 @@ class ProtocolRun(Base, TimestampMixin):
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Both null for a plain graph run. Set together only when this run was
     # created by "run all cells" (services.protocol_execution.plan_cell_runs)
-    # for one FactorialCellResult under the protocol's own experiment_id --
+    # for one FactorialReplicateResult under the protocol's experiment --
     # factor_values is that cell's own factor_values, substituted into the
     # graph's factor_bindings-tagged fields before execution
-    # (apply_factor_bindings), and cell_label is where the result gets
-    # written back to via upsert_cell.
-    cell_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # (apply_factor_bindings), and replicate_label is where the result gets
+    # written back. ``cell_label`` remains a temporary ORM alias for callers
+    # using the pre-normalization API vocabulary.
+    replicate_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    cell_label = synonym("replicate_label")
     factor_values: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    replicate_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("factorial_replicate_results.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # Which design revision this run's cell belonged to when it was planned
-    # (null for a plain graph run, same as cell_label). Without it, a result
+    # (null for a plain graph run, same as replicate_label). Without it, a result
     # arriving after the user regenerated the design would be written against
     # whatever design is current *then* -- landing on a different design's
     # cell, or minting a spurious one if the combination no longer exists.

@@ -25,12 +25,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.experiment_design_revision import ExperimentDesignRevision
-from asaree.models.factorial_cell_result import FactorialCellResult
+from asaree.models.factorial_cell import FactorialCell
+from asaree.models.factorial_replicate_result import FactorialReplicateResult
 
 
 class DesignRevisionError(ValueError):
@@ -144,39 +145,44 @@ async def delete_revision(db: AsyncSession, revision_id: uuid.UUID) -> None:
 
 @dataclass
 class RevisionSummary:
-    """A revision plus the cell tallies the history UI needs, so listing the
+    """A revision plus cell/replicate tallies the history UI needs, so listing the
     history is one query pair rather than one per revision."""
 
     revision: ExperimentDesignRevision
     cell_count: int
-    scored_count: int
+    replicate_count: int
+    scored_replicate_count: int
 
 
 async def list_revision_summaries(db: AsyncSession, *, experiment_id: uuid.UUID) -> list[RevisionSummary]:
     revisions = await list_revisions(db, experiment_id=experiment_id)
     if not revisions:
         return []
-    counts = (
+    rows = (
         await db.execute(
             select(
-                FactorialCellResult.design_revision_id,
-                func.count(FactorialCellResult.id),
-                # metric_values is nullable AND can be an empty dict; "scored"
-                # has always meant a non-empty one (see plan_cell_runs' own
-                # `not c.metric_values` skip), so both have to be excluded here
-                # or the history would disagree with the Cells tab.
-                func.count(FactorialCellResult.id).filter(text("metric_values IS NOT NULL AND metric_values <> '{}'")),
+                FactorialCell.design_revision_id,
+                FactorialCell.id,
+                FactorialReplicateResult.metric_values,
             )
-            .where(FactorialCellResult.experiment_id == experiment_id)
-            .group_by(FactorialCellResult.design_revision_id)
+            .join(FactorialReplicateResult, FactorialReplicateResult.cell_id == FactorialCell.id)
+            .where(FactorialCell.experiment_id == experiment_id)
         )
     ).all()
-    by_revision = {row[0]: (row[1], row[2]) for row in counts}
+    cell_keys: dict[uuid.UUID, set[str]] = {}
+    replicate_counts: dict[uuid.UUID, int] = {}
+    scored_counts: dict[uuid.UUID, int] = {}
+    for revision_id, cell_id, metric_values in rows:
+        cell_keys.setdefault(revision_id, set()).add(str(cell_id))
+        replicate_counts[revision_id] = replicate_counts.get(revision_id, 0) + 1
+        if metric_values:
+            scored_counts[revision_id] = scored_counts.get(revision_id, 0) + 1
     return [
         RevisionSummary(
             revision=r,
-            cell_count=by_revision.get(r.id, (0, 0))[0],
-            scored_count=by_revision.get(r.id, (0, 0))[1],
+            cell_count=len(cell_keys.get(r.id, set())),
+            replicate_count=replicate_counts.get(r.id, 0),
+            scored_replicate_count=scored_counts.get(r.id, 0),
         )
         for r in revisions
     ]

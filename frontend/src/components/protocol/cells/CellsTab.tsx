@@ -4,6 +4,7 @@ import { ArrowLeft, Download, Maximize2, Minimize2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { experimentsApi } from '@/api/client'
+import { groupReplicatesIntoCells } from '@/lib/experiment'
 import { sanitizeFilename } from '@/lib/utils'
 import type { Cell, Experiment } from '@/types/experiments'
 import { CellsHeatmap } from './CellsHeatmap'
@@ -88,7 +89,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${sanitizeFilename(experiment.name, 'experiment')}-cells.csv`
+    a.download = `${sanitizeFilename(experiment.name, 'experiment')}-replicates.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -113,7 +114,8 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
   }
 
   const cells = cellsQuery.data
-  const scored = cells?.filter((c) => c.metric_values).length ?? 0
+  const cellCount = cells ? groupReplicatesIntoCells(cells).length : 0
+  const scoredReplicates = cells?.filter((replicate) => replicate.metric_values).length ?? 0
   const viewingHistory = revisionId !== null
 
   // The history list stays mounted through the error/empty cases below: an
@@ -160,7 +162,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
       <div className="fixed inset-0 z-50 flex flex-col bg-background p-4">
         <div className="mb-3 flex items-center justify-between">
           <p className="text-sm font-semibold">
-            Cells — <span className="font-mono text-muted-foreground">{scored}/{cells?.length ?? 0} scored</span>
+            Cells — <span className="font-mono text-muted-foreground">{cellCount} {cellCount === 1 ? 'cell' : 'cells'} · {scoredReplicates}/{cells?.length ?? 0} replicates scored</span>
           </p>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => void handleDownloadCsv()}>
@@ -184,10 +186,10 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
     <div className="flex flex-col gap-3 p-3 text-sm">
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-xs text-muted-foreground">
-          {scored}/{cells?.length ?? 0} scored
+          {cellCount} {cellCount === 1 ? 'cell' : 'cells'} · {scoredReplicates}/{cells?.length ?? 0} replicates scored
         </span>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon-sm" aria-label="Download cells CSV" onClick={() => void handleDownloadCsv()}>
+          <Button variant="outline" size="icon-sm" aria-label="Download replicates CSV" onClick={() => void handleDownloadCsv()}>
             <Download className="size-3.5" />
           </Button>
           <Button variant="outline" size="sm" onClick={() => setFullscreen(true)}>

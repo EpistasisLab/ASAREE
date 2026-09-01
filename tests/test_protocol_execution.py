@@ -1311,7 +1311,7 @@ async def test_plan_single_cell_run_raises_on_unknown_cell_label(owner_id: uuid.
         protocol_id = protocol.id
     try:
         async with get_session() as db:
-            with pytest.raises(ProtocolValidationError, match="No such cell"):
+            with pytest.raises(ProtocolValidationError, match="No such replicate"):
                 await plan_single_cell_run(
                     db,
                     protocol_id=protocol_id,

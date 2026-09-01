@@ -106,6 +106,10 @@ class UpdateExperimentRequest(BaseModel):
 
 class ExperimentResponse(BaseModel):
     id: uuid.UUID
+    cell_id: uuid.UUID
+    factorial_cell_label: str
+    replicate_label: str
+    replicate_number: int
     name: str
     description: str | None
     hypothesis: str | None
@@ -182,8 +186,14 @@ class UpsertCellRequest(BaseModel):
 
 
 class CellResponse(BaseModel):
+    """Legacy API shape for one replicate result row.
+
+    The ``/cells`` route is retained for compatibility; a user-facing cell is
+    the group of rows sharing the same factor combination.
+    """
+
     id: uuid.UUID
-    # Which generation of the design this cell belongs to. Cells returned by
+    # Which generation of the design this replicate belongs to. Rows returned by
     # the default (unfiltered) reads are always the current revision's.
     design_revision_id: uuid.UUID
     cell_label: str
@@ -290,8 +300,8 @@ async def delete_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser
 
 @router.post("/{experiment_id}/generate-design", response_model=list[CellResponse])
 async def generate_design_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> list[CellResponse]:
-    """Materialize one cell per combination of the experiment's declared
-    factors — the cross product, computed fresh each call.
+    """Materialize one result row per replicate of every cell in the
+    experiment's declared factor cross product.
 
     Safe to call again: a design producing the same set of cells merges into
     the current revision, and one producing a different set opens a new
@@ -326,7 +336,8 @@ class DesignRevisionResponse(BaseModel):
     # has moved on.
     design_spec: dict[str, Any] | None
     cell_count: int
-    scored_count: int
+    replicate_count: int
+    scored_replicate_count: int
     created_at: datetime
 
 
@@ -335,9 +346,14 @@ class DesignImpactResponse(BaseModel):
     regeneration_required: bool
     current_cell_count: int
     proposed_cell_count: int
-    added_count: int
-    retained_count: int
-    removed_count: int
+    added_cell_count: int
+    retained_cell_count: int
+    removed_cell_count: int
+    current_replicate_count: int
+    proposed_replicate_count: int
+    added_replicate_count: int
+    retained_replicate_count: int
+    removed_replicate_count: int
 
 
 @router.get("/{experiment_id}/design-impact", response_model=DesignImpactResponse)
@@ -365,7 +381,8 @@ async def list_design_revisions_endpoint(
             superseded_at=s.revision.superseded_at,
             design_spec=s.revision.design_spec,
             cell_count=s.cell_count,
-            scored_count=s.scored_count,
+            replicate_count=s.replicate_count,
+            scored_replicate_count=s.scored_replicate_count,
             created_at=s.revision.created_at,
         )
         for s in summaries
@@ -485,7 +502,7 @@ async def get_cell_endpoint(
     await _get_owned_experiment(db, experiment_id, user)
     cell = await get_cell(db, experiment_id=experiment_id, cell_label=cell_label)
     if cell is None:
-        raise HTTPException(status_code=404, detail="No such cell")
+        raise HTTPException(status_code=404, detail="No such replicate result")
     return CellResponse.model_validate(cell)
 
 
@@ -493,8 +510,8 @@ async def get_cell_endpoint(
 async def list_cells_endpoint(
     experiment_id: uuid.UUID, user: CurrentUser, db: DbSession, revision_id: uuid.UUID | None = None
 ) -> list[CellResponse]:
-    """The current design's cells. Pass ``revision_id`` to read a superseded
-    design's instead -- see GET /design-revisions for the ids."""
+    """The current design's replicate result rows. Pass ``revision_id`` to
+    read a superseded design's instead -- see GET /design-revisions for ids."""
     await _get_owned_experiment(db, experiment_id, user)
     cells = await list_cells(db, experiment_id=experiment_id, revision_id=revision_id)
     return [CellResponse.model_validate(c) for c in cells]
@@ -502,7 +519,7 @@ async def list_cells_endpoint(
 
 @router.get("/{experiment_id}/cells.csv")
 async def export_cells_csv_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> Response:
-    """One row per cell that's actually run, one column per factor_values/
+    """One row per replicate that's actually run, one column per factor_values/
     metric_values key seen across them -- see services.csv_export
     (cells_that_ran / cells_to_csv)."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
@@ -512,7 +529,7 @@ async def export_cells_csv_endpoint(experiment_id: uuid.UUID, user: CurrentUser,
     return Response(
         content=csv_text,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}-cells.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}-replicates.csv"'},
     )
 
 

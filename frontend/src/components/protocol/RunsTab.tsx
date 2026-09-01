@@ -284,7 +284,7 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
     return (
       <div className="flex flex-col gap-3 p-3 text-sm">
         <p className="text-sm text-muted-foreground">
-          No trials yet -- generate a design and run cells from the Design tab first.
+          No trials yet -- generate a design, then run replicates from the canvas.
         </p>
         <ExperimentAgents experimentId={experimentId} />
       </div>
@@ -383,7 +383,7 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
           <thead className="bg-muted/50 uppercase text-muted-foreground">
             <tr>
               <th className="cursor-pointer px-2 py-1.5 text-left" onClick={() => onSort('cell_label')}>
-                Cell {sortKey === 'cell_label' && (sortDirection === 'asc' ? '↑' : '↓')}
+                Replicate {sortKey === 'cell_label' && (sortDirection === 'asc' ? '↑' : '↓')}
               </th>
               <th className="cursor-pointer px-2 py-1.5 text-left" onClick={() => onSort('status')}>
                 Status {sortKey === 'status' && (sortDirection === 'asc' ? '↑' : '↓')}

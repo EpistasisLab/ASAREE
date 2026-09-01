@@ -16,7 +16,10 @@ earns its place.
   column per derived factor (reuses `deriveFactors`) plus up to 4 curated metric columns
   (`pickMetricColumns` — same preference order as the heatmap's default metric, capped because
   a real scored cell can have 6-7 numeric keys and showing all of them makes the table
-  unreadably wide). `table-fixed` isn't used since the column set is dynamic; instead:
+  unreadably wide). One table row is one true cell (a unique factor combination): its metric
+  columns are replicate means and its status reports scored/total replicates. The API's legacy
+  `Cell` rows are individual replicate observations and must be grouped first via
+  `groupReplicatesIntoCells`. `table-fixed` isn't used since the column set is dynamic; instead:
   `truncate` on free-text cells, a shaded uppercase sortable header row, subtle zebra striping,
   `font-mono` on technical values. It's styled to the side panel's own compact table idiom (a
   plain `text-xs` `<table>` in a bordered box, like `RunsTab`/`ResultsTab`), not
@@ -25,8 +28,8 @@ earns its place.
 - **A factorial design gets a heatmap complement above its table, not instead of it**
   (`CellsHeatmap.tsx`) — precise numbers still matter, a heatmap just makes the *shape* of a
   multi-factor sweep's results scannable at a glance. 1-2 factors render as one grid; 3 facet
-  into one grid per level of the third. Replicate cells sharing one factor combination are
-  averaged, not just the first one picked. Color is `color-mix(in oklch, var(--muted),
+  into one grid per level of the third. Replicates within each cell are averaged, not just the
+  first one picked. Color is `color-mix(in oklch, var(--muted),
   var(--primary) N%)` (`heatColor` in `lib/experiment.ts`) — low values dim, high values glow
   in the theme's own accent, not an unrelated rainbow scale. Its layout is driven by
   **container queries** (`@lg`/`@2xl`, with `CellsTab`'s `CellsBody` marking the `@container`),

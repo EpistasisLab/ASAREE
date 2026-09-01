@@ -217,7 +217,14 @@ export interface ExperimentResults {
 }
 
 export interface Cell {
+  // Legacy persistence/API shape: despite the name, one row is one replicate
+  // observation. Group by factor_values for the user-facing experimental cell.
   id: string
+  cell_id: string
+  factorial_cell_label: string
+  replicate_label: string
+  replicate_number: number
+  // Deprecated response alias for replicate_label.
   cell_label: string
   // Which generation of the design this observation was made under. Cells
   // from a superseded revision stay in the database as history, so listCells
@@ -242,7 +249,8 @@ export interface DesignRevision {
   superseded_at: string | null
   design_spec: DesignSpec | null
   cell_count: number
-  scored_count: number
+  replicate_count: number
+  scored_replicate_count: number
   created_at: string
 }
 
@@ -251,7 +259,12 @@ export interface DesignImpact {
   regeneration_required: boolean
   current_cell_count: number
   proposed_cell_count: number
-  added_count: number
-  retained_count: number
-  removed_count: number
+  added_cell_count: number
+  retained_cell_count: number
+  removed_cell_count: number
+  current_replicate_count: number
+  proposed_replicate_count: number
+  added_replicate_count: number
+  retained_replicate_count: number
+  removed_replicate_count: number
 }

@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.experiments import get_experiment
@@ -89,7 +89,8 @@ class ProtocolRunResponse(BaseModel):
     status: str
     node_runs: dict[str, Any]
     error: str | None
-    cell_label: str | None
+    replicate_label: str | None
+    replicate_result_id: uuid.UUID | None
     factor_values: dict[str, Any] | None
     design_revision_id: uuid.UUID | None
     protocol_revision_id: uuid.UUID | None
@@ -114,20 +115,23 @@ class ProtocolRevisionResponse(BaseModel):
 
 class CreateProtocolRunRequest(BaseModel):
     # Omitted/null -- today's ad-hoc, un-substituted whole-graph run. Set --
-    # runs that one already-generated cell for real, its own factor_values
+    # runs that one already-generated replicate for real, its cell's factor_values
     # substituted in (see services.protocol_execution.plan_single_cell_run),
     # the same as one entry of "Run all cells" but picked by name instead of
-    # running every not-yet-scored cell at once.
-    cell_label: str | None = None
+    # running every not-yet-scored replicate at once.
+    replicate_label: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("replicate_label", "cell_label"),
+    )
 
 
 class CellRunBatchResponse(BaseModel):
     """One "run all cells" trigger fans out into these -- one ProtocolRun per
-    not-yet-scored cell. ``skipped`` is how many cells already had
+    not-yet-scored replicate. ``skipped`` is how many replicates already had
     metric_values and were left alone (resume semantics)."""
 
     protocol_run_ids: list[uuid.UUID]
-    cell_labels: list[str]
+    replicate_labels: list[str]
     skipped: int
     protocol_revision_id: uuid.UUID
     protocol_revision: int
@@ -262,16 +266,16 @@ async def create_protocol_run_endpoint(
 ) -> ProtocolRunResponse:
     protocol = await _get_owned_protocol(db, protocol_id, user)
     revision = await _require_published_revision(db, protocol)
-    cell_label = body.cell_label if body else None
+    replicate_label = body.replicate_label if body else None
     try:
-        if cell_label:
+        if replicate_label:
             run = await plan_single_cell_run(
                 db,
                 protocol_id=protocol_id,
                 experiment_id=protocol.experiment_id,
                 owner_id=user.id,
                 graph=revision.graph,
-                cell_label=cell_label,
+                cell_label=replicate_label,
                 protocol_revision_id=revision.id,
             )
         else:
@@ -314,8 +318,8 @@ async def run_single_node_endpoint(
 async def create_cell_runs_endpoint(
     protocol_id: uuid.UUID, user: CurrentUser, db: DbSession
 ) -> CellRunBatchResponse:
-    """"Run all cells": one ProtocolRun per not-yet-scored FactorialCellResult
-    under this protocol's linked experiment, each with that cell's own
+    """ "Run all cells": one ProtocolRun per not-yet-scored replicate result
+    under this protocol's linked experiment, each with its cell's
     factor_values substituted into the graph's factor-bound fields at
     execution time (see services.protocol_execution.run_protocol)."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
@@ -335,7 +339,7 @@ async def create_cell_runs_endpoint(
         await enqueue_protocol_run(run.id)
     return CellRunBatchResponse(
         protocol_run_ids=[r.id for r in runs],
-        cell_labels=[r.cell_label for r in runs if r.cell_label is not None],
+        replicate_labels=[r.replicate_label for r in runs if r.replicate_label is not None],
         skipped=skipped,
         protocol_revision_id=revision.id,
         protocol_revision=revision.revision,

@@ -3,18 +3,8 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { deriveFactors, displayFactorValue, factorValueKey } from '@/lib/experiment'
+import { deriveFactors, displayFactorValue, factorValueKey, replicateNumberForLabel } from '@/lib/experiment'
 import type { Cell, Experiment } from '@/types/experiments'
-
-// services.design_generation.cell_label_for's own convention: replicate 1 has
-// no "__repN" suffix at all (so a single-replicate experiment's cell_label is
-// unaffected), every later replicate appends one. factor_values never carries
-// a replicate key -- every replicate of the same combination has identical
-// factor_values -- so this is the only way to tell them apart for display.
-function replicateNumberFor(cellLabel: string): number {
-  const match = /__rep(\d+)$/.exec(cellLabel)
-  return match ? Number(match[1]) : 1
-}
 
 // The combination's own label with any "__repN" suffix stripped -- every
 // replicate of one combination shares this, so sorting by it first groups
@@ -32,7 +22,7 @@ function sortByReplicateOrder(cells: Cell[]): Cell[] {
   return [...cells].sort((a, b) => {
     const baseCompare = baseLabelFor(a.cell_label).localeCompare(baseLabelFor(b.cell_label))
     if (baseCompare !== 0) return baseCompare
-    return replicateNumberFor(a.cell_label) - replicateNumberFor(b.cell_label)
+    return replicateNumberForLabel(a.cell_label) - replicateNumberForLabel(b.cell_label)
   })
 }
 
@@ -107,9 +97,9 @@ export function SelectCellDialog({
     >
       <DialogContent showCloseButton={false} className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Run a specific cell</DialogTitle>
+          <DialogTitle>Run a specific replicate</DialogTitle>
           <DialogDescription>
-            Picks one already-generated cell to run for real, its own factor values substituted in -- or keep today's
+            Pick one planned replicate to run with its cell's factor values substituted in -- or keep today's
             ad-hoc, un-substituted whole-graph pass.
           </DialogDescription>
         </DialogHeader>
@@ -149,7 +139,7 @@ export function SelectCellDialog({
           </div>
         )}
         {cells.length > 6 && (
-          <Input autoFocus placeholder="Filter cells…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <Input autoFocus placeholder="Filter replicates…" value={filter} onChange={(e) => setFilter(e.target.value)} />
         )}
         <ul className="max-h-80 space-y-1.5 overflow-y-auto text-sm">
           <li>
@@ -171,7 +161,7 @@ export function SelectCellDialog({
                   .map(([k, v]) => `${k}: ${displayFactorValue(v)}`)
                   .join(' · ')
               : null
-            const replicate = replicateNumberFor(cell.cell_label)
+            const replicate = replicateNumberForLabel(cell.cell_label)
             return (
               <li key={cell.cell_label}>
                 <button
@@ -207,7 +197,7 @@ export function SelectCellDialog({
             )
           })}
           {filtered.length === 0 && (
-            <li className="px-2.5 py-1.5 text-xs text-muted-foreground">No cells match the current filters.</li>
+            <li className="px-2.5 py-1.5 text-xs text-muted-foreground">No replicates match the current filters.</li>
           )}
         </ul>
         <DialogFooter>

@@ -9,17 +9,19 @@ function scopeTitle(scope: RunScope): string {
   switch (scope.type) {
     case 'graph':
       return 'Run the full experiment?'
-    case 'cell':
+    case 'replicate':
       return `Run replicate "${scope.label}"?`
     case 'all-cells':
-      return `Run all ${scope.cellCount} replicates?`
+      return scope.pendingReplicateCount === scope.replicateCount
+        ? `Run all ${scope.replicateCount} replicates?`
+        : `Run ${scope.pendingReplicateCount} pending replicates?`
     case 'node':
       return `Run "${scope.label}" alone?`
   }
 }
 
 // Shown on EVERY Run click -- the main Run button (whole graph or a picked
-// cell), Run all cells, and each agent's own per-node Play icon -- before anything actually
+// replicate), Run all cells, and each agent's own per-node Play icon -- before anything actually
 // fires. Real LLM calls cost money, so this is the one chance to catch
 // "this isn't wired the way I think it is" before spending a real attempt
 // on it (see the spinal-fusion experiment trace this session, where a run
@@ -76,7 +78,11 @@ export function RunConfirmDialog({
         <div className="space-y-2 text-sm">
           {scope.type === 'all-cells' && (
             <p>
-              The published canvas will run once for each of the {scope.cellCount} replicates.
+              The published canvas will run each pending replicate across {scope.cellCount}{' '}
+              {scope.cellCount === 1 ? 'cell' : 'cells'}.
+              {scope.replicateCount > scope.pendingReplicateCount
+                ? ` ${scope.replicateCount - scope.pendingReplicateCount} already-scored replicates will be skipped.`
+                : ''}
             </p>
           )}
           <p>

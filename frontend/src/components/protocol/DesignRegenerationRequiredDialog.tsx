@@ -11,7 +11,7 @@ export function DesignRegenerationRequiredDialog({ onClose }: { onClose: () => v
         <DialogHeader>
           <DialogTitle>Design changed — regeneration required</DialogTitle>
           <DialogDescription>
-            The generated cells no longer match the canvas or design settings you are viewing.
+            The generated cells or replicates no longer match the canvas or design settings you are viewing.
           </DialogDescription>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">

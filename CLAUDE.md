@@ -117,8 +117,13 @@ rather than doing it silently as a routine part of coding:
     superseded design's cells, which is exactly the bug. Go through
     `services/factorial_cells.py`'s `get_cell`/`list_cells`/`upsert_cell`, which scope to the
     current revision by default and take an explicit `revision_id` only to read history on
-    purpose. `experiment_id` stays denormalized on the cell (most queries are per-experiment)
-    and both filters are applied together, since `revision_id` can arrive from a query string.
+  purpose. `experiment_id` stays denormalized on the cell (most queries are per-experiment)
+  and both filters are applied together, since `revision_id` can arrive from a query string.
+  - **User-facing cell vs. persistence row:** a cell is one unique factor combination together
+    with all its planned replicates. The legacy `FactorialCellResult` table/API shape stores one
+    row per replicate observation; group those rows by factor values before presenting cells,
+    and use “replicate” for run/progress/scored counts. “Run all cells” is the experiment-level
+    action that runs every pending replicate across those cells.
   - `generate_design_cells` opens a new revision **only when the new design would drop a cell
     the current one has**. Re-clicking generate, changing the seed, widening a factor's levels
     or raising `replicates` all keep the current revision and its row ids — history entries are

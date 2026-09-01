@@ -29,9 +29,10 @@ function DeleteRevisionDialog({
         <DialogHeader>
           <DialogTitle>Delete design revision {revision.revision}?</DialogTitle>
           <DialogDescription>
-            Its {revision.cell_count} {revision.cell_count === 1 ? 'cell' : 'cells'}
-            {revision.scored_count > 0
-              ? `, including ${revision.scored_count} with recorded results,`
+            Its {revision.cell_count} {revision.cell_count === 1 ? 'cell' : 'cells'} and {revision.replicate_count}{' '}
+            {revision.replicate_count === 1 ? 'replicate' : 'replicates'}
+            {revision.scored_replicate_count > 0
+              ? `, including ${revision.scored_replicate_count} with recorded results,`
               : ''}{' '}
             will be permanently deleted. This can't be undone.
           </DialogDescription>
@@ -127,7 +128,7 @@ export function DesignHistory({
                 >
                   <span className={`font-mono ${isSelected ? 'text-primary' : ''}`}>rev {r.revision}</span>
                   <span className="font-mono">
-                    {r.scored_count}/{r.cell_count} scored
+                    {r.cell_count} {r.cell_count === 1 ? 'cell' : 'cells'} · {r.scored_replicate_count}/{r.replicate_count} replicates scored
                   </span>
                   <span className="truncate">
                     {isCurrent ? 'current' : `superseded ${formatRelative(r.superseded_at as string)}`}

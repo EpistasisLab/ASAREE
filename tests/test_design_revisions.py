@@ -19,7 +19,8 @@ import pytest_asyncio
 import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for the FK
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.experiment import ResearchExperiment
-from asaree.models.factorial_cell_result import FactorialCellResult
+from asaree.models.factorial_cell import FactorialCell
+from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.models.user import User
 from asaree.services.design_generation import generate_design_cells, get_design_impact
 from asaree.services.design_revisions import (
@@ -139,7 +140,7 @@ async def test_results_for_surviving_cells_carry_forward(experiment_id: uuid.UUI
         # The carried-forward copy is the new revision's only scored cell;
         # history keeps both originals, the dropped one included -- carrying a
         # result forward copies it, it doesn't move it out of the record.
-        assert [(s.revision.revision, s.scored_count) for s in summaries] == [(2, 1), (1, 2)]
+        assert [(s.revision.revision, s.scored_replicate_count) for s in summaries] == [(2, 1), (1, 2)]
 
 
 async def test_widening_a_design_reuses_the_current_revision(experiment_id: uuid.UUID) -> None:
@@ -172,7 +173,33 @@ async def test_design_impact_previews_an_expansion_before_regeneration(experimen
     assert impact.has_generated_design is True
     assert impact.regeneration_required is True
     assert (impact.current_cell_count, impact.proposed_cell_count) == (2, 6)
-    assert (impact.added_count, impact.retained_count, impact.removed_count) == (4, 2, 0)
+    assert (impact.added_cell_count, impact.retained_cell_count, impact.removed_cell_count) == (4, 2, 0)
+    assert (impact.current_replicate_count, impact.proposed_replicate_count) == (2, 6)
+    assert (impact.added_replicate_count, impact.retained_replicate_count, impact.removed_replicate_count) == (4, 2, 0)
+
+
+async def test_design_counts_cells_separately_from_replicates(experiment_id: uuid.UUID) -> None:
+    async with get_session() as db:
+        await generate_design_cells(
+            db,
+            experiment_id=experiment_id,
+            factors=_TWO_BY_ONE,
+            replicates=3,
+            design_spec={"factors": _TWO_BY_ONE, "replicates": 3},
+        )
+
+    async with get_session() as db:
+        impact = await get_design_impact(
+            db,
+            experiment_id=experiment_id,
+            design_spec={"factors": _TWO_BY_ONE, "replicates": 3},
+        )
+        summary = (await list_revision_summaries(db, experiment_id=experiment_id))[0]
+
+    assert impact.current_cell_count == impact.proposed_cell_count == 2
+    assert impact.current_replicate_count == impact.proposed_replicate_count == 6
+    assert summary.cell_count == 2
+    assert summary.replicate_count == 6
 
 
 async def test_removing_the_final_factor_retires_every_current_cell(experiment_id: uuid.UUID) -> None:
@@ -271,4 +298,8 @@ async def test_revision_numbers_are_never_reused(experiment_id: uuid.UUID) -> No
 def _cells_of(experiment_id: uuid.UUID):  # type: ignore[no-untyped-def]
     from sqlalchemy import select
 
-    return select(FactorialCellResult).where(FactorialCellResult.experiment_id == experiment_id)
+    return (
+        select(FactorialReplicateResult)
+        .join(FactorialReplicateResult.cell)
+        .where(FactorialCell.experiment_id == experiment_id)
+    )

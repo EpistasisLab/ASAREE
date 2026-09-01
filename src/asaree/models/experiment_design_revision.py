@@ -1,6 +1,6 @@
 """One generation of an experiment's design.
 
-A ``FactorialCellResult`` is an observation made *under a particular design*.
+A ``FactorialCell`` and its replicate results belong to a particular design.
 Before this table, cells hung directly off the experiment, which quietly
 asserted that an experiment has exactly one design for all time -- so
 regenerating after a factor change left the previous design's cells behind
@@ -19,8 +19,8 @@ Re-generating an unchanged design reuses the current revision rather than
 piling up empty near-duplicates, and edits that don't affect which cells exist
 (``randomization_seed``, a renamed metric) don't supersede anything.
 
-Deleting a revision cascades to its cells, by the FK on
-``FactorialCellResult.design_revision_id`` rather than by application code --
+Deleting a revision cascades through ``FactorialCell.design_revision_id`` to
+its replicate results rather than relying on application code --
 history is user-deletable (see ``services.design_revisions.delete_revision``),
 and a delete that left orphaned cells behind would recreate the exact bug this
 table exists to fix.

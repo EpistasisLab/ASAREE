@@ -566,7 +566,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       setDesignRegenerationWarningOpen(true)
       return
     }
-    setPendingRunConfirm(selectedCellLabel ? { type: 'cell', label: selectedCellLabel } : { type: 'graph' })
+    setPendingRunConfirm(selectedCellLabel ? { type: 'replicate', label: selectedCellLabel } : { type: 'graph' })
   }
 
   function confirmPendingRun() {

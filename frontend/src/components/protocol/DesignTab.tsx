@@ -497,8 +497,8 @@ export function DesignTab({
           <Label htmlFor="design-seed" className="flex items-center gap-1.5">
             Randomization seed
             <InfoTooltip>
-              Only shuffles the ORDER cells are generated in -- never which combinations exist or their labels. Set
-              one to make that shuffle reproducible; leave blank to keep cells in their natural, unshuffled order.
+              Only shuffles the order planned replicates are generated in -- never which cells exist or their labels.
+              Set one to make that shuffle reproducible; leave blank to keep replicates in their natural order.
             </InfoTooltip>
           </Label>
           <Input
@@ -515,7 +515,7 @@ export function DesignTab({
         <Label className="flex items-center gap-1.5">
           Metrics
           <InfoTooltip>
-            What this experiment scores each cell on. Primary marks the one used for the significance analysis;
+            What this experiment records for each replicate. Primary marks the metric used for significance analysis;
             Maximize/Minimize says which direction is better.
           </InfoTooltip>
         </Label>
@@ -543,8 +543,10 @@ export function DesignTab({
           <div className="rounded-md border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/10 px-2.5 py-2 text-xs text-muted-foreground">
             <p className="font-medium text-foreground">Design changed — regeneration required.</p>
             <p className="mt-1">
-              {impact.current_cell_count} current → {impact.proposed_cell_count} proposed: {impact.added_count} added, {impact.retained_count} retained
-              {impact.removed_count ? `, ${impact.removed_count} moved to history` : ''}.
+              {impact.current_cell_count} → {impact.proposed_cell_count} cells; {impact.current_replicate_count} →{' '}
+              {impact.proposed_replicate_count} replicates. Replicates: {impact.added_replicate_count} added,{' '}
+              {impact.retained_replicate_count} retained
+              {impact.removed_replicate_count ? `, ${impact.removed_replicate_count} moved to history` : ''}.
             </p>
           </div>
         )}
@@ -567,7 +569,12 @@ export function DesignTab({
           {generateMutation.isPending ? 'Generating…' : impact?.regeneration_required ? 'Update design' : 'Generate design'}
         </Button>
         {isDirty && <p className="text-xs text-muted-foreground">Save your changes before generating.</p>}
-        {generateMutation.data && <p className="text-xs text-muted-foreground">{generateMutation.data.length} cell(s) total</p>}
+        {generateMutation.data && (
+          <p className="text-xs text-muted-foreground">
+            {combinations} {combinations === 1 ? 'cell' : 'cells'} · {generateMutation.data.length}{' '}
+            {generateMutation.data.length === 1 ? 'replicate' : 'replicates'} total
+          </p>
+        )}
       </div>
 
       <Button disabled={!isDirty || saveMutation.isPending} onClick={() => saveMutation.mutate()}>

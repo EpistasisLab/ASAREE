@@ -3,7 +3,7 @@
 ``upsert_cell`` is the replacement for the source notebook's two
 ``client.runs.update(mlm_run_id, metadata={...})`` calls (pre-scoring and
 post-scoring) — both become calls to this, merged onto the same
-``FactorialCellResult`` row rather than the run.
+replicate-result row rather than the run.
 """
 
 from __future__ import annotations
@@ -143,7 +143,7 @@ class Experiments:
         metric_values: dict[str, Any] | None = None,
         artifacts: dict[str, Any] | None = None,
     ) -> Cell:
-        """Merge fields onto a cell's row — pass just what changed; unset
+        """Merge fields onto a replicate-result row — pass just what changed; unset
         fields are left untouched (a pre-scoring call and a post-scoring
         call land on the same row without either erasing the other)."""
         payload: dict[str, Any] = {}

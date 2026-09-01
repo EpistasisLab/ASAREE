@@ -68,6 +68,58 @@ function getFactors(designSpec: Experiment['design_spec']): FactorSpec[] | null 
  * factor worth an axis -- excluded when deriving factors from observed data. */
 const NON_FACTOR_KEYS = new Set(['replicate', 'seed', 'rep', 'trial', 'iteration'])
 
+export function replicateNumberForLabel(label: string): number {
+  const match = /__rep(\d+)$/.exec(label)
+  return match ? Number(match[1]) : 1
+}
+
+export function cellLabelForReplicateLabel(label: string): string {
+  return label.replace(/__rep\d+$/, '')
+}
+
+export interface ExperimentalCell {
+  label: string
+  factorValues: Record<string, unknown>
+  replicates: Cell[]
+  scoredReplicateCount: number
+  updatedAt: string
+}
+
+/** Group the persistence layer's one-row-per-replicate results into the
+ * user-facing cell they belong to: one factor combination and all of its
+ * replicates. Generated labels provide a stable fallback for legacy rows
+ * without factor values. */
+export function groupReplicatesIntoCells(replicates: Cell[]): ExperimentalCell[] {
+  const groups = new Map<string, Cell[]>()
+  for (const replicate of replicates) {
+    const factorEntries = Object.entries(replicate.factor_values ?? {})
+      .filter(([key]) => !NON_FACTOR_KEYS.has(key.toLowerCase()))
+      .sort(([a], [b]) => a.localeCompare(b))
+    const key = replicate.cell_id || (factorEntries.length > 0
+      ? canonicalStringify(Object.fromEntries(factorEntries))
+      : replicate.factorial_cell_label)
+    const group = groups.get(key)
+    if (group) group.push(replicate)
+    else groups.set(key, [replicate])
+  }
+
+  return Array.from(groups.values(), (group) => {
+    const sorted = [...group].sort(
+      (a, b) => a.replicate_number - b.replicate_number,
+    )
+    const latest = sorted.reduce((a, b) => (a.updated_at > b.updated_at ? a : b))
+    return {
+      label: sorted[0].factorial_cell_label,
+      factorValues: Object.fromEntries(
+        Object.entries(sorted[0].factor_values ?? {}).filter(([key]) => !NON_FACTOR_KEYS.has(key.toLowerCase())),
+      ),
+      replicates: sorted,
+      scoredReplicateCount: sorted.filter((replicate) => !!replicate.metric_values).length,
+      updatedAt: latest.updated_at,
+    }
+  })
+}
+
 /** The CELLS decide which factors exist; design_spec.factors only refines the
  * level ordering of names that actually appear on them. It used to win
  * outright, which broke the heatmap silently and completely: a real
@@ -137,7 +189,7 @@ function selectionMetricHint(experiment: Experiment | undefined): string | undef
   return (experiment?.task_brief as { selection_metric?: string } | undefined)?.selection_metric
 }
 
-/** Every top-level numeric key actually observed across scored cells --
+/** Every top-level numeric key actually observed across scored replicates --
  * what a metric "Color by" selector can offer, with zero setup required. */
 export function availableMetricKeys(cells: Cell[]): string[] {
   const keys = new Set<string>()
@@ -219,7 +271,9 @@ export function bestMetric(experiment: Experiment | undefined, cells: Cell[] | u
   if (!cells) return null
   const key = pickDefaultMetric(experiment, cells)
   if (!key) return null
-  const values = cells.map((c) => c.metric_values?.[key]).filter((v): v is number => typeof v === 'number')
+  const values = groupReplicatesIntoCells(cells)
+    .map((cell) => meanMetric(cell.replicates, key))
+    .filter((value): value is number => value !== null)
   if (values.length === 0) return null
   return { key, value: Math.max(...values) }
 }
@@ -256,8 +310,8 @@ export function heatColor(value: number, min: number, max: number): string {
   return `color-mix(in oklch, var(--muted) 100%, var(--primary) ${pct}%)`
 }
 
-/** "chart-4" (amber, generated-but-unscored) / "chart-3" (emerald, fully scored) /
- * "primary" (cyan, partially scored) / "muted-foreground" (dim, no cells yet). */
+/** "chart-4" (amber, generated-but-unscored) / "chart-3" (emerald, all replicates scored) /
+ * "primary" (cyan, some replicates scored) / "muted-foreground" (dim, no cells yet). */
 export function cellsStatusAccent(cells: Cell[] | undefined): string {
   const total = cells?.length ?? 0
   if (total === 0) return 'var(--muted-foreground)'

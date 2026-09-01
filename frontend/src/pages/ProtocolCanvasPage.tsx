@@ -12,7 +12,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
-import { bestMetric, cellsStatusAccent, formatMetricLabel, metricValueSuffix, scaledMetricValue } from '@/lib/experiment'
+import { bestMetric, cellsStatusAccent, formatMetricLabel, groupReplicatesIntoCells, metricValueSuffix, scaledMetricValue } from '@/lib/experiment'
 import { unboundFactorNames } from '@/lib/factorBindings'
 import {
   applyExperimentRenameToProtocolCache,
@@ -113,20 +113,21 @@ function TopBarStat({ icon: Icon, value, title, accent }: { icon: LucideIcon; va
 function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Cell[] | undefined }) {
   if (experiment.design_type !== 'factorial' || !cells) return null
   const scored = cells.filter((c) => c.metric_values).length
+  const cellCount = groupReplicatesIntoCells(cells).length
   const best = bestMetric(experiment, cells)
   return (
     <>
       <TopBarStat
         icon={Target}
-        value={`${scored}/${cells.length} scored`}
-        title="Cells with a recorded metric, out of every cell in this design"
+        value={`${cellCount} ${cellCount === 1 ? 'cell' : 'cells'} · ${scored}/${cells.length} replicates scored`}
+        title="Replicates with a recorded metric, out of every planned replicate in this design"
         accent={cellsStatusAccent(cells)}
       />
       {best && (
         <TopBarStat
           icon={Trophy}
           value={`${scaledMetricValue(best.key, best.value).toFixed(4)}${metricValueSuffix(best.key)}`}
-          title={`Best ${formatMetricLabel(best.key)} across this experiment's scored cells`}
+          title={`Best mean ${formatMetricLabel(best.key)} across this experiment's cells`}
           accent="var(--chart-3)"
         />
       )}
@@ -135,7 +136,7 @@ function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Cel
 }
 
 // Triggers POST /protocols/{id}/cell-runs (one ProtocolRun per not-yet-scored
-// cell, factor_values substituted at execution time -- see
+// replicate, with its cell's factor_values substituted at execution time -- see
 // services.protocol_execution.plan_cell_runs) and polls the existing
 // GET /protocols/{id}/runs, filtered to just the runs this click created,
 // until every one is terminal -- reusing protocolsApi.listRuns rather than
@@ -145,12 +146,16 @@ function RunAllCellsButton({
   protocol,
   experimentId,
   cellCount,
+  replicateCount,
+  pendingReplicateCount,
   regenerationRequired,
   unboundFactors,
 }: {
   protocol: Protocol
   experimentId: string
   cellCount: number
+  replicateCount: number
+  pendingReplicateCount: number
   regenerationRequired: boolean
   unboundFactors: string[]
 }) {
@@ -217,10 +222,10 @@ function RunAllCellsButton({
   let statusLabel: string | null = null
   if (triggerMutation.isPending) statusLabel = 'Starting…'
   else if (triggeredIds && isRunning) {
-    statusLabel = `${stopRequested ? 'Stopping' : 'Running'} ${doneCount}/${triggeredIds.length} cells${batchRevision ? ` · canvas v${batchRevision}` : ''}…`
+    statusLabel = `${stopRequested ? 'Stopping' : 'Running'} ${doneCount}/${triggeredIds.length} replicates${batchRevision ? ` · canvas v${batchRevision}` : ''}…`
   }
   else if (triggeredIds) {
-    const parts = [`${triggeredIds.length - failedCount - cancelledCount} done`]
+    const parts = [`${triggeredIds.length - failedCount - cancelledCount} replicates done`]
     if (failedCount) parts.push(`${failedCount} failed`)
     if (cancelledCount) parts.push(`${cancelledCount} cancelled`)
     statusLabel = parts.join(', ')
@@ -231,7 +236,7 @@ function RunAllCellsButton({
       ? triggerMutation.error.detail
       : 'Could not start the run.'
     : null
-  const runBlocked = cellCount === 0 || regenerationRequired || unboundFactors.length > 0 || !protocol.published_revision_id
+  const runBlocked = replicateCount === 0 || pendingReplicateCount === 0 || regenerationRequired || unboundFactors.length > 0 || !protocol.published_revision_id
   const blockedLabel = regenerationRequired
     ? 'Update design'
     : unboundFactors.length > 0
@@ -247,8 +252,10 @@ function RunAllCellsButton({
       ? `Rebind or remove: ${unboundFactors.join(', ')}.`
       : !protocol.published_revision_id
         ? 'Publish a valid canvas before running cells.'
-        : cellCount === 0
+        : replicateCount === 0
           ? 'Generate design first — there are no cells to run yet.'
+          : pendingReplicateCount === 0
+            ? 'Every planned replicate has already been scored.'
           : undefined
 
   return (
@@ -282,7 +289,7 @@ function RunAllCellsButton({
       </span>
       {confirmRunAll && (
         <RunConfirmDialog
-          scope={{ type: 'all-cells', cellCount }}
+          scope={{ type: 'all-cells', cellCount, replicateCount, pendingReplicateCount }}
           nodes={protocol.graph.nodes as unknown as Node[]}
           edges={protocol.graph.edges as Edge[]}
           queryClient={queryClient}
@@ -413,7 +420,9 @@ export function ProtocolCanvasPage() {
               <RunAllCellsButton
                 protocol={protocolQuery.data}
                 experimentId={experimentId}
-                cellCount={cellsQuery.data?.length ?? 0}
+                cellCount={groupReplicatesIntoCells(cellsQuery.data ?? []).length}
+                replicateCount={cellsQuery.data?.length ?? 0}
+                pendingReplicateCount={cellsQuery.data?.filter((replicate) => !replicate.metric_values).length ?? 0}
                 regenerationRequired={impactQuery.data?.regeneration_required ?? false}
                 unboundFactors={unboundFactors}
               />

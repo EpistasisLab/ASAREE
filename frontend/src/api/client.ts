@@ -218,7 +218,7 @@ export const experimentsApi = {
   // anywhere in the experiment (see services.csv_export.cells_to_csv) --
   // a Blob, not JSON, so callers hand it straight to URL.createObjectURL.
   downloadCellsCsv: (id: string) => requestBlob(`/experiments/${id}/cells.csv`),
-  // Materializes one FactorialCellResult per combination of the experiment's
+  // Materializes one cell per combination and its replicate-result children.
   // declared factors, returning the current design's cells. If the new design
   // isn't the same set of cells as the current one, the current design
   // revision is superseded and a new one opened -- results for surviving cell
@@ -251,7 +251,7 @@ export const protocolsApi = {
   // already-generated cell for real (its own factor_values substituted in)
   // instead of today's ad-hoc, un-substituted whole-graph run.
   run: (id: string, cellLabel?: string | null) =>
-    request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST', body: { cell_label: cellLabel ?? null } }),
+    request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST', body: { replicate_label: cellLabel ?? null } }),
   // The per-node Play icon -- 422 if the node has upstream input or isn't a
   // runnable Agent (see validate_single_node_runnable). Same polling shape
   // as a plain run (getRun), just with node_runs carrying only this one key.
@@ -265,7 +265,7 @@ export const protocolsApi = {
   listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
   // "Run all cells" -- 422 if there's no linked experiment or the graph
   // doesn't have exactly one final node; fans out one ProtocolRun per
-  // not-yet-scored FactorialCellResult, each polled via listRuns.
+  // not-yet-scored replicate result, each polled via listRuns.
   runCells: (id: string) => request<CellRunBatch>(`/protocols/${id}/cell-runs`, { method: 'POST' }),
 }
 

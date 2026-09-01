@@ -76,13 +76,22 @@ class Protocols:
         data = self._client._get(f"/protocols/{protocol_id}/revisions/{revision_id}")
         return ProtocolRevision(**data)
 
-    def run(self, protocol_id: ResourceId, *, cell_label: str | None = None) -> ProtocolRun:
+    def run(
+        self,
+        protocol_id: ResourceId,
+        *,
+        replicate_label: str | None = None,
+        cell_label: str | None = None,
+    ) -> ProtocolRun:
         """Compile and run this protocol's current graph -- 422 if it's
         empty or has a cycle. Returns immediately with status "pending";
-        poll with get_run. ``cell_label`` runs that one already-generated
-        cell for real (its own factor_values substituted in) instead of
+        poll with get_run. ``replicate_label`` runs that one already-generated
+        replicate (its cell's factor_values substituted in) instead of
         today's ad-hoc, un-substituted whole-graph run."""
-        payload = {"cell_label": cell_label} if cell_label is not None else {}
+        if replicate_label is not None and cell_label is not None and replicate_label != cell_label:
+            raise ValueError("replicate_label and deprecated cell_label disagree")
+        effective_label = replicate_label if replicate_label is not None else cell_label
+        payload = {"replicate_label": effective_label} if effective_label is not None else {}
         data = self._client._post(f"/protocols/{protocol_id}/runs", json=payload)
         return ProtocolRun(**data)
 

@@ -2030,15 +2030,15 @@ async def plan_cell_runs(
     protocol_revision_id: uuid.UUID | None = None,
 ) -> tuple[list[ProtocolRun], int]:
     """ "Run all cells": creates one pending :class:`ProtocolRun` per
-    not-yet-scored :class:`FactorialCellResult` under *experiment_id*, each
-    carrying that cell's own ``factor_values`` for ``run_protocol`` to
+    not-yet-scored replicate row under *experiment_id*, each carrying its
+    cell's ``factor_values`` for ``run_protocol`` to
     substitute at execution time via ``apply_factor_bindings``. Returns
-    ``(created_runs, skipped_count)`` -- a cell already carrying
+    ``(created_runs, skipped_count)`` -- a replicate already carrying
     ``metric_values`` is skipped (resume semantics: a repeat click doesn't
-    re-run, and re-bill, an already-scored cell). Raises
+    re-run, and re-bill, an already-scored replicate). Raises
     :class:`ProtocolValidationError` (same type the plain-run endpoint
     already 422s on) if there's no linked experiment, the graph itself is
-    invalid, the graph doesn't have exactly one sink node -- a cell's result
+    invalid, the graph doesn't have exactly one sink node -- a replicate's result
     has to come from somewhere unambiguous, mirroring the notebook's own
     single-pipeline (DC->FTE->FS->MLM) shape -- or the experiment's declared
     coordination strategy rejects this graph (see
@@ -2046,12 +2046,12 @@ async def plan_cell_runs(
     that's the caller's job, same create-then-enqueue split
     ``create_protocol_run_endpoint`` already uses for a plain run."""
     if experiment_id is None:
-        raise ProtocolValidationError("This protocol has no linked experiment to run cells for.")
+        raise ProtocolValidationError("This protocol has no linked experiment to run replicates for.")
     topological_order(graph)  # raises ProtocolValidationError on a cycle/empty graph
     sinks = sink_node_ids(graph)
     if len(sinks) != 1:
         raise ProtocolValidationError(
-            f"This protocol must have exactly one final node to run per experimental cell (found {len(sinks)})."
+            f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
         )
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
@@ -2064,11 +2064,12 @@ async def plan_cell_runs(
     if impact.regeneration_required:
         raise ProtocolValidationError(
             "Design changed — review and regenerate before running all cells. "
-            f"Current {impact.current_cell_count}, proposed {impact.proposed_cell_count}."
+            f"Current {impact.current_cell_count} cells/{impact.current_replicate_count} replicates, "
+            f"proposed {impact.proposed_cell_count} cells/{impact.proposed_replicate_count} replicates."
         )
 
     # Current design only -- list_cells scopes to the experiment's current
-    # revision, so a superseded design's cells are neither counted nor run.
+    # revision, so a superseded design's replicates are neither counted nor run.
     cells = await list_cells(db, experiment_id=experiment_id)
     pending = [c for c in cells if not c.metric_values]
     runs = [
@@ -2078,6 +2079,7 @@ async def plan_cell_runs(
             owner_id=owner_id,
             cell_label=cell.cell_label,
             factor_values=cell.factor_values or {},
+            replicate_result_id=cell.id,
             design_revision_id=cell.design_revision_id,
             protocol_revision_id=protocol_revision_id,
         )
@@ -2096,23 +2098,23 @@ async def plan_single_cell_run(
     cell_label: str,
     protocol_revision_id: uuid.UUID | None = None,
 ) -> ProtocolRun:
-    """Run one already-generated cell for real, by name -- the single-cell
-    counterpart to plan_cell_runs's own "every not-yet-scored cell" batch.
+    """Run one already-generated replicate for real, by name -- the single-run
+    counterpart to plan_cell_runs's own "every not-yet-scored replicate" batch.
     The canvas's own Run button offers this alongside its existing ad-hoc
     (no substitution) run once the linked experiment has generated cells,
     for testing one specific factor combination without either running
     everything or falling back to an un-substituted smoke test. Same
     validation as plan_cell_runs (linked experiment, valid graph, exactly
     one sink, coordination strategy) but does NOT skip an already-scored
-    cell -- picking one specific cell by name is a deliberate re-run, not a
+    replicate -- picking one specific replicate by name is a deliberate re-run, not a
     batch resume, so there's nothing to protect it from."""
     if experiment_id is None:
-        raise ProtocolValidationError("This protocol has no linked experiment to run a cell for.")
+        raise ProtocolValidationError("This protocol has no linked experiment to run a replicate for.")
     topological_order(graph)  # raises ProtocolValidationError on a cycle/empty graph
     sinks = sink_node_ids(graph)
     if len(sinks) != 1:
         raise ProtocolValidationError(
-            f"This protocol must have exactly one final node to run per experimental cell (found {len(sinks)})."
+            f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
         )
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
@@ -2123,17 +2125,18 @@ async def plan_single_cell_run(
         raise ProtocolValidationError(str(exc)) from exc
     impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=design_spec)
     if impact.regeneration_required:
-        raise ProtocolValidationError("Design changed — review and regenerate before running a cell.")
+        raise ProtocolValidationError("Design changed — review and regenerate before running a replicate.")
 
     cell = await get_cell(db, experiment_id=experiment_id, cell_label=cell_label)
     if cell is None:
-        raise ProtocolValidationError(f"No such cell: {cell_label!r}")
+        raise ProtocolValidationError(f"No such replicate: {cell_label!r}")
     return await create_protocol_run(
         db,
         protocol_id=protocol_id,
         owner_id=owner_id,
         cell_label=cell.cell_label,
         factor_values=cell.factor_values or {},
+        replicate_result_id=cell.id,
         design_revision_id=cell.design_revision_id,
         protocol_revision_id=protocol_revision_id,
     )

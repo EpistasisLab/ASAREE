@@ -7,7 +7,10 @@ import {
   displayFactorValue,
   formatMetricLabel,
   formatMetricValue,
+  groupReplicatesIntoCells,
+  meanMetric,
   pickMetricColumns,
+  type ExperimentalCell,
 } from '@/lib/experiment'
 import { cn } from '@/lib/utils'
 import type { Cell, Experiment } from '@/types/experiments'
@@ -16,14 +19,13 @@ type CellSort = { key: string; dir: 'asc' | 'desc' }
 
 const CELLS_PAGE_SIZE = 20
 
-function cellSortValue(cell: Cell, key: string): string | number {
-  if (key === 'cell_label') return cell.cell_label.toLowerCase()
-  if (key === 'updated_at') return new Date(cell.updated_at).getTime()
-  if (key === 'status') return cell.metric_values ? 1 : 0
-  if (key.startsWith('factor:')) return displayFactorValue(cell.factor_values?.[key.slice(7)] ?? '').toLowerCase()
+function cellSortValue(cell: ExperimentalCell, key: string): string | number {
+  if (key === 'cell_label') return cell.label.toLowerCase()
+  if (key === 'updated_at') return new Date(cell.updatedAt).getTime()
+  if (key === 'status') return cell.scoredReplicateCount / cell.replicates.length
+  if (key.startsWith('factor:')) return displayFactorValue(cell.factorValues[key.slice(7)] ?? '').toLowerCase()
   if (key.startsWith('metric:')) {
-    const v = cell.metric_values?.[key.slice(7)]
-    return typeof v === 'number' ? v : Number.NEGATIVE_INFINITY
+    return meanMetric(cell.replicates, key.slice(7)) ?? Number.NEGATIVE_INFINITY
   }
   return ''
 }
@@ -60,7 +62,9 @@ function SortableCellHead({
 
 /** A real table -- one column per derived factor, one per curated metric --
  * not two squished `key=value, key=value` string dumps styled like a table.
- * Every column is independently sortable.
+ * Every row is one true experimental cell (a unique factor combination),
+ * with metrics averaged across its replicates. Every column is independently
+ * sortable.
  *
  * Styled to the side panel's own compact table idiom (see RunsTab/ResultsTab:
  * a plain `text-xs` table in a bordered box, zebra-striped, font-mono for
@@ -74,6 +78,7 @@ export function CellsTable({ experiment, cells }: { experiment: Experiment; cell
   const [page, setPage] = useState(1)
   const factors = useMemo(() => deriveFactors(cells, experiment.design_spec) ?? [], [cells, experiment.design_spec])
   const metricColumns = useMemo(() => pickMetricColumns(experiment, cells), [experiment, cells])
+  const groupedCells = useMemo(() => groupReplicatesIntoCells(cells), [cells])
 
   function handleSort(key: string) {
     setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
@@ -81,7 +86,7 @@ export function CellsTable({ experiment, cells }: { experiment: Experiment; cell
   }
 
   const sorted = useMemo(() => {
-    const rows = [...cells]
+    const rows = [...groupedCells]
     rows.sort((a, b) => {
       const av = cellSortValue(a, sort.key)
       const bv = cellSortValue(b, sort.key)
@@ -89,7 +94,7 @@ export function CellsTable({ experiment, cells }: { experiment: Experiment; cell
       return sort.dir === 'asc' ? cmp : -cmp
     })
     return rows
-  }, [cells, sort])
+  }, [groupedCells, sort])
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / CELLS_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages)
@@ -114,25 +119,27 @@ export function CellsTable({ experiment, cells }: { experiment: Experiment; cell
           </thead>
           <tbody>
             {paged.map((cell, i) => (
-              <tr key={cell.id} className={i % 2 === 1 ? 'bg-muted/20' : ''}>
-                <td className="max-w-40 truncate px-2 py-1.5 font-mono font-medium" title={cell.cell_label}>
-                  {cell.cell_label}
+              <tr key={cell.label} className={i % 2 === 1 ? 'bg-muted/20' : ''}>
+                <td className="max-w-40 truncate px-2 py-1.5 font-mono font-medium" title={cell.label}>
+                  {cell.label}
                 </td>
                 {factors.map((f) => (
                   <td key={f.name} className="max-w-32 truncate px-2 py-1.5 font-mono text-muted-foreground">
-                    {cell.factor_values && f.name in cell.factor_values ? displayFactorValue(cell.factor_values[f.name]) : '—'}
+                    {f.name in cell.factorValues ? displayFactorValue(cell.factorValues[f.name]) : '—'}
                   </td>
                 ))}
                 {metricColumns.map((m) => (
                   <td key={m} className="px-2 py-1.5 font-mono whitespace-nowrap text-muted-foreground">
-                    {formatMetricValue(m, cell.metric_values?.[m])}
+                    {formatMetricValue(m, meanMetric(cell.replicates, m))}
                   </td>
                 ))}
                 <td className="px-2 py-1.5">
-                  <Badge variant={cell.metric_values ? 'default' : 'secondary'}>{cell.metric_values ? 'Scored' : 'Not scored'}</Badge>
+                  <Badge variant={cell.scoredReplicateCount === cell.replicates.length ? 'default' : 'secondary'}>
+                    {cell.scoredReplicateCount}/{cell.replicates.length} replicates scored
+                  </Badge>
                 </td>
                 <td className="px-2 py-1.5 font-mono whitespace-nowrap text-muted-foreground">
-                  {new Date(cell.updated_at).toLocaleString()}
+                  {new Date(cell.updatedAt).toLocaleString()}
                 </td>
               </tr>
             ))}

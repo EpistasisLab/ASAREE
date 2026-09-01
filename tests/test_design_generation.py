@@ -21,7 +21,7 @@ from asaree.services.design_generation import (
     generate_design_cells,
 )
 from asaree.services.experiments import create_experiment
-from asaree.services.factorial_cells import list_cells
+from asaree.services.factorial_cells import list_cells, list_factorial_cells, split_replicate_label
 
 _FACTORS = [{"name": "tier", "levels": ["small", "large"]}, {"name": "effort", "levels": ["low", "high"]}]
 
@@ -72,6 +72,12 @@ def test_cell_label_for_replicate_one_has_no_suffix() -> None:
 def test_cell_label_for_replicate_two_gets_suffix() -> None:
     combo = {"tier": "small", "effort": "low"}
     assert cell_label_for(combo, replicate=2) == f"{cell_label_for(combo)}__rep2"
+
+
+def test_replicate_label_maps_to_its_cell_and_number() -> None:
+    base = cell_label_for({"tier": "small", "effort": "low"})
+    assert split_replicate_label(base) == (base, 1)
+    assert split_replicate_label(f"{base}__rep3") == (base, 3)
 
 
 def test_cell_label_for_dict_valued_level_prefers_identifying_key() -> None:
@@ -148,6 +154,10 @@ async def test_generate_design_cells_with_replicates_creates_n_copies(owner_id: 
         assert len(cells) == 12  # 4 combinations * 3 replicates
         labels = {c.cell_label for c in cells}
         assert len(labels) == 12  # every replicate gets a distinct label
+        factorial_cells = await list_factorial_cells(db, experiment_id=experiment_id)
+        assert len(factorial_cells) == 4
+        assert all(len(cell.replicates) == 3 for cell in factorial_cells)
+        assert {rep.replicate_number for rep in factorial_cells[0].replicates} == {1, 2, 3}
 
     async with get_session() as db:
         await db.delete(await db.get(type(experiment), experiment_id))

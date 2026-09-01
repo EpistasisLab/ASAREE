@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
+import { PanelLeftClose, PencilRuler } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -15,8 +16,8 @@ import type { Experiment } from '@/types/experiments'
 const DEFAULT_PANEL_WIDTH = 384
 
 // Below ~320px the tab strip wraps and every table in here is unreadable, so
-// there's nothing useful on the other side of this floor -- collapsing the
-// panel entirely would be a different feature (a toggle, not a drag).
+// the resize handle does not go below this floor. The separate collapse toggle
+// is the compact-view escape hatch when the canvas needs all available room.
 const MIN_PANEL_WIDTH = 320
 
 // Two independent ceilings: never wider than this outright, and never so wide
@@ -31,6 +32,7 @@ const MIN_CANVAS_WIDTH = 420
 // value under an `asaree:` key, not per experiment -- how wide you like this
 // panel is a property of how you work, not of which experiment you opened.
 const PANEL_WIDTH_STORAGE_KEY = 'asaree:experiment-panel-width'
+const PANEL_COLLAPSED_STORAGE_KEY = 'asaree:experiment-panel-collapsed'
 
 function clampPanelWidth(width: number): number {
   const viewportMax = typeof window !== 'undefined' ? window.innerWidth - MIN_CANVAS_WIDTH : MAX_PANEL_WIDTH
@@ -42,6 +44,10 @@ function readStoredPanelWidth(): number {
   const raw = typeof window !== 'undefined' ? window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY) : null
   const parsed = raw !== null ? Number(raw) : NaN
   return clampPanelWidth(Number.isFinite(parsed) ? parsed : DEFAULT_PANEL_WIDTH)
+}
+
+function readStoredCollapsed(): boolean {
+  return typeof window !== 'undefined' && window.localStorage.getItem(PANEL_COLLAPSED_STORAGE_KEY) === 'true'
 }
 
 // A fixed left panel on the protocol canvas -- the primary place to build
@@ -74,6 +80,7 @@ export function ExperimentSidePanel({
   isLoading: boolean
 }) {
   const [width, setWidth] = useState(readStoredPanelWidth)
+  const [collapsed, setCollapsed] = useState(readStoredCollapsed)
   const [dragging, setDragging] = useState(false)
   const dragStart = useRef<{ x: number; width: number } | null>(null)
 
@@ -134,6 +141,33 @@ export function ExperimentSidePanel({
     })
   }
 
+  function setPanelCollapsed(next: boolean) {
+    setCollapsed(next)
+    window.localStorage.setItem(PANEL_COLLAPSED_STORAGE_KEY, String(next))
+  }
+
+  // A compact left rail preserves a clear way back to the experiment's
+  // declaration without taking working room away from the canvas. The Design
+  // glyph is deliberately a real button rather than a hover-only affordance:
+  // it remains discoverable on touch devices and keyboard reachable.
+  if (collapsed) {
+    return (
+      <div className="flex min-h-0 shrink-0">
+        <Card className="flex h-full w-11 shrink-0 flex-col items-center p-1.5">
+          <button
+            type="button"
+            aria-label="Expand Design panel"
+            title="Expand Design panel"
+            onClick={() => setPanelCollapsed(false)}
+            className="flex size-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <PencilRuler className="size-4" aria-hidden="true" />
+          </button>
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <div className="relative flex min-h-0 shrink-0" style={{ width }}>
       <Card className="flex min-h-0 w-full flex-col overflow-hidden p-0">
@@ -144,17 +178,28 @@ export function ExperimentSidePanel({
           </div>
         ) : (
           <Tabs defaultValue="design" className="flex h-full min-h-0 flex-col">
-            <TabsList className="mx-3 mt-3 shrink-0">
-              <TabsTrigger value="design">Design</TabsTrigger>
-              {/* Between Design and Runs, in the order the work actually happens:
-                  declare the design, look at the cells it produced, watch them
-                  run, then read the analysis. Deliberately NOT folded into
-                  Results -- that tab is the statistical analysis OF these
-                  numbers (effects, CIs, non-inferiority), not the raw grid. */}
-              <TabsTrigger value="cells">Cells</TabsTrigger>
-              <TabsTrigger value="runs">Runs</TabsTrigger>
-              <TabsTrigger value="results">Results</TabsTrigger>
-            </TabsList>
+            <div className="mx-3 mt-3 flex shrink-0 items-center gap-1.5">
+              <TabsList className="min-w-0 flex-1">
+                <TabsTrigger value="design">Design</TabsTrigger>
+                {/* Between Design and Runs, in the order the work actually happens:
+                    declare the design, look at the cells it produced, watch them
+                    run, then read the analysis. Deliberately NOT folded into
+                    Results -- that tab is the statistical analysis OF these
+                    numbers (effects, CIs, non-inferiority), not the raw grid. */}
+                <TabsTrigger value="cells">Cells</TabsTrigger>
+                <TabsTrigger value="runs">Runs</TabsTrigger>
+                <TabsTrigger value="results">Results</TabsTrigger>
+              </TabsList>
+              <button
+                type="button"
+                aria-label="Collapse Design panel"
+                title="Collapse Design panel"
+                onClick={() => setPanelCollapsed(true)}
+                className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <PanelLeftClose className="size-4" aria-hidden="true" />
+              </button>
+            </div>
 
             {/* min-h-0 is load-bearing here -- without it, a flex item's
                 default min-height:auto keeps this box as tall as its content,

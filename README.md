@@ -24,8 +24,11 @@ library — in-process, not a service call.
 For installation, reproducible research, and production deployments, use a
 tagged [GitHub Release](https://github.com/EpistasisLab/ASAREE/releases). The
 [latest release](https://github.com/EpistasisLab/ASAREE/releases/latest) is the
-recommended version for new installations. Release tags are immutable, so a
-deployment or experiment can be recreated from the same source later.
+recommended version for new installations. The project treats every published
+release tag as permanent so a deployment or experiment can be recreated from
+the same source later. Repository administrators enforce this policy with
+GitHub's release immutability setting; ordinary Git tags are not inherently
+immutable.
 
 The `main` branch contains the latest development version. It may include
 changes that have not yet been released or fully validated for production, so

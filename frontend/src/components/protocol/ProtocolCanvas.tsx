@@ -70,6 +70,7 @@ import { FactorEditorDialog } from './FactorEditorDialog'
 import { CONNECTOR_CHILD_CLEARANCE, connectorNodeOffsetX, findFreePosition, tidyLayout } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
 import { DatasetBrowserPanel } from './DatasetBrowserPanel'
+import { DesignRegenerationRequiredDialog } from './DesignRegenerationRequiredDialog'
 import { DATASET_BROWSE, nodeDataForDataset } from './datasetCatalog'
 import { McpServerBrowserPanel } from './McpServerBrowserPanel'
 import {
@@ -93,7 +94,7 @@ import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
 import { RunConfirmDialog } from './RunConfirmDialog'
 import type { RunScope } from './runSummary'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
-import { SelectCellDialog } from './SelectCellDialog'
+import { SelectReplicateDialog } from './SelectCellDialog'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
 import { OkfBundleBrowserPanel } from './OkfBundleBrowserPanel'
 import { OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE, nodeDataForBundle, nodeDataForDocument } from './okfCatalog'
@@ -347,7 +348,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   protocolId: string
   experimentId: string | null
   initialGraph: ProtocolGraph
-}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph }, canvasHandleRef) {
+  hasUnpublishedChanges: boolean
+  publishedRevision: number | null
+}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph, hasUnpublishedChanges, publishedRevision }, canvasHandleRef) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialGraph.nodes as Node[])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateLegacyHandles(initialGraph))
   const queryClient = useQueryClient()
@@ -463,21 +466,28 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // (billable) run never fires without the user seeing what will actually
   // execute first.
   const [pendingRunConfirm, setPendingRunConfirm] = useState<RunScope | null>(null)
+  const [designRegenerationWarningOpen, setDesignRegenerationWarningOpen] = useState(false)
   const [runId, setRunId] = useState<string | null>(null)
   // null -- today's ad-hoc, un-substituted whole-graph run (the only option
-  // before any cells exist). Set -- runs that one already-generated cell for
+  // before any cells exist). Set -- runs one already-generated replicate for
   // real, its own factor_values substituted in (see
-  // services.protocol_execution.plan_single_cell_run), picked from the
+  // services.protocol_execution.plan_single_replicate_run), picked from the
   // dropdown next to the Run button.
-  const [selectedCellLabel, setSelectedCellLabel] = useState<string | null>(null)
+  const [selectedReplicateLabel, setSelectedReplicateLabel] = useState<string | null>(null)
   const [cellPickerOpen, setCellPickerOpen] = useState(false)
-  const cellsQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'cells'],
-    queryFn: () => experimentsApi.listCells(experimentId!),
+  const replicatesQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'replicates'],
+    queryFn: () => experimentsApi.listReplicates(experimentId!),
     enabled: !!experimentId,
   })
-  const cellOptions = cellsQuery.data ?? []
-  // design_spec for SelectCellDialog's own factor-checkbox filter -- fetched
+  const designImpactQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'design-impact'],
+    queryFn: () => experimentsApi.getDesignImpact(experimentId!),
+    enabled: !!experimentId,
+  })
+  const replicateOptions = replicatesQuery.data ?? []
+  const designRegenerationRequired = designImpactQuery.data?.regeneration_required ?? false
+  // design_spec for SelectReplicateDialog's own factor-checkbox filter -- fetched
   // only while that dialog is actually open, same "on demand" convention
   // factorPickerExperimentQuery below uses for the same query.
   const cellPickerExperimentQuery = useQuery({
@@ -522,7 +532,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   }, [edges, fitView, setNodes])
 
   const runMutation = useMutation({
-    mutationFn: () => protocolsApi.run(protocolId, selectedCellLabel),
+    mutationFn: () => protocolsApi.run(protocolId, selectedReplicateLabel),
     onSuccess: (run) => setRunId(run.id),
   })
 
@@ -552,7 +562,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // nodes failed" AFTER spending a real attempt.
   function requestRun() {
     setRunErrorDismissed(false)
-    setPendingRunConfirm(selectedCellLabel ? { type: 'cell', label: selectedCellLabel } : { type: 'graph' })
+    if (designRegenerationRequired) {
+      setDesignRegenerationWarningOpen(true)
+      return
+    }
+    setPendingRunConfirm(selectedReplicateLabel ? { type: 'replicate', label: selectedReplicateLabel } : { type: 'graph' })
   }
 
   function confirmPendingRun() {
@@ -564,6 +578,19 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     }
     setPendingRunConfirm(null)
   }
+
+  // A run must always use an immutable published snapshot. When the canvas
+  // draft differs, this mutation lets the confirmation dialog make the
+  // user's intended choice explicit: publish the draft, then run it.
+  const publishAndRunMutation = useMutation({
+    mutationFn: () => protocolsApi.publish(protocolId),
+    onSuccess: (published) => {
+      if (published.experiment_id) {
+        queryClient.setQueryData(protocolForExperimentQueryKey(published.experiment_id), published)
+      }
+      confirmPendingRun()
+    },
+  })
 
   // The canvas's per-node Play icon -- reuses the exact same runId/runQuery
   // polling state as the main Run button, since a node-scoped run's
@@ -831,6 +858,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     onSuccess: ({ factor, field }) => {
       bindFactorOnNode(field.nodeId, field.fieldPath, factor.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
       setFactorPickerNodeId(null)
     },
   })
@@ -1117,6 +1145,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           // response so a slow earlier save can't overwrite a later one.
           if (seq !== saveSeqRef.current || !updated.experiment_id) return
           queryClient.setQueryData(protocolForExperimentQueryKey(updated.experiment_id), updated)
+          queryClient.invalidateQueries({ queryKey: ['experiments', updated.experiment_id, 'design-impact'] })
         })
         .catch(() => {
           // Best-effort autosave; a transient failure just means the next
@@ -1199,55 +1228,32 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // shows the node's own plain label, unaffected.
   const factorNodeLabel = selectedNode ? agentTracedLabel(selectedNode, edges, nodes) : ''
 
-  // The mirror image of FactorsEditor's own delete/rename cleanup
-  // (DesignTab.tsx): removing a factor there sweeps every node's
-  // factor_bindings via removeFactorBindings/renameFactorBindings, but
-  // nothing swept the OTHER direction -- unbinding a field from its factor
-  // in a node's own inspector (the "Factor: {name}" badge's X) only ever
-  // cleared that one node's own factor_bindings entry, leaving the factor
-  // itself sitting in design_spec.factors forever with nothing left to bind
-  // it to, invisible until the user separately opened the Design tab and
-  // deleted it there by hand. Only prunes a factor once NO node/field
-  // anywhere still references it -- a factor deliberately shared across
-  // several nodes (e.g. spinal-use-case.json's "Critic enabled" spanning
-  // all 4 Critic Gate nodes) survives unbinding just one of them.
-  async function pruneOrphanedFactors(nextNodes: Node[], removedFactorNames: string[]) {
-    if (!experimentId || removedFactorNames.length === 0) return
-    const stillReferenced = new Set<string>()
-    for (const n of nextNodes) {
-      const bindings = (n.data as { factor_bindings?: Record<string, string> } | undefined)?.factor_bindings ?? {}
-      for (const name of Object.values(bindings)) stillReferenced.add(name)
-    }
-    const orphaned = removedFactorNames.filter((name) => !stillReferenced.has(name))
+  // A factor only has meaning while it controls at least one canvas field.
+  // Whether the final binding was explicitly unbound in an inspector or was
+  // removed with a deleted node, remove that factor declaration too so the
+  // Design panel and the materialized matrix cannot advertise a treatment
+  // the canvas no longer has.
+  async function removeUnboundFactors(nextNodes: Node[], removedNames: string[]) {
+    if (!experimentId || removedNames.length === 0) return
+    const stillBound = new Set(
+      nextNodes.flatMap((node) => Object.values((node.data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {})),
+    )
+    const orphaned = removedNames.filter((name) => !stillBound.has(name))
     if (orphaned.length === 0) return
-    const fresh = await experimentsApi.get(experimentId)
-    const existingFactors = fresh.design_spec?.factors ?? []
-    const nextFactors = existingFactors.filter((f) => !orphaned.includes(f.name))
-    if (nextFactors.length === existingFactors.length) return
-    await experimentsApi.update(experimentId, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
+    const experiment = await experimentsApi.get(experimentId)
+    const factors = experiment.design_spec?.factors ?? []
+    const nextFactors = factors.filter((factor) => !orphaned.includes(factor.name))
+    if (nextFactors.length === factors.length) return
+    await experimentsApi.update(experimentId, { design_spec: { ...experiment.design_spec, factors: nextFactors } })
     queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+    queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
   }
 
-  // The third way a binding can disappear, alongside unbinding a field in an
-  // inspector (updateNodeData) and deleting the factor in the Design tab
-  // (DesignTab's own sweep): deleting the NODE that carried it. Without this,
-  // the factor outlived the only thing that referenced it -- still listed in
-  // the Design tab, still multiplying the cell count, and no longer reachable
-  // from any node's inspector to unbind.
-  //
-  // Runs for both delete paths (deleteNode and xyflow's onNodesDelete), and
-  // deliberately reuses pruneOrphanedFactors rather than deleting outright,
-  // so a factor shared across several nodes survives losing just one of them.
-  function pruneFactorsForDeletedNodes(deleted: Node[]) {
-    const deletedIds = new Set(deleted.map((n) => n.id))
-    const removedFactorNames = deleted.flatMap((n) =>
-      Object.values((n.data as { factor_bindings?: Record<string, string> } | undefined)?.factor_bindings ?? {}),
-    )
-    if (removedFactorNames.length === 0) return
-    void pruneOrphanedFactors(
-      nodes.filter((n) => !deletedIds.has(n.id)),
-      removedFactorNames,
-    )
+  function removeFactorsForDeletedNodes(deleting: Node[], nextNodes: Node[]) {
+    const removedNames = [...new Set(
+      deleting.flatMap((node) => Object.values((node.data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {})),
+    )]
+    void removeUnboundFactors(nextNodes, removedNames)
   }
 
   function updateNodeData(
@@ -1266,16 +1272,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | ReasonActPatternNodeData
       | SingleAgentBaselinePatternNodeData,
   ) {
-    const oldBindings =
-      (nodes.find((n) => n.id === nodeId)?.data as { factor_bindings?: Record<string, string> } | undefined)
-        ?.factor_bindings ?? {}
-    const newBindings = (data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {}
-    const removedFactorNames = Object.entries(oldBindings)
-      .filter(([path, name]) => newBindings[path] !== name)
+    const previous = nodes.find((node) => node.id === nodeId)
+    const oldBindings = (previous?.data as { factor_bindings?: Record<string, string> } | undefined)?.factor_bindings ?? {}
+    const nextBindings = (data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {}
+    const removedNames = Object.entries(oldBindings)
+      .filter(([path, name]) => nextBindings[path] !== name)
       .map(([, name]) => name)
-    const nextNodes = nodes.map((n) => (n.id === nodeId ? { ...n, data } : n))
+    const nextNodes = nodes.map((node) => (node.id === nodeId ? { ...node, data } : node))
     setNodes(nextNodes)
-    if (removedFactorNames.length > 0) void pruneOrphanedFactors(nextNodes, removedFactorNames)
+    void removeUnboundFactors(nextNodes, removedNames)
   }
 
   // Client-side guardrail mirroring the backend's own connector validation
@@ -1345,11 +1350,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   )
 
   function deleteNode(nodeId: string) {
-    const node = nodes.find((n) => n.id === nodeId)
-    setNodes((nds) => nds.filter((n) => n.id !== nodeId))
+    const deleting = nodes.filter((node) => node.id === nodeId)
+    const nextNodes = nodes.filter((node) => node.id !== nodeId)
+    setNodes(nextNodes)
     setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId))
     setSelectedNodeId(null)
-    if (node) pruneFactorsForDeletedNodes([node])
+    removeFactorsForDeletedNodes(deleting, nextNodes)
   }
 
   // The node inspector's own Delete button calls deleteNode directly --
@@ -1434,7 +1440,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onPaneClick={() => setSelectedNodeId(null)}
             onNodesDelete={(deleted) => {
               if (deleted.some((n) => n.id === selectedNodeId)) setSelectedNodeId(null)
-              pruneFactorsForDeletedNodes(deleted)
             }}
             fitView
             fitViewOptions={{ maxZoom: DEFAULT_ZOOM }}
@@ -1496,28 +1501,40 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             )
           })()}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
-            {cellOptions.length > 0 && (
-              <Button size="sm" variant="outline" className="max-w-40" onClick={() => setCellPickerOpen(true)}>
-                <span className={`truncate ${selectedCellLabel ? 'font-mono' : ''}`} title={selectedCellLabel ?? undefined}>
-                  {selectedCellLabel ?? 'Run cell'}
-                </span>
-              </Button>
+            {replicateOptions.length > 0 && (
+              <span title={designRegenerationRequired ? 'Design changed — review and regenerate before selecting a cell.' : undefined}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="max-w-40"
+                  onClick={() => (designRegenerationRequired ? setDesignRegenerationWarningOpen(true) : setCellPickerOpen(true))}
+                >
+                  <span className={`truncate ${selectedReplicateLabel ? 'font-mono' : ''}`} title={selectedReplicateLabel ?? undefined}>
+                    {designRegenerationRequired ? 'Update design' : selectedReplicateLabel ?? 'Run replicate'}
+                  </span>
+                </Button>
+              </span>
             )}
             {cellPickerOpen && (
-              <SelectCellDialog
-                cells={cellOptions}
+              <SelectReplicateDialog
+                replicates={replicateOptions}
                 designSpec={cellPickerExperimentQuery.data?.design_spec}
-                selectedCellLabel={selectedCellLabel}
+                selectedReplicateLabel={selectedReplicateLabel}
                 onCancel={() => setCellPickerOpen(false)}
-                onSelect={(cellLabel) => {
-                  setSelectedCellLabel(cellLabel)
+                onSelect={(replicateLabel) => {
+                  setSelectedReplicateLabel(replicateLabel)
                   setCellPickerOpen(false)
                 }}
               />
             )}
-            <Button size="sm" disabled={isRunning} onClick={requestRun}>
+            <Button
+              size="sm"
+              disabled={isRunning}
+              title={designRegenerationRequired ? 'Design changed — review and regenerate before running.' : undefined}
+              onClick={requestRun}
+            >
               <Play className="size-4" />
-              {isRunning ? 'Running…' : selectedCellLabel ? `Run cell: ${selectedCellLabel}` : 'Run'}
+              {isRunning ? 'Running…' : designRegenerationRequired ? 'Update design' : selectedReplicateLabel ? `Run replicate: ${selectedReplicateLabel}` : 'Run'}
             </Button>
             {isRunning && (
               <Button
@@ -1730,6 +1747,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           }}
           onConfirm={() => {
             if (pendingDelete.resolve) {
+              const deletedNodeIds = new Set(pendingDelete.nodes.map((node) => node.id))
+              removeFactorsForDeletedNodes(
+                pendingDelete.nodes,
+                nodes.filter((node) => !deletedNodeIds.has(node.id)),
+              )
               pendingDelete.resolve({ nodes: pendingDelete.nodes, edges: pendingDelete.edges })
             } else {
               // requestDeleteNode's path -- no xyflow deletion pending, just
@@ -1748,8 +1770,20 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           queryClient={queryClient}
           onCancel={() => setPendingRunConfirm(null)}
           onConfirm={confirmPendingRun}
+          hasUnpublishedChanges={hasUnpublishedChanges}
+          publishedRevision={publishedRevision}
+          isPublishing={publishAndRunMutation.isPending}
+          publishError={
+            publishAndRunMutation.error instanceof ApiError && typeof publishAndRunMutation.error.detail === 'string'
+              ? publishAndRunMutation.error.detail
+              : publishAndRunMutation.isError
+                ? 'Could not publish the latest canvas.'
+                : null
+          }
+          onPublishAndRun={() => publishAndRunMutation.mutate()}
         />
       )}
+      {designRegenerationWarningOpen && <DesignRegenerationRequiredDialog onClose={() => setDesignRegenerationWarningOpen(false)} />}
       {factorPickerNodeId && (
         <FactorEditorDialog
           open

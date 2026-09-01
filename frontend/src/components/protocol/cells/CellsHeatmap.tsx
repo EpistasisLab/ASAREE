@@ -2,10 +2,11 @@ import { Fragment, useMemo, useState } from 'react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   availableMetricKeys,
-  cellsMatching,
+  replicatesMatching,
   deriveFactors,
   displayFactorValue,
   formatMetricLabel,
+  groupReplicatesIntoCells,
   heatColor,
   meanMetric,
   metricValueSuffix,
@@ -14,7 +15,7 @@ import {
   type FactorSpec,
 } from '@/lib/experiment'
 import { cn } from '@/lib/utils'
-import type { Cell, Experiment } from '@/types/experiments'
+import type { Experiment, Replicate } from '@/types/experiments'
 
 /** Why there's no grid here, said out loud in one dim line rather than
  * rendering nothing at all. The table below still carries every number, so
@@ -36,8 +37,7 @@ function HeatmapUnavailable({ reason }: { reason: string }) {
  * either. Bails out to a one-line HeatmapUnavailable note for >3 derived
  * factors, <2 cells, or no numeric metric anywhere: those are exactly the
  * cases where a heatmap can't show anything the table doesn't already say
- * better. Replicate cells sharing one combination are averaged, not just the
- * first one picked.
+ * better. Replicates in each cell are averaged, not just the first one picked.
  *
  * Sized by CONTAINER query (`@lg`/`@2xl`), not by a compact/roomy prop or the
  * viewport: this renders both inside the drag-resizable side panel and in the
@@ -48,20 +48,21 @@ function HeatmapUnavailable({ reason }: { reason: string }) {
  * three components to make that happen. The parent marks the container --
  * see CellsTab's own `@container`.
  */
-export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Cell[] }) {
+export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Replicate[] }) {
   const availableMetrics = useMemo(() => availableMetricKeys(cells), [cells])
   const defaultMetric = useMemo(() => pickDefaultMetric(experiment, cells), [experiment, cells])
   const [metricKey, setMetricKey] = useState<string | null>(defaultMetric)
   const activeMetric = metricKey && availableMetrics.includes(metricKey) ? metricKey : defaultMetric
 
   const factors = useMemo(() => deriveFactors(cells, experiment.design_spec), [cells, experiment.design_spec])
+  const cellCount = useMemo(() => groupReplicatesIntoCells(cells).length, [cells])
 
   if (!factors || factors.length < 1)
     return <HeatmapUnavailable reason="these cells carry no factor values to lay out as axes" />
   if (factors.length > 3)
     return <HeatmapUnavailable reason={`${factors.length} factors here — a heatmap only reads for up to 3`} />
-  if (cells.length < 2) return <HeatmapUnavailable reason="there's only one cell" />
-  if (!activeMetric) return <HeatmapUnavailable reason="no cell has a numeric metric recorded yet" />
+  if (cellCount < 2) return <HeatmapUnavailable reason="there's only one cell" />
+  if (!activeMetric) return <HeatmapUnavailable reason="no replicate has a numeric metric recorded yet" />
 
   const rowFactor = factors[0]
   const colFactor: FactorSpec = factors[1] ?? { name: '', levels: [null] }
@@ -74,7 +75,7 @@ export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; ce
         const match: Record<string, unknown> = { [rowFactor.name]: rowLevel }
         if (colFactor.name) match[colFactor.name] = colLevel
         if (facetFactor) match[facetFactor.name] = facetLevel
-        const matched = cellsMatching(cells, match)
+        const matched = replicatesMatching(cells, match)
         return { value: meanMetric(matched, activeMetric), count: matched.length }
       }),
     ),
@@ -82,7 +83,7 @@ export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; ce
 
   const allValues = grid.flat(2).map((c) => c.value).filter((v): v is number => v !== null)
   if (allValues.length === 0)
-    return <HeatmapUnavailable reason={`no cell has been scored on ${formatMetricLabel(activeMetric)} yet`} />
+    return <HeatmapUnavailable reason={`no replicate has been scored on ${formatMetricLabel(activeMetric)} yet`} />
   const min = Math.min(...allValues)
   const max = Math.max(...allValues)
 
@@ -204,7 +205,7 @@ export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; ce
                           key={ci}
                           className="flex aspect-square min-h-8 items-center justify-center rounded-md border border-border/50 font-mono text-[0.65rem] @lg:min-h-12 @lg:text-xs"
                           style={cellData.value !== null ? { background: heatColor(cellData.value, min, max) } : undefined}
-                          title={cellData.count > 0 ? `n=${cellData.count}` : 'no cell for this combination'}
+                          title={cellData.count > 0 ? `${cellData.count} planned replicates` : 'no cell for this combination'}
                         >
                           {cellData.value !== null
                             ? `${scaledMetricValue(activeMetric, cellData.value).toFixed(3)}${metricValueSuffix(activeMetric)}`

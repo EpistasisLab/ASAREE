@@ -17,14 +17,21 @@ from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.experiments import get_experiment
+from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
     find_gated_pairs,
     plan_cell_runs,
-    plan_single_cell_run,
+    plan_single_replicate_run,
     topological_order,
     validate_coordination_strategy,
     validate_single_node_runnable,
+)
+from asaree.services.protocol_revisions import (
+    get_published_revision,
+    get_revision,
+    is_draft_published,
+    publish_protocol,
 )
 from asaree.services.protocol_runs import (
     create_protocol_run,
@@ -54,7 +61,7 @@ class CreateProtocolRequest(BaseModel):
 
 class UpdateProtocolRequest(BaseModel):
     """All fields optional; only the ones actually set are written -- same
-    "unset vs. null" convention ``UpdateExperimentRequest``/``UpsertCellRequest``
+    "unset vs. null" convention used by the experiment update APIs
     use. ``graph`` is a full replacement, not a merge (see
     ``services.protocols.update_protocol``)."""
 
@@ -70,12 +77,11 @@ class ProtocolResponse(BaseModel):
     description: str | None
     experiment_id: uuid.UUID | None
     graph: dict[str, Any]
+    published_revision_id: uuid.UUID | None
+    published_revision: int | None
+    has_unpublished_changes: bool
     created_at: datetime
     updated_at: datetime
-
-    class Config:
-        from_attributes = True
-
 
 class ProtocolRunResponse(BaseModel):
     id: uuid.UUID
@@ -83,8 +89,11 @@ class ProtocolRunResponse(BaseModel):
     status: str
     node_runs: dict[str, Any]
     error: str | None
-    cell_label: str | None
+    replicate_label: str | None
+    replicate_result_id: uuid.UUID | None
     factor_values: dict[str, Any] | None
+    design_revision_id: uuid.UUID | None
+    protocol_revision_id: uuid.UUID | None
     target_node_id: str | None
     cancel_requested_at: datetime | None
     created_at: datetime
@@ -94,23 +103,35 @@ class ProtocolRunResponse(BaseModel):
         from_attributes = True
 
 
+class ProtocolRevisionResponse(BaseModel):
+    id: uuid.UUID
+    protocol_id: uuid.UUID
+    revision: int
+    graph: dict[str, Any]
+    published_at: datetime
+
+    class Config:
+        from_attributes = True
+
 class CreateProtocolRunRequest(BaseModel):
     # Omitted/null -- today's ad-hoc, un-substituted whole-graph run. Set --
-    # runs that one already-generated cell for real, its own factor_values
-    # substituted in (see services.protocol_execution.plan_single_cell_run),
+    # runs that one already-generated replicate for real, its cell's factor_values
+    # substituted in (see services.protocol_execution.plan_single_replicate_run),
     # the same as one entry of "Run all cells" but picked by name instead of
-    # running every not-yet-scored cell at once.
-    cell_label: str | None = None
+    # running every not-yet-scored replicate at once.
+    replicate_label: str | None = None
 
 
 class CellRunBatchResponse(BaseModel):
     """One "run all cells" trigger fans out into these -- one ProtocolRun per
-    not-yet-scored cell. ``skipped`` is how many cells already had
+    not-yet-scored replicate. ``skipped`` is how many replicates already had
     metric_values and were left alone (resume semantics)."""
 
     protocol_run_ids: list[uuid.UUID]
-    cell_labels: list[str]
+    replicate_labels: list[str]
     skipped: int
+    protocol_revision_id: uuid.UUID
+    protocol_revision: int
 
 
 async def _get_owned_protocol(db: DbSession, protocol_id: uuid.UUID, user: CurrentUser) -> Any:
@@ -118,6 +139,29 @@ async def _get_owned_protocol(db: DbSession, protocol_id: uuid.UUID, user: Curre
     if protocol is None or protocol.owner_id != user.id:
         raise HTTPException(status_code=404, detail="No such protocol")
     return protocol
+
+
+async def _protocol_response(db: DbSession, protocol: Any) -> ProtocolResponse:
+    published = await get_published_revision(db, protocol)
+    return ProtocolResponse(
+        id=protocol.id,
+        name=protocol.name,
+        description=protocol.description,
+        experiment_id=protocol.experiment_id,
+        graph=protocol.graph,
+        published_revision_id=published.id if published else None,
+        published_revision=published.revision if published else None,
+        has_unpublished_changes=not is_draft_published(protocol, published),
+        created_at=protocol.created_at,
+        updated_at=protocol.updated_at,
+    )
+
+
+async def _require_published_revision(db: DbSession, protocol: Any) -> Any:
+    revision = await get_published_revision(db, protocol)
+    if revision is None:
+        raise HTTPException(status_code=409, detail="Publish this protocol before running it.")
+    return revision
 
 
 async def _validated_experiment_id(
@@ -146,7 +190,7 @@ async def create_protocol_endpoint(
         experiment_id=experiment_id,
         graph=body.graph,
     )
-    return ProtocolResponse.model_validate(protocol)
+    return await _protocol_response(db, protocol)
 
 
 @router.get("", response_model=list[ProtocolResponse])
@@ -154,13 +198,13 @@ async def list_protocols_endpoint(
     user: CurrentUser, db: DbSession, experiment_id: uuid.UUID | None = None
 ) -> list[ProtocolResponse]:
     protocols = await list_protocols(db, owner_id=user.id, experiment_id=experiment_id)
-    return [ProtocolResponse.model_validate(p) for p in protocols]
+    return [await _protocol_response(db, p) for p in protocols]
 
 
 @router.get("/{protocol_id}", response_model=ProtocolResponse)
 async def get_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ProtocolResponse:
     protocol = await _get_owned_protocol(db, protocol_id, user)
-    return ProtocolResponse.model_validate(protocol)
+    return await _protocol_response(db, protocol)
 
 
 @router.patch("/{protocol_id}", response_model=ProtocolResponse)
@@ -177,7 +221,34 @@ async def update_protocol_endpoint(
         fields["experiment_id"] = await _validated_experiment_id(fields["experiment_id"], db, user)
     protocol = await update_protocol(db, protocol_id, fields=fields)
     assert protocol is not None  # existence already checked above
-    return ProtocolResponse.model_validate(protocol)
+    return await _protocol_response(db, protocol)
+
+
+@router.post("/{protocol_id}/publish", response_model=ProtocolResponse)
+async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ProtocolResponse:
+    """Make the current autosaved canvas the immutable version future runs use."""
+    protocol = await _get_owned_protocol(db, protocol_id, user)
+    try:
+        topological_order(protocol.graph)
+        experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
+        design_spec = experiment.design_spec if experiment is not None else None
+        validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(protocol.graph)))
+        validate_factor_bindings(design_spec, protocol.graph)
+    except (ProtocolValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await publish_protocol(db, protocol)
+    return await _protocol_response(db, protocol)
+
+
+@router.get("/{protocol_id}/revisions/{revision_id}", response_model=ProtocolRevisionResponse)
+async def get_protocol_revision_endpoint(
+    protocol_id: uuid.UUID, revision_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> ProtocolRevisionResponse:
+    await _get_owned_protocol(db, protocol_id, user)
+    revision = await get_revision(db, revision_id)
+    if revision is None or revision.protocol_id != protocol_id:
+        raise HTTPException(status_code=404, detail="No such protocol revision")
+    return ProtocolRevisionResponse.model_validate(revision)
 
 
 @router.delete("/{protocol_id}", status_code=204)
@@ -191,23 +262,27 @@ async def create_protocol_run_endpoint(
     protocol_id: uuid.UUID, user: CurrentUser, db: DbSession, body: CreateProtocolRunRequest | None = None
 ) -> ProtocolRunResponse:
     protocol = await _get_owned_protocol(db, protocol_id, user)
-    cell_label = body.cell_label if body else None
+    revision = await _require_published_revision(db, protocol)
+    replicate_label = body.replicate_label if body else None
     try:
-        if cell_label:
-            run = await plan_single_cell_run(
+        if replicate_label:
+            run = await plan_single_replicate_run(
                 db,
                 protocol_id=protocol_id,
                 experiment_id=protocol.experiment_id,
                 owner_id=user.id,
-                graph=protocol.graph,
-                cell_label=cell_label,
+                graph=revision.graph,
+                replicate_label=replicate_label,
+                protocol_revision_id=revision.id,
             )
         else:
-            topological_order(protocol.graph)
+            topological_order(revision.graph)
             experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
             design_spec = experiment.design_spec if experiment is not None else None
-            validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(protocol.graph)))
-            run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=user.id)
+            validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(revision.graph)))
+            run = await create_protocol_run(
+                db, protocol_id=protocol_id, owner_id=user.id, protocol_revision_id=revision.id
+            )
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await enqueue_protocol_run(run.id)
@@ -224,11 +299,14 @@ async def run_single_node_endpoint(
     running a node mid-pipeline against real upstream output needs a
     bounded/partial-run entrypoint this executor doesn't have yet."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
+    revision = await _require_published_revision(db, protocol)
     try:
-        validate_single_node_runnable(protocol.graph, node_id)
+        validate_single_node_runnable(revision.graph, node_id)
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=user.id, target_node_id=node_id)
+    run = await create_protocol_run(
+        db, protocol_id=protocol_id, owner_id=user.id, target_node_id=node_id, protocol_revision_id=revision.id
+    )
     await enqueue_protocol_run(run.id)
     return ProtocolRunResponse.model_validate(run)
 
@@ -237,18 +315,20 @@ async def run_single_node_endpoint(
 async def create_cell_runs_endpoint(
     protocol_id: uuid.UUID, user: CurrentUser, db: DbSession
 ) -> CellRunBatchResponse:
-    """"Run all cells": one ProtocolRun per not-yet-scored FactorialCellResult
-    under this protocol's linked experiment, each with that cell's own
+    """ "Run all cells": one ProtocolRun per not-yet-scored replicate result
+    under this protocol's linked experiment, each with its cell's
     factor_values substituted into the graph's factor-bound fields at
     execution time (see services.protocol_execution.run_protocol)."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
+    revision = await _require_published_revision(db, protocol)
     try:
         runs, skipped = await plan_cell_runs(
             db,
             protocol_id=protocol.id,
             experiment_id=protocol.experiment_id,
             owner_id=user.id,
-            graph=protocol.graph,
+            graph=revision.graph,
+            protocol_revision_id=revision.id,
         )
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -256,8 +336,10 @@ async def create_cell_runs_endpoint(
         await enqueue_protocol_run(run.id)
     return CellRunBatchResponse(
         protocol_run_ids=[r.id for r in runs],
-        cell_labels=[r.cell_label for r in runs if r.cell_label is not None],
+        replicate_labels=[r.replicate_label for r in runs if r.replicate_label is not None],
         skipped=skipped,
+        protocol_revision_id=revision.id,
+        protocol_revision=revision.revision,
     )
 
 

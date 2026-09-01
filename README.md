@@ -7,10 +7,11 @@ experiments rather than one-off prompts.
 You build a pipeline of agents on a visual protocol canvas, declare the factors
 you want to vary across it (model, effort, whether a critic gate is enabled,
 anything else bound to a node's config), and ASAREE materializes the full
-factorial design as cells, runs them, and collects each cell's metrics so the
-comparison is a measured result instead of an impression. Datasets are
-registered, split, and versioned as they pass between agents, and the tools the
-agents reach for are MCP servers, so a run is reproducible end to end.
+factorial design as cells, runs every replicate, and collects each replicate's
+metrics so the comparison is a measured result instead of an impression.
+Datasets are registered, split, and versioned as they pass between agents, and
+the tools the agents reach for are MCP servers, so a run is reproducible end
+to end.
 
 ASAREE is built on top of [Motoro](https://github.com/EpistasisLab/motoro),
 which provides the agent runtime, execution patterns, LLM service, and MCP
@@ -18,18 +19,42 @@ integration. Motoro ships no HTTP layer, no auth, and no UI; ASAREE adds those,
 plus the experiment/protocol/dataset model, and depends on Motoro as a pinned
 library — in-process, not a service call.
 
+## Releases and development
+
+For installation, reproducible research, and production deployments, use a
+tagged [GitHub Release](https://github.com/EpistasisLab/ASAREE/releases). The
+[latest release](https://github.com/EpistasisLab/ASAREE/releases/latest) is the
+recommended version for new installations. The project treats every published
+release tag as permanent so a deployment or experiment can be recreated from
+the same source later. Repository administrators enforce this policy with
+GitHub's release immutability setting; ordinary Git tags are not inherently
+immutable.
+
+The `main` branch contains the latest development version. It may include
+changes that have not yet been released or fully validated for production, so
+do not use `main` when an exact, stable version matters.
+
 ## Get started
 
 You need **git** and **Docker with Compose v2** (`docker compose version`),
 about 10 GB of free disk, and 10–20 minutes for the first build.
 
-**1. Clone and start it.**
+**1. Install a release and start it.** Open the
+[releases page](https://github.com/EpistasisLab/ASAREE/releases), choose a tag,
+and replace `vX.Y.Z` below with that tag (for example, `v0.3.0`).
 
 ```bash
-git clone https://github.com/EpistasisLab/ASAREE.git
+git clone --branch vX.Y.Z --depth 1 https://github.com/EpistasisLab/ASAREE.git
 cd ASAREE
 cp .env.example .env
 docker compose up -d --build
+```
+
+Contributors who intentionally want the current development version can clone
+`main` instead:
+
+```bash
+git clone --branch main https://github.com/EpistasisLab/ASAREE.git
 ```
 
 That brings up Postgres, Redis, both migration steps, the API, the run worker,
@@ -71,6 +96,40 @@ docker compose down                   # stop, keep all data
 ```
 
 The frontend hot-reloads from your checkout; backend changes need a rebuild.
+
+`docker compose up -d --build` also runs pending database migrations. The
+one-shot `motoro-migrate` service upgrades Motoro's `motoro` database first;
+`asaree-migrate` then upgrades ASAREE's `asaree` database. The API and worker
+start only after both migration services exit successfully.
+`docker compose restart asaree-app` restarts only that service and does not
+rerun the migration services.
+
+Before upgrading an existing production deployment, back up both databases.
+Then check out the desired release tag and recreate the stack:
+
+```bash
+git fetch --tags
+git switch --detach vX.Y.Z
+docker compose up -d --build
+docker compose ps
+```
+
+To run the migrations explicitly against an external PostgreSQL server, build
+the release's migration image, supply URLs for both databases, and run the two
+chains in order. URL-encode any special characters in the credentials.
+
+```bash
+docker compose build motoro-migrate asaree-migrate
+
+MOTORO_DB_URL='postgresql+asyncpg://USER:PASSWORD@HOST:PORT/motoro'
+ASAREE_DB_URL='postgresql+asyncpg://USER:PASSWORD@HOST:PORT/asaree'
+
+docker compose run --rm --no-deps motoro-migrate deploy --url "$MOTORO_DB_URL"
+docker compose run --rm --no-deps asaree-migrate upgrade --url "$ASAREE_DB_URL"
+
+docker compose run --rm --no-deps motoro-migrate current --url "$MOTORO_DB_URL"
+docker compose run --rm --no-deps asaree-migrate current --url "$ASAREE_DB_URL"
+```
 
 The stack binds ports 8000 (API), 5173 (frontend), 5453 (Postgres), and 6381
 (Redis). If one is taken, set `POSTGRES_PORT` or `REDIS_PORT` in `.env`; the

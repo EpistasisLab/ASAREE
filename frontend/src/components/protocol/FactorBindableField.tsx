@@ -156,6 +156,7 @@ export function FactorBindableField({
     onSuccess: (next) => {
       onBind(next.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
       setOpen(false)
     },
   })

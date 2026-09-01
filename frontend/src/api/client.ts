@@ -12,11 +12,11 @@ import type {
 } from '@/types/auth'
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
-import type { Cell, DesignSpec, Experiment, ExperimentResults, Trial } from '@/types/experiments'
+import type { DesignImpact, DesignRevision, DesignSpec, Experiment, ExperimentResults, Replicate, Trial } from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
-import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRun } from '@/types/protocols'
+import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
 
@@ -200,17 +200,33 @@ export const experimentsApi = {
     },
   ) => request<Experiment>(`/experiments/${id}`, { method: 'PATCH', body: data }),
   remove: (id: string) => request<void>(`/experiments/${id}`, { method: 'DELETE' }),
-  listCells: (id: string) => request<Cell[]>(`/experiments/${id}/cells`),
-  // One row per cell, one column per factor_values/metric_values key seen
-  // anywhere in the experiment (see services.csv_export.cells_to_csv) --
+  // The experiment's current design cells; pass a revisionId to read a
+  // superseded revision's instead (the design-history drill-down).
+  listReplicates: (id: string, revisionId?: string) =>
+    request<Replicate[]>(revisionId ? `/experiments/${id}/replicates?revision_id=${revisionId}` : `/experiments/${id}/replicates`),
+  // Every generation of this experiment's design, newest first -- the first
+  // entry (superseded_at === null) is the current one.
+  listDesignRevisions: (id: string) => request<DesignRevision[]>(`/experiments/${id}/design-revisions`),
+  // Permanently deletes a superseded revision and every cell in it, results
+  // included (409 on the current revision -- regenerate to replace that).
+  deleteDesignRevision: (id: string, revisionId: string) =>
+    request<void>(`/experiments/${id}/design-revisions/${revisionId}`, { method: 'DELETE' }),
+  // Pure preview of the current declaration against the materialized design;
+  // used to make an explicit regeneration decision before runs are allowed.
+  getDesignImpact: (id: string) => request<DesignImpact>(`/experiments/${id}/design-impact`),
+  // One row per replicate, one column per factor_values/metric_values key seen
+  // anywhere in the experiment (see services.csv_export.replicates_to_csv) --
   // a Blob, not JSON, so callers hand it straight to URL.createObjectURL.
-  downloadCellsCsv: (id: string) => requestBlob(`/experiments/${id}/cells.csv`),
-  // Materializes one FactorialCellResult per combination of the experiment's
-  // declared factors -- safe to call again after widening a factor's levels,
-  // existing cells are untouched (see services.design_generation).
-  generateDesign: (id: string) => request<Cell[]>(`/experiments/${id}/generate-design`, { method: 'POST' }),
-  // One row per cell (a "trial"), not per ProtocolRun -- a cell that's never
-  // been run is still listed, with status "queued" (see TrialResponse /
+  downloadReplicatesCsv: (id: string) => requestBlob(`/experiments/${id}/replicates.csv`),
+  // Materializes one cell per combination and its replicate-result children.
+  // declared factors, returning the current design's replicates. If the new design
+  // isn't the same set of cells as the current one, the current design
+  // revision is superseded and a new one opened -- results for surviving cell
+  // labels carry forward, the rest stay in history (see
+  // services.design_generation). Nothing is ever deleted here.
+  generateDesign: (id: string) => request<Replicate[]>(`/experiments/${id}/generate-design`, { method: 'POST' }),
+  // One row per replicate (a "trial"), not per ProtocolRun -- a replicate that's never
+  // been run is still listed, with status "not_started" (see TrialResponse /
   // services.protocol_runs.list_experiment_trials).
   listTrials: (id: string) => request<Trial[]>(`/experiments/${id}/runs`),
   // Derives analyze_factorial's own condition_factors/positive_levels/
@@ -228,17 +244,19 @@ export const protocolsApi = {
     request<Protocol[]>(experimentId ? `/protocols?experiment_id=${experimentId}` : '/protocols'),
   update: (id: string, data: { name?: string; description?: string | null; graph?: ProtocolGraph }) =>
     request<Protocol>(`/protocols/${id}`, { method: 'PATCH', body: data }),
+  publish: (id: string) => request<Protocol>(`/protocols/${id}/publish`, { method: 'POST' }),
   remove: (id: string) => request<void>(`/protocols/${id}`, { method: 'DELETE' }),
   // 422 if the graph is empty or has a cycle -- returns immediately with
   // status "pending"; poll getRun for progress. cellLabel runs that one
   // already-generated cell for real (its own factor_values substituted in)
   // instead of today's ad-hoc, un-substituted whole-graph run.
   run: (id: string, cellLabel?: string | null) =>
-    request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST', body: { cell_label: cellLabel ?? null } }),
+    request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST', body: { replicate_label: cellLabel ?? null } }),
   // The per-node Play icon -- 422 if the node has upstream input or isn't a
   // runnable Agent (see validate_single_node_runnable). Same polling shape
   // as a plain run (getRun), just with node_runs carrying only this one key.
   runNode: (id: string, nodeId: string) => request<ProtocolRun>(`/protocols/${id}/nodes/${nodeId}/run`, { method: 'POST' }),
+  getRevision: (id: string, revisionId: string) => request<ProtocolRevision>(`/protocols/${id}/revisions/${revisionId}`),
   getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
   // Only raises cancel_requested_at -- a no-op (200, unchanged row) once the
   // run is already terminal. run_protocol's own node loop is what actually
@@ -247,7 +265,7 @@ export const protocolsApi = {
   listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
   // "Run all cells" -- 422 if there's no linked experiment or the graph
   // doesn't have exactly one final node; fans out one ProtocolRun per
-  // not-yet-scored FactorialCellResult, each polled via listRuns.
+  // not-yet-scored replicate result, each polled via listRuns.
   runCells: (id: string) => request<CellRunBatch>(`/protocols/${id}/cell-runs`, { method: 'POST' }),
 }
 

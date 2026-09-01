@@ -33,7 +33,11 @@ const DEPENDENCY_HANDLES = new Set([
   'knowledge',
 ])
 
-export type RunScope = { type: 'graph' } | { type: 'cell'; label: string } | { type: 'node'; nodeId: string; label: string }
+export type RunScope =
+  | { type: 'graph' }
+  | { type: 'replicate'; label: string }
+  | { type: 'all-cells'; cellCount: number; replicateCount: number; pendingReplicateCount: number }
+  | { type: 'node'; nodeId: string; label: string }
 
 export interface RunSummary {
   agentCount: number
@@ -50,8 +54,8 @@ export interface RunSummary {
 
 // Builds a plain-language summary of what a Run click will actually
 // execute -- shown in RunConfirmDialog before any real (billable) LLM call
-// fires. For scope "graph"/"cell" every node on the canvas participates
-// (a cell run is the same graph, just with factor_values substituted); for
+// fires. For scope "graph"/"replicate"/"all-cells" every node on the canvas participates
+// (a replicate run is the same graph, just with factor_values substituted); for
 // scope "node" (the per-node Play icon) only that node's own directly-wired
 // dependencies count, mirroring the one-level connector traversal
 // services.protocol_execution's _resolve_llm_config/_resolve_tool_config/

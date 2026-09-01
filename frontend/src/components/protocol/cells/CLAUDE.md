@@ -16,7 +16,10 @@ earns its place.
   column per derived factor (reuses `deriveFactors`) plus up to 4 curated metric columns
   (`pickMetricColumns` — same preference order as the heatmap's default metric, capped because
   a real scored cell can have 6-7 numeric keys and showing all of them makes the table
-  unreadably wide). `table-fixed` isn't used since the column set is dynamic; instead:
+  unreadably wide). One table row is one true cell (a unique factor combination): its metric
+  columns are replicate means and its status reports scored/total replicates. The API's legacy
+  `Replicate` rows are individual observations and must be grouped first via
+  `groupReplicatesIntoCells`. `table-fixed` isn't used since the column set is dynamic; instead:
   `truncate` on free-text cells, a shaded uppercase sortable header row, subtle zebra striping,
   `font-mono` on technical values. It's styled to the side panel's own compact table idiom (a
   plain `text-xs` `<table>` in a bordered box, like `RunsTab`/`ResultsTab`), not
@@ -25,8 +28,8 @@ earns its place.
 - **A factorial design gets a heatmap complement above its table, not instead of it**
   (`CellsHeatmap.tsx`) — precise numbers still matter, a heatmap just makes the *shape* of a
   multi-factor sweep's results scannable at a glance. 1-2 factors render as one grid; 3 facet
-  into one grid per level of the third. Replicate cells sharing one factor combination are
-  averaged, not just the first one picked. Color is `color-mix(in oklch, var(--muted),
+  into one grid per level of the third. Replicates within each cell are averaged, not just the
+  first one picked. Color is `color-mix(in oklch, var(--muted),
   var(--primary) N%)` (`heatColor` in `lib/experiment.ts`) — low values dim, high values glow
   in the theme's own accent, not an unrelated rainbow scale. Its layout is driven by
   **container queries** (`@lg`/`@2xl`, with `CellsTab`'s `CellsBody` marking the `@container`),
@@ -54,7 +57,7 @@ earns its place.
     the declared display names (`Azure Foundry:Model`, `Critic enabled`), while the *Spinal
     Fusion* one declares those same-style names but its cells are keyed `tier`/`effort`/
     `critic` from the design generator. Nothing keeps the two in sync. When they diverged,
-    every `cellsMatching()` lookup matched 0 of 80 cells, every square came out `null`, and
+    every `replicatesMatching()` lookup matched 0 of 80 replicates, every square came out `null`, and
     the grid vanished with no error in the console, no failing type, and no visible clue —
     it looked exactly like a broken component. A declared spec now only contributes level
     order and planned-but-unrun levels for names the cells actually use. The metric selector only shows when there's more than one
@@ -101,4 +104,18 @@ earns its place.
   relative last-used) since it's a footnote to the trial table in a narrow column, not its own
   page section. The model-hash tint is the part that carries meaning and must survive any
   further restyling; don't go back to ARES's plain name/role/added thin table either.
+- **Design history is a collapsed footnote, not a peer of the table** (`DesignHistory.tsx`):
+  regenerating a design that would drop cells supersedes the whole revision rather than editing
+  or deleting the old cells (see the root `CLAUDE.md`'s "Cells belong to a design revision"),
+  so an experiment quietly accumulates results the current view doesn't show. The list renders
+  **only once there are ≥2 revisions** — a permanent "1 revision" row is noise in a 320px
+  column, and a single current revision is just "the design", which is already the whole rest
+  of the tab. Selecting a superseded revision swaps the heatmap/table onto its cells with an
+  explicit read-only banner; that selection lives in `CellsTab` so the tally, the CSV button and
+  the grid can't disagree about which design they're showing, and a superseded revision gets its
+  own query key so it never overwrites the `['experiments', id, 'cells']` entry the canvas top
+  bar and `DesignTab` share. Deleting one is permanent and cascades to its results, so it goes
+  through a `Dialog` that names the counts (the `DeleteNodeConfirmDialog` convention), not the
+  lighter inline two-click confirm — and the current revision has no delete affordance at all,
+  since the server refuses it (409).
 - Paginate client-side once a list can realistically exceed ~10-20 rows.

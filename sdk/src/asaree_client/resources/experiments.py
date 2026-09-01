@@ -1,9 +1,9 @@
-"""Experiment and factorial-cell resource, matching asaree.api.experiments.
+"""Experiment, factorial-cell, and replicate resources.
 
-``upsert_cell`` is the replacement for the source notebook's two
+``upsert_replicate`` is the replacement for the source notebook's two
 ``client.runs.update(mlm_run_id, metadata={...})`` calls (pre-scoring and
 post-scoring) — both become calls to this, merged onto the same
-``FactorialCellResult`` row rather than the run.
+replicate-result row rather than the run.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from asaree_client.models import Cell, Experiment, ExperimentArtifact
+from asaree_client.models import DesignRevision, Experiment, ExperimentArtifact, Replicate
 
 ResourceId = uuid.UUID | str
 # Distinguishes "omit this kwarg" (leave unchanged) from "pass None"
@@ -106,24 +106,44 @@ class Experiments:
         data = self._client._patch(f"/experiments/{experiment_id}", json=payload)
         return Experiment(**data)
 
-    def generate_design(self, experiment_id: ResourceId) -> builtins.list[Cell]:
+    def generate_design(self, experiment_id: ResourceId) -> builtins.list[Replicate]:
         """Materialize one cell per combination of the experiment's declared
-        factors. Safe to call again after widening a factor's levels."""
-        data = self._client._post(f"/experiments/{experiment_id}/generate-design")
-        return [Cell(**c) for c in data]
+        factors and their replicate results, returning the current replicates.
 
-    def upsert_cell(
+        Safe to call again after changing the factors. If the new design
+        produces a different set of cells than the current one, the current
+        design revision is superseded and a new one opened: results for cells
+        that survive the change carry forward, and the rest stay behind in the
+        superseded revision as history (see ``list_design_revisions``). Nothing
+        is deleted, and the returned list is always exactly the new design.
+        """
+        data = self._client._post(f"/experiments/{experiment_id}/generate-design")
+        return [Replicate(**replicate) for replicate in data]
+
+    def list_design_revisions(self, experiment_id: ResourceId) -> builtins.list[DesignRevision]:
+        """Every generation of this experiment's design, newest first. The
+        first entry (``superseded_at is None``) is the current design."""
+        data = self._client._get(f"/experiments/{experiment_id}/design-revisions")
+        return [DesignRevision(**r) for r in data]
+
+    def delete_design_revision(self, experiment_id: ResourceId, revision_id: ResourceId) -> None:
+        """Permanently delete a superseded design revision and all of its
+        cells, including any results scored in them. Refuses (409) on the
+        current revision -- regenerate the design to replace that instead."""
+        self._client._delete(f"/experiments/{experiment_id}/design-revisions/{revision_id}")
+
+    def upsert_replicate(
         self,
         experiment_id: ResourceId,
-        cell_label: str,
+        replicate_label: str,
         *,
         run_id: ResourceId | None = None,
         workspace_id: str | None = None,
         factor_values: dict[str, Any] | None = None,
         metric_values: dict[str, Any] | None = None,
         artifacts: dict[str, Any] | None = None,
-    ) -> Cell:
-        """Merge fields onto a cell's row — pass just what changed; unset
+    ) -> Replicate:
+        """Merge fields onto a replicate-result row — pass just what changed; unset
         fields are left untouched (a pre-scoring call and a post-scoring
         call land on the same row without either erasing the other)."""
         payload: dict[str, Any] = {}
@@ -137,16 +157,20 @@ class Experiments:
             payload["metric_values"] = metric_values
         if artifacts is not None:
             payload["artifacts"] = artifacts
-        data = self._client._put(f"/experiments/{experiment_id}/cells/{cell_label}", json=payload)
-        return Cell(**data)
+        data = self._client._put(f"/experiments/{experiment_id}/replicates/{replicate_label}", json=payload)
+        return Replicate(**data)
 
-    def get_cell(self, experiment_id: ResourceId, cell_label: str) -> Cell:
-        data = self._client._get(f"/experiments/{experiment_id}/cells/{cell_label}")
-        return Cell(**data)
+    def get_replicate(self, experiment_id: ResourceId, replicate_label: str) -> Replicate:
+        data = self._client._get(f"/experiments/{experiment_id}/replicates/{replicate_label}")
+        return Replicate(**data)
 
-    def list_cells(self, experiment_id: ResourceId) -> builtins.list[Cell]:
-        data = self._client._get(f"/experiments/{experiment_id}/cells")
-        return [Cell(**c) for c in data]
+    def list_replicates(
+        self, experiment_id: ResourceId, *, revision_id: ResourceId | None = None
+    ) -> builtins.list[Replicate]:
+        """The current design's replicate results, optionally from a superseded revision."""
+        params = {"revision_id": str(revision_id)} if revision_id is not None else None
+        data = self._client._get(f"/experiments/{experiment_id}/replicates", params=params)
+        return [Replicate(**replicate) for replicate in data]
 
     def analyze(
         self,

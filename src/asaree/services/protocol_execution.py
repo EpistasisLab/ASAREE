@@ -46,9 +46,12 @@ from asaree.services.dataset_workspaces import (
     head_data_locator,
     seed_cell_workspace,
 )
+from asaree.services.design_generation import get_design_impact
 from asaree.services.experiments import get_experiment
-from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
-from asaree.services.metric_promotion import promote_cell_score_metrics
+from asaree.services.factor_bindings import validate_factor_bindings
+from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
+from asaree.services.metric_promotion import promote_replicate_score_metrics
+from asaree.services.protocol_revisions import get_revision
 from asaree.services.protocol_runs import (
     create_protocol_run,
     get_cancel_requested_at,
@@ -2024,17 +2027,18 @@ async def plan_cell_runs(
     experiment_id: uuid.UUID | None,
     owner_id: uuid.UUID,
     graph: dict[str, Any],
+    protocol_revision_id: uuid.UUID | None = None,
 ) -> tuple[list[ProtocolRun], int]:
     """ "Run all cells": creates one pending :class:`ProtocolRun` per
-    not-yet-scored :class:`FactorialCellResult` under *experiment_id*, each
-    carrying that cell's own ``factor_values`` for ``run_protocol`` to
+    not-yet-scored replicate row under *experiment_id*, each carrying its
+    cell's ``factor_values`` for ``run_protocol`` to
     substitute at execution time via ``apply_factor_bindings``. Returns
-    ``(created_runs, skipped_count)`` -- a cell already carrying
+    ``(created_runs, skipped_count)`` -- a replicate already carrying
     ``metric_values`` is skipped (resume semantics: a repeat click doesn't
-    re-run, and re-bill, an already-scored cell). Raises
+    re-run, and re-bill, an already-scored replicate). Raises
     :class:`ProtocolValidationError` (same type the plain-run endpoint
     already 422s on) if there's no linked experiment, the graph itself is
-    invalid, the graph doesn't have exactly one sink node -- a cell's result
+    invalid, the graph doesn't have exactly one sink node -- a replicate's result
     has to come from somewhere unambiguous, mirroring the notebook's own
     single-pipeline (DC->FTE->FS->MLM) shape -- or the experiment's declared
     coordination strategy rejects this graph (see
@@ -2042,72 +2046,101 @@ async def plan_cell_runs(
     that's the caller's job, same create-then-enqueue split
     ``create_protocol_run_endpoint`` already uses for a plain run."""
     if experiment_id is None:
-        raise ProtocolValidationError("This protocol has no linked experiment to run cells for.")
+        raise ProtocolValidationError("This protocol has no linked experiment to run replicates for.")
     topological_order(graph)  # raises ProtocolValidationError on a cycle/empty graph
     sinks = sink_node_ids(graph)
     if len(sinks) != 1:
         raise ProtocolValidationError(
-            f"This protocol must have exactly one final node to run per experimental cell (found {len(sinks)})."
+            f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
         )
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(graph)))
+    try:
+        validate_factor_bindings(design_spec, graph)
+    except ValueError as exc:
+        raise ProtocolValidationError(str(exc)) from exc
+    impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=design_spec)
+    if impact.regeneration_required:
+        raise ProtocolValidationError(
+            "Design changed — review and regenerate before running all cells. "
+            f"Current {impact.current_cell_count} cells/{impact.current_replicate_count} replicates, "
+            f"proposed {impact.proposed_cell_count} cells/{impact.proposed_replicate_count} replicates."
+        )
 
-    cells = await list_cells(db, experiment_id=experiment_id)
-    pending = [c for c in cells if not c.metric_values]
+    # Current design only -- list_replicates scopes to the experiment's current
+    # revision, so a superseded design's replicates are neither counted nor run.
+    replicates = await list_replicates(db, experiment_id=experiment_id)
+    pending = [replicate for replicate in replicates if not replicate.metric_values]
     runs = [
         await create_protocol_run(
             db,
             protocol_id=protocol_id,
             owner_id=owner_id,
-            cell_label=cell.cell_label,
-            factor_values=cell.factor_values or {},
+            replicate_label=replicate.replicate_label,
+            factor_values=replicate.factor_values or {},
+            replicate_result_id=replicate.id,
+            design_revision_id=replicate.design_revision_id,
+            protocol_revision_id=protocol_revision_id,
         )
-        for cell in pending
+        for replicate in pending
     ]
-    return runs, len(cells) - len(pending)
+    return runs, len(replicates) - len(pending)
 
 
-async def plan_single_cell_run(
+async def plan_single_replicate_run(
     db: AsyncSession,
     *,
     protocol_id: uuid.UUID,
     experiment_id: uuid.UUID | None,
     owner_id: uuid.UUID,
     graph: dict[str, Any],
-    cell_label: str,
+    replicate_label: str,
+    protocol_revision_id: uuid.UUID | None = None,
 ) -> ProtocolRun:
-    """Run one already-generated cell for real, by name -- the single-cell
-    counterpart to plan_cell_runs's own "every not-yet-scored cell" batch.
+    """Run one already-generated replicate for real, by name -- the single-run
+    counterpart to plan_cell_runs's own "every not-yet-scored replicate" batch.
     The canvas's own Run button offers this alongside its existing ad-hoc
     (no substitution) run once the linked experiment has generated cells,
     for testing one specific factor combination without either running
     everything or falling back to an un-substituted smoke test. Same
     validation as plan_cell_runs (linked experiment, valid graph, exactly
     one sink, coordination strategy) but does NOT skip an already-scored
-    cell -- picking one specific cell by name is a deliberate re-run, not a
+    replicate -- picking one specific replicate by name is a deliberate re-run, not a
     batch resume, so there's nothing to protect it from."""
     if experiment_id is None:
-        raise ProtocolValidationError("This protocol has no linked experiment to run a cell for.")
+        raise ProtocolValidationError("This protocol has no linked experiment to run a replicate for.")
     topological_order(graph)  # raises ProtocolValidationError on a cycle/empty graph
     sinks = sink_node_ids(graph)
     if len(sinks) != 1:
         raise ProtocolValidationError(
-            f"This protocol must have exactly one final node to run per experimental cell (found {len(sinks)})."
+            f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
         )
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(graph)))
+    try:
+        validate_factor_bindings(design_spec, graph)
+    except ValueError as exc:
+        raise ProtocolValidationError(str(exc)) from exc
+    impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=design_spec)
+    if impact.regeneration_required:
+        raise ProtocolValidationError("Design changed — review and regenerate before running a replicate.")
 
-    cell = await get_cell(db, experiment_id=experiment_id, cell_label=cell_label)
-    if cell is None:
-        raise ProtocolValidationError(f"No such cell: {cell_label!r}")
+    replicate = await get_replicate(
+        db, experiment_id=experiment_id, replicate_label=replicate_label
+    )
+    if replicate is None:
+        raise ProtocolValidationError(f"No such replicate: {replicate_label!r}")
     return await create_protocol_run(
         db,
         protocol_id=protocol_id,
         owner_id=owner_id,
-        cell_label=cell.cell_label,
-        factor_values=cell.factor_values or {},
+        replicate_label=replicate.replicate_label,
+        factor_values=replicate.factor_values or {},
+        replicate_result_id=replicate.id,
+        design_revision_id=replicate.design_revision_id,
+        protocol_revision_id=protocol_revision_id,
     )
 
 
@@ -2223,7 +2256,26 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             await set_status(db, protocol_run_id, status="failed", error="protocol no longer exists")
             return
         protocol_id, owner_id, graph = protocol.id, run.owner_id, protocol.graph
-        experiment_id, cell_label, factor_values = protocol.experiment_id, run.cell_label, run.factor_values
+        if run.protocol_revision_id is not None:
+            revision = await get_revision(db, run.protocol_revision_id)
+            if revision is None:
+                await set_status(
+                    db, protocol_run_id, status="failed", error="published protocol revision no longer exists"
+                )
+                return
+            graph = revision.graph
+        experiment_id, replicate_label, factor_values = (
+            protocol.experiment_id,
+            run.replicate_label,
+            run.factor_values,
+        )
+        # Pinned when the run was planned, so a design regenerated while this
+        # was in flight can't redirect the write-backs below onto a different
+        # generation's cell (or mint a stray one for a combination the current
+        # design no longer has). Null for a run planned before this column
+        # existed -- upsert_replicate then falls back to the current revision,
+        # which is the old behavior and the best available answer.
+        design_revision_id = run.design_revision_id
         target_node_id = run.target_node_id
         experiment = await get_experiment(db, experiment_id) if experiment_id else None
         design_spec = experiment.design_spec if experiment is not None else None
@@ -2256,22 +2308,23 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             await set_status(db, protocol_run_id, status="failed", error=str(e))
         return
 
-    effective_cell_label = _effective_cell_label(cell_label, protocol_run_id)
-    workspace_id = _compute_workspace_id(experiment_id, cell_label, protocol_run_id)
+    effective_cell_label = _effective_cell_label(replicate_label, protocol_run_id)
+    workspace_id = _compute_workspace_id(experiment_id, replicate_label, protocol_run_id)
 
     async with get_session() as db:
         await set_status(db, protocol_run_id, status="running")
-        if cell_label and experiment_id:
+        if replicate_label and experiment_id:
             # Pre-write, before any node executes: a crash/timeout mid-run
             # still leaves this cell's provenance recorded (mirrors the
-            # notebook's own pre-scoring upsert_cell call). workspace_id is
-            # already computed above -- FactorialCellResult.workspace_id
+            # notebook's own pre-scoring upsert_replicate call). workspace_id is
+            # already computed above -- FactorialReplicateResult.workspace_id
             # existed for this before anything ever populated it.
-            await upsert_cell(
+            await upsert_replicate(
                 db,
                 experiment_id=experiment_id,
-                cell_label=cell_label,
+                replicate_label=replicate_label,
                 fields={"run_id": protocol_run_id, "factor_values": factor_values or {}, "workspace_id": workspace_id},
+                revision_id=design_revision_id,
             )
 
     node_runs: dict[str, Any] = {}
@@ -2402,7 +2455,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             await set_status(db, protocol_run_id, status="failed", error="one or more nodes failed")
         else:
             await set_status(db, protocol_run_id, status="completed")
-            if cell_label and experiment_id:
+            if replicate_label and experiment_id:
                 # Post-write, success only: fold the graph's single designated
                 # output (the sink node's raw output_text) into this cell's
                 # artifacts. There's still no generic notion of "which
@@ -2411,21 +2464,22 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 # call below is for for the one recognizable pipeline shape
                 # (a Score agent wired to a single run_model_script call)
                 # this doesn't cover, a user still promotes artifacts into
-                # metric_values manually via PUT /experiments/{id}/cells/
-                # {cell_label}, the same manual step the notebook's own
+                # metric_values manually via PUT /experiments/{id}/replicates/
+                # {replicate_label}, the same manual step the notebook's own
                 # score_payload is today.
                 sinks = sink_node_ids(graph)
                 if len(sinks) == 1 and node_runs.get(sinks[0], {}).get("status") == "completed":
-                    await upsert_cell(
+                    await upsert_replicate(
                         db,
                         experiment_id=experiment_id,
-                        cell_label=cell_label,
+                        replicate_label=replicate_label,
                         fields={
                             "artifacts": {
                                 "output_text": node_runs[sinks[0]].get("output_text"),
                                 "protocol_run_id": str(protocol_run_id),
                             }
                         },
+                        revision_id=design_revision_id,
                     )
                 # Best-effort: matches the Score/run_model_script shape ->
                 # writes metric_values; doesn't match (or anything else goes
@@ -2433,11 +2487,14 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 # moves on. Never lets a promotion failure fail an otherwise-
                 # successful run.
                 try:
-                    await promote_cell_score_metrics(
-                        db, experiment_id=experiment_id, cell_label=cell_label, protocol_run_id=protocol_run_id
+                    await promote_replicate_score_metrics(
+                        db,
+                        experiment_id=experiment_id,
+                        replicate_label=replicate_label,
+                        protocol_run_id=protocol_run_id,
                     )
                 except Exception:
                     logger.exception(
                         "score_metric_promotion_failed",
-                        extra={"experiment_id": str(experiment_id), "cell_label": cell_label},
+                        extra={"experiment_id": str(experiment_id), "replicate_label": replicate_label},
                     )

@@ -1,4 +1,4 @@
-import type { Cell, Experiment } from '@/types/experiments'
+import type { Experiment, Replicate } from '@/types/experiments'
 
 export function factorCount(designSpec: Experiment['design_spec']): number | null {
   const factors = (designSpec as { factors?: unknown } | null)?.factors
@@ -10,7 +10,7 @@ export function factorCount(designSpec: Experiment['design_spec']): number | nul
 // distinct object to the same "[object Object]", which would silently
 // conflate different LLM/Tool/Pattern configs wherever this codebase
 // compares/dedupes/sorts factor values by their string form (this module's own
-// deriveFactors/cellsMatching). A canonical (recursively key-sorted) JSON
+// deriveFactors/replicatesMatching). A canonical (recursively key-sorted) JSON
 // string is stable across separately-deserialized-but-content-identical
 // objects, which `new Set(...)`'s reference-based dedup and JS's own
 // `String()` both are not.
@@ -68,12 +68,64 @@ function getFactors(designSpec: Experiment['design_spec']): FactorSpec[] | null 
  * factor worth an axis -- excluded when deriving factors from observed data. */
 const NON_FACTOR_KEYS = new Set(['replicate', 'seed', 'rep', 'trial', 'iteration'])
 
+export function replicateNumberForLabel(label: string): number {
+  const match = /__rep(\d+)$/.exec(label)
+  return match ? Number(match[1]) : 1
+}
+
+export function cellLabelForReplicateLabel(label: string): string {
+  return label.replace(/__rep\d+$/, '')
+}
+
+export interface ExperimentalCell {
+  label: string
+  factorValues: Record<string, unknown>
+  replicates: Replicate[]
+  scoredReplicateCount: number
+  updatedAt: string
+}
+
+/** Group the persistence layer's one-row-per-replicate results into the
+ * user-facing cell they belong to: one factor combination and all of its
+ * replicates. Generated labels provide a stable fallback for legacy rows
+ * without factor values. */
+export function groupReplicatesIntoCells(replicates: Replicate[]): ExperimentalCell[] {
+  const groups = new Map<string, Replicate[]>()
+  for (const replicate of replicates) {
+    const factorEntries = Object.entries(replicate.factor_values ?? {})
+      .filter(([key]) => !NON_FACTOR_KEYS.has(key.toLowerCase()))
+      .sort(([a], [b]) => a.localeCompare(b))
+    const key = replicate.cell_id || (factorEntries.length > 0
+      ? canonicalStringify(Object.fromEntries(factorEntries))
+      : replicate.cell_label)
+    const group = groups.get(key)
+    if (group) group.push(replicate)
+    else groups.set(key, [replicate])
+  }
+
+  return Array.from(groups.values(), (group) => {
+    const sorted = [...group].sort(
+      (a, b) => a.replicate_number - b.replicate_number,
+    )
+    const latest = sorted.reduce((a, b) => (a.updated_at > b.updated_at ? a : b))
+    return {
+      label: sorted[0].cell_label,
+      factorValues: Object.fromEntries(
+        Object.entries(sorted[0].factor_values ?? {}).filter(([key]) => !NON_FACTOR_KEYS.has(key.toLowerCase())),
+      ),
+      replicates: sorted,
+      scoredReplicateCount: sorted.filter((replicate) => !!replicate.metric_values).length,
+      updatedAt: latest.updated_at,
+    }
+  })
+}
+
 /** The CELLS decide which factors exist; design_spec.factors only refines the
  * level ordering of names that actually appear on them. It used to win
  * outright, which broke the heatmap silently and completely: a real
  * experiment here declared factors named "Azure Foundry:Model"/"Azure
  * Foundry:Effort"/"Critic enabled" while its cells were keyed
- * tier/effort/critic, so every cellsMatching() lookup against a declared name
+ * tier/effort/critic, so every replicatesMatching() lookup against a declared name
  * matched zero cells, every square came out null, and the grid vanished with
  * no error anywhere. Declared names are human-authored labels for canvas
  * nodes; cell keys come from the design generator -- there is nothing keeping
@@ -81,14 +133,14 @@ const NON_FACTOR_KEYS = new Set(['replicate', 'seed', 'rep', 'trial', 'iteration
  * factors straight from what's actually on the cells, so this works with
  * zero setup for the common case where nothing was ever declared. Shared by
  * the Cells table/heatmap (components/protocol/cells/) and the Run button's
- * cell picker (SelectCellDialog.tsx) -- both need the same "what factors/
+ * replicate picker (SelectReplicateDialog) -- both need the same "what factors/
  * levels exist across these cells" answer. */
-export function deriveFactors(cells: Cell[], designSpec: Experiment['design_spec']): FactorSpec[] | null {
+export function deriveFactors(replicates: Replicate[], designSpec: Experiment['design_spec']): FactorSpec[] | null {
   const declared = getFactors(designSpec)
 
   const keys: string[] = []
-  for (const c of cells) {
-    for (const k of Object.keys(c.factor_values ?? {})) {
+  for (const replicate of replicates) {
+    for (const k of Object.keys(replicate.factor_values ?? {})) {
       if (!NON_FACTOR_KEYS.has(k.toLowerCase()) && !keys.includes(k)) keys.push(k)
     }
   }
@@ -100,7 +152,7 @@ export function deriveFactors(cells: Cell[], designSpec: Experiment['design_spec
   const declaredByName = new Map((declared ?? []).map((f) => [f.name, f]))
 
   const factors = keys.map((name) => {
-    const values = cells.map((c) => c.factor_values?.[name]).filter((v) => v !== undefined)
+    const values = replicates.map((replicate) => replicate.factor_values?.[name]).filter((v) => v !== undefined)
     // Dedup by content (factorValueKey), not by reference -- `new Set` would
     // treat every separately-deserialized dict-valued level (e.g. two cells
     // both bound to the same LLM config) as distinct, since object identity
@@ -137,12 +189,12 @@ function selectionMetricHint(experiment: Experiment | undefined): string | undef
   return (experiment?.task_brief as { selection_metric?: string } | undefined)?.selection_metric
 }
 
-/** Every top-level numeric key actually observed across scored cells --
+/** Every top-level numeric key actually observed across scored replicates --
  * what a metric "Color by" selector can offer, with zero setup required. */
-export function availableMetricKeys(cells: Cell[]): string[] {
+export function availableMetricKeys(replicates: Replicate[]): string[] {
   const keys = new Set<string>()
-  for (const c of cells) {
-    for (const [k, v] of Object.entries(c.metric_values ?? {})) {
+  for (const replicate of replicates) {
+    for (const [k, v] of Object.entries(replicate.metric_values ?? {})) {
       if (typeof v === 'number') keys.add(k)
     }
   }
@@ -188,8 +240,8 @@ export function metricValueSuffix(key: string): string {
   return METRIC_VALUE_SUFFIXES[key] ?? ''
 }
 
-export function pickDefaultMetric(experiment: Experiment | undefined, cells: Cell[]): string | null {
-  const available = availableMetricKeys(cells)
+export function pickDefaultMetric(experiment: Experiment | undefined, replicates: Replicate[]): string | null {
+  const available = availableMetricKeys(replicates)
   const hint = selectionMetricHint(experiment)
   if (hint && available.includes(hint)) return hint
   for (const p of PREFERRED_METRICS) if (available.includes(p)) return p
@@ -202,8 +254,8 @@ export function pickDefaultMetric(experiment: Experiment | undefined, cells: Cel
  * Same preference order as pickDefaultMetric (hint, then PREFERRED_METRICS),
  * filled out alphabetically so the table still has *some* metric columns
  * when nothing on the preferred list is present. */
-export function pickMetricColumns(experiment: Experiment | undefined, cells: Cell[], max = 4): string[] {
-  const available = availableMetricKeys(cells)
+export function pickMetricColumns(experiment: Experiment | undefined, replicates: Replicate[], max = 4): string[] {
+  const available = availableMetricKeys(replicates)
   const hint = selectionMetricHint(experiment)
   const ordered: string[] = []
   if (hint && available.includes(hint)) ordered.push(hint)
@@ -215,11 +267,13 @@ export function pickMetricColumns(experiment: Experiment | undefined, cells: Cel
 /** The single headline number for an experiment -- the best observed value of
  * whichever metric pickDefaultMetric settles on. Drives the canvas top bar's
  * own "best metric" readout. */
-export function bestMetric(experiment: Experiment | undefined, cells: Cell[] | undefined): { key: string; value: number } | null {
-  if (!cells) return null
-  const key = pickDefaultMetric(experiment, cells)
+export function bestMetric(experiment: Experiment | undefined, replicates: Replicate[] | undefined): { key: string; value: number } | null {
+  if (!replicates) return null
+  const key = pickDefaultMetric(experiment, replicates)
   if (!key) return null
-  const values = cells.map((c) => c.metric_values?.[key]).filter((v): v is number => typeof v === 'number')
+  const values = groupReplicatesIntoCells(replicates)
+    .map((cell) => meanMetric(cell.replicates, key))
+    .filter((value): value is number => value !== null)
   if (values.length === 0) return null
   return { key, value: Math.max(...values) }
 }
@@ -235,14 +289,14 @@ export function formatMetricValue(key: string, value: unknown): string {
 /** Every cell whose factor_values match `match` on all of its keys -- i.e. one
  * combination's replicates. Compared via factorValueKey so dict-valued levels
  * match by content, not by reference. */
-export function cellsMatching(cells: Cell[], match: Record<string, unknown>): Cell[] {
-  return cells.filter((c) => Object.entries(match).every(([k, v]) => factorValueKey(c.factor_values?.[k]) === factorValueKey(v)))
+export function replicatesMatching(replicates: Replicate[], match: Record<string, unknown>): Replicate[] {
+  return replicates.filter((replicate) => Object.entries(match).every(([k, v]) => factorValueKey(replicate.factor_values?.[k]) === factorValueKey(v)))
 }
 
 /** Replicates sharing one factor combination are AVERAGED for the heatmap,
  * not "first one wins" -- see the heatmap's own comment. */
-export function meanMetric(cells: Cell[], metricKey: string): number | null {
-  const values = cells.map((c) => c.metric_values?.[metricKey]).filter((v): v is number => typeof v === 'number')
+export function meanMetric(replicates: Replicate[], metricKey: string): number | null {
+  const values = replicates.map((replicate) => replicate.metric_values?.[metricKey]).filter((v): v is number => typeof v === 'number')
   if (values.length === 0) return null
   return values.reduce((a, b) => a + b, 0) / values.length
 }
@@ -256,12 +310,12 @@ export function heatColor(value: number, min: number, max: number): string {
   return `color-mix(in oklch, var(--muted) 100%, var(--primary) ${pct}%)`
 }
 
-/** "chart-4" (amber, generated-but-unscored) / "chart-3" (emerald, fully scored) /
- * "primary" (cyan, partially scored) / "muted-foreground" (dim, no cells yet). */
-export function cellsStatusAccent(cells: Cell[] | undefined): string {
-  const total = cells?.length ?? 0
+/** "chart-4" (amber, generated-but-unscored) / "chart-3" (emerald, all replicates scored) /
+ * "primary" (cyan, some replicates scored) / "muted-foreground" (dim, no cells yet). */
+export function replicatesStatusAccent(replicates: Replicate[] | undefined): string {
+  const total = replicates?.length ?? 0
   if (total === 0) return 'var(--muted-foreground)'
-  const scored = cells!.filter((c) => c.metric_values).length
+  const scored = replicates!.filter((replicate) => replicate.metric_values).length
   if (scored === 0) return 'var(--chart-4)'
   if (scored === total) return 'var(--chart-3)'
   return 'var(--primary)'

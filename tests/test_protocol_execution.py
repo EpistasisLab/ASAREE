@@ -15,14 +15,15 @@ import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for 
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.user import User
 from asaree.services import protocol_execution as pe
+from asaree.services.design_generation import generate_design_cells
 from asaree.services.experiments import create_experiment, delete_experiment
-from asaree.services.factorial_cells import get_cell, upsert_cell
+from asaree.services.factorial_cells import get_replicate, upsert_replicate
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
     apply_factor_bindings,
     find_gated_pairs,
     plan_cell_runs,
-    plan_single_cell_run,
+    plan_single_replicate_run,
     sink_node_ids,
     topological_order,
     validate_coordination_strategy,
@@ -1207,13 +1208,17 @@ async def test_plan_cell_runs_creates_one_run_per_pending_cell_skips_scored(owne
             db, name=f"cell-run-pending-protocol-{uuid.uuid4().hex}", owner_id=owner_id, experiment_id=experiment_id
         )
         protocol_id = protocol.id
-        await upsert_cell(db, experiment_id=experiment_id, cell_label="cell-1", fields={"factor_values": {"x": 1}})
-        await upsert_cell(db, experiment_id=experiment_id, cell_label="cell-2", fields={"factor_values": {"x": 2}})
+        await upsert_replicate(
+            db, experiment_id=experiment_id, replicate_label="cell-1", fields={"factor_values": {"x": 1}}
+        )
+        await upsert_replicate(
+            db, experiment_id=experiment_id, replicate_label="cell-2", fields={"factor_values": {"x": 2}}
+        )
         # Already scored -- must be skipped, not re-run/re-billed.
-        await upsert_cell(
+        await upsert_replicate(
             db,
             experiment_id=experiment_id,
-            cell_label="cell-3",
+            replicate_label="cell-3",
             fields={"factor_values": {"x": 3}, "metric_values": {"roc_auc": 0.9}},
         )
 
@@ -1223,9 +1228,9 @@ async def test_plan_cell_runs_creates_one_run_per_pending_cell_skips_scored(owne
                 db, protocol_id=protocol_id, experiment_id=experiment_id, owner_id=owner_id, graph=graph
             )
         assert skipped == 1
-        assert {r.cell_label for r in runs} == {"cell-1", "cell-2"}
+        assert {run.replicate_label for run in runs} == {"cell-1", "cell-2"}
         assert all(r.protocol_id == protocol_id for r in runs)
-        by_label = {r.cell_label: r for r in runs}
+        by_label = {run.replicate_label: run for run in runs}
         assert by_label["cell-1"].factor_values == {"x": 1}
         assert by_label["cell-2"].factor_values == {"x": 2}
     finally:
@@ -1234,16 +1239,56 @@ async def test_plan_cell_runs_creates_one_run_per_pending_cell_skips_scored(owne
             await delete_experiment(db, experiment_id)
 
 
-async def test_plan_single_cell_run_raises_without_experiment(owner_id: uuid.UUID) -> None:
+async def test_plan_cell_runs_ignores_a_superseded_design(owner_id: uuid.UUID) -> None:
+    """The bug this whole revision model exists for: a design shrunk from 6
+    cells to 2 used to launch 6 runs, because the 4 the new design dropped
+    were still sitting under the experiment."""
+    graph = _graph(["a", "b"], [("a", "b")])
+    factors_wide = [{"name": "tier", "levels": ["s", "l"]}, {"name": "effort", "levels": ["lo", "mid", "hi"]}]
+    factors_narrow = [{"name": "tier", "levels": ["s", "l"]}, {"name": "effort", "levels": ["lo"]}]
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"cell-run-superseded-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db, name=f"cell-run-superseded-protocol-{uuid.uuid4().hex}", owner_id=owner_id, experiment_id=experiment_id
+        )
+        protocol_id = protocol.id
+        await generate_design_cells(db, experiment_id=experiment_id, factors=factors_wide)
+    async with get_session() as db:
+        await generate_design_cells(db, experiment_id=experiment_id, factors=factors_narrow)
+
+    try:
+        async with get_session() as db:
+            runs, skipped = await plan_cell_runs(
+                db, protocol_id=protocol_id, experiment_id=experiment_id, owner_id=owner_id, graph=graph
+            )
+        assert len(runs) == 2  # not 6
+        assert skipped == 0
+        # Every run is pinned to the design it was planned under, so a
+        # regenerate mid-flight can't redirect where its result lands.
+        assert len({r.design_revision_id for r in runs}) == 1
+        assert runs[0].design_revision_id is not None
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)  # cascades the created ProtocolRuns
+            await delete_experiment(db, experiment_id)
+
+
+async def test_plan_single_replicate_run_raises_without_experiment(owner_id: uuid.UUID) -> None:
     graph = _graph(["a", "b"], [("a", "b")])
     async with get_session() as db:
         with pytest.raises(ProtocolValidationError, match="no linked experiment"):
-            await plan_single_cell_run(
-                db, protocol_id=uuid.uuid4(), experiment_id=None, owner_id=owner_id, graph=graph, cell_label="cell-1"
+            await plan_single_replicate_run(
+                db,
+                protocol_id=uuid.uuid4(),
+                experiment_id=None,
+                owner_id=owner_id,
+                graph=graph,
+                replicate_label="cell-1",
             )
 
 
-async def test_plan_single_cell_run_raises_on_multi_sink_graph(owner_id: uuid.UUID) -> None:
+async def test_plan_single_replicate_run_raises_on_multi_sink_graph(owner_id: uuid.UUID) -> None:
     graph = _graph(["a", "b", "c"], [("a", "b"), ("a", "c")])
     async with get_session() as db:
         experiment = await create_experiment(db, name=f"single-cell-multisink-{uuid.uuid4().hex}", owner_id=owner_id)
@@ -1251,20 +1296,20 @@ async def test_plan_single_cell_run_raises_on_multi_sink_graph(owner_id: uuid.UU
     try:
         async with get_session() as db:
             with pytest.raises(ProtocolValidationError, match="exactly one final node"):
-                await plan_single_cell_run(
+                await plan_single_replicate_run(
                     db,
                     protocol_id=uuid.uuid4(),
                     experiment_id=experiment_id,
                     owner_id=owner_id,
                     graph=graph,
-                    cell_label="cell-1",
+                    replicate_label="cell-1",
                 )
     finally:
         async with get_session() as db:
             await delete_experiment(db, experiment_id)
 
 
-async def test_plan_single_cell_run_raises_on_unknown_cell_label(owner_id: uuid.UUID) -> None:
+async def test_plan_single_replicate_run_raises_on_unknown_replicate_label(owner_id: uuid.UUID) -> None:
     graph = _graph(["a", "b"], [("a", "b")])
     async with get_session() as db:
         experiment = await create_experiment(db, name=f"single-cell-unknown-{uuid.uuid4().hex}", owner_id=owner_id)
@@ -1275,14 +1320,14 @@ async def test_plan_single_cell_run_raises_on_unknown_cell_label(owner_id: uuid.
         protocol_id = protocol.id
     try:
         async with get_session() as db:
-            with pytest.raises(ProtocolValidationError, match="No such cell"):
-                await plan_single_cell_run(
+            with pytest.raises(ProtocolValidationError, match="No such replicate"):
+                await plan_single_replicate_run(
                     db,
                     protocol_id=protocol_id,
                     experiment_id=experiment_id,
                     owner_id=owner_id,
                     graph=graph,
-                    cell_label="does-not-exist",
+                    replicate_label="does-not-exist",
                 )
     finally:
         async with get_session() as db:
@@ -1290,7 +1335,7 @@ async def test_plan_single_cell_run_raises_on_unknown_cell_label(owner_id: uuid.
             await delete_experiment(db, experiment_id)
 
 
-async def test_plan_single_cell_run_does_not_skip_an_already_scored_cell(owner_id: uuid.UUID) -> None:
+async def test_plan_single_replicate_run_does_not_skip_an_already_scored_replicate(owner_id: uuid.UUID) -> None:
     graph = _graph(["a", "b"], [("a", "b")])
     async with get_session() as db:
         experiment = await create_experiment(db, name=f"single-cell-scored-{uuid.uuid4().hex}", owner_id=owner_id)
@@ -1300,26 +1345,26 @@ async def test_plan_single_cell_run_does_not_skip_an_already_scored_cell(owner_i
         )
         protocol_id = protocol.id
         # Already scored -- plan_cell_runs would skip this one; picking it by
-        # name is a deliberate re-run, so plan_single_cell_run must not.
-        await upsert_cell(
+        # name is a deliberate re-run, so plan_single_replicate_run must not.
+        await upsert_replicate(
             db,
             experiment_id=experiment_id,
-            cell_label="cell-1",
+            replicate_label="cell-1",
             fields={"factor_values": {"x": 1}, "metric_values": {"roc_auc": 0.9}},
         )
 
     try:
         async with get_session() as db:
-            run = await plan_single_cell_run(
+            run = await plan_single_replicate_run(
                 db,
                 protocol_id=protocol_id,
                 experiment_id=experiment_id,
                 owner_id=owner_id,
                 graph=graph,
-                cell_label="cell-1",
+                replicate_label="cell-1",
             )
         assert run.protocol_id == protocol_id
-        assert run.cell_label == "cell-1"
+        assert run.replicate_label == "cell-1"
         assert run.factor_values == {"x": 1}
     finally:
         async with get_session() as db:
@@ -1333,7 +1378,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
     """End-to-end (minus the actual LLM call): a run created with
     cell_label/factor_values set gets the substituted value resolvable via
     the worker's LLM connector, and the sink node's output lands on the
-    right cell via the real upsert_cell -- proves apply_factor_bindings is
+    right replicate via the real upsert_replicate -- proves apply_factor_bindings is
     actually wired into run_protocol, not just correct in isolation. Model
     config lives on the connected `llm` node now, not the agent's own
     config -- the factor binding targets that node instead."""
@@ -1371,14 +1416,17 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
             },
         )
         protocol_id = protocol.id
-        await upsert_cell(
-            db, experiment_id=experiment_id, cell_label="only-cell", fields={"factor_values": {"Temperature": 0.1}}
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="only-cell",
+            fields={"factor_values": {"Temperature": 0.1}},
         )
         run = await create_protocol_run(
             db,
             protocol_id=protocol_id,
             owner_id=owner_id,
-            cell_label="only-cell",
+            replicate_label="only-cell",
             factor_values={"Temperature": 0.1},
         )
         run_id = run.id
@@ -1390,14 +1438,16 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
         assert received_workspace_ids[0] == f"{experiment_id}/only-cell"
 
         async with get_session() as db:
-            cell = await get_cell(db, experiment_id=experiment_id, cell_label="only-cell")
-            assert cell is not None
-            assert cell.run_id == run_id
-            assert cell.factor_values == {"Temperature": 0.1}
-            assert cell.workspace_id == f"{experiment_id}/only-cell"
-            assert cell.artifacts is not None
-            assert cell.artifacts["output_text"] == "output for worker"
-            assert cell.artifacts["protocol_run_id"] == str(run_id)
+            replicate = await get_replicate(
+                db, experiment_id=experiment_id, replicate_label="only-cell"
+            )
+            assert replicate is not None
+            assert replicate.run_id == run_id
+            assert replicate.factor_values == {"Temperature": 0.1}
+            assert replicate.workspace_id == f"{experiment_id}/only-cell"
+            assert replicate.artifacts is not None
+            assert replicate.artifacts["output_text"] == "output for worker"
+            assert replicate.artifacts["protocol_run_id"] == str(run_id)
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
@@ -1425,8 +1475,12 @@ async def _run_single_cell_protocol(owner_id: uuid.UUID) -> tuple[uuid.UUID, str
             },
         )
         protocol_id = protocol.id
-        await upsert_cell(db, experiment_id=experiment_id, cell_label="only-cell", fields={"factor_values": {}})
-        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id, cell_label="only-cell")
+        await upsert_replicate(
+            db, experiment_id=experiment_id, replicate_label="only-cell", fields={"factor_values": {}}
+        )
+        run = await create_protocol_run(
+            db, protocol_id=protocol_id, owner_id=owner_id, replicate_label="only-cell"
+        )
         run_id = run.id
     return experiment_id, "only-cell", protocol_id, run_id
 
@@ -1446,11 +1500,11 @@ async def test_run_protocol_calls_score_metric_promotion_on_cell_completion(
 
     calls = []
 
-    async def fake_promote(db, *, experiment_id, cell_label, protocol_run_id):
-        calls.append((experiment_id, cell_label, protocol_run_id))
+    async def fake_promote(db, *, experiment_id, replicate_label, protocol_run_id):
+        calls.append((experiment_id, replicate_label, protocol_run_id))
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
-    monkeypatch.setattr(pe, "promote_cell_score_metrics", fake_promote)
+    monkeypatch.setattr(pe, "promote_replicate_score_metrics", fake_promote)
 
     experiment_id, cell_label, protocol_id, run_id = await _run_single_cell_protocol(owner_id)
     try:
@@ -1473,11 +1527,11 @@ async def test_run_protocol_survives_score_metric_promotion_failure(
     async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
         return "worker output", None, None
 
-    async def fake_promote(db, *, experiment_id, cell_label, protocol_run_id):
+    async def fake_promote(db, *, experiment_id, replicate_label, protocol_run_id):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
-    monkeypatch.setattr(pe, "promote_cell_score_metrics", fake_promote)
+    monkeypatch.setattr(pe, "promote_replicate_score_metrics", fake_promote)
 
     experiment_id, cell_label, protocol_id, run_id = await _run_single_cell_protocol(owner_id)
     try:
@@ -1487,10 +1541,12 @@ async def test_run_protocol_survives_score_metric_promotion_failure(
             run = await get_protocol_run(db, run_id)
             assert run is not None
             assert run.status == "completed"
-            cell = await get_cell(db, experiment_id=experiment_id, cell_label=cell_label)
-            assert cell is not None
-            assert cell.artifacts is not None
-            assert cell.artifacts["output_text"] == "worker output"
+            replicate = await get_replicate(
+                db, experiment_id=experiment_id, replicate_label=cell_label
+            )
+            assert replicate is not None
+            assert replicate.artifacts is not None
+            assert replicate.artifacts["output_text"] == "worker output"
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)

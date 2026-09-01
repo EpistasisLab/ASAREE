@@ -107,6 +107,48 @@ rather than doing it silently as a routine part of coding:
   association. `GET /runs` has no server-side `experiment_id` filter (only `agent_id`) — this
   fetches every run for the user and filters client-side, which is fine at today's scale but
   is the place to add a real filter if a user's run history grows large enough to matter.
+- **Cells belong to a design revision, not to the experiment** — `experiment_design_revisions`
+  (`models/experiment_design_revision.py`, migration `e2f7c4a91b60`). The current design is the
+  one revision with `superseded_at IS NULL` (a partial unique index enforces "at most one",
+  rather than convention). This exists because generation used to be purely additive: a design
+  shrunk from 6 cells to 2 left all 6 behind, so the experiment still read "0/6 scored" and
+  "run all cells" still launched 6.
+  - **Never query `FactorialReplicateResult` without joining its owning cell** — that loses
+    experiment/design-revision scope. Go through
+    `services/factorial_cells.py`'s `get_replicate`/`list_replicates`/`upsert_replicate`, which scope to the
+    current revision by default and take an explicit `revision_id` only to read history on
+    purpose. `experiment_id` lives on the parent cell, and both experiment and revision filters
+    are applied together because `revision_id` can arrive from a query string.
+  - **Cell vs. replicate:** a `FactorialCell` is one unique factor combination together
+    with all its planned `FactorialReplicateResult` children. Group replicate responses by `cell_id`,
+    and use “replicate” for run/progress/scored counts. “Run all cells” is the experiment-level
+    action that runs every pending replicate across those cells.
+  - `generate_design_cells` opens a new revision **only when the new design would drop a cell
+    the current one has**. Re-clicking generate, changing the seed, widening a factor's levels
+    or raising `replicates` all keep the current revision and its row ids — history entries are
+    meant to mark designs that actually discarded something, not every edit. Results for a
+    label the two revisions share are copied forward; the originals stay in history.
+  - `ProtocolRun.design_revision_id` **pins** which design a run's result belongs to, so a
+    regenerate mid-flight can't redirect the write-back (`plan_cell_runs` →
+    `run_protocol`/`promote_cell_score_metrics`). It's `ondelete="SET NULL"` — run history
+    outlives the design; cells are `ondelete="CASCADE"` so deleting a revision really does
+    delete its results.
+  - Deleting the **current** revision is refused (409) — that's a reset, not a deletion;
+    regenerating is how you replace it. Revision numbers are `max()+1` over every revision ever,
+    so a deleted number is never reused. The history UI is `components/protocol/cells/
+    DesignHistory.tsx`.
+- **A protocol canvas is a draft; production runs use a published revision** — `Protocol.graph`
+  remains the autosaved draft while `protocol_revisions` stores immutable graph snapshots. A
+  `ProtocolRun` carries both `design_revision_id` and `protocol_revision_id`; `run_protocol`
+  loads the latter, so a canvas edit can never hot-patch queued, running, or resumed work. Never
+  create a production run from `Protocol.graph` directly: publish first and pass the resulting
+  revision through the planning path. The top bar deliberately says when a visible canvas has
+  unpublished changes and which published revision production currently uses.
+- **A declared factor must bind to at least one canvas field before a cell batch can run** —
+  deleting/unbinding a node field leaves the factor declared but *unbound*, rather than silently
+  deleting the experimental treatment. The user must rebind it or remove it, then review the
+  design impact and regenerate. `services.factor_bindings` is the shared backend guard; the
+  Design tab shows the same state before generation.
 
 # Color — meaningful variation, not decoration
 

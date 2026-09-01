@@ -1,9 +1,9 @@
-"""Research experiments and their factorial cell results.
+"""Research experiments, factorial cells, and replicate results.
 
-``PUT /experiments/{id}/cells/{cell_label}`` is the one endpoint that replaces
+``PUT /experiments/{id}/replicates/{replicate_label}`` is the endpoint that replaces
 both of the notebook's old ``client.runs.update(mlm_run_id, metadata={...})``
 calls — pre-scoring and post-scoring are just two calls to it with different
-fields, merged onto the same row (see ``services.factorial_cells.upsert_cell``).
+fields, merged onto the same replicate result.
 """
 
 from __future__ import annotations
@@ -17,9 +17,15 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
-from asaree.services.csv_export import cells_that_ran, cells_to_csv
+from asaree.services.csv_export import replicates_that_ran, replicates_to_csv
 from asaree.services.datasets import get_dataset
-from asaree.services.design_generation import DesignValidationError, generate_design_cells
+from asaree.services.design_generation import DesignValidationError, generate_design_cells, get_design_impact
+from asaree.services.design_revisions import (
+    DesignRevisionError,
+    delete_revision,
+    get_revision,
+    list_revision_summaries,
+)
 from asaree.services.experiment_artifacts import create_artifact, delete_artifact, get_artifact, list_artifacts
 from asaree.services.experiments import (
     create_experiment,
@@ -34,7 +40,7 @@ from asaree.services.experiments import (
     update_experiment,
 )
 from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_experiment_design, analyze_factorial
-from asaree.services.factorial_cells import get_cell, list_cells, upsert_cell
+from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
 from asaree.services.protocol_runs import list_experiment_trials
 from asaree.services.protocols import sync_protocol_names_to_experiment
 
@@ -74,7 +80,7 @@ class CreateExperimentRequest(BaseModel):
 
 class UpdateExperimentRequest(BaseModel):
     """All fields optional; only the ones actually set are written -- same
-    "unset vs. null" convention ``UpsertCellRequest`` uses below. ``name``
+    "unset vs. null" convention ``UpsertReplicateRequest`` uses below. ``name``
     is how the GUI renames an experiment created with a placeholder name
     straight from the Experiments page; ``dataset_ids`` (a full replacement,
     ``[]`` to detach everything) is what the protocol canvas sends whenever
@@ -157,7 +163,7 @@ def _resolved_dataset_ids(fields: dict[str, Any]) -> list[uuid.UUID] | None:
     return None
 
 
-class UpsertCellRequest(BaseModel):
+class UpsertReplicateRequest(BaseModel):
     """All fields optional; only the ones actually set are written.
 
     ``factor_values``/``metric_values``/``artifacts`` are merged into
@@ -175,9 +181,17 @@ class UpsertCellRequest(BaseModel):
     artifacts: dict[str, Any] | None = None
 
 
-class CellResponse(BaseModel):
+class ReplicateResponse(BaseModel):
+    """One replicate result and its owning cell's immutable design context."""
+
     id: uuid.UUID
+    cell_id: uuid.UUID
     cell_label: str
+    replicate_label: str
+    replicate_number: int
+    # Which generation of the design this replicate belongs to. Rows returned by
+    # the default (unfiltered) reads are always the current revision's.
+    design_revision_id: uuid.UUID
     run_id: uuid.UUID | None
     workspace_id: str | None
     factor_values: dict[str, Any] | None
@@ -279,28 +293,117 @@ async def delete_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser
     await delete_experiment(db, experiment_id)
 
 
-@router.post("/{experiment_id}/generate-design", response_model=list[CellResponse])
-async def generate_design_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> list[CellResponse]:
-    """Materialize one cell per combination of the experiment's declared
-    factors — the cross product, computed fresh each call. Safe to call again
-    after widening a factor's levels: existing cells' results are untouched,
-    only the new combinations get created (see ``generate_design_cells``)."""
+@router.post("/{experiment_id}/generate-design", response_model=list[ReplicateResponse])
+async def generate_design_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> list[ReplicateResponse]:
+    """Materialize one result row per replicate of every cell in the
+    experiment's declared factor cross product.
+
+    Safe to call again: a design producing the same set of cells merges into
+    the current revision, and one producing a different set opens a new
+    revision, carrying forward the results of every combination the two share.
+    The previous design's cells become history rather than lingering in the
+    current view (see ``generate_design_cells``)."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
     design_spec = experiment.design_spec or {}
-    factors = design_spec.get("factors")
-    if not factors:
-        raise HTTPException(status_code=422, detail="This experiment has no factors declared (design_spec.factors)")
+    factors = design_spec.get("factors") or []
     try:
-        cells = await generate_design_cells(
+        replicates = await generate_design_cells(
             db,
             experiment_id=experiment_id,
             factors=factors,
             replicates=design_spec.get("replicates") or 1,
             randomization_seed=design_spec.get("randomization_seed"),
+            design_spec=experiment.design_spec,
         )
     except DesignValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return [CellResponse.model_validate(c) for c in cells]
+    return [ReplicateResponse.model_validate(replicate) for replicate in replicates]
+
+
+class DesignRevisionResponse(BaseModel):
+    id: uuid.UUID
+    revision: int
+    # Null = this is the experiment's current design; a timestamp = when it
+    # was replaced. The frontend keys "current vs history" off this.
+    superseded_at: datetime | None
+    # The design_spec snapshot that produced this revision, so a superseded
+    # revision's numbers stay interpretable after the experiment's own spec
+    # has moved on.
+    design_spec: dict[str, Any] | None
+    cell_count: int
+    replicate_count: int
+    scored_replicate_count: int
+    created_at: datetime
+
+
+class DesignImpactResponse(BaseModel):
+    has_generated_design: bool
+    regeneration_required: bool
+    current_cell_count: int
+    proposed_cell_count: int
+    added_cell_count: int
+    retained_cell_count: int
+    removed_cell_count: int
+    current_replicate_count: int
+    proposed_replicate_count: int
+    added_replicate_count: int
+    retained_replicate_count: int
+    removed_replicate_count: int
+
+
+@router.get("/{experiment_id}/design-impact", response_model=DesignImpactResponse)
+async def design_impact_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> DesignImpactResponse:
+    """Preview the cell-set change regeneration would make, without writing it."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    try:
+        impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=experiment.design_spec)
+    except DesignValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return DesignImpactResponse(**impact.__dict__)
+
+
+@router.get("/{experiment_id}/design-revisions", response_model=list[DesignRevisionResponse])
+async def list_design_revisions_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> list[DesignRevisionResponse]:
+    """Every generation of this experiment's design, current one first."""
+    await _get_owned_experiment(db, experiment_id, user)
+    summaries = await list_revision_summaries(db, experiment_id=experiment_id)
+    return [
+        DesignRevisionResponse(
+            id=s.revision.id,
+            revision=s.revision.revision,
+            superseded_at=s.revision.superseded_at,
+            design_spec=s.revision.design_spec,
+            cell_count=s.cell_count,
+            replicate_count=s.replicate_count,
+            scored_replicate_count=s.scored_replicate_count,
+            created_at=s.revision.created_at,
+        )
+        for s in summaries
+    ]
+
+
+@router.delete("/{experiment_id}/design-revisions/{revision_id}", status_code=204)
+async def delete_design_revision_endpoint(
+    experiment_id: uuid.UUID, revision_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> None:
+    """Permanently delete a superseded design and every cell under it.
+
+    409 for the current design: replacing it is what generate-design does, and
+    deleting it would leave the experiment with no design at all. 404 if the
+    revision belongs to a different experiment, so a revision id from one
+    experiment can't be used to delete through another."""
+    await _get_owned_experiment(db, experiment_id, user)
+    revision = await get_revision(db, revision_id)
+    if revision is None or revision.experiment_id != experiment_id:
+        raise HTTPException(status_code=404, detail="No such design revision")
+    try:
+        await delete_revision(db, revision_id)
+    except DesignRevisionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 class AnalyzeFactorialRequest(BaseModel):
@@ -331,12 +434,12 @@ async def analyze_factorial_endpoint(
     """Failure homogeneity, factorial effects (Freedman-Lane + max-stat FWER),
     estimated marginal means, non-inferiority vs. the reference condition
     (BCa bootstrap + Holm), and heteroscedasticity diagnostics — computed
-    fresh from this experiment's current cells, not persisted."""
+    fresh from this experiment's current replicate results, not persisted."""
     await _get_owned_experiment(db, experiment_id, user)
-    cells = await list_cells(db, experiment_id=experiment_id)
+    replicates = await list_replicates(db, experiment_id=experiment_id)
     try:
         return analyze_factorial(
-            cells,
+            replicates,
             condition_factors=body.condition_factors,
             positive_levels=body.positive_levels,
             reference_condition=body.reference_condition,
@@ -374,52 +477,62 @@ async def get_experiment_results_endpoint(
     endpoint is a thin pass-through, all the real derivation/wrapping logic
     lives there so it's unit-testable without a request/response cycle."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
-    cells = await list_cells(db, experiment_id=experiment_id)
-    result = analyze_experiment_design(experiment.design_spec, cells)
+    replicates = await list_replicates(db, experiment_id=experiment_id)
+    result = analyze_experiment_design(experiment.design_spec, replicates)
     return ResultsResponse(**result)
 
 
-@router.put("/{experiment_id}/cells/{cell_label}", response_model=CellResponse)
-async def upsert_cell_endpoint(
-    experiment_id: uuid.UUID, cell_label: str, body: UpsertCellRequest, user: CurrentUser, db: DbSession
-) -> CellResponse:
+@router.put("/{experiment_id}/replicates/{replicate_label}", response_model=ReplicateResponse)
+async def upsert_replicate_endpoint(
+    experiment_id: uuid.UUID,
+    replicate_label: str,
+    body: UpsertReplicateRequest,
+    user: CurrentUser,
+    db: DbSession,
+) -> ReplicateResponse:
     await _get_owned_experiment(db, experiment_id, user)
     fields = body.model_dump(exclude_unset=True)
-    cell = await upsert_cell(db, experiment_id=experiment_id, cell_label=cell_label, fields=fields)
-    return CellResponse.model_validate(cell)
+    replicate = await upsert_replicate(
+        db, experiment_id=experiment_id, replicate_label=replicate_label, fields=fields
+    )
+    return ReplicateResponse.model_validate(replicate)
 
 
-@router.get("/{experiment_id}/cells/{cell_label}", response_model=CellResponse)
-async def get_cell_endpoint(
-    experiment_id: uuid.UUID, cell_label: str, user: CurrentUser, db: DbSession
-) -> CellResponse:
+@router.get("/{experiment_id}/replicates/{replicate_label}", response_model=ReplicateResponse)
+async def get_replicate_endpoint(
+    experiment_id: uuid.UUID, replicate_label: str, user: CurrentUser, db: DbSession
+) -> ReplicateResponse:
     await _get_owned_experiment(db, experiment_id, user)
-    cell = await get_cell(db, experiment_id=experiment_id, cell_label=cell_label)
-    if cell is None:
-        raise HTTPException(status_code=404, detail="No such cell")
-    return CellResponse.model_validate(cell)
+    replicate = await get_replicate(db, experiment_id=experiment_id, replicate_label=replicate_label)
+    if replicate is None:
+        raise HTTPException(status_code=404, detail="No such replicate result")
+    return ReplicateResponse.model_validate(replicate)
 
 
-@router.get("/{experiment_id}/cells", response_model=list[CellResponse])
-async def list_cells_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> list[CellResponse]:
+@router.get("/{experiment_id}/replicates", response_model=list[ReplicateResponse])
+async def list_replicates_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession, revision_id: uuid.UUID | None = None
+) -> list[ReplicateResponse]:
+    """The current design's replicate result rows. Pass ``revision_id`` to
+    read a superseded design's instead -- see GET /design-revisions for ids."""
     await _get_owned_experiment(db, experiment_id, user)
-    cells = await list_cells(db, experiment_id=experiment_id)
-    return [CellResponse.model_validate(c) for c in cells]
+    replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=revision_id)
+    return [ReplicateResponse.model_validate(replicate) for replicate in replicates]
 
 
-@router.get("/{experiment_id}/cells.csv")
-async def export_cells_csv_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> Response:
-    """One row per cell that's actually run, one column per factor_values/
+@router.get("/{experiment_id}/replicates.csv")
+async def export_replicates_csv_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> Response:
+    """One row per replicate that's actually run, one column per factor_values/
     metric_values key seen across them -- see services.csv_export
-    (cells_that_ran / cells_to_csv)."""
+    (replicates_that_ran / replicates_to_csv)."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
-    cells = await list_cells(db, experiment_id=experiment_id)
-    csv_text = cells_to_csv(cells_that_ran(cells))
+    replicates = await list_replicates(db, experiment_id=experiment_id)
+    csv_text = replicates_to_csv(replicates_that_ran(replicates))
     filename = _UNSAFE_FILENAME_CHAR.sub("_", experiment.name.strip()) or "experiment"
     return Response(
         content=csv_text,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}-cells.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}-replicates.csv"'},
     )
 
 
@@ -486,14 +599,14 @@ async def delete_artifact_endpoint(
     await delete_artifact(db, artifact_id=artifact_id)
 
 
-# "pending" is ProtocolRun's own internal vocabulary -- the Runs tab shows
-# "queued" instead, matching a cell that has no run at all yet (see
-# ExperimentTrial's own docstring on why "trial" means cell, not ProtocolRun).
+# "pending" is ProtocolRun's own internal vocabulary -- the Runs tab calls a
+# submitted-but-not-started run "queued". A cell with no run at all is kept
+# distinct as "not_started" (see ExperimentTrial's docstring).
 _RUN_STATUS_TO_TRIAL_STATUS = {"pending": "queued"}
 
 
 class TrialResponse(BaseModel):
-    cell_label: str
+    replicate_label: str
     factor_values: dict[str, Any]
     metric_values: dict[str, Any]
     status: str
@@ -506,15 +619,15 @@ class TrialResponse(BaseModel):
 async def list_experiment_trials_endpoint(
     experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
 ) -> list[TrialResponse]:
-    """One row per cell (a "trial" -- a factor-level combination x replicate),
-    not per ProtocolRun -- a cell that's never been run is still a trial
-    (status "queued"), which listing ProtocolRuns alone would miss. See
+    """One row per replicate (a "trial"), not per ProtocolRun -- a replicate
+    that's never been run is still a trial
+    (status "not_started"), which listing ProtocolRuns alone would miss. See
     services.protocol_runs.list_experiment_trials."""
     await _get_owned_experiment(db, experiment_id, user)
     trials = await list_experiment_trials(db, experiment_id=experiment_id)
     return [
         TrialResponse(
-            cell_label=t.cell_label,
+            replicate_label=t.replicate_label,
             factor_values=t.factor_values,
             metric_values=t.metric_values,
             status=_RUN_STATUS_TO_TRIAL_STATUS.get(t.status, t.status),

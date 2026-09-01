@@ -86,9 +86,17 @@ class Experiment(BaseModel):
     created_at: datetime
 
 
-class Cell(BaseModel):
+class Replicate(BaseModel):
     id: uuid.UUID
+    cell_id: uuid.UUID
     cell_label: str
+    replicate_label: str
+    replicate_number: int
+    # Which generation of the experiment's design this observation was made
+    # under. Replicates from a superseded design stay in the database as history,
+    # so a replicate is only part of the live design if this matches the
+    # experiment's current DesignRevision.
+    design_revision_id: uuid.UUID
     run_id: uuid.UUID | None
     workspace_id: str | None
     factor_values: dict[str, Any] | None
@@ -96,6 +104,25 @@ class Cell(BaseModel):
     artifacts: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime
+
+
+class DesignRevision(BaseModel):
+    """One generation of an experiment's factorial design.
+
+    Regenerating a design that no longer produces the same set of cells
+    supersedes the current revision and opens a new one; the old cells (and
+    whatever was scored in them) are kept as history rather than deleted.
+    ``superseded_at is None`` marks the one revision that is current.
+    """
+
+    id: uuid.UUID
+    revision: int
+    superseded_at: datetime | None
+    design_spec: dict[str, Any] | None
+    cell_count: int
+    replicate_count: int
+    scored_replicate_count: int
+    created_at: datetime
 
 
 class ExperimentArtifact(BaseModel):
@@ -120,6 +147,9 @@ class Protocol(BaseModel):
     description: str | None
     experiment_id: uuid.UUID | None
     graph: dict[str, Any]
+    published_revision_id: uuid.UUID | None = None
+    published_revision: int | None = None
+    has_unpublished_changes: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -130,21 +160,34 @@ class ProtocolRun(BaseModel):
     status: str
     node_runs: dict[str, Any]
     error: str | None
-    cell_label: str | None = None
+    replicate_label: str | None = None
+    replicate_result_id: uuid.UUID | None = None
     factor_values: dict[str, Any] | None = None
+    design_revision_id: uuid.UUID | None = None
+    protocol_revision_id: uuid.UUID | None = None
     target_node_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
+class ProtocolRevision(BaseModel):
+    id: uuid.UUID
+    protocol_id: uuid.UUID
+    revision: int
+    graph: dict[str, Any]
+    published_at: datetime
+
+
 class CellRunBatch(BaseModel):
-    """"Run all cells" fanout result -- one ProtocolRun id per not-yet-scored
-    cell; ``skipped`` is how many cells already had metric_values and were
+    """ "Run all cells" fanout result -- one ProtocolRun id per not-yet-scored
+    replicate; ``skipped`` is how many replicates already had metric_values and were
     left alone (resume semantics)."""
 
     protocol_run_ids: list[uuid.UUID]
-    cell_labels: list[str]
+    replicate_labels: list[str]
     skipped: int
+    protocol_revision_id: uuid.UUID | None = None
+    protocol_revision: int | None = None
 
 
 class RegisteredDataset(BaseModel):

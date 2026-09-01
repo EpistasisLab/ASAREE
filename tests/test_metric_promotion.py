@@ -1,5 +1,5 @@
 """Pure-logic tests for services.metric_promotion -- the flattening/extraction
-that turns a run_model_script response into FactorialCellResult.metric_values.
+that turns a run_model_script response into FactorialReplicateResult.metric_values.
 No DB fixtures exist anywhere else in this suite (every other test file is
 pure/unit-level); promote_cell_score_metrics/promote_experiment_score_metrics
 (the two DB-touching orchestration functions) are verified manually against a
@@ -22,7 +22,7 @@ def _step(tool_call: dict | None) -> SimpleNamespace:
 
 def test_extract_score_metrics_flattens_top_level_and_chosen_threshold() -> None:
     # Shape matches a real run_model_script response (see the spinal
-    # experiment's own factorial_cell_results.metric_values).
+    # experiment's own factorial_replicate_results.metric_values).
     tool_result = {
         "test_metrics": {
             "roc_auc": 0.7555,

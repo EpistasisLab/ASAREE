@@ -126,7 +126,7 @@ async def update_protocol(
     """Set whichever fields the caller passed (an ``exclude_unset`` dump from
     the API layer), each a full replacement.
 
-    Unlike ``upsert_cell``'s JSONB partial-merge idiom, ``graph`` here is
+    Unlike ``upsert_replicate``'s JSONB partial-merge idiom, ``graph`` here is
     always a full replacement, not a merge -- a canvas save is one editor
     session persisting its whole current state atomically, not a partial
     patch against concurrent writers. This also lets ``description``/

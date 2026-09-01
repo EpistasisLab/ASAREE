@@ -2,7 +2,7 @@
 Results tab's own entry point, deriving analyze_factorial's parameters from
 an experiment's Design tab declarations instead of a caller supplying them.
 Pure/no-DB: takes a plain design_spec dict and a list of simple cell-like
-objects, matching analyze_factorial's own "stateless function of cells"
+objects, matching analyze_factorial's own "stateless function of replicates"
 contract."""
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from asaree.services.factorial_analysis import analyze_experiment_design
 
 
 @dataclass
-class _FakeCell:
+class _FakeReplicate:
     factor_values: dict[str, Any] = field(default_factory=dict)
     metric_values: dict[str, Any] = field(default_factory=dict)
     artifacts: dict[str, Any] = field(default_factory=dict)
@@ -63,16 +63,16 @@ def test_none_design_spec_is_unavailable() -> None:
 
 
 def test_not_enough_scored_data_is_unavailable_not_a_crash() -> None:
-    # Exactly 1 scored cell per condition -- too few data points for
+    # Exactly 1 scored replicate per condition -- too few data points for
     # analyze_factorial's saturated OLS model (2 points, 2 terms) raises a
     # raw ZeroDivisionError before its own "fewer than 2 scored replicates"
     # check is ever reached. This function's contract is to never crash the
     # Results tab regardless of which numeric edge case degenerate data hits.
-    cells = [
-        _FakeCell(factor_values={"tier": "small"}, metric_values={"accuracy": 0.8}, cell_label="tier_small"),
-        _FakeCell(factor_values={"tier": "large"}, metric_values={"accuracy": 0.9}, cell_label="tier_large"),
+    replicates = [
+        _FakeReplicate(factor_values={"tier": "small"}, metric_values={"accuracy": 0.8}, cell_label="tier_small"),
+        _FakeReplicate(factor_values={"tier": "large"}, metric_values={"accuracy": 0.9}, cell_label="tier_large"),
     ]
-    result = analyze_experiment_design(_design_spec(), cells)
+    result = analyze_experiment_design(_design_spec(), replicates)
     assert result["available"] is False
     assert result["reason"]
     assert result["analysis"] is None
@@ -87,30 +87,30 @@ def test_reference_condition_with_one_replicate_surfaces_real_analyze_factorial_
     spec = _design_spec(
         factors=[{"name": "tier", "levels": ["small", "large"]}, {"name": "effort", "levels": ["low", "high"]}]
     )
-    cells = [
-        _FakeCell(factor_values={"tier": "small", "effort": "low"}, metric_values={"accuracy": 0.70}),
-        _FakeCell(factor_values={"tier": "small", "effort": "high"}, metric_values={"accuracy": 0.75}),
-        _FakeCell(factor_values={"tier": "small", "effort": "high"}, metric_values={"accuracy": 0.77}),
-        _FakeCell(factor_values={"tier": "large", "effort": "low"}, metric_values={"accuracy": 0.80}),
-        _FakeCell(factor_values={"tier": "large", "effort": "low"}, metric_values={"accuracy": 0.82}),
-        _FakeCell(factor_values={"tier": "large", "effort": "high"}, metric_values={"accuracy": 0.90}),
-        _FakeCell(factor_values={"tier": "large", "effort": "high"}, metric_values={"accuracy": 0.92}),
+    replicates = [
+        _FakeReplicate(factor_values={"tier": "small", "effort": "low"}, metric_values={"accuracy": 0.70}),
+        _FakeReplicate(factor_values={"tier": "small", "effort": "high"}, metric_values={"accuracy": 0.75}),
+        _FakeReplicate(factor_values={"tier": "small", "effort": "high"}, metric_values={"accuracy": 0.77}),
+        _FakeReplicate(factor_values={"tier": "large", "effort": "low"}, metric_values={"accuracy": 0.80}),
+        _FakeReplicate(factor_values={"tier": "large", "effort": "low"}, metric_values={"accuracy": 0.82}),
+        _FakeReplicate(factor_values={"tier": "large", "effort": "high"}, metric_values={"accuracy": 0.90}),
+        _FakeReplicate(factor_values={"tier": "large", "effort": "high"}, metric_values={"accuracy": 0.92}),
     ]
-    result = analyze_experiment_design(spec, cells)
+    result = analyze_experiment_design(spec, replicates)
     assert result["available"] is False
     assert "replicate" in result["reason"]
 
 
 def test_happy_path_returns_analysis_and_best_condition_maximize() -> None:
-    cells = [
-        _FakeCell(factor_values={"tier": "small"}, metric_values={"accuracy": 0.70}, cell_label="tier_small"),
-        _FakeCell(factor_values={"tier": "small"}, metric_values={"accuracy": 0.72}, cell_label="tier_small__rep2"),
-        _FakeCell(factor_values={"tier": "small"}, metric_values={"accuracy": 0.68}, cell_label="tier_small__rep3"),
-        _FakeCell(factor_values={"tier": "large"}, metric_values={"accuracy": 0.91}, cell_label="tier_large"),
-        _FakeCell(factor_values={"tier": "large"}, metric_values={"accuracy": 0.89}, cell_label="tier_large__rep2"),
-        _FakeCell(factor_values={"tier": "large"}, metric_values={"accuracy": 0.93}, cell_label="tier_large__rep3"),
+    replicates = [
+        _FakeReplicate(factor_values={"tier": "small"}, metric_values={"accuracy": 0.70}, cell_label="tier_small"),
+        _FakeReplicate(factor_values={"tier": "small"}, metric_values={"accuracy": 0.72}, cell_label="tier_small"),
+        _FakeReplicate(factor_values={"tier": "small"}, metric_values={"accuracy": 0.68}, cell_label="tier_small"),
+        _FakeReplicate(factor_values={"tier": "large"}, metric_values={"accuracy": 0.91}, cell_label="tier_large"),
+        _FakeReplicate(factor_values={"tier": "large"}, metric_values={"accuracy": 0.89}, cell_label="tier_large"),
+        _FakeReplicate(factor_values={"tier": "large"}, metric_values={"accuracy": 0.93}, cell_label="tier_large"),
     ]
-    result = analyze_experiment_design(_design_spec(), cells)
+    result = analyze_experiment_design(_design_spec(), replicates)
     assert result["available"] is True
     assert result["reason"] is None
     assert result["analysis"] is not None
@@ -121,15 +121,15 @@ def test_happy_path_returns_analysis_and_best_condition_maximize() -> None:
 
 def test_happy_path_best_condition_respects_minimize_direction() -> None:
     spec = _design_spec(metrics=[{"name": "latency", "primary": True, "direction": "minimize"}])
-    cells = [
-        _FakeCell(factor_values={"tier": "small"}, metric_values={"latency": 1.2}, cell_label="tier_small"),
-        _FakeCell(factor_values={"tier": "small"}, metric_values={"latency": 1.3}, cell_label="tier_small__rep2"),
-        _FakeCell(factor_values={"tier": "small"}, metric_values={"latency": 1.1}, cell_label="tier_small__rep3"),
-        _FakeCell(factor_values={"tier": "large"}, metric_values={"latency": 3.0}, cell_label="tier_large"),
-        _FakeCell(factor_values={"tier": "large"}, metric_values={"latency": 3.2}, cell_label="tier_large__rep2"),
-        _FakeCell(factor_values={"tier": "large"}, metric_values={"latency": 2.8}, cell_label="tier_large__rep3"),
+    replicates = [
+        _FakeReplicate(factor_values={"tier": "small"}, metric_values={"latency": 1.2}, cell_label="tier_small"),
+        _FakeReplicate(factor_values={"tier": "small"}, metric_values={"latency": 1.3}, cell_label="tier_small"),
+        _FakeReplicate(factor_values={"tier": "small"}, metric_values={"latency": 1.1}, cell_label="tier_small"),
+        _FakeReplicate(factor_values={"tier": "large"}, metric_values={"latency": 3.0}, cell_label="tier_large"),
+        _FakeReplicate(factor_values={"tier": "large"}, metric_values={"latency": 3.2}, cell_label="tier_large"),
+        _FakeReplicate(factor_values={"tier": "large"}, metric_values={"latency": 2.8}, cell_label="tier_large"),
     ]
-    result = analyze_experiment_design(spec, cells)
+    result = analyze_experiment_design(spec, replicates)
     assert result["available"] is True
     # "small" has the lower mean latency and direction is "minimize".
     assert result["best_condition"]["_condition_label"] == "tier_small"

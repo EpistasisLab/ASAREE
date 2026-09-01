@@ -9,15 +9,19 @@ function scopeTitle(scope: RunScope): string {
   switch (scope.type) {
     case 'graph':
       return 'Run the full experiment?'
-    case 'cell':
-      return `Run cell "${scope.label}"?`
+    case 'replicate':
+      return `Run replicate "${scope.label}"?`
+    case 'all-cells':
+      return scope.pendingReplicateCount === scope.replicateCount
+        ? `Run all ${scope.replicateCount} replicates?`
+        : `Run ${scope.pendingReplicateCount} pending replicates?`
     case 'node':
       return `Run "${scope.label}" alone?`
   }
 }
 
 // Shown on EVERY Run click -- the main Run button (whole graph or a picked
-// cell) and each agent's own per-node Play icon -- before anything actually
+// replicate), Run all cells, and each agent's own per-node Play icon -- before anything actually
 // fires. Real LLM calls cost money, so this is the one chance to catch
 // "this isn't wired the way I think it is" before spending a real attempt
 // on it (see the spinal-fusion experiment trace this session, where a run
@@ -32,6 +36,11 @@ export function RunConfirmDialog({
   queryClient,
   onCancel,
   onConfirm,
+  hasUnpublishedChanges = false,
+  publishedRevision = null,
+  isPublishing = false,
+  publishError = null,
+  onPublishAndRun,
 }: {
   scope: RunScope
   nodes: Node[]
@@ -39,6 +48,11 @@ export function RunConfirmDialog({
   queryClient: QueryClient
   onCancel: () => void
   onConfirm: () => void
+  hasUnpublishedChanges?: boolean
+  publishedRevision?: number | null
+  isPublishing?: boolean
+  publishError?: string | null
+  onPublishAndRun?: () => void
 }) {
   const summary = summarizeRun(nodes, edges, scope)
   const allIssues = findNodeConfigIssues(nodes, edges, queryClient)
@@ -62,9 +76,19 @@ export function RunConfirmDialog({
         </DialogHeader>
 
         <div className="space-y-2 text-sm">
+          {scope.type === 'all-cells' && (
+            <p>
+              The published canvas will run each pending replicate across {scope.cellCount}{' '}
+              {scope.cellCount === 1 ? 'cell' : 'cells'}.
+              {scope.replicateCount > scope.pendingReplicateCount
+                ? ` ${scope.replicateCount - scope.pendingReplicateCount} already-scored replicates will be skipped.`
+                : ''}
+            </p>
+          )}
           <p>
             {summary.agentCount} agent{summary.agentCount === 1 ? '' : 's'}
-            {summary.criticGateCount > 0 ? `, ${summary.criticGateCount} critic gate${summary.criticGateCount === 1 ? '' : 's'}` : ''} will run.
+            {summary.criticGateCount > 0 ? `, ${summary.criticGateCount} critic gate${summary.criticGateCount === 1 ? '' : 's'}` : ''} will run
+            {scope.type === 'all-cells' ? ' per replicate' : ''}.
           </p>
           <dl className="space-y-1 text-xs text-muted-foreground">
             <div>
@@ -97,6 +121,16 @@ export function RunConfirmDialog({
           </dl>
         </div>
 
+        {hasUnpublishedChanges && (
+          <div className="space-y-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm">
+            <p className="font-medium">Canvas has unpublished changes</p>
+            <p className="text-xs text-muted-foreground">
+              This run will use published canvas v{publishedRevision}. Publish the latest canvas first to run the changes you are viewing.
+            </p>
+            {publishError && <p className="text-xs text-destructive">{publishError}</p>}
+          </div>
+        )}
+
         {issues.length > 0 && (
           <div className="space-y-1.5">
             <p className="text-sm font-medium text-destructive">
@@ -119,7 +153,18 @@ export function RunConfirmDialog({
           <Button variant="outline" onClick={onCancel}>
             Cancel
           </Button>
-          <Button onClick={onConfirm}>{issues.length > 0 ? 'Run anyway' : 'Confirm & run'}</Button>
+          {hasUnpublishedChanges ? (
+            <>
+              <Button variant="outline" disabled={isPublishing} onClick={onConfirm}>
+                Run published v{publishedRevision}
+              </Button>
+              <Button disabled={isPublishing} onClick={onPublishAndRun}>
+                {isPublishing ? 'Publishing…' : 'Publish & run'}
+              </Button>
+            </>
+          ) : (
+            <Button onClick={onConfirm}>{issues.length > 0 ? 'Run anyway' : 'Confirm & run'}</Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -134,15 +134,14 @@ export interface Experiment {
   archived_at: string | null
 }
 
-// One row of the Runs tab's trial list -- "trial" means cell (a
-// factor-level combination x replicate), not ProtocolRun; a cell that's
-// never been run at all is still a trial, reported with status "queued".
+// One row of the Runs tab's trial list -- one replicate, not ProtocolRun; a replicate that's
+// never been run at all is still a trial, reported with status "not_started".
 // Matches src/asaree/api/experiments.py's TrialResponse exactly.
 export interface Trial {
-  cell_label: string
+  replicate_label: string
   factor_values: Record<string, unknown>
   metric_values: Record<string, unknown>
-  status: 'queued' | 'running' | 'completed' | 'failed'
+  status: 'not_started' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
   run_id: string | null
   error: string | null
   updated_at: string
@@ -216,9 +215,17 @@ export interface ExperimentResults {
   best_condition: EmmCell | null
 }
 
-export interface Cell {
+export interface Replicate {
+  // One independently runnable observation within the owning cell.
   id: string
+  cell_id: string
   cell_label: string
+  replicate_label: string
+  replicate_number: number
+  // Which generation of the design this observation was made under. Replicates
+  // from a superseded revision stay in the database as history, so listReplicates
+  // returns only the current revision's unless asked for another one.
+  design_revision_id: string
   run_id: string | null
   workspace_id: string | null
   factor_values: Record<string, unknown> | null
@@ -226,4 +233,34 @@ export interface Cell {
   artifacts: Record<string, unknown> | null
   created_at: string
   updated_at: string
+}
+
+// One generation of an experiment's design. Regenerating a design whose set
+// of cells has changed supersedes the current revision and opens a new one,
+// keeping the old cells (and anything scored in them) as history rather than
+// deleting them -- `superseded_at === null` marks the one that is current.
+export interface DesignRevision {
+  id: string
+  revision: number
+  superseded_at: string | null
+  design_spec: DesignSpec | null
+  cell_count: number
+  replicate_count: number
+  scored_replicate_count: number
+  created_at: string
+}
+
+export interface DesignImpact {
+  has_generated_design: boolean
+  regeneration_required: boolean
+  current_cell_count: number
+  proposed_cell_count: number
+  added_cell_count: number
+  retained_cell_count: number
+  removed_cell_count: number
+  current_replicate_count: number
+  proposed_replicate_count: number
+  added_replicate_count: number
+  retained_replicate_count: number
+  removed_replicate_count: number
 }

@@ -49,13 +49,40 @@ class ProtocolRun(Base, TimestampMixin):
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Both null for a plain graph run. Set together only when this run was
     # created by "run all cells" (services.protocol_execution.plan_cell_runs)
-    # for one FactorialCellResult under the protocol's own experiment_id --
+    # for one FactorialReplicateResult under the protocol's experiment --
     # factor_values is that cell's own factor_values, substituted into the
     # graph's factor_bindings-tagged fields before execution
-    # (apply_factor_bindings), and cell_label is where the result gets
-    # written back to via upsert_cell.
-    cell_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # (apply_factor_bindings), and replicate_label is where the result gets
+    # written back.
+    replicate_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     factor_values: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    replicate_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("factorial_replicate_results.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # Which design revision this run's cell belonged to when it was planned
+    # (null for a plain graph run, same as replicate_label). Without it, a result
+    # arriving after the user regenerated the design would be written against
+    # whatever design is current *then* -- landing on a different design's
+    # cell, or minting a spurious one if the combination no longer exists.
+    # SET NULL rather than CASCADE: deleting a design's results shouldn't
+    # erase the record that the run happened.
+    design_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("experiment_design_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # The immutable published canvas revision this execution uses.  Null is
+    # retained only for runs created before protocol revisions existed.
+    protocol_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("protocol_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # Set only for a canvas "Play" run on one Agent node in isolation (the
     # node's own hover-toolbar icon, not the top-level Run button) -- null
     # for both a plain graph run and a "run all cells" run. run_protocol

@@ -173,23 +173,23 @@ def _holm(pvals: Sequence[float] | np.ndarray) -> np.ndarray:
     return adj
 
 
-def _cells_to_frame(cells: Sequence[Any]) -> pd.DataFrame:
-    """One row per cell: flattened factor_values + metric_values, plus
+def _replicates_to_frame(replicates: Sequence[Any]) -> pd.DataFrame:
+    """One row per replicate: flattened factor_values + metric_values, plus
     artifacts kept as a nested dict (accessed by key on demand, not flattened
     — artifacts is a use-case-owned bag, its keys aren't known in advance)."""
     rows = []
-    for cell in cells:
-        row: dict[str, Any] = dict(cell.factor_values or {})
-        for k, v in (cell.metric_values or {}).items():
+    for replicate in replicates:
+        row: dict[str, Any] = dict(replicate.factor_values or {})
+        for k, v in (replicate.metric_values or {}).items():
             row[f"metric__{k}"] = v
-        row["_artifacts"] = cell.artifacts or {}
-        row["_cell_label"] = cell.cell_label
+        row["_artifacts"] = replicate.artifacts or {}
+        row["_cell_label"] = replicate.cell_label
         rows.append(row)
     return pd.DataFrame(rows)
 
 
 def analyze_factorial(
-    cells: Sequence[Any],
+    replicates: Sequence[Any],
     *,
     condition_factors: list[str],
     positive_levels: dict[str, Any],
@@ -205,7 +205,7 @@ def analyze_factorial(
     """The full analysis: failure homogeneity, factorial effects (raw + logit),
     estimated marginal means, non-inferiority vs. *reference_condition*, and
     heteroscedasticity diagnostics. Stateless — a deterministic function of
-    *cells* and the given seed, not something that needs its own table.
+    *replicates* and the given seed, not something that needs its own table.
     """
     if len(condition_factors) < 1:
         raise FactorialAnalysisError("condition_factors must be a non-empty list")
@@ -215,15 +215,15 @@ def analyze_factorial(
         raise FactorialAnalysisError("reference_condition must specify exactly the condition factors")
 
     rng = np.random.default_rng(seed)
-    df_all = _cells_to_frame(cells)
+    df_all = _replicates_to_frame(replicates)
     if df_all.empty:
-        raise FactorialAnalysisError("no cells to analyze — generate the design and run it first")
+        raise FactorialAnalysisError("no replicates to analyze — generate the design and run it first")
 
     metric_col = f"metric__{primary_metric}"
     labels = {f: f for f in condition_factors}
     effects = condition_factors
 
-    # A cell is attempted-and-known if it reports either a metric or an
+    # A replicate is attempted-and-known if it reports either a metric or an
     # explicit failure flag. Anything else hasn't been run yet and is
     # excluded entirely, rather than miscounted as a failure.
     def _failure_flag(artifacts: dict[str, Any]) -> bool:
@@ -234,7 +234,7 @@ def analyze_factorial(
     attempted = df_all[has_metric | has_failure_flag].copy()
     n_not_yet_run = len(df_all) - len(attempted)
     if attempted.empty:
-        raise FactorialAnalysisError("no attempted cells (no metric values and no failure flags found)")
+        raise FactorialAnalysisError("no attempted replicates (no metric values and no failure flags found)")
 
     attempted["_failed"] = attempted["_artifacts"].apply(_failure_flag)
     for factor in condition_factors:
@@ -392,7 +392,7 @@ def analyze_factorial(
     }
 
 
-def analyze_experiment_design(design_spec: dict[str, Any] | None, cells: Sequence[Any]) -> dict[str, Any]:
+def analyze_experiment_design(design_spec: dict[str, Any] | None, replicates: Sequence[Any]) -> dict[str, Any]:
     """The Results tab's own entry point -- a thin wrapper around
     ``analyze_factorial`` that needs no caller-supplied parameters at all.
     ``condition_factors``/``positive_levels``/``reference_condition``/
@@ -447,7 +447,7 @@ def analyze_experiment_design(design_spec: dict[str, Any] | None, cells: Sequenc
 
     try:
         analysis = analyze_factorial(
-            cells,
+            replicates,
             condition_factors=condition_factors,
             positive_levels=positive_levels,
             reference_condition=reference_condition,

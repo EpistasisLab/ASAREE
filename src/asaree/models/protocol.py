@@ -5,7 +5,7 @@ varies, a protocol says what runs. The whole node/edge graph is kept as one
 opaque JSONB blob rather than normalized Node/Edge/Port tables -- nothing in
 ASAREE itself ever queries into the graph's structure, only the canvas UI
 (and later, a protocol executor) ever read it, and both read it whole. Same
-reasoning FactorialCellResult's JSONB-by-role columns already use.
+reasoning FactorialReplicateResult's JSONB-by-role columns use.
 """
 
 from __future__ import annotations
@@ -36,6 +36,17 @@ class Protocol(Base, TimestampMixin):
     # (selected, dragging, measured dimensions) is stripped by the frontend
     # before saving.
     graph: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # The revision production executions use. ``graph`` above remains the
+    # freely autosaved draft, so editing a canvas never hot-patches a queued
+    # or running protocol run.
+    published_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "protocol_revisions.id", ondelete="SET NULL", use_alter=True, name="protocols_published_revision_id_fkey"
+        ),
+        nullable=True,
+        index=True,
+    )
     # RESTRICT, not CASCADE: same reasoning as ResearchExperiment.owner_id --
     # deleting a user shouldn't silently discard the protocols they built.
     owner_id: Mapped[uuid.UUID] = mapped_column(

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Bot } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -15,9 +15,14 @@ import type { Trial } from '@/types/experiments'
 
 const PAGE_SIZE = 20
 const NON_FACTOR_KEYS = new Set(['replicate', 'seed', 'rep', 'trial', 'iteration'])
-const STATUS_ORDER: Trial['status'][] = ['queued', 'running', 'completed', 'failed']
+function statusLabel(status: Trial['status']): string {
+  return status === 'not_started' ? 'Not started' : status === 'queued' ? 'Queued' : `${status[0].toUpperCase()}${status.slice(1)}`
+}
 
 function statusBadge(status: Trial['status']) {
+  if (status === 'not_started') {
+    return { label: 'Not started', className: 'border-transparent bg-muted text-muted-foreground' }
+  }
   return nodeRunBadge(status === 'queued' ? 'pending' : status)
 }
 
@@ -31,7 +36,7 @@ function deriveFactorNames(trials: Trial[]): string[] {
   return [...names].sort()
 }
 
-type SortKey = 'cell_label' | 'status' | 'updated_at'
+type SortKey = 'replicate_label' | 'status' | 'updated_at'
 
 function sortTrials(trials: Trial[], key: SortKey, direction: 'asc' | 'desc'): Trial[] {
   const sorted = [...trials].sort((a, b) => {
@@ -42,7 +47,7 @@ function sortTrials(trials: Trial[], key: SortKey, direction: 'asc' | 'desc'): T
   return direction === 'asc' ? sorted : sorted.reverse()
 }
 
-// The trial detail drill-in -- cell status/error plus, when the trial has a
+// The trial detail drill-in -- replicate status/error plus, when the trial has a
 // real ProtocolRun (run_id set), each pipeline node's own status/output/
 // error (GET /protocols/{id}/runs/{runId}, already built for the canvas's
 // own run-polling -- no new backend endpoint needed for this).
@@ -55,17 +60,25 @@ function TrialDetailDialog({
   protocolId: string
   onClose: () => void
 }) {
+  const [showSnapshot, setShowSnapshot] = useState(false)
   const runQuery = useQuery({
     queryKey: ['protocols', protocolId, 'runs', trial?.run_id],
     queryFn: () => protocolsApi.getRun(protocolId, trial!.run_id!),
     enabled: !!trial?.run_id,
   })
+  const revisionQuery = useQuery({
+    queryKey: ['protocols', protocolId, 'revisions', runQuery.data?.protocol_revision_id],
+    queryFn: () => protocolsApi.getRevision(protocolId, runQuery.data!.protocol_revision_id!),
+    enabled: showSnapshot && !!runQuery.data?.protocol_revision_id,
+  })
+
+  useEffect(() => setShowSnapshot(false), [trial?.run_id])
 
   return (
     <Dialog open={!!trial} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="font-mono text-sm">{trial?.cell_label}</DialogTitle>
+          <DialogTitle className="font-mono text-sm">{trial?.replicate_label}</DialogTitle>
         </DialogHeader>
         {trial && (
           <div className="space-y-3 text-sm">
@@ -85,6 +98,31 @@ function TrialDetailDialog({
               <p className="text-xs text-muted-foreground">Could not load this trial's run detail.</p>
             ) : (
               <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {runQuery.data.design_revision_id && (
+                    <Badge variant="outline" className="font-mono text-xs">Design revision pinned</Badge>
+                  )}
+                  {runQuery.data.protocol_revision_id && (
+                    <>
+                      <Badge variant="outline" className="font-mono text-xs">Published canvas pinned</Badge>
+                      <Button size="xs" variant="outline" onClick={() => setShowSnapshot((shown) => !shown)}>
+                        {showSnapshot ? 'Hide canvas used' : 'View canvas used'}
+                      </Button>
+                    </>
+                  )}
+                </div>
+                {showSnapshot && (
+                  revisionQuery.isLoading ? <Skeleton className="h-24 w-full" /> : revisionQuery.isError || !revisionQuery.data ? (
+                    <p className="text-xs text-muted-foreground">Could not load the immutable canvas snapshot.</p>
+                  ) : (
+                    <div className="space-y-1">
+                      <p className="font-mono text-xs text-muted-foreground">Published canvas v{revisionQuery.data.revision}</p>
+                      <pre className="max-h-48 overflow-auto rounded-md border bg-muted/30 p-2 text-[0.65rem] leading-relaxed">
+                        {JSON.stringify(revisionQuery.data.graph, null, 2)}
+                      </pre>
+                    </div>
+                  )
+                )}
                 <p className="text-xs font-medium text-muted-foreground">Agent activity</p>
                 {Object.entries(runQuery.data.node_runs).map(([nodeId, node]) => (
                   <div key={nodeId} className="rounded-md border px-2.5 py-1.5">
@@ -210,12 +248,15 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
 
   const counts = {
     total: trials.length,
+    notStarted: trials.filter((t) => t.status === 'not_started').length,
     queued: trials.filter((t) => t.status === 'queued').length,
     running: trials.filter((t) => t.status === 'running').length,
     completed: trials.filter((t) => t.status === 'completed').length,
     failed: trials.filter((t) => t.status === 'failed').length,
+    cancelled: trials.filter((t) => t.status === 'cancelled').length,
   }
-  const progressPct = counts.total > 0 ? Math.round(((counts.completed + counts.failed) / counts.total) * 100) : 0
+  const terminalCount = counts.completed + counts.failed + counts.cancelled
+  const progressPct = counts.total > 0 ? Math.round((terminalCount / counts.total) * 100) : 0
 
   function onSort(key: SortKey) {
     if (key === sortKey) setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -243,7 +284,7 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
     return (
       <div className="flex flex-col gap-3 p-3 text-sm">
         <p className="text-sm text-muted-foreground">
-          No trials yet -- generate a design and run cells from the Design tab first.
+          No trials yet -- generate a design, then run replicates from the canvas.
         </p>
         <ExperimentAgents experimentId={experimentId} />
       </div>
@@ -252,23 +293,33 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
 
   return (
     <div className="flex flex-col gap-3 p-3 text-sm">
-      <div className="grid grid-cols-4 gap-2 text-center font-mono text-xs">
-        <div className="rounded-md border px-2 py-1.5">
-          <p className="text-base">{counts.queued}</p>
-          <p className="text-muted-foreground">Queued</p>
-        </div>
-        <div className="rounded-md border px-2 py-1.5">
-          <p className="text-base text-[color:var(--primary)]">{counts.running}</p>
-          <p className="text-muted-foreground">Running</p>
-        </div>
-        <div className="rounded-md border px-2 py-1.5">
-          <p className="text-base text-[color:var(--chart-3)]">{counts.completed}</p>
-          <p className="text-muted-foreground">Completed</p>
-        </div>
-        <div className="rounded-md border px-2 py-1.5">
-          <p className="text-base text-destructive">{counts.failed}</p>
-          <p className="text-muted-foreground">Failed</p>
-        </div>
+      <div className="grid grid-cols-3 gap-2 text-center font-mono text-xs">
+        {[
+          { status: 'not_started' as const, count: counts.notStarted, valueClass: 'text-muted-foreground' },
+          { status: 'queued' as const, count: counts.queued, valueClass: '' },
+          { status: 'running' as const, count: counts.running, valueClass: 'text-[color:var(--primary)]' },
+          { status: 'completed' as const, count: counts.completed, valueClass: 'text-[color:var(--chart-3)]' },
+          { status: 'failed' as const, count: counts.failed, valueClass: 'text-destructive' },
+          { status: 'cancelled' as const, count: counts.cancelled, valueClass: 'text-muted-foreground' },
+        ].map(({ status, count, valueClass }) => {
+          const selected = statusFilter === status
+          return (
+            <button
+              key={status}
+              type="button"
+              aria-pressed={selected}
+              title={selected ? 'Show all statuses' : `Show ${statusLabel(status).toLowerCase()} trials`}
+              className={`rounded-md border px-2 py-1.5 transition-colors hover:bg-muted/60 ${selected ? 'border-primary bg-primary/5' : ''}`}
+              onClick={() => {
+                setStatusFilter((current) => (current === status ? 'all' : status))
+                setPage(0)
+              }}
+            >
+              <p className={`text-base ${valueClass}`}>{count}</p>
+              <p className="text-muted-foreground">{statusLabel(status)}</p>
+            </button>
+          )
+        })}
       </div>
 
       <div className="space-y-1">
@@ -276,31 +327,11 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
           <div className="h-full bg-[color:var(--chart-3)] transition-all" style={{ width: `${progressPct}%` }} />
         </div>
         <p className="font-mono text-xs text-muted-foreground">
-          {counts.completed + counts.failed}/{counts.total} trials done ({progressPct}%)
+          {terminalCount}/{counts.total} trials finished ({progressPct}%)
         </p>
       </div>
 
       <div className="flex gap-1.5">
-        <Select
-          value={statusFilter}
-          onValueChange={(v) => {
-            if (!v) return
-            setStatusFilter(v as Trial['status'] | 'all')
-            setPage(0)
-          }}
-        >
-          <SelectTrigger className="flex-1">
-            <SelectValue>{() => (statusFilter === 'all' ? 'All statuses' : statusFilter)}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            {STATUS_ORDER.map((s) => (
-              <SelectItem key={s} value={s}>
-                {s}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
         <Select
           value={factorFilter}
           onValueChange={(v) => {
@@ -351,8 +382,8 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
         <table className="w-full text-xs">
           <thead className="bg-muted/50 uppercase text-muted-foreground">
             <tr>
-              <th className="cursor-pointer px-2 py-1.5 text-left" onClick={() => onSort('cell_label')}>
-                Cell {sortKey === 'cell_label' && (sortDirection === 'asc' ? '↑' : '↓')}
+              <th className="cursor-pointer px-2 py-1.5 text-left" onClick={() => onSort('replicate_label')}>
+                Replicate {sortKey === 'replicate_label' && (sortDirection === 'asc' ? '↑' : '↓')}
               </th>
               <th className="cursor-pointer px-2 py-1.5 text-left" onClick={() => onSort('status')}>
                 Status {sortKey === 'status' && (sortDirection === 'asc' ? '↑' : '↓')}
@@ -367,12 +398,12 @@ export function RunsTab({ experimentId, protocolId }: { experimentId: string; pr
               const badge = statusBadge(t.status)
               return (
                 <tr
-                  key={t.cell_label}
+                  key={t.replicate_label}
                   className={`cursor-pointer hover:bg-muted/50 ${i % 2 === 1 ? 'bg-muted/20' : ''}`}
                   onClick={() => setSelectedTrial(t)}
                 >
-                  <td className="truncate px-2 py-1.5 font-mono" title={t.cell_label}>
-                    {t.cell_label}
+                  <td className="truncate px-2 py-1.5 font-mono" title={t.replicate_label}>
+                    {t.replicate_label}
                   </td>
                   <td className="px-2 py-1.5">{badge && <Badge className={badge.className}>{badge.label}</Badge>}</td>
                   <td className="px-2 py-1.5 font-mono text-muted-foreground">{new Date(t.updated_at).toLocaleString()}</td>

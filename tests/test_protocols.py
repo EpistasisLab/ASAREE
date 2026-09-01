@@ -21,6 +21,7 @@ import asaree.models.experiment  # noqa: F401 -- registers research_experiments 
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.user import User
 from asaree.services.experiments import create_experiment
+from asaree.services.protocol_revisions import get_published_revision, is_draft_published, publish_protocol
 from asaree.services.protocols import (
     create_protocol,
     delete_protocol,
@@ -98,6 +99,25 @@ async def test_update_unknown_field_rejected(owner_id: uuid.UUID) -> None:
         protocol = await create_protocol(db, name="pipeline-b", owner_id=owner_id)
         with pytest.raises(ValueError, match="not settable"):
             await update_protocol(db, protocol.id, fields={"owner_id": uuid.uuid4()})
+        await delete_protocol(db, protocol.id)
+
+
+async def test_publish_freezes_the_draft_and_advances_the_revision(owner_id: uuid.UUID) -> None:
+    first_graph = {"nodes": [{"id": "a", "type": "step", "data": {}}], "edges": []}
+    second_graph = {"nodes": [{"id": "b", "type": "step", "data": {}}], "edges": []}
+    async with get_session() as db:
+        protocol = await create_protocol(db, name="published-protocol", owner_id=owner_id, graph=first_graph)
+        assert await get_published_revision(db, protocol) is None
+        first = await publish_protocol(db, protocol)
+        assert first.revision == 1
+        assert first.graph == first_graph
+        assert is_draft_published(protocol, first) is True
+        await update_protocol(db, protocol.id, fields={"graph": second_graph})
+        assert is_draft_published(protocol, first) is False
+        second = await publish_protocol(db, protocol)
+        assert second.revision == 2
+        assert second.graph == second_graph
+        assert first.graph == first_graph
         await delete_protocol(db, protocol.id)
 
 

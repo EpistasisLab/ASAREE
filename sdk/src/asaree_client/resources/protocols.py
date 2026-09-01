@@ -6,7 +6,7 @@ import builtins
 import uuid
 from typing import Any
 
-from asaree_client.models import CellRunBatch, Protocol, ProtocolRun
+from asaree_client.models import CellRunBatch, Protocol, ProtocolRevision, ProtocolRun
 
 ResourceId = uuid.UUID | str
 
@@ -66,13 +66,28 @@ class Protocols:
     def delete(self, protocol_id: ResourceId) -> None:
         self._client._delete(f"/protocols/{protocol_id}")
 
-    def run(self, protocol_id: ResourceId, *, cell_label: str | None = None) -> ProtocolRun:
+    def publish(self, protocol_id: ResourceId) -> Protocol:
+        """Freeze the autosaved draft as the version future production runs use."""
+        data = self._client._post(f"/protocols/{protocol_id}/publish")
+        return Protocol(**data)
+
+    def get_revision(self, protocol_id: ResourceId, revision_id: ResourceId) -> ProtocolRevision:
+        """Return the immutable canvas snapshot an execution references."""
+        data = self._client._get(f"/protocols/{protocol_id}/revisions/{revision_id}")
+        return ProtocolRevision(**data)
+
+    def run(
+        self,
+        protocol_id: ResourceId,
+        *,
+        replicate_label: str | None = None,
+    ) -> ProtocolRun:
         """Compile and run this protocol's current graph -- 422 if it's
         empty or has a cycle. Returns immediately with status "pending";
-        poll with get_run. ``cell_label`` runs that one already-generated
-        cell for real (its own factor_values substituted in) instead of
+        poll with get_run. ``replicate_label`` runs that one already-generated
+        replicate (its cell's factor_values substituted in) instead of
         today's ad-hoc, un-substituted whole-graph run."""
-        payload = {"cell_label": cell_label} if cell_label is not None else {}
+        payload = {"replicate_label": replicate_label} if replicate_label is not None else {}
         data = self._client._post(f"/protocols/{protocol_id}/runs", json=payload)
         return ProtocolRun(**data)
 
@@ -84,8 +99,8 @@ class Protocols:
         return ProtocolRun(**data)
 
     def run_cells(self, protocol_id: ResourceId) -> CellRunBatch:
-        """"Run all cells" -- one ProtocolRun per not-yet-scored cell under
-        this protocol's linked experiment, each cell's own factor_values
+        """"Run all cells" -- one ProtocolRun per not-yet-scored replicate under
+        this protocol's linked experiment, each replicate's cell factor_values
         substituted in. 422 if there's no linked experiment or the graph
         doesn't have exactly one final node."""
         data = self._client._post(f"/protocols/{protocol_id}/cell-runs")

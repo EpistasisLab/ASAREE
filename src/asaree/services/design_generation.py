@@ -5,11 +5,12 @@ use-case-specific assumptions. The other half (orchestration — the
 critic-gating loop, workspace staging) stays notebook-side, deliberately.
 
 Two responsibilities, kept separate: computing the design (pure, no I/O) and
-materializing it as ``FactorialCellResult`` rows (via the existing
-``upsert_cell`` merge, so generating a design twice — e.g. after adding a
-replicate level — only creates the new combinations; already-populated cells
-are untouched, since the merge only ever sets ``factor_values`` and nothing
-else).
+materializing it as ``FactorialCell`` parents with
+``FactorialReplicateResult`` children under a *design revision*
+(see services.design_revisions). Generation used to be purely additive, which
+meant a design that shrank left the old design's cells behind to pollute every
+count and every "run all cells"; a design whose cell set changes now opens a
+new revision and carries forward the results of any combination the two share.
 """
 
 from __future__ import annotations
@@ -20,12 +21,14 @@ import json
 import random
 import re
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from asaree.models.factorial_cell_result import FactorialCellResult
-from asaree.services.factorial_cells import upsert_cell
+from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.services.design_revisions import get_current_revision, supersede_and_create
+from asaree.services.factorial_cells import list_replicates, upsert_replicate
 
 
 class DesignValidationError(ValueError):
@@ -84,6 +87,7 @@ _DICT_SLUG_PRIORITY_KEYS = ("model", "provider", "execution_pattern", "server_na
 # regenerations either way, and sorting would only hide the (already
 # meaningless) case of two levels holding the same set.
 _MAX_LIST_SLUG_ITEMS = 3
+_NON_FACTOR_KEYS = {"replicate", "seed", "rep", "trial", "iteration"}
 
 
 def _slugify(value: Any) -> str:
@@ -107,15 +111,107 @@ def _slugify(value: Any) -> str:
     return slug or "x"
 
 
-def cell_label_for(combination: dict[str, Any], *, replicate: int = 1) -> str:
-    """A deterministic, sorted label for one combination — stable regardless
-    of the order factors were declared in, so the same combination always
-    lands on the same cell. ``replicate`` is 1-indexed; replicate 1's label is
-    left exactly as it always was (no suffix) so existing single-replicate
-    experiments are unaffected and a later replicates increase only adds new
-    cells (2, 3, ...) rather than renaming the original one."""
-    base = "__".join(f"{name}_{_slugify(value)}" for name, value in sorted(combination.items()))
-    return base if replicate <= 1 else f"{base}__rep{replicate}"
+def cell_label_for(combination: dict[str, Any]) -> str:
+    """Return the deterministic label for one unique factor combination."""
+    return "__".join(f"{name}_{_slugify(value)}" for name, value in sorted(combination.items()))
+
+
+def replicate_label_for(combination: dict[str, Any], *, replicate: int = 1) -> str:
+    """Return the label for one replicate within a factor-combination cell.
+
+    Replicate 1 retains the unsuffixed historical label; later replicates use
+    ``__repN``. This keeps existing data stable while making the cell/replicate
+    distinction explicit at every call site.
+    """
+    cell_label = cell_label_for(combination)
+    return cell_label if replicate <= 1 else f"{cell_label}__rep{replicate}"
+
+
+def _cell_key(factor_values: dict[str, Any] | None, label: str) -> str:
+    factors = {key: value for key, value in (factor_values or {}).items() if key.lower() not in _NON_FACTOR_KEYS}
+    return json.dumps(factors, sort_keys=True, default=str) if factors else re.sub(r"__rep\d+$", "", label)
+
+
+_CARRIED_FORWARD_FIELDS = ("run_id", "workspace_id", "factor_values", "metric_values", "artifacts")
+
+
+@dataclass(frozen=True)
+class DesignImpact:
+    """The non-mutating comparison shown before a user regenerates cells."""
+
+    has_generated_design: bool
+    regeneration_required: bool
+    current_cell_count: int
+    proposed_cell_count: int
+    added_cell_count: int
+    retained_cell_count: int
+    removed_cell_count: int
+    current_replicate_count: int
+    proposed_replicate_count: int
+    added_replicate_count: int
+    retained_replicate_count: int
+    removed_replicate_count: int
+
+
+def material_design_spec(design_spec: dict[str, Any] | None) -> dict[str, Any]:
+    """Return only the declaration fields that determine which cells exist."""
+    spec = design_spec or {}
+    return {"factors": spec.get("factors") or [], "replicates": spec.get("replicates") or 1}
+
+
+def _planned_replicates(factors: list[dict[str, Any]], replicates: int) -> list[tuple[str, dict[str, Any]]]:
+    if replicates < 1:
+        raise DesignValidationError(f"replicates must be at least 1, got {replicates}")
+    return [
+        (replicate_label_for(combo, replicate=replicate), combo)
+        for combo in generate_design(factors)
+        for replicate in range(1, replicates + 1)
+    ]
+
+
+async def get_design_impact(
+    db: AsyncSession, *, experiment_id: uuid.UUID, design_spec: dict[str, Any] | None
+) -> DesignImpact:
+    """Compare the declared factorial matrix to its materialized revision."""
+    material = material_design_spec(design_spec)
+    planned = _planned_replicates(material["factors"], material["replicates"]) if material["factors"] else []
+    planned_labels = {label for label, _ in planned}
+    planned_cell_keys = {_cell_key(combo, label) for label, combo in planned}
+    current = await get_current_revision(db, experiment_id)
+    if current is None:
+        return DesignImpact(
+            has_generated_design=False,
+            regeneration_required=bool(planned),
+            current_cell_count=0,
+            proposed_cell_count=len(planned_cell_keys),
+            added_cell_count=len(planned_cell_keys),
+            retained_cell_count=0,
+            removed_cell_count=0,
+            current_replicate_count=0,
+            proposed_replicate_count=len(planned),
+            added_replicate_count=len(planned),
+            retained_replicate_count=0,
+            removed_replicate_count=0,
+        )
+    current_replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=current.id)
+    current_labels = {replicate.replicate_label for replicate in current_replicates}
+    current_cell_keys = {
+        _cell_key(replicate.factor_values, replicate.replicate_label) for replicate in current_replicates
+    }
+    return DesignImpact(
+        has_generated_design=True,
+        regeneration_required=material_design_spec(current.design_spec) != material or current_labels != planned_labels,
+        current_cell_count=len(current_cell_keys),
+        proposed_cell_count=len(planned_cell_keys),
+        added_cell_count=len(planned_cell_keys - current_cell_keys),
+        retained_cell_count=len(planned_cell_keys & current_cell_keys),
+        removed_cell_count=len(current_cell_keys - planned_cell_keys),
+        current_replicate_count=len(current_replicates),
+        proposed_replicate_count=len(planned),
+        added_replicate_count=len(planned_labels - current_labels),
+        retained_replicate_count=len(planned_labels & current_labels),
+        removed_replicate_count=len(current_labels - planned_labels),
+    )
 
 
 async def generate_design_cells(
@@ -125,33 +221,95 @@ async def generate_design_cells(
     factors: list[dict[str, Any]],
     replicates: int = 1,
     randomization_seed: int | None = None,
-) -> list[FactorialCellResult]:
-    """Compute the design and materialize ``replicates`` cell rows per
-    combination (default 1 — today's exact behavior, unchanged).
+    design_spec: dict[str, Any] | None = None,
+) -> list[FactorialReplicateResult]:
+    """Compute the design and materialize ``replicates`` child rows per
+    combination (default 1), under the experiment's current design revision.
 
-    Idempotent: re-running this (e.g. after widening a factor's levels or
-    raising ``replicates``) only creates the new combinations/replicates —
-    ``upsert_cell`` merges ``factor_values`` onto an existing row rather than
-    resetting it, so a cell that already has results is left alone.
+    A new revision is opened exactly when the new design would *drop* a cell
+    the current revision has — not on every change. Re-clicking generate,
+    changing ``randomization_seed``, widening a factor's levels or raising
+    ``replicates`` all leave every existing cell part of the new design, so
+    they keep the current revision and merge into its rows: no near-empty
+    duplicate revisions pile up, and (as before) the cells you already scored
+    are untouched, right down to their row ids.
+
+    Dropping a cell is the case that needs a revision (see
+    services.design_revisions). This is the fix for cells outliving the design
+    that created them: shrinking a design from 6 cells to 2 used to leave all 6
+    in place — still counted in "0/6 scored", still picked up by "run all
+    cells" — because generation was purely additive and nothing ever removed a
+    combination. The old cells now stay under their own superseded revision,
+    where they remain readable as history but are invisible to every
+    current-design reader. Results for a label the two revisions share are
+    carried forward into the new one, so shrinking a design only costs you the
+    combinations you actually removed.
 
     ``randomization_seed``, when set, only shuffles the *order* of the
     returned list (assignment-order independence, standard factorial-design
     practice) — it never affects which combinations/replicates are generated
     or their (deterministic) cell_label.
     """
-    if replicates < 1:
-        raise DesignValidationError(f"replicates must be at least 1, got {replicates}")
-    combinations = generate_design(factors)
-    cells = []
-    for combo in combinations:
-        for replicate in range(1, replicates + 1):
-            cell = await upsert_cell(
-                db,
-                experiment_id=experiment_id,
-                cell_label=cell_label_for(combo, replicate=replicate),
-                fields={"factor_values": combo},
-            )
-            cells.append(cell)
+    # An empty factor declaration is a meaningful replacement when an
+    # existing design's final factor was removed: it retires every current
+    # cell into history and leaves an empty current revision.  Do not call
+    # ``generate_design`` in that case -- its non-empty validation remains
+    # correct for callers trying to construct a factorial cross-product.
+    planned = _planned_replicates(factors, replicates) if factors else []
+    planned_labels = {label for label, _ in planned}
+
+    current = await get_current_revision(db, experiment_id)
+    existing = (
+        {
+            replicate.replicate_label: replicate
+            for replicate in await list_replicates(db, experiment_id=experiment_id, revision_id=current.id)
+        }
+        if current is not None
+        else {}
+    )
+
+    # Only a design that leaves cells behind needs a new revision; one that
+    # adds to (or exactly matches) the current design has nothing to orphan.
+    dropped = set(existing) - planned_labels
+
+    if current is not None and not dropped:
+        # Keep the revision and merge into its rows -- factor_values is
+        # re-merged because a level's *value* can change without changing its
+        # slugified label.
+        revision_id = current.id
+        carry_over: dict[str, FactorialReplicateResult] = {}
+        if current.design_spec != design_spec:
+            current.design_spec = design_spec
+            await db.flush()
+    else:
+        revision = await supersede_and_create(db, experiment_id=experiment_id, design_spec=design_spec)
+        revision_id = revision.id
+        carry_over = existing
+
+    replicate_results = []
+    for label, combo in planned:
+        fields: dict[str, Any] = {"factor_values": combo}
+        previous = carry_over.get(label)
+        if previous is not None:
+            # Same combination, same label -- the observation is as valid
+            # under the new design as it was under the old one, so it moves
+            # across rather than being re-run and re-billed.
+            for field in _CARRIED_FORWARD_FIELDS:
+                value = getattr(previous, field)
+                if value:
+                    fields[field] = value
+            # factor_values from the new design wins: it's what was actually
+            # planned this time, and the carried dict is the same combination
+            # anyway.
+            fields["factor_values"] = combo
+        replicate_result = await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label=label,
+            fields=fields,
+            revision_id=revision_id,
+        )
+        replicate_results.append(replicate_result)
     if randomization_seed is not None:
-        random.Random(randomization_seed).shuffle(cells)
-    return cells
+        random.Random(randomization_seed).shuffle(replicate_results)
+    return replicate_results

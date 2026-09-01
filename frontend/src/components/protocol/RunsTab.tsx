@@ -12,6 +12,7 @@ import { protocolForExperimentQueryKey } from '@/lib/protocolGraph'
 import type { Trial } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
 import { RunConfirmDialog } from './RunConfirmDialog'
+import { WarningBadge } from './nodes/WarningBadge'
 
 function factorEntries(cell: ExperimentalCell): [string, unknown][] {
   // Factor ordering is meaningful when a user declared it, so preserve the
@@ -59,6 +60,11 @@ function trialStatusBadge(status: Trial['status']) {
     case 'cancelled':
       return { label: 'Cancelled', className: 'border-transparent bg-muted text-muted-foreground' }
   }
+}
+
+const OBSOLETE_TRIAL_BADGE = {
+  label: 'Obsolete',
+  className: 'border-transparent bg-[color:var(--chart-2)]/10 text-[color:var(--chart-2)]',
 }
 
 // The panel's run control deliberately keeps the resume behavior of the
@@ -404,7 +410,9 @@ export function RunsTab({
   const trialsQuery = useQuery({
     queryKey: ['experiments', experimentId, 'runs'],
     queryFn: () => experimentsApi.listTrials(experimentId),
-    enabled: expandedCells.size > 0,
+    // Obsolescence is surfaced at the Cells and cell-header levels, not only
+    // inside an expanded replicate list, so load this while Runs is visible.
+    enabled: true,
     refetchInterval: 3000,
   })
 
@@ -424,6 +432,11 @@ export function RunsTab({
 
   const cells = groupReplicatesIntoCells(replicatesQuery.data).sort((a, b) => cellSortKey(a).localeCompare(cellSortKey(b)))
   const trialsByLabel = new Map((trialsQuery.data ?? []).map((trial) => [trial.replicate_label, trial]))
+  const obsoleteCells = cells.filter((cell) => cell.replicates.some((replicate) => trialsByLabel.get(replicate.replicate_label)?.obsolete))
+  const obsoleteReplicateCount = cells.reduce(
+    (count, cell) => count + cell.replicates.filter((replicate) => trialsByLabel.get(replicate.replicate_label)?.obsolete).length,
+    0,
+  )
 
   function toggleCell(cellLabel: string) {
     setExpandedCells((current) => {
@@ -442,6 +455,12 @@ export function RunsTab({
     <section className="space-y-1.5 p-3" aria-labelledby="run-cells-heading">
       <div className="flex items-center gap-2">
         <h2 id="run-cells-heading" className="text-sm font-medium">Cells</h2>
+        {obsoleteReplicateCount > 0 && (
+          <WarningBadge
+            issues={`${obsoleteReplicateCount} replicate${obsoleteReplicateCount === 1 ? '' : 's'} across ${obsoleteCells.length} cell${obsoleteCells.length === 1 ? '' : 's'} ran against an older published canvas version.`}
+            className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
+          />
+        )}
         <RunAllCellsButton
           protocol={protocol}
           experimentId={experimentId}
@@ -457,6 +476,7 @@ export function RunsTab({
           const remaining = entries.slice(2)
           const expanded = expandedCells.has(cell.label)
           const replicateListId = `cell-${cell.label}-replicates`
+          const obsoleteCount = cell.replicates.filter((replicate) => trialsByLabel.get(replicate.replicate_label)?.obsolete).length
           return (
             <div key={cell.label} className="overflow-hidden rounded-md border">
               <div className="flex items-start gap-2 px-3 py-2.5">
@@ -478,6 +498,12 @@ export function RunsTab({
                       <Badge variant="outline" className="shrink-0 border-[color:var(--chart-2)] text-[color:var(--chart-2)]">
                         {cell.replicates.length} {cell.replicates.length === 1 ? 'replicate' : 'replicates'}
                       </Badge>
+                      {obsoleteCount > 0 && (
+                        <WarningBadge
+                          issues={`${obsoleteCount} replicate${obsoleteCount === 1 ? '' : 's'} ran against an older published canvas version.`}
+                          className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
+                        />
+                      )}
                     </div>
                     {remaining.length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1">
@@ -516,12 +542,20 @@ export function RunsTab({
                     <ul className="space-y-1.5" aria-label={`Replicates for ${cell.label}`}>
                       {cell.replicates.map((replicate) => {
                         const trial = trialsByLabel.get(replicate.replicate_label)
-                        const badge = trial ? trialStatusBadge(trial.status) : null
+                        const badge = trial ? (trial.obsolete ? OBSOLETE_TRIAL_BADGE : trialStatusBadge(trial.status)) : null
                         return (
                           <li key={replicate.id} className="rounded-md border bg-background px-2.5 py-2">
                             <div className="flex items-center justify-between gap-3">
                               <div className="min-w-0">
-                                <p className="text-sm font-medium">Replicate {replicate.replicate_number}</p>
+                                <div className="flex items-center gap-1.5">
+                                  <p className="text-sm font-medium">Replicate {replicate.replicate_number}</p>
+                                  {trial?.obsolete && (
+                                    <WarningBadge
+                                      issues="This replicate ran against an older published canvas version. Run it again to produce a current result."
+                                      className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
+                                    />
+                                  )}
+                                </div>
                               </div>
                               <div className="flex shrink-0 items-center gap-2">
                                 {badge ? <Badge className={badge.className}>{badge.label}</Badge> : <Badge variant="outline">Status unavailable</Badge>}

@@ -15,6 +15,7 @@ from asaree.models.database import dispose_engine, get_session
 from asaree.models.user import User
 from asaree.services.experiments import create_experiment, delete_experiment
 from asaree.services.factorial_cells import upsert_replicate
+from asaree.services.protocol_revisions import publish_protocol
 from asaree.services.protocol_runs import (
     create_protocol_run,
     fail_protocol_run,
@@ -282,4 +283,76 @@ async def test_list_experiment_trials_reflects_not_started_running_and_completed
         assert by_label["cell-scored-externally"].run_id is None
 
     async with get_session() as db:
+        await delete_experiment(db, experiment_id)
+
+
+async def test_list_experiment_trials_marks_runs_obsolete_after_a_new_canvas_publish(owner_id: uuid.UUID) -> None:
+    """Both revision-pinned and older unpinned rows surface as obsolete.
+
+    The fallback for an unpinned row matters for experiments that were run
+    before published-canvas provenance was stored on ProtocolRun.
+    """
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"obsolete-trial-test-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db,
+            name=f"obsolete-trial-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment_id,
+        )
+        protocol_id = protocol.id
+        first_revision = await publish_protocol(db, protocol)
+
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="legacy-cell",
+            fields={"factor_values": {"x": 1}},
+        )
+        legacy_run = await create_protocol_run(
+            db,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            # Deliberately omit protocol_revision_id to model an older run.
+        )
+        legacy_run.status = "completed"
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="legacy-cell",
+            fields={"run_id": legacy_run.id},
+        )
+
+        second_revision = await publish_protocol(db, protocol)
+        assert second_revision.id != first_revision.id
+
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="current-cell",
+            fields={"factor_values": {"x": 2}},
+        )
+        current_run = await create_protocol_run(
+            db,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            protocol_revision_id=second_revision.id,
+        )
+        current_run.status = "completed"
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="current-cell",
+            fields={"run_id": current_run.id},
+        )
+
+    async with get_session() as db:
+        trials = await list_experiment_trials(db, experiment_id=experiment_id)
+        by_label = {trial.replicate_label: trial for trial in trials}
+        assert by_label["legacy-cell"].obsolete is True
+        assert by_label["current-cell"].obsolete is False
+
+    async with get_session() as db:
+        await delete_protocol(db, protocol_id)
         await delete_experiment(db, experiment_id)

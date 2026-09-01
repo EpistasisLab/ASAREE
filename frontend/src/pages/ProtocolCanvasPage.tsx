@@ -137,6 +137,7 @@ function ProtocolPublicationControl({ protocol, experimentId }: { protocol: Prot
     mutationFn: () => protocolsApi.publish(protocol.id),
     onSuccess: (published) => {
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'runs'] })
     },
   })
   const status = protocol.published_revision

@@ -143,6 +143,9 @@ export interface Trial {
   metric_values: Record<string, unknown>
   status: 'not_started' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
   run_id: string | null
+  // True when this run used an older published canvas version than the
+  // protocol's current published version.
+  obsolete: boolean
   error: string | null
   updated_at: string
 }

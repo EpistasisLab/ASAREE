@@ -629,6 +629,7 @@ class TrialResponse(BaseModel):
     metric_values: dict[str, Any]
     status: str
     run_id: uuid.UUID | None
+    obsolete: bool
     error: str | None
     updated_at: datetime
 
@@ -650,6 +651,7 @@ async def list_experiment_trials_endpoint(
             metric_values=t.metric_values,
             status=_RUN_STATUS_TO_TRIAL_STATUS.get(t.status, t.status),
             run_id=t.run_id,
+            obsolete=t.obsolete,
             error=t.error,
             updated_at=t.updated_at,
         )

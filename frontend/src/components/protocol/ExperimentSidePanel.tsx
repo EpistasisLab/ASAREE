@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
-import { ListChecks, PanelLeftClose, PencilRuler } from 'lucide-react'
+import { BarChart3, ListChecks, PanelLeftClose, PencilRuler } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { DesignTab } from './DesignTab'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import { RunsTab } from './RunsTab'
+import { ResultsTab } from './ResultsTab'
 import type { Experiment } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
 
@@ -31,7 +32,7 @@ const MIN_CANVAS_WIDTH = 420
 // panel is a property of how you work, not of which experiment you opened.
 const PANEL_WIDTH_STORAGE_KEY = 'asaree:experiment-panel-width'
 const PANEL_COLLAPSED_STORAGE_KEY = 'asaree:experiment-panel-collapsed'
-type PanelTab = 'design' | 'runs'
+type PanelTab = 'design' | 'runs' | 'results'
 
 function clampPanelWidth(width: number): number {
   const viewportMax = typeof window !== 'undefined' ? window.innerWidth - MIN_CANVAS_WIDTH : MAX_PANEL_WIDTH
@@ -79,6 +80,7 @@ export function ExperimentSidePanel({
   const [width, setWidth] = useState(readStoredPanelWidth)
   const [collapsed, setCollapsed] = useState(readStoredCollapsed)
   const [activeTab, setActiveTab] = useState<PanelTab>('design')
+  const [resultReplicateLabel, setResultReplicateLabel] = useState<string | null>(null)
   const [hasPendingDesignUpdate, setHasPendingDesignUpdate] = useState(false)
   const [dragging, setDragging] = useState(false)
   const dragStart = useRef<{ x: number; width: number } | null>(null)
@@ -150,6 +152,11 @@ export function ExperimentSidePanel({
     setPanelCollapsed(false)
   }
 
+  function viewReplicateResult(replicateLabel: string) {
+    setResultReplicateLabel(replicateLabel)
+    openPanel('results')
+  }
+
   const showDesignAttentionBorder = activeTab === 'design' && (needsInitialGeneration || hasPendingDesignUpdate)
 
   return (
@@ -189,6 +196,19 @@ export function ExperimentSidePanel({
           <ListChecks className="size-4" aria-hidden="true" />
           <span>Runs</span>
         </button>
+        <button
+          type="button"
+          aria-label="Open Results panel"
+          aria-pressed={activeTab === 'results'}
+          title="Open Results panel"
+          onClick={() => openPanel('results')}
+          className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-xs font-medium transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+            activeTab === 'results' ? 'bg-muted text-foreground' : 'text-muted-foreground'
+          }`}
+        >
+          <BarChart3 className="size-4" aria-hidden="true" />
+          <span>Results</span>
+        </button>
       </Card>
 
       {!collapsed && (
@@ -197,7 +217,7 @@ export function ExperimentSidePanel({
           showDesignAttentionBorder && 'border border-[color:var(--chart-4)]/60',
         )}>
           <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
-            <span className="text-sm font-medium">{activeTab === 'design' ? 'Design' : 'Runs'}</span>
+            <span className="text-sm font-medium">{activeTab === 'design' ? 'Design' : activeTab === 'runs' ? 'Runs' : 'Results'}</span>
             <div className="flex items-center gap-1">
               <button
                 type="button"
@@ -224,12 +244,19 @@ export function ExperimentSidePanel({
                   canvasRef={canvasRef}
                   onDesignUpdatePendingChange={setHasPendingDesignUpdate}
                 />
-              ) : (
+              ) : activeTab === 'runs' ? (
                 <RunsTab
                   experimentId={experiment.id}
                   protocol={protocol}
                   regenerationRequired={regenerationRequired}
                   unboundFactors={unboundFactors}
+                  onViewResult={viewReplicateResult}
+                />
+              ) : (
+                <ResultsTab
+                  experimentId={experiment.id}
+                  initialReplicateLabel={resultReplicateLabel}
+                  onInitialReplicateShown={() => setResultReplicateLabel(null)}
                 />
               )}
             </div>

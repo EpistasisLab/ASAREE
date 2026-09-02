@@ -396,11 +396,13 @@ export function RunsTab({
   protocol,
   regenerationRequired,
   unboundFactors,
+  onViewResult,
 }: {
   experimentId: string
   protocol: Protocol | undefined
   regenerationRequired: boolean
   unboundFactors: string[]
+  onViewResult: (replicateLabel: string) => void
 }) {
   const [expandedCells, setExpandedCells] = useState<Set<string>>(() => new Set())
   const replicatesQuery = useQuery({
@@ -437,6 +439,15 @@ export function RunsTab({
     (count, cell) => count + cell.replicates.filter((replicate) => trialsByLabel.get(replicate.replicate_label)?.obsolete).length,
     0,
   )
+  // Runs stays operational rather than becoming a second Results dashboard:
+  // this one compact line answers whether there is work in flight, while
+  // comparison metrics, spend, and outputs stay in the Results rail item.
+  const trials = [...trialsByLabel.values()]
+  const currentTrialCount = trials.filter((trial) => !trial.obsolete).length
+  const completedCount = trials.filter((trial) => trial.status === 'completed' && !trial.obsolete).length
+  const runningCount = trials.filter((trial) => trial.status === 'running').length
+  const queuedCount = trials.filter((trial) => trial.status === 'queued').length
+  const failedCount = trials.filter((trial) => trial.status === 'failed' || trial.status === 'cancelled').length
 
   function toggleCell(cellLabel: string) {
     setExpandedCells((current) => {
@@ -453,21 +464,29 @@ export function RunsTab({
 
   return (
     <section className="space-y-1.5 p-3" aria-labelledby="run-cells-heading">
-      <div className="flex items-center gap-2">
-        <h2 id="run-cells-heading" className="text-sm font-medium">Cells</h2>
-        {obsoleteReplicateCount > 0 && (
-          <WarningBadge
-            issues={`${obsoleteReplicateCount} replicate${obsoleteReplicateCount === 1 ? '' : 's'} across ${obsoleteCells.length} cell${obsoleteCells.length === 1 ? '' : 's'} ran against an older published canvas version.`}
-            className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
+      <div className="space-y-0.5">
+        <div className="flex items-center gap-2">
+          <h2 id="run-cells-heading" className="text-sm font-medium">Cells</h2>
+          {obsoleteReplicateCount > 0 && (
+            <WarningBadge
+              issues={`${obsoleteReplicateCount} replicate${obsoleteReplicateCount === 1 ? '' : 's'} across ${obsoleteCells.length} cell${obsoleteCells.length === 1 ? '' : 's'} ran against an older published canvas version.`}
+              className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
+            />
+          )}
+          <RunAllCellsButton
+            protocol={protocol}
+            experimentId={experimentId}
+            regenerationRequired={regenerationRequired}
+            unboundFactors={unboundFactors}
           />
-        )}
-        <RunAllCellsButton
-          protocol={protocol}
-          experimentId={experimentId}
-          regenerationRequired={regenerationRequired}
-          unboundFactors={unboundFactors}
-        />
-        <span className="ml-auto font-mono text-xs text-muted-foreground">{cells.length}</span>
+          <span className="ml-auto font-mono text-xs text-muted-foreground">{cells.length}</span>
+        </div>
+        <p className="text-xs text-muted-foreground" aria-live="polite">
+          {completedCount}/{currentTrialCount || (trials.length === 0 ? replicatesQuery.data.length : 0)} current complete
+          {runningCount > 0 && ` · ${runningCount} running`}
+          {queuedCount > 0 && ` · ${queuedCount} queued`}
+          {failedCount > 0 && ` · ${failedCount} failed`}
+        </p>
       </div>
       <div className="space-y-2">
         {cells.map((cell) => {
@@ -559,6 +578,16 @@ export function RunsTab({
                               </div>
                               <div className="flex shrink-0 items-center gap-2">
                                 {badge ? <Badge className={badge.className}>{badge.label}</Badge> : <Badge variant="outline">Status unavailable</Badge>}
+                                {trial?.run_id && (
+                                  <Button
+                                    variant="outline"
+                                    size="xs"
+                                    className="h-5 px-1.5 text-[0.65rem]"
+                                    onClick={() => onViewResult(replicate.replicate_label)}
+                                  >
+                                    View result
+                                  </Button>
+                                )}
                                 <RunReplicateButton
                                   protocol={protocol}
                                   experimentId={experimentId}

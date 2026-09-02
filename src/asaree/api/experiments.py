@@ -27,6 +27,7 @@ from asaree.services.design_revisions import (
     list_revision_summaries,
 )
 from asaree.services.experiment_artifacts import create_artifact, delete_artifact, get_artifact, list_artifacts
+from asaree.services.experiment_run_results import summarize_experiment_run_results
 from asaree.services.experiments import (
     create_experiment,
     create_untitled_experiment,
@@ -487,6 +488,17 @@ class ResultsResponse(BaseModel):
     best_condition: dict[str, Any] | None
 
 
+class RunResultsResponse(BaseModel):
+    """The general-purpose results scorecard, unlike the optional factorial analysis."""
+
+    overview: dict[str, Any]
+    metric_keys: list[str]
+    primary_metric: str | None
+    primary_metric_direction: str
+    cells: list[dict[str, Any]]
+    replicates: list[dict[str, Any]]
+
+
 @router.get("/{experiment_id}/results", response_model=ResultsResponse)
 async def get_experiment_results_endpoint(
     experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
@@ -498,6 +510,23 @@ async def get_experiment_results_endpoint(
     replicates = await list_replicates(db, experiment_id=experiment_id)
     result = analyze_experiment_design(experiment.design_spec, replicates)
     return ResultsResponse(**result)
+
+
+@router.get("/{experiment_id}/run-results", response_model=RunResultsResponse)
+async def get_experiment_run_results_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> RunResultsResponse:
+    """Operational and outcome summary for the experiment's current cells.
+
+    This remains available for every experiment, including one without the
+    balanced 2-level design needed by the statistical ``/results`` endpoint.
+    """
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    return RunResultsResponse(
+        **(await summarize_experiment_run_results(
+            db, experiment_id=experiment_id, design_spec=experiment.design_spec
+        ))
+    )
 
 
 @router.put("/{experiment_id}/replicates/{replicate_label}", response_model=ReplicateResponse)

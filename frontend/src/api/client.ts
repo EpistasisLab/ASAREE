@@ -12,7 +12,7 @@ import type {
 } from '@/types/auth'
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
-import type { DesignImpact, DesignRevision, DesignSpec, Experiment, ExperimentResults, Replicate, Trial } from '@/types/experiments'
+import type { DesignImpact, DesignRevision, DesignSpec, Experiment, ExperimentResults, ExperimentRunResults, Replicate, Trial } from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
@@ -235,6 +235,9 @@ export const experimentsApi = {
   // declarations -- no request body needed (see
   // services.factorial_analysis.analyze_experiment_design).
   getResults: (id: string) => request<ExperimentResults>(`/experiments/${id}/results`),
+  // A current-design scorecard and the per-cell/per-replicate evidence behind
+  // it. Unlike getResults(), no balanced-factorial assumptions are required.
+  getRunResults: (id: string) => request<ExperimentRunResults>(`/experiments/${id}/run-results`),
 }
 
 export const protocolsApi = {

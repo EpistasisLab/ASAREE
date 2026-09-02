@@ -218,6 +218,85 @@ export interface ExperimentResults {
   best_condition: EmmCell | null
 }
 
+// The general-purpose Results panel is intentionally not limited to a
+// balanced factorial design. These records combine execution facts (status,
+// duration, usage) with whatever numeric metrics the experiment produced.
+export interface ResultNodeRun {
+  node_id: string
+  node_label: string
+  status: string
+  output_text: string | null
+  error: string | null
+  agent_run_id: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  cost_usd: number | null
+}
+
+export interface ResultReplicate {
+  replicate_label: string
+  replicate_number: number
+  cell_label: string
+  factor_values: Record<string, unknown>
+  metric_values: Record<string, unknown>
+  status: Trial['status']
+  obsolete: boolean
+  error: string | null
+  run_id: string | null
+  protocol_revision_id: string | null
+  updated_at: string
+  duration_seconds: number | null
+  node_runs: ResultNodeRun[]
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  cost_usd: number | null
+  agent_run_count: number
+  reported_usage_count: number
+  reported_cost_count: number
+}
+
+export interface ResultCell {
+  cell_label: string
+  factor_values: Record<string, unknown>
+  replicate_count: number
+  completed_count: number
+  current_completed_count: number
+  obsolete_count: number
+  metric_means: Record<string, number>
+  cost_usd: number | null
+  total_tokens: number | null
+  duration_seconds: number | null
+}
+
+export interface RunResultsOverview {
+  total_replicates: number
+  completed_replicates: number
+  running_replicates: number
+  queued_replicates: number
+  failed_replicates: number
+  not_started_replicates: number
+  obsolete_replicates: number
+  total_cost_usd: number | null
+  total_input_tokens: number | null
+  total_output_tokens: number | null
+  total_tokens: number | null
+  total_duration_seconds: number | null
+  agent_run_count: number
+  reported_usage_count: number
+  reported_cost_count: number
+}
+
+export interface ExperimentRunResults {
+  overview: RunResultsOverview
+  metric_keys: string[]
+  primary_metric: string | null
+  primary_metric_direction: 'maximize' | 'minimize'
+  cells: ResultCell[]
+  replicates: ResultReplicate[]
+}
+
 export interface Replicate {
   // One independently runnable observation within the owning cell.
   id: string

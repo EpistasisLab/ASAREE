@@ -130,6 +130,8 @@ export interface Experiment {
   // code written before that; it is no longer a stored column.
   dataset_ids: string[]
   dataset_id: string | null
+  locked_at: string | null
+  locked_protocol_revision_id: string | null
   created_at: string
   archived_at: string | null
 }

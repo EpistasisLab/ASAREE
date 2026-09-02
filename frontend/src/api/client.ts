@@ -199,6 +199,8 @@ export const experimentsApi = {
       dataset_id?: string | null
     },
   ) => request<Experiment>(`/experiments/${id}`, { method: 'PATCH', body: data }),
+  lock: (id: string) => request<Experiment>(`/experiments/${id}/lock`, { method: 'POST' }),
+  unlock: (id: string) => request<Experiment>(`/experiments/${id}/unlock`, { method: 'POST' }),
   remove: (id: string) => request<void>(`/experiments/${id}`, { method: 'DELETE' }),
   // The experiment's current design cells; pass a revisionId to read a
   // superseded revision's instead (the design-history drill-down).

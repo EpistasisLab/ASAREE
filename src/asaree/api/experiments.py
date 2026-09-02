@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime
+from copy import deepcopy
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
@@ -42,8 +43,9 @@ from asaree.services.experiments import (
 )
 from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_experiment_design, analyze_factorial
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
+from asaree.services.protocol_revisions import get_published_revision, is_draft_published
 from asaree.services.protocol_runs import list_experiment_trials
-from asaree.services.protocols import sync_protocol_names_to_experiment
+from asaree.services.protocols import list_protocols, sync_protocol_names_to_experiment
 
 # For a Content-Disposition filename only -- never touches the experiment's
 # own stored name, just what the browser offers to save the download as.
@@ -133,6 +135,8 @@ class ExperimentResponse(BaseModel):
     dataset_ids: list[uuid.UUID]
     dataset_id: uuid.UUID | None
     archived_at: datetime | None
+    locked_at: datetime | None
+    locked_protocol_revision_id: uuid.UUID | None
     created_at: datetime
 
 
@@ -148,8 +152,35 @@ def _experiment_response(e: Any, dataset_ids: list[uuid.UUID]) -> ExperimentResp
         dataset_ids=dataset_ids,
         dataset_id=dataset_ids[0] if dataset_ids else None,
         archived_at=e.archived_at,
+        locked_at=e.locked_at,
+        locked_protocol_revision_id=e.locked_protocol_revision_id,
         created_at=e.created_at,
     )
+
+
+def _locked_design_change_is_replicates_only(current: dict[str, Any] | None, proposed: dict[str, Any] | None) -> bool:
+    """Whether a locked design patch only changes its permitted run count."""
+    before = deepcopy(current or {})
+    after = deepcopy(proposed or {})
+    before.pop("replicates", None)
+    after.pop("replicates", None)
+    return before == after
+
+
+def _reject_locked_mutation(experiment: Any, fields: dict[str, Any]) -> None:
+    if experiment.locked_at is None:
+        return
+    # Identity/lifecycle metadata does not alter what runs. Everything that
+    # changes the design/canvas wiring is blocked, except replicate count.
+    disallowed = set(fields) - {"name", "description", "archived_at", "design_spec"}
+    design_changed_beyond_replicates = "design_spec" in fields and not _locked_design_change_is_replicates_only(
+        experiment.design_spec, fields["design_spec"]
+    )
+    if disallowed or design_changed_beyond_replicates:
+        raise HTTPException(
+            status_code=409,
+            detail="Experiment is locked. Unlock it before changing the canvas or design.",
+        )
 
 
 async def _validated_dataset_ids(dataset_ids: list[uuid.UUID], db: DbSession, user: CurrentUser) -> list[uuid.UUID]:
@@ -275,6 +306,7 @@ async def update_experiment_endpoint(
 ) -> ExperimentResponse:
     experiment = await _get_owned_experiment(db, experiment_id, user)
     fields = body.model_dump(exclude_unset=True)
+    _reject_locked_mutation(experiment, fields)
     if "name" in fields and fields["name"] is not None:
         existing = await get_experiment_by_name(db, fields["name"], owner_id=user.id)
         if existing is not None and existing.id != experiment_id:
@@ -301,6 +333,44 @@ async def update_experiment_endpoint(
     return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment_id))
 
 
+@router.post("/{experiment_id}/lock", response_model=ExperimentResponse)
+async def lock_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ExperimentResponse:
+    """Record the published canvas/design snapshot that is approved to run."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    protocols = await list_protocols(db, owner_id=user.id, experiment_id=experiment_id)
+    published_revision_id: uuid.UUID | None = None
+    for candidate in protocols:
+        published = await get_published_revision(db, candidate)
+        if published is not None and is_draft_published(candidate, published):
+            published_revision_id = published.id
+            break
+    if published_revision_id is None:
+        raise HTTPException(status_code=409, detail="Publish the latest canvas before locking this experiment.")
+    experiment = await update_experiment(
+        db,
+        experiment_id,
+        fields={
+            "locked_at": datetime.now(UTC),
+            "locked_protocol_revision_id": published_revision_id,
+            "locked_design_spec": deepcopy(experiment.design_spec),
+        },
+    )
+    assert experiment is not None
+    return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment_id))
+
+
+@router.post("/{experiment_id}/unlock", response_model=ExperimentResponse)
+async def unlock_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ExperimentResponse:
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    experiment = await update_experiment(
+        db,
+        experiment_id,
+        fields={"locked_at": None, "locked_protocol_revision_id": None, "locked_design_spec": None},
+    )
+    assert experiment is not None
+    return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment_id))
+
+
 @router.delete("/{experiment_id}", status_code=204)
 async def delete_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> None:
     await _get_owned_experiment(db, experiment_id, user)
@@ -323,6 +393,7 @@ async def generate_design_endpoint(
     if body is not None:
         fields = body.model_dump(exclude_unset=True)
         if fields:
+            _reject_locked_mutation(experiment, fields)
             experiment = await update_experiment(db, experiment_id, fields=fields)
             assert experiment is not None  # existence already checked above
     design_spec = experiment.design_spec or {}

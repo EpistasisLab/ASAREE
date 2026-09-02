@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ReactFlowProvider } from '@xyflow/react'
-import { Target, Trophy, type LucideIcon } from 'lucide-react'
+import { Lock, Target, Trophy, type LucideIcon } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
@@ -231,6 +231,7 @@ export function ProtocolCanvasPage() {
             ← Experiments
           </Link>
           {experimentQuery.data && <EditableExperimentName experiment={experimentQuery.data} />}
+          {experimentQuery.data?.locked_at && <span className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary"><Lock className="size-3" /> Locked</span>}
           {experimentQuery.data && <TopBarStats experiment={experimentQuery.data} cells={replicatesQuery.data} />}
           <div className="flex-1" />
           {protocolQuery.data && experimentId && (
@@ -268,6 +269,7 @@ export function ProtocolCanvasPage() {
                   initialGraph={protocolQuery.data.graph}
                   hasUnpublishedChanges={protocolQuery.data.has_unpublished_changes}
                   publishedRevision={protocolQuery.data.published_revision}
+                  experimentLocked={!!experimentQuery.data?.locked_at}
                 />
               </ReactFlowProvider>
               {experimentId && <ResultsInspectorPanel experimentId={experimentId} selection={resultSelection} onClose={() => setResultSelection(null)} />}

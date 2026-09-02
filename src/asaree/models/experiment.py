@@ -86,6 +86,14 @@ class ResearchExperiment(Base, TimestampMixin):
     # timestamp rather than a bool gives "when" for free, same reasoning as
     # ProtocolRun.last_heartbeat_at.
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # A locked experiment is reproducible by construction: the snapshot records
+    # the published canvas revision and declared design that were approved for
+    # execution.  Replicate count is deliberately the sole mutable design
+    # field while locked, allowing an experiment to be extended without
+    # changing its conditions.
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_protocol_revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    locked_design_spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 __all__ = ["ResearchExperiment"]

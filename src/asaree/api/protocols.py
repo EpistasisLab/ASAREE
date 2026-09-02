@@ -224,8 +224,12 @@ async def get_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: D
 async def update_protocol_endpoint(
     protocol_id: uuid.UUID, body: UpdateProtocolRequest, user: CurrentUser, db: DbSession
 ) -> ProtocolResponse:
-    await _get_owned_protocol(db, protocol_id, user)
+    existing_protocol = await _get_owned_protocol(db, protocol_id, user)
     fields = body.model_dump(exclude_unset=True)
+    if existing_protocol.experiment_id and {"graph", "experiment_id"}.intersection(fields):
+        experiment = await get_experiment(db, existing_protocol.experiment_id)
+        if experiment is not None and experiment.locked_at is not None:
+            raise HTTPException(status_code=409, detail="Experiment is locked. Unlock it before changing the canvas.")
     if "name" in fields and fields["name"] is not None:
         existing = await get_protocol_by_name(db, fields["name"], owner_id=user.id)
         if existing is not None and existing.id != protocol_id:
@@ -241,6 +245,13 @@ async def update_protocol_endpoint(
 async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ProtocolResponse:
     """Make the current autosaved canvas the immutable version future runs use."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
+    if protocol.experiment_id:
+        experiment = await get_experiment(db, protocol.experiment_id)
+        if experiment is not None and experiment.locked_at is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Experiment is locked. Unlock it before publishing a changed canvas.",
+            )
     try:
         topological_order(protocol.graph)
         experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
@@ -266,7 +277,11 @@ async def get_protocol_revision_endpoint(
 
 @router.delete("/{protocol_id}", status_code=204)
 async def delete_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> None:
-    await _get_owned_protocol(db, protocol_id, user)
+    protocol = await _get_owned_protocol(db, protocol_id, user)
+    if protocol.experiment_id:
+        experiment = await get_experiment(db, protocol.experiment_id)
+        if experiment is not None and experiment.locked_at is not None:
+            raise HTTPException(status_code=409, detail="Experiment is locked. Unlock it before deleting the canvas.")
     await delete_protocol(db, protocol_id)
 
 

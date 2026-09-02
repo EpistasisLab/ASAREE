@@ -11,7 +11,7 @@ function scopeTitle(scope: RunScope): string {
     case 'graph':
       return 'Run the full experiment?'
     case 'replicate':
-      return `Run replicate "${scope.label}"?`
+      return scope.title ?? `Run replicate "${scope.label}"?`
     case 'all-cells':
       return scope.pendingReplicateCount === scope.replicateCount
         ? `Run all ${scope.replicateCount} replicates?`

@@ -16,7 +16,7 @@ import {
   type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Plus, Square, X } from 'lucide-react'
+import { Lock, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { newNodeId } from '@/lib/nodeId'
@@ -348,7 +348,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   initialGraph: ProtocolGraph
   hasUnpublishedChanges: boolean
   publishedRevision: number | null
-}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph, hasUnpublishedChanges, publishedRevision }, canvasHandleRef) {
+  experimentLocked?: boolean
+}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph, hasUnpublishedChanges, publishedRevision, experimentLocked = false }, canvasHandleRef) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialGraph.nodes as Node[])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateLegacyHandles(initialGraph))
   const queryClient = useQueryClient()
@@ -416,6 +417,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     [bindFactorOnNode, removeFactorBindings, renameFactorBindings],
   )
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!experimentLocked) return
+    // A lock can be applied from the canvas menu while an inspector is open.
+    // Close that editor immediately so it never looks as if its fields can
+    // still be changed; the node cards remain visible on the canvas.
+    setSelectedNodeId(null)
+    setAddPanelOpen(false)
+  }, [experimentLocked])
   // The node whose hover-toolbar "Make experimental factor" icon was just
   // clicked -- opens FactorEditorDialog's field picker pre-filtered to just
   // that node's own unbound fields (see requestMakeFactor below).
@@ -481,7 +490,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const currentViewport = useViewport()
   const isAtRest = !restingViewportRef.current || isNearViewport(currentViewport, restingViewportRef.current)
 
-  const onConnect = useCallback((connection: Connection) => setEdges((eds) => addEdge(connection, eds)), [setEdges])
+  const onConnect = useCallback((connection: Connection) => {
+    if (!experimentLocked) setEdges((eds) => addEdge(connection, eds))
+  }, [experimentLocked, setEdges])
 
   // "Tidy up" -- reposition every node into a generated layout (see
   // layout.ts's tidyLayout). Goes through this component's own setNodes
@@ -490,6 +501,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // positions up with no extra request wiring. fitView waits a frame so it
   // measures the moved nodes, not the ones they replaced.
   const tidyUp = useCallback(() => {
+    if (experimentLocked) return
     setNodes((nds) => {
       const positions = tidyLayout(nds, edges)
       return nds.map((n) => {
@@ -498,7 +510,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       })
     })
     requestAnimationFrame(() => fitView({ maxZoom: DEFAULT_ZOOM, duration: 300 }))
-  }, [edges, fitView, setNodes])
+  }, [edges, experimentLocked, fitView, setNodes])
 
   // Read-only subscription to the linked experiment, purely so the dataset
   // sync below sees 'dataset_config' factor levels (see its own comment).
@@ -687,6 +699,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // isn't ALSO in this same delete batch.
   const onBeforeDelete = useCallback(
     async ({ nodes: deleting, edges: deletingEdges }: { nodes: Node[]; edges: Edge[] }) => {
+      if (experimentLocked) return false
       const deletedNodeIds = new Set(deleting.map((n) => n.id))
       const filteredEdges = deletingEdges.filter((e) => e.targetHandle !== 'architectural_pattern' || deletedNodeIds.has(e.target))
       // An edge-only deletion (no nodes -- e.g. selecting a single edge and
@@ -700,7 +713,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         setPendingDelete({ nodes: deleting, edges: filteredEdges, resolve })
       })
     },
-    [],
+    [experimentLocked],
   )
 
   function resetAddPanelBrowsers() {
@@ -724,36 +737,39 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // the slot's node type via CONNECTOR_PANEL_INFO, and addNode() below
   // wires the picked node straight into the requesting node's handle.
   const requestConnectorAdd = useCallback((request: ConnectorAddRequest) => {
+    if (experimentLocked) return
     setSelectedNodeId(null)
     setPendingConnectorAdd(request)
     setPendingMainEdgeAdd(null)
     setPendingEdgeInsert(null)
     resetAddPanelBrowsers()
     setAddPanelOpen(true)
-  }, [])
+  }, [experimentLocked])
   // A MainEdgeAddStub requests this instead -- same panel, restricted to
   // "agent" (the only node type this stub ever creates), and addNode()
   // below wires a plain edge (no handle id) in whichever direction the
   // requesting stub sits.
   const requestMainEdgeAdd = useCallback((request: MainEdgeAddRequest) => {
+    if (experimentLocked) return
     setSelectedNodeId(null)
     setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(request)
     setPendingEdgeInsert(null)
     resetAddPanelBrowsers()
     setAddPanelOpen(true)
-  }, [])
+  }, [experimentLocked])
   // An InteractEdge's own "+" requests this -- same panel again, restricted
   // to "agent", and addNode() below removes the original edge and rewires
   // origin->newAgent->target instead.
   const requestEdgeInsert = useCallback((request: EdgeInsertRequest) => {
+    if (experimentLocked) return
     setSelectedNodeId(null)
     setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(null)
     setPendingEdgeInsert(request)
     resetAddPanelBrowsers()
     setAddPanelOpen(true)
-  }, [])
+  }, [experimentLocked])
   // The canvas's per-node Play icon (NodeHoverToolbar) -- opens
   // RunConfirmDialog scoped to just this node, same as the main Run button,
   // rather than firing runNodeMutation immediately (see its own comment for
@@ -778,11 +794,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // experience than the two dialogs simply stacking.
   const requestMakeFactor = useCallback(
     (nodeId: string) => {
-      if (!experimentId) return
+      if (!experimentId || experimentLocked) return
       setAddPanelOpen(false)
       setFactorPickerNodeId(nodeId)
     },
-    [experimentId],
+    [experimentId, experimentLocked],
   )
   const canvasActions = useMemo(
     () => ({ requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode, requestMakeFactor }),
@@ -857,6 +873,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // node already there (findFreePosition) so a fresh node never lands on
   // top of an existing one.
   function addNode(nodeType: string, dataOverride?: ProtocolNode['data']) {
+    if (experimentLocked) return
     // Not a node type -- drills into the server browser, keeping whichever
     // pending connector/edge request is in flight so picking a server there
     // still wires the resulting node into the slot that asked for it.
@@ -1227,6 +1244,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | ReasonActPatternNodeData
       | SingleAgentBaselinePatternNodeData,
   ) {
+    if (experimentLocked) return
     const previous = nodes.find((node) => node.id === nodeId)
     const oldBindings = (previous?.data as { factor_bindings?: Record<string, string> } | undefined)?.factor_bindings ?? {}
     const nextBindings = (data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {}
@@ -1305,6 +1323,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   )
 
   function deleteNode(nodeId: string) {
+    if (experimentLocked) return
     const deleting = nodes.filter((node) => node.id === nodeId)
     const nextNodes = nodes.filter((node) => node.id !== nodeId)
     setNodes(nextNodes)
@@ -1319,6 +1338,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // there's no pending xyflow deletion to approve/reject here -- just call
   // deleteNode for real once the user confirms).
   function requestDeleteNode(nodeId: string) {
+    if (experimentLocked) return
     const node = nodes.find((n) => n.id === nodeId)
     if (!node) return
     const relatedEdges = edges.filter((e) => e.source === nodeId || e.target === nodeId)
@@ -1338,6 +1358,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // imported nodes have already been placed this same import -- so nothing
   // lands exactly on top of an existing OR a freshly-imported node.
   function handleImport(imported: ProtocolGraph) {
+    if (experimentLocked) return
     if (imported.nodes.length === 0) return
     const idMap = new Map(imported.nodes.map((n) => [n.id, newNodeId()]))
 
@@ -1383,12 +1404,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            nodesDraggable={!experimentLocked}
+            nodesConnectable={!experimentLocked}
+            edgesReconnectable={!experimentLocked}
             isValidConnection={isValidConnection}
             nodeTypes={NODE_TYPES}
             edgeTypes={EDGE_TYPES}
             onBeforeDelete={onBeforeDelete}
             onNodeClick={() => setAddPanelOpen(false)}
             onNodeDoubleClick={(_, node) => {
+              if (experimentLocked) return
               setAddPanelOpen(false)
               setSelectedNodeId(node.id)
             }}
@@ -1417,7 +1442,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               <MiniMap pannable zoomable className="!bg-card" maskColor="color-mix(in oklch, var(--background), transparent 40%)" />
             )}
           </ReactFlow>
-          <CanvasControls onTidy={tidyUp} />
+          {!experimentLocked && <CanvasControls onTidy={tidyUp} />}
           {(() => {
             // runNodeMutation.error is the real validation
             // message (e.g. topological_order/validate_single_node_runnable
@@ -1471,6 +1496,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               size="icon"
               className="rounded-full"
               aria-label="Add node"
+              disabled={experimentLocked}
               onClick={() => {
                 setSelectedNodeId(null)
                 setPendingConnectorAdd(null)
@@ -1490,6 +1516,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               onImport={handleImport}
             />
           </div>
+          {experimentLocked && (
+            <div className="absolute top-3 left-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-background/95 px-2.5 py-1.5 text-xs font-medium shadow-sm">
+              <Lock className="size-3.5" /> Canvas locked
+            </div>
+          )}
         </div>
         {addPanelOpen && serverBrowserOpen ? (
           <McpServerBrowserPanel

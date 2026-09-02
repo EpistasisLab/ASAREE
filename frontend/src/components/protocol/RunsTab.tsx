@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Download, Lock, Square } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -80,6 +80,7 @@ export function RunAllCellsButton({
   label = 'Run all cells',
   dialogTitle,
   compact = false,
+  hasCompletedRun = false,
 }: {
   protocol: Protocol | undefined
   experimentId: string
@@ -89,11 +90,22 @@ export function RunAllCellsButton({
   label?: string
   dialogTitle?: string
   compact?: boolean
+  hasCompletedRun?: boolean
 }) {
   const queryClient = useQueryClient()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selectedReruns, setSelectedReruns] = useState<Set<string>>(() => new Set())
   const [expandedCells, setExpandedCells] = useState<Set<string>>(() => new Set())
+  const [lockBeforeRun, setLockBeforeRun] = useState(false)
+  const experimentQuery = useQuery({
+    queryKey: ['experiments', experimentId],
+    queryFn: () => experimentsApi.get(experimentId),
+  })
+  const trialsQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'runs'],
+    queryFn: () => experimentsApi.listTrials(experimentId),
+    refetchInterval: dialogOpen ? 3000 : false,
+  })
   const replicatesQuery = useQuery({
     queryKey: ['experiments', experimentId, 'replicates'],
     queryFn: () => experimentsApi.listReplicates(experimentId),
@@ -103,16 +115,30 @@ export function RunAllCellsButton({
   const replicates = requestedLabels
     ? allReplicates.filter((replicate) => requestedLabels.has(replicate.replicate_label))
     : allReplicates
+  const activeReplicateLabels = new Set(
+    (trialsQuery.data ?? [])
+      .filter((trial) => trial.status === 'queued' || trial.status === 'running')
+      .map((trial) => trial.replicate_label),
+  )
+  const eligibleReplicateLabels = replicates
+    .filter((replicate) => !activeReplicateLabels.has(replicate.replicate_label))
+    .map((replicate) => replicate.replicate_label)
   const cellCount = groupReplicatesIntoCells(replicates).length
-  const pendingReplicateCount = replicates.filter((replicate) => !replicate.metric_values).length
-  const scoredCells = groupReplicatesIntoCells(replicates.filter((replicate) => !!replicate.metric_values)).sort((a, b) =>
+  const pendingReplicateCount = replicates.filter(
+    (replicate) => !replicate.metric_values && !activeReplicateLabels.has(replicate.replicate_label),
+  ).length
+  const scoredCells = groupReplicatesIntoCells(
+    replicates.filter((replicate) => !!replicate.metric_values && !activeReplicateLabels.has(replicate.replicate_label)),
+  ).sort((a, b) =>
     cellSortKey(a).localeCompare(cellSortKey(b)),
   )
 
   const runMutation = useMutation({
     mutationFn: () =>
       protocolsApi.runCells(protocol!.id, {
-        replicateLabels,
+        // Do not launch a second concurrent attempt for an in-flight
+        // replicate. The Stop controls let users finish that attempt first.
+        replicateLabels: eligibleReplicateLabels,
         rerunReplicateLabels: [...selectedReruns],
       }),
     onSuccess: () => {
@@ -122,11 +148,28 @@ export function RunAllCellsButton({
       setDialogOpen(false)
     },
   })
+  const lockMutation = useMutation({
+    mutationFn: () => experimentsApi.lock(experimentId),
+    onSuccess: (locked) => {
+      queryClient.setQueryData(['experiments', experimentId], locked)
+      queryClient.invalidateQueries({ queryKey: ['experiments'] })
+      runMutation.mutate()
+    },
+  })
+
+  function beginRun() {
+    if (lockBeforeRun && !experimentQuery.data?.locked_at) {
+      lockMutation.mutate()
+      return
+    }
+    runMutation.mutate()
+  }
+
   const publishAndRunMutation = useMutation({
     mutationFn: () => protocolsApi.publish(protocol!.id),
     onSuccess: (published) => {
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
-      runMutation.mutate()
+      beginRun()
     },
   })
 
@@ -155,13 +198,34 @@ export function RunAllCellsButton({
     // choice explicit: previous results are skipped unless chosen again.
     setSelectedReruns(new Set())
     setExpandedCells(new Set())
+    setLockBeforeRun(false)
     setDialogOpen(true)
+  }
+
+  function downloadDefinition() {
+    if (!protocol) return
+    const experiment = experimentQuery.data
+    const name = experiment?.name ?? protocol.name
+    const payload = {
+      name,
+      description: protocol.description,
+      graph: protocol.graph,
+      design_spec: experiment?.design_spec ?? null,
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${name.trim().replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '') || 'experiment'}.json`
+    link.click()
+    URL.revokeObjectURL(url)
   }
 
   const runBlocked =
     !protocol ||
     replicatesQuery.isLoading ||
     replicates.length === 0 ||
+    (pendingReplicateCount === 0 && scoredCells.length === 0) ||
     regenerationRequired ||
     unboundFactors.length > 0 ||
     !protocol.published_revision_id
@@ -173,9 +237,16 @@ export function RunAllCellsButton({
         ? 'Publish a valid canvas before running cells.'
         : replicates.length === 0
           ? 'Generate design first — there are no cells to run yet.'
+          : pendingReplicateCount === 0 && scoredCells.length === 0
+            ? 'All selected replicates are already running.'
           : undefined
   const runnableReplicateCount = pendingReplicateCount + selectedReruns.size
-  const errorMessage = runMutation.error instanceof ApiError && typeof runMutation.error.detail === 'string'
+  const actionLabel = label ?? (hasCompletedRun ? 'Re-run all cells' : 'Run all cells')
+  const errorMessage = lockMutation.error instanceof ApiError && typeof lockMutation.error.detail === 'string'
+    ? lockMutation.error.detail
+    : lockMutation.isError
+      ? 'Could not lock the experiment before starting it.'
+      : runMutation.error instanceof ApiError && typeof runMutation.error.detail === 'string'
     ? runMutation.error.detail
     : runMutation.isError
       ? 'Could not start the experiment.'
@@ -190,7 +261,7 @@ export function RunAllCellsButton({
           onClick={openDialog}
           className={compact ? 'bg-[color:var(--chart-3)] text-primary-foreground hover:bg-[color:var(--chart-3)]/80' : undefined}
         >
-          {label}
+          {actionLabel}
         </Button>
       </span>
       {dialogOpen && protocol && (
@@ -207,7 +278,7 @@ export function RunAllCellsButton({
           edges={protocol.graph.edges as Edge[]}
           queryClient={queryClient}
           onCancel={() => setDialogOpen(false)}
-          onConfirm={() => runMutation.mutate()}
+          onConfirm={beginRun}
           hasUnpublishedChanges={protocol.has_unpublished_changes}
           publishedRevision={protocol.published_revision}
           isPublishing={publishAndRunMutation.isPending}
@@ -219,14 +290,34 @@ export function RunAllCellsButton({
                 : null
           }
           onPublishAndRun={() => publishAndRunMutation.mutate()}
-          confirmLabel={label}
+          confirmLabel={actionLabel}
           confirmDisabled={runnableReplicateCount === 0}
-          isConfirming={runMutation.isPending}
+          isConfirming={runMutation.isPending || lockMutation.isPending}
           confirmError={errorMessage}
           additionalContent={
-            <section aria-labelledby="previous-runs-heading" className="space-y-2">
-              <div>
-                <h3 id="previous-runs-heading" className="text-sm font-medium">Previously run cells</h3>
+            <div className="space-y-4">
+              <section className="space-y-2 rounded-md border border-primary/25 bg-primary/5 px-3 py-2.5">
+                {!experimentQuery.data?.locked_at && (
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      id="lock-before-run"
+                      checked={lockBeforeRun}
+                      onCheckedChange={(checked) => setLockBeforeRun(checked === true)}
+                      className="mt-0.5"
+                    />
+                    <label htmlFor="lock-before-run" className="cursor-pointer text-sm">
+                      <span className="flex items-center gap-1.5 font-medium"><Lock className="size-3.5" /> Lock experiment before running</span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">Locks the published canvas and design so these results stay reproducible. Replicate count remains adjustable.</span>
+                    </label>
+                  </div>
+                )}
+                <Button type="button" variant="outline" size="xs" onClick={downloadDefinition}>
+                  <Download className="size-3.5" /> Download experiment definition
+                </Button>
+              </section>
+              <section aria-labelledby="previous-runs-heading" className="space-y-2">
+                <div>
+                  <h3 id="previous-runs-heading" className="text-sm font-medium">Previously run cells</h3>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   Previous results are skipped by default. Check a cell or replicate to run it again.
                 </p>
@@ -286,11 +377,52 @@ export function RunAllCellsButton({
               {runnableReplicateCount === 0 && (
                 <p className="text-xs text-muted-foreground">Select at least one previously run replicate to run again.</p>
               )}
-            </section>
+              </section>
+            </div>
           }
         />
       )}
     </>
+  )
+}
+
+// A protocol run is the actual cancellable unit. A cell/experiment stop is
+// simply this same operation applied to each of its active replicate runs.
+// The API only raises a durable cancellation flag; polling below keeps the
+// visible status in sync until the worker reaches a safe interruption point.
+function StopRunsButton({
+  protocol,
+  experimentId,
+  runIds,
+  all = false,
+}: {
+  protocol: Protocol | undefined
+  experimentId: string
+  runIds: Array<string | null | undefined>
+  all?: boolean
+}) {
+  const queryClient = useQueryClient()
+  const uniqueRunIds = [...new Set(runIds.filter((id): id is string => !!id))]
+  const stopMutation = useMutation({
+    mutationFn: () => Promise.all(uniqueRunIds.map((runId) => protocolsApi.cancelRun(protocol!.id, runId))),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'runs'] })
+      queryClient.invalidateQueries({ queryKey: ['protocols', protocol!.id, 'runs'] })
+    },
+  })
+
+  if (!protocol || uniqueRunIds.length === 0) return null
+  const label = all || uniqueRunIds.length > 1 ? 'Stop all' : 'Stop'
+  return (
+    <Button
+      variant="outline"
+      size="xs"
+      className="h-5 border-destructive/40 px-1.5 text-[0.65rem] text-destructive hover:bg-destructive/10 hover:text-destructive"
+      disabled={stopMutation.isPending}
+      onClick={() => stopMutation.mutate()}
+    >
+      <Square className="size-3" /> {stopMutation.isPending ? 'Stopping…' : label}
+    </Button>
   )
 }
 
@@ -303,6 +435,8 @@ function RunReplicateButton({
   experimentId,
   replicateLabel,
   replicateNumber,
+  hasCompletedRun,
+  activeRunId,
   regenerationRequired,
   unboundFactors,
 }: {
@@ -310,6 +444,8 @@ function RunReplicateButton({
   experimentId: string
   replicateLabel: string
   replicateNumber: number
+  hasCompletedRun: boolean
+  activeRunId: string | null
   regenerationRequired: boolean
   unboundFactors: string[]
 }) {
@@ -344,24 +480,25 @@ function RunReplicateButton({
     : runMutation.isError
       ? 'Could not start this replicate.'
       : null
+  const actionLabel = hasCompletedRun ? 'Re-run' : 'Run'
 
   return (
     <>
       <span title={blockedTitle}>
         <Button
           size="xs"
-          disabled={runBlocked}
+          disabled={runBlocked || !!activeRunId}
           onClick={() => setDialogOpen(true)}
-          aria-label={`Run replicate ${replicateNumber}`}
-          title="Run replicate"
+          aria-label={`${actionLabel} replicate ${replicateNumber}`}
+          title={activeRunId ? 'This replicate is already running.' : `${actionLabel} replicate`}
           className="h-5 px-1.5 text-[0.65rem]"
         >
-          Run
+          {actionLabel}
         </Button>
       </span>
       {dialogOpen && protocol && (
         <RunConfirmDialog
-          scope={{ type: 'replicate', label: `Replicate ${replicateNumber}` }}
+          scope={{ type: 'replicate', label: `Replicate ${replicateNumber}`, title: `${actionLabel} replicate?` }}
           nodes={protocol.graph.nodes as unknown as Node[]}
           edges={protocol.graph.edges as Edge[]}
           queryClient={queryClient}
@@ -378,11 +515,12 @@ function RunReplicateButton({
                 : null
           }
           onPublishAndRun={() => publishAndRunMutation.mutate()}
-          confirmLabel="Run replicate"
+          confirmLabel={`${actionLabel} replicate`}
           isConfirming={runMutation.isPending}
           confirmError={errorMessage}
         />
       )}
+      {activeRunId && <StopRunsButton protocol={protocol} experimentId={experimentId} runIds={[activeRunId]} />}
     </>
   )
 }
@@ -448,6 +586,18 @@ export function RunsTab({
   const runningCount = trials.filter((trial) => trial.status === 'running').length
   const queuedCount = trials.filter((trial) => trial.status === 'queued').length
   const failedCount = trials.filter((trial) => trial.status === 'failed' || trial.status === 'cancelled').length
+  const isActiveTrial = (trial: Trial | undefined): trial is Trial =>
+    !!trial?.run_id && (trial.status === 'queued' || trial.status === 'running')
+  const activeExperimentRunIds = trials.filter(isActiveTrial).map((trial) => trial.run_id)
+  // Completion is the user-visible truth here. A result can be completed
+  // from persisted metrics even when it has no ProtocolRun provenance (for
+  // example, imported or notebook-scored results), so run_id is not a valid
+  // test for whether this scope has already been run.
+  const hasFinishedRun = (trial: Trial | undefined) =>
+    !!trial && trial.status !== 'not_started' && !isActiveTrial(trial)
+  const experimentHasCompletedRun = cells.length > 0 && cells.every((cell) =>
+    cell.replicates.every((replicate) => hasFinishedRun(trialsByLabel.get(replicate.replicate_label))),
+  )
 
   function toggleCell(cellLabel: string) {
     setExpandedCells((current) => {
@@ -478,7 +628,10 @@ export function RunsTab({
             experimentId={experimentId}
             regenerationRequired={regenerationRequired}
             unboundFactors={unboundFactors}
+            hasCompletedRun={experimentHasCompletedRun}
+            dialogTitle={experimentHasCompletedRun ? 'Re-run all cells?' : 'Run all cells?'}
           />
+          <StopRunsButton protocol={protocol} experimentId={experimentId} runIds={activeExperimentRunIds} all />
           <span className="ml-auto font-mono text-xs text-muted-foreground">{cells.length}</span>
         </div>
         <p className="text-xs text-muted-foreground" aria-live="polite">
@@ -496,6 +649,13 @@ export function RunsTab({
           const expanded = expandedCells.has(cell.label)
           const replicateListId = `cell-${cell.label}-replicates`
           const obsoleteCount = cell.replicates.filter((replicate) => trialsByLabel.get(replicate.replicate_label)?.obsolete).length
+          const activeCellRunIds = cell.replicates
+            .map((replicate) => trialsByLabel.get(replicate.replicate_label))
+            .filter(isActiveTrial)
+            .map((trial) => trial.run_id)
+          const cellHasCompletedRun = cell.replicates.every((replicate) =>
+            hasFinishedRun(trialsByLabel.get(replicate.replicate_label)),
+          )
           return (
             <div key={cell.label} className="overflow-hidden rounded-md border">
               <div className="flex items-start gap-2 px-3 py-2.5">
@@ -543,10 +703,11 @@ export function RunsTab({
                     regenerationRequired={regenerationRequired}
                     unboundFactors={unboundFactors}
                     replicateLabels={cell.replicates.map((replicate) => replicate.replicate_label)}
-                    label="Run all replicates"
-                    dialogTitle="Run all replicates?"
+                    label={cellHasCompletedRun ? 'Re-run all replicates' : 'Run all replicates'}
+                    dialogTitle={cellHasCompletedRun ? 'Re-run all replicates?' : 'Run all replicates?'}
                     compact
                   />
+                  <StopRunsButton protocol={protocol} experimentId={experimentId} runIds={activeCellRunIds} all />
                 </div>
               </div>
 
@@ -593,6 +754,8 @@ export function RunsTab({
                                   experimentId={experimentId}
                                   replicateLabel={replicate.replicate_label}
                                   replicateNumber={replicate.replicate_number}
+                                  hasCompletedRun={hasFinishedRun(trial)}
+                                  activeRunId={isActiveTrial(trial) ? trial.run_id : null}
                                   regenerationRequired={regenerationRequired}
                                   unboundFactors={unboundFactors}
                                 />

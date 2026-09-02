@@ -91,11 +91,13 @@ function AddFactorButton({
   protocolId,
   canvasRef,
   existingNames,
+  disabled = false,
 }: {
   experiment: Experiment
   protocolId: string | undefined
   canvasRef: RefObject<ProtocolCanvasHandle | null>
   existingNames: string[]
+  disabled?: boolean
 }) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const queryClient = useQueryClient()
@@ -125,7 +127,7 @@ function AddFactorButton({
 
   return (
     <>
-      <Button variant="outline" size="sm" onClick={() => setDialogOpen(true)}>
+      <Button variant="outline" size="sm" disabled={disabled} onClick={() => setDialogOpen(true)}>
         <Plus className="size-3.5" /> Add factor
       </Button>
 
@@ -175,11 +177,13 @@ function FactorsEditor({
   protocolId,
   canvasRef,
   factors,
+  disabled = false,
 }: {
   experiment: Experiment
   protocolId: string | undefined
   canvasRef: RefObject<ProtocolCanvasHandle | null>
   factors: DesignFactor[]
+  disabled?: boolean
 }) {
   const [editingFactor, setEditingFactor] = useState<{ index: number; draft: DesignFactor } | null>(null)
   const queryClient = useQueryClient()
@@ -231,6 +235,7 @@ function FactorsEditor({
             variant="ghost"
             size="icon-sm"
             aria-label="Edit factor"
+            disabled={disabled}
             onClick={() => setEditingFactor({ index: i, draft: factor })}
           >
             <Pencil className="size-3.5" />
@@ -239,14 +244,14 @@ function FactorsEditor({
             variant="ghost"
             size="icon-sm"
             aria-label="Remove factor"
-            disabled={deleteMutation.isPending}
+            disabled={disabled || deleteMutation.isPending}
             onClick={() => deleteMutation.mutate(factor.name)}
           >
             <X className="size-3.5" />
           </Button>
         </div>
       ))}
-      <AddFactorButton experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} existingNames={factors.map((f) => f.name)} />
+      <AddFactorButton experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} existingNames={factors.map((f) => f.name)} disabled={disabled} />
 
       {editingFactor && (
         <FactorEditorDialog
@@ -267,7 +272,7 @@ function FactorsEditor({
   )
 }
 
-function MetricsEditor({ metrics, onChange }: { metrics: DesignMetric[]; onChange: (metrics: DesignMetric[]) => void }) {
+function MetricsEditor({ metrics, onChange, disabled = false }: { metrics: DesignMetric[]; onChange: (metrics: DesignMetric[]) => void; disabled?: boolean }) {
   return (
     <div className="space-y-2">
       {metrics.map((metric, i) => (
@@ -276,6 +281,7 @@ function MetricsEditor({ metrics, onChange }: { metrics: DesignMetric[]; onChang
             value={metric.name}
             placeholder="Metric name"
             className="flex-1"
+            disabled={disabled}
             onChange={(e) => onChange(metrics.map((m, j) => (j === i ? { ...m, name: e.target.value } : m)))}
           />
           <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground" title="Primary metric">
@@ -283,12 +289,14 @@ function MetricsEditor({ metrics, onChange }: { metrics: DesignMetric[]; onChang
               type="radio"
               name="primary-metric"
               checked={metric.primary}
+              disabled={disabled}
               onChange={() => onChange(metrics.map((m, j) => ({ ...m, primary: j === i })))}
             />
             Primary
           </label>
           <Select
             value={metric.direction}
+            disabled={disabled}
             onValueChange={(value) => {
               if (value) onChange(metrics.map((m, j) => (j === i ? { ...m, direction: value as DesignMetric['direction'] } : m)))
             }}
@@ -301,7 +309,7 @@ function MetricsEditor({ metrics, onChange }: { metrics: DesignMetric[]; onChang
               <SelectItem value="minimize">Minimize</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="ghost" size="icon-sm" aria-label="Remove metric" onClick={() => onChange(metrics.filter((_, j) => j !== i))}>
+          <Button variant="ghost" size="icon-sm" aria-label="Remove metric" disabled={disabled} onClick={() => onChange(metrics.filter((_, j) => j !== i))}>
             <X className="size-3.5" />
           </Button>
         </div>
@@ -309,6 +317,7 @@ function MetricsEditor({ metrics, onChange }: { metrics: DesignMetric[]; onChang
       <Button
         variant="outline"
         size="sm"
+        disabled={disabled}
         onClick={() => onChange([...metrics, { name: '', primary: metrics.length === 0, direction: 'maximize' }])}
       >
         <Plus className="size-3.5" /> Add metric
@@ -376,6 +385,12 @@ export function DesignTab({
   }, [experiment])
 
   function designDraft() {
+    if (experiment.locked_at) {
+      // The lock deliberately permits only this one extension. Avoid sending
+      // untouched metadata in the same request: the API correctly treats a
+      // metadata field in a locked mutation as an attempt to edit the design.
+      return { design_spec: { ...experiment.design_spec, replicates: replicates ?? 1 } }
+    }
     return {
       hypothesis: hypothesis.trim() || null,
       design_spec: {
@@ -469,6 +484,7 @@ export function DesignTab({
   const canGenerate = validFactors.length > 0 || impact?.regeneration_required === true
   const needsDesignUpdate = matrixDraftChanged || impact?.regeneration_required === true
   const metadataSaveKey = `${metadataDraftKey}:${matrixDraftKey}`
+  const isLocked = !!experiment.locked_at
 
   // The amber border belongs to the surrounding sidebar, while the evidence
   // for it (an unsaved local matrix edit or a stale materialized design) lives
@@ -519,6 +535,12 @@ export function DesignTab({
 
   return (
     <div className="flex flex-col gap-5 p-3 text-sm">
+      {isLocked && (
+        <div className="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-xs text-muted-foreground">
+          <p className="font-medium text-foreground">Experiment locked</p>
+          <p className="mt-1">The canvas and design are fixed for reproducible runs. You can still change the replicate count and apply that change to the cells.</p>
+        </div>
+      )}
       <div className="space-y-1.5">
         <Label htmlFor="design-hypothesis" className="flex items-center gap-1.5">
           Hypothesis
@@ -527,6 +549,7 @@ export function DesignTab({
         <Textarea
           id="design-hypothesis"
           value={hypothesis}
+          disabled={isLocked}
           onChange={(e) => setHypothesis(e.target.value)}
           placeholder="What are you trying to learn from this experiment?"
           className="min-h-20"
@@ -542,8 +565,8 @@ export function DesignTab({
             (e.g. "Critic Gate" requires a real Critic Gate node wired in) or running the protocol is rejected.
           </InfoTooltip>
         </Label>
-        <Select value={coordinationSlug} onValueChange={(value) => value && setCoordinationSlug(value as CoordinationStrategySlug)}>
-          <SelectTrigger className="w-full">
+        <Select value={coordinationSlug} disabled={isLocked} onValueChange={(value) => value && setCoordinationSlug(value as CoordinationStrategySlug)}>
+          <SelectTrigger className="w-full" disabled={isLocked}>
             <SelectValue>{() => selectedStrategy?.label ?? coordinationSlug}</SelectValue>
           </SelectTrigger>
           <SelectContent>
@@ -573,7 +596,7 @@ export function DesignTab({
             one cell.
           </InfoTooltip>
         </Label>
-        <FactorsEditor experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} factors={factors} />
+        <FactorsEditor experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} factors={factors} disabled={isLocked} />
       </div>
 
       <div className="space-y-1.5">
@@ -619,6 +642,7 @@ export function DesignTab({
             type="number"
             placeholder="(none)"
             value={randomizationSeed ?? ''}
+            disabled={isLocked}
             onChange={(e) => setRandomizationSeed(e.target.value === '' ? null : Number(e.target.value))}
           />
         </div>
@@ -632,7 +656,7 @@ export function DesignTab({
             Maximize/Minimize says which direction is better.
           </InfoTooltip>
         </Label>
-        <MetricsEditor metrics={metrics} onChange={setMetrics} />
+        <MetricsEditor metrics={metrics} onChange={setMetrics} disabled={isLocked} />
       </div>
 
       <div className="space-y-1.5 rounded-md border bg-muted/30 px-3 py-2">

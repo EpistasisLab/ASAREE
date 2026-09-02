@@ -128,6 +128,14 @@ function ReplicateResultDetail({ replicate, metricKeys }: {
   const metrics = metricKeys.filter((key) => typeof replicate.metric_values[key] === 'number')
   const hasUsage = replicate.cost_usd !== null || replicate.total_tokens !== null || replicate.duration_seconds !== null || replicate.agent_run_count > 0
   const timelineOnly = metrics.length === 0 && !hasUsage && !replicate.error
+  // When the timeline is the whole inspector and it contains one final agent
+  // output, use the remaining viewport for that output instead of leaving a
+  // short, fixed-height preview above empty space. Multiple timeline entries
+  // intentionally retain their compact list layout so no one entry crowds out
+  // the others.
+  const expandableOutputNodeId = timelineOnly && replicate.node_runs.length === 1 && replicate.node_runs[0].output_text
+    ? replicate.node_runs[0].node_id
+    : null
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2">
@@ -158,13 +166,20 @@ function ReplicateResultDetail({ replicate, metricKeys }: {
           <section className={timelineOnly ? 'flex min-h-[20rem] flex-1 flex-col space-y-2' : 'space-y-2'}>
             <h3 className="text-sm font-medium">Run timeline</h3>
             {replicate.node_runs.length === 0 ? <p className="text-sm text-muted-foreground">No node-level run details are available.</p> : (
-              <ol className={timelineOnly ? 'flex-1 space-y-2' : 'space-y-2'}>
+              <ol className={timelineOnly ? 'flex min-h-0 flex-1 flex-col space-y-2' : 'space-y-2'}>
               {replicate.node_runs.map((node) => (
-                <li key={node.node_id} className="rounded-md border px-3 py-2">
+                <li key={node.node_id} className={expandableOutputNodeId === node.node_id ? 'flex min-h-0 flex-1 flex-col rounded-md border px-3 py-2' : 'rounded-md border px-3 py-2'}>
                   <div className="flex items-center justify-between gap-3"><p className="font-medium" title={node.node_id}>{node.node_label}</p><Badge variant="outline" className="capitalize">{node.status}</Badge></div>
                   <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">{node.cost_usd !== null && <span>{formatCurrency(node.cost_usd)}</span>}{node.total_tokens !== null && <span>{formatNumber(node.total_tokens)} tokens</span>}</div>
                   {node.error && <p className="mt-2 whitespace-pre-wrap break-words text-xs text-destructive">{node.error}</p>}
-                  {node.output_text && <p className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded bg-muted/50 p-2 font-mono text-xs">{node.output_text}</p>}
+                  {node.output_text && (
+                    <p className={expandableOutputNodeId === node.node_id
+                      ? 'mt-2 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded bg-muted/50 p-2 font-mono text-xs'
+                      : 'mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded bg-muted/50 p-2 font-mono text-xs'}
+                    >
+                      {node.output_text}
+                    </p>
+                  )}
                 </li>
               ))}
             </ol>

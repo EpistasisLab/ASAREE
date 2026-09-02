@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ReactFlowProvider } from '@xyflow/react'
-import { Lock, Target, Trophy, type LucideIcon } from 'lucide-react'
+import { AlertTriangle, Lock, Target, Trophy, type LucideIcon } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
@@ -108,7 +108,7 @@ function TopBarStat({ icon: Icon, value, title, accent }: { icon: LucideIcon; va
 // Same design_type gate the Cells tab uses -- cells/metric_values are a
 // factorial concept, so a future non-factorial experiment gets no chips
 // rather than a nonsensical "0/0 scored".
-function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Replicate[] | undefined }) {
+function TopBarStats({ experiment, cells, obsoleteRunCount = 0 }: { experiment: Experiment; cells: Replicate[] | undefined; obsoleteRunCount?: number }) {
   if (experiment.design_type !== 'factorial' || !cells) return null
   const scored = cells.filter((c) => c.metric_values).length
   const cellCount = groupReplicatesIntoCells(cells).length
@@ -121,6 +121,11 @@ function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Rep
         title="Replicates with a recorded metric, out of every planned replicate in this design"
         accent={replicatesStatusAccent(cells)}
       />
+      {obsoleteRunCount > 0 && (
+        <span className="flex items-center gap-1.5 rounded-md border border-[color:var(--chart-4)]/50 bg-[color:var(--chart-4)]/10 px-2 py-1 text-xs font-medium text-[color:var(--chart-4)]" title="Runs against older canvas versions are excluded from current results.">
+          <AlertTriangle className="size-3.5" /> {obsoleteRunCount} obsolete run{obsoleteRunCount === 1 ? '' : 's'}
+        </span>
+      )}
       {best && (
         <TopBarStat
           icon={Trophy}
@@ -251,6 +256,12 @@ export function ProtocolCanvasPage() {
     queryFn: () => experimentsApi.listReplicates(experimentId!),
     enabled: !!experimentId,
   })
+  const runResultsQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'run-results'],
+    queryFn: () => experimentsApi.getRunResults(experimentId!),
+    enabled: !!experimentId,
+    refetchInterval: 5000,
+  })
   const impactQuery = useQuery({
     queryKey: ['experiments', experimentId, 'design-impact'],
     queryFn: () => experimentsApi.getDesignImpact(experimentId!),
@@ -273,7 +284,7 @@ export function ProtocolCanvasPage() {
           </Link>
           {experimentQuery.data && <EditableExperimentName experiment={experimentQuery.data} />}
           {experimentQuery.data?.locked_at && <span className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary"><Lock className="size-3" /> Locked</span>}
-          {experimentQuery.data && <TopBarStats experiment={experimentQuery.data} cells={replicatesQuery.data} />}
+          {experimentQuery.data && <TopBarStats experiment={experimentQuery.data} cells={replicatesQuery.data} obsoleteRunCount={runResultsQuery.data?.overview.obsolete_replicates ?? 0} />}
           <div className="flex-1" />
           {protocolQuery.data && experimentId && (
             <>

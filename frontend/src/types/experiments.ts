@@ -257,6 +257,28 @@ export interface ResultReplicate {
   agent_run_count: number
   reported_usage_count: number
   reported_cost_count: number
+  obsolete_runs: ObsoleteRun[]
+}
+
+// Immutable ProtocolRun records that used an earlier canvas version. This
+// includes the latest stored run when it has since become obsolete, as well as
+// runs superseded by later attempts for the same replicate.
+export interface ObsoleteRun {
+  run_id: string
+  status: Trial['status']
+  obsolete: true
+  error: string | null
+  protocol_revision_id: string | null
+  updated_at: string
+  duration_seconds: number | null
+  node_runs: ResultNodeRun[]
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  cost_usd: number | null
+  agent_run_count: number
+  reported_usage_count: number
+  reported_cost_count: number
 }
 
 export interface ResultCell {

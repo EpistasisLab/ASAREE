@@ -215,6 +215,32 @@ async def summarize_experiment_run_results(
     trials = await list_experiment_trials(db, experiment_id=experiment_id)
     trials_by_label = {trial.replicate_label: trial for trial in trials}
     protocol_run_ids = {trial.run_id for trial in trials if trial.run_id is not None}
+    # The replicate row points to its latest ProtocolRun, but every earlier
+    # execution remains durable in protocol_runs. Keep those old immutable
+    # versions available so a re-run never hides the evidence it replaced.
+    history_rows = (
+        await db.execute(
+            select(ProtocolRun, Protocol.published_revision_id, ProtocolRevision.published_at)
+            .join(Protocol, ProtocolRun.protocol_id == Protocol.id)
+            .outerjoin(ProtocolRevision, Protocol.published_revision_id == ProtocolRevision.id)
+            .where(Protocol.experiment_id == experiment_id, ProtocolRun.replicate_label.is_not(None))
+        )
+    ).all()
+    history_by_label: defaultdict[str, list[tuple[ProtocolRun, bool]]] = defaultdict(list)
+    for historical_run, current_revision_id, current_published_at in history_rows:
+        obsolete = current_revision_id is not None and (
+            (
+                historical_run.protocol_revision_id is not None
+                and historical_run.protocol_revision_id != current_revision_id
+            )
+            or (
+                historical_run.protocol_revision_id is None
+                and current_published_at is not None
+                and historical_run.created_at < current_published_at
+            )
+        )
+        history_by_label[historical_run.replicate_label or ""].append((historical_run, obsolete))
+        protocol_run_ids.add(historical_run.id)
     protocol_runs_by_id: dict[uuid.UUID, ProtocolRun] = {}
     if protocol_run_ids:
         result = await db.execute(select(ProtocolRun).where(ProtocolRun.id.in_(protocol_run_ids)))
@@ -232,41 +258,88 @@ async def summarize_experiment_run_results(
                 continue
     agent_runs = await _agent_runs_by_id(agent_run_ids)
 
+    def execution_detail(protocol_run: ProtocolRun) -> dict[str, Any]:
+        """The timeline and reported usage for one immutable ProtocolRun."""
+        node_results: list[dict[str, Any]] = []
+        usage_values: defaultdict[str, list[float]] = defaultdict(list)
+        node_labels = node_labels_by_protocol_run.get(protocol_run.id, {})
+        for node_id, node_run in (protocol_run.node_runs or {}).items():
+            node_run = node_run if isinstance(node_run, dict) else {}
+            if not _has_execution_evidence(node_run):
+                continue
+            agent_run_id = node_run.get("run_id")
+            agent_run: Any | None = None
+            try:
+                if agent_run_id:
+                    agent_run = agent_runs.get(uuid.UUID(str(agent_run_id)))
+            except (TypeError, ValueError):
+                pass
+            usage = _usage(agent_run)
+            for key, value in usage.items():
+                if value is not None:
+                    usage_values[key].append(float(value))
+            node_results.append(
+                {
+                    "node_id": node_id,
+                    "node_label": node_labels.get(node_id, node_id),
+                    "status": node_run.get("status", "unknown"),
+                    "output_text": node_run.get("output_text"),
+                    "error": node_run.get("error"),
+                    "agent_run_id": str(agent_run_id) if agent_run_id else None,
+                    **usage,
+                }
+            )
+        return {
+            "duration_seconds": _duration_seconds(protocol_run.created_at, protocol_run.updated_at),
+            "node_runs": node_results,
+            "input_tokens": int(sum(usage_values["input_tokens"])) if usage_values["input_tokens"] else None,
+            "output_tokens": int(sum(usage_values["output_tokens"])) if usage_values["output_tokens"] else None,
+            "total_tokens": int(sum(usage_values["total_tokens"])) if usage_values["total_tokens"] else None,
+            "cost_usd": sum(usage_values["cost_usd"]) if usage_values["cost_usd"] else None,
+            "agent_run_count": sum(node["agent_run_id"] is not None for node in node_results),
+            "reported_usage_count": len(
+                {node["agent_run_id"] for node in node_results if node["total_tokens"] is not None}
+            ),
+            "reported_cost_count": len(
+                {node["agent_run_id"] for node in node_results if node["cost_usd"] is not None}
+            ),
+        }
+
     result_rows: list[dict[str, Any]] = []
     metric_keys: set[str] = set()
     for replicate in replicates:
         trial = trials_by_label.get(replicate.replicate_label)
         protocol_run = protocol_runs_by_id.get(trial.run_id) if trial and trial.run_id else None
-        node_results: list[dict[str, Any]] = []
-        usage_values: defaultdict[str, list[float]] = defaultdict(list)
-        if protocol_run is not None:
-            node_labels = node_labels_by_protocol_run.get(protocol_run.id, {})
-            for node_id, node_run in (protocol_run.node_runs or {}).items():
-                node_run = node_run if isinstance(node_run, dict) else {}
-                if not _has_execution_evidence(node_run):
-                    continue
-                agent_run_id = node_run.get("run_id")
-                agent_run: Any | None = None
-                try:
-                    if agent_run_id:
-                        agent_run = agent_runs.get(uuid.UUID(str(agent_run_id)))
-                except (TypeError, ValueError):
-                    pass
-                usage = _usage(agent_run)
-                for key, value in usage.items():
-                    if value is not None:
-                        usage_values[key].append(float(value))
-                node_results.append(
-                    {
-                        "node_id": node_id,
-                        "node_label": node_labels.get(node_id, node_id),
-                        "status": node_run.get("status", "unknown"),
-                        "output_text": node_run.get("output_text"),
-                        "error": node_run.get("error"),
-                        "agent_run_id": str(agent_run_id) if agent_run_id else None,
-                        **usage,
-                    }
-                )
+        execution = execution_detail(protocol_run) if protocol_run is not None else {
+            "duration_seconds": None,
+            "node_runs": [],
+            "input_tokens": None,
+            "output_tokens": None,
+            "total_tokens": None,
+            "cost_usd": None,
+            "agent_run_count": 0,
+            "reported_usage_count": 0,
+            "reported_cost_count": 0,
+        }
+        # The replicate row only names the latest run. It may itself be stale
+        # after a later canvas publication, so obsolete history must include
+        # that row as well as any preceding executions. Do not make callers
+        # reconstruct this by combining a current row and "previous" history.
+        obsolete_runs = [
+            {
+                "run_id": str(historical_run.id),
+                "status": "queued" if historical_run.status == "pending" else historical_run.status,
+                "obsolete": True,
+                "error": historical_run.error,
+                "protocol_revision_id": str(historical_run.protocol_revision_id)
+                if historical_run.protocol_revision_id
+                else None,
+                "updated_at": historical_run.updated_at,
+                **execution_detail(historical_run),
+            }
+            for historical_run, obsolete in history_by_label.get(replicate.replicate_label, [])
+            if obsolete
+        ]
 
         metrics = _numeric_metrics(replicate.metric_values)
         metric_keys.update(metrics)
@@ -290,21 +363,8 @@ async def summarize_experiment_run_results(
                     else None
                 ),
                 "updated_at": trial.updated_at if trial is not None else replicate.updated_at,
-                "duration_seconds": (
-                    _duration_seconds(protocol_run.created_at, protocol_run.updated_at) if protocol_run else None
-                ),
-                "node_runs": node_results,
-                "input_tokens": int(sum(usage_values["input_tokens"])) if usage_values["input_tokens"] else None,
-                "output_tokens": int(sum(usage_values["output_tokens"])) if usage_values["output_tokens"] else None,
-                "total_tokens": int(sum(usage_values["total_tokens"])) if usage_values["total_tokens"] else None,
-                "cost_usd": sum(usage_values["cost_usd"]) if usage_values["cost_usd"] else None,
-                "agent_run_count": sum(node["agent_run_id"] is not None for node in node_results),
-                "reported_usage_count": len(
-                    {node["agent_run_id"] for node in node_results if node["total_tokens"] is not None}
-                ),
-                "reported_cost_count": len(
-                    {node["agent_run_id"] for node in node_results if node["cost_usd"] is not None}
-                ),
+                "obsolete_runs": sorted(obsolete_runs, key=lambda run: run["updated_at"], reverse=True),
+                **execution,
             }
         )
 
@@ -328,7 +388,7 @@ async def summarize_experiment_run_results(
                 "replicate_count": len(rows),
                 "completed_count": sum(row["status"] == "completed" for row in rows),
                 "current_completed_count": sum(row["status"] == "completed" for row in current),
-                "obsolete_count": sum(row["obsolete"] for row in rows),
+                "obsolete_count": sum(len(row["obsolete_runs"]) for row in rows),
                 "metric_means": {key: value for key, value in metrics.items() if value is not None},
                 "cost_usd": _sum_reported(current, "cost_usd"),
                 "total_tokens": _sum_reported(current, "total_tokens"),
@@ -343,7 +403,7 @@ async def summarize_experiment_run_results(
         "queued_replicates": sum(row["status"] in {"pending", "queued"} for row in result_rows),
         "failed_replicates": sum(row["status"] in {"failed", "cancelled"} for row in result_rows),
         "not_started_replicates": sum(row["status"] == "not_started" for row in result_rows),
-        "obsolete_replicates": sum(bool(row["obsolete"]) for row in result_rows),
+        "obsolete_replicates": sum(len(row["obsolete_runs"]) for row in result_rows),
         "total_cost_usd": _sum_reported(current_rows, "cost_usd"),
         "total_input_tokens": _sum_reported(current_rows, "input_tokens"),
         "total_output_tokens": _sum_reported(current_rows, "output_tokens"),

@@ -6,8 +6,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { displayFactorValue, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
-import type { ResultCell, ResultReplicate } from '@/types/experiments'
+import type { ObsoleteRun, ResultCell, ResultReplicate } from '@/types/experiments'
 
 function formatNumber(value: number | null, maximumFractionDigits = 0): string {
   if (value === null || !Number.isFinite(value)) return 'Not reported'
@@ -77,7 +78,7 @@ function CellCard({ cell, metricKey }: { cell: ResultCell; metricKey: string | n
     <div className="rounded-md border px-3 py-2.5">
       <div className="flex items-start justify-between gap-2">
         <p className="min-w-0 truncate text-sm font-medium" title={factorSummary(cell.factor_values)}>{factorSummary(cell.factor_values)}</p>
-        {cell.obsolete_count > 0 && <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--chart-4)]" aria-label="Includes obsolete results" />}
+        {cell.obsolete_count > 0 && <Badge variant="outline" className="shrink-0 border-[color:var(--chart-4)]/60 text-[color:var(--chart-4)]">{cell.obsolete_count} obsolete {cell.obsolete_count === 1 ? 'run' : 'runs'}</Badge>}
       </div>
       <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs">
         {metricKey && (
@@ -189,6 +190,38 @@ function ReplicateResultDetail({ replicate, metricKeys }: {
   )
 }
 
+function historicalRunAsReplicate(replicate: ResultReplicate, historicalRun: ObsoleteRun): ResultReplicate {
+  // The shared detail component needs the stable replicate identity/factors,
+  // while the historical run contributes the immutable execution facts.
+  return {
+    ...replicate,
+    ...historicalRun,
+    metric_values: {},
+    obsolete_runs: [],
+  }
+}
+
+function latestObsoleteRun(replicate: ResultReplicate | null): ObsoleteRun | null {
+  if (!replicate?.obsolete || !replicate.run_id) return null
+  return {
+    run_id: replicate.run_id,
+    status: replicate.status,
+    obsolete: true,
+    error: replicate.error,
+    protocol_revision_id: replicate.protocol_revision_id,
+    updated_at: replicate.updated_at,
+    duration_seconds: replicate.duration_seconds,
+    node_runs: replicate.node_runs,
+    input_tokens: replicate.input_tokens,
+    output_tokens: replicate.output_tokens,
+    total_tokens: replicate.total_tokens,
+    cost_usd: replicate.cost_usd,
+    agent_run_count: replicate.agent_run_count,
+    reported_usage_count: replicate.reported_usage_count,
+    reported_cost_count: replicate.reported_cost_count,
+  }
+}
+
 export type ResultsSelection =
   | { type: 'cell'; cellLabel: string }
   | { type: 'replicate'; replicateLabel: string }
@@ -205,6 +238,7 @@ export function ResultsInspectorPanel({
   selection: ResultsSelection | null
   onClose: () => void
 }) {
+  const [expandedObsoleteRuns, setExpandedObsoleteRuns] = useState<Set<string>>(() => new Set())
   const resultsQuery = useQuery({
     queryKey: ['experiments', experimentId, 'run-results'],
     queryFn: () => experimentsApi.getRunResults(experimentId),
@@ -225,6 +259,18 @@ export function ResultsInspectorPanel({
     : cell
       ? factorSummary(cell.factor_values)
       : undefined
+  // During a rolling frontend/backend restart, accept the prior response name
+  // too. The earlier API omitted the latest stale run from its history, so add
+  // it locally when necessary rather than hiding a real obsolete result.
+  const legacyObsoleteRuns = (replicate as (ResultReplicate & { previous_obsolete_runs?: ObsoleteRun[] }) | null)
+    ?.previous_obsolete_runs
+  const reportedObsoleteRuns = Array.isArray(replicate?.obsolete_runs)
+    ? replicate.obsolete_runs
+    : Array.isArray(legacyObsoleteRuns) ? legacyObsoleteRuns : []
+  const latestStaleRun = latestObsoleteRun(replicate)
+  const obsoleteRuns = latestStaleRun && !reportedObsoleteRuns.some((run) => run.run_id === latestStaleRun.run_id)
+    ? [latestStaleRun, ...reportedObsoleteRuns]
+    : reportedObsoleteRuns
 
   return (
     <aside className="absolute inset-0 z-20 flex w-full flex-col border-l bg-card shadow-xl" aria-label="Result details">
@@ -235,7 +281,61 @@ export function ResultsInspectorPanel({
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
         {resultsQuery.isLoading ? <div className="space-y-3"><Skeleton className="h-20 w-full" /><Skeleton className="h-36 w-full" /></div>
           : resultsQuery.isError || !resultsQuery.data ? <p className="text-sm text-muted-foreground">Could not load these results.</p>
-            : replicate ? <ReplicateResultDetail replicate={replicate} metricKeys={resultsQuery.data.metric_keys} />
+            : replicate ? (
+              <Tabs defaultValue="current" className="flex min-h-0 flex-1 flex-col">
+                <TabsList className="w-full rounded-md border bg-muted/50 p-1">
+                  <TabsTrigger value="current" className="px-3 data-active:border-primary/30 data-active:bg-primary data-active:text-primary-foreground">Current</TabsTrigger>
+                  <TabsTrigger value="obsolete" className="px-3 data-active:border-primary/30 data-active:bg-primary data-active:text-primary-foreground">Obsolete{obsoleteRuns.length > 0 ? ` (${obsoleteRuns.length})` : ''}</TabsTrigger>
+                </TabsList>
+                <TabsContent value="current" className="mt-3 flex min-h-0 flex-1 flex-col">
+                  {replicate.obsolete ? (
+                    <p className="text-sm text-muted-foreground">No result has run against the current canvas version yet. Run this replicate to create one.</p>
+                  ) : (
+                    <ReplicateResultDetail replicate={replicate} metricKeys={resultsQuery.data.metric_keys} />
+                  )}
+                </TabsContent>
+                <TabsContent value="obsolete" className="mt-3 min-h-0 overflow-y-auto">
+                  {obsoleteRuns.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">This replicate has no obsolete runs.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {obsoleteRuns.map((historicalRun) => {
+                        const expanded = expandedObsoleteRuns.has(historicalRun.run_id)
+                        const detailId = `obsolete-run-${historicalRun.run_id}`
+                        return (
+                        <section key={historicalRun.run_id} className="rounded-md border p-3">
+                          <button
+                            type="button"
+                            className="flex w-full items-center gap-2 text-left"
+                            aria-expanded={expanded}
+                            aria-controls={detailId}
+                            onClick={() => setExpandedObsoleteRuns((current) => {
+                              const next = new Set(current)
+                              if (next.has(historicalRun.run_id)) next.delete(historicalRun.run_id)
+                              else next.add(historicalRun.run_id)
+                              return next
+                            })}
+                          >
+                            <ChevronDown className={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`} />
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-sm font-medium">Run from {new Date(historicalRun.updated_at).toLocaleString()}</span>
+                              <span className="mt-0.5 block truncate text-xs text-muted-foreground">{historicalRun.protocol_revision_id ? `Canvas revision ${historicalRun.protocol_revision_id.slice(0, 8)}` : 'Earlier canvas version'}</span>
+                            </span>
+                            <Badge className={statusClass(historicalRun.status, true)}>Obsolete</Badge>
+                          </button>
+                          {expanded && (
+                            <div id={detailId} className="mt-3 border-t pt-3">
+                              <ReplicateResultDetail replicate={historicalRunAsReplicate(replicate, historicalRun)} metricKeys={[]} />
+                            </div>
+                          )}
+                        </section>
+                        )
+                      })}
+                    </div>
+                  )}
+                </TabsContent>
+              </Tabs>
+            )
               : cell ? <CellResultSummary cell={cell} metricKeys={resultsQuery.data.metric_keys} />
                 : <p className="text-sm text-muted-foreground">This result is no longer available.</p>}
       </div>
@@ -284,7 +384,7 @@ export function ResultsTab({
           <Scorecard label="Total tokens" value={formatNumber(overview.total_tokens)} note={overview.agent_run_count ? `${overview.reported_usage_count}/${overview.agent_run_count} calls reported` : 'No agent calls yet'} icon={Coins} />
           <Scorecard label="Run time" value={formatDuration(overview.total_duration_seconds)} note="Across current results" icon={Clock3} />
         </div>
-        {overview.obsolete_replicates > 0 && <div className="mt-2 flex gap-2 rounded-md border border-[color:var(--chart-4)]/50 bg-[color:var(--chart-4)]/10 px-2.5 py-2 text-xs text-foreground"><AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--chart-4)]" /><span>{overview.obsolete_replicates} result{overview.obsolete_replicates === 1 ? '' : 's'} ran against an older canvas version and are excluded from current totals.</span></div>}
+        {overview.obsolete_replicates > 0 && <div className="mt-2 flex gap-2 rounded-md border border-[color:var(--chart-4)]/50 bg-[color:var(--chart-4)]/10 px-2.5 py-2 text-xs text-foreground"><AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--chart-4)]" /><span>{overview.obsolete_replicates} run{overview.obsolete_replicates === 1 ? '' : 's'} used an older canvas version and are excluded from current totals.</span></div>}
       </section>
       <section className="space-y-2">
         <div className="flex items-center justify-between gap-2"><div><h2 className="text-sm font-medium">Cell comparison</h2><p className="text-xs text-muted-foreground">Average result across current replicates{metricKey === primaryMetric ? ` · ${primaryMetricDirection === 'minimize' ? 'lower is better' : 'higher is better'}` : ''}</p></div>{metricKeys.length > 0 && <Select value={metricKey ?? undefined} onValueChange={(value) => setMetricPreference(value ?? null)}><SelectTrigger size="sm" aria-label="Choose comparison metric"><SelectValue>{(value) => formatMetricLabel(value ?? '')}</SelectValue></SelectTrigger><SelectContent>{metricKeys.map((key) => <SelectItem key={key} value={key}>{formatMetricLabel(key)}</SelectItem>)}</SelectContent></Select>}</div>
@@ -336,7 +436,7 @@ export function ResultsTab({
                       <div className="flex items-center gap-2">
                         <p className="min-w-0 flex-1 truncate text-sm font-medium" title={factorSummary(cell.factor_values)}>{factorSummary(cell.factor_values)}</p>
                         <Badge variant="outline" className="shrink-0 border-[color:var(--chart-2)] text-[color:var(--chart-2)]">{cell.replicate_count} {cell.replicate_count === 1 ? 'replicate' : 'replicates'}</Badge>
-                        {cell.obsolete_count > 0 && <AlertTriangle className="size-4 shrink-0 text-[color:var(--chart-4)]" aria-label="Includes obsolete results" />}
+                        {cell.obsolete_count > 0 && <Badge variant="outline" className="shrink-0 border-[color:var(--chart-4)]/60 text-[color:var(--chart-4)]">{cell.obsolete_count} obsolete {cell.obsolete_count === 1 ? 'run' : 'runs'}</Badge>}
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">{cell.current_completed_count}/{cell.replicate_count} current complete</p>
                     </div>

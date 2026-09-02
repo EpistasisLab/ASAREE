@@ -9,6 +9,7 @@ import { ProtocolCanvas, type ProtocolCanvasHandle } from '@/components/protocol
 import { ResultsInspectorPanel, type ResultsSelection } from '@/components/protocol/ResultsTab'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
@@ -134,11 +135,22 @@ function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Rep
 
 function ProtocolPublicationControl({ protocol, experimentId }: { protocol: Protocol; experimentId: string }) {
   const queryClient = useQueryClient()
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const trialsQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'runs'],
+    queryFn: () => experimentsApi.listTrials(experimentId),
+    enabled: protocol.has_unpublished_changes,
+  })
+  // Obsolescence is based on immutable protocol-run provenance. Results that
+  // were scored directly without a ProtocolRun have no canvas version to
+  // become stale against, so do not overstate the impact in this warning.
+  const affectedReplicateCount = (trialsQuery.data ?? []).filter((trial) => !!trial.run_id && !trial.obsolete).length
   const publishMutation = useMutation({
     mutationFn: () => protocolsApi.publish(protocol.id),
     onSuccess: (published) => {
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'runs'] })
+      setConfirmOpen(false)
     },
   })
   const status = protocol.published_revision
@@ -147,16 +159,45 @@ function ProtocolPublicationControl({ protocol, experimentId }: { protocol: Prot
       : `Published v${protocol.published_revision}`
     : 'No published canvas'
   const error = publishMutation.error instanceof ApiError && typeof publishMutation.error.detail === 'string' ? publishMutation.error.detail : null
+  function requestPublish() {
+    if (affectedReplicateCount > 0) setConfirmOpen(true)
+    else publishMutation.mutate()
+  }
   return (
-    <div className="flex items-center gap-2">
-      <span className="font-mono text-xs text-muted-foreground" title="Production runs use the immutable published canvas revision.">
-        {status}
-      </span>
-      {error && <span className="max-w-56 truncate text-xs text-destructive" title={error}>{error}</span>}
-      <Button size="sm" variant="outline" disabled={!protocol.has_unpublished_changes || publishMutation.isPending} onClick={() => publishMutation.mutate()}>
-        {publishMutation.isPending ? 'Publishing…' : 'Publish canvas'}
-      </Button>
-    </div>
+    <>
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-xs text-muted-foreground" title="Production runs use the immutable published canvas revision.">
+          {status}
+        </span>
+        {error && <span className="max-w-56 truncate text-xs text-destructive" title={error}>{error}</span>}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!protocol.has_unpublished_changes || publishMutation.isPending || trialsQuery.isLoading}
+          onClick={requestPublish}
+        >
+          {publishMutation.isPending ? 'Publishing…' : 'Publish canvas'}
+        </Button>
+      </div>
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Publish a new canvas version?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Publishing this draft changes the canvas version used by future runs. {affectedReplicateCount}{' '}
+            previously run replicate{affectedReplicateCount === 1 ? '' : 's'} will be marked obsolete because{affectedReplicateCount === 1 ? ' it was' : ' they were'} run against the current version.
+          </p>
+          <p className="text-xs text-muted-foreground">The results remain available for comparison; they are not deleted.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+            <Button onClick={() => publishMutation.mutate()} disabled={publishMutation.isPending}>
+              {publishMutation.isPending ? 'Publishing…' : 'Publish and mark obsolete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

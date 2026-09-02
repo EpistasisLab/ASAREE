@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { displayFactorValue, factorValueKey, groupReplicatesIntoCells, type ExperimentalCell } from '@/lib/experiment'
 import { protocolForExperimentQueryKey } from '@/lib/protocolGraph'
-import type { Trial } from '@/types/experiments'
+import type { ResultCell, ResultReplicate, Trial } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
 import { RunConfirmDialog } from './RunConfirmDialog'
 import { WarningBadge } from './nodes/WarningBadge'
@@ -65,6 +65,32 @@ function trialStatusBadge(status: Trial['status']) {
 const OBSOLETE_TRIAL_BADGE = {
   label: 'Obsolete',
   className: 'border-transparent bg-[color:var(--chart-2)]/10 text-[color:var(--chart-2)]',
+}
+
+function formatCurrency(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value)) return null
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value)
+}
+
+function formatNumber(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value)) return null
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)
+}
+
+function formatDuration(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value)) return null
+  if (value < 60) return `${Math.round(value)} sec`
+  if (value < 3600) return `${(value / 60).toFixed(1)} min`
+  return `${(value / 3600).toFixed(1)} hr`
+}
+
+function usageSummary(result: Pick<ResultCell, 'cost_usd' | 'total_tokens' | 'duration_seconds'> | Pick<ResultReplicate, 'cost_usd' | 'total_tokens' | 'duration_seconds'>): string[] {
+  const tokens = formatNumber(result.total_tokens)
+  return [
+    formatCurrency(result.cost_usd),
+    tokens ? `${tokens} tokens` : null,
+    formatDuration(result.duration_seconds),
+  ].filter((value): value is string => !!value)
 }
 
 // The panel's run control deliberately keeps the resume behavior of the
@@ -555,6 +581,11 @@ export function RunsTab({
     enabled: true,
     refetchInterval: 3000,
   })
+  const resultsQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'run-results'],
+    queryFn: () => experimentsApi.getRunResults(experimentId),
+    refetchInterval: 5000,
+  })
 
   if (replicatesQuery.isLoading) {
     return (
@@ -572,6 +603,8 @@ export function RunsTab({
 
   const cells = groupReplicatesIntoCells(replicatesQuery.data).sort((a, b) => cellSortKey(a).localeCompare(cellSortKey(b)))
   const trialsByLabel = new Map((trialsQuery.data ?? []).map((trial) => [trial.replicate_label, trial]))
+  const cellResultsByLabel = new Map((resultsQuery.data?.cells ?? []).map((cell) => [cell.cell_label, cell]))
+  const replicateResultsByLabel = new Map((resultsQuery.data?.replicates ?? []).map((replicate) => [replicate.replicate_label, replicate]))
   const obsoleteCells = cells.filter((cell) => cell.replicates.some((replicate) => trialsByLabel.get(replicate.replicate_label)?.obsolete))
   const obsoleteReplicateCount = cells.reduce(
     (count, cell) => count + cell.replicates.filter((replicate) => trialsByLabel.get(replicate.replicate_label)?.obsolete).length,
@@ -586,6 +619,11 @@ export function RunsTab({
   const runningCount = trials.filter((trial) => trial.status === 'running').length
   const queuedCount = trials.filter((trial) => trial.status === 'queued').length
   const failedCount = trials.filter((trial) => trial.status === 'failed' || trial.status === 'cancelled').length
+  const overviewUsage = resultsQuery.data ? usageSummary({
+    cost_usd: resultsQuery.data.overview.total_cost_usd,
+    total_tokens: resultsQuery.data.overview.total_tokens,
+    duration_seconds: resultsQuery.data.overview.total_duration_seconds,
+  }) : []
   const isActiveTrial = (trial: Trial | undefined): trial is Trial =>
     !!trial?.run_id && (trial.status === 'queued' || trial.status === 'running')
   const activeExperimentRunIds = trials.filter(isActiveTrial).map((trial) => trial.run_id)
@@ -640,6 +678,12 @@ export function RunsTab({
           {queuedCount > 0 && ` · ${queuedCount} queued`}
           {failedCount > 0 && ` · ${failedCount} failed`}
         </p>
+        {overviewUsage.length > 0 && (
+          <p className="flex flex-wrap gap-x-2 text-xs text-muted-foreground" title="Reported usage across current, non-obsolete replicate results.">
+            <span>Current usage</span>
+            {overviewUsage.map((value) => <span key={value}>{value}</span>)}
+          </p>
+        )}
       </div>
       <div className="space-y-2">
         {cells.map((cell) => {
@@ -649,6 +693,8 @@ export function RunsTab({
           const expanded = expandedCells.has(cell.label)
           const replicateListId = `cell-${cell.label}-replicates`
           const obsoleteCount = cell.replicates.filter((replicate) => trialsByLabel.get(replicate.replicate_label)?.obsolete).length
+          const cellResult = cellResultsByLabel.get(cell.label)
+          const cellUsage = cellResult ? usageSummary(cellResult) : []
           const activeCellRunIds = cell.replicates
             .map((replicate) => trialsByLabel.get(replicate.replicate_label))
             .filter(isActiveTrial)
@@ -694,6 +740,12 @@ export function RunsTab({
                       </div>
                     )}
                     <p className="mt-1 font-mono text-[0.65rem] text-muted-foreground" title={cell.label}>Cell ID: {cell.label}</p>
+                    {cellResult && (
+                      <p className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+                        <span>{cellResult.current_completed_count}/{cellResult.replicate_count} current complete</span>
+                        {cellUsage.map((value) => <span key={value}>{value}</span>)}
+                      </p>
+                    )}
                   </div>
                 </button>
                 <div className="flex shrink-0 flex-col items-end gap-1.5">
@@ -722,6 +774,8 @@ export function RunsTab({
                     <ul className="space-y-1.5" aria-label={`Replicates for ${cell.label}`}>
                       {cell.replicates.map((replicate) => {
                         const trial = trialsByLabel.get(replicate.replicate_label)
+                        const replicateResult = replicateResultsByLabel.get(replicate.replicate_label)
+                        const replicateUsage = replicateResult ? usageSummary(replicateResult) : []
                         const badge = trial ? (trial.obsolete ? OBSOLETE_TRIAL_BADGE : trialStatusBadge(trial.status)) : null
                         return (
                           <li key={replicate.id} className="rounded-md border bg-background px-2.5 py-2">
@@ -736,6 +790,7 @@ export function RunsTab({
                                     />
                                   )}
                                 </div>
+                                {replicateUsage.length > 0 && <p className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground">{replicateUsage.map((value) => <span key={value}>{value}</span>)}</p>}
                               </div>
                               <div className="flex shrink-0 items-center gap-2">
                                 {badge ? <Badge className={badge.className}>{badge.label}</Badge> : <Badge variant="outline">Status unavailable</Badge>}

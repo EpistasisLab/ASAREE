@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { DesignTab } from './DesignTab'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import { RunsTab } from './RunsTab'
-import { ResultsTab } from './ResultsTab'
+import { ResultsTab, type ResultsSelection } from './ResultsTab'
 import type { Experiment } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
 
@@ -67,6 +67,7 @@ export function ExperimentSidePanel({
   needsInitialGeneration,
   regenerationRequired,
   unboundFactors,
+  onResultSelection,
 }: {
   experiment: Experiment | undefined
   protocolId: string | undefined
@@ -76,11 +77,11 @@ export function ExperimentSidePanel({
   needsInitialGeneration: boolean
   regenerationRequired: boolean
   unboundFactors: string[]
+  onResultSelection: (selection: ResultsSelection) => void
 }) {
   const [width, setWidth] = useState(readStoredPanelWidth)
   const [collapsed, setCollapsed] = useState(readStoredCollapsed)
   const [activeTab, setActiveTab] = useState<PanelTab>('design')
-  const [resultReplicateLabel, setResultReplicateLabel] = useState<string | null>(null)
   const [hasPendingDesignUpdate, setHasPendingDesignUpdate] = useState(false)
   const [dragging, setDragging] = useState(false)
   const dragStart = useRef<{ x: number; width: number } | null>(null)
@@ -153,7 +154,7 @@ export function ExperimentSidePanel({
   }
 
   function viewReplicateResult(replicateLabel: string) {
-    setResultReplicateLabel(replicateLabel)
+    onResultSelection({ type: 'replicate', replicateLabel })
     openPanel('results')
   }
 
@@ -255,8 +256,7 @@ export function ExperimentSidePanel({
               ) : (
                 <ResultsTab
                   experimentId={experiment.id}
-                  initialReplicateLabel={resultReplicateLabel}
-                  onInitialReplicateShown={() => setResultReplicateLabel(null)}
+                  onSelectResult={onResultSelection}
                 />
               )}
             </div>

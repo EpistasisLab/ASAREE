@@ -703,13 +703,17 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     [],
   )
 
-  function closeAddPanel() {
-    setAddPanelOpen(false)
+  function resetAddPanelBrowsers() {
     setServerBrowserOpen(false)
     setSkillBrowserOpen(false)
     setBundleBrowserOpen(false)
     setDocumentBrowserOpen(false)
     setDatasetBrowserOpen(false)
+  }
+
+  function closeAddPanel() {
+    setAddPanelOpen(false)
+    resetAddPanelBrowsers()
     setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(null)
     setPendingEdgeInsert(null)
@@ -722,7 +726,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const requestConnectorAdd = useCallback((request: ConnectorAddRequest) => {
     setSelectedNodeId(null)
     setPendingConnectorAdd(request)
-    setServerBrowserOpen(false)
+    setPendingMainEdgeAdd(null)
+    setPendingEdgeInsert(null)
+    resetAddPanelBrowsers()
     setAddPanelOpen(true)
   }, [])
   // A MainEdgeAddStub requests this instead -- same panel, restricted to
@@ -731,8 +737,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // requesting stub sits.
   const requestMainEdgeAdd = useCallback((request: MainEdgeAddRequest) => {
     setSelectedNodeId(null)
+    setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(request)
-    setServerBrowserOpen(false)
+    setPendingEdgeInsert(null)
+    resetAddPanelBrowsers()
     setAddPanelOpen(true)
   }, [])
   // An InteractEdge's own "+" requests this -- same panel again, restricted
@@ -740,8 +748,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // origin->newAgent->target instead.
   const requestEdgeInsert = useCallback((request: EdgeInsertRequest) => {
     setSelectedNodeId(null)
+    setPendingConnectorAdd(null)
+    setPendingMainEdgeAdd(null)
     setPendingEdgeInsert(request)
-    setServerBrowserOpen(false)
+    resetAddPanelBrowsers()
     setAddPanelOpen(true)
   }, [])
   // The canvas's per-node Play icon (NodeHoverToolbar) -- opens
@@ -1464,7 +1474,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               onClick={() => {
                 setSelectedNodeId(null)
                 setPendingConnectorAdd(null)
-                setServerBrowserOpen(false)
+                setPendingMainEdgeAdd(null)
+                setPendingEdgeInsert(null)
+                resetAddPanelBrowsers()
                 setAddPanelOpen(true)
               }}
             >

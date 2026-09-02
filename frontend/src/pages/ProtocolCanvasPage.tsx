@@ -6,6 +6,7 @@ import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
 import { ProtocolCanvas, type ProtocolCanvasHandle } from '@/components/protocol/ProtocolCanvas'
+import { ResultsInspectorPanel, type ResultsSelection } from '@/components/protocol/ResultsTab'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -171,6 +172,7 @@ export function ProtocolCanvasPage() {
   // ProtocolCanvas.tsx's own comment on ProtocolCanvasHandle for why this
   // needs to be imperative rather than a plain prop.
   const canvasRef = useRef<ProtocolCanvasHandle>(null)
+  const [resultSelection, setResultSelection] = useState<ResultsSelection | null>(null)
 
   const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
@@ -248,6 +250,7 @@ export function ProtocolCanvasPage() {
             needsInitialGeneration={impactQuery.data?.has_generated_design === false && impactQuery.data.proposed_cell_count > 0}
             regenerationRequired={impactQuery.data?.regeneration_required ?? false}
             unboundFactors={unboundFactors}
+            onResultSelection={setResultSelection}
           />
 
           {protocolQuery.isLoading ? (
@@ -255,7 +258,7 @@ export function ProtocolCanvasPage() {
           ) : protocolQuery.isError || !protocolQuery.data ? (
             <p className="text-sm text-muted-foreground">Could not load this experiment's protocol.</p>
           ) : (
-            <Card className="flex-1 overflow-hidden p-0">
+            <Card className="relative flex-1 overflow-hidden p-0">
               <ReactFlowProvider>
                 <ProtocolCanvas
                   key={protocolQuery.data.id}
@@ -267,6 +270,7 @@ export function ProtocolCanvasPage() {
                   publishedRevision={protocolQuery.data.published_revision}
                 />
               </ReactFlowProvider>
+              {experimentId && <ResultsInspectorPanel experimentId={experimentId} selection={resultSelection} onClose={() => setResultSelection(null)} />}
             </Card>
           )}
         </div>

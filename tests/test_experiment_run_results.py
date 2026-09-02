@@ -1,5 +1,6 @@
 """Pure normalization coverage for the experiment Results scorecard."""
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 from asaree.services.experiment_run_results import _has_execution_evidence, _node_labels, _primary_metric, _usage
@@ -16,6 +17,11 @@ def test_usage_normalizes_provider_token_names_and_derives_total() -> None:
         "total_tokens": 150,
         "cost_usd": 0.042,
     }
+
+
+def test_usage_keeps_motoro_numeric_cost_estimates() -> None:
+    agent_run = SimpleNamespace(token_usage={}, cost_estimate=Decimal("0.042000"))
+    assert _usage(agent_run)["cost_usd"] == 0.042
 
 
 def test_usage_keeps_unreported_values_unknown_instead_of_zero() -> None:

@@ -12,6 +12,8 @@ import asyncio
 import uuid
 from collections import defaultdict
 from datetime import datetime
+from decimal import Decimal
+from math import isfinite
 from typing import Any
 
 from motoro.runner import get_run
@@ -27,9 +29,10 @@ from asaree.services.protocol_runs import list_experiment_trials
 
 def _number(value: Any) -> float | None:
     """A finite numeric value, excluding booleans (which are ints in Python)."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
+    if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
         return None
-    return float(value)
+    number = float(value)
+    return number if isfinite(number) else None
 
 
 def _usage(agent_run: Any | None) -> dict[str, int | float | None]:

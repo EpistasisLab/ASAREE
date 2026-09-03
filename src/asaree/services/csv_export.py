@@ -88,7 +88,7 @@ def _unique_column_name(base: str, used: set[str]) -> str:
 def _declared_level_labels(design_spec: dict[str, Any] | None) -> dict[str, dict[str, str]]:
     """Map a persisted factor value to its user-facing analysis label.
 
-    Old designs have no labels yet. They use a short ``field_1``-style
+    Old designs have no labels yet. They use a short ``level1``-style
     fallback here, while undeclared factor values retain the legacy value-
     derived header for backwards-compatible direct exports.
     """
@@ -102,8 +102,7 @@ def _declared_level_labels(design_spec: dict[str, Any] | None) -> dict[str, dict
         name, levels = factor.get("name"), factor.get("levels")
         if not isinstance(name, str) or not isinstance(levels, list):
             continue
-        stem = _column_identifier(name.rsplit(":", 1)[-1], fallback="level")
-        defaults = [f"{stem}_{index}" for index in range(1, len(levels) + 1)]
+        defaults = [f"level{index}" for index in range(1, len(levels) + 1)]
         supplied = factor.get("level_labels")
         labels = (
             [

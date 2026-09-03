@@ -55,10 +55,8 @@ export function levelTypeOf(factor: DesignFactor): LevelType {
   return factor.level_type ?? 'string'
 }
 
-export function defaultFactorLevelLabels(factorName: string, count: number): string[] {
-  const source = factorName.split(':').at(-1) ?? factorName
-  const stem = source.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'level'
-  return Array.from({ length: count }, (_, index) => `${stem}_${index + 1}`)
+export function defaultFactorLevelLabels(_factorName: string, count: number): string[] {
+  return Array.from({ length: count }, (_, index) => `level${index + 1}`)
 }
 
 export function factorLevelLabels(factor: DesignFactor): string[] {

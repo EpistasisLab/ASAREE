@@ -52,7 +52,7 @@ def test_design_spec_adds_short_default_labels_for_legacy_factor_levels() -> Non
             {
                 "name": "Agent:System prompt",
                 "levels": ["a very long prompt", "another long prompt"],
-                "level_labels": ["system_prompt_1", "system_prompt_2"],
+                "level_labels": ["level1", "level2"],
             }
         ]
     }
@@ -65,7 +65,7 @@ def test_level_labels_do_not_change_the_material_design() -> None:
             {
                 "name": "Agent:System prompt",
                 "levels": ["a", "b"],
-                "level_labels": ["system_prompt_1", "system_prompt_2"],
+                "level_labels": ["level1", "level2"],
             }
         ],
         "replicates": 2,

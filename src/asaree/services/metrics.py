@@ -227,8 +227,7 @@ def normalize_design_spec(
             levels = factor.get("levels")
             if not isinstance(levels, list):
                 continue
-            stem = re.sub(r"[^a-z0-9]+", "_", factor["name"].rsplit(":", 1)[-1].lower()).strip("_") or "level"
-            defaults = [f"{stem}_{index}" for index in range(1, len(levels) + 1)]
+            defaults = [f"level{index}" for index in range(1, len(levels) + 1)]
             supplied = factor.get("level_labels")
             if isinstance(supplied, list) and len(supplied) == len(levels):
                 factor["level_labels"] = [

@@ -1,8 +1,8 @@
-import { useRef, useState, type ChangeEvent } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import type { Edge, Node } from '@xyflow/react'
-import { Archive, ArchiveRestore, Download, Lock, LockOpen, MoreVertical, Pencil, Text, Upload } from 'lucide-react'
+import { Archive, ArchiveRestore, Download, Lock, LockOpen, MoreVertical, Pencil, Text } from 'lucide-react'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -12,8 +12,6 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { applyExperimentRenameToProtocolCache, protocolForExperimentQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { sanitizeFilename } from '@/lib/utils'
-import type { ProtocolGraph } from '@/types/protocols'
-import type { DesignSpec } from '@/types/experiments'
 
 // Every menu item that opens a follow-up surface renders it as a SEPARATE
 // controlled Dialog (open/onOpenChange state), not nested inside
@@ -142,40 +140,11 @@ function EditDescriptionDialog({
   )
 }
 
-// A non-destructive "fill gaps" merge, same spirit as the graph import's own
-// "merge alongside, never replace" behavior (ProtocolCanvas.tsx's
-// handleImport) -- an imported design shouldn't be able to silently clobber
-// factors/metrics/settings the CURRENT experiment already has. Factors and
-// metrics are appended by name (skipping anything the current design_spec
-// already declares under that name -- factor names are computed from node
-// labels via computeFactorName, so a re-import of the same protocol produces
-// the same names and is naturally idempotent); the singular settings
-// (replicates/randomization_seed/coordination_strategy) only ever fill in
-// when the current experiment hasn't set them at all.
-function mergeDesignSpec(current: DesignSpec | null | undefined, imported: DesignSpec | null | undefined): DesignSpec | undefined {
-  if (!imported) return current ?? undefined
-  const currentFactorNames = new Set((current?.factors ?? []).map((f) => f.name))
-  const mergedFactors = [...(current?.factors ?? []), ...(imported.factors ?? []).filter((f) => !currentFactorNames.has(f.name))]
-  const currentMetricNames = new Set((current?.metrics ?? []).map((m) => m.name))
-  const mergedMetrics = [...(current?.metrics ?? []), ...(imported.metrics ?? []).filter((m) => !currentMetricNames.has(m.name))]
-  return {
-    ...current,
-    ...imported,
-    factors: mergedFactors.length > 0 ? mergedFactors : undefined,
-    metrics: mergedMetrics.length > 0 ? mergedMetrics : undefined,
-    replicates: current?.replicates ?? imported.replicates,
-    randomization_seed: current?.randomization_seed ?? imported.randomization_seed,
-    coordination_strategy: current?.coordination_strategy ?? imported.coordination_strategy,
-  }
-}
-
 // The canvas-level "⋮" menu, next to Run/+ -- acts on the EXPERIMENT for
 // identity/lifecycle (rename/description/archive, matching this app's own
 // "experiments instead of workflows" framing), and on the PROTOCOL's own
-// graph for Download/Import, since that's the only part with an actual
-// JSON-able shape. Import only parses -- the actual merge-into-canvas (id
-// remapping, position offsetting) happens in ProtocolCanvas.tsx itself via
-// onImport, since that's where nodes/edges/findFreePosition live.
+// graph for Download. Importing always creates a separate experiment from the
+// global Create menu, so a canvas can never be changed by accident here.
 // Deliberately no Delete here (or anywhere in the GUI) -- Archive is the
 // only lifecycle-destructive action end users get, so a misclick can't
 // silently lose an experiment's runs/cells. DELETE /experiments/{id} still
@@ -186,19 +155,15 @@ export function ProtocolCanvasMenu({
   experimentId,
   nodes,
   edges,
-  onImport,
 }: {
   protocolId: string
   experimentId: string | null
   nodes: Node[]
   edges: Edge[]
-  onImport: (graph: ProtocolGraph) => void
 }) {
   const [renameOpen, setRenameOpen] = useState(false)
   const [descriptionOpen, setDescriptionOpen] = useState(false)
   const [lockConfirmOpen, setLockConfirmOpen] = useState(false)
-  const [importError, setImportError] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -277,40 +242,6 @@ export function ProtocolCanvasMenu({
     URL.revokeObjectURL(url)
   }
 
-  const importDesignMutation = useMutation({
-    mutationFn: (designSpec: DesignSpec) => {
-      const merged = mergeDesignSpec(experiment?.design_spec, designSpec)
-      return experimentsApi.update(experimentId!, { design_spec: merged })
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
-    },
-  })
-
-  function handleFileSelected(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = '' // allow re-selecting the same file later
-    if (!file) return
-    setImportError(null)
-    file
-      .text()
-      .then((text) => {
-        const parsed = JSON.parse(text)
-        if (!Array.isArray(parsed?.graph?.nodes) || !Array.isArray(parsed?.graph?.edges)) {
-          setImportError('This file is not a valid protocol export.')
-          return
-        }
-        onImport(parsed.graph as ProtocolGraph)
-        // Only when this canvas is actually linked to an experiment -- an
-        // unlinked protocol has nowhere to attach factors/metrics at all
-        // (same reasoning as FactorBindableField's own disabled state).
-        if (experimentId && parsed.design_spec && typeof parsed.design_spec === 'object') {
-          importDesignMutation.mutate(parsed.design_spec as DesignSpec)
-        }
-      })
-      .catch(() => setImportError('Could not read this file as JSON.'))
-  }
-
   const isArchived = !!experiment?.archived_at
   const isLocked = !!experiment?.locked_at
 
@@ -346,22 +277,8 @@ export function ProtocolCanvasMenu({
             <Download className="size-4" />
             Download
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={isLocked} onClick={() => fileInputRef.current?.click()}>
-            <Upload className="size-4" />
-            Import from file…
-          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <input ref={fileInputRef} type="file" accept="application/json" className="hidden" onChange={handleFileSelected} />
-
-      {importError && (
-        <span
-          className="absolute top-14 right-3 z-10 max-w-64 truncate rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive"
-          title={importError}
-        >
-          {importError}
-        </span>
-      )}
 
       {experimentId && experiment && (
         <>

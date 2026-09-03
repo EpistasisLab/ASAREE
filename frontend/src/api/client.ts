@@ -185,6 +185,20 @@ export const experimentsApi = {
   // archived experiment it can't see) can invalidate before the POST lands.
   create: (data: { name?: string; description?: string | null }) =>
     request<Experiment>('/experiments', { method: 'POST', body: data }),
+  // Creates both a fresh experiment and its linked canvas in one server-side
+  // transaction.  Unlike the old canvas import, this never merges into the
+  // experiment currently open in the browser.
+  importDefinition: (data: {
+    name: string
+    description?: string | null
+    hypothesis?: string | null
+    design_type?: string
+    task_brief?: Record<string, unknown> | null
+    design_spec?: DesignSpec | null
+    graph: ProtocolGraph
+    published_graph?: ProtocolGraph | null
+    protocol_description?: string | null
+  }) => request<Experiment>('/experiments/import-definition', { method: 'POST', body: data }),
   update: (
     id: string,
     data: {

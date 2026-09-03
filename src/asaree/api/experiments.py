@@ -16,6 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.csv_export import replicates_that_ran, replicates_to_csv, result_rows_to_csv
@@ -44,9 +45,14 @@ from asaree.services.experiments import (
 from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_experiment_design, analyze_factorial
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
 from asaree.services.metrics import build_evaluation_context, model_judge_metrics, normalize_design_spec
-from asaree.services.protocol_revisions import get_published_revision, is_draft_published
+from asaree.services.protocol_revisions import get_published_revision, is_draft_published, publish_protocol
 from asaree.services.protocol_runs import list_experiment_trials
-from asaree.services.protocols import list_protocols, sync_protocol_names_to_experiment
+from asaree.services.protocols import (
+    create_protocol,
+    generated_protocol_name,
+    list_protocols,
+    sync_protocol_names_to_experiment,
+)
 from asaree.worker.enqueue import enqueue_metric_evaluation
 
 # For a Content-Disposition filename only -- never touches the experiment's
@@ -107,6 +113,30 @@ class UpdateExperimentRequest(BaseModel):
     dataset_id: uuid.UUID | None = None
     design_spec: dict[str, Any] | None = None
     archived_at: datetime | None = None
+
+
+class ImportExperimentDefinitionRequest(BaseModel):
+    """The portable, executable part of an experiment definition.
+
+    This deliberately does not accept run history, generated cells, artifacts,
+    published revisions, locks, or external artifact contents.  An import is a
+    *new*, editable experiment: those records belong to the source experiment,
+    while the graph keeps its Dataset/Knowledge/Skill references for the user
+    to reconnect in the destination workspace.
+    """
+
+    name: str
+    description: str | None = None
+    hypothesis: str | None = None
+    design_type: str = "factorial"
+    task_brief: dict[str, Any] | None = None
+    design_spec: dict[str, Any] | None = None
+    graph: dict[str, Any]
+    # When supplied by the portable export, this becomes revision 1 on the
+    # new protocol. `graph` remains the editable draft, so the source's
+    # published-vs-draft state survives without reusing source revision IDs.
+    published_graph: dict[str, Any] | None = None
+    protocol_description: str | None = None
 
 
 class GenerateDesignRequest(BaseModel):
@@ -290,6 +320,76 @@ async def create_experiment_endpoint(
         else await create_experiment(db, name=name, owner_id=user.id, **fields)
     )
     return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment.id))
+
+
+@router.post("/import-definition", response_model=ExperimentResponse, status_code=201)
+async def import_experiment_definition_endpoint(
+    body: ImportExperimentDefinitionRequest, user: CurrentUser, db: DbSession
+) -> ExperimentResponse:
+    """Create a fresh experiment and its canvas from a portable definition.
+
+    Both inserts use this request's one database transaction.  If validation or
+    protocol creation fails, the session dependency rolls the experiment back
+    as well, so this endpoint can never leave an orphaned half-import behind.
+    """
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Experiment name cannot be empty")
+    if await get_experiment_by_name(db, name, owner_id=user.id) is not None:
+        raise HTTPException(status_code=409, detail="An experiment with this name already exists")
+    if not isinstance(body.graph.get("nodes"), list) or not isinstance(body.graph.get("edges"), list):
+        raise HTTPException(status_code=422, detail="The imported definition must contain a graph with nodes and edges")
+    if body.published_graph is not None and (
+        not isinstance(body.published_graph.get("nodes"), list)
+        or not isinstance(body.published_graph.get("edges"), list)
+    ):
+        raise HTTPException(status_code=422, detail="The imported published canvas must contain nodes and edges")
+
+    try:
+        design_spec = normalize_design_spec(body.design_spec, validate_metrics=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Do not attach source dataset IDs here.  They refer to source-workspace
+    # artifacts and may not exist for this owner; their node configuration is
+    # retained in the graph so the user can supply/reconnect them after import.
+    try:
+        # The lookup above gives the dialog its friendly suggested name. This
+        # savepoint covers the unavoidable race where another tab takes it
+        # between that lookup and the insert, turning it back into a 409 for
+        # the client rather than an integrity-error 500.
+        async with db.begin_nested():
+            experiment = await create_experiment(
+                db,
+                name=name,
+                owner_id=user.id,
+                description=body.description,
+                design_type=body.design_type,
+                task_brief=body.task_brief,
+                design_spec=design_spec,
+            )
+            # `publish_protocol` can only freeze the protocol's current draft.
+            # Start from the source published snapshot when one exists, freeze
+            # it as the imported protocol's revision 1, then restore the
+            # source draft if it had unpublished edits.
+            protocol = await create_protocol(
+                db,
+                name=generated_protocol_name(experiment.name, experiment.id),
+                owner_id=user.id,
+                description=body.protocol_description,
+                experiment_id=experiment.id,
+                graph=body.published_graph or body.graph,
+            )
+            if body.published_graph is not None:
+                await publish_protocol(db, protocol)
+                if body.graph != body.published_graph:
+                    protocol.graph = body.graph
+                    await db.flush()
+    except IntegrityError as exc:
+        if "uq_research_experiments_owner_name" in str(exc.orig):
+            raise HTTPException(status_code=409, detail="An experiment with this name already exists") from exc
+        raise
+    return _experiment_response(experiment, [])
 
 
 @router.get("", response_model=list[ExperimentResponse])

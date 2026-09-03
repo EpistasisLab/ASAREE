@@ -26,6 +26,7 @@ import {
   makeCustomMetric,
   metricCatalogEntry,
   normalizeDesignMetrics,
+  type MetricAggregation,
   type MetricDirection,
   type MetricValueType,
 } from '@/lib/metricCatalog'
@@ -320,12 +321,13 @@ function CustomMetricDialog({
   metric?: DesignMetric
   existingNames: string[]
   onCancel: () => void
-  onSave: (metric: { name: string; description: string; direction: MetricDirection; valueType: MetricValueType; unit?: string; scoring?: MetricScoringConfig }) => void
+  onSave: (metric: { name: string; description: string; direction: MetricDirection; valueType: MetricValueType; aggregation: MetricAggregation; unit?: string; scoring?: MetricScoringConfig }) => void
 }) {
   const [name, setName] = useState(metric?.name ?? '')
   const [description, setDescription] = useState(metric?.description ?? '')
   const [direction, setDirection] = useState<MetricDirection>(metric?.direction ?? 'maximize')
   const [valueType, setValueType] = useState<MetricValueType>(metric?.valueType ?? 'number')
+  const [aggregation, setAggregation] = useState<MetricAggregation>(metric?.aggregation ?? 'mean')
   const [unit, setUnit] = useState(metric?.unit ?? '')
   const [judgeEnabled, setJudgeEnabled] = useState(metric?.scoring?.method === 'model_judge')
   const [rubric, setRubric] = useState(metric?.scoring?.rubric ?? '')
@@ -366,6 +368,7 @@ function CustomMetricDialog({
             <div className="space-y-1.5"><Label>Value type</Label><Select value={valueType} onValueChange={(value) => value && setValueType(value as MetricValueType)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="number">Number</SelectItem><SelectItem value="boolean">Boolean</SelectItem><SelectItem value="string">Text</SelectItem></SelectContent></Select></div>
             <div className="space-y-1.5"><Label htmlFor="custom-metric-unit">Unit</Label><Input id="custom-metric-unit" value={unit} onChange={(event) => setUnit(event.target.value)} placeholder="Optional" /></div>
           </div>
+          {valueType === 'number' && <div className="space-y-1.5"><Label>Cell result</Label><Select value={aggregation} onValueChange={(value) => value && setAggregation(value as MetricAggregation)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="mean">Average per replicate</SelectItem><SelectItem value="sum">Total across replicates</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Controls the value shown for each condition in Results. Boolean metrics always use a pass rate.</p></div>}
           <div className="rounded-md border bg-muted/20 p-3">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -410,7 +413,7 @@ function CustomMetricDialog({
             </div>}
           </div>
         </div>
-        <DialogFooter><Button variant="outline" onClick={onCancel}>Cancel</Button><Button disabled={invalid} onClick={() => onSave({ name, description, direction, valueType: judgeEnabled ? 'number' : valueType, unit, scoring: judgeEnabled ? { method: 'model_judge', rubric, reference, min: parsedMinimum, max: parsedMaximum, judge: { provider: judgeProvider as LLMProvider, model: judgeModel.trim() } } : undefined })}>{metric ? 'Save metric' : 'Add metric'}</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" onClick={onCancel}>Cancel</Button><Button disabled={invalid} onClick={() => onSave({ name, description, direction, valueType: judgeEnabled ? 'number' : valueType, aggregation: judgeEnabled || valueType === 'boolean' ? 'mean' : aggregation, unit, scoring: judgeEnabled ? { method: 'model_judge', rubric, reference, min: parsedMinimum, max: parsedMaximum, judge: { provider: judgeProvider as LLMProvider, model: judgeModel.trim() } } : undefined })}>{metric ? 'Save metric' : 'Add metric'}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   )

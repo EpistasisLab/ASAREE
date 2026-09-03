@@ -24,6 +24,7 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
         "kind": "runtime",
         "valueType": "number",
         "defaultDirection": "minimize",
+        "aggregation": "sum",
         "unit": "USD",
         "contextEligible": True,
     },
@@ -34,6 +35,7 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
         "kind": "runtime",
         "valueType": "number",
         "defaultDirection": "minimize",
+        "aggregation": "sum",
         "unit": "seconds",
         "contextEligible": True,
     },
@@ -44,6 +46,7 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
         "kind": "runtime",
         "valueType": "number",
         "defaultDirection": "minimize",
+        "aggregation": "sum",
         "unit": "tokens",
         "contextEligible": True,
     },
@@ -54,6 +57,7 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
         "kind": "runtime",
         "valueType": "number",
         "defaultDirection": "minimize",
+        "aggregation": "sum",
         "unit": "tokens",
         "contextEligible": True,
     },
@@ -64,6 +68,7 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
         "kind": "runtime",
         "valueType": "number",
         "defaultDirection": "minimize",
+        "aggregation": "sum",
         "unit": "tokens",
         "contextEligible": True,
     },
@@ -72,6 +77,7 @@ _CATALOG_BY_KEY = {str(entry["key"]): entry for entry in METRIC_CATALOG}
 _KINDS = {"runtime", "deterministic_evaluator", "model_judge", "agent_reported", "custom"}
 _VALUE_TYPES = {"number", "boolean", "string"}
 _DIRECTIONS = {"maximize", "minimize"}
+_AGGREGATIONS = {"mean", "sum"}
 _JUDGE_PROVIDERS = {"anthropic", "openai", "azure_foundry", "openrouter", "local"}
 _DELIMITER = re.compile(r"</?experiment_evaluation_context>", re.IGNORECASE)
 
@@ -146,6 +152,15 @@ def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> l
             else "maximize"
         )
         metric["primary"] = bool(metric.get("primary"))
+        metric["aggregation"] = (
+            "mean"
+            if metric["valueType"] == "boolean"
+            else metric.get("aggregation")
+            if metric.get("aggregation") in _AGGREGATIONS
+            else catalog.get("aggregation", "mean")
+            if catalog
+            else "mean"
+        )
         if metric.get("unit") is None and catalog and catalog.get("unit"):
             metric["unit"] = catalog["unit"]
         scoring = metric.get("scoring")

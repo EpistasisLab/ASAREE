@@ -726,6 +726,7 @@ class RunResultsResponse(BaseModel):
     overview: dict[str, Any]
     metric_keys: list[str]
     metric_types: dict[str, str]
+    metric_aggregations: dict[str, str]
     primary_metric: str | None
     primary_metric_direction: str
     cells: list[dict[str, Any]]
@@ -783,7 +784,7 @@ async def get_run_results_schema_endpoint(experiment_id: uuid.UUID, user: Curren
     results = await summarize_experiment_run_results(
         db, experiment_id=experiment_id, design_spec=experiment.design_spec
     )
-    return result_rows_schema(results["replicates"], results["metric_types"])
+    return result_rows_schema(results["replicates"], results["metric_types"], results["metric_aggregations"])
 
 
 class ScoreCompletedRunsResponse(BaseModel):

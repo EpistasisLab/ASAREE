@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 from asaree.services.csv_export import result_rows_schema, result_rows_to_csv
 from asaree.services.experiment_run_results import (
+    _aggregate_metric_values,
+    _declared_metric_aggregations,
     _declared_runtime_metrics,
     _has_execution_evidence,
     _node_labels,
@@ -65,6 +67,23 @@ def test_declared_runtime_metrics_are_projected_from_execution_telemetry() -> No
     execution = {"cost_usd": 0.04, "total_tokens": 150, "duration_seconds": 2.5}
     assert _declared_runtime_metrics(spec, execution) == {"cost_usd": 0.04, "total_tokens": 150.0}
     assert _primary_metric(spec) == ("cost_usd", "maximize")
+
+
+def test_declared_metric_aggregation_defaults_to_average_and_keeps_explicit_totals() -> None:
+    assert _declared_metric_aggregations(
+        {
+            "metrics": [
+                {"name": "Quality", "kind": "custom", "valueType": "number", "aggregation": "mean"},
+                {"name": "Features", "kind": "custom", "valueType": "number", "aggregation": "sum"},
+                {"name": "Passed", "kind": "custom", "valueType": "boolean", "aggregation": "sum"},
+            ]
+        }
+    ) == {"Quality": "mean", "Features": "sum", "Passed": "mean"}
+
+
+def test_cell_metric_aggregations_apply_the_declared_operation() -> None:
+    assert _aggregate_metric_values([1.0, 2.0, 3.0], "mean") == 2.0
+    assert _aggregate_metric_values([1.0, 2.0, 3.0], "sum") == 6.0
 
 
 def test_cell_metric_rollups_sum_current_replicates() -> None:
@@ -142,7 +161,7 @@ def test_results_csv_schema_describes_treatment_coding_and_binary_outcomes() -> 
         "level": "small",
         "reference_level": "large",
     }
-    assert outcome == {"name": "passed", "role": "outcome", "value_type": "boolean"}
+    assert outcome == {"name": "passed", "role": "outcome", "value_type": "boolean", "cell_aggregation": "mean"}
 
 
 def test_node_labels_prefers_the_canvas_name_over_its_durable_id() -> None:

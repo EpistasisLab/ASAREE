@@ -34,6 +34,7 @@ export interface DesignMetric {
   scoring?: MetricScoringConfig
   primary: boolean
   direction: 'maximize' | 'minimize'
+  aggregation?: 'mean' | 'sum'
   [key: string]: unknown
 }
 
@@ -370,6 +371,7 @@ export interface ExperimentRunResults {
   overview: RunResultsOverview
   metric_keys: string[]
   metric_types: Record<string, 'number' | 'boolean'>
+  metric_aggregations: Record<string, 'mean' | 'sum'>
   primary_metric: string | null
   primary_metric_direction: 'maximize' | 'minimize'
   cells: ResultCell[]

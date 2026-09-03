@@ -34,6 +34,13 @@ def test_custom_metric_values_are_validated_against_their_declared_type() -> Non
         validate_metric_values(metrics, {"Passed": 1})
 
 
+def test_boolean_metrics_always_normalize_to_pass_rate_aggregation() -> None:
+    metrics = normalize_metrics(
+        [{"name": "Passed", "kind": "custom", "valueType": "boolean", "aggregation": "sum", "primary": True}]
+    )
+    assert metrics[0]["aggregation"] == "mean"
+
+
 def test_evaluation_context_filters_stale_ids_and_escapes_delimiters() -> None:
     metrics = [
         {

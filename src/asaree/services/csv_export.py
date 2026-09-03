@@ -151,7 +151,11 @@ def _result_csv_layout(
     return _RESULT_FIXED_FIELDS, factor_columns, metric_keys
 
 
-def result_rows_schema(rows: Sequence[dict[str, Any]], metric_types: dict[str, str] | None = None) -> dict[str, Any]:
+def result_rows_schema(
+    rows: Sequence[dict[str, Any]],
+    metric_types: dict[str, str] | None = None,
+    metric_aggregations: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Machine-readable companion metadata for a Results design-matrix CSV."""
     fixed_fields, factor_columns, metric_keys = _result_csv_layout(rows)
     factor_levels: dict[str, list[str]] = {}
@@ -182,7 +186,12 @@ def result_rows_schema(rows: Sequence[dict[str, Any]], metric_types: dict[str, s
             *({"name": field, "role": "metadata"} for field in fixed_fields),
             *factor_metadata,
             *(
-                {"name": key, "role": "outcome", "value_type": (metric_types or {}).get(key, "number")}
+                {
+                    "name": key,
+                    "role": "outcome",
+                    "value_type": (metric_types or {}).get(key, "number"),
+                    "cell_aggregation": (metric_aggregations or {}).get(key, "mean"),
+                }
                 for key in metric_keys
             ),
         ],

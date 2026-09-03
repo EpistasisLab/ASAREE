@@ -87,6 +87,13 @@ def _sum(values: list[float]) -> float | None:
     return sum(values) if values else None
 
 
+def _aggregate_metric_values(values: list[float], aggregation: str) -> float | None:
+    """Aggregate the reported values for one metric within one condition."""
+    if not values:
+        return None
+    return sum(values) if aggregation == "sum" else sum(values) / len(values)
+
+
 def _sum_reported(rows: list[dict[str, Any]], key: str) -> float | None:
     values = [float(row[key]) for row in rows if row[key] is not None]
     return sum(values) if values else None
@@ -136,6 +143,16 @@ def _declared_metric_types(design_spec: dict[str, Any] | None) -> dict[str, str]
         if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
             types[key] = metric["valueType"]
     return types
+
+
+def _declared_metric_aggregations(design_spec: dict[str, Any] | None) -> dict[str, str]:
+    """Map Results metric keys to their declared per-cell aggregation."""
+    aggregations: dict[str, str] = {}
+    for metric in normalize_metrics((design_spec or {}).get("metrics")):
+        key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric["name"]
+        if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
+            aggregations[key] = metric["aggregation"]
+    return aggregations
 
 
 def _has_execution_evidence(node_run: dict[str, Any]) -> bool:
@@ -385,6 +402,7 @@ async def summarize_experiment_run_results(
     result_rows: list[dict[str, Any]] = []
     metric_keys: set[str] = set()
     metric_types = _declared_metric_types(design_spec)
+    metric_aggregations = _declared_metric_aggregations(design_spec)
     for replicate in replicates:
         trial = trials_by_label.get(replicate.replicate_label)
         latest_run = protocol_runs_by_id.get(trial.run_id) if trial and trial.run_id else None
@@ -473,7 +491,8 @@ async def summarize_experiment_run_results(
         for key in metric_keys:
             values = [_number(row["metric_values"].get(key)) for row in current]
             observed = [value for value in values if value is not None]
-            metrics[key] = _sum(observed) / len(observed) if observed else None
+            aggregation = metric_aggregations.get(key, "mean")
+            metrics[key] = _aggregate_metric_values(observed, aggregation)
             metric_counts[key] = len(observed)
         cell_summaries.append(
             {
@@ -516,6 +535,7 @@ async def summarize_experiment_run_results(
         "overview": overview,
         "metric_keys": sorted(metric_keys),
         "metric_types": {key: metric_types.get(key, "number") for key in sorted(metric_keys)},
+        "metric_aggregations": {key: metric_aggregations.get(key, "mean") for key in sorted(metric_keys)},
         "primary_metric": primary_metric if primary_metric in metric_keys else None,
         "primary_metric_direction": primary_metric_direction,
         "cells": sorted(cell_summaries, key=lambda cell: cell["cell_label"]),

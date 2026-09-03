@@ -158,7 +158,7 @@ def test_results_csv_orders_identity_factors_metrics_then_operational_metadata()
         {
             "factors": [
                 {"name": "first", "levels": ["a", "b"], "level_labels": ["level1", "level2"]},
-                {"name": "later", "levels": ["x", "y"], "level_labels": ["level1", "level2"]},
+                {"name": "later", "levels": ["x", "y", "z"], "level_labels": ["level1", "level2", "level3"]},
             ]
         },
     )
@@ -167,8 +167,8 @@ def test_results_csv_orders_identity_factors_metrics_then_operational_metadata()
     assert header == [
         "cell_label",
         "replicate_number",
-        "first",
         "later",
+        "first",
         "duration_seconds",
         "input_tokens",
         "output_tokens",

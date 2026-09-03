@@ -129,16 +129,39 @@ def _factor_columns(
     """
     discovered_factor_keys = {key for row in rows for key in (row.get("factor_values") or {})}
     declared_factors = design_spec.get("factors") if isinstance(design_spec, dict) else None
-    declared_factor_keys = [
-        factor["name"]
+    declared_level_counts = {
+        factor["name"]: len(factor["levels"])
         for factor in (declared_factors or [])
-        if isinstance(factor, dict) and isinstance(factor.get("name"), str) and factor["name"] in discovered_factor_keys
-    ]
-    # generate_design's first declared factor is its outer loop, so this is
-    # the most stable (slowest-changing) through least stable order. Any
-    # legacy/externally reported factor absent from the declaration follows in
-    # deterministic alphabetical order.
-    factor_keys = [*declared_factor_keys, *sorted(discovered_factor_keys - set(declared_factor_keys))]
+        if isinstance(factor, dict)
+        and isinstance(factor.get("name"), str)
+        and isinstance(factor.get("levels"), list)
+        and factor["name"] in discovered_factor_keys
+    }
+    observed_level_counts = {
+        key: len(
+            {
+                _factor_level_key(factors[key])
+                for row in rows
+                if isinstance((factors := row.get("factor_values")), dict) and key in factors
+            }
+        )
+        for key in discovered_factor_keys
+    }
+    # A factor with more declared treatments comes first. Declaration order
+    # breaks ties, then a name keeps legacy/externally reported factors stable.
+    declared_order = {name: index for index, name in enumerate(declared_level_counts)}
+
+    def factor_sort_key(key: str) -> tuple[int, int, str]:
+        return (
+            -declared_level_counts.get(key, observed_level_counts[key]),
+            declared_order.get(key, len(declared_order)),
+            key,
+        )
+
+    factor_keys = sorted(
+        discovered_factor_keys,
+        key=factor_sort_key,
+    )
     used = set(reserved)
     labels_by_factor = _declared_level_labels(design_spec)
     columns: list[tuple[str, str, str, dict[str, str] | None]] = []

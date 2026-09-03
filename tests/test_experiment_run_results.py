@@ -167,8 +167,8 @@ def test_results_csv_orders_identity_factors_metrics_then_operational_metadata()
     assert header == [
         "cell_label",
         "replicate_number",
-        "later",
         "first",
+        "later",
         "duration_seconds",
         "input_tokens",
         "output_tokens",

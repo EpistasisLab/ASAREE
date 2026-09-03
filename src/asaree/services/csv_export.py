@@ -147,13 +147,15 @@ def _factor_columns(
         )
         for key in discovered_factor_keys
     }
-    # A factor with more declared treatments comes first. Declaration order
-    # breaks ties, then a name keeps legacy/externally reported factors stable.
+    # A factor with fewer declared treatments comes first, putting the most
+    # variable/high-cardinality treatment columns on the right. Declaration
+    # order breaks ties, then a name keeps legacy/externally reported factors
+    # stable.
     declared_order = {name: index for index, name in enumerate(declared_level_counts)}
 
     def factor_sort_key(key: str) -> tuple[int, int, str]:
         return (
-            -declared_level_counts.get(key, observed_level_counts[key]),
+            declared_level_counts.get(key, observed_level_counts[key]),
             declared_order.get(key, len(declared_order)),
             key,
         )

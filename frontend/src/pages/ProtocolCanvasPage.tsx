@@ -129,7 +129,7 @@ function TopBarStats({ experiment, cells, obsoleteRunCount = 0 }: { experiment: 
       {best && (
         <TopBarStat
           icon={Trophy}
-          value={`${formatMetricLabel(best.key)} · ${scaledMetricValue(best.key, best.value).toFixed(4)}${metricValueSuffix(best.key)}`}
+          value={`${formatMetricLabel(best.key)} · ${best.valueType === 'boolean' ? `${Math.round(best.value * 100)}%` : `${scaledMetricValue(best.key, best.value).toFixed(4)}${metricValueSuffix(best.key)}`}`}
           title={`Best mean ${formatMetricLabel(best.key)} across this experiment's cells, using the declared primary metric`}
           accent="var(--chart-3)"
         />

@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
 from asaree.deps import CurrentUser, DbSession
-from asaree.services.csv_export import replicates_that_ran, replicates_to_csv, result_rows_to_csv
+from asaree.services.csv_export import replicates_that_ran, replicates_to_csv, result_rows_schema, result_rows_to_csv
 from asaree.services.datasets import get_dataset
 from asaree.services.design_generation import DesignValidationError, generate_design_cells, get_design_impact
 from asaree.services.design_revisions import (
@@ -42,9 +42,20 @@ from asaree.services.experiments import (
     set_experiment_datasets,
     update_experiment,
 )
-from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_experiment_design, analyze_factorial
+from asaree.services.factorial_analysis import (
+    FactorialAnalysisError,
+    analyze_binary_factorial,
+    analyze_experiment_design,
+    analyze_factorial,
+)
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
-from asaree.services.metrics import build_evaluation_context, model_judge_metrics, normalize_design_spec
+from asaree.services.metrics import (
+    build_evaluation_context,
+    model_judge_metrics,
+    normalize_design_spec,
+    normalize_metrics,
+    validate_metric_values,
+)
 from asaree.services.protocol_revisions import get_published_revision, is_draft_published, publish_protocol
 from asaree.services.protocol_runs import list_experiment_trials
 from asaree.services.protocols import (
@@ -662,10 +673,23 @@ async def analyze_factorial_endpoint(
     estimated marginal means, non-inferiority vs. the reference condition
     (BCa bootstrap + Holm), and heteroscedasticity diagnostics — computed
     fresh from this experiment's current replicate results, not persisted."""
-    await _get_owned_experiment(db, experiment_id, user)
+    experiment = await _get_owned_experiment(db, experiment_id, user)
     replicates = await list_replicates(db, experiment_id=experiment_id)
+    declared_primary = next(
+        (
+            metric
+            for metric in normalize_metrics((experiment.design_spec or {}).get("metrics"))
+            if metric["name"] == body.primary_metric
+        ),
+        None,
+    )
     try:
-        return analyze_factorial(
+        analysis = (
+            analyze_binary_factorial
+            if declared_primary and declared_primary["valueType"] == "boolean"
+            else analyze_factorial
+        )
+        return analysis(
             replicates,
             condition_factors=body.condition_factors,
             positive_levels=body.positive_levels,
@@ -701,6 +725,7 @@ class RunResultsResponse(BaseModel):
 
     overview: dict[str, Any]
     metric_keys: list[str]
+    metric_types: dict[str, str]
     primary_metric: str | None
     primary_metric_direction: str
     cells: list[dict[str, Any]]
@@ -749,6 +774,16 @@ async def export_run_results_csv_endpoint(experiment_id: uuid.UUID, user: Curren
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}-results.csv"'},
     )
+
+
+@router.get("/{experiment_id}/run-results.schema.json")
+async def get_run_results_schema_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> dict[str, Any]:
+    """Machine-readable factor encoding and outcome types for Results CSV consumers."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    results = await summarize_experiment_run_results(
+        db, experiment_id=experiment_id, design_spec=experiment.design_spec
+    )
+    return result_rows_schema(results["replicates"], results["metric_types"])
 
 
 class ScoreCompletedRunsResponse(BaseModel):
@@ -806,7 +841,7 @@ async def upsert_replicate_endpoint(
     user: CurrentUser,
     db: DbSession,
 ) -> ReplicateResponse:
-    await _get_owned_experiment(db, experiment_id, user)
+    experiment = await _get_owned_experiment(db, experiment_id, user)
     # This endpoint edits the current replicate projection. If its only run is
     # against an older canvas, that record is immutable history; users must
     # create a new attempt before recording new values.
@@ -817,6 +852,13 @@ async def upsert_replicate_endpoint(
             status_code=409, detail="This run is obsolete history. Re-run the replicate before recording results."
         )
     fields = body.model_dump(exclude_unset=True)
+    if "metric_values" in fields:
+        try:
+            fields["metric_values"] = validate_metric_values(
+                (experiment.design_spec or {}).get("metrics"), fields["metric_values"]
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     replicate = await upsert_replicate(db, experiment_id=experiment_id, replicate_label=replicate_label, fields=fields)
     return ReplicateResponse.model_validate(replicate)
 

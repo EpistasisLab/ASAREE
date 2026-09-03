@@ -1,5 +1,12 @@
+import pytest
+
 from asaree.services.metric_evaluation import build_metric_judge_prompt, validate_metric_scores
-from asaree.services.metrics import build_evaluation_context, compose_system_prompt, normalize_metrics
+from asaree.services.metrics import (
+    build_evaluation_context,
+    compose_system_prompt,
+    normalize_metrics,
+    validate_metric_values,
+)
 
 
 def test_legacy_metric_is_normalized_with_a_stable_id_and_primary() -> None:
@@ -10,6 +17,21 @@ def test_legacy_metric_is_normalized_with_a_stable_id_and_primary() -> None:
     assert first[0]["kind"] == "custom"
     assert first[0]["description"] == "Legacy metric declaration for Accuracy."
     assert first[0]["primary"] is True
+
+
+def test_custom_metric_values_are_validated_against_their_declared_type() -> None:
+    metrics = [
+        {"name": "Passed", "kind": "custom", "valueType": "boolean", "primary": True},
+        {"name": "Score", "kind": "custom", "valueType": "number", "primary": False},
+        {"name": "Note", "kind": "custom", "valueType": "string", "primary": False},
+    ]
+    assert validate_metric_values(metrics, {"Passed": True, "Score": 0.8, "Note": "reviewed"}) == {
+        "Passed": True,
+        "Score": 0.8,
+        "Note": "reviewed",
+    }
+    with pytest.raises(ValueError, match="Passed"):
+        validate_metric_values(metrics, {"Passed": 1})
 
 
 def test_evaluation_context_filters_stale_ids_and_escapes_delimiters() -> None:

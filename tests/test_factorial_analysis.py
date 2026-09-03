@@ -62,6 +62,24 @@ def test_none_design_spec_is_unavailable() -> None:
     assert result["analysis"] is None
 
 
+def test_boolean_primary_metric_uses_binomial_logistic_analysis() -> None:
+    spec = _design_spec(metrics=[{"name": "passed", "primary": True, "direction": "maximize", "valueType": "boolean"}])
+    replicates = [
+        _FakeReplicate(factor_values={"tier": "small"}, metric_values={"passed": value})
+        for value in [False, True, False, False]
+    ] + [
+        _FakeReplicate(factor_values={"tier": "large"}, metric_values={"passed": value})
+        for value in [True, True, False, True]
+    ]
+
+    result = analyze_experiment_design(spec, replicates)
+
+    assert result["available"] is True
+    assert result["analysis"]["analysis_type"] == "binary_logistic"
+    assert result["best_condition"]["condition"] == "tier_large"
+    assert result["analysis"]["emm_cells"][0]["n"] == 4
+
+
 def test_not_enough_scored_data_is_unavailable_not_a_crash() -> None:
     # Exactly 1 scored replicate per condition -- too few data points for
     # analyze_factorial's saturated OLS model (2 points, 2 terms) raises a

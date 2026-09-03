@@ -29,6 +29,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy import stats as st
+from scipy.optimize import minimize
 
 from asaree.services.design_generation import cell_label_for
 
@@ -392,6 +393,130 @@ def analyze_factorial(
     }
 
 
+def analyze_binary_factorial(
+    replicates: Sequence[Any],
+    *,
+    condition_factors: list[str],
+    positive_levels: dict[str, Any],
+    reference_condition: dict[str, Any],
+    primary_metric: str,
+    alpha: float = 0.05,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """Binomial/logistic factorial analysis for a Boolean primary outcome.
+
+    The continuous-outcome permutation and non-inferiority workflow above is
+    not valid for individual 0/1 observations. This fit uses the same
+    effect-coded factorial design but estimates log odds and predicted pass
+    probabilities through a binomial likelihood instead.
+    """
+    if len(condition_factors) < 1:
+        raise FactorialAnalysisError("condition_factors must be a non-empty list")
+    if set(positive_levels) != set(condition_factors) or set(reference_condition) != set(condition_factors):
+        raise FactorialAnalysisError("positive_levels and reference_condition must declare every condition factor")
+
+    df = _replicates_to_frame(replicates)
+    metric_col = f"metric__{primary_metric}"
+    if df.empty or metric_col not in df:
+        raise FactorialAnalysisError("no Boolean metric values have been reported yet")
+    scored = df[df[metric_col].notna()].copy()
+    if scored.empty:
+        raise FactorialAnalysisError("no Boolean metric values have been reported yet")
+    if not scored[metric_col].map(lambda value: isinstance(value, bool)).all():
+        raise FactorialAnalysisError(f"primary metric {primary_metric!r} is not Boolean")
+
+    for factor in condition_factors:
+        seen = set(scored[factor].dropna().unique().tolist())
+        if len(seen) > 2:
+            raise FactorialAnalysisError(f"factor {factor!r} has {len(seen)} distinct levels; expected exactly 2")
+        if positive_levels[factor] not in seen and seen:
+            raise FactorialAnalysisError(f"positive_levels[{factor!r}] was never observed")
+        scored[f"_coded__{factor}"] = np.where(scored[factor] == positive_levels[factor], 1.0, -1.0)
+
+    coded = {factor: scored[f"_coded__{factor}"].to_numpy(float) for factor in condition_factors}
+    x, term_names = _design_matrix(coded, condition_factors, {factor: factor for factor in condition_factors})
+    y = scored[metric_col].astype(float).to_numpy()
+    if len(y) <= x.shape[1]:
+        raise FactorialAnalysisError("not enough scored Boolean outcomes for the requested factorial model")
+    if np.all(y == 0) or np.all(y == 1):
+        raise FactorialAnalysisError("all scored outcomes are identical; logistic effects cannot be estimated")
+
+    def objective(beta: np.ndarray) -> tuple[float, np.ndarray]:
+        logits = np.clip(x @ beta, -35, 35)
+        probabilities = 1 / (1 + np.exp(-logits))
+        loss = -np.sum(y * logits - np.logaddexp(0, logits))
+        return float(loss), x.T @ (probabilities - y)
+
+    fit = minimize(
+        lambda beta: objective(beta)[0],
+        np.zeros(x.shape[1]),
+        jac=lambda beta: objective(beta)[1],
+        method="BFGS",
+    )
+    if not fit.success or not np.all(np.isfinite(fit.x)) or np.max(np.abs(fit.x)) > 20:
+        raise FactorialAnalysisError("logistic model could not converge (the outcomes may be completely separated)")
+    probabilities = 1 / (1 + np.exp(-np.clip(x @ fit.x, -35, 35)))
+    information = x.T @ (probabilities[:, None] * (1 - probabilities[:, None]) * x)
+    try:
+        covariance = np.linalg.inv(information)
+    except np.linalg.LinAlgError as exc:
+        raise FactorialAnalysisError("logistic model information matrix is singular") from exc
+    standard_errors = np.sqrt(np.diag(covariance))
+    z_scores = fit.x[1:] / standard_errors[1:]
+    z_critical = st.norm.ppf(1 - alpha / 2)
+    effects = []
+    for index, name in enumerate(term_names, start=1):
+        estimate = float(fit.x[index])
+        se = float(standard_errors[index])
+        effects.append(
+            {
+                "effect": name,
+                "log_odds": estimate,
+                "odds_ratio": float(np.exp(estimate)),
+                "ci_lo_odds_ratio": float(np.exp(estimate - z_critical * se)),
+                "ci_hi_odds_ratio": float(np.exp(estimate + z_critical * se)),
+                "z": float(z_scores[index - 1]),
+                "p_value": float(2 * st.norm.sf(abs(z_scores[index - 1]))),
+            }
+        )
+
+    scored["_condition_label"] = scored[condition_factors].apply(
+        lambda row: cell_label_for({factor: row[factor] for factor in condition_factors}), axis=1
+    )
+    cells = []
+    for label, group in scored.groupby("_condition_label"):
+        # _design_matrix orders interactions after main effects; use a design
+        # row directly to preserve that order for every factorial size.
+        matching = np.flatnonzero(scored["_condition_label"].to_numpy() == label)[0]
+        point = x[matching]
+        logit = float(point @ fit.x)
+        se = float(np.sqrt(point @ covariance @ point))
+        cells.append(
+            {
+                "condition": label,
+                "mean": float(1 / (1 + np.exp(-logit))),
+                "ci_lo": float(1 / (1 + np.exp(-(logit - z_critical * se)))),
+                "ci_hi": float(1 / (1 + np.exp(-(logit + z_critical * se)))),
+                "successes": int(group[metric_col].sum()),
+                "n": int(len(group)),
+            }
+        )
+    return {
+        "analysis_type": "binary_logistic",
+        "n_scored": int(len(scored)),
+        "factorial_effects": effects,
+        "emm_cells": sorted(cells, key=lambda cell: cell["condition"]),
+        "footer": {
+            "primary_metric": primary_metric,
+            "condition_factors": condition_factors,
+            "positive_levels": positive_levels,
+            "reference_condition": reference_condition,
+            "model": "binomial logistic regression with -1/+1 effect coding",
+            "alpha": alpha,
+        },
+    }
+
+
 def analyze_experiment_design(design_spec: dict[str, Any] | None, replicates: Sequence[Any]) -> dict[str, Any]:
     """The Results tab's own entry point -- a thin wrapper around
     ``analyze_factorial`` that needs no caller-supplied parameters at all.
@@ -446,12 +571,22 @@ def analyze_experiment_design(design_spec: dict[str, Any] | None, replicates: Se
     positive_levels = {f["name"]: f["levels"][1] for f in factors}
 
     try:
-        analysis = analyze_factorial(
-            replicates,
-            condition_factors=condition_factors,
-            positive_levels=positive_levels,
-            reference_condition=reference_condition,
-            primary_metric=primary["name"],
+        analysis = (
+            analyze_binary_factorial(
+                replicates,
+                condition_factors=condition_factors,
+                positive_levels=positive_levels,
+                reference_condition=reference_condition,
+                primary_metric=primary["name"],
+            )
+            if primary.get("valueType") == "boolean"
+            else analyze_factorial(
+                replicates,
+                condition_factors=condition_factors,
+                positive_levels=positive_levels,
+                reference_condition=reference_condition,
+                primary_metric=primary["name"],
+            )
         )
     except FactorialAnalysisError as exc:
         return {"available": False, "reason": str(exc), "analysis": None, "best_condition": None}

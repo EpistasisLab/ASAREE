@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import uuid
 from copy import deepcopy
+from math import isfinite
 from typing import Any
 
 MetricCatalogEntry = dict[str, str | bool]
@@ -206,6 +207,38 @@ def normalize_design_spec(
     if "metrics" in result:
         result["metrics"] = normalize_metrics(result["metrics"], validate_custom_names=validate_metrics)
     return result
+
+
+def validate_metric_values(metrics: Any, values: dict[str, Any] | None) -> dict[str, Any]:
+    """Validate declared outcome values at the API boundary.
+
+    Metric declarations are dynamic JSONB, so this is intentionally a
+    declaration-driven validation rather than a database-column constraint.
+    Unknown keys stay allowed for backwards-compatible externally reported
+    metrics; declared custom metrics must honor their selected value type.
+    """
+    declared = {
+        metric["name"]: metric
+        for metric in normalize_metrics(metrics)
+        if metric["kind"] != "runtime"
+    }
+    normalized: dict[str, Any] = {}
+    for key, value in (values or {}).items():
+        metric = declared.get(key)
+        if metric is None:
+            normalized[key] = value
+            continue
+        value_type = metric["valueType"]
+        if value_type == "boolean":
+            if not isinstance(value, bool):
+                raise ValueError(f"Metric {key!r} must be Boolean.")
+        elif value_type == "number":
+            if isinstance(value, bool) or not isinstance(value, int | float) or not isfinite(float(value)):
+                raise ValueError(f"Metric {key!r} must be a finite number.")
+        elif value_type == "string" and not isinstance(value, str):
+            raise ValueError(f"Metric {key!r} must be text.")
+        normalized[key] = value
+    return normalized
 
 
 def _safe_context_text(value: Any) -> str:

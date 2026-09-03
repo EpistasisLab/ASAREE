@@ -195,7 +195,7 @@ export function availableMetricKeys(replicates: Replicate[]): string[] {
   const keys = new Set<string>()
   for (const replicate of replicates) {
     for (const [k, v] of Object.entries(replicate.metric_values ?? {})) {
-      if (typeof v === 'number') keys.add(k)
+      if (typeof v === 'number' || typeof v === 'boolean') keys.add(k)
     }
   }
   return Array.from(keys).sort()
@@ -267,16 +267,16 @@ export function pickMetricColumns(experiment: Experiment | undefined, replicates
 /** The explicitly declared metric that decides an experiment's headline
  * result. task_brief.selection_metric is only a legacy display hint, so it
  * must never choose the canvas top-bar result. */
-export function primaryMetric(experiment: Experiment | undefined): { key: string; direction: 'maximize' | 'minimize' } | null {
+export function primaryMetric(experiment: Experiment | undefined): { key: string; direction: 'maximize' | 'minimize'; valueType?: 'number' | 'boolean' | 'string' } | null {
   const metric = experiment?.design_spec?.metrics?.find((candidate) => candidate.primary && candidate.name)
   if (!metric) return null
   const key = metric.kind === 'runtime' && typeof metric.catalogKey === 'string' ? metric.catalogKey : metric.name
-  return { key, direction: metric.direction }
+  return { key, direction: metric.direction, valueType: metric.valueType }
 }
 
 /** The single headline number for an experiment -- the best observed value of
  * its declared primary metric. Drives the canvas top bar's own result readout. */
-export function bestMetric(experiment: Experiment | undefined, replicates: Replicate[] | undefined): { key: string; value: number } | null {
+export function bestMetric(experiment: Experiment | undefined, replicates: Replicate[] | undefined): { key: string; value: number; valueType?: 'number' | 'boolean' | 'string' } | null {
   if (!replicates) return null
   const primary = primaryMetric(experiment)
   if (!primary) return null
@@ -284,7 +284,7 @@ export function bestMetric(experiment: Experiment | undefined, replicates: Repli
     .map((cell) => meanMetric(cell.replicates, primary.key))
     .filter((value): value is number => value !== null)
   if (values.length === 0) return null
-  return { key: primary.key, value: primary.direction === 'minimize' ? Math.min(...values) : Math.max(...values) }
+  return { key: primary.key, value: primary.direction === 'minimize' ? Math.min(...values) : Math.max(...values), valueType: primary.valueType }
 }
 
 /** Formatted for display: scaled into its display unit, trailing zeros
@@ -308,7 +308,10 @@ export function replicatesMatching(replicates: Replicate[], match: Record<string
 /** Replicates sharing one factor combination are AVERAGED for the heatmap,
  * not "first one wins" -- see the heatmap's own comment. */
 export function meanMetric(replicates: Replicate[], metricKey: string): number | null {
-  const values = replicates.map((replicate) => replicate.metric_values?.[metricKey]).filter((v): v is number => typeof v === 'number')
+  const values = replicates
+    .map((replicate) => replicate.metric_values?.[metricKey])
+    .map((value) => typeof value === 'boolean' ? Number(value) : value)
+    .filter((value): value is number => typeof value === 'number')
   if (values.length === 0) return null
   return values.reduce((a, b) => a + b, 0) / values.length
 }

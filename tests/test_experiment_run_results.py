@@ -1,13 +1,16 @@
 """Pure normalization coverage for the experiment Results scorecard."""
 
+import csv
+import io
 from decimal import Decimal
 from types import SimpleNamespace
 
-from asaree.services.csv_export import result_rows_to_csv
+from asaree.services.csv_export import result_rows_schema, result_rows_to_csv
 from asaree.services.experiment_run_results import (
     _declared_runtime_metrics,
     _has_execution_evidence,
     _node_labels,
+    _numeric_metrics,
     _primary_metric,
     _sum,
     _usage,
@@ -39,6 +42,10 @@ def test_usage_keeps_unreported_values_unknown_instead_of_zero() -> None:
         "total_tokens": None,
         "cost_usd": None,
     }
+
+
+def test_boolean_metric_is_a_binary_numeric_outcome() -> None:
+    assert _numeric_metrics({"passed": True, "failed": False}) == {"passed": 1.0, "failed": 0.0}
 
 
 def test_primary_metric_uses_the_design_direction() -> None:
@@ -82,6 +89,60 @@ def test_results_csv_includes_projected_runtime_metrics() -> None:
     header, row = csv_text.strip().splitlines()
     assert "duration_seconds" in header and "total_tokens" in header
     assert "2.5" in row and "150" in row
+
+
+def test_results_csv_projects_factors_to_a_numeric_design_matrix() -> None:
+    csv_text = result_rows_to_csv(
+        [
+            {
+                "replicate_label": "small__rep1",
+                "factor_values": {"critic": True, "model": "small", "temperature": 0.2},
+                "metric_values": {"accuracy": 0.8, "passed": True},
+            },
+            {
+                "replicate_label": "large__rep1",
+                "factor_values": {"critic": False, "model": "large", "temperature": 0.8},
+                "metric_values": {"accuracy": 0.9, "passed": False},
+            },
+        ]
+    )
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+
+    assert "critic_enabled" in rows[0]
+    assert "temperature" in rows[0]
+    # Categorical factors use treatment coding: alphabetically first "large"
+    # is the reference level, and "small" becomes the indicator column.
+    assert "model_small" in rows[0]
+    assert "model" not in rows[0]
+    assert rows[0]["critic_enabled"] == "1"
+    assert rows[1]["critic_enabled"] == "0"
+    assert rows[0]["model_small"] == "1"
+    assert rows[1]["model_small"] == "0"
+    assert rows[0]["temperature"] == "0.2"
+    assert rows[1]["temperature"] == "0.8"
+    assert rows[0]["passed"] == "1"
+    assert rows[1]["passed"] == "0"
+
+
+def test_results_csv_schema_describes_treatment_coding_and_binary_outcomes() -> None:
+    schema = result_rows_schema(
+        [
+            {"factor_values": {"model": "small"}, "metric_values": {"passed": True}},
+            {"factor_values": {"model": "large"}, "metric_values": {"passed": False}},
+        ],
+        {"passed": "boolean"},
+    )
+    factor = next(column for column in schema["columns"] if column["name"] == "model_small")
+    outcome = next(column for column in schema["columns"] if column["name"] == "passed")
+    assert factor == {
+        "name": "model_small",
+        "role": "factor",
+        "source_factor": "model",
+        "encoding": "categorical",
+        "level": "small",
+        "reference_level": "large",
+    }
+    assert outcome == {"name": "passed", "role": "outcome", "value_type": "boolean"}
 
 
 def test_node_labels_prefers_the_canvas_name_over_its_durable_id() -> None:

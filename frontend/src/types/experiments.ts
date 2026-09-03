@@ -342,6 +342,7 @@ export interface ResultCell {
   current_completed_count: number
   obsolete_count: number
   metric_means: Record<string, number>
+  metric_counts: Record<string, number>
   cost_usd: number | null
   total_tokens: number | null
   duration_seconds: number | null
@@ -368,6 +369,7 @@ export interface RunResultsOverview {
 export interface ExperimentRunResults {
   overview: RunResultsOverview
   metric_keys: string[]
+  metric_types: Record<string, 'number' | 'boolean'>
   primary_metric: string | null
   primary_metric_direction: 'maximize' | 'minimize'
   cells: ResultCell[]

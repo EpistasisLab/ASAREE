@@ -29,8 +29,10 @@ from asaree.services.protocol_runs import list_experiment_trials
 
 
 def _number(value: Any) -> float | None:
-    """A finite numeric value, excluding booleans (which are ints in Python)."""
-    if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
+    """A finite numeric value, including Boolean outcomes as 0/1."""
+    if isinstance(value, bool):
+        return float(value)
+    if not isinstance(value, int | float | Decimal):
         return None
     number = float(value)
     return number if isfinite(number) else None
@@ -76,6 +78,11 @@ def _numeric_metrics(values: dict[str, Any] | None) -> dict[str, float]:
     return {key: number for key, value in (values or {}).items() if (number := _number(value)) is not None}
 
 
+def _normalize_metric_values(values: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep metric values displayable while making Boolean outcomes numeric."""
+    return {key: int(value) if isinstance(value, bool) else value for key, value in (values or {}).items()}
+
+
 def _sum(values: list[float]) -> float | None:
     return sum(values) if values else None
 
@@ -119,6 +126,16 @@ def _declared_runtime_metrics(design_spec: dict[str, Any] | None, execution: dic
         if value is not None:
             values[metric["catalogKey"]] = value
     return values
+
+
+def _declared_metric_types(design_spec: dict[str, Any] | None) -> dict[str, str]:
+    """Map Results metric keys to their declared numeric outcome type."""
+    types: dict[str, str] = {}
+    for metric in normalize_metrics((design_spec or {}).get("metrics")):
+        key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric["name"]
+        if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
+            types[key] = metric["valueType"]
+    return types
 
 
 def _has_execution_evidence(node_run: dict[str, Any]) -> bool:
@@ -343,7 +360,7 @@ async def summarize_experiment_run_results(
         metric_values = stored.get("metric_values")
         evaluation = stored.get("metric_evaluation")
         return (
-            dict(metric_values) if isinstance(metric_values, dict) else {},
+            _normalize_metric_values(metric_values if isinstance(metric_values, dict) else None),
             dict(evaluation) if isinstance(evaluation, dict) else None,
         )
 
@@ -367,6 +384,7 @@ async def summarize_experiment_run_results(
 
     result_rows: list[dict[str, Any]] = []
     metric_keys: set[str] = set()
+    metric_types = _declared_metric_types(design_spec)
     for replicate in replicates:
         trial = trials_by_label.get(replicate.replicate_label)
         latest_run = protocol_runs_by_id.get(trial.run_id) if trial and trial.run_id else None
@@ -384,7 +402,7 @@ async def summarize_experiment_run_results(
             metric_values = (
                 snapshot_metrics
                 if "metric_values" in stored_attempt
-                else dict(replicate.metric_values or {})
+                else _normalize_metric_values(replicate.metric_values)
             )
             metric_evaluation = snapshot_evaluation or (
                 (replicate.artifacts or {}).get("metric_evaluation")
@@ -451,9 +469,12 @@ async def summarize_experiment_run_results(
         current = rows
         source = rows
         metrics = {}
+        metric_counts = {}
         for key in metric_keys:
             values = [_number(row["metric_values"].get(key)) for row in current]
-            metrics[key] = _sum([value for value in values if value is not None])
+            observed = [value for value in values if value is not None]
+            metrics[key] = _sum(observed) / len(observed) if observed else None
+            metric_counts[key] = len(observed)
         cell_summaries.append(
             {
                 "cell_label": cell_label,
@@ -462,10 +483,10 @@ async def summarize_experiment_run_results(
                 "completed_count": sum(row["status"] == "completed" for row in rows),
                 "current_completed_count": sum(row["status"] == "completed" for row in current),
                 "obsolete_count": sum(len(row["obsolete_runs"]) for row in rows),
-                # Kept under the established response key for client
-                # compatibility. Values are deliberately cell totals, not
-                # means: a cell aggregates all of its current replicates.
+                # One metric value per replicate: every cell comparison uses
+                # its mean. For Boolean metrics that is the pass rate.
                 "metric_means": {key: value for key, value in metrics.items() if value is not None},
+                "metric_counts": {key: count for key, count in metric_counts.items() if count > 0},
                 "cost_usd": _sum_reported(current, "cost_usd"),
                 "total_tokens": _sum_reported(current, "total_tokens"),
                 "duration_seconds": _sum_reported(source, "duration_seconds"),
@@ -494,6 +515,7 @@ async def summarize_experiment_run_results(
     return {
         "overview": overview,
         "metric_keys": sorted(metric_keys),
+        "metric_types": {key: metric_types.get(key, "number") for key in sorted(metric_keys)},
         "primary_metric": primary_metric if primary_metric in metric_keys else None,
         "primary_metric_direction": primary_metric_direction,
         "cells": sorted(cell_summaries, key=lambda cell: cell["cell_label"]),

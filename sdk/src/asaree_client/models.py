@@ -179,9 +179,9 @@ class ProtocolRevision(BaseModel):
 
 
 class CellRunBatch(BaseModel):
-    """ "Run all cells" fanout result -- one ProtocolRun id per not-yet-scored
-    replicate; ``skipped`` is how many replicates already had metric_values and were
-    left alone (resume semantics)."""
+    """ "Run all cells" fanout result -- one ProtocolRun id per not-yet-completed
+    replicate; ``skipped`` is how many replicates already had metrics or a completed
+    run and were left alone (resume semantics)."""
 
     protocol_run_ids: list[uuid.UUID]
     replicate_labels: list[str]

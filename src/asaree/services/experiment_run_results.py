@@ -24,12 +24,15 @@ from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.factorial_cells import list_replicates
+from asaree.services.metrics import normalize_metrics
 from asaree.services.protocol_runs import list_experiment_trials
 
 
 def _number(value: Any) -> float | None:
-    """A finite numeric value, excluding booleans (which are ints in Python)."""
-    if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
+    """A finite numeric value, including Boolean outcomes as 0/1."""
+    if isinstance(value, bool):
+        return float(value)
+    if not isinstance(value, int | float | Decimal):
         return None
     number = float(value)
     return number if isfinite(number) else None
@@ -72,15 +75,23 @@ def _duration_seconds(start: datetime, end: datetime) -> float:
 
 
 def _numeric_metrics(values: dict[str, Any] | None) -> dict[str, float]:
-    return {
-        key: number
-        for key, value in (values or {}).items()
-        if (number := _number(value)) is not None
-    }
+    return {key: number for key, value in (values or {}).items() if (number := _number(value)) is not None}
 
 
-def _mean(values: list[float]) -> float | None:
-    return sum(values) / len(values) if values else None
+def _normalize_metric_values(values: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep metric values displayable while making Boolean outcomes numeric."""
+    return {key: int(value) if isinstance(value, bool) else value for key, value in (values or {}).items()}
+
+
+def _sum(values: list[float]) -> float | None:
+    return sum(values) if values else None
+
+
+def _aggregate_metric_values(values: list[float], aggregation: str) -> float | None:
+    """Aggregate the reported values for one metric within one condition."""
+    if not values:
+        return None
+    return sum(values) if aggregation == "sum" else sum(values) / len(values)
 
 
 def _sum_reported(rows: list[dict[str, Any]], key: str) -> float | None:
@@ -96,8 +107,52 @@ def _primary_metric(design_spec: dict[str, Any] | None) -> tuple[str | None, str
     for metric in metrics:
         if isinstance(metric, dict) and metric.get("primary") and isinstance(metric.get("name"), str):
             direction = metric.get("direction")
-            return metric["name"], direction if direction in {"maximize", "minimize"} else "maximize"
+            # Catalog runtime metrics are stored under their telemetry key
+            # (cost_usd, duration_seconds, ...), while their display name is
+            # intentionally human-readable ("Cost", "Duration").
+            key = metric.get("catalogKey") if metric.get("kind") == "runtime" else metric["name"]
+            resolved_key = key if isinstance(key, str) else metric["name"]
+            resolved_direction = direction if direction in {"maximize", "minimize"} else "maximize"
+            return resolved_key, resolved_direction
     return None, "maximize"
+
+
+def _declared_runtime_metrics(design_spec: dict[str, Any] | None, execution: dict[str, Any]) -> dict[str, float]:
+    """Project selected runtime telemetry into the Results metric namespace.
+
+    Telemetry remains execution-owned and is never written into a replicate's
+    persisted ``metric_values`` JSON.  This view merely makes a declared
+    runtime metric selectable and comparable beside promoted score metrics.
+    """
+    metrics = design_spec.get("metrics") if isinstance(design_spec, dict) else None
+    values: dict[str, float] = {}
+    for metric in normalize_metrics(metrics):
+        if metric["kind"] != "runtime" or not isinstance(metric.get("catalogKey"), str):
+            continue
+        value = _number(execution.get(metric["catalogKey"]))
+        if value is not None:
+            values[metric["catalogKey"]] = value
+    return values
+
+
+def _declared_metric_types(design_spec: dict[str, Any] | None) -> dict[str, str]:
+    """Map Results metric keys to their declared numeric outcome type."""
+    types: dict[str, str] = {}
+    for metric in normalize_metrics((design_spec or {}).get("metrics")):
+        key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric["name"]
+        if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
+            types[key] = metric["valueType"]
+    return types
+
+
+def _declared_metric_aggregations(design_spec: dict[str, Any] | None) -> dict[str, str]:
+    """Map Results metric keys to their declared per-cell aggregation."""
+    aggregations: dict[str, str] = {}
+    for metric in normalize_metrics((design_spec or {}).get("metrics")):
+        key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric["name"]
+        if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
+            aggregations[key] = metric["aggregation"]
+    return aggregations
 
 
 def _has_execution_evidence(node_run: dict[str, Any]) -> bool:
@@ -300,17 +355,11 @@ async def summarize_experiment_run_results(
             "reported_usage_count": len(
                 {node["agent_run_id"] for node in node_results if node["total_tokens"] is not None}
             ),
-            "reported_cost_count": len(
-                {node["agent_run_id"] for node in node_results if node["cost_usd"] is not None}
-            ),
+            "reported_cost_count": len({node["agent_run_id"] for node in node_results if node["cost_usd"] is not None}),
         }
 
-    result_rows: list[dict[str, Any]] = []
-    metric_keys: set[str] = set()
-    for replicate in replicates:
-        trial = trials_by_label.get(replicate.replicate_label)
-        protocol_run = protocol_runs_by_id.get(trial.run_id) if trial and trial.run_id else None
-        execution = execution_detail(protocol_run) if protocol_run is not None else {
+    def empty_execution() -> dict[str, Any]:
+        return {
             "duration_seconds": None,
             "node_runs": [],
             "input_tokens": None,
@@ -321,27 +370,79 @@ async def summarize_experiment_run_results(
             "reported_usage_count": 0,
             "reported_cost_count": 0,
         }
-        # The replicate row only names the latest run. It may itself be stale
-        # after a later canvas publication, so obsolete history must include
-        # that row as well as any preceding executions. Do not make callers
-        # reconstruct this by combining a current row and "previous" history.
+
+    def attempt_result(protocol_run: ProtocolRun) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """The immutable score/evaluation facts recorded by this attempt."""
+        stored = protocol_run.attempt_result if isinstance(protocol_run.attempt_result, dict) else {}
+        metric_values = stored.get("metric_values")
+        evaluation = stored.get("metric_evaluation")
+        return (
+            _normalize_metric_values(metric_values if isinstance(metric_values, dict) else None),
+            dict(evaluation) if isinstance(evaluation, dict) else None,
+        )
+
+    def historical_run_payload(protocol_run: ProtocolRun, *, obsolete: bool) -> dict[str, Any]:
+        execution = execution_detail(protocol_run)
+        metric_values, evaluation = attempt_result(protocol_run)
+        metric_values.update(_declared_runtime_metrics(design_spec, execution))
+        return {
+            "run_id": str(protocol_run.id),
+            "status": "queued" if protocol_run.status == "pending" else protocol_run.status,
+            "obsolete": obsolete,
+            "error": protocol_run.error,
+            "protocol_revision_id": str(protocol_run.protocol_revision_id)
+            if protocol_run.protocol_revision_id
+            else None,
+            "updated_at": protocol_run.updated_at,
+            "metric_values": metric_values,
+            "metric_evaluation": evaluation,
+            **execution,
+        }
+
+    result_rows: list[dict[str, Any]] = []
+    metric_keys: set[str] = set()
+    metric_types = _declared_metric_types(design_spec)
+    metric_aggregations = _declared_metric_aggregations(design_spec)
+    for replicate in replicates:
+        trial = trials_by_label.get(replicate.replicate_label)
+        latest_run = protocol_runs_by_id.get(trial.run_id) if trial and trial.run_id else None
+        latest_is_obsolete = bool(trial and trial.obsolete)
+        # An obsolete attempt is history, never this replicate's current
+        # result. Represent the stable replicate slot as awaiting a current
+        # attempt, while retaining the old attempt below for inspection.
+        protocol_run = None if latest_is_obsolete else latest_run
+        execution = execution_detail(protocol_run) if protocol_run is not None else empty_execution()
+        if protocol_run is not None:
+            snapshot_metrics, snapshot_evaluation = attempt_result(protocol_run)
+            # Legacy runs lack snapshots. Their projection is the best
+            # available compatibility source; new runs always use snapshots.
+            stored_attempt = protocol_run.attempt_result if isinstance(protocol_run.attempt_result, dict) else {}
+            metric_values = (
+                snapshot_metrics
+                if "metric_values" in stored_attempt
+                else _normalize_metric_values(replicate.metric_values)
+            )
+            metric_evaluation = snapshot_evaluation or (
+                (replicate.artifacts or {}).get("metric_evaluation")
+                if isinstance((replicate.artifacts or {}).get("metric_evaluation"), dict)
+                else None
+            )
+        else:
+            metric_values, metric_evaluation = {}, None
+        metric_values.update(_declared_runtime_metrics(design_spec, execution))
+
+        history = history_by_label.get(replicate.replicate_label, [])
         obsolete_runs = [
-            {
-                "run_id": str(historical_run.id),
-                "status": "queued" if historical_run.status == "pending" else historical_run.status,
-                "obsolete": True,
-                "error": historical_run.error,
-                "protocol_revision_id": str(historical_run.protocol_revision_id)
-                if historical_run.protocol_revision_id
-                else None,
-                "updated_at": historical_run.updated_at,
-                **execution_detail(historical_run),
-            }
-            for historical_run, obsolete in history_by_label.get(replicate.replicate_label, [])
+            historical_run_payload(historical_run, obsolete=True)
+            for historical_run, obsolete in history
             if obsolete
         ]
-
-        metrics = _numeric_metrics(replicate.metric_values)
+        superseded_runs = [
+            historical_run_payload(historical_run, obsolete=False)
+            for historical_run, obsolete in history
+            if not obsolete and (latest_run is None or historical_run.id != latest_run.id)
+        ]
+        metrics = _numeric_metrics(metric_values)
         metric_keys.update(metrics)
         result_rows.append(
             {
@@ -349,38 +450,50 @@ async def summarize_experiment_run_results(
                 "replicate_number": replicate.replicate_number,
                 "cell_label": replicate.cell_label,
                 "factor_values": replicate.factor_values or {},
-                "metric_values": replicate.metric_values or {},
+                "metric_values": metric_values,
                 "status": (
-                    "queued" if trial is not None and trial.status == "pending"
+                    "not_started"
+                    if latest_is_obsolete
+                    else (
+                    "queued"
+                    if trial is not None and trial.status == "pending"
                     else (trial.status if trial else "not_started")
+                    )
                 ),
-                "obsolete": bool(trial and trial.obsolete),
-                "error": trial.error if trial is not None else None,
-                "run_id": str(trial.run_id) if trial and trial.run_id else None,
+                "obsolete": False,
+                "requires_current_attempt": latest_is_obsolete,
+                "error": None if latest_is_obsolete else (trial.error if trial is not None else None),
+                "run_id": str(protocol_run.id) if protocol_run is not None else None,
                 "protocol_revision_id": (
                     str(protocol_run.protocol_revision_id)
                     if protocol_run and protocol_run.protocol_revision_id
                     else None
                 ),
-                "updated_at": trial.updated_at if trial is not None else replicate.updated_at,
+                "updated_at": (trial.updated_at if trial is not None else replicate.updated_at),
+                "metric_evaluation": metric_evaluation,
                 "obsolete_runs": sorted(obsolete_runs, key=lambda run: run["updated_at"], reverse=True),
+                "superseded_runs": sorted(superseded_runs, key=lambda run: run["updated_at"], reverse=True),
                 **execution,
             }
         )
 
-    current_rows = [row for row in result_rows if not row["obsolete"]]
+    current_rows = result_rows
     cells: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in result_rows:
         cells[row["cell_label"]].append(row)
 
     cell_summaries: list[dict[str, Any]] = []
     for cell_label, rows in cells.items():
-        current = [row for row in rows if not row["obsolete"]]
-        source = current or rows
+        current = rows
+        source = rows
         metrics = {}
+        metric_counts = {}
         for key in metric_keys:
             values = [_number(row["metric_values"].get(key)) for row in current]
-            metrics[key] = _mean([value for value in values if value is not None])
+            observed = [value for value in values if value is not None]
+            aggregation = metric_aggregations.get(key, "mean")
+            metrics[key] = _aggregate_metric_values(observed, aggregation)
+            metric_counts[key] = len(observed)
         cell_summaries.append(
             {
                 "cell_label": cell_label,
@@ -389,7 +502,10 @@ async def summarize_experiment_run_results(
                 "completed_count": sum(row["status"] == "completed" for row in rows),
                 "current_completed_count": sum(row["status"] == "completed" for row in current),
                 "obsolete_count": sum(len(row["obsolete_runs"]) for row in rows),
+                # One metric value per replicate: every cell comparison uses
+                # its mean. For Boolean metrics that is the pass rate.
                 "metric_means": {key: value for key, value in metrics.items() if value is not None},
+                "metric_counts": {key: count for key, count in metric_counts.items() if count > 0},
                 "cost_usd": _sum_reported(current, "cost_usd"),
                 "total_tokens": _sum_reported(current, "total_tokens"),
                 "duration_seconds": _sum_reported(source, "duration_seconds"),
@@ -404,6 +520,7 @@ async def summarize_experiment_run_results(
         "failed_replicates": sum(row["status"] in {"failed", "cancelled"} for row in result_rows),
         "not_started_replicates": sum(row["status"] == "not_started" for row in result_rows),
         "obsolete_replicates": sum(len(row["obsolete_runs"]) for row in result_rows),
+        "superseded_attempts": sum(len(row["superseded_runs"]) for row in result_rows),
         "total_cost_usd": _sum_reported(current_rows, "cost_usd"),
         "total_input_tokens": _sum_reported(current_rows, "input_tokens"),
         "total_output_tokens": _sum_reported(current_rows, "output_tokens"),
@@ -417,6 +534,8 @@ async def summarize_experiment_run_results(
     return {
         "overview": overview,
         "metric_keys": sorted(metric_keys),
+        "metric_types": {key: metric_types.get(key, "number") for key in sorted(metric_keys)},
+        "metric_aggregations": {key: metric_aggregations.get(key, "mean") for key in sorted(metric_keys)},
         "primary_metric": primary_metric if primary_metric in metric_keys else None,
         "primary_metric_direction": primary_metric_direction,
         "cells": sorted(cell_summaries, key=lambda cell: cell["cell_label"]),

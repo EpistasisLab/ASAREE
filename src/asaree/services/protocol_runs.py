@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
@@ -60,6 +61,32 @@ async def create_protocol_run(
     )
     db.add(run)
     await db.flush()
+    if replicate_result_id is not None:
+        # A planned run is a new attempt for this stable replicate slot. Its
+        # result projection must immediately become "latest attempt only" --
+        # no old score/output may survive a pending, failed, or cancelled
+        # replacement attempt. The immutable old values belong on that old
+        # ProtocolRun.attempt_result instead.
+        replicate = await db.get(FactorialReplicateResult, replicate_result_id)
+        if replicate is not None:
+            # Legacy/current projections may predate attempt_result. Snapshot
+            # their last values before replacing the slot so a manual rerun
+            # never erases inspectable history.
+            if replicate.run_id is not None:
+                previous_run = await get_protocol_run(db, replicate.run_id)
+                if previous_run is not None:
+                    snapshot = dict(previous_run.attempt_result or {})
+                    if "metric_values" not in snapshot and isinstance(replicate.metric_values, dict):
+                        snapshot["metric_values"] = dict(replicate.metric_values)
+                    evaluation = (replicate.artifacts or {}).get("metric_evaluation")
+                    if "metric_evaluation" not in snapshot and isinstance(evaluation, dict):
+                        snapshot["metric_evaluation"] = dict(evaluation)
+                    previous_run.attempt_result = snapshot or None
+            replicate.run_id = run.id
+            replicate.workspace_id = None
+            replicate.metric_values = None
+            replicate.artifacts = None
+            await db.flush()
     await db.refresh(run)
     return run
 
@@ -170,6 +197,35 @@ async def update_node_run(
     await db.flush()
     await db.refresh(run)
     return run
+
+
+async def update_attempt_result(
+    db: AsyncSession, protocol_run_id: uuid.UUID, *, fields: dict[str, Any]
+) -> ProtocolRun | None:
+    """Replace named immutable-result facets for one execution attempt.
+
+    ``metric_values`` is deliberately assigned as a whole, never merged with
+    an earlier attempt's values.  Other callers may add independently named
+    result facets without overwriting the stored node timeline.
+    """
+    run = await get_protocol_run(db, protocol_run_id)
+    if run is None:
+        return None
+    result = dict(run.attempt_result or {})
+    result.update(fields)
+    run.attempt_result = result
+    await db.flush()
+    await db.refresh(run)
+    return run
+
+
+async def is_current_replicate_attempt(db: AsyncSession, protocol_run_id: uuid.UUID) -> bool:
+    """Whether this run still owns its replicate slot's latest projection."""
+    run = await get_protocol_run(db, protocol_run_id)
+    if run is None or run.replicate_result_id is None:
+        return False
+    replicate = await db.get(FactorialReplicateResult, run.replicate_result_id)
+    return replicate is not None and replicate.run_id == run.id
 
 
 async def request_protocol_run_cancellation(db: AsyncSession, protocol_run_id: uuid.UUID) -> ProtocolRun | None:

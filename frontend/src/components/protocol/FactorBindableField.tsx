@@ -14,6 +14,7 @@ import { revealsHiddenMcpServers } from './bindableFields'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import {
   computeFactorName,
+  defaultFactorLevelLabels,
   FACTOR_TRIGGER_CLASSNAME,
   isStructuredLevelType,
   parseLevelValue,
@@ -126,6 +127,7 @@ export function FactorBindableField({
 }) {
   const [open, setOpen] = useState(false)
   const [levels, setLevels] = useState<string[]>(() => seedLevels(currentValue))
+  const [levelLabels, setLevelLabels] = useState<string[]>(() => defaultFactorLevelLabels(`${nodeLabel}:${defaultLabel}`, 2))
   const queryClient = useQueryClient()
   // This component only ever renders inside a node inspector on the canvas,
   // so the graph is right there in context -- no prop-drilling needed.
@@ -221,6 +223,7 @@ export function FactorBindableField({
           factor={{
             name: factorName,
             levels: structured ? seedStructuredLevels(currentValue, levelType) : seedLevels(currentValue),
+            level_labels: defaultFactorLevelLabels(factorName, 2),
             level_type: levelType,
           }}
           onSave={(next) => saveMutation.mutate(next)}
@@ -234,7 +237,11 @@ export function FactorBindableField({
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
-        if (next) setLevels(seedLevels(currentValue))
+        if (next) {
+          const nextLevels = seedLevels(currentValue)
+          setLevels(nextLevels)
+          setLevelLabels(defaultFactorLevelLabels(factorName, nextLevels.length))
+        }
       }}
     >
       <TooltipProvider delay={200}>
@@ -298,17 +305,34 @@ export function FactorBindableField({
                     onChange={(e) => setLevels((ls) => ls.map((l, j) => (j === i ? e.target.value : l)))}
                   />
                 )}
+                <Input
+                  aria-label={`Level ${i + 1} label`}
+                  className="w-32"
+                  placeholder={`Level ${i + 1} label`}
+                  value={levelLabels[i] ?? ''}
+                  onChange={(e) => setLevelLabels((ls) => ls.map((label, j) => (j === i ? e.target.value : label)))}
+                />
                 <Button
                   variant="ghost"
                   size="icon-sm"
                   aria-label="Remove level"
-                  onClick={() => setLevels((ls) => ls.filter((_, j) => j !== i))}
+                  onClick={() => {
+                    setLevels((ls) => ls.filter((_, j) => j !== i))
+                    setLevelLabels((ls) => ls.filter((_, j) => j !== i))
+                  }}
                 >
                   <X className="size-3.5" />
                 </Button>
               </div>
             ))}
-            <Button variant="outline" size="sm" onClick={() => setLevels((ls) => [...ls, ''])}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setLevels((ls) => [...ls, ''])
+                setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(factorName, ls.length + 1)[ls.length]])
+              }}
+            >
               Add level
             </Button>
           </div>
@@ -318,11 +342,12 @@ export function FactorBindableField({
           className="w-full"
           disabled={saveMutation.isPending}
           onClick={() => {
+            const selectedIndexes = levelType === 'boolean' ? [0, 1] : levels.flatMap((level, index) => (level.trim() ? [index] : []))
             const parsedLevels =
-              levelType === 'boolean'
-                ? [true, false]
-                : levels.filter((l) => l.trim() !== '').map((l) => parseLevelValue(l, levelType))
-            saveMutation.mutate({ name: factorName, levels: parsedLevels, level_type: levelType })
+              levelType === 'boolean' ? [true, false] : selectedIndexes.map((index) => parseLevelValue(levels[index], levelType))
+            const defaults = defaultFactorLevelLabels(factorName, parsedLevels.length)
+            const labels = selectedIndexes.map((index, outputIndex) => levelLabels[index]?.trim() || defaults[outputIndex])
+            saveMutation.mutate({ name: factorName, levels: parsedLevels, level_labels: labels, level_type: levelType })
           }}
         >
           Save

@@ -156,7 +156,15 @@ class DesignImpact:
 def material_design_spec(design_spec: dict[str, Any] | None) -> dict[str, Any]:
     """Return only the declaration fields that determine which cells exist."""
     spec = design_spec or {}
-    return {"factors": spec.get("factors") or [], "replicates": spec.get("replicates") or 1}
+    factors = spec.get("factors") or []
+    # A level label controls how a treatment is named in a downloaded design
+    # matrix, not which treatment executes. Keep it out of revision/impact
+    # comparisons so renaming a long system prompt never churns cell rows.
+    material_factors = [
+        {key: value for key, value in factor.items() if key != "level_labels"} if isinstance(factor, dict) else factor
+        for factor in factors
+    ]
+    return {"factors": material_factors, "replicates": spec.get("replicates") or 1}
 
 
 def _planned_replicates(factors: list[dict[str, Any]], replicates: int) -> list[tuple[str, dict[str, Any]]]:

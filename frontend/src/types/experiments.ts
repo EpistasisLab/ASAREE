@@ -1,6 +1,11 @@
 export interface DesignFactor {
   name: string
   levels: unknown[]
+  // Short, user-editable names for individual treatments. They are persisted
+  // alongside raw levels and become categorical factor values in the Results
+  // CSV, so a long system prompt never becomes CSV data outside its secure
+  // execution record.
+  level_labels?: string[]
   // Absent means 'string' -- factors created before this field existed keep
   // working unchanged. Drives which control the factor editor renders per
   // level (see components/protocol/factorLevels.ts); purely a frontend/UX
@@ -19,9 +24,38 @@ export interface DesignFactor {
 }
 
 export interface DesignMetric {
+  // Stable instance identity.  Catalog entries also retain their catalog key;
+  // custom and legacy declarations intentionally have no catalog key.
+  id?: string
+  catalogKey?: string
   name: string
+  description?: string
+  kind?: 'runtime' | 'deterministic_evaluator' | 'model_judge' | 'agent_reported' | 'custom'
+  valueType?: 'number' | 'boolean' | 'string'
+  unit?: string
+  // Present only when this metric is evaluated by the controlled post-run
+  // judge. Keeping the rubric with the experiment declaration makes the
+  // resulting score reproducible and lets old/manual metrics remain valid.
+  scoring?: MetricScoringConfig
   primary: boolean
   direction: 'maximize' | 'minimize'
+  aggregation?: 'mean' | 'sum'
+  [key: string]: unknown
+}
+
+export interface MetricScoringConfig {
+  method: 'model_judge'
+  rubric: string
+  reference?: string
+  min?: number
+  max?: number
+  // An explicit evaluator model keeps scores comparable when an experiment
+  // varies the task agents' own models. The credential itself is never
+  // persisted: only its provider and chosen model are recorded.
+  judge?: {
+    provider: import('./llmSettings').LLMProvider
+    model: string
+  }
 }
 
 // "sequential" (default when design_spec.coordination_strategy is absent --
@@ -132,7 +166,9 @@ export interface Experiment {
   dataset_id: string | null
   locked_at: string | null
   locked_protocol_revision_id: string | null
+  locked_design_spec: DesignSpec | null
   created_at: string
+  updated_at: string
   archived_at: string | null
 }
 
@@ -244,6 +280,9 @@ export interface ResultReplicate {
   metric_values: Record<string, unknown>
   status: Trial['status']
   obsolete: boolean
+  // The prior attempt is obsolete; this stable replicate slot has no result
+  // yet against the current canvas version.
+  requires_current_attempt?: boolean
   error: string | null
   run_id: string | null
   protocol_revision_id: string | null
@@ -257,19 +296,28 @@ export interface ResultReplicate {
   agent_run_count: number
   reported_usage_count: number
   reported_cost_count: number
+  metric_evaluation?: {
+    status: 'queued' | 'running' | 'completed' | 'failed' | 'skipped'
+    error?: string | null
+    evaluator_run_id?: string | null
+    metric_ids?: string[]
+  } | null
   obsolete_runs: ObsoleteRun[]
+  superseded_runs: SupersededRun[]
 }
 
-// Immutable ProtocolRun records that used an earlier canvas version. This
-// includes the latest stored run when it has since become obsolete, as well as
-// runs superseded by later attempts for the same replicate.
-export interface ObsoleteRun {
+// Read-only facts for a past ProtocolRun attempt. Both obsolete and
+// superseded attempts stay available for inspection, but never participate in
+// current results, CSV, or statistical analysis.
+export interface HistoricalRun {
   run_id: string
   status: Trial['status']
-  obsolete: true
+  obsolete: boolean
   error: string | null
   protocol_revision_id: string | null
   updated_at: string
+  metric_values: Record<string, unknown>
+  metric_evaluation?: ResultReplicate['metric_evaluation']
   duration_seconds: number | null
   node_runs: ResultNodeRun[]
   input_tokens: number | null
@@ -281,6 +329,17 @@ export interface ObsoleteRun {
   reported_cost_count: number
 }
 
+// A prior attempt used an older published canvas revision.
+export interface ObsoleteRun extends HistoricalRun {
+  obsolete: true
+}
+
+// A prior attempt used the current canvas revision, but was replaced by a
+// later run of the same stable replicate slot.
+export interface SupersededRun extends HistoricalRun {
+  obsolete: false
+}
+
 export interface ResultCell {
   cell_label: string
   factor_values: Record<string, unknown>
@@ -289,6 +348,7 @@ export interface ResultCell {
   current_completed_count: number
   obsolete_count: number
   metric_means: Record<string, number>
+  metric_counts: Record<string, number>
   cost_usd: number | null
   total_tokens: number | null
   duration_seconds: number | null
@@ -315,6 +375,8 @@ export interface RunResultsOverview {
 export interface ExperimentRunResults {
   overview: RunResultsOverview
   metric_keys: string[]
+  metric_types: Record<string, 'number' | 'boolean'>
+  metric_aggregations: Record<string, 'mean' | 'sum'>
   primary_metric: string | null
   primary_metric_direction: 'maximize' | 'minimize'
   cells: ResultCell[]

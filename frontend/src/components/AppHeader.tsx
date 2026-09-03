@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, KeyRound, SquarePlus, UserRound } from 'lucide-react'
+import { ChevronDown, FileUp, KeyRound, SquarePlus, UserRound } from 'lucide-react'
 import { Link, NavLink, useNavigate } from 'react-router-dom'
 import { experimentsApi } from '@/api/client'
 import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
+import { CreateExperimentFromFileDialog } from '@/components/CreateExperimentFromFileDialog'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useAuth } from '@/hooks/useAuth'
@@ -16,6 +17,7 @@ export function AppHeader() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [credentialDialogOpen, setCredentialDialogOpen] = useState(false)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
 
   // Global "+" menu (not page-local) so creating an experiment
   // doesn't require first navigating to the Experiments list.
@@ -80,6 +82,10 @@ export function AppHeader() {
                   <KeyRound className="size-4" />
                   Create credential
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setImportDialogOpen(true)}>
+                  <FileUp className="size-4" />
+                  Create experiment from file
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -135,6 +141,11 @@ export function AppHeader() {
         </div>
       </div>
       <CreateCredentialDialog open={credentialDialogOpen} onOpenChange={setCredentialDialogOpen} />
+      <CreateExperimentFromFileDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        onImported={(experimentId) => navigate(`/experiments/${experimentId}/protocol`)}
+      />
     </header>
   )
 }

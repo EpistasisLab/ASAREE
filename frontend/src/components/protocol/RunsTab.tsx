@@ -93,10 +93,11 @@ function usageSummary(result: Pick<ResultCell, 'cost_usd' | 'total_tokens' | 'du
   ].filter((value): value is string => !!value)
 }
 
-// The panel's run control deliberately keeps the resume behavior of the
-// canvas's "Run all cells" action: unscored replicates run automatically.
-// This confirmation adds one decision only -- whether a previously scored
-// replicate should be deliberately re-run (and therefore re-billed).
+// The panel's run control resumes only replicates without a current completed
+// result. A completed run is meaningful even when it deliberately produced no
+// score metrics, so it stays out of a later batch unless the user explicitly
+// elects to re-run it (and therefore re-bill it). Obsolete results are current
+// work again because they belong to an older canvas version.
 export function RunAllCellsButton({
   protocol,
   experimentId,
@@ -123,6 +124,8 @@ export function RunAllCellsButton({
   const [selectedReruns, setSelectedReruns] = useState<Set<string>>(() => new Set())
   const [expandedCells, setExpandedCells] = useState<Set<string>>(() => new Set())
   const [lockBeforeRun, setLockBeforeRun] = useState(false)
+  const [downloadingDefinition, setDownloadingDefinition] = useState(false)
+  const [definitionDownloadError, setDefinitionDownloadError] = useState<string | null>(null)
   const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
     queryFn: () => experimentsApi.get(experimentId),
@@ -146,15 +149,36 @@ export function RunAllCellsButton({
       .filter((trial) => trial.status === 'queued' || trial.status === 'running')
       .map((trial) => trial.replicate_label),
   )
+  const completedReplicateLabels = new Set(
+    (trialsQuery.data ?? [])
+      .filter((trial) => trial.status === 'completed' && !trial.obsolete)
+      .map((trial) => trial.replicate_label),
+  )
+  const obsoleteReplicateLabels = new Set(
+    (trialsQuery.data ?? [])
+      .filter((trial) => trial.obsolete)
+      .map((trial) => trial.replicate_label),
+  )
   const eligibleReplicateLabels = replicates
     .filter((replicate) => !activeReplicateLabels.has(replicate.replicate_label))
     .map((replicate) => replicate.replicate_label)
   const cellCount = groupReplicatesIntoCells(replicates).length
+  const previouslyRunReplicateLabels = new Set(
+    replicates
+      .filter(
+        (replicate) =>
+          !obsoleteReplicateLabels.has(replicate.replicate_label) &&
+          (!!replicate.metric_values || completedReplicateLabels.has(replicate.replicate_label)),
+      )
+      .map((replicate) => replicate.replicate_label),
+  )
+  const previouslyRunReplicates = replicates.filter((replicate) => previouslyRunReplicateLabels.has(replicate.replicate_label))
   const pendingReplicateCount = replicates.filter(
-    (replicate) => !replicate.metric_values && !activeReplicateLabels.has(replicate.replicate_label),
+    (replicate) =>
+      !previouslyRunReplicateLabels.has(replicate.replicate_label) && !activeReplicateLabels.has(replicate.replicate_label),
   ).length
-  const scoredCells = groupReplicatesIntoCells(
-    replicates.filter((replicate) => !!replicate.metric_values && !activeReplicateLabels.has(replicate.replicate_label)),
+  const previouslyRunCells = groupReplicatesIntoCells(
+    previouslyRunReplicates.filter((replicate) => !activeReplicateLabels.has(replicate.replicate_label)),
   ).sort((a, b) =>
     cellSortKey(a).localeCompare(cellSortKey(b)),
   )
@@ -228,30 +252,107 @@ export function RunAllCellsButton({
     setDialogOpen(true)
   }
 
-  function downloadDefinition() {
+  async function downloadDefinition() {
     if (!protocol) return
-    const experiment = experimentQuery.data
-    const name = experiment?.name ?? protocol.name
-    const payload = {
-      name,
-      description: protocol.description,
-      graph: protocol.graph,
-      design_spec: experiment?.design_spec ?? null,
+    setDownloadingDefinition(true)
+    setDefinitionDownloadError(null)
+    try {
+      // Read fresh rather than exporting whichever React Query snapshot
+      // happens to be on screen. A portable definition should describe one
+      // coherent point in time, including the currently published canvas.
+      const [experiment, canvas, designRevisions] = await Promise.all([
+        experimentsApi.get(experimentId),
+        protocolsApi.get(protocol.id),
+        experimentsApi.listDesignRevisions(experimentId),
+      ])
+      const revisionIds = [...new Set([canvas.published_revision_id, experiment.locked_protocol_revision_id].filter((id): id is string => !!id))]
+      const revisions = await Promise.all(revisionIds.map((revisionId) => protocolsApi.getRevision(canvas.id, revisionId)))
+      const revisionById = new Map(revisions.map((revision) => [revision.id, revision]))
+      const publishedCanvas = canvas.published_revision_id ? revisionById.get(canvas.published_revision_id) ?? null : null
+      const lockedCanvas = experiment.locked_protocol_revision_id ? revisionById.get(experiment.locked_protocol_revision_id) ?? null : null
+      const payload = {
+        format: 'asaree.experiment-definition',
+        schema_version: 1,
+        exported_at: new Date().toISOString(),
+        // The existing canvas importer consumes these two top-level fields.
+        // Keep them as the current draft while the richer envelope below
+        // carries immutable published/locked snapshots and provenance.
+        name: experiment.name,
+        description: canvas.description,
+        graph: canvas.graph,
+        design_spec: experiment.design_spec,
+        experiment: {
+          source_id: experiment.id,
+          name: experiment.name,
+          description: experiment.description,
+          hypothesis: experiment.hypothesis,
+          design_type: experiment.design_type,
+          task_brief: experiment.task_brief,
+          design_spec: experiment.design_spec,
+          dataset_ids: experiment.dataset_ids,
+          archived_at: experiment.archived_at,
+          created_at: experiment.created_at,
+          updated_at: experiment.updated_at,
+          lock: experiment.locked_at ? {
+            locked_at: experiment.locked_at,
+            source_protocol_revision_id: experiment.locked_protocol_revision_id,
+            design_spec: experiment.locked_design_spec,
+            canvas_revision: lockedCanvas ? {
+              source_id: lockedCanvas.id,
+              revision: lockedCanvas.revision,
+              published_at: lockedCanvas.published_at,
+              graph: lockedCanvas.graph,
+            } : null,
+          } : null,
+        },
+        canvas: {
+          source_protocol_id: canvas.id,
+          name: canvas.name,
+          description: canvas.description,
+          draft: { graph: canvas.graph, updated_at: canvas.updated_at },
+          published: publishedCanvas ? {
+            source_id: publishedCanvas.id,
+            revision: publishedCanvas.revision,
+            published_at: publishedCanvas.published_at,
+            graph: publishedCanvas.graph,
+          } : null,
+          has_unpublished_changes: canvas.has_unpublished_changes,
+        },
+        design_revisions: designRevisions.map((revision) => ({
+          source_id: revision.id,
+          revision: revision.revision,
+          superseded_at: revision.superseded_at,
+          design_spec: revision.design_spec,
+          cell_count: revision.cell_count,
+          replicate_count: revision.replicate_count,
+          scored_replicate_count: revision.scored_replicate_count,
+          created_at: revision.created_at,
+        })),
+        portability: {
+          excluded: ['provider credential secrets', 'replicate results and run history', 'dataset file contents', 'knowledge bundle/document contents', 'skill file contents'],
+          note: 'All canvas nodes and their configuration are included. Dataset, Knowledge, and Skill nodes retain their labels and resource IDs as references; recreate or map their external artifacts before importing into another workspace.',
+        },
+      }
+      const name = experiment.name || canvas.name
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${name.trim().replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '') || 'experiment'}.json`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      setDefinitionDownloadError('Could not prepare the experiment definition. Please try again.')
+    } finally {
+      setDownloadingDefinition(false)
     }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${name.trim().replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '') || 'experiment'}.json`
-    link.click()
-    URL.revokeObjectURL(url)
   }
 
   const runBlocked =
     !protocol ||
     replicatesQuery.isLoading ||
     replicates.length === 0 ||
-    (pendingReplicateCount === 0 && scoredCells.length === 0) ||
+    (pendingReplicateCount === 0 && previouslyRunCells.length === 0) ||
     regenerationRequired ||
     unboundFactors.length > 0 ||
     !protocol.published_revision_id
@@ -263,7 +364,7 @@ export function RunAllCellsButton({
         ? 'Publish a valid canvas before running cells.'
         : replicates.length === 0
           ? 'Generate design first — there are no cells to run yet.'
-          : pendingReplicateCount === 0 && scoredCells.length === 0
+          : pendingReplicateCount === 0 && previouslyRunCells.length === 0
             ? 'All selected replicates are already running.'
           : undefined
   const runnableReplicateCount = pendingReplicateCount + selectedReruns.size
@@ -337,22 +438,23 @@ export function RunAllCellsButton({
                     </label>
                   </div>
                 )}
-                <Button type="button" variant="outline" size="xs" onClick={downloadDefinition}>
-                  <Download className="size-3.5" /> Download experiment definition
+                <Button type="button" variant="outline" size="xs" onClick={downloadDefinition} disabled={downloadingDefinition}>
+                  <Download className="size-3.5" /> {downloadingDefinition ? 'Preparing definition…' : 'Download experiment definition'}
                 </Button>
+                {definitionDownloadError && <p className="text-xs text-destructive">{definitionDownloadError}</p>}
               </section>
               <section aria-labelledby="previous-runs-heading" className="space-y-2">
                 <div>
                   <h3 id="previous-runs-heading" className="text-sm font-medium">Previously run cells</h3>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Previous results are skipped by default. Check a cell or replicate to run it again.
+                  Completed replicates are skipped by default. Check a cell or replicate to run it again.
                 </p>
               </div>
-              {scoredCells.length === 0 ? (
+              {previouslyRunCells.length === 0 ? (
                 <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">No completed replicates to review.</p>
               ) : (
                 <div className="max-h-60 space-y-2 overflow-y-auto pr-1">
-                  {scoredCells.map((cell) => {
+                  {previouslyRunCells.map((cell) => {
                     const labels = cell.replicates.map((replicate) => replicate.replicate_label)
                     const selectedCount = labels.filter((label) => selectedReruns.has(label)).length
                     const expanded = expandedCells.has(cell.label)
@@ -383,16 +485,22 @@ export function RunAllCellsButton({
                         </div>
                         {expanded && (
                           <ul id={listId} className="space-y-1 border-t bg-muted/20 px-2.5 py-2" aria-label={`Previously run replicates for ${summary}`}>
-                            {cell.replicates.map((replicate) => (
-                              <li key={replicate.id} className="flex items-center gap-2 rounded-md bg-background px-2 py-1.5">
-                                <Checkbox
-                                  checked={selectedReruns.has(replicate.replicate_label)}
-                                  onCheckedChange={(checked) => setReplicatesSelected([replicate.replicate_label], checked === true)}
-                                  aria-label={`Run replicate ${replicate.replicate_number} again`}
-                                />
-                                <span className="text-sm">Replicate {replicate.replicate_number}</span>
-                              </li>
-                            ))}
+                            {cell.replicates.map((replicate) => {
+                              const scored = !!replicate.metric_values
+                              return (
+                                <li key={replicate.id} className="flex items-center gap-2 rounded-md bg-background px-2 py-1.5">
+                                  <Checkbox
+                                    checked={selectedReruns.has(replicate.replicate_label)}
+                                    onCheckedChange={(checked) => setReplicatesSelected([replicate.replicate_label], checked === true)}
+                                    aria-label={`Run replicate ${replicate.replicate_number} again`}
+                                  />
+                                  <span className="text-sm">Replicate {replicate.replicate_number}</span>
+                                  <span className="ml-auto text-xs text-muted-foreground">
+                                    {scored ? 'Scored' : 'Completed without metrics'}
+                                  </span>
+                                </li>
+                              )
+                            })}
                           </ul>
                         )}
                       </div>

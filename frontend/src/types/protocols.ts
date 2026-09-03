@@ -103,9 +103,8 @@ export interface ProtocolRevision {
 }
 
 // One "run all cells" trigger fans out into these -- one ProtocolRun per
-// not-yet-scored replicate. skipped is how many replicates already had metric_values
-// and were left alone (resume semantics, same as generate-design's own
-// idempotency).
+// not-yet-completed replicate. skipped is how many replicates already had
+// metrics or a completed run and were left alone (resume semantics).
 export interface CellRunBatch {
   protocol_run_ids: string[]
   replicate_labels: string[]
@@ -176,6 +175,9 @@ export interface AgentNodeData {
   // factor". The factor itself lives on the linked experiment's own
   // design_spec.factors -- this is only the node-side half of the binding.
   factor_bindings?: Record<string, string>
+  // IDs of experiment-owned metric declarations to expose as guidance to
+  // this one Agent.  Empty/absent is deliberately no context injection.
+  contextMetricIds?: string[]
   // Absent/undefined means active -- every graph saved before this field
   // existed is unaffected. A deactivated node's own logic is skipped
   // entirely by the executor; its upstream input passes straight through

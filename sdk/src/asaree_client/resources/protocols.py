@@ -99,7 +99,7 @@ class Protocols:
         return ProtocolRun(**data)
 
     def run_cells(self, protocol_id: ResourceId) -> CellRunBatch:
-        """"Run all cells" -- one ProtocolRun per not-yet-scored replicate under
+        """"Run all cells" -- one ProtocolRun per not-yet-completed replicate under
         this protocol's linked experiment, each replicate's cell factor_values
         substituted in. 422 if there's no linked experiment or the graph
         doesn't have exactly one final node."""

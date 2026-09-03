@@ -1345,55 +1345,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     setPendingDelete({ nodes: [node], edges: relatedEdges })
   }
 
-  // "Import from file..." (ProtocolCanvasMenu) hands back the parsed
-  // {nodes, edges} -- merges them in ALONGSIDE the current canvas (not a
-  // replace, per the user's own choice for import behavior): every
-  // imported node gets a fresh id (newNodeId is collision-safe by
-  // construction) and every edge's source/target is rewritten to match;
-  // the whole imported cluster is translated so its bounding-box center
-  // lands near the current viewport center (same placement logic addNode
-  // already uses), preserving the imported nodes' relative spacing to each
-  // other, then each translated position runs through the existing
-  // findFreePosition against both the current canvas's nodes AND whichever
-  // imported nodes have already been placed this same import -- so nothing
-  // lands exactly on top of an existing OR a freshly-imported node.
-  function handleImport(imported: ProtocolGraph) {
-    if (experimentLocked) return
-    if (imported.nodes.length === 0) return
-    const idMap = new Map(imported.nodes.map((n) => [n.id, newNodeId()]))
-
-    const rect = paneRef.current?.getBoundingClientRect()
-    const center = rect
-      ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-      : { x: window.innerWidth / 2, y: window.innerHeight / 2 }
-    const desiredCenter = screenToFlowPosition(center)
-
-    const xs = imported.nodes.map((n) => n.position.x)
-    const ys = imported.nodes.map((n) => n.position.y)
-    const bboxCenter = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 }
-    const offset = { x: desiredCenter.x - bboxCenter.x, y: desiredCenter.y - bboxCenter.y }
-
-    const placed: Node['position'][] = []
-    const newNodes: Node[] = imported.nodes.map((n) => {
-      const translated = { x: n.position.x + offset.x, y: n.position.y + offset.y }
-      const position = findFreePosition([...nodes.map((existing) => existing.position), ...placed], translated)
-      placed.push(position)
-      return { id: idMap.get(n.id)!, type: n.type, position, data: n.data }
-    })
-    const newEdges: Edge[] = imported.edges
-      .filter((e) => idMap.has(e.source) && idMap.has(e.target))
-      .map((e) => ({
-        id: newNodeId(),
-        source: idMap.get(e.source)!,
-        target: idMap.get(e.target)!,
-        sourceHandle: e.sourceHandle,
-        targetHandle: e.targetHandle,
-      }))
-
-    setNodes((nds) => nds.concat(newNodes))
-    setEdges((eds) => eds.concat(newEdges))
-  }
-
   return (
     <ProtocolCanvasActionsProvider value={canvasActions}>
       <div className="flex h-full w-full">
@@ -1513,7 +1464,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               experimentId={experimentId}
               nodes={nodes}
               edges={edges}
-              onImport={handleImport}
             />
           </div>
           {experimentLocked && (

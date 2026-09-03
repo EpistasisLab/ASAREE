@@ -1,9 +1,22 @@
 """Pure normalization coverage for the experiment Results scorecard."""
 
+import csv
+import io
 from decimal import Decimal
 from types import SimpleNamespace
 
-from asaree.services.experiment_run_results import _has_execution_evidence, _node_labels, _primary_metric, _usage
+from asaree.services.csv_export import result_rows_schema, result_rows_to_csv
+from asaree.services.experiment_run_results import (
+    _aggregate_metric_values,
+    _declared_metric_aggregations,
+    _declared_runtime_metrics,
+    _has_execution_evidence,
+    _node_labels,
+    _numeric_metrics,
+    _primary_metric,
+    _sum,
+    _usage,
+)
 
 
 def test_usage_normalizes_provider_token_names_and_derives_total() -> None:
@@ -33,10 +46,218 @@ def test_usage_keeps_unreported_values_unknown_instead_of_zero() -> None:
     }
 
 
+def test_boolean_metric_is_a_binary_numeric_outcome() -> None:
+    assert _numeric_metrics({"passed": True, "failed": False}) == {"passed": 1.0, "failed": 0.0}
+
+
 def test_primary_metric_uses_the_design_direction() -> None:
-    assert _primary_metric(
-        {"metrics": [{"name": "loss", "primary": True, "direction": "minimize"}]}
-    ) == ("loss", "minimize")
+    assert _primary_metric({"metrics": [{"name": "loss", "primary": True, "direction": "minimize"}]}) == (
+        "loss",
+        "minimize",
+    )
+
+
+def test_declared_runtime_metrics_are_projected_from_execution_telemetry() -> None:
+    spec = {
+        "metrics": [
+            {"catalogKey": "cost_usd", "kind": "runtime", "name": "Cost", "primary": True},
+            {"catalogKey": "total_tokens", "kind": "runtime", "name": "Total tokens", "primary": False},
+        ]
+    }
+    execution = {"cost_usd": 0.04, "total_tokens": 150, "duration_seconds": 2.5}
+    assert _declared_runtime_metrics(spec, execution) == {"cost_usd": 0.04, "total_tokens": 150.0}
+    assert _primary_metric(spec) == ("cost_usd", "maximize")
+
+
+def test_declared_metric_aggregation_defaults_to_average_and_keeps_explicit_totals() -> None:
+    assert _declared_metric_aggregations(
+        {
+            "metrics": [
+                {"name": "Quality", "kind": "custom", "valueType": "number", "aggregation": "mean"},
+                {"name": "Features", "kind": "custom", "valueType": "number", "aggregation": "sum"},
+                {"name": "Passed", "kind": "custom", "valueType": "boolean", "aggregation": "sum"},
+            ]
+        }
+    ) == {"Quality": "mean", "Features": "sum", "Passed": "mean"}
+
+
+def test_cell_metric_aggregations_apply_the_declared_operation() -> None:
+    assert _aggregate_metric_values([1.0, 2.0, 3.0], "mean") == 2.0
+    assert _aggregate_metric_values([1.0, 2.0, 3.0], "sum") == 6.0
+
+
+def test_cell_metric_rollups_sum_current_replicates() -> None:
+    assert _sum([1250.0, 300.5, 49.5]) == 1600.0
+    assert _sum([]) is None
+
+
+def test_results_csv_includes_projected_runtime_metrics() -> None:
+    csv_text = result_rows_to_csv(
+        [
+            {
+                "replicate_label": "cell__rep1",
+                "replicate_number": 1,
+                "cell_label": "cell",
+                "status": "completed",
+                "factor_values": {"model": "small"},
+                "metric_values": {"duration_seconds": 2.5, "total_tokens": 150},
+                "cost_usd": 0.04,
+            }
+        ]
+    )
+    header, row = csv_text.strip().splitlines()
+    assert "duration_seconds" in header and "total_tokens" in header
+    assert "2.5" in row and "150" in row
+
+
+def test_results_csv_projects_categorical_factors_to_short_level_labels() -> None:
+    csv_text = result_rows_to_csv(
+        [
+            {
+                "replicate_label": "small__rep1",
+                "factor_values": {"critic": True, "model": "small", "temperature": 0.2},
+                "metric_values": {"accuracy": 0.8, "passed": True},
+            },
+            {
+                "replicate_label": "large__rep1",
+                "factor_values": {"critic": False, "model": "large", "temperature": 0.8},
+                "metric_values": {"accuracy": 0.9, "passed": False},
+            },
+        ],
+        {"factors": [{"name": "model", "levels": ["small", "large"], "level_labels": ["small", "large"]}]},
+    )
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+
+    assert "critic_enabled" in rows[0]
+    assert "temperature" in rows[0]
+    assert "model" in rows[0]
+    by_model = {row["model"]: row for row in rows}
+    assert by_model["small"]["critic_enabled"] == "1"
+    assert by_model["large"]["critic_enabled"] == "0"
+    assert by_model["small"]["temperature"] == "0.2"
+    assert by_model["large"]["temperature"] == "0.8"
+    assert by_model["small"]["passed"] == "1"
+    assert by_model["large"]["passed"] == "0"
+
+
+def test_results_csv_orders_identity_factors_metrics_then_operational_metadata() -> None:
+    csv_text = result_rows_to_csv(
+        [
+            {
+                "replicate_label": "internal-only",
+                "cell_label": "first_a__later_x",
+                "replicate_number": 2,
+                "factor_values": {"later": "x", "first": "a"},
+                "metric_values": {"Quality": 0.9},
+                "duration_seconds": 12.5,
+                "status": "completed",
+                "run_id": "run-1",
+            }
+        ],
+        {
+            "factors": [
+                {"name": "first", "levels": ["a", "b"], "level_labels": ["level1", "level2"]},
+                {"name": "later", "levels": ["x", "y", "z"], "level_labels": ["level1", "level2", "level3"]},
+            ]
+        },
+    )
+
+    header = csv_text.splitlines()[0].split(",")
+    assert header == [
+        "cell_label",
+        "replicate_number",
+        "first",
+        "later",
+        "duration_seconds",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cost_usd",
+        "Quality",
+        "status",
+        "obsolete",
+        "run_id",
+        "protocol_revision_id",
+        "updated_at",
+        "error",
+    ]
+    assert "replicate_label" not in header
+
+
+def test_results_csv_sorts_long_form_factor_values_in_natural_level_order() -> None:
+    csv_text = result_rows_to_csv(
+        [
+            {"cell_label": "third", "replicate_number": 1, "factor_values": {"prompt": "third"}},
+            {"cell_label": "first", "replicate_number": 2, "factor_values": {"prompt": "first"}},
+            {"cell_label": "second", "replicate_number": 1, "factor_values": {"prompt": "second"}},
+        ],
+        {
+            "factors": [
+                {
+                    "name": "prompt",
+                    "levels": ["first", "second", "third"],
+                    "level_labels": ["level1", "level2", "level3"],
+                }
+            ]
+        },
+    )
+
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    assert [row["prompt"] for row in rows] == ["level1", "level2", "level3"]
+
+
+def test_results_csv_schema_describes_categorical_labels_and_binary_outcomes() -> None:
+    schema = result_rows_schema(
+        [
+            {"factor_values": {"model": "small"}, "metric_values": {"passed": True}},
+            {"factor_values": {"model": "large"}, "metric_values": {"passed": False}},
+        ],
+        {"passed": "boolean"},
+    )
+    factor = next(column for column in schema["columns"] if column["name"] == "model")
+    outcome = next(column for column in schema["columns"] if column["name"] == "passed")
+    assert factor == {
+        "name": "model",
+        "role": "factor",
+        "source_factor": "model",
+        "encoding": "categorical",
+        "value_type": "string",
+        "levels": ["level1", "level2"],
+    }
+    assert outcome == {"name": "passed", "role": "outcome", "value_type": "boolean", "cell_aggregation": "mean"}
+
+
+def test_results_csv_uses_persisted_level_labels_instead_of_long_treatment_values() -> None:
+    long_prompts = [
+        "Classify every record and explain each decision in exhaustive detail.",
+        "Describe this dataset in full detail, including every available column and caveat.",
+        "Summarize the dataset for a clinical researcher in one concise paragraph.",
+    ]
+    rows = [{"factor_values": {"Agent:System prompt": prompt}} for prompt in long_prompts]
+    design_spec = {
+        "factors": [
+            {
+                "name": "Agent:System prompt",
+                "levels": long_prompts,
+                "level_labels": ["classifier", "full_description", "concise_summary"],
+            }
+        ]
+    }
+
+    csv_text = result_rows_to_csv(rows, design_spec)
+    schema = result_rows_schema(rows, design_spec=design_spec)
+
+    header = csv_text.splitlines()[0]
+    assert "agent_system_prompt" in header
+    assert "Describe this dataset" not in header
+    exported_rows = list(csv.DictReader(io.StringIO(csv_text)))
+    assert [row["agent_system_prompt"] for row in exported_rows] == [
+        "classifier",
+        "concise_summary",
+        "full_description",
+    ]
+    factor = next(column for column in schema["columns"] if column["name"] == "agent_system_prompt")
+    assert set(factor["levels"]) == {"classifier", "full_description", "concise_summary"}
 
 
 def test_node_labels_prefers_the_canvas_name_over_its_durable_id() -> None:

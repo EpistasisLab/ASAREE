@@ -77,7 +77,7 @@ export function ExperimentSidePanel({
   needsInitialGeneration: boolean
   regenerationRequired: boolean
   unboundFactors: string[]
-  onResultSelection: (selection: ResultsSelection) => void
+  onResultSelection: (selection: ResultsSelection | null) => void
 }) {
   const [width, setWidth] = useState(readStoredPanelWidth)
   const [collapsed, setCollapsed] = useState(readStoredCollapsed)
@@ -151,6 +151,10 @@ export function ExperimentSidePanel({
   function openPanel(tab: PanelTab) {
     setActiveTab(tab)
     setPanelCollapsed(false)
+    // Result selection owns the canvas-side inspector. Leaving Results via
+    // the persistent rail should not leave a stale detail panel over the
+    // canvas while the user works in Design or Runs.
+    if (tab !== 'results') onResultSelection(null)
   }
 
   function viewReplicateResult(replicateLabel: string) {
@@ -256,6 +260,8 @@ export function ExperimentSidePanel({
               ) : (
                 <ResultsTab
                   experimentId={experiment.id}
+                  experimentName={experiment.name}
+                  experiment={experiment}
                   onSelectResult={onResultSelection}
                 />
               )}

@@ -172,12 +172,33 @@ export const experimentsApi = {
   list: (opts?: { includeArchived?: boolean }) =>
     request<Experiment[]>(opts?.includeArchived ? '/experiments?include_archived=true' : '/experiments'),
   get: (id: string) => request<Experiment>(`/experiments/${id}`),
+  evaluationContext: (id: string, contextMetricIds: string[]) =>
+    request<{ context: string }>(`/experiments/${id}/evaluation-context`, {
+      method: 'POST',
+      body: { context_metric_ids: contextMetricIds },
+    }),
+  scoreCompletedRuns: (id: string) =>
+    request<{ queued: number }>(`/experiments/${id}/score-completed-runs`, { method: 'POST' }),
   // Omit `name` and the server allocates the next free "Untitled Experiment N"
   // atomically -- the one-click create in AppHeader relies on that, since a
   // name this client picks from a GET is a guess that another session (or an
   // archived experiment it can't see) can invalidate before the POST lands.
   create: (data: { name?: string; description?: string | null }) =>
     request<Experiment>('/experiments', { method: 'POST', body: data }),
+  // Creates both a fresh experiment and its linked canvas in one server-side
+  // transaction.  Unlike the old canvas import, this never merges into the
+  // experiment currently open in the browser.
+  importDefinition: (data: {
+    name: string
+    description?: string | null
+    hypothesis?: string | null
+    design_type?: string
+    task_brief?: Record<string, unknown> | null
+    design_spec?: DesignSpec | null
+    graph: ProtocolGraph
+    published_graph?: ProtocolGraph | null
+    protocol_description?: string | null
+  }) => request<Experiment>('/experiments/import-definition', { method: 'POST', body: data }),
   update: (
     id: string,
     data: {
@@ -220,6 +241,7 @@ export const experimentsApi = {
   // anywhere in the experiment (see services.csv_export.replicates_to_csv) --
   // a Blob, not JSON, so callers hand it straight to URL.createObjectURL.
   downloadReplicatesCsv: (id: string) => requestBlob(`/experiments/${id}/replicates.csv`),
+  downloadRunResultsCsv: (id: string) => requestBlob(`/experiments/${id}/run-results.csv`),
   // Materializes one cell per combination and its replicate-result children.
   // declared factors, returning the current design's replicates. If the new design
   // isn't the same set of cells as the current one, the current design
@@ -271,7 +293,7 @@ export const protocolsApi = {
   listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
   // "Run all cells" -- 422 if there's no linked experiment or the graph
   // doesn't have exactly one final node; fans out one ProtocolRun per pending
-  // replicate. The optional list explicitly re-runs selected scored rows.
+  // replicate. The optional list explicitly re-runs selected completed rows.
   runCells: (id: string, options?: { replicateLabels?: string[]; rerunReplicateLabels?: string[] }) =>
     request<CellRunBatch>(`/protocols/${id}/cell-runs`, {
       method: 'POST',

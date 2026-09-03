@@ -1,20 +1,35 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
-import { Pencil, Plus, X } from 'lucide-react'
+import { Info, Pencil, Plus, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { experimentsApi, protocolsApi } from '@/api/client'
+import { experimentsApi, llmSettingsApi, protocolsApi } from '@/api/client'
 import { unboundFactorNames } from '@/lib/factorBindings'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import { revealsHiddenMcpServers, toolFactorServerId, unboundBindableFields, type UnboundField } from './bindableFields'
 import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import { InfoTooltip } from './InfoTooltip'
+import { ModelField } from './ModelField'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { useProviderModels } from './useProviderModels'
+import {
+  METRIC_CATALOG,
+  makeCatalogMetric,
+  makeCustomMetric,
+  metricCatalogEntry,
+  normalizeDesignMetrics,
+  type MetricAggregation,
+  type MetricDirection,
+  type MetricValueType,
+} from '@/lib/metricCatalog'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import type { ProtocolGraph } from '@/types/protocols'
 import {
@@ -23,7 +38,9 @@ import {
   type DesignFactor,
   type DesignMetric,
   type Experiment,
+  type MetricScoringConfig,
 } from '@/types/experiments'
+import { LLM_PROVIDER_CATALOG, LLM_PROVIDER_LABELS, type LLMProvider } from '@/types/llmSettings'
 
 const AUTOSAVE_DELAY_MS = 800
 
@@ -272,25 +289,165 @@ function FactorsEditor({
   )
 }
 
+function withPrimary(metrics: DesignMetric[]): DesignMetric[] {
+  if (!metrics.length) return []
+  const selected = metrics.findIndex((metric) => metric.primary)
+  return metrics.map((metric, index) => ({ ...metric, primary: index === (selected < 0 ? 0 : selected) }))
+}
+
+function MetricInfo({ metric }: { metric: DesignMetric }) {
+  const catalog = metricCatalogEntry(metric.catalogKey)
+  return (
+    <TooltipProvider delay={200}>
+      <Tooltip>
+        <TooltipTrigger render={<button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" aria-label={`About ${metric.name}`} />}>
+          <Info className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipContent className="max-w-72 flex-col items-start gap-1 text-left">
+          <span>{metric.description || catalog?.shortDescription || 'Metric definition unavailable.'}</span>
+          <span className="text-background/70">{catalog ? `${catalog.kind.replace(/_/g, ' ')} metric` : `${metric.kind ?? 'custom'} metric`}</span>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
+function CustomMetricDialog({
+  metric,
+  existingNames,
+  onCancel,
+  onSave,
+}: {
+  metric?: DesignMetric
+  existingNames: string[]
+  onCancel: () => void
+  onSave: (metric: { name: string; description: string; direction: MetricDirection; valueType: MetricValueType; aggregation: MetricAggregation; unit?: string; scoring?: MetricScoringConfig }) => void
+}) {
+  const [name, setName] = useState(metric?.name ?? '')
+  const [description, setDescription] = useState(metric?.description ?? '')
+  const [direction, setDirection] = useState<MetricDirection>(metric?.direction ?? 'maximize')
+  const [valueType, setValueType] = useState<MetricValueType>(metric?.valueType ?? 'number')
+  const [aggregation, setAggregation] = useState<MetricAggregation>(metric?.aggregation ?? 'mean')
+  const [unit, setUnit] = useState(metric?.unit ?? '')
+  const [judgeEnabled, setJudgeEnabled] = useState(metric?.scoring?.method === 'model_judge')
+  const [rubric, setRubric] = useState(metric?.scoring?.rubric ?? '')
+  const [reference, setReference] = useState(metric?.scoring?.reference ?? '')
+  const [minimum, setMinimum] = useState(metric?.scoring?.min?.toString() ?? '0')
+  const [maximum, setMaximum] = useState(metric?.scoring?.max?.toString() ?? '100')
+  const [judgeProvider, setJudgeProvider] = useState<LLMProvider | ''>(metric?.scoring?.judge?.provider ?? '')
+  const [judgeModel, setJudgeModel] = useState(metric?.scoring?.judge?.model ?? '')
+  const credentialsQuery = useQuery({ queryKey: ['llm-settings'], queryFn: () => llmSettingsApi.list(), staleTime: 10 * 60 * 1000 })
+  const { modelsQuery, models } = useProviderModels(judgeProvider || undefined)
+  const registeredProviders = (credentialsQuery.data ?? []).map((credential) => credential.provider)
+  const normalizedName = name.trim().toLocaleLowerCase()
+  const duplicate = !!normalizedName && existingNames.some((existing) => existing.trim().toLocaleLowerCase() === normalizedName && existing !== metric?.name)
+  const parsedMinimum = minimum.trim() === '' ? undefined : Number(minimum)
+  const parsedMaximum = maximum.trim() === '' ? undefined : Number(maximum)
+  const invalidRange = judgeEnabled && (
+    !rubric.trim()
+    || (parsedMinimum !== undefined && !Number.isFinite(parsedMinimum))
+    || (parsedMaximum !== undefined && !Number.isFinite(parsedMaximum))
+    || (parsedMinimum !== undefined && parsedMaximum !== undefined && parsedMinimum > parsedMaximum)
+  )
+  const unavailableJudgeCredential = !!judgeProvider && !credentialsQuery.isLoading && !registeredProviders.includes(judgeProvider)
+  const invalidJudge = judgeEnabled && (!judgeProvider || !judgeModel.trim() || unavailableJudgeCredential)
+  const invalid = !name.trim() || !description.trim() || duplicate || invalidRange || invalidJudge
+  return (
+    <Dialog open onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent showCloseButton={false} className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{metric ? 'Edit custom metric' : 'Custom metric'}</DialogTitle>
+          <DialogDescription>Custom metrics are reporting targets by default. Enable an LLM judge below to score each completed output automatically.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5"><Label htmlFor="custom-metric-name">Name</Label><Input id="custom-metric-name" autoFocus value={name} onChange={(event) => setName(event.target.value)} /></div>
+          <div className="space-y-1.5"><Label htmlFor="custom-metric-description">Definition</Label><Textarea id="custom-metric-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></div>
+          {duplicate && <p className="text-xs text-destructive">A custom metric with this name already exists.</p>}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-1.5"><Label>Direction</Label><Select value={direction} onValueChange={(value) => value && setDirection(value as MetricDirection)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="maximize">Maximize</SelectItem><SelectItem value="minimize">Minimize</SelectItem></SelectContent></Select></div>
+            <div className="space-y-1.5"><Label>Value type</Label><Select value={valueType} onValueChange={(value) => value && setValueType(value as MetricValueType)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="number">Number</SelectItem><SelectItem value="boolean">Boolean</SelectItem><SelectItem value="string">Text</SelectItem></SelectContent></Select></div>
+            <div className="space-y-1.5"><Label htmlFor="custom-metric-unit">Unit</Label><Input id="custom-metric-unit" value={unit} onChange={(event) => setUnit(event.target.value)} placeholder="Optional" /></div>
+          </div>
+          {valueType === 'number' && <div className="space-y-1.5"><Label>Cell result</Label><Select value={aggregation} onValueChange={(value) => value && setAggregation(value as MetricAggregation)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="mean">Average per replicate</SelectItem><SelectItem value="sum">Total across replicates</SelectItem></SelectContent></Select><p className="text-xs text-muted-foreground">Controls the value shown for each condition in Results. Boolean metrics always use a pass rate.</p></div>}
+          <div className="rounded-md border bg-muted/20 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <Label htmlFor="custom-metric-judge" className="text-sm">Evaluate automatically with an LLM judge</Label>
+                <p className="mt-1 text-xs text-muted-foreground">Runs after the task completes against the final output. It never asks the task Agent to score itself.</p>
+              </div>
+              <Checkbox id="custom-metric-judge" checked={judgeEnabled} onCheckedChange={(checked) => setJudgeEnabled(checked === true)} />
+            </div>
+            {judgeEnabled && <div className="mt-3 space-y-3 border-t pt-3">
+              <div className="space-y-1.5"><Label htmlFor="custom-metric-rubric">Judge rubric</Label><Textarea id="custom-metric-rubric" rows={4} value={rubric} onChange={(event) => setRubric(event.target.value)} placeholder="Explain exactly how the score should be assigned." /></div>
+              <div className="space-y-1.5"><Label htmlFor="custom-metric-reference">Reference material — Optional</Label><Textarea id="custom-metric-reference" rows={3} value={reference} onChange={(event) => setReference(event.target.value)} placeholder="Paste a reference answer, relevant source excerpts, or acceptance criteria." /><p className="text-xs text-muted-foreground">The judge only receives this text and the final output; attached knowledge tools are not exposed to it.</p></div>
+              <div className="grid grid-cols-2 gap-3 border-t pt-3">
+                <div className="space-y-1.5">
+                  <Label>Judge provider</Label>
+                  <Select value={judgeProvider || '__select__'} onValueChange={(provider) => {
+                    if (!provider || provider === '__select__') return
+                    setJudgeProvider(provider as LLMProvider)
+                    setJudgeModel('')
+                  }}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__select__" disabled>Select a saved credential…</SelectItem>
+                      {LLM_PROVIDER_CATALOG.filter((provider) => registeredProviders.includes(provider.id)).map((provider) => (
+                        <SelectItem key={provider.id} value={provider.id}>{provider.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="custom-metric-judge-model">Judge model</Label>
+                  {judgeProvider
+                    ? <ModelField id="custom-metric-judge-model" value={judgeModel} models={models} isLoading={modelsQuery.isLoading} onChange={setJudgeModel} />
+                    : <Input disabled placeholder="Select a provider first" />}
+                </div>
+              </div>
+              {credentialsQuery.isLoading ? <p className="text-xs text-muted-foreground">Loading saved credentials…</p>
+                : registeredProviders.length === 0 ? <p className="text-xs text-destructive">Add a provider credential before enabling an LLM judge.</p>
+                  : judgeProvider && !registeredProviders.includes(judgeProvider) ? <p className="text-xs text-destructive">The saved {LLM_PROVIDER_LABELS[judgeProvider as LLMProvider]} credential is no longer available. Select another provider.</p>
+                    : <p className="text-xs text-muted-foreground">This provider and model are saved with the metric, independent of the task Agent’s model.</p>}
+              <div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label htmlFor="custom-metric-minimum">Minimum score</Label><Input id="custom-metric-minimum" type="number" value={minimum} onChange={(event) => setMinimum(event.target.value)} /></div><div className="space-y-1.5"><Label htmlFor="custom-metric-maximum">Maximum score</Label><Input id="custom-metric-maximum" type="number" value={maximum} onChange={(event) => setMaximum(event.target.value)} /></div></div>
+              {(invalidRange || invalidJudge) && <p className="text-xs text-destructive">Provide a rubric, a saved provider and model, and valid numeric bounds (minimum cannot exceed maximum).</p>}
+            </div>}
+          </div>
+        </div>
+        <DialogFooter><Button variant="outline" onClick={onCancel}>Cancel</Button><Button disabled={invalid} onClick={() => onSave({ name, description, direction, valueType: judgeEnabled ? 'number' : valueType, aggregation: judgeEnabled || valueType === 'boolean' ? 'mean' : aggregation, unit, scoring: judgeEnabled ? { method: 'model_judge', rubric, reference, min: parsedMinimum, max: parsedMaximum, judge: { provider: judgeProvider as LLMProvider, model: judgeModel.trim() } } : undefined })}>{metric ? 'Save metric' : 'Add metric'}</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function MetricsEditor({ metrics, onChange, disabled = false }: { metrics: DesignMetric[]; onChange: (metrics: DesignMetric[]) => void; disabled?: boolean }) {
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [customEditing, setCustomEditing] = useState<DesignMetric | undefined>()
+  const pickerRef = useRef<HTMLInputElement>(null)
+  const normalized = normalizeDesignMetrics(metrics)
+  const selectedCatalogKeys = new Set(normalized.map((metric) => metric.catalogKey).filter(Boolean))
+  const available = METRIC_CATALOG.filter((entry) => !selectedCatalogKeys.has(entry.key)).filter((entry) => `${entry.name} ${entry.shortDescription}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+
+  useEffect(() => { if (pickerOpen) pickerRef.current?.focus() }, [pickerOpen])
+
+  function update(next: DesignMetric[]) { onChange(withPrimary(next)) }
+  function remove(index: number) { update(normalized.filter((_, itemIndex) => itemIndex !== index)) }
+  function dismissPicker() { setPickerOpen(false); setQuery('') }
+
   return (
     <div className="space-y-2">
-      {metrics.map((metric, i) => (
+      {normalized.length === 0 && !pickerOpen && <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">No metrics selected yet.</p>}
+      {normalized.map((metric, i) => (
         <div key={i} className="flex items-center gap-1.5">
-          <Input
-            value={metric.name}
-            placeholder="Metric name"
-            className="flex-1"
-            disabled={disabled}
-            onChange={(e) => onChange(metrics.map((m, j) => (j === i ? { ...m, name: e.target.value } : m)))}
-          />
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md border bg-muted/20 px-2.5 py-2 text-sm"><span className="truncate">{metric.name}</span><MetricInfo metric={metric} /></div>
+          {(metric.kind === 'custom' || metric.kind === 'model_judge') && <Button variant="ghost" size="icon-sm" aria-label={`Edit ${metric.name}`} disabled={disabled} onClick={() => setCustomEditing(metric)}><Pencil className="size-3.5" /></Button>}
           <label className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground" title="Primary metric">
             <input
               type="radio"
               name="primary-metric"
               checked={metric.primary}
               disabled={disabled}
-              onChange={() => onChange(metrics.map((m, j) => ({ ...m, primary: j === i })))}
+              onChange={() => update(normalized.map((m, j) => ({ ...m, primary: j === i })))}
             />
             Primary
           </label>
@@ -298,7 +455,7 @@ function MetricsEditor({ metrics, onChange, disabled = false }: { metrics: Desig
             value={metric.direction}
             disabled={disabled}
             onValueChange={(value) => {
-              if (value) onChange(metrics.map((m, j) => (j === i ? { ...m, direction: value as DesignMetric['direction'] } : m)))
+              if (value) update(normalized.map((m, j) => (j === i ? { ...m, direction: value as DesignMetric['direction'] } : m)))
             }}
           >
             <SelectTrigger className="w-32 shrink-0">
@@ -309,19 +466,27 @@ function MetricsEditor({ metrics, onChange, disabled = false }: { metrics: Desig
               <SelectItem value="minimize">Minimize</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="ghost" size="icon-sm" aria-label="Remove metric" disabled={disabled} onClick={() => onChange(metrics.filter((_, j) => j !== i))}>
+          <Button variant="ghost" size="icon-sm" aria-label="Remove metric" disabled={disabled} onClick={() => remove(i)}>
             <X className="size-3.5" />
           </Button>
         </div>
       ))}
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={disabled}
-        onClick={() => onChange([...metrics, { name: '', primary: metrics.length === 0, direction: 'maximize' }])}
-      >
+      {pickerOpen && <div className="rounded-md border bg-muted/20 p-2" onKeyDown={(event) => { if (event.key === 'Escape') dismissPicker() }}>
+        <div className="flex gap-2"><Input ref={pickerRef} aria-label="Search metrics" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search metrics…" /><Button variant="ghost" size="sm" onClick={dismissPicker}>Cancel</Button></div>
+        <div className="mt-2 max-h-48 space-y-1 overflow-y-auto" role="listbox" aria-label="Available metrics">
+          {available.map((entry) => <button key={entry.key} type="button" role="option" className="w-full rounded px-2 py-1.5 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { update([...normalized, makeCatalogMetric(entry, normalized.length === 0)]); dismissPicker() }}><span className="text-sm font-medium">{entry.name}</span><span className="ml-2 text-xs text-muted-foreground">Runtime · {entry.shortDescription}</span></button>)}
+          {available.length === 0 && <p className="px-2 py-1 text-xs text-muted-foreground">No catalog metrics match.</p>}
+          <button type="button" role="option" className="w-full rounded border-t px-2 py-1.5 text-left text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { dismissPicker(); setCustomEditing({ name: '', description: '', direction: 'maximize', primary: false, kind: 'custom' }) }}>Custom metric…</button>
+        </div>
+      </div>}
+      <Button variant="outline" size="sm" disabled={disabled || pickerOpen} onClick={() => setPickerOpen(true)}>
         <Plus className="size-3.5" /> Add metric
       </Button>
+      {customEditing && <CustomMetricDialog metric={customEditing.name ? customEditing : undefined} existingNames={normalized.map((metric) => metric.name)} onCancel={() => setCustomEditing(undefined)} onSave={(input) => {
+        if (customEditing.name) update(normalized.map((metric) => metric.id === customEditing.id ? { ...metric, ...input, kind: input.scoring ? 'model_judge' as const : 'custom' as const } : metric))
+        else update([...normalized, makeCustomMetric(input, normalized.length === 0)])
+        setCustomEditing(undefined)
+      }} />}
     </div>
   )
 }
@@ -359,7 +524,7 @@ export function DesignTab({
   // every other read of this state falls back to `?? 1` too.
   const [replicates, setReplicates] = useState<number | null>(experiment.design_spec?.replicates ?? 1)
   const [randomizationSeed, setRandomizationSeed] = useState<number | null>(experiment.design_spec?.randomization_seed ?? null)
-  const [metrics, setMetrics] = useState<DesignMetric[]>(experiment.design_spec?.metrics ?? [])
+  const [metrics, setMetrics] = useState<DesignMetric[]>(() => normalizeDesignMetrics(experiment.design_spec?.metrics))
   const [coordinationSlug, setCoordinationSlug] = useState<CoordinationStrategySlug>(
     experiment.design_spec?.coordination_strategy?.slug ?? 'sequential',
   )
@@ -380,7 +545,7 @@ export function DesignTab({
     setFactors(experiment.design_spec?.factors ?? [])
     setReplicates(experiment.design_spec?.replicates ?? 1)
     setRandomizationSeed(experiment.design_spec?.randomization_seed ?? null)
-    setMetrics(experiment.design_spec?.metrics ?? [])
+    setMetrics(normalizeDesignMetrics(experiment.design_spec?.metrics))
     setCoordinationSlug(experiment.design_spec?.coordination_strategy?.slug ?? 'sequential')
   }, [experiment])
 

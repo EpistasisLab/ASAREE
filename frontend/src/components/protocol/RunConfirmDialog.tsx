@@ -94,7 +94,7 @@ export function RunConfirmDialog({
               The published canvas will run each pending replicate across {scope.cellCount}{' '}
               {scope.cellCount === 1 ? 'cell' : 'cells'}.
               {scope.replicateCount > scope.pendingReplicateCount
-                ? ` ${scope.replicateCount - scope.pendingReplicateCount} already-scored replicates will be skipped.`
+                ? ` ${scope.replicateCount - scope.pendingReplicateCount} previously completed replicates will be skipped.`
                 : ''}
             </p>
           )}
@@ -104,7 +104,7 @@ export function RunConfirmDialog({
               {scope.pendingReplicateCount + scope.rerunReplicateCount === 1 ? '' : 's'} across {scope.cellCount}{' '}
               {scope.cellCount === 1 ? 'cell' : 'cells'}.
               {scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount > 0
-                ? ` ${scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount} previously scored replicate${scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount === 1 ? '' : 's'} will be skipped.`
+                ? ` ${scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount} previously completed replicate${scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount === 1 ? '' : 's'} will be skipped.`
                 : ''}
             </p>
           )}

@@ -16,9 +16,10 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 
 from asaree.deps import CurrentUser, DbSession
-from asaree.services.csv_export import replicates_that_ran, replicates_to_csv
+from asaree.services.csv_export import replicates_that_ran, replicates_to_csv, result_rows_schema, result_rows_to_csv
 from asaree.services.datasets import get_dataset
 from asaree.services.design_generation import DesignValidationError, generate_design_cells, get_design_impact
 from asaree.services.design_revisions import (
@@ -41,11 +42,29 @@ from asaree.services.experiments import (
     set_experiment_datasets,
     update_experiment,
 )
-from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_experiment_design, analyze_factorial
+from asaree.services.factorial_analysis import (
+    FactorialAnalysisError,
+    analyze_binary_factorial,
+    analyze_experiment_design,
+    analyze_factorial,
+)
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
-from asaree.services.protocol_revisions import get_published_revision, is_draft_published
+from asaree.services.metrics import (
+    build_evaluation_context,
+    model_judge_metrics,
+    normalize_design_spec,
+    normalize_metrics,
+    validate_metric_values,
+)
+from asaree.services.protocol_revisions import get_published_revision, is_draft_published, publish_protocol
 from asaree.services.protocol_runs import list_experiment_trials
-from asaree.services.protocols import list_protocols, sync_protocol_names_to_experiment
+from asaree.services.protocols import (
+    create_protocol,
+    generated_protocol_name,
+    list_protocols,
+    sync_protocol_names_to_experiment,
+)
+from asaree.worker.enqueue import enqueue_metric_evaluation
 
 # For a Content-Disposition filename only -- never touches the experiment's
 # own stored name, just what the browser offers to save the download as.
@@ -57,6 +76,7 @@ router = APIRouter(prefix="/experiments", tags=["experiments"])
 class FactorSpec(BaseModel):
     name: str
     levels: list[Any]
+    level_labels: list[str] | None = None
 
 
 class CreateExperimentRequest(BaseModel):
@@ -107,6 +127,30 @@ class UpdateExperimentRequest(BaseModel):
     archived_at: datetime | None = None
 
 
+class ImportExperimentDefinitionRequest(BaseModel):
+    """The portable, executable part of an experiment definition.
+
+    This deliberately does not accept run history, generated cells, artifacts,
+    published revisions, locks, or external artifact contents.  An import is a
+    *new*, editable experiment: those records belong to the source experiment,
+    while the graph keeps its Dataset/Knowledge/Skill references for the user
+    to reconnect in the destination workspace.
+    """
+
+    name: str
+    description: str | None = None
+    hypothesis: str | None = None
+    design_type: str = "factorial"
+    task_brief: dict[str, Any] | None = None
+    design_spec: dict[str, Any] | None = None
+    graph: dict[str, Any]
+    # When supplied by the portable export, this becomes revision 1 on the
+    # new protocol. `graph` remains the editable draft, so the source's
+    # published-vs-draft state survives without reusing source revision IDs.
+    published_graph: dict[str, Any] | None = None
+    protocol_description: str | None = None
+
+
 class GenerateDesignRequest(BaseModel):
     """An optional declaration to persist as part of generating cells.
 
@@ -137,7 +181,11 @@ class ExperimentResponse(BaseModel):
     archived_at: datetime | None
     locked_at: datetime | None
     locked_protocol_revision_id: uuid.UUID | None
+    # Kept alongside the lock timestamp so a portable definition can carry
+    # the exact design declaration that was approved for execution.
+    locked_design_spec: dict[str, Any] | None
     created_at: datetime
+    updated_at: datetime
 
 
 def _experiment_response(e: Any, dataset_ids: list[uuid.UUID]) -> ExperimentResponse:
@@ -148,22 +196,30 @@ def _experiment_response(e: Any, dataset_ids: list[uuid.UUID]) -> ExperimentResp
         hypothesis=e.hypothesis,
         design_type=e.design_type,
         task_brief=e.task_brief,
-        design_spec=e.design_spec,
+        design_spec=normalize_design_spec(e.design_spec),
         dataset_ids=dataset_ids,
         dataset_id=dataset_ids[0] if dataset_ids else None,
         archived_at=e.archived_at,
         locked_at=e.locked_at,
         locked_protocol_revision_id=e.locked_protocol_revision_id,
+        locked_design_spec=normalize_design_spec(e.locked_design_spec),
         created_at=e.created_at,
+        updated_at=e.updated_at,
     )
 
 
 def _locked_design_change_is_replicates_only(current: dict[str, Any] | None, proposed: dict[str, Any] | None) -> bool:
-    """Whether a locked design patch only changes its permitted run count."""
+    """Whether a locked design patch changes only run count or CSV metadata."""
     before = deepcopy(current or {})
     after = deepcopy(proposed or {})
     before.pop("replicates", None)
     after.pop("replicates", None)
+    for spec in (before, after):
+        factors = spec.get("factors")
+        if isinstance(factors, list):
+            for factor in factors:
+                if isinstance(factor, dict):
+                    factor.pop("level_labels", None)
     return before == after
 
 
@@ -270,7 +326,9 @@ async def create_experiment_endpoint(
         "description": body.description,
         "design_type": body.design_type,
         "task_brief": body.task_brief,
-        "design_spec": {"factors": [f.model_dump() for f in body.factors]} if body.factors else None,
+        "design_spec": (
+            normalize_design_spec({"factors": [f.model_dump() for f in body.factors]}) if body.factors else None
+        ),
         "dataset_ids": dataset_ids,
     }
     # No name given -> the server names it, and the 409 above is unreachable:
@@ -282,6 +340,76 @@ async def create_experiment_endpoint(
         else await create_experiment(db, name=name, owner_id=user.id, **fields)
     )
     return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment.id))
+
+
+@router.post("/import-definition", response_model=ExperimentResponse, status_code=201)
+async def import_experiment_definition_endpoint(
+    body: ImportExperimentDefinitionRequest, user: CurrentUser, db: DbSession
+) -> ExperimentResponse:
+    """Create a fresh experiment and its canvas from a portable definition.
+
+    Both inserts use this request's one database transaction.  If validation or
+    protocol creation fails, the session dependency rolls the experiment back
+    as well, so this endpoint can never leave an orphaned half-import behind.
+    """
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Experiment name cannot be empty")
+    if await get_experiment_by_name(db, name, owner_id=user.id) is not None:
+        raise HTTPException(status_code=409, detail="An experiment with this name already exists")
+    if not isinstance(body.graph.get("nodes"), list) or not isinstance(body.graph.get("edges"), list):
+        raise HTTPException(status_code=422, detail="The imported definition must contain a graph with nodes and edges")
+    if body.published_graph is not None and (
+        not isinstance(body.published_graph.get("nodes"), list)
+        or not isinstance(body.published_graph.get("edges"), list)
+    ):
+        raise HTTPException(status_code=422, detail="The imported published canvas must contain nodes and edges")
+
+    try:
+        design_spec = normalize_design_spec(body.design_spec, validate_metrics=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Do not attach source dataset IDs here.  They refer to source-workspace
+    # artifacts and may not exist for this owner; their node configuration is
+    # retained in the graph so the user can supply/reconnect them after import.
+    try:
+        # The lookup above gives the dialog its friendly suggested name. This
+        # savepoint covers the unavoidable race where another tab takes it
+        # between that lookup and the insert, turning it back into a 409 for
+        # the client rather than an integrity-error 500.
+        async with db.begin_nested():
+            experiment = await create_experiment(
+                db,
+                name=name,
+                owner_id=user.id,
+                description=body.description,
+                design_type=body.design_type,
+                task_brief=body.task_brief,
+                design_spec=design_spec,
+            )
+            # `publish_protocol` can only freeze the protocol's current draft.
+            # Start from the source published snapshot when one exists, freeze
+            # it as the imported protocol's revision 1, then restore the
+            # source draft if it had unpublished edits.
+            protocol = await create_protocol(
+                db,
+                name=generated_protocol_name(experiment.name, experiment.id),
+                owner_id=user.id,
+                description=body.protocol_description,
+                experiment_id=experiment.id,
+                graph=body.published_graph or body.graph,
+            )
+            if body.published_graph is not None:
+                await publish_protocol(db, protocol)
+                if body.graph != body.published_graph:
+                    protocol.graph = body.graph
+                    await db.flush()
+    except IntegrityError as exc:
+        if "uq_research_experiments_owner_name" in str(exc.orig):
+            raise HTTPException(status_code=409, detail="An experiment with this name already exists") from exc
+        raise
+    return _experiment_response(experiment, [])
 
 
 @router.get("", response_model=list[ExperimentResponse])
@@ -300,12 +428,36 @@ async def get_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, d
     return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment_id))
 
 
+class EvaluationContextRequest(BaseModel):
+    context_metric_ids: list[str]
+
+
+class EvaluationContextResponse(BaseModel):
+    context: str
+
+
+@router.post("/{experiment_id}/evaluation-context", response_model=EvaluationContextResponse)
+async def experiment_evaluation_context_endpoint(
+    experiment_id: uuid.UUID, body: EvaluationContextRequest, user: CurrentUser, db: DbSession
+) -> EvaluationContextResponse:
+    """Render the exact context helper used by execution for the inspector preview."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    return EvaluationContextResponse(
+        context=build_evaluation_context((experiment.design_spec or {}).get("metrics"), body.context_metric_ids)
+    )
+
+
 @router.patch("/{experiment_id}", response_model=ExperimentResponse)
 async def update_experiment_endpoint(
     experiment_id: uuid.UUID, body: UpdateExperimentRequest, user: CurrentUser, db: DbSession
 ) -> ExperimentResponse:
     experiment = await _get_owned_experiment(db, experiment_id, user)
     fields = body.model_dump(exclude_unset=True)
+    if "design_spec" in fields:
+        try:
+            fields["design_spec"] = normalize_design_spec(fields["design_spec"], validate_metrics=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     _reject_locked_mutation(experiment, fields)
     if "name" in fields and fields["name"] is not None:
         existing = await get_experiment_by_name(db, fields["name"], owner_id=user.id)
@@ -392,6 +544,11 @@ async def generate_design_endpoint(
     experiment = await _get_owned_experiment(db, experiment_id, user)
     if body is not None:
         fields = body.model_dump(exclude_unset=True)
+        if "design_spec" in fields:
+            try:
+                fields["design_spec"] = normalize_design_spec(fields["design_spec"], validate_metrics=True)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         if fields:
             _reject_locked_mutation(experiment, fields)
             experiment = await update_experiment(db, experiment_id, fields=fields)
@@ -525,10 +682,23 @@ async def analyze_factorial_endpoint(
     estimated marginal means, non-inferiority vs. the reference condition
     (BCa bootstrap + Holm), and heteroscedasticity diagnostics — computed
     fresh from this experiment's current replicate results, not persisted."""
-    await _get_owned_experiment(db, experiment_id, user)
+    experiment = await _get_owned_experiment(db, experiment_id, user)
     replicates = await list_replicates(db, experiment_id=experiment_id)
+    declared_primary = next(
+        (
+            metric
+            for metric in normalize_metrics((experiment.design_spec or {}).get("metrics"))
+            if metric["name"] == body.primary_metric
+        ),
+        None,
+    )
     try:
-        return analyze_factorial(
+        analysis = (
+            analyze_binary_factorial
+            if declared_primary and declared_primary["valueType"] == "boolean"
+            else analyze_factorial
+        )
+        return analysis(
             replicates,
             condition_factors=body.condition_factors,
             positive_levels=body.positive_levels,
@@ -564,6 +734,8 @@ class RunResultsResponse(BaseModel):
 
     overview: dict[str, Any]
     metric_keys: list[str]
+    metric_types: dict[str, str]
+    metric_aggregations: dict[str, str]
     primary_metric: str | None
     primary_metric_direction: str
     cells: list[dict[str, Any]]
@@ -594,10 +766,83 @@ async def get_experiment_run_results_endpoint(
     """
     experiment = await _get_owned_experiment(db, experiment_id, user)
     return RunResultsResponse(
-        **(await summarize_experiment_run_results(
-            db, experiment_id=experiment_id, design_spec=experiment.design_spec
-        ))
+        **(await summarize_experiment_run_results(db, experiment_id=experiment_id, design_spec=experiment.design_spec))
     )
+
+
+@router.get("/{experiment_id}/run-results.csv")
+async def export_run_results_csv_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> Response:
+    """Download the same enriched data shown on the Results tab."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    results = await summarize_experiment_run_results(
+        db, experiment_id=experiment_id, design_spec=experiment.design_spec
+    )
+    csv_text = result_rows_to_csv(results["replicates"], experiment.design_spec)
+    filename = _UNSAFE_FILENAME_CHAR.sub("_", experiment.name.strip()) or "experiment"
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}-results.csv"'},
+    )
+
+
+@router.get("/{experiment_id}/run-results.schema.json")
+async def get_run_results_schema_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> dict[str, Any]:
+    """Machine-readable factor encoding and outcome types for Results CSV consumers."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    results = await summarize_experiment_run_results(
+        db, experiment_id=experiment_id, design_spec=experiment.design_spec
+    )
+    return result_rows_schema(
+        results["replicates"], results["metric_types"], results["metric_aggregations"], experiment.design_spec
+    )
+
+
+class ScoreCompletedRunsResponse(BaseModel):
+    queued: int
+
+
+@router.post("/{experiment_id}/score-completed-runs", response_model=ScoreCompletedRunsResponse)
+async def score_completed_runs_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> ScoreCompletedRunsResponse:
+    """Queue post-run judges for completed current-design replicates.
+
+    This is a backfill/retry operation only: it never re-executes the task
+    graph.  Each evaluator reads the run's persisted final output instead.
+    """
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    configured = model_judge_metrics((experiment.design_spec or {}).get("metrics"))
+    if not configured:
+        raise HTTPException(status_code=409, detail="Configure at least one LLM judge metric before scoring results.")
+    trials = {trial.replicate_label: trial for trial in await list_experiment_trials(db, experiment_id=experiment_id)}
+    queued = 0
+    for replicate in await list_replicates(db, experiment_id=experiment_id):
+        trial = trials.get(replicate.replicate_label)
+        # A completed run can still be obsolete when the canvas was published
+        # again after it started. It is excluded from Results, so never spend
+        # a judge call scoring it during this backfill/retry operation either.
+        if trial is None or trial.obsolete or trial.status != "completed" or replicate.run_id is None:
+            continue
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label=replicate.replicate_label,
+            revision_id=replicate.design_revision_id,
+            fields={
+                "artifacts": {
+                    "metric_evaluation": {
+                        "status": "queued",
+                        "metric_ids": [metric["id"] for metric in configured],
+                        "error": None,
+                        "evaluator_run_id": None,
+                    }
+                }
+            },
+        )
+        await enqueue_metric_evaluation(replicate.run_id)
+        queued += 1
+    return ScoreCompletedRunsResponse(queued=queued)
 
 
 @router.put("/{experiment_id}/replicates/{replicate_label}", response_model=ReplicateResponse)
@@ -608,11 +853,25 @@ async def upsert_replicate_endpoint(
     user: CurrentUser,
     db: DbSession,
 ) -> ReplicateResponse:
-    await _get_owned_experiment(db, experiment_id, user)
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    # This endpoint edits the current replicate projection. If its only run is
+    # against an older canvas, that record is immutable history; users must
+    # create a new attempt before recording new values.
+    trials = await list_experiment_trials(db, experiment_id=experiment_id)
+    trial = next((candidate for candidate in trials if candidate.replicate_label == replicate_label), None)
+    if trial is not None and trial.obsolete:
+        raise HTTPException(
+            status_code=409, detail="This run is obsolete history. Re-run the replicate before recording results."
+        )
     fields = body.model_dump(exclude_unset=True)
-    replicate = await upsert_replicate(
-        db, experiment_id=experiment_id, replicate_label=replicate_label, fields=fields
-    )
+    if "metric_values" in fields:
+        try:
+            fields["metric_values"] = validate_metric_values(
+                (experiment.design_spec or {}).get("metrics"), fields["metric_values"]
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    replicate = await upsert_replicate(db, experiment_id=experiment_id, replicate_label=replicate_label, fields=fields)
     return ReplicateResponse.model_validate(replicate)
 
 

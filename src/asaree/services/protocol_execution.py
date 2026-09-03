@@ -37,6 +37,7 @@ from motoro.schemas.output import parse_envelope
 from motoro.schemas.pattern import PatternConfig
 from motoro.services.mcp_service import hydrate_registry
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.config import get_settings
@@ -1605,6 +1606,25 @@ async def _execute_run_cancellable(
             await poller
 
 
+async def _sync_durable_agent(*, name: str, owner_id: uuid.UUID, fields: dict[str, Any]) -> Any:
+    """Create or update a protocol-owned Agent without a check-then-insert race.
+
+    Multiple protocol runs can reach the same canvas node concurrently. The
+    durable Motoro Agent is keyed by owner/name, so a losing create retries as
+    an update of the row the concurrent request just inserted.
+    """
+    existing = await get_agent_by_name(name, owner_id=owner_id)
+    if existing is not None:
+        return await update_agent(existing.id, **fields)
+    try:
+        return await create_agent(name=name, owner_id=owner_id, **fields)
+    except IntegrityError:
+        existing = await get_agent_by_name(name, owner_id=owner_id)
+        if existing is None:
+            raise
+        return await update_agent(existing.id, **fields)
+
+
 async def _run_agent_node(
     node: dict[str, Any],
     *,
@@ -1676,36 +1696,22 @@ async def _run_agent_node(
         base_system_prompt, evaluation_metrics, (node.get("data") or {}).get("contextMetricIds")
     )
 
-    existing = await get_agent_by_name(agent_name, owner_id=owner_id)
-    if existing is not None:
-        agent = await update_agent(
-            existing.id,
-            goal=config.get("goal") or "",
-            description=description,
-            system_prompt=system_prompt,
-            model_config=model_config,
-            pattern_config=pattern_config,
-            tool_config=tool_config,
-            skill_config=skill_config,
-            output_contract=config.get("output_contract"),
-            budget_limit_usd=config.get("budget_limit_usd"),
-            max_run_duration_seconds=config.get("max_run_duration_seconds"),
-        )
-    else:
-        agent = await create_agent(
-            name=agent_name,
-            goal=config.get("goal") or "",
-            description=description,
-            system_prompt=system_prompt,
-            model_config=model_config,
-            pattern_config=pattern_config,
-            tool_config=tool_config,
-            skill_config=skill_config,
-            output_contract=config.get("output_contract"),
-            budget_limit_usd=config.get("budget_limit_usd"),
-            max_run_duration_seconds=config.get("max_run_duration_seconds"),
-            owner_id=owner_id,
-        )
+    agent = await _sync_durable_agent(
+        name=agent_name,
+        owner_id=owner_id,
+        fields={
+            "goal": config.get("goal") or "",
+            "description": description,
+            "system_prompt": system_prompt,
+            "model_config": model_config,
+            "pattern_config": pattern_config,
+            "tool_config": tool_config,
+            "skill_config": skill_config,
+            "output_contract": config.get("output_contract"),
+            "budget_limit_usd": config.get("budget_limit_usd"),
+            "max_run_duration_seconds": config.get("max_run_duration_seconds"),
+        },
+    )
     assert agent is not None
 
     run = await create_run(
@@ -1789,30 +1795,19 @@ async def _run_critic(
     system_prompt = config.get("system_prompt") or _default_system_prompt(label, "Critic Gate")
     tool_config: dict[str, list[str]] = {"server_names": [], "tool_names": []}
 
-    existing = await get_agent_by_name(agent_name, owner_id=owner_id)
-    if existing is not None:
-        agent = await update_agent(
-            existing.id,
-            goal=goal,
-            description=description,
-            system_prompt=system_prompt,
-            model_config=model_config,
-            pattern_config=pattern_config,
-            tool_config=tool_config,
-            output_contract=CRITIC_OUTPUT_CONTRACT,
-        )
-    else:
-        agent = await create_agent(
-            name=agent_name,
-            goal=goal,
-            description=description,
-            system_prompt=system_prompt,
-            model_config=model_config,
-            pattern_config=pattern_config,
-            tool_config=tool_config,
-            output_contract=CRITIC_OUTPUT_CONTRACT,
-            owner_id=owner_id,
-        )
+    agent = await _sync_durable_agent(
+        name=agent_name,
+        owner_id=owner_id,
+        fields={
+            "goal": goal,
+            "description": description,
+            "system_prompt": system_prompt,
+            "model_config": model_config,
+            "pattern_config": pattern_config,
+            "tool_config": tool_config,
+            "output_contract": CRITIC_OUTPUT_CONTRACT,
+        },
+    )
     assert agent is not None
 
     instruction = f"Review the following output and return your verdict.\n\nOutput to review:\n\n{worker_output}"
@@ -2021,7 +2016,6 @@ async def evaluate_protocol_run_metrics(protocol_run_id: uuid.UUID) -> bool:
             # stored Agent config before Motoro begins their runs.
             config_key = hashlib.sha256(f"{model_config.provider}:{model_config.model}".encode()).hexdigest()[:12]
             agent_name = f"experiment-metric-judge-{experiment.id}-{config_key}"
-            existing = await get_agent_by_name(agent_name, owner_id=protocol_run.owner_id)
             agent_fields = {
                 "goal": "Evaluate declared experiment metrics and return the required numeric score payload.",
                 "description": "Controlled post-run evaluator for experiment metric declarations.",
@@ -2032,10 +2026,10 @@ async def evaluate_protocol_run_metrics(protocol_run_id: uuid.UUID) -> bool:
                 "skill_config": {"skill_ids": []},
                 "output_contract": JUDGE_OUTPUT_CONTRACT,
             }
-            agent = (
-                await update_agent(existing.id, **agent_fields)
-                if existing is not None
-                else await create_agent(name=agent_name, owner_id=protocol_run.owner_id, **agent_fields)
+            agent = await _sync_durable_agent(
+                name=agent_name,
+                owner_id=protocol_run.owner_id,
+                fields=agent_fields,
             )
             assert agent is not None
             run = await create_run(

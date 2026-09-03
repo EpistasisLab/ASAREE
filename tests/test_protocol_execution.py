@@ -7,6 +7,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -420,6 +421,40 @@ def _registration(**overrides: object) -> dict[str, object]:
         "dictionary_json": None,
         **overrides,
     }
+
+
+async def test_sync_durable_agent_recovers_from_a_concurrent_create(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second protocol run reuses the Agent created by the winning run."""
+    test_owner_id = uuid.uuid4()
+    existing = SimpleNamespace(id=uuid.uuid4())
+    lookups = 0
+    updates: list[tuple[uuid.UUID, dict[str, object]]] = []
+
+    async def fake_get_agent_by_name(name: str, *, owner_id: uuid.UUID):
+        nonlocal lookups
+        assert name == "protocol-1-node-a"
+        assert owner_id == test_owner_id
+        lookups += 1
+        return None if lookups == 1 else existing
+
+    async def fake_create_agent(**_kwargs: object):
+        raise pe.IntegrityError("INSERT", {}, Exception("duplicate key"))
+
+    async def fake_update_agent(agent_id: uuid.UUID, **fields: object):
+        updates.append((agent_id, fields))
+        return existing
+
+    monkeypatch.setattr(pe, "get_agent_by_name", fake_get_agent_by_name)
+    monkeypatch.setattr(pe, "create_agent", fake_create_agent)
+    monkeypatch.setattr(pe, "update_agent", fake_update_agent)
+
+    result = await pe._sync_durable_agent(
+        name="protocol-1-node-a", owner_id=test_owner_id, fields={"goal": "Do the work."}
+    )
+
+    assert result is existing
+    assert lookups == 2
+    assert updates == [(existing.id, {"goal": "Do the work."})]
 
 
 async def test_preseed_skipped_without_a_workspace_or_with_several_datasets(

@@ -15,7 +15,9 @@ import { pickToolNamesForServer, selectableMcpServers, type UnboundField } from 
 import { useProviderModels } from './useProviderModels'
 import {
   computeFactorName,
+  defaultFactorLevelLabels,
   emptyStructuredLevel,
+  factorLevelLabels,
   isStructuredLevelType,
   LEVEL_TYPE_LABELS,
   levelTypeOf,
@@ -558,6 +560,7 @@ export function FactorEditorDialog({
   const [search, setSearch] = useState('')
   const [levelType, setLevelType] = useState<LevelType>(levelTypeOf(factor))
   const [levels, setLevels] = useState<unknown[]>(() => (isStructuredLevelType(levelTypeOf(factor)) ? factor.levels : factor.levels.map((l) => String(l))))
+  const [levelLabels, setLevelLabels] = useState<string[]>(() => factorLevelLabels(factor))
 
   // Re-seed the local draft every time this dialog (re)opens -- same
   // "re-seed on open" convention DesignTab.tsx and FactorBindableField.tsx's
@@ -571,6 +574,7 @@ export function FactorEditorDialog({
         const t = levelTypeOf(factor)
         setLevelType(t)
         setLevels(isStructuredLevelType(t) ? factor.levels : factor.levels.map((l) => String(l)))
+        setLevelLabels(factorLevelLabels(factor))
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -579,7 +583,11 @@ export function FactorEditorDialog({
   function pickField(field: UnboundField) {
     setSelectedField(field)
     setLevelType(field.levelType)
-    setLevels(isStructuredLevelType(field.levelType) ? seedStructuredLevels(field.currentValue, field.levelType) : seedLevels(field.currentValue))
+    const nextLevels = isStructuredLevelType(field.levelType)
+      ? seedStructuredLevels(field.currentValue, field.levelType)
+      : seedLevels(field.currentValue)
+    setLevels(nextLevels)
+    setLevelLabels(defaultFactorLevelLabels(computeFactorName(field.nodeLabel, field.fieldLabel, existingNames ?? []), nextLevels.length))
   }
 
   function changeLevelType(next: LevelType) {
@@ -590,7 +598,9 @@ export function FactorEditorDialog({
     // can't carry the old levels forward, so both directions just reset to
     // that type's own default starting levels.
     if (next === 'boolean' || levelType === 'boolean' || isStructuredLevelType(next) || isStructuredLevelType(levelType)) {
-      setLevels(next === 'boolean' ? [true, false] : isStructuredLevelType(next) ? [emptyStructuredLevel(next), emptyStructuredLevel(next)] : ['', ''])
+      const nextLevels = next === 'boolean' ? [true, false] : isStructuredLevelType(next) ? [emptyStructuredLevel(next), emptyStructuredLevel(next)] : ['', '']
+      setLevels(nextLevels)
+      setLevelLabels(defaultFactorLevelLabels(name, nextLevels.length))
     }
   }
 
@@ -603,12 +613,19 @@ export function FactorEditorDialog({
   const needsFieldPick = !!pickableFields && !selectedField
 
   function save() {
-    const parsedLevels = isStructuredLevelType(levelType)
-      ? levels
-      : levelType === 'boolean'
-        ? [true, false]
-        : (levels as string[]).filter((l) => l.trim() !== '').map((l) => parseLevelValue(l, levelType))
-    onSave({ name, levels: parsedLevels, level_type: levelType }, selectedField ?? undefined)
+    const selectedIndexes =
+      isStructuredLevelType(levelType) || levelType === 'boolean'
+        ? levels.map((_, index) => index)
+        : (levels as string[]).flatMap((level, index) => (level.trim() ? [index] : []))
+    const parsedLevels =
+      isStructuredLevelType(levelType)
+        ? levels
+        : levelType === 'boolean'
+          ? [true, false]
+          : selectedIndexes.map((index) => parseLevelValue((levels as string[])[index], levelType))
+    const defaults = defaultFactorLevelLabels(name, parsedLevels.length)
+    const labels = selectedIndexes.map((index, outputIndex) => levelLabels[index]?.trim() || defaults[outputIndex])
+    onSave({ name, levels: parsedLevels, level_labels: labels, level_type: levelType }, selectedField ?? undefined)
     onOpenChange(false)
   }
 
@@ -705,23 +722,41 @@ export function FactorEditorDialog({
                   <div className="space-y-2">
                     {(levels as string[]).map((level, i) => (
                       <div key={i} className="flex items-start gap-1.5">
-                        <Textarea
-                          rows={6}
-                          className="font-mono text-xs"
-                          value={level}
-                          onChange={(e) => setLevels((ls) => ls.map((l, j) => (j === i ? e.target.value : l)))}
-                        />
+                        <div className="flex-1 space-y-1.5">
+                          <Input
+                            aria-label={`Level ${i + 1} label`}
+                            placeholder={`Level ${i + 1} label`}
+                            value={levelLabels[i] ?? ''}
+                            onChange={(e) => setLevelLabels((ls) => ls.map((label, j) => (j === i ? e.target.value : label)))}
+                          />
+                          <Textarea
+                            rows={6}
+                            className="font-mono text-xs"
+                            value={level}
+                            onChange={(e) => setLevels((ls) => ls.map((l, j) => (j === i ? e.target.value : l)))}
+                          />
+                        </div>
                         <Button
                           variant="ghost"
                           size="icon-sm"
                           aria-label="Remove level"
-                          onClick={() => setLevels((ls) => ls.filter((_, j) => j !== i))}
+                          onClick={() => {
+                            setLevels((ls) => ls.filter((_, j) => j !== i))
+                            setLevelLabels((ls) => ls.filter((_, j) => j !== i))
+                          }}
                         >
                           <X className="size-3.5" />
                         </Button>
                       </div>
                     ))}
-                    <Button variant="outline" size="sm" onClick={() => setLevels((ls) => [...ls, ''])}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setLevels((ls) => [...ls, ''])
+                        setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(name, ls.length + 1)[ls.length]])
+                      }}
+                    >
                       <Plus className="size-3.5" /> Add level
                     </Button>
                   </div>
@@ -729,7 +764,13 @@ export function FactorEditorDialog({
                   <div className="space-y-2">
                     {levels.map((level, i) => (
                       <div key={i} className="flex items-start gap-1.5">
-                        <div className="flex-1">
+                        <div className="flex-1 space-y-1.5">
+                          <Input
+                            aria-label={`Level ${i + 1} label`}
+                            placeholder={`Level ${i + 1} label`}
+                            value={levelLabels[i] ?? ''}
+                            onChange={(e) => setLevelLabels((ls) => ls.map((label, j) => (j === i ? e.target.value : label)))}
+                          />
                           {levelType === 'llm_config' ? (
                             <LlmConfigLevelRow
                               value={level as StructuredLevel}
@@ -776,13 +817,23 @@ export function FactorEditorDialog({
                           variant="ghost"
                           size="icon-sm"
                           aria-label="Remove level"
-                          onClick={() => setLevels((ls) => ls.filter((_, j) => j !== i))}
+                          onClick={() => {
+                            setLevels((ls) => ls.filter((_, j) => j !== i))
+                            setLevelLabels((ls) => ls.filter((_, j) => j !== i))
+                          }}
                         >
                           <X className="size-3.5" />
                         </Button>
                       </div>
                     ))}
-                    <Button variant="outline" size="sm" onClick={() => setLevels((ls) => [...ls, emptyStructuredLevel(levelType)])}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setLevels((ls) => [...ls, emptyStructuredLevel(levelType)])
+                        setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(name, ls.length + 1)[ls.length]])
+                      }}
+                    >
                       <Plus className="size-3.5" /> Add level
                     </Button>
                   </div>
@@ -795,17 +846,34 @@ export function FactorEditorDialog({
                           value={level}
                           onChange={(e) => setLevels((ls) => ls.map((l, j) => (j === i ? e.target.value : l)))}
                         />
+                        <Input
+                          aria-label={`Level ${i + 1} label`}
+                          className="w-36"
+                          placeholder={`Level ${i + 1} label`}
+                          value={levelLabels[i] ?? ''}
+                          onChange={(e) => setLevelLabels((ls) => ls.map((label, j) => (j === i ? e.target.value : label)))}
+                        />
                         <Button
                           variant="ghost"
                           size="icon-sm"
                           aria-label="Remove level"
-                          onClick={() => setLevels((ls) => ls.filter((_, j) => j !== i))}
+                          onClick={() => {
+                            setLevels((ls) => ls.filter((_, j) => j !== i))
+                            setLevelLabels((ls) => ls.filter((_, j) => j !== i))
+                          }}
                         >
                           <X className="size-3.5" />
                         </Button>
                       </div>
                     ))}
-                    <Button variant="outline" size="sm" onClick={() => setLevels((ls) => [...ls, ''])}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setLevels((ls) => [...ls, ''])
+                        setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(name, ls.length + 1)[ls.length]])
+                      }}
+                    >
                       <Plus className="size-3.5" /> Add level
                     </Button>
                   </div>

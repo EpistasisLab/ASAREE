@@ -76,6 +76,7 @@ router = APIRouter(prefix="/experiments", tags=["experiments"])
 class FactorSpec(BaseModel):
     name: str
     levels: list[Any]
+    level_labels: list[str] | None = None
 
 
 class CreateExperimentRequest(BaseModel):
@@ -208,11 +209,17 @@ def _experiment_response(e: Any, dataset_ids: list[uuid.UUID]) -> ExperimentResp
 
 
 def _locked_design_change_is_replicates_only(current: dict[str, Any] | None, proposed: dict[str, Any] | None) -> bool:
-    """Whether a locked design patch only changes its permitted run count."""
+    """Whether a locked design patch changes only run count or CSV metadata."""
     before = deepcopy(current or {})
     after = deepcopy(proposed or {})
     before.pop("replicates", None)
     after.pop("replicates", None)
+    for spec in (before, after):
+        factors = spec.get("factors")
+        if isinstance(factors, list):
+            for factor in factors:
+                if isinstance(factor, dict):
+                    factor.pop("level_labels", None)
     return before == after
 
 
@@ -319,7 +326,9 @@ async def create_experiment_endpoint(
         "description": body.description,
         "design_type": body.design_type,
         "task_brief": body.task_brief,
-        "design_spec": {"factors": [f.model_dump() for f in body.factors]} if body.factors else None,
+        "design_spec": (
+            normalize_design_spec({"factors": [f.model_dump() for f in body.factors]}) if body.factors else None
+        ),
         "dataset_ids": dataset_ids,
     }
     # No name given -> the server names it, and the 409 above is unreachable:
@@ -768,7 +777,7 @@ async def export_run_results_csv_endpoint(experiment_id: uuid.UUID, user: Curren
     results = await summarize_experiment_run_results(
         db, experiment_id=experiment_id, design_spec=experiment.design_spec
     )
-    csv_text = result_rows_to_csv(results["replicates"])
+    csv_text = result_rows_to_csv(results["replicates"], experiment.design_spec)
     filename = _UNSAFE_FILENAME_CHAR.sub("_", experiment.name.strip()) or "experiment"
     return Response(
         content=csv_text,
@@ -784,7 +793,9 @@ async def get_run_results_schema_endpoint(experiment_id: uuid.UUID, user: Curren
     results = await summarize_experiment_run_results(
         db, experiment_id=experiment_id, design_spec=experiment.design_spec
     )
-    return result_rows_schema(results["replicates"], results["metric_types"], results["metric_aggregations"])
+    return result_rows_schema(
+        results["replicates"], results["metric_types"], results["metric_aggregations"], experiment.design_spec
+    )
 
 
 class ScoreCompletedRunsResponse(BaseModel):

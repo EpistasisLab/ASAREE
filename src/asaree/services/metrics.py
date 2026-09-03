@@ -219,6 +219,27 @@ def normalize_design_spec(
     if design_spec is None:
         return None
     result = deepcopy(design_spec)
+    factors = result.get("factors")
+    if isinstance(factors, list):
+        for factor in factors:
+            if not isinstance(factor, dict) or not isinstance(factor.get("name"), str):
+                continue
+            levels = factor.get("levels")
+            if not isinstance(levels, list):
+                continue
+            stem = re.sub(r"[^a-z0-9]+", "_", factor["name"].rsplit(":", 1)[-1].lower()).strip("_") or "level"
+            defaults = [f"{stem}_{index}" for index in range(1, len(levels) + 1)]
+            supplied = factor.get("level_labels")
+            if isinstance(supplied, list) and len(supplied) == len(levels):
+                factor["level_labels"] = [
+                    label.strip() if isinstance(label, str) and label.strip() else defaults[index]
+                    for index, label in enumerate(supplied)
+                ]
+            else:
+                # Legacy factors have only their raw treatment values. Give
+                # them short, stable labels on read/save without exposing a
+                # long prompt or structured configuration in a CSV header.
+                factor["level_labels"] = defaults
     if "metrics" in result:
         result["metrics"] = normalize_metrics(result["metrics"], validate_custom_names=validate_metrics)
     return result

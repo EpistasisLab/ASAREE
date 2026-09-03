@@ -1,9 +1,11 @@
 import pytest
 
+from asaree.services.design_generation import material_design_spec
 from asaree.services.metric_evaluation import build_metric_judge_prompt, validate_metric_scores
 from asaree.services.metrics import (
     build_evaluation_context,
     compose_system_prompt,
+    normalize_design_spec,
     normalize_metrics,
     validate_metric_values,
 )
@@ -39,6 +41,36 @@ def test_boolean_metrics_always_normalize_to_pass_rate_aggregation() -> None:
         [{"name": "Passed", "kind": "custom", "valueType": "boolean", "aggregation": "sum", "primary": True}]
     )
     assert metrics[0]["aggregation"] == "mean"
+
+
+def test_design_spec_adds_short_default_labels_for_legacy_factor_levels() -> None:
+    spec = normalize_design_spec(
+        {"factors": [{"name": "Agent:System prompt", "levels": ["a very long prompt", "another long prompt"]}]}
+    )
+    assert spec == {
+        "factors": [
+            {
+                "name": "Agent:System prompt",
+                "levels": ["a very long prompt", "another long prompt"],
+                "level_labels": ["system_prompt_1", "system_prompt_2"],
+            }
+        ]
+    }
+
+
+def test_level_labels_do_not_change_the_material_design() -> None:
+    without_labels = {"factors": [{"name": "Agent:System prompt", "levels": ["a", "b"]}], "replicates": 2}
+    with_labels = {
+        "factors": [
+            {
+                "name": "Agent:System prompt",
+                "levels": ["a", "b"],
+                "level_labels": ["system_prompt_1", "system_prompt_2"],
+            }
+        ],
+        "replicates": 2,
+    }
+    assert material_design_spec(without_labels) == material_design_spec(with_labels)
 
 
 def test_evaluation_context_filters_stale_ids_and_escapes_delimiters() -> None:

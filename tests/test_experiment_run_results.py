@@ -164,6 +164,35 @@ def test_results_csv_schema_describes_treatment_coding_and_binary_outcomes() -> 
     assert outcome == {"name": "passed", "role": "outcome", "value_type": "boolean", "cell_aggregation": "mean"}
 
 
+def test_results_csv_uses_persisted_level_labels_instead_of_long_treatment_values() -> None:
+    long_prompts = [
+        "Classify every record and explain each decision in exhaustive detail.",
+        "Describe this dataset in full detail, including every available column and caveat.",
+        "Summarize the dataset for a clinical researcher in one concise paragraph.",
+    ]
+    rows = [{"factor_values": {"Agent:System prompt": prompt}} for prompt in long_prompts]
+    design_spec = {
+        "factors": [
+            {
+                "name": "Agent:System prompt",
+                "levels": long_prompts,
+                "level_labels": ["classifier", "full_description", "concise_summary"],
+            }
+        ]
+    }
+
+    csv_text = result_rows_to_csv(rows, design_spec)
+    schema = result_rows_schema(rows, design_spec=design_spec)
+
+    header = csv_text.splitlines()[0]
+    assert "agent_system_prompt_full_description" in header
+    assert "agent_system_prompt_concise_summary" in header
+    assert "Describe this dataset" not in header
+    treatment = next(column for column in schema["columns"] if column["name"] == "agent_system_prompt_full_description")
+    assert treatment["level_label"] == "full_description"
+    assert treatment["reference_level_label"] == "classifier"
+
+
 def test_node_labels_prefers_the_canvas_name_over_its_durable_id() -> None:
     assert _node_labels({"nodes": [{"id": "node-mtj4m99c-l0beqhd2", "data": {"label": "Model evaluator"}}]}) == {
         "node-mtj4m99c-l0beqhd2": "Model evaluator"

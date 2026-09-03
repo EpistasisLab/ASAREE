@@ -271,7 +271,7 @@ export const protocolsApi = {
   listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
   // "Run all cells" -- 422 if there's no linked experiment or the graph
   // doesn't have exactly one final node; fans out one ProtocolRun per pending
-  // replicate. The optional list explicitly re-runs selected scored rows.
+  // replicate. The optional list explicitly re-runs selected completed rows.
   runCells: (id: string, options?: { replicateLabels?: string[]; rerunReplicateLabels?: string[] }) =>
     request<CellRunBatch>(`/protocols/${id}/cell-runs`, {
       method: 'POST',

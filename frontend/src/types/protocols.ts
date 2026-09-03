@@ -103,9 +103,8 @@ export interface ProtocolRevision {
 }
 
 // One "run all cells" trigger fans out into these -- one ProtocolRun per
-// not-yet-scored replicate. skipped is how many replicates already had metric_values
-// and were left alone (resume semantics, same as generate-design's own
-// idempotency).
+// not-yet-completed replicate. skipped is how many replicates already had
+// metrics or a completed run and were left alone (resume semantics).
 export interface CellRunBatch {
   protocol_run_ids: string[]
   replicate_labels: string[]

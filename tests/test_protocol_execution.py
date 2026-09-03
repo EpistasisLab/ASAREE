@@ -28,6 +28,7 @@ from asaree.services.protocol_execution import (
     topological_order,
     validate_coordination_strategy,
 )
+from asaree.services.protocol_revisions import publish_protocol
 from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, request_protocol_run_cancellation
 from asaree.services.protocols import create_protocol, delete_protocol
 
@@ -1236,6 +1237,108 @@ async def test_plan_cell_runs_creates_one_run_per_pending_cell_skips_scored(owne
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRuns
+            await delete_experiment(db, experiment_id)
+
+
+async def test_plan_cell_runs_skips_and_allows_rerun_of_completed_unscored_replicate(owner_id: uuid.UUID) -> None:
+    """A successful qualitative run is completed even without numeric metrics.
+
+    It must not be re-run and re-billed by a later batch by default, but the
+    caller can deliberately select it from the prior-runs list.
+    """
+    graph = _graph(["a", "b"], [("a", "b")])
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"cell-run-completed-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db, name=f"cell-run-completed-protocol-{uuid.uuid4().hex}", owner_id=owner_id, experiment_id=experiment_id
+        )
+        protocol_id = protocol.id
+        completed_run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        completed_run.status = "completed"
+        await db.flush()
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="cell-completed-without-metrics",
+            fields={"factor_values": {"x": 1}, "run_id": completed_run.id},
+        )
+
+    try:
+        async with get_session() as db:
+            runs, skipped = await plan_cell_runs(
+                db, protocol_id=protocol_id, experiment_id=experiment_id, owner_id=owner_id, graph=graph
+            )
+        assert runs == []
+        assert skipped == 1
+
+        async with get_session() as db:
+            runs, skipped = await plan_cell_runs(
+                db,
+                protocol_id=protocol_id,
+                experiment_id=experiment_id,
+                owner_id=owner_id,
+                graph=graph,
+                rerun_replicate_labels={"cell-completed-without-metrics"},
+            )
+        assert [run.replicate_label for run in runs] == ["cell-completed-without-metrics"]
+        assert skipped == 0
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+            await delete_experiment(db, experiment_id)
+
+
+async def test_plan_cell_runs_runs_an_obsolete_completed_replicate(owner_id: uuid.UUID) -> None:
+    """A completed result from an older canvas revision is not a prior result.
+
+    It must not appear in the selectable prior-runs set or prevent the
+    replicate from running against the newly published canvas.
+    """
+    graph = _graph(["a", "b"], [("a", "b")])
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"cell-run-obsolete-{uuid.uuid4().hex}", owner_id=owner_id)
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db,
+            name=f"cell-run-obsolete-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment_id,
+            graph=graph,
+        )
+        protocol_id = protocol.id
+        old_revision = await publish_protocol(db, protocol)
+        completed_run = await create_protocol_run(
+            db,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            protocol_revision_id=old_revision.id,
+        )
+        completed_run.status = "completed"
+        new_revision = await publish_protocol(db, protocol)
+        await db.flush()
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="cell-obsolete",
+            fields={"factor_values": {"x": 1}, "run_id": completed_run.id},
+        )
+
+    try:
+        async with get_session() as db:
+            runs, skipped = await plan_cell_runs(
+                db,
+                protocol_id=protocol_id,
+                experiment_id=experiment_id,
+                owner_id=owner_id,
+                graph=graph,
+                protocol_revision_id=new_revision.id,
+            )
+        assert [run.replicate_label for run in runs] == ["cell-obsolete"]
+        assert skipped == 0
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
             await delete_experiment(db, experiment_id)
 
 

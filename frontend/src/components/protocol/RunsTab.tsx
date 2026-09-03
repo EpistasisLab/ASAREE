@@ -93,10 +93,11 @@ function usageSummary(result: Pick<ResultCell, 'cost_usd' | 'total_tokens' | 'du
   ].filter((value): value is string => !!value)
 }
 
-// The panel's run control deliberately keeps the resume behavior of the
-// canvas's "Run all cells" action: unscored replicates run automatically.
-// This confirmation adds one decision only -- whether a previously scored
-// replicate should be deliberately re-run (and therefore re-billed).
+// The panel's run control resumes only replicates without a current completed
+// result. A completed run is meaningful even when it deliberately produced no
+// score metrics, so it stays out of a later batch unless the user explicitly
+// elects to re-run it (and therefore re-bill it). Obsolete results are current
+// work again because they belong to an older canvas version.
 export function RunAllCellsButton({
   protocol,
   experimentId,
@@ -146,15 +147,36 @@ export function RunAllCellsButton({
       .filter((trial) => trial.status === 'queued' || trial.status === 'running')
       .map((trial) => trial.replicate_label),
   )
+  const completedReplicateLabels = new Set(
+    (trialsQuery.data ?? [])
+      .filter((trial) => trial.status === 'completed' && !trial.obsolete)
+      .map((trial) => trial.replicate_label),
+  )
+  const obsoleteReplicateLabels = new Set(
+    (trialsQuery.data ?? [])
+      .filter((trial) => trial.obsolete)
+      .map((trial) => trial.replicate_label),
+  )
   const eligibleReplicateLabels = replicates
     .filter((replicate) => !activeReplicateLabels.has(replicate.replicate_label))
     .map((replicate) => replicate.replicate_label)
   const cellCount = groupReplicatesIntoCells(replicates).length
+  const previouslyRunReplicateLabels = new Set(
+    replicates
+      .filter(
+        (replicate) =>
+          !obsoleteReplicateLabels.has(replicate.replicate_label) &&
+          (!!replicate.metric_values || completedReplicateLabels.has(replicate.replicate_label)),
+      )
+      .map((replicate) => replicate.replicate_label),
+  )
+  const previouslyRunReplicates = replicates.filter((replicate) => previouslyRunReplicateLabels.has(replicate.replicate_label))
   const pendingReplicateCount = replicates.filter(
-    (replicate) => !replicate.metric_values && !activeReplicateLabels.has(replicate.replicate_label),
+    (replicate) =>
+      !previouslyRunReplicateLabels.has(replicate.replicate_label) && !activeReplicateLabels.has(replicate.replicate_label),
   ).length
-  const scoredCells = groupReplicatesIntoCells(
-    replicates.filter((replicate) => !!replicate.metric_values && !activeReplicateLabels.has(replicate.replicate_label)),
+  const previouslyRunCells = groupReplicatesIntoCells(
+    previouslyRunReplicates.filter((replicate) => !activeReplicateLabels.has(replicate.replicate_label)),
   ).sort((a, b) =>
     cellSortKey(a).localeCompare(cellSortKey(b)),
   )
@@ -251,7 +273,7 @@ export function RunAllCellsButton({
     !protocol ||
     replicatesQuery.isLoading ||
     replicates.length === 0 ||
-    (pendingReplicateCount === 0 && scoredCells.length === 0) ||
+    (pendingReplicateCount === 0 && previouslyRunCells.length === 0) ||
     regenerationRequired ||
     unboundFactors.length > 0 ||
     !protocol.published_revision_id
@@ -263,7 +285,7 @@ export function RunAllCellsButton({
         ? 'Publish a valid canvas before running cells.'
         : replicates.length === 0
           ? 'Generate design first — there are no cells to run yet.'
-          : pendingReplicateCount === 0 && scoredCells.length === 0
+          : pendingReplicateCount === 0 && previouslyRunCells.length === 0
             ? 'All selected replicates are already running.'
           : undefined
   const runnableReplicateCount = pendingReplicateCount + selectedReruns.size
@@ -345,14 +367,14 @@ export function RunAllCellsButton({
                 <div>
                   <h3 id="previous-runs-heading" className="text-sm font-medium">Previously run cells</h3>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Previous results are skipped by default. Check a cell or replicate to run it again.
+                  Completed replicates are skipped by default. Check a cell or replicate to run it again.
                 </p>
               </div>
-              {scoredCells.length === 0 ? (
+              {previouslyRunCells.length === 0 ? (
                 <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">No completed replicates to review.</p>
               ) : (
                 <div className="max-h-60 space-y-2 overflow-y-auto pr-1">
-                  {scoredCells.map((cell) => {
+                  {previouslyRunCells.map((cell) => {
                     const labels = cell.replicates.map((replicate) => replicate.replicate_label)
                     const selectedCount = labels.filter((label) => selectedReruns.has(label)).length
                     const expanded = expandedCells.has(cell.label)
@@ -383,16 +405,22 @@ export function RunAllCellsButton({
                         </div>
                         {expanded && (
                           <ul id={listId} className="space-y-1 border-t bg-muted/20 px-2.5 py-2" aria-label={`Previously run replicates for ${summary}`}>
-                            {cell.replicates.map((replicate) => (
-                              <li key={replicate.id} className="flex items-center gap-2 rounded-md bg-background px-2 py-1.5">
-                                <Checkbox
-                                  checked={selectedReruns.has(replicate.replicate_label)}
-                                  onCheckedChange={(checked) => setReplicatesSelected([replicate.replicate_label], checked === true)}
-                                  aria-label={`Run replicate ${replicate.replicate_number} again`}
-                                />
-                                <span className="text-sm">Replicate {replicate.replicate_number}</span>
-                              </li>
-                            ))}
+                            {cell.replicates.map((replicate) => {
+                              const scored = !!replicate.metric_values
+                              return (
+                                <li key={replicate.id} className="flex items-center gap-2 rounded-md bg-background px-2 py-1.5">
+                                  <Checkbox
+                                    checked={selectedReruns.has(replicate.replicate_label)}
+                                    onCheckedChange={(checked) => setReplicatesSelected([replicate.replicate_label], checked === true)}
+                                    aria-label={`Run replicate ${replicate.replicate_number} again`}
+                                  />
+                                  <span className="text-sm">Replicate {replicate.replicate_number}</span>
+                                  <span className="ml-auto text-xs text-muted-foreground">
+                                    {scored ? 'Scored' : 'Completed without metrics'}
+                                  </span>
+                                </li>
+                              )
+                            })}
                           </ul>
                         )}
                       </div>

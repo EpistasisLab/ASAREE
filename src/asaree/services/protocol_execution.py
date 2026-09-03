@@ -35,6 +35,7 @@ from motoro.schemas.agent import ModelConfig
 from motoro.schemas.output import parse_envelope
 from motoro.schemas.pattern import PatternConfig
 from motoro.services.mcp_service import hydrate_registry
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.config import get_settings
@@ -2032,13 +2033,16 @@ async def plan_cell_runs(
     rerun_replicate_labels: set[str] | None = None,
 ) -> tuple[list[ProtocolRun], int]:
     """ "Run all cells": creates one pending :class:`ProtocolRun` per
-    not-yet-scored replicate row under *experiment_id*, each carrying its
+    not-yet-completed replicate row under *experiment_id*, each carrying its
     cell's ``factor_values`` for ``run_protocol`` to
     substitute at execution time via ``apply_factor_bindings``. Returns
-    ``(created_runs, skipped_count)`` -- a replicate already carrying
-    ``metric_values`` is skipped (resume semantics) unless its label appears
-    in ``rerun_replicate_labels``. ``replicate_labels`` optionally narrows the
-    batch to one or more current-design replicates. Raises
+    ``(created_runs, skipped_count)`` -- a replicate with score metrics or a
+    non-obsolete completed prior ProtocolRun is skipped (resume semantics)
+    unless its label appears in ``rerun_replicate_labels``. This keeps
+    intentionally unscored qualitative runs from being silently re-billed,
+    while letting obsolete results run against the current canvas.
+    ``replicate_labels`` optionally narrows the batch to one or more
+    current-design replicates. Raises
     :class:`ProtocolValidationError` (same type the plain-run endpoint
     already 422s on) if there's no linked experiment, the graph itself is
     invalid, the graph doesn't have exactly one sink node -- a replicate's result
@@ -2084,16 +2088,49 @@ async def plan_cell_runs(
     unknown = requested_reruns - requested_labels
     if unknown:
         raise ProtocolValidationError(f"Unknown replicate label(s): {', '.join(sorted(unknown))}.")
-    scored_labels = {replicate.replicate_label for replicate in replicates if replicate.metric_values}
-    not_scored = requested_reruns - scored_labels
-    if not_scored:
+    run_ids = {replicate.run_id for replicate in replicates if replicate.run_id is not None}
+    runs_by_id: dict[uuid.UUID, ProtocolRun] = {}
+    if run_ids:
+        runs_by_id = {
+            run.id: run
+            for run in (
+                await db.execute(select(ProtocolRun).where(ProtocolRun.id.in_(run_ids)))
+            ).scalars()
+        }
+    published_revision = await get_revision(db, protocol_revision_id) if protocol_revision_id is not None else None
+
+    # Keep the definition of obsolete in step with list_experiment_trials:
+    # a run pinned to another revision is obsolete; an older unpinned legacy
+    # run is obsolete once a newer canvas was published. Directly scored rows
+    # have no ProtocolRun and therefore cannot be obsolete.
+    def is_obsolete(run: ProtocolRun) -> bool:
+        if protocol_revision_id is None:
+            return False
+        if run.protocol_revision_id is not None:
+            return run.protocol_revision_id != protocol_revision_id
+        return published_revision is not None and run.created_at < published_revision.published_at
+
+    obsolete_run_ids = {run.id for run in runs_by_id.values() if is_obsolete(run)}
+    completed_run_ids = {
+        run.id
+        for run in runs_by_id.values()
+        if run.status == "completed" and run.id not in obsolete_run_ids
+    }
+    completed_labels = {
+        replicate.replicate_label
+        for replicate in replicates
+        if (replicate.metric_values and replicate.run_id not in obsolete_run_ids)
+        or replicate.run_id in completed_run_ids
+    }
+    not_completed = requested_reruns - completed_labels
+    if not_completed:
         raise ProtocolValidationError(
-            f"Only previously scored replicates can be selected to run again: {', '.join(sorted(not_scored))}."
+            f"Only previously completed replicates can be selected to run again: {', '.join(sorted(not_completed))}."
         )
     pending = [
         replicate
         for replicate in replicates
-        if not replicate.metric_values or replicate.replicate_label in requested_reruns
+        if replicate.replicate_label not in completed_labels or replicate.replicate_label in requested_reruns
     ]
     runs = [
         await create_protocol_run(
@@ -2122,13 +2159,13 @@ async def plan_single_replicate_run(
     protocol_revision_id: uuid.UUID | None = None,
 ) -> ProtocolRun:
     """Run one already-generated replicate for real, by name -- the single-run
-    counterpart to plan_cell_runs's own "every not-yet-scored replicate" batch.
+    counterpart to plan_cell_runs's own "every not-yet-completed replicate" batch.
     The canvas's own Run button offers this alongside its existing ad-hoc
     (no substitution) run once the linked experiment has generated cells,
     for testing one specific factor combination without either running
     everything or falling back to an un-substituted smoke test. Same
     validation as plan_cell_runs (linked experiment, valid graph, exactly
-    one sink, coordination strategy) but does NOT skip an already-scored
+    one sink, coordination strategy) but does NOT skip an already-completed
     replicate -- picking one specific replicate by name is a deliberate re-run, not a
     batch resume, so there's nothing to protect it from."""
     if experiment_id is None:

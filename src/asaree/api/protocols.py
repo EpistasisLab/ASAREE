@@ -118,15 +118,15 @@ class CreateProtocolRunRequest(BaseModel):
     # runs that one already-generated replicate for real, its cell's factor_values
     # substituted in (see services.protocol_execution.plan_single_replicate_run),
     # the same as one entry of "Run all cells" but picked by name instead of
-    # running every not-yet-scored replicate at once.
+    # running every not-yet-completed replicate at once.
     replicate_label: str | None = None
 
 
 class CellRunBatchRequest(BaseModel):
-    """Previously scored replicates the user explicitly chose to run again.
+    """Previously completed replicates the user explicitly chose to run again.
 
-    Omit this body for the normal resume behavior: every unscored replicate
-    runs, while scored ones remain skipped.
+    Omit this body for the normal resume behavior: every never-completed
+    replicate runs, while completed ones remain skipped.
     """
 
     # When omitted, this is the whole current design. Supplying labels scopes
@@ -137,8 +137,8 @@ class CellRunBatchRequest(BaseModel):
 
 class CellRunBatchResponse(BaseModel):
     """One "run all cells" trigger fans out into these -- one ProtocolRun per
-    not-yet-scored replicate. ``skipped`` is how many replicates already had
-    metric_values and were left alone (resume semantics)."""
+    not-yet-completed replicate. ``skipped`` is how many replicates already
+    completed and were left alone (resume semantics)."""
 
     protocol_run_ids: list[uuid.UUID]
     replicate_labels: list[str]

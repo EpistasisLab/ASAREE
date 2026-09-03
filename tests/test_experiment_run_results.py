@@ -131,14 +131,13 @@ def test_results_csv_projects_categorical_factors_to_short_level_labels() -> Non
     assert "critic_enabled" in rows[0]
     assert "temperature" in rows[0]
     assert "model" in rows[0]
-    assert rows[0]["critic_enabled"] == "1"
-    assert rows[1]["critic_enabled"] == "0"
-    assert rows[0]["model"] == "small"
-    assert rows[1]["model"] == "large"
-    assert rows[0]["temperature"] == "0.2"
-    assert rows[1]["temperature"] == "0.8"
-    assert rows[0]["passed"] == "1"
-    assert rows[1]["passed"] == "0"
+    by_model = {row["model"]: row for row in rows}
+    assert by_model["small"]["critic_enabled"] == "1"
+    assert by_model["large"]["critic_enabled"] == "0"
+    assert by_model["small"]["temperature"] == "0.2"
+    assert by_model["large"]["temperature"] == "0.8"
+    assert by_model["small"]["passed"] == "1"
+    assert by_model["large"]["passed"] == "0"
 
 
 def test_results_csv_orders_identity_factors_metrics_then_operational_metadata() -> None:
@@ -183,6 +182,28 @@ def test_results_csv_orders_identity_factors_metrics_then_operational_metadata()
         "error",
     ]
     assert "replicate_label" not in header
+
+
+def test_results_csv_sorts_long_form_factor_values_in_natural_level_order() -> None:
+    csv_text = result_rows_to_csv(
+        [
+            {"cell_label": "third", "replicate_number": 1, "factor_values": {"prompt": "third"}},
+            {"cell_label": "first", "replicate_number": 2, "factor_values": {"prompt": "first"}},
+            {"cell_label": "second", "replicate_number": 1, "factor_values": {"prompt": "second"}},
+        ],
+        {
+            "factors": [
+                {
+                    "name": "prompt",
+                    "levels": ["first", "second", "third"],
+                    "level_labels": ["level1", "level2", "level3"],
+                }
+            ]
+        },
+    )
+
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    assert [row["prompt"] for row in rows] == ["level1", "level2", "level3"]
 
 
 def test_results_csv_schema_describes_categorical_labels_and_binary_outcomes() -> None:
@@ -232,8 +253,8 @@ def test_results_csv_uses_persisted_level_labels_instead_of_long_treatment_value
     exported_rows = list(csv.DictReader(io.StringIO(csv_text)))
     assert [row["agent_system_prompt"] for row in exported_rows] == [
         "classifier",
-        "full_description",
         "concise_summary",
+        "full_description",
     ]
     factor = next(column for column in schema["columns"] if column["name"] == "agent_system_prompt")
     assert set(factor["levels"]) == {"classifier", "full_description", "concise_summary"}

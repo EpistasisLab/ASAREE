@@ -75,6 +75,12 @@ def _factor_level_key(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def _natural_label_key(label: str) -> tuple[str, int, str]:
+    """Keep generated labels in human order: level2 before level10."""
+    match = re.fullmatch(r"(.*?)(\d+)", label.casefold())
+    return (match.group(1), int(match.group(2)), label) if match else (label.casefold(), -1, label)
+
+
 def _unique_column_name(base: str, used: set[str]) -> str:
     candidate = base
     suffix = 2
@@ -288,7 +294,23 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
-    for source in rows:
+
+    def row_sort_key(source: dict[str, Any]) -> tuple[Any, ...]:
+        factors = source.get("factor_values") or {}
+        factor_keys: list[Any] = []
+        for _column_name, factor_key, kind, labels in factor_columns:
+            value = factors.get(factor_key)
+            if kind == "categorical":
+                label = (labels or {}).get(_factor_level_key(value), "")
+                factor_keys.append(_natural_label_key(label))
+            elif kind == "boolean":
+                factor_keys.append(int(bool(value)))
+            elif kind == "numeric":
+                factor_keys.append(value if isinstance(value, int | float) else float("-inf"))
+        replicate_number = source.get("replicate_number")
+        return (*factor_keys, replicate_number if isinstance(replicate_number, int) else 0)
+
+    for source in sorted(rows, key=row_sort_key):
         metrics = {
             key: int(value) if isinstance(value, bool) else value
             for key, value in (source.get("metric_values") or {}).items()

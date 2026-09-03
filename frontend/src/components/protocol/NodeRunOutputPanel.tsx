@@ -60,6 +60,63 @@ function StepRow({ step }: { step: RunStep }) {
   )
 }
 
+// This trace is shared by the live node inspector and the immutable
+// experiment-result inspector. Both surfaces point at the same AgentRun, so
+// keeping the fetch and presentation here prevents their views of an agent's
+// SRPA loop from drifting apart.
+export function RunStepTrace({ runId }: { runId: string }) {
+  const [stepsOpen, setStepsOpen] = useState(false)
+  const stepsQuery = useQuery({
+    queryKey: ['runs', runId, 'steps'],
+    queryFn: () => runsApi.getSteps(runId),
+    enabled: stepsOpen,
+  })
+  const steps = stepsQuery.data ?? []
+  const iterations = new Map<number, RunStep[]>()
+  for (const step of steps) {
+    const bucket = iterations.get(step.iteration) ?? []
+    bucket.push(step)
+    iterations.set(step.iteration, bucket)
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <button
+        type="button"
+        onClick={() => setStepsOpen((open) => !open)}
+        className="flex cursor-pointer items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+        aria-expanded={stepsOpen}
+      >
+        {stepsOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+        Steps (Sense / Reason / Plan / Act)
+      </button>
+      {stepsOpen &&
+        (stepsQuery.isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading steps…</p>
+        ) : steps.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No step trace recorded for this run.</p>
+        ) : (
+          <div className="space-y-3">
+            {[...iterations.entries()]
+              .sort(([a], [b]) => a - b)
+              .map(([iteration, iterationSteps]) => (
+                <div key={iteration} className="space-y-1.5">
+                  <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Iteration {iteration}</p>
+                  <div className="space-y-1">
+                    {iterationSteps
+                      .sort((a, b) => a.sequence - b.sequence)
+                      .map((step) => (
+                        <StepRow key={step.id} step={step} />
+                      ))}
+                  </div>
+                </div>
+              ))}
+          </div>
+        ))}
+    </div>
+  )
+}
+
 // The one piece of ARES's Run Detail page worth reusing here: real
 // observability into what an agent actually did (its Sense/Reason/Plan/Act
 // loop), not a wholesale port of that page. Zero new backend work --
@@ -70,13 +127,7 @@ function StepRow({ step }: { step: RunStep }) {
 // already available from the same polled node_runs blob the canvas badge
 // uses -- no separate request needed for that part.
 export function NodeRunOutputPanel({ nodeRun }: { nodeRun: NodeRunState | undefined }) {
-  const [stepsOpen, setStepsOpen] = useState(false)
   const badge = nodeRunBadge(nodeRun?.status)
-  const stepsQuery = useQuery({
-    queryKey: ['runs', nodeRun?.run_id, 'steps'],
-    queryFn: () => runsApi.getSteps(nodeRun!.run_id!),
-    enabled: stepsOpen && !!nodeRun?.run_id,
-  })
 
   if (!nodeRun) {
     return (
@@ -84,14 +135,6 @@ export function NodeRunOutputPanel({ nodeRun }: { nodeRun: NodeRunState | undefi
         This node hasn't run yet -- click Run on the canvas to see its output here.
       </p>
     )
-  }
-
-  const steps = stepsQuery.data ?? []
-  const iterations = new Map<number, RunStep[]>()
-  for (const step of steps) {
-    const bucket = iterations.get(step.iteration) ?? []
-    bucket.push(step)
-    iterations.set(step.iteration, bucket)
   }
 
   // Critic Gate only -- `approved` only exists at all on a gate's own
@@ -148,41 +191,7 @@ export function NodeRunOutputPanel({ nodeRun }: { nodeRun: NodeRunState | undefi
         <p className="text-sm text-muted-foreground">No output yet.</p>
       )}
 
-      {nodeRun.run_id && (
-        <div className="space-y-1.5">
-          <button
-            type="button"
-            onClick={() => setStepsOpen((o) => !o)}
-            className="flex cursor-pointer items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
-          >
-            {stepsOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-            Steps (Sense / Reason / Plan / Act)
-          </button>
-          {stepsOpen &&
-            (stepsQuery.isLoading ? (
-              <p className="text-xs text-muted-foreground">Loading steps…</p>
-            ) : steps.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No step trace recorded for this run.</p>
-            ) : (
-              <div className="space-y-3">
-                {[...iterations.entries()]
-                  .sort(([a], [b]) => a - b)
-                  .map(([iteration, iterationSteps]) => (
-                    <div key={iteration} className="space-y-1.5">
-                      <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Iteration {iteration}</p>
-                      <div className="space-y-1">
-                        {iterationSteps
-                          .sort((a, b) => a.sequence - b.sequence)
-                          .map((step) => (
-                            <StepRow key={step.id} step={step} />
-                          ))}
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            ))}
-        </div>
-      )}
+      {nodeRun.run_id && <RunStepTrace runId={nodeRun.run_id} />}
     </div>
   )
 }

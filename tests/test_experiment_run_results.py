@@ -9,6 +9,7 @@ from asaree.services.experiment_run_results import (
     _has_execution_evidence,
     _node_labels,
     _primary_metric,
+    _sum,
     _usage,
 )
 
@@ -41,9 +42,10 @@ def test_usage_keeps_unreported_values_unknown_instead_of_zero() -> None:
 
 
 def test_primary_metric_uses_the_design_direction() -> None:
-    assert _primary_metric(
-        {"metrics": [{"name": "loss", "primary": True, "direction": "minimize"}]}
-    ) == ("loss", "minimize")
+    assert _primary_metric({"metrics": [{"name": "loss", "primary": True, "direction": "minimize"}]}) == (
+        "loss",
+        "minimize",
+    )
 
 
 def test_declared_runtime_metrics_are_projected_from_execution_telemetry() -> None:
@@ -58,17 +60,24 @@ def test_declared_runtime_metrics_are_projected_from_execution_telemetry() -> No
     assert _primary_metric(spec) == ("cost_usd", "maximize")
 
 
+def test_cell_metric_rollups_sum_current_replicates() -> None:
+    assert _sum([1250.0, 300.5, 49.5]) == 1600.0
+    assert _sum([]) is None
+
+
 def test_results_csv_includes_projected_runtime_metrics() -> None:
     csv_text = result_rows_to_csv(
-        [{
-            "replicate_label": "cell__rep1",
-            "replicate_number": 1,
-            "cell_label": "cell",
-            "status": "completed",
-            "factor_values": {"model": "small"},
-            "metric_values": {"duration_seconds": 2.5, "total_tokens": 150},
-            "cost_usd": 0.04,
-        }]
+        [
+            {
+                "replicate_label": "cell__rep1",
+                "replicate_number": 1,
+                "cell_label": "cell",
+                "status": "completed",
+                "factor_values": {"model": "small"},
+                "metric_values": {"duration_seconds": 2.5, "total_tokens": 150},
+                "cost_usd": 0.04,
+            }
+        ]
     )
     header, row = csv_text.strip().splitlines()
     assert "duration_seconds" in header and "total_tokens" in header

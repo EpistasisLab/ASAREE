@@ -282,7 +282,10 @@ export function bestMetric(experiment: Experiment | undefined, replicates: Repli
  * trimmed, unit suffix appended, non-numbers rendered as an em dash. */
 export function formatMetricValue(key: string, value: unknown): string {
   if (typeof value !== 'number') return '—'
-  const formatted = scaledMetricValue(key, value).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+  // Explicitly use a grouped, readable display for large score/token-like
+  // custom metrics.  The Results detail panel surfaces these values in a
+  // compact grid where an ungrouped `12500` is needlessly hard to scan.
+  const formatted = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 }).format(scaledMetricValue(key, value))
   return `${formatted}${metricValueSuffix(key)}`
 }
 

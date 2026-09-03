@@ -76,8 +76,8 @@ def _numeric_metrics(values: dict[str, Any] | None) -> dict[str, float]:
     return {key: number for key, value in (values or {}).items() if (number := _number(value)) is not None}
 
 
-def _mean(values: list[float]) -> float | None:
-    return sum(values) / len(values) if values else None
+def _sum(values: list[float]) -> float | None:
+    return sum(values) if values else None
 
 
 def _sum_reported(rows: list[dict[str, Any]], key: str) -> float | None:
@@ -414,7 +414,7 @@ async def summarize_experiment_run_results(
         metrics = {}
         for key in metric_keys:
             values = [_number(row["metric_values"].get(key)) for row in current]
-            metrics[key] = _mean([value for value in values if value is not None])
+            metrics[key] = _sum([value for value in values if value is not None])
         cell_summaries.append(
             {
                 "cell_label": cell_label,
@@ -423,6 +423,9 @@ async def summarize_experiment_run_results(
                 "completed_count": sum(row["status"] == "completed" for row in rows),
                 "current_completed_count": sum(row["status"] == "completed" for row in current),
                 "obsolete_count": sum(len(row["obsolete_runs"]) for row in rows),
+                # Kept under the established response key for client
+                # compatibility. Values are deliberately cell totals, not
+                # means: a cell aggregates all of its current replicates.
                 "metric_means": {key: value for key, value in metrics.items() if value is not None},
                 "cost_usd": _sum_reported(current, "cost_usd"),
                 "total_tokens": _sum_reported(current, "total_tokens"),

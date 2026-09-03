@@ -16,7 +16,7 @@ import {
   type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Play, Plus, Square, X } from 'lucide-react'
+import { Lock, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { newNodeId } from '@/lib/nodeId'
@@ -70,7 +70,6 @@ import { FactorEditorDialog } from './FactorEditorDialog'
 import { CONNECTOR_CHILD_CLEARANCE, connectorNodeOffsetX, findFreePosition, tidyLayout } from './layout'
 import { LlmNodeInspector } from './LlmNodeInspector'
 import { DatasetBrowserPanel } from './DatasetBrowserPanel'
-import { DesignRegenerationRequiredDialog } from './DesignRegenerationRequiredDialog'
 import { DATASET_BROWSE, nodeDataForDataset } from './datasetCatalog'
 import { McpServerBrowserPanel } from './McpServerBrowserPanel'
 import {
@@ -94,7 +93,6 @@ import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
 import { RunConfirmDialog } from './RunConfirmDialog'
 import type { RunScope } from './runSummary'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
-import { SelectReplicateDialog } from './SelectCellDialog'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
 import { OkfBundleBrowserPanel } from './OkfBundleBrowserPanel'
 import { OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE, nodeDataForBundle, nodeDataForDocument } from './okfCatalog'
@@ -350,7 +348,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   initialGraph: ProtocolGraph
   hasUnpublishedChanges: boolean
   publishedRevision: number | null
-}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph, hasUnpublishedChanges, publishedRevision }, canvasHandleRef) {
+  experimentLocked?: boolean
+}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph, hasUnpublishedChanges, publishedRevision, experimentLocked = false }, canvasHandleRef) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialGraph.nodes as Node[])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateLegacyHandles(initialGraph))
   const queryClient = useQueryClient()
@@ -418,6 +417,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     [bindFactorOnNode, removeFactorBindings, renameFactorBindings],
   )
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!experimentLocked) return
+    // A lock can be applied from the canvas menu while an inspector is open.
+    // Close that editor immediately so it never looks as if its fields can
+    // still be changed; the node cards remain visible on the canvas.
+    setSelectedNodeId(null)
+    setAddPanelOpen(false)
+  }, [experimentLocked])
   // The node whose hover-toolbar "Make experimental factor" icon was just
   // clicked -- opens FactorEditorDialog's field picker pre-filtered to just
   // that node's own unbound fields (see requestMakeFactor below).
@@ -460,41 +467,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // Same idea again, requested from an existing edge's own hover "+"
   // (InteractEdge) -- splits that edge into origin->newAgent->target.
   const [pendingEdgeInsert, setPendingEdgeInsert] = useState<EdgeInsertRequest | null>(null)
-  // Populated by the main Run button (whole graph or a picked cell) and by
-  // each node's own per-node Play icon (requestRunNode below) -- opens
+  // Populated by each node's per-node Play icon (requestRunNode below) -- opens
   // RunConfirmDialog instead of firing the run immediately, so a real
   // (billable) run never fires without the user seeing what will actually
   // execute first.
   const [pendingRunConfirm, setPendingRunConfirm] = useState<RunScope | null>(null)
-  const [designRegenerationWarningOpen, setDesignRegenerationWarningOpen] = useState(false)
   const [runId, setRunId] = useState<string | null>(null)
-  // null -- today's ad-hoc, un-substituted whole-graph run (the only option
-  // before any cells exist). Set -- runs one already-generated replicate for
-  // real, its own factor_values substituted in (see
-  // services.protocol_execution.plan_single_replicate_run), picked from the
-  // dropdown next to the Run button.
-  const [selectedReplicateLabel, setSelectedReplicateLabel] = useState<string | null>(null)
-  const [cellPickerOpen, setCellPickerOpen] = useState(false)
-  const replicatesQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'replicates'],
-    queryFn: () => experimentsApi.listReplicates(experimentId!),
-    enabled: !!experimentId,
-  })
-  const designImpactQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'design-impact'],
-    queryFn: () => experimentsApi.getDesignImpact(experimentId!),
-    enabled: !!experimentId,
-  })
-  const replicateOptions = replicatesQuery.data ?? []
-  const designRegenerationRequired = designImpactQuery.data?.regeneration_required ?? false
-  // design_spec for SelectReplicateDialog's own factor-checkbox filter -- fetched
-  // only while that dialog is actually open, same "on demand" convention
-  // factorPickerExperimentQuery below uses for the same query.
-  const cellPickerExperimentQuery = useQuery({
-    queryKey: ['experiments', experimentId],
-    queryFn: () => experimentsApi.get(experimentId!),
-    enabled: !!experimentId && cellPickerOpen,
-  })
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, fitView } = useReactFlow()
 
@@ -512,7 +490,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const currentViewport = useViewport()
   const isAtRest = !restingViewportRef.current || isNearViewport(currentViewport, restingViewportRef.current)
 
-  const onConnect = useCallback((connection: Connection) => setEdges((eds) => addEdge(connection, eds)), [setEdges])
+  const onConnect = useCallback((connection: Connection) => {
+    if (!experimentLocked) setEdges((eds) => addEdge(connection, eds))
+  }, [experimentLocked, setEdges])
 
   // "Tidy up" -- reposition every node into a generated layout (see
   // layout.ts's tidyLayout). Goes through this component's own setNodes
@@ -521,6 +501,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // positions up with no extra request wiring. fitView waits a frame so it
   // measures the moved nodes, not the ones they replaced.
   const tidyUp = useCallback(() => {
+    if (experimentLocked) return
     setNodes((nds) => {
       const positions = tidyLayout(nds, edges)
       return nds.map((n) => {
@@ -529,12 +510,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       })
     })
     requestAnimationFrame(() => fitView({ maxZoom: DEFAULT_ZOOM, duration: 300 }))
-  }, [edges, fitView, setNodes])
-
-  const runMutation = useMutation({
-    mutationFn: () => protocolsApi.run(protocolId, selectedReplicateLabel),
-    onSuccess: (run) => setRunId(run.id),
-  })
+  }, [edges, experimentLocked, fitView, setNodes])
 
   // Read-only subscription to the linked experiment, purely so the dataset
   // sync below sees 'dataset_config' factor levels (see its own comment).
@@ -553,28 +529,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     mutationFn: (datasetIds: string[]) => experimentsApi.update(experimentId!, { dataset_ids: datasetIds }),
   })
 
-  // Run button's own entry point -- always opens RunConfirmDialog first
-  // (whole graph, or the picked cell) rather than firing a real, billable
-  // run immediately. That dialog does its own pre-flight scan for obviously
-  // misconfigured nodes (no model, no dataset picked, no script code, an
-  // agent with nothing wired into its required LLM connector) and surfaces
-  // them inline instead of only ever finding out via a generic "one or more
-  // nodes failed" AFTER spending a real attempt.
-  function requestRun() {
-    setRunErrorDismissed(false)
-    if (designRegenerationRequired) {
-      setDesignRegenerationWarningOpen(true)
-      return
-    }
-    setPendingRunConfirm(selectedReplicateLabel ? { type: 'replicate', label: selectedReplicateLabel } : { type: 'graph' })
-  }
-
   function confirmPendingRun() {
     if (!pendingRunConfirm) return
     if (pendingRunConfirm.type === 'node') {
       runNodeMutation.mutate(pendingRunConfirm.nodeId)
-    } else {
-      runMutation.mutate()
     }
     setPendingRunConfirm(null)
   }
@@ -592,9 +550,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
   })
 
-  // The canvas's per-node Play icon -- reuses the exact same runId/runQuery
-  // polling state as the main Run button, since a node-scoped run's
-  // node_runs just carries one key instead of the whole graph's; the
+  // The canvas's per-node Play icon stores its run in the shared runId/runQuery
+  // polling state, so the
   // Output tab and status badge both already read from that same state
   // with no changes needed.
   const runNodeMutation = useMutation({
@@ -615,7 +572,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
   })
 
-  const isRunning = runMutation.isPending || (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
+  const isRunning = runNodeMutation.isPending || (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
 
   // Stop button -- only raises cancel_requested_at; run_protocol's own node
   // loop (polled between nodes, not mid-node) is what actually honors it.
@@ -742,6 +699,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // isn't ALSO in this same delete batch.
   const onBeforeDelete = useCallback(
     async ({ nodes: deleting, edges: deletingEdges }: { nodes: Node[]; edges: Edge[] }) => {
+      if (experimentLocked) return false
       const deletedNodeIds = new Set(deleting.map((n) => n.id))
       const filteredEdges = deletingEdges.filter((e) => e.targetHandle !== 'architectural_pattern' || deletedNodeIds.has(e.target))
       // An edge-only deletion (no nodes -- e.g. selecting a single edge and
@@ -755,16 +713,20 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         setPendingDelete({ nodes: deleting, edges: filteredEdges, resolve })
       })
     },
-    [],
+    [experimentLocked],
   )
 
-  function closeAddPanel() {
-    setAddPanelOpen(false)
+  function resetAddPanelBrowsers() {
     setServerBrowserOpen(false)
     setSkillBrowserOpen(false)
     setBundleBrowserOpen(false)
     setDocumentBrowserOpen(false)
     setDatasetBrowserOpen(false)
+  }
+
+  function closeAddPanel() {
+    setAddPanelOpen(false)
+    resetAddPanelBrowsers()
     setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(null)
     setPendingEdgeInsert(null)
@@ -775,30 +737,39 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // the slot's node type via CONNECTOR_PANEL_INFO, and addNode() below
   // wires the picked node straight into the requesting node's handle.
   const requestConnectorAdd = useCallback((request: ConnectorAddRequest) => {
+    if (experimentLocked) return
     setSelectedNodeId(null)
     setPendingConnectorAdd(request)
-    setServerBrowserOpen(false)
+    setPendingMainEdgeAdd(null)
+    setPendingEdgeInsert(null)
+    resetAddPanelBrowsers()
     setAddPanelOpen(true)
-  }, [])
+  }, [experimentLocked])
   // A MainEdgeAddStub requests this instead -- same panel, restricted to
   // "agent" (the only node type this stub ever creates), and addNode()
   // below wires a plain edge (no handle id) in whichever direction the
   // requesting stub sits.
   const requestMainEdgeAdd = useCallback((request: MainEdgeAddRequest) => {
+    if (experimentLocked) return
     setSelectedNodeId(null)
+    setPendingConnectorAdd(null)
     setPendingMainEdgeAdd(request)
-    setServerBrowserOpen(false)
+    setPendingEdgeInsert(null)
+    resetAddPanelBrowsers()
     setAddPanelOpen(true)
-  }, [])
+  }, [experimentLocked])
   // An InteractEdge's own "+" requests this -- same panel again, restricted
   // to "agent", and addNode() below removes the original edge and rewires
   // origin->newAgent->target instead.
   const requestEdgeInsert = useCallback((request: EdgeInsertRequest) => {
+    if (experimentLocked) return
     setSelectedNodeId(null)
+    setPendingConnectorAdd(null)
+    setPendingMainEdgeAdd(null)
     setPendingEdgeInsert(request)
-    setServerBrowserOpen(false)
+    resetAddPanelBrowsers()
     setAddPanelOpen(true)
-  }, [])
+  }, [experimentLocked])
   // The canvas's per-node Play icon (NodeHoverToolbar) -- opens
   // RunConfirmDialog scoped to just this node, same as the main Run button,
   // rather than firing runNodeMutation immediately (see its own comment for
@@ -823,11 +794,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // experience than the two dialogs simply stacking.
   const requestMakeFactor = useCallback(
     (nodeId: string) => {
-      if (!experimentId) return
+      if (!experimentId || experimentLocked) return
       setAddPanelOpen(false)
       setFactorPickerNodeId(nodeId)
     },
-    [experimentId],
+    [experimentId, experimentLocked],
   )
   const canvasActions = useMemo(
     () => ({ requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode, requestMakeFactor }),
@@ -902,6 +873,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // node already there (findFreePosition) so a fresh node never lands on
   // top of an existing one.
   function addNode(nodeType: string, dataOverride?: ProtocolNode['data']) {
+    if (experimentLocked) return
     // Not a node type -- drills into the server browser, keeping whichever
     // pending connector/edge request is in flight so picking a server there
     // still wires the resulting node into the slot that asked for it.
@@ -1272,6 +1244,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | ReasonActPatternNodeData
       | SingleAgentBaselinePatternNodeData,
   ) {
+    if (experimentLocked) return
     const previous = nodes.find((node) => node.id === nodeId)
     const oldBindings = (previous?.data as { factor_bindings?: Record<string, string> } | undefined)?.factor_bindings ?? {}
     const nextBindings = (data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {}
@@ -1350,6 +1323,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   )
 
   function deleteNode(nodeId: string) {
+    if (experimentLocked) return
     const deleting = nodes.filter((node) => node.id === nodeId)
     const nextNodes = nodes.filter((node) => node.id !== nodeId)
     setNodes(nextNodes)
@@ -1364,6 +1338,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // there's no pending xyflow deletion to approve/reject here -- just call
   // deleteNode for real once the user confirms).
   function requestDeleteNode(nodeId: string) {
+    if (experimentLocked) return
     const node = nodes.find((n) => n.id === nodeId)
     if (!node) return
     const relatedEdges = edges.filter((e) => e.source === nodeId || e.target === nodeId)
@@ -1383,6 +1358,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // imported nodes have already been placed this same import -- so nothing
   // lands exactly on top of an existing OR a freshly-imported node.
   function handleImport(imported: ProtocolGraph) {
+    if (experimentLocked) return
     if (imported.nodes.length === 0) return
     const idMap = new Map(imported.nodes.map((n) => [n.id, newNodeId()]))
 
@@ -1428,12 +1404,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            nodesDraggable={!experimentLocked}
+            nodesConnectable={!experimentLocked}
+            edgesReconnectable={!experimentLocked}
             isValidConnection={isValidConnection}
             nodeTypes={NODE_TYPES}
             edgeTypes={EDGE_TYPES}
             onBeforeDelete={onBeforeDelete}
             onNodeClick={() => setAddPanelOpen(false)}
             onNodeDoubleClick={(_, node) => {
+              if (experimentLocked) return
               setAddPanelOpen(false)
               setSelectedNodeId(node.id)
             }}
@@ -1462,14 +1442,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               <MiniMap pannable zoomable className="!bg-card" maskColor="color-mix(in oklch, var(--background), transparent 40%)" />
             )}
           </ReactFlow>
-          <CanvasControls onTidy={tidyUp} />
+          {!experimentLocked && <CanvasControls onTidy={tidyUp} />}
           {(() => {
-            // runMutation.error/runNodeMutation.error is the real validation
+            // runNodeMutation.error is the real validation
             // message (e.g. topological_order/validate_single_node_runnable
             // rejecting before any ProtocolRun row even exists) --
             // runQuery.data?.error only ever exists once a run row was
             // created and later failed asynchronously in the worker.
-            const failedMutation = runMutation.isError ? runMutation : runNodeMutation.isError ? runNodeMutation : null
+            const failedMutation = runNodeMutation.isError ? runNodeMutation : null
             const runErrorText =
               runQuery.data?.error ??
               (failedMutation
@@ -1501,41 +1481,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             )
           })()}
           <div className="absolute top-3 right-3 z-10 flex items-center gap-2">
-            {replicateOptions.length > 0 && (
-              <span title={designRegenerationRequired ? 'Design changed — review and regenerate before selecting a cell.' : undefined}>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="max-w-40"
-                  onClick={() => (designRegenerationRequired ? setDesignRegenerationWarningOpen(true) : setCellPickerOpen(true))}
-                >
-                  <span className={`truncate ${selectedReplicateLabel ? 'font-mono' : ''}`} title={selectedReplicateLabel ?? undefined}>
-                    {designRegenerationRequired ? 'Update design' : selectedReplicateLabel ?? 'Run replicate'}
-                  </span>
-                </Button>
-              </span>
-            )}
-            {cellPickerOpen && (
-              <SelectReplicateDialog
-                replicates={replicateOptions}
-                designSpec={cellPickerExperimentQuery.data?.design_spec}
-                selectedReplicateLabel={selectedReplicateLabel}
-                onCancel={() => setCellPickerOpen(false)}
-                onSelect={(replicateLabel) => {
-                  setSelectedReplicateLabel(replicateLabel)
-                  setCellPickerOpen(false)
-                }}
-              />
-            )}
-            <Button
-              size="sm"
-              disabled={isRunning}
-              title={designRegenerationRequired ? 'Design changed — review and regenerate before running.' : undefined}
-              onClick={requestRun}
-            >
-              <Play className="size-4" />
-              {isRunning ? 'Running…' : designRegenerationRequired ? 'Update design' : selectedReplicateLabel ? `Run replicate: ${selectedReplicateLabel}` : 'Run'}
-            </Button>
             {isRunning && (
               <Button
                 size="sm"
@@ -1551,10 +1496,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               size="icon"
               className="rounded-full"
               aria-label="Add node"
+              disabled={experimentLocked}
               onClick={() => {
                 setSelectedNodeId(null)
                 setPendingConnectorAdd(null)
-                setServerBrowserOpen(false)
+                setPendingMainEdgeAdd(null)
+                setPendingEdgeInsert(null)
+                resetAddPanelBrowsers()
                 setAddPanelOpen(true)
               }}
             >
@@ -1568,6 +1516,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               onImport={handleImport}
             />
           </div>
+          {experimentLocked && (
+            <div className="absolute top-3 left-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-background/95 px-2.5 py-1.5 text-xs font-medium shadow-sm">
+              <Lock className="size-3.5" /> Canvas locked
+            </div>
+          )}
         </div>
         {addPanelOpen && serverBrowserOpen ? (
           <McpServerBrowserPanel
@@ -1783,7 +1736,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           onPublishAndRun={() => publishAndRunMutation.mutate()}
         />
       )}
-      {designRegenerationWarningOpen && <DesignRegenerationRequiredDialog onClose={() => setDesignRegenerationWarningOpen(false)} />}
       {factorPickerNodeId && (
         <FactorEditorDialog
           open

@@ -130,6 +130,8 @@ export interface Experiment {
   // code written before that; it is no longer a stored column.
   dataset_ids: string[]
   dataset_id: string | null
+  locked_at: string | null
+  locked_protocol_revision_id: string | null
   created_at: string
   archived_at: string | null
 }
@@ -143,6 +145,9 @@ export interface Trial {
   metric_values: Record<string, unknown>
   status: 'not_started' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
   run_id: string | null
+  // True when this run used an older published canvas version than the
+  // protocol's current published version.
+  obsolete: boolean
   error: string | null
   updated_at: string
 }
@@ -213,6 +218,107 @@ export interface ExperimentResults {
   reason: string | null
   analysis: ExperimentAnalysis | null
   best_condition: EmmCell | null
+}
+
+// The general-purpose Results panel is intentionally not limited to a
+// balanced factorial design. These records combine execution facts (status,
+// duration, usage) with whatever numeric metrics the experiment produced.
+export interface ResultNodeRun {
+  node_id: string
+  node_label: string
+  status: string
+  output_text: string | null
+  error: string | null
+  agent_run_id: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  cost_usd: number | null
+}
+
+export interface ResultReplicate {
+  replicate_label: string
+  replicate_number: number
+  cell_label: string
+  factor_values: Record<string, unknown>
+  metric_values: Record<string, unknown>
+  status: Trial['status']
+  obsolete: boolean
+  error: string | null
+  run_id: string | null
+  protocol_revision_id: string | null
+  updated_at: string
+  duration_seconds: number | null
+  node_runs: ResultNodeRun[]
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  cost_usd: number | null
+  agent_run_count: number
+  reported_usage_count: number
+  reported_cost_count: number
+  obsolete_runs: ObsoleteRun[]
+}
+
+// Immutable ProtocolRun records that used an earlier canvas version. This
+// includes the latest stored run when it has since become obsolete, as well as
+// runs superseded by later attempts for the same replicate.
+export interface ObsoleteRun {
+  run_id: string
+  status: Trial['status']
+  obsolete: true
+  error: string | null
+  protocol_revision_id: string | null
+  updated_at: string
+  duration_seconds: number | null
+  node_runs: ResultNodeRun[]
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  cost_usd: number | null
+  agent_run_count: number
+  reported_usage_count: number
+  reported_cost_count: number
+}
+
+export interface ResultCell {
+  cell_label: string
+  factor_values: Record<string, unknown>
+  replicate_count: number
+  completed_count: number
+  current_completed_count: number
+  obsolete_count: number
+  metric_means: Record<string, number>
+  cost_usd: number | null
+  total_tokens: number | null
+  duration_seconds: number | null
+}
+
+export interface RunResultsOverview {
+  total_replicates: number
+  completed_replicates: number
+  running_replicates: number
+  queued_replicates: number
+  failed_replicates: number
+  not_started_replicates: number
+  obsolete_replicates: number
+  total_cost_usd: number | null
+  total_input_tokens: number | null
+  total_output_tokens: number | null
+  total_tokens: number | null
+  total_duration_seconds: number | null
+  agent_run_count: number
+  reported_usage_count: number
+  reported_cost_count: number
+}
+
+export interface ExperimentRunResults {
+  overview: RunResultsOverview
+  metric_keys: string[]
+  primary_metric: string | null
+  primary_metric_direction: 'maximize' | 'minimize'
+  cells: ResultCell[]
+  replicates: ResultReplicate[]
 }
 
 export interface Replicate {

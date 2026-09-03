@@ -122,6 +122,19 @@ class CreateProtocolRunRequest(BaseModel):
     replicate_label: str | None = None
 
 
+class CellRunBatchRequest(BaseModel):
+    """Previously scored replicates the user explicitly chose to run again.
+
+    Omit this body for the normal resume behavior: every unscored replicate
+    runs, while scored ones remain skipped.
+    """
+
+    # When omitted, this is the whole current design. Supplying labels scopes
+    # a run from one cell to just that cell's replicates.
+    replicate_labels: list[str] | None = None
+    rerun_replicate_labels: list[str] = []
+
+
 class CellRunBatchResponse(BaseModel):
     """One "run all cells" trigger fans out into these -- one ProtocolRun per
     not-yet-scored replicate. ``skipped`` is how many replicates already had
@@ -211,8 +224,12 @@ async def get_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: D
 async def update_protocol_endpoint(
     protocol_id: uuid.UUID, body: UpdateProtocolRequest, user: CurrentUser, db: DbSession
 ) -> ProtocolResponse:
-    await _get_owned_protocol(db, protocol_id, user)
+    existing_protocol = await _get_owned_protocol(db, protocol_id, user)
     fields = body.model_dump(exclude_unset=True)
+    if existing_protocol.experiment_id and {"graph", "experiment_id"}.intersection(fields):
+        experiment = await get_experiment(db, existing_protocol.experiment_id)
+        if experiment is not None and experiment.locked_at is not None:
+            raise HTTPException(status_code=409, detail="Experiment is locked. Unlock it before changing the canvas.")
     if "name" in fields and fields["name"] is not None:
         existing = await get_protocol_by_name(db, fields["name"], owner_id=user.id)
         if existing is not None and existing.id != protocol_id:
@@ -228,6 +245,13 @@ async def update_protocol_endpoint(
 async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ProtocolResponse:
     """Make the current autosaved canvas the immutable version future runs use."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
+    if protocol.experiment_id:
+        experiment = await get_experiment(db, protocol.experiment_id)
+        if experiment is not None and experiment.locked_at is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Experiment is locked. Unlock it before publishing a changed canvas.",
+            )
     try:
         topological_order(protocol.graph)
         experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
@@ -253,7 +277,11 @@ async def get_protocol_revision_endpoint(
 
 @router.delete("/{protocol_id}", status_code=204)
 async def delete_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> None:
-    await _get_owned_protocol(db, protocol_id, user)
+    protocol = await _get_owned_protocol(db, protocol_id, user)
+    if protocol.experiment_id:
+        experiment = await get_experiment(db, protocol.experiment_id)
+        if experiment is not None and experiment.locked_at is not None:
+            raise HTTPException(status_code=409, detail="Experiment is locked. Unlock it before deleting the canvas.")
     await delete_protocol(db, protocol_id)
 
 
@@ -313,12 +341,9 @@ async def run_single_node_endpoint(
 
 @router.post("/{protocol_id}/cell-runs", response_model=CellRunBatchResponse, status_code=201)
 async def create_cell_runs_endpoint(
-    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession
+    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession, body: CellRunBatchRequest | None = None
 ) -> CellRunBatchResponse:
-    """ "Run all cells": one ProtocolRun per not-yet-scored replicate result
-    under this protocol's linked experiment, each with its cell's
-    factor_values substituted into the graph's factor-bound fields at
-    execution time (see services.protocol_execution.run_protocol)."""
+    """Run every pending replicate plus any explicitly selected reruns."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
     revision = await _require_published_revision(db, protocol)
     try:
@@ -329,6 +354,8 @@ async def create_cell_runs_endpoint(
             owner_id=user.id,
             graph=revision.graph,
             protocol_revision_id=revision.id,
+            replicate_labels=set(body.replicate_labels) if body and body.replicate_labels is not None else None,
+            rerun_replicate_labels=set(body.rerun_replicate_labels) if body is not None else None,
         )
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

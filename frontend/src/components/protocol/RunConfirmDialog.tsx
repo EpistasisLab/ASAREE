@@ -1,4 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import type { Edge, Node } from '@xyflow/react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -10,11 +11,13 @@ function scopeTitle(scope: RunScope): string {
     case 'graph':
       return 'Run the full experiment?'
     case 'replicate':
-      return `Run replicate "${scope.label}"?`
+      return scope.title ?? `Run replicate "${scope.label}"?`
     case 'all-cells':
       return scope.pendingReplicateCount === scope.replicateCount
         ? `Run all ${scope.replicateCount} replicates?`
         : `Run ${scope.pendingReplicateCount} pending replicates?`
+    case 'selected-cells':
+      return scope.title ?? 'Run the experiment?'
     case 'node':
       return `Run "${scope.label}" alone?`
   }
@@ -41,6 +44,11 @@ export function RunConfirmDialog({
   isPublishing = false,
   publishError = null,
   onPublishAndRun,
+  additionalContent,
+  confirmLabel,
+  confirmDisabled = false,
+  isConfirming = false,
+  confirmError = null,
 }: {
   scope: RunScope
   nodes: Node[]
@@ -53,6 +61,11 @@ export function RunConfirmDialog({
   isPublishing?: boolean
   publishError?: string | null
   onPublishAndRun?: () => void
+  additionalContent?: ReactNode
+  confirmLabel?: string
+  confirmDisabled?: boolean
+  isConfirming?: boolean
+  confirmError?: string | null
 }) {
   const summary = summarizeRun(nodes, edges, scope)
   const allIssues = findNodeConfigIssues(nodes, edges, queryClient)
@@ -69,7 +82,7 @@ export function RunConfirmDialog({
         if (!open) onCancel()
       }}
     >
-      <DialogContent showCloseButton={false} className="sm:max-w-md">
+      <DialogContent showCloseButton={false} className={additionalContent ? 'sm:max-w-xl' : 'sm:max-w-md'}>
         <DialogHeader>
           <DialogTitle>{scopeTitle(scope)}</DialogTitle>
           <DialogDescription>This makes real LLM calls and may incur cost -- review what's about to run before continuing.</DialogDescription>
@@ -82,6 +95,16 @@ export function RunConfirmDialog({
               {scope.cellCount === 1 ? 'cell' : 'cells'}.
               {scope.replicateCount > scope.pendingReplicateCount
                 ? ` ${scope.replicateCount - scope.pendingReplicateCount} already-scored replicates will be skipped.`
+                : ''}
+            </p>
+          )}
+          {scope.type === 'selected-cells' && (
+            <p>
+              The published canvas will run {scope.pendingReplicateCount + scope.rerunReplicateCount} replicate
+              {scope.pendingReplicateCount + scope.rerunReplicateCount === 1 ? '' : 's'} across {scope.cellCount}{' '}
+              {scope.cellCount === 1 ? 'cell' : 'cells'}.
+              {scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount > 0
+                ? ` ${scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount} previously scored replicate${scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount === 1 ? '' : 's'} will be skipped.`
                 : ''}
             </p>
           )}
@@ -121,6 +144,9 @@ export function RunConfirmDialog({
           </dl>
         </div>
 
+        {additionalContent}
+        {confirmError && <p className="text-sm text-destructive">{confirmError}</p>}
+
         {hasUnpublishedChanges && (
           <div className="space-y-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm">
             <p className="font-medium">Canvas has unpublished changes</p>
@@ -155,15 +181,17 @@ export function RunConfirmDialog({
           </Button>
           {hasUnpublishedChanges ? (
             <>
-              <Button variant="outline" disabled={isPublishing} onClick={onConfirm}>
+              <Button variant="outline" disabled={isPublishing || isConfirming || confirmDisabled} onClick={onConfirm}>
                 Run published v{publishedRevision}
               </Button>
-              <Button disabled={isPublishing} onClick={onPublishAndRun}>
+              <Button disabled={isPublishing || isConfirming || confirmDisabled} onClick={onPublishAndRun}>
                 {isPublishing ? 'Publishing…' : 'Publish & run'}
               </Button>
             </>
           ) : (
-            <Button onClick={onConfirm}>{issues.length > 0 ? 'Run anyway' : 'Confirm & run'}</Button>
+            <Button disabled={isConfirming || confirmDisabled} onClick={onConfirm}>
+              {isConfirming ? 'Starting…' : confirmLabel ?? (issues.length > 0 ? 'Run anyway' : 'Confirm & run')}
+            </Button>
           )}
         </DialogFooter>
       </DialogContent>

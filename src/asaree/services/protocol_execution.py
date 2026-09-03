@@ -2028,14 +2028,17 @@ async def plan_cell_runs(
     owner_id: uuid.UUID,
     graph: dict[str, Any],
     protocol_revision_id: uuid.UUID | None = None,
+    replicate_labels: set[str] | None = None,
+    rerun_replicate_labels: set[str] | None = None,
 ) -> tuple[list[ProtocolRun], int]:
     """ "Run all cells": creates one pending :class:`ProtocolRun` per
     not-yet-scored replicate row under *experiment_id*, each carrying its
     cell's ``factor_values`` for ``run_protocol`` to
     substitute at execution time via ``apply_factor_bindings``. Returns
     ``(created_runs, skipped_count)`` -- a replicate already carrying
-    ``metric_values`` is skipped (resume semantics: a repeat click doesn't
-    re-run, and re-bill, an already-scored replicate). Raises
+    ``metric_values`` is skipped (resume semantics) unless its label appears
+    in ``rerun_replicate_labels``. ``replicate_labels`` optionally narrows the
+    batch to one or more current-design replicates. Raises
     :class:`ProtocolValidationError` (same type the plain-run endpoint
     already 422s on) if there's no linked experiment, the graph itself is
     invalid, the graph doesn't have exactly one sink node -- a replicate's result
@@ -2071,7 +2074,27 @@ async def plan_cell_runs(
     # Current design only -- list_replicates scopes to the experiment's current
     # revision, so a superseded design's replicates are neither counted nor run.
     replicates = await list_replicates(db, experiment_id=experiment_id)
-    pending = [replicate for replicate in replicates if not replicate.metric_values]
+    labels = {replicate.replicate_label for replicate in replicates}
+    requested_labels = labels if replicate_labels is None else replicate_labels
+    unknown_requested = requested_labels - labels
+    if unknown_requested:
+        raise ProtocolValidationError(f"Unknown replicate label(s): {', '.join(sorted(unknown_requested))}.")
+    replicates = [replicate for replicate in replicates if replicate.replicate_label in requested_labels]
+    requested_reruns = rerun_replicate_labels or set()
+    unknown = requested_reruns - requested_labels
+    if unknown:
+        raise ProtocolValidationError(f"Unknown replicate label(s): {', '.join(sorted(unknown))}.")
+    scored_labels = {replicate.replicate_label for replicate in replicates if replicate.metric_values}
+    not_scored = requested_reruns - scored_labels
+    if not_scored:
+        raise ProtocolValidationError(
+            f"Only previously scored replicates can be selected to run again: {', '.join(sorted(not_scored))}."
+        )
+    pending = [
+        replicate
+        for replicate in replicates
+        if not replicate.metric_values or replicate.replicate_label in requested_reruns
+    ]
     runs = [
         await create_protocol_run(
             db,

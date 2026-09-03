@@ -17,6 +17,8 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from asaree.models.protocol import Protocol
+from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.factorial_cells import list_replicates
 
@@ -213,6 +215,10 @@ class ExperimentTrial:
     metric_values: dict[str, Any]
     status: str  # "not_started" | "pending" | "running" | "completed" | "failed"
     run_id: uuid.UUID | None
+    # The run used an older immutable published canvas revision than the
+    # protocol's current one. This is derived on read, preserving the run's
+    # actual lifecycle status and history rather than mutating either.
+    obsolete: bool
     error: str | None
     updated_at: datetime
 
@@ -240,9 +246,38 @@ async def list_experiment_trials(
         result = await db.execute(select(ProtocolRun).where(ProtocolRun.id.in_(run_ids)))
         runs_by_id = {r.id: r for r in result.scalars().all()}
 
+    protocol_ids = {run.protocol_id for run in runs_by_id.values()}
+    # Keep the publication timestamp too.  Every new cell run pins its
+    # revision, but pre-revision records have no such ID.  For those legacy
+    # records we can still safely tell that a later canvas publication made
+    # the result stale by comparing the run's creation time to the current
+    # published revision's timestamp.
+    current_revisions: dict[uuid.UUID, tuple[uuid.UUID | None, datetime | None]] = {}
+    if protocol_ids:
+        result = await db.execute(
+            select(Protocol.id, Protocol.published_revision_id, ProtocolRevision.published_at)
+            .outerjoin(ProtocolRevision, Protocol.published_revision_id == ProtocolRevision.id)
+            .where(Protocol.id.in_(protocol_ids))
+        )
+        current_revisions = {
+            protocol_id: (revision_id, published_at)
+            for protocol_id, revision_id, published_at in result.all()
+        }
+
     trials = []
     for replicate in replicates:
         run = runs_by_id.get(replicate.run_id) if replicate.run_id else None
+        current_revision = current_revisions.get(run.protocol_id) if run is not None else None
+        current_revision_id, published_at = current_revision or (None, None)
+        obsolete = run is not None and current_revision_id is not None and (
+            # Normal case: a run explicitly records the immutable canvas it
+            # executed against.
+            (run.protocol_revision_id is not None and run.protocol_revision_id != current_revision_id)
+            # Compatibility case: rows made before that provenance column was
+            # populated.  A current canvas published after the run began is
+            # necessarily a newer version than the one it could have used.
+            or (run.protocol_revision_id is None and published_at is not None and run.created_at < published_at)
+        )
         if run is not None:
             status = run.status
             error = run.error
@@ -258,6 +293,7 @@ async def list_experiment_trials(
                 metric_values=replicate.metric_values or {},
                 status=status,
                 run_id=replicate.run_id,
+                obsolete=obsolete,
                 error=error,
                 updated_at=updated_at,
             )

@@ -1,229 +1,481 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Maximize2, Minimize2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, CircleDollarSign, Clock3, Coins, Cpu, ExternalLink, X } from 'lucide-react'
+import { experimentsApi } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { experimentsApi } from '@/api/client'
-import type { EmmCell, ExperimentAnalysis, FactorialEffect } from '@/types/experiments'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { displayFactorValue, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
+import type { ObsoleteRun, ResultCell, ResultReplicate } from '@/types/experiments'
 
-function fmt(n: number | undefined, digits = 3): string {
-  return typeof n === 'number' && Number.isFinite(n) ? n.toFixed(digits) : '—'
+function formatNumber(value: number | null, maximumFractionDigits = 0): string {
+  if (value === null || !Number.isFinite(value)) return 'Not reported'
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits }).format(value)
 }
 
-function StatCard({ label, value }: { label: string; value: number }) {
+function formatCurrency(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return 'Not reported'
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value)
+}
+
+function formatDuration(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return 'Not reported'
+  if (value < 60) return `${Math.round(value)} sec`
+  if (value < 3600) return `${(value / 60).toFixed(1)} min`
+  return `${(value / 3600).toFixed(1)} hr`
+}
+
+function factorSummary(values: Record<string, unknown>): string {
+  const entries = Object.entries(values)
+  if (entries.length === 0) return 'No varying factors'
+  return entries.map(([name, value]) => `${name.split(':').join(' · ')}: ${displayFactorValue(value)}`).join(' · ')
+}
+
+function numericMetricValue(replicate: ResultReplicate, metricKey: string | null): number | null {
+  if (!metricKey) return null
+  const value = replicate.metric_values[metricKey]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function statusLabel(status: ResultReplicate['status'], obsolete: boolean): string {
+  if (obsolete) return 'Obsolete'
+  return {
+    not_started: 'Not started',
+    queued: 'Queued',
+    running: 'Running',
+    completed: 'Completed',
+    failed: 'Failed',
+    cancelled: 'Cancelled',
+  }[status]
+}
+
+function statusClass(status: ResultReplicate['status'], obsolete: boolean): string {
+  if (obsolete) return 'border-transparent bg-[color:var(--chart-2)]/10 text-[color:var(--chart-2)]'
+  if (status === 'completed') return 'border-transparent bg-[color:var(--chart-3)]/10 text-[color:var(--chart-3)]'
+  if (status === 'failed') return 'border-transparent bg-destructive/10 text-destructive'
+  if (status === 'running' || status === 'queued') return 'border-transparent bg-primary/10 text-primary'
+  return 'border-transparent bg-muted text-muted-foreground'
+}
+
+function Scorecard({ label, value, note, icon: Icon }: { label: string; value: string; note?: string; icon: typeof Coins }) {
   return (
-    <div className="rounded-md border px-2 py-1.5 text-center font-mono text-xs">
-      <p className="text-base">{value}</p>
-      <p className="text-muted-foreground">{label}</p>
+    <div className="rounded-md border bg-card px-2.5 py-2">
+      <div className="flex items-center justify-between gap-2 text-muted-foreground">
+        <span className="text-xs">{label}</span>
+        <Icon className="size-3.5" aria-hidden="true" />
+      </div>
+      <p className="mt-1 truncate text-base font-medium tabular-nums" title={value}>{value}</p>
+      {note && <p className="mt-0.5 text-[11px] text-muted-foreground">{note}</p>}
     </div>
   )
 }
 
-function EmmTable({ cells, best }: { cells: EmmCell[]; best: EmmCell | null }) {
+function CellCard({ cell, metricKey }: { cell: ResultCell; metricKey: string | null }) {
+  const metric = metricKey ? cell.metric_means[metricKey] : undefined
   return (
-    <div className="overflow-hidden rounded-md border">
-      <table className="w-full text-xs">
-        <thead className="bg-muted/50 uppercase text-muted-foreground">
-          <tr>
-            <th className="px-2 py-1.5 text-left">Condition</th>
-            <th className="px-2 py-1.5 text-right">Mean</th>
-            <th className="px-2 py-1.5 text-right">95% CI</th>
-            <th className="px-2 py-1.5 text-right">n</th>
-          </tr>
-        </thead>
-        <tbody>
-          {cells.map((c, i) => (
-            <tr key={c._condition_label} className={i % 2 === 1 ? 'bg-muted/20' : ''}>
-              <td className="px-2 py-1.5 font-mono">
-                {c._condition_label}
-                {best?._condition_label === c._condition_label && (
-                  <Badge className="ml-1.5 border-transparent bg-[color-mix(in_oklch,var(--chart-3),transparent_80%)] text-[color:var(--chart-3)]">
-                    Best
-                  </Badge>
-                )}
-              </td>
-              <td className="px-2 py-1.5 text-right font-mono">{fmt(c.mean)}</td>
-              <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">
-                [{fmt(c.ci_lo)}, {fmt(c.ci_hi)}]
-              </td>
-              <td className="px-2 py-1.5 text-right font-mono text-muted-foreground">{c.count}</td>
-            </tr>
+    <div className="rounded-md border px-3 py-2.5">
+      <div className="flex items-start justify-between gap-2">
+        <p className="min-w-0 truncate text-sm font-medium" title={factorSummary(cell.factor_values)}>{factorSummary(cell.factor_values)}</p>
+        {cell.obsolete_count > 0 && <Badge variant="outline" className="shrink-0 border-[color:var(--chart-4)]/60 text-[color:var(--chart-4)]">{cell.obsolete_count} obsolete {cell.obsolete_count === 1 ? 'run' : 'runs'}</Badge>}
+      </div>
+      <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs">
+        {metricKey && (
+          <span>
+            <span className="text-muted-foreground">{formatMetricLabel(metricKey)} </span>
+            <span className="font-medium tabular-nums">{metric === undefined ? '—' : formatMetricValue(metricKey, metric)}</span>
+          </span>
+        )}
+        <span className="text-muted-foreground">{cell.current_completed_count}/{cell.replicate_count} current complete</span>
+        {cell.cost_usd !== null && <span className="text-muted-foreground">{formatCurrency(cell.cost_usd)}</span>}
+      </div>
+    </div>
+  )
+}
+
+function CellResultSummary({ cell, metricKeys }: { cell: ResultCell; metricKeys: string[] }) {
+  const metrics = metricKeys.filter((key) => typeof cell.metric_means[key] === 'number')
+  const hasUsage = cell.cost_usd !== null || cell.total_tokens !== null || cell.duration_seconds !== null
+  return (
+    <section className="mb-2 rounded-md border bg-background px-2.5 py-2" aria-label="Cell result summary">
+      <p className="text-xs text-muted-foreground">Current replicates only</p>
+      {metrics.length > 0 && (
+        <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {metrics.map((key) => (
+            <div key={key} className="rounded border px-2 py-1.5">
+              <p className="truncate text-[11px] text-muted-foreground" title={formatMetricLabel(key)}>{formatMetricLabel(key)}</p>
+              <p className="mt-0.5 text-sm font-medium tabular-nums">{formatMetricValue(key, cell.metric_means[key])}</p>
+            </div>
           ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-function EffectsTable({ effects, title }: { effects: FactorialEffect[]; title: string }) {
-  if (effects.length === 0) return null
-  return (
-    <div className="space-y-1.5">
-      <p className="text-xs font-medium text-muted-foreground">{title}</p>
-      <div className="overflow-hidden rounded-md border">
-        <table className="w-full text-xs">
-          <thead className="bg-muted/50 uppercase text-muted-foreground">
-            <tr>
-              <th className="px-2 py-1.5 text-left">Term</th>
-              <th className="px-2 py-1.5 text-right">Estimate</th>
-              <th className="px-2 py-1.5 text-right">p (FWER)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {effects.map((e, i) => (
-              <tr key={e.effect} className={i % 2 === 1 ? 'bg-muted/20' : ''}>
-                <td className="px-2 py-1.5 font-mono">{e.effect}</td>
-                <td className="px-2 py-1.5 text-right font-mono">{fmt(e.estimate_half_diff)}</td>
-                <td className={`px-2 py-1.5 text-right font-mono ${e.p_maxstat_fwer < 0.05 ? 'text-[color:var(--chart-3)]' : 'text-muted-foreground'}`}>
-                  {fmt(e.p_maxstat_fwer)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-function ResultsContent({ analysis, bestCondition }: { analysis: ExperimentAnalysis; bestCondition: EmmCell | null }) {
-  const mainEffects = analysis.factorial_effects.filter((e) => !e.effect.includes(':'))
-  const interactions = analysis.factorial_effects.filter((e) => e.effect.includes(':'))
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="grid grid-cols-4 gap-2">
-        <StatCard label="Scored" value={analysis.n_scored} />
-        <StatCard label="Attempted" value={analysis.n_attempted} />
-        <StatCard label="Failed" value={analysis.n_failed} />
-        <StatCard label="Not yet run" value={analysis.n_not_yet_run} />
-      </div>
-
-      {bestCondition && (
-        <div className="rounded-md border bg-[color-mix(in_oklch,var(--chart-3),transparent_92%)] px-3 py-2">
-          <p className="text-xs font-medium text-muted-foreground">Best-performing configuration</p>
-          <p className="font-mono text-sm">
-            {bestCondition._condition_label} — {fmt(bestCondition.mean)} [{fmt(bestCondition.ci_lo)}, {fmt(bestCondition.ci_hi)}]
-          </p>
         </div>
       )}
+      {hasUsage && (
+        <div className={`${metrics.length > 0 ? 'mt-2 border-t pt-2' : 'mt-2'} flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground`}>
+          {cell.cost_usd !== null && <span>Cost <span className="font-medium text-foreground">{formatCurrency(cell.cost_usd)}</span></span>}
+          {cell.total_tokens !== null && <span>Tokens <span className="font-medium text-foreground">{formatNumber(cell.total_tokens)}</span></span>}
+          {cell.duration_seconds !== null && <span>Duration <span className="font-medium text-foreground">{formatDuration(cell.duration_seconds)}</span></span>}
+        </div>
+      )}
+      {metrics.length === 0 && !hasUsage && <p className="mt-1 text-xs text-muted-foreground">No current result data has been reported yet.</p>}
+    </section>
+  )
+}
 
-      <div className="space-y-1.5">
-        <p className="text-xs font-medium text-muted-foreground">Condition comparisons (uncertainty via 95% CI)</p>
-        <EmmTable cells={analysis.emm_cells} best={bestCondition} />
-      </div>
-
-      <EffectsTable effects={mainEffects} title="Factor effects" />
-      <EffectsTable effects={interactions} title="Interactions" />
-
-      {analysis.non_inferiority.length > 0 && (
-        <div className="space-y-1.5">
-          <p className="text-xs font-medium text-muted-foreground">Non-inferiority vs. reference</p>
-          <div className="overflow-hidden rounded-md border">
-            <table className="w-full text-xs">
-              <thead className="bg-muted/50 uppercase text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-1.5 text-left">Condition</th>
-                  <th className="px-2 py-1.5 text-right">Contrast</th>
-                  <th className="px-2 py-1.5 text-left">Decision</th>
-                </tr>
-              </thead>
-              <tbody>
-                {analysis.non_inferiority.map((row, i) => (
-                  <tr key={row.condition} className={i % 2 === 1 ? 'bg-muted/20' : ''}>
-                    <td className="px-2 py-1.5 font-mono">{row.condition}</td>
-                    <td className="px-2 py-1.5 text-right font-mono">{fmt(row.contrast_vs_reference)}</td>
-                    <td className="px-2 py-1.5 text-muted-foreground">{row.ni_decision ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+function ReplicateResultDetail({ replicate, metricKeys }: {
+  replicate: ResultReplicate
+  metricKeys: string[]
+}) {
+  const metrics = metricKeys.filter((key) => typeof replicate.metric_values[key] === 'number')
+  const hasUsage = replicate.cost_usd !== null || replicate.total_tokens !== null || replicate.duration_seconds !== null || replicate.agent_run_count > 0
+  const timelineOnly = metrics.length === 0 && !hasUsage && !replicate.error
+  // When the timeline is the whole inspector and it contains one final agent
+  // output, use the remaining viewport for that output instead of leaving a
+  // short, fixed-height preview above empty space. Multiple timeline entries
+  // intentionally retain their compact list layout so no one entry crowds out
+  // the others.
+  const expandableOutputNodeId = timelineOnly && replicate.node_runs.length === 1 && replicate.node_runs[0].output_text
+    ? replicate.node_runs[0].node_id
+    : null
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge className={statusClass(replicate.status, replicate.obsolete)}>{statusLabel(replicate.status, replicate.obsolete)}</Badge>
+            {replicate.obsolete && <span className="text-xs text-[color:var(--chart-2)]">This result used an older canvas version.</span>}
           </div>
-        </div>
-      )}
+          {metrics.length > 0 && (
+            <section className="space-y-2">
+              <h3 className="text-sm font-medium">Outcome</h3>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {metrics.map((key) => <div key={key} className="rounded-md border px-2.5 py-2"><p className="truncate text-xs text-muted-foreground" title={formatMetricLabel(key)}>{formatMetricLabel(key)}</p><p className="mt-0.5 font-medium tabular-nums">{formatMetricValue(key, replicate.metric_values[key])}</p></div>)}
+            </div>
+            </section>
+          )}
+          {hasUsage && (
+            <section className="space-y-2">
+              <h3 className="text-sm font-medium">Usage</h3>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <Scorecard label="Estimated cost" value={formatCurrency(replicate.cost_usd)} icon={CircleDollarSign} />
+                <Scorecard label="Total tokens" value={formatNumber(replicate.total_tokens)} icon={Coins} />
+                <Scorecard label="Duration" value={formatDuration(replicate.duration_seconds)} icon={Clock3} />
+                <Scorecard label="Agent calls" value={String(replicate.agent_run_count)} icon={Cpu} />
+              </div>
+              {replicate.agent_run_count > 0 && (replicate.reported_usage_count < replicate.agent_run_count || replicate.reported_cost_count < replicate.agent_run_count) && <p className="text-xs text-muted-foreground">Usage and cost are shown only where the provider reported them.</p>}
+            </section>
+          )}
+          {replicate.error && <section className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"><h3 className="font-medium">Run error</h3><p className="mt-1 whitespace-pre-wrap break-words">{replicate.error}</p></section>}
+          <section className={timelineOnly ? 'flex min-h-[20rem] flex-1 flex-col space-y-2' : 'space-y-2'}>
+            <h3 className="text-sm font-medium">Run timeline</h3>
+            {replicate.node_runs.length === 0 ? <p className="text-sm text-muted-foreground">No node-level run details are available.</p> : (
+              <ol className={timelineOnly ? 'flex min-h-0 flex-1 flex-col space-y-2' : 'space-y-2'}>
+              {replicate.node_runs.map((node) => (
+                <li key={node.node_id} className={expandableOutputNodeId === node.node_id ? 'flex min-h-0 flex-1 flex-col rounded-md border px-3 py-2' : 'rounded-md border px-3 py-2'}>
+                  <div className="flex items-center justify-between gap-3"><p className="font-medium" title={node.node_id}>{node.node_label}</p><Badge variant="outline" className="capitalize">{node.status}</Badge></div>
+                  <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground">{node.cost_usd !== null && <span>{formatCurrency(node.cost_usd)}</span>}{node.total_tokens !== null && <span>{formatNumber(node.total_tokens)} tokens</span>}</div>
+                  {node.error && <p className="mt-2 whitespace-pre-wrap break-words text-xs text-destructive">{node.error}</p>}
+                  {node.output_text && (
+                    <p className={expandableOutputNodeId === node.node_id
+                      ? 'mt-2 min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded bg-muted/50 p-2 font-mono text-xs'
+                      : 'mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded bg-muted/50 p-2 font-mono text-xs'}
+                    >
+                      {node.output_text}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
     </div>
   )
 }
 
-// A "maximize" toggle for the whole Results content -- CLAUDE.md's
-// established convention for a wide/dense view that can outgrow the side
-// panel's own column (see cells/CellsTab.tsx for the other one): a fixed
-// inset-0 overlay with an Escape handler and body-scroll lock, not the
-// browser Fullscreen API. This is the "link into a larger/full-screen
-// analysis view" the Results tab asks for.
-export function ResultsTab({ experimentId }: { experimentId: string }) {
-  const [fullscreen, setFullscreen] = useState(false)
+function historicalRunAsReplicate(replicate: ResultReplicate, historicalRun: ObsoleteRun): ResultReplicate {
+  // The shared detail component needs the stable replicate identity/factors,
+  // while the historical run contributes the immutable execution facts.
+  return {
+    ...replicate,
+    ...historicalRun,
+    metric_values: {},
+    obsolete_runs: [],
+  }
+}
 
+function latestObsoleteRun(replicate: ResultReplicate | null): ObsoleteRun | null {
+  if (!replicate?.obsolete || !replicate.run_id) return null
+  return {
+    run_id: replicate.run_id,
+    status: replicate.status,
+    obsolete: true,
+    error: replicate.error,
+    protocol_revision_id: replicate.protocol_revision_id,
+    updated_at: replicate.updated_at,
+    duration_seconds: replicate.duration_seconds,
+    node_runs: replicate.node_runs,
+    input_tokens: replicate.input_tokens,
+    output_tokens: replicate.output_tokens,
+    total_tokens: replicate.total_tokens,
+    cost_usd: replicate.cost_usd,
+    agent_run_count: replicate.agent_run_count,
+    reported_usage_count: replicate.reported_usage_count,
+    reported_cost_count: replicate.reported_cost_count,
+  }
+}
+
+export type ResultsSelection =
+  | { type: 'cell'; cellLabel: string }
+  | { type: 'replicate'; replicateLabel: string }
+
+// This lives alongside the canvas rather than inside the left Results panel.
+// Keeping selection in the page lets the left panel remain usable while this
+// inspector updates in place for every cell or replicate the user chooses.
+export function ResultsInspectorPanel({
+  experimentId,
+  selection,
+  onClose,
+}: {
+  experimentId: string
+  selection: ResultsSelection | null
+  onClose: () => void
+}) {
+  const [expandedObsoleteRuns, setExpandedObsoleteRuns] = useState<Set<string>>(() => new Set())
   const resultsQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'results'],
-    queryFn: () => experimentsApi.getResults(experimentId),
+    queryKey: ['experiments', experimentId, 'run-results'],
+    queryFn: () => experimentsApi.getRunResults(experimentId),
+    enabled: selection !== null,
+    refetchInterval: 5000,
   })
+  if (!selection) return null
 
-  useEffect(() => {
-    if (!fullscreen) return
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setFullscreen(false)
-    }
-    document.addEventListener('keydown', onKeyDown)
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.removeEventListener('keydown', onKeyDown)
-      document.body.style.overflow = ''
-    }
-  }, [fullscreen])
-
-  if (resultsQuery.isLoading) {
-    return (
-      <div className="space-y-3 p-3">
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-32 w-full" />
-      </div>
-    )
-  }
-
-  if (resultsQuery.isError || !resultsQuery.data) {
-    return (
-      <div className="p-3">
-        <p className="text-sm text-muted-foreground">Could not load this experiment's results.</p>
-      </div>
-    )
-  }
-
-  const { available, reason, analysis, best_condition } = resultsQuery.data
-
-  if (!available || !analysis) {
-    return (
-      <div className="p-3">
-        <p className="text-sm text-muted-foreground">{reason ?? 'No results available yet.'}</p>
-      </div>
-    )
-  }
-
-  if (fullscreen) {
-    return (
-      <div className="fixed inset-0 z-50 flex flex-col bg-background p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <p className="text-sm font-semibold">Results — full analysis</p>
-          <Button variant="outline" size="icon-sm" aria-label="Exit fullscreen" onClick={() => setFullscreen(false)}>
-            <Minimize2 className="size-4" />
-          </Button>
-        </div>
-        <div className="flex-1 overflow-y-auto text-sm">
-          <ResultsContent analysis={analysis} bestCondition={best_condition} />
-        </div>
-      </div>
-    )
-  }
+  const replicate = selection.type === 'replicate'
+    ? resultsQuery.data?.replicates.find((candidate) => candidate.replicate_label === selection.replicateLabel) ?? null
+    : null
+  const cell = selection.type === 'cell'
+    ? resultsQuery.data?.cells.find((candidate) => candidate.cell_label === selection.cellLabel) ?? null
+    : null
+  const title = replicate ? `Replicate ${replicate.replicate_number}` : 'Cell results'
+  const description = replicate
+    ? factorSummary(replicate.factor_values)
+    : cell
+      ? factorSummary(cell.factor_values)
+      : undefined
+  // During a rolling frontend/backend restart, accept the prior response name
+  // too. The earlier API omitted the latest stale run from its history, so add
+  // it locally when necessary rather than hiding a real obsolete result.
+  const legacyObsoleteRuns = (replicate as (ResultReplicate & { previous_obsolete_runs?: ObsoleteRun[] }) | null)
+    ?.previous_obsolete_runs
+  const reportedObsoleteRuns = Array.isArray(replicate?.obsolete_runs)
+    ? replicate.obsolete_runs
+    : Array.isArray(legacyObsoleteRuns) ? legacyObsoleteRuns : []
+  const latestStaleRun = latestObsoleteRun(replicate)
+  const obsoleteRuns = latestStaleRun && !reportedObsoleteRuns.some((run) => run.run_id === latestStaleRun.run_id)
+    ? [latestStaleRun, ...reportedObsoleteRuns]
+    : reportedObsoleteRuns
 
   return (
-    <div className="flex flex-col gap-3 p-3 text-sm">
-      <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={() => setFullscreen(true)}>
-          <Maximize2 className="size-3.5" /> Maximize
-        </Button>
+    <aside className="absolute inset-0 z-20 flex w-full flex-col border-l bg-card shadow-xl" aria-label="Result details">
+      <div className="flex min-h-11 shrink-0 items-start justify-between gap-3 border-b px-3 py-2.5">
+        <div className="min-w-0"><h2 className="truncate text-sm font-medium">{title}</h2>{description && <p className="mt-0.5 truncate text-xs text-muted-foreground" title={description}>{description}</p>}</div>
+        <Button variant="ghost" size="icon-sm" className="shrink-0" aria-label="Close result details" title="Close result details" onClick={onClose}><X className="size-4" /></Button>
       </div>
-      <ResultsContent analysis={analysis} bestCondition={best_condition} />
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
+        {resultsQuery.isLoading ? <div className="space-y-3"><Skeleton className="h-20 w-full" /><Skeleton className="h-36 w-full" /></div>
+          : resultsQuery.isError || !resultsQuery.data ? <p className="text-sm text-muted-foreground">Could not load these results.</p>
+            : replicate ? (
+              <Tabs defaultValue="current" className="flex min-h-0 flex-1 flex-col">
+                <TabsList className="w-full rounded-md border bg-muted/50 p-1">
+                  <TabsTrigger value="current" className="px-3 data-active:border-primary/30 data-active:bg-primary data-active:text-primary-foreground">Current</TabsTrigger>
+                  <TabsTrigger value="obsolete" className="px-3 data-active:border-primary/30 data-active:bg-primary data-active:text-primary-foreground">Obsolete{obsoleteRuns.length > 0 ? ` (${obsoleteRuns.length})` : ''}</TabsTrigger>
+                </TabsList>
+                <TabsContent value="current" className="mt-3 flex min-h-0 flex-1 flex-col">
+                  {replicate.obsolete ? (
+                    <p className="text-sm text-muted-foreground">No result has run against the current canvas version yet. Run this replicate to create one.</p>
+                  ) : (
+                    <ReplicateResultDetail replicate={replicate} metricKeys={resultsQuery.data.metric_keys} />
+                  )}
+                </TabsContent>
+                <TabsContent value="obsolete" className="mt-3 min-h-0 overflow-y-auto">
+                  {obsoleteRuns.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">This replicate has no obsolete runs.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {obsoleteRuns.map((historicalRun) => {
+                        const expanded = expandedObsoleteRuns.has(historicalRun.run_id)
+                        const detailId = `obsolete-run-${historicalRun.run_id}`
+                        return (
+                        <section key={historicalRun.run_id} className="rounded-md border p-3">
+                          <button
+                            type="button"
+                            className="flex w-full items-center gap-2 text-left"
+                            aria-expanded={expanded}
+                            aria-controls={detailId}
+                            onClick={() => setExpandedObsoleteRuns((current) => {
+                              const next = new Set(current)
+                              if (next.has(historicalRun.run_id)) next.delete(historicalRun.run_id)
+                              else next.add(historicalRun.run_id)
+                              return next
+                            })}
+                          >
+                            <ChevronDown className={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`} />
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-sm font-medium">Run from {new Date(historicalRun.updated_at).toLocaleString()}</span>
+                              <span className="mt-0.5 block truncate text-xs text-muted-foreground">{historicalRun.protocol_revision_id ? `Canvas revision ${historicalRun.protocol_revision_id.slice(0, 8)}` : 'Earlier canvas version'}</span>
+                            </span>
+                            <Badge className={statusClass(historicalRun.status, true)}>Obsolete</Badge>
+                          </button>
+                          {expanded && (
+                            <div id={detailId} className="mt-3 border-t pt-3">
+                              <ReplicateResultDetail replicate={historicalRunAsReplicate(replicate, historicalRun)} metricKeys={[]} />
+                            </div>
+                          )}
+                        </section>
+                        )
+                      })}
+                    </div>
+                  )}
+                </TabsContent>
+              </Tabs>
+            )
+              : cell ? <CellResultSummary cell={cell} metricKeys={resultsQuery.data.metric_keys} />
+                : <p className="text-sm text-muted-foreground">This result is no longer available.</p>}
+      </div>
+    </aside>
+  )
+}
+
+export function ResultsTab({
+  experimentId,
+  onSelectResult,
+}: {
+  experimentId: string
+  onSelectResult: (selection: ResultsSelection) => void
+}) {
+  const [metricPreference, setMetricPreference] = useState<string | null>(null)
+  const [expandedResultCells, setExpandedResultCells] = useState<Set<string>>(() => new Set())
+  const resultsQuery = useQuery({ queryKey: ['experiments', experimentId, 'run-results'], queryFn: () => experimentsApi.getRunResults(experimentId), refetchInterval: 5000 })
+  if (resultsQuery.isLoading) return <div className="space-y-3 p-3"><Skeleton className="h-20 w-full" /><Skeleton className="h-36 w-full" /></div>
+  if (resultsQuery.isError || !resultsQuery.data) return <p className="p-3 text-sm text-muted-foreground">Could not load this experiment’s results.</p>
+
+  const { overview, cells, replicates, metric_keys: metricKeys, primary_metric: primaryMetric, primary_metric_direction: primaryMetricDirection } = resultsQuery.data
+  const metricKey = metricPreference && metricKeys.includes(metricPreference)
+    ? metricPreference
+    : primaryMetric && metricKeys.includes(primaryMetric)
+      ? primaryMetric
+      : metricKeys[0] ?? null
+  const sortDirection = metricKey === primaryMetric && primaryMetricDirection === 'minimize' ? -1 : 1
+  const sortedCells = [...cells].sort((left, right) => !metricKey
+    ? left.cell_label.localeCompare(right.cell_label)
+    : sortDirection * ((right.metric_means[metricKey] ?? -Infinity) - (left.metric_means[metricKey] ?? -Infinity)))
+  const replicatesByCell = new Map<string, ResultReplicate[]>()
+  for (const replicate of replicates) {
+    const cellReplicates = replicatesByCell.get(replicate.cell_label) ?? []
+    cellReplicates.push(replicate)
+    replicatesByCell.set(replicate.cell_label, cellReplicates)
+  }
+  for (const cellReplicates of replicatesByCell.values()) cellReplicates.sort((left, right) => left.replicate_number - right.replicate_number)
+  if (overview.total_replicates === 0) return <p className="p-3 text-sm text-muted-foreground">Generate a design and run a replicate to see results here.</p>
+
+  return (
+    <div className="space-y-4 p-3">
+      <section>
+        <div className="grid grid-cols-2 gap-2">
+          <Scorecard label="Current results" value={`${overview.completed_replicates}/${overview.total_replicates}`} note={`${overview.running_replicates} running · ${overview.failed_replicates} failed`} icon={ChevronRight} />
+          <Scorecard label="Estimated spend" value={formatCurrency(overview.total_cost_usd)} note={overview.agent_run_count ? `${overview.reported_cost_count}/${overview.agent_run_count} calls reported` : 'No agent calls yet'} icon={CircleDollarSign} />
+          <Scorecard label="Total tokens" value={formatNumber(overview.total_tokens)} note={overview.agent_run_count ? `${overview.reported_usage_count}/${overview.agent_run_count} calls reported` : 'No agent calls yet'} icon={Coins} />
+          <Scorecard label="Run time" value={formatDuration(overview.total_duration_seconds)} note="Across current results" icon={Clock3} />
+        </div>
+        {overview.obsolete_replicates > 0 && <div className="mt-2 flex gap-2 rounded-md border border-[color:var(--chart-4)]/50 bg-[color:var(--chart-4)]/10 px-2.5 py-2 text-xs text-foreground"><AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--chart-4)]" /><span>{overview.obsolete_replicates} run{overview.obsolete_replicates === 1 ? '' : 's'} used an older canvas version and are excluded from current totals.</span></div>}
+      </section>
+      <section className="space-y-2">
+        <div className="flex items-center justify-between gap-2"><div><h2 className="text-sm font-medium">Cell comparison</h2><p className="text-xs text-muted-foreground">Average result across current replicates{metricKey === primaryMetric ? ` · ${primaryMetricDirection === 'minimize' ? 'lower is better' : 'higher is better'}` : ''}</p></div>{metricKeys.length > 0 && <Select value={metricKey ?? undefined} onValueChange={(value) => setMetricPreference(value ?? null)}><SelectTrigger size="sm" aria-label="Choose comparison metric"><SelectValue>{(value) => formatMetricLabel(value ?? '')}</SelectValue></SelectTrigger><SelectContent>{metricKeys.map((key) => <SelectItem key={key} value={key}>{formatMetricLabel(key)}</SelectItem>)}</SelectContent></Select>}</div>
+        {metricKeys.length === 0 ? <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">No numeric metrics have been reported yet. Run details and provider usage are still available below.</p> : <div className="space-y-2">{sortedCells.map((cell) => <CellCard key={cell.cell_label} cell={cell} metricKey={metricKey} />)}</div>}
+      </section>
+      <section className="space-y-2">
+        <div><h2 className="text-sm font-medium">Cell results</h2><p className="text-xs text-muted-foreground">Expand a cell to inspect its replicates, metrics, usage, outputs, and node activity.</p></div>
+        <div className="space-y-2">
+          {sortedCells.map((cell) => {
+            const expanded = expandedResultCells.has(cell.cell_label)
+            const cellReplicates = replicatesByCell.get(cell.cell_label) ?? []
+            const replicateListId = `result-cell-${cell.cell_label}-replicates`
+            const metric = metricKey ? cell.metric_means[metricKey] : undefined
+            const currentMetricValues = cellReplicates
+              .filter((replicate) => !replicate.obsolete)
+              .map((replicate) => numericMetricValue(replicate, metricKey))
+              .filter((value): value is number => value !== null)
+            const replicateMetricMean = currentMetricValues.length > 0
+              ? currentMetricValues.reduce((sum, value) => sum + value, 0) / currentMetricValues.length
+              : null
+            const replicateMetricDeviation = replicateMetricMean !== null && currentMetricValues.length > 1
+              ? Math.sqrt(currentMetricValues.reduce((sum, value) => sum + (value - replicateMetricMean) ** 2, 0) / currentMetricValues.length)
+              : null
+            const orderedReplicates = [...cellReplicates].sort((left, right) => {
+              const leftValue = left.obsolete ? null : numericMetricValue(left, metricKey)
+              const rightValue = right.obsolete ? null : numericMetricValue(right, metricKey)
+              if (leftValue !== null && rightValue !== null) return sortDirection * (rightValue - leftValue)
+              if (leftValue !== null) return -1
+              if (rightValue !== null) return 1
+              return left.replicate_number - right.replicate_number
+            })
+            return (
+              <div key={cell.cell_label} className="overflow-hidden rounded-md border">
+                <div className="flex items-center gap-2 px-3 py-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedResultCells((current) => {
+                      const next = new Set(current)
+                      if (next.has(cell.cell_label)) next.delete(cell.cell_label)
+                      else next.add(cell.cell_label)
+                      return next
+                    })}
+                    aria-expanded={expanded}
+                    aria-controls={replicateListId}
+                    className="flex min-w-0 flex-1 items-center gap-3 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <ChevronDown className={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="min-w-0 flex-1 truncate text-sm font-medium" title={factorSummary(cell.factor_values)}>{factorSummary(cell.factor_values)}</p>
+                        <Badge variant="outline" className="shrink-0 border-[color:var(--chart-2)] text-[color:var(--chart-2)]">{cell.replicate_count} {cell.replicate_count === 1 ? 'replicate' : 'replicates'}</Badge>
+                        {cell.obsolete_count > 0 && <Badge variant="outline" className="shrink-0 border-[color:var(--chart-4)]/60 text-[color:var(--chart-4)]">{cell.obsolete_count} obsolete {cell.obsolete_count === 1 ? 'run' : 'runs'}</Badge>}
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">{cell.current_completed_count}/{cell.replicate_count} current complete</p>
+                    </div>
+                    {metric !== undefined && <span className="shrink-0 text-sm font-medium tabular-nums">{formatMetricValue(metricKey!, metric)}</span>}
+                  </button>
+                  <Button variant="outline" size="xs" className="shrink-0" onClick={() => onSelectResult({ type: 'cell', cellLabel: cell.cell_label })}>View results</Button>
+                </div>
+                {expanded && (
+                  <div id={replicateListId} className="border-t bg-muted/20 px-3 py-2.5">
+                    {cellReplicates.length === 0 ? <p className="text-sm text-muted-foreground">No replicate results are available for this cell.</p> : (
+                      <>
+                        {metricKey && replicateMetricMean !== null && (
+                          <div className="mb-2 rounded-md border bg-background px-2.5 py-2">
+                            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                              <p className="text-xs font-medium">Replicate comparison · {formatMetricLabel(metricKey)}</p>
+                              <p className="text-xs text-muted-foreground">Current results only</p>
+                            </div>
+                            <p className="mt-1 text-xs tabular-nums text-muted-foreground">Mean <span className="font-medium text-foreground">{formatMetricValue(metricKey, replicateMetricMean)}</span> · Range <span className="font-medium text-foreground">{formatMetricValue(metricKey, Math.min(...currentMetricValues))}–{formatMetricValue(metricKey, Math.max(...currentMetricValues))}</span>{replicateMetricDeviation !== null && <> · SD <span className="font-medium text-foreground">{formatMetricValue(metricKey, replicateMetricDeviation)}</span></>}</p>
+                          </div>
+                        )}
+                        <ul className="space-y-1.5" aria-label={`Replicate results for ${factorSummary(cell.factor_values)}`}>
+                        {orderedReplicates.map((replicate) => (
+                          <li key={replicate.replicate_label}>
+                            <button type="button" onClick={() => onSelectResult({ type: 'replicate', replicateLabel: replicate.replicate_label })} className="flex w-full items-center gap-2 rounded-md border bg-background px-2.5 py-2 text-left transition-colors hover:bg-muted/50">
+                              <div className="min-w-0 flex-1"><p className="text-sm font-medium">Replicate {replicate.replicate_number}</p><p className="mt-0.5 text-xs text-muted-foreground">{replicate.cost_usd !== null ? formatCurrency(replicate.cost_usd) : 'Cost not reported'}{replicate.duration_seconds !== null ? ` · ${formatDuration(replicate.duration_seconds)}` : ''}</p></div>
+                              <div className="flex shrink-0 items-center gap-2">{numericMetricValue(replicate, metricKey) !== null && <span className="text-xs font-medium tabular-nums">{formatMetricValue(metricKey!, numericMetricValue(replicate, metricKey)!)}</span>}<Badge className={statusClass(replicate.status, replicate.obsolete)}>{statusLabel(replicate.status, replicate.obsolete)}</Badge><ExternalLink className="size-3.5 text-muted-foreground" /></div>
+                            </button>
+                          </li>
+                        ))}
+                        </ul>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </section>
     </div>
   )
 }

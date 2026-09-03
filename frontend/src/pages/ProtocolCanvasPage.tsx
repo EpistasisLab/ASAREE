@@ -1,14 +1,15 @@
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ReactFlowProvider, type Edge, type Node } from '@xyflow/react'
-import { Square, Target, Trophy, type LucideIcon } from 'lucide-react'
+import { ReactFlowProvider } from '@xyflow/react'
+import { AlertTriangle, Lock, Target, Trophy, type LucideIcon } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
 import { ProtocolCanvas, type ProtocolCanvasHandle } from '@/components/protocol/ProtocolCanvas'
-import { RunConfirmDialog } from '@/components/protocol/RunConfirmDialog'
+import { ResultsInspectorPanel, type ResultsSelection } from '@/components/protocol/ResultsTab'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
@@ -19,11 +20,8 @@ import {
   generatedProtocolName,
   protocolForExperimentQueryKey,
 } from '@/lib/protocolGraph'
-import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import type { Experiment, Replicate } from '@/types/experiments'
-import type { Protocol, ProtocolRun } from '@/types/protocols'
-
-const RUN_POLL_MS = 2000
+import type { Protocol } from '@/types/protocols'
 
 // Click-to-rename, the pattern for anything created with a placeholder name:
 // no gate before creating, edit the name in place once you're looking at what
@@ -110,7 +108,7 @@ function TopBarStat({ icon: Icon, value, title, accent }: { icon: LucideIcon; va
 // Same design_type gate the Cells tab uses -- cells/metric_values are a
 // factorial concept, so a future non-factorial experiment gets no chips
 // rather than a nonsensical "0/0 scored".
-function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Replicate[] | undefined }) {
+function TopBarStats({ experiment, cells, obsoleteRunCount = 0 }: { experiment: Experiment; cells: Replicate[] | undefined; obsoleteRunCount?: number }) {
   if (experiment.design_type !== 'factorial' || !cells) return null
   const scored = cells.filter((c) => c.metric_values).length
   const cellCount = groupReplicatesIntoCells(cells).length
@@ -123,6 +121,11 @@ function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Rep
         title="Replicates with a recorded metric, out of every planned replicate in this design"
         accent={replicatesStatusAccent(cells)}
       />
+      {obsoleteRunCount > 0 && (
+        <span className="flex items-center gap-1.5 rounded-md border border-[color:var(--chart-4)]/50 bg-[color:var(--chart-4)]/10 px-2 py-1 text-xs font-medium text-[color:var(--chart-4)]" title="Runs against older canvas versions are excluded from current results.">
+          <AlertTriangle className="size-3.5" /> {obsoleteRunCount} obsolete run{obsoleteRunCount === 1 ? '' : 's'}
+        </span>
+      )}
       {best && (
         <TopBarStat
           icon={Trophy}
@@ -135,192 +138,24 @@ function TopBarStats({ experiment, cells }: { experiment: Experiment; cells: Rep
   )
 }
 
-// Triggers POST /protocols/{id}/cell-runs (one ProtocolRun per not-yet-scored
-// replicate, with its cell's factor_values substituted at execution time -- see
-// services.protocol_execution.plan_cell_runs) and polls the existing
-// GET /protocols/{id}/runs, filtered to just the runs this click created,
-// until every one is terminal -- reusing protocolsApi.listRuns rather than
-// adding a new aggregate polling endpoint. Disabled once there are 0 cells
-// yet (nothing generated to run against).
-function RunAllCellsButton({
-  protocol,
-  experimentId,
-  cellCount,
-  replicateCount,
-  pendingReplicateCount,
-  regenerationRequired,
-  unboundFactors,
-}: {
-  protocol: Protocol
-  experimentId: string
-  cellCount: number
-  replicateCount: number
-  pendingReplicateCount: number
-  regenerationRequired: boolean
-  unboundFactors: string[]
-}) {
-  const protocolId = protocol.id
-  const queryClient = useQueryClient()
-  const [triggeredIds, setTriggeredIds] = useState<string[] | null>(null)
-  const [batchRevision, setBatchRevision] = useState<number | null>(null)
-  const [stopRequested, setStopRequested] = useState(false)
-  const [confirmRunAll, setConfirmRunAll] = useState(false)
-
-  const triggerMutation = useMutation({
-    mutationFn: () => protocolsApi.runCells(protocolId),
-    onSuccess: (batch) => {
-      setTriggeredIds(batch.protocol_run_ids)
-      setBatchRevision(batch.protocol_revision)
-      setStopRequested(false)
-    },
-  })
-  const publishAndRunMutation = useMutation({
-    mutationFn: () => protocolsApi.publish(protocolId),
-    onSuccess: (published) => {
-      queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
-      setConfirmRunAll(false)
-      triggerMutation.mutate()
-    },
-  })
-
-  const runsQuery = useQuery({
-    queryKey: ['protocols', protocolId, 'runs'],
-    queryFn: () => protocolsApi.listRuns(protocolId),
-    enabled: !!triggeredIds,
-    refetchInterval: (query) => {
-      const runs = query.state.data
-      if (!runs || !triggeredIds) return RUN_POLL_MS
-      const triggered = runs.filter((r) => triggeredIds.includes(r.id))
-      const allTerminal = triggered.length === triggeredIds.length && triggered.every((r) => TERMINAL_RUN_STATUSES.has(r.status))
-      if (allTerminal) {
-        queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'replicates'] })
-        return false
-      }
-      return RUN_POLL_MS
-    },
-  })
-
-  const triggered: ProtocolRun[] = triggeredIds ? (runsQuery.data ?? []).filter((r) => triggeredIds.includes(r.id)) : []
-  const doneCount = triggered.filter((r) => TERMINAL_RUN_STATUSES.has(r.status)).length
-  const failedCount = triggered.filter((r) => r.status === 'failed').length
-  const cancelledCount = triggered.filter((r) => r.status === 'cancelled').length
-  const isRunning = triggerMutation.isPending || (!!triggeredIds && doneCount < triggeredIds.length)
-
-  // "Stop all" only raises cancel_requested_at on each still-running run in
-  // the batch (same fire-and-poll shape as the single-run Stop button in
-  // ProtocolCanvas.tsx) -- run_protocol's own node loop is what actually
-  // honors it, per run, between nodes. Already-terminal runs are left
-  // alone; there's nothing to cancel there.
-  const cancelAllMutation = useMutation({
-    mutationFn: async () => {
-      const stillRunning = triggered.filter((r) => !TERMINAL_RUN_STATUSES.has(r.status))
-      await Promise.all(stillRunning.map((r) => protocolsApi.cancelRun(protocolId, r.id)))
-    },
-    onSuccess: () => setStopRequested(true),
-  })
-
-  let statusLabel: string | null = null
-  if (triggerMutation.isPending) statusLabel = 'Starting…'
-  else if (triggeredIds && isRunning) {
-    statusLabel = `${stopRequested ? 'Stopping' : 'Running'} ${doneCount}/${triggeredIds.length} replicates${batchRevision ? ` · canvas v${batchRevision}` : ''}…`
-  }
-  else if (triggeredIds) {
-    const parts = [`${triggeredIds.length - failedCount - cancelledCount} replicates done`]
-    if (failedCount) parts.push(`${failedCount} failed`)
-    if (cancelledCount) parts.push(`${cancelledCount} cancelled`)
-    statusLabel = parts.join(', ')
-  }
-
-  const errorMessage = triggerMutation.isError
-    ? triggerMutation.error instanceof ApiError && typeof triggerMutation.error.detail === 'string'
-      ? triggerMutation.error.detail
-      : 'Could not start the run.'
-    : null
-  const runBlocked = replicateCount === 0 || pendingReplicateCount === 0 || regenerationRequired || unboundFactors.length > 0 || !protocol.published_revision_id
-  const blockedLabel = regenerationRequired
-    ? 'Update design'
-    : unboundFactors.length > 0
-      ? 'Resolve factors'
-      : !protocol.published_revision_id
-        ? 'Publish protocol'
-        : protocol.has_unpublished_changes
-          ? `Run published v${protocol.published_revision}`
-          : 'Run all cells'
-  const blockedTitle = regenerationRequired
-    ? 'Design changed — review and regenerate before running all cells.'
-    : unboundFactors.length > 0
-      ? `Rebind or remove: ${unboundFactors.join(', ')}.`
-      : !protocol.published_revision_id
-        ? 'Publish a valid canvas before running cells.'
-        : replicateCount === 0
-          ? 'Generate design first — there are no cells to run yet.'
-          : pendingReplicateCount === 0
-            ? 'Every planned replicate has already been scored.'
-          : undefined
-
-  return (
-    <div className="flex items-center gap-2">
-      {errorMessage && (
-        <span className="max-w-64 truncate rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive" title={errorMessage}>
-          {errorMessage}
-        </span>
-      )}
-      {statusLabel && <span className="font-mono text-xs text-muted-foreground">{statusLabel}</span>}
-      {isRunning && !triggerMutation.isPending && (
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={stopRequested || cancelAllMutation.isPending}
-          onClick={() => cancelAllMutation.mutate()}
-        >
-          <Square className="size-4" />
-          {stopRequested ? 'Stopping…' : 'Stop all'}
-        </Button>
-      )}
-      <span title={blockedTitle}>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={isRunning || runBlocked}
-          onClick={() => setConfirmRunAll(true)}
-        >
-          {isRunning ? 'Running…' : blockedLabel}
-        </Button>
-      </span>
-      {confirmRunAll && (
-        <RunConfirmDialog
-          scope={{ type: 'all-cells', cellCount, replicateCount, pendingReplicateCount }}
-          nodes={protocol.graph.nodes as unknown as Node[]}
-          edges={protocol.graph.edges as Edge[]}
-          queryClient={queryClient}
-          onCancel={() => setConfirmRunAll(false)}
-          onConfirm={() => {
-            setConfirmRunAll(false)
-            triggerMutation.mutate()
-          }}
-          hasUnpublishedChanges={protocol.has_unpublished_changes}
-          publishedRevision={protocol.published_revision}
-          isPublishing={publishAndRunMutation.isPending}
-          publishError={
-            publishAndRunMutation.error instanceof ApiError && typeof publishAndRunMutation.error.detail === 'string'
-              ? publishAndRunMutation.error.detail
-              : publishAndRunMutation.isError
-                ? 'Could not publish the latest canvas.'
-                : null
-          }
-          onPublishAndRun={() => publishAndRunMutation.mutate()}
-        />
-      )}
-    </div>
-  )
-}
-
 function ProtocolPublicationControl({ protocol, experimentId }: { protocol: Protocol; experimentId: string }) {
   const queryClient = useQueryClient()
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const trialsQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'runs'],
+    queryFn: () => experimentsApi.listTrials(experimentId),
+    enabled: protocol.has_unpublished_changes,
+  })
+  // Obsolescence is based on immutable protocol-run provenance. Results that
+  // were scored directly without a ProtocolRun have no canvas version to
+  // become stale against, so do not overstate the impact in this warning.
+  const affectedReplicateCount = (trialsQuery.data ?? []).filter((trial) => !!trial.run_id && !trial.obsolete).length
   const publishMutation = useMutation({
     mutationFn: () => protocolsApi.publish(protocol.id),
     onSuccess: (published) => {
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'runs'] })
+      setConfirmOpen(false)
     },
   })
   const status = protocol.published_revision
@@ -329,16 +164,45 @@ function ProtocolPublicationControl({ protocol, experimentId }: { protocol: Prot
       : `Published v${protocol.published_revision}`
     : 'No published canvas'
   const error = publishMutation.error instanceof ApiError && typeof publishMutation.error.detail === 'string' ? publishMutation.error.detail : null
+  function requestPublish() {
+    if (affectedReplicateCount > 0) setConfirmOpen(true)
+    else publishMutation.mutate()
+  }
   return (
-    <div className="flex items-center gap-2">
-      <span className="font-mono text-xs text-muted-foreground" title="Production runs use the immutable published canvas revision.">
-        {status}
-      </span>
-      {error && <span className="max-w-56 truncate text-xs text-destructive" title={error}>{error}</span>}
-      <Button size="sm" variant="outline" disabled={!protocol.has_unpublished_changes || publishMutation.isPending} onClick={() => publishMutation.mutate()}>
-        {publishMutation.isPending ? 'Publishing…' : 'Publish canvas'}
-      </Button>
-    </div>
+    <>
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-xs text-muted-foreground" title="Production runs use the immutable published canvas revision.">
+          {status}
+        </span>
+        {error && <span className="max-w-56 truncate text-xs text-destructive" title={error}>{error}</span>}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!protocol.has_unpublished_changes || publishMutation.isPending || trialsQuery.isLoading}
+          onClick={requestPublish}
+        >
+          {publishMutation.isPending ? 'Publishing…' : 'Publish canvas'}
+        </Button>
+      </div>
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Publish a new canvas version?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Publishing this draft changes the canvas version used by future runs. {affectedReplicateCount}{' '}
+            previously run replicate{affectedReplicateCount === 1 ? '' : 's'} will be marked obsolete because{affectedReplicateCount === 1 ? ' it was' : ' they were'} run against the current version.
+          </p>
+          <p className="text-xs text-muted-foreground">The results remain available for comparison; they are not deleted.</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+            <Button onClick={() => publishMutation.mutate()} disabled={publishMutation.isPending}>
+              {publishMutation.isPending ? 'Publishing…' : 'Publish and mark obsolete'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
@@ -354,6 +218,7 @@ export function ProtocolCanvasPage() {
   // ProtocolCanvas.tsx's own comment on ProtocolCanvasHandle for why this
   // needs to be imperative rather than a plain prop.
   const canvasRef = useRef<ProtocolCanvasHandle>(null)
+  const [resultSelection, setResultSelection] = useState<ResultsSelection | null>(null)
 
   const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
@@ -391,6 +256,12 @@ export function ProtocolCanvasPage() {
     queryFn: () => experimentsApi.listReplicates(experimentId!),
     enabled: !!experimentId,
   })
+  const runResultsQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'run-results'],
+    queryFn: () => experimentsApi.getRunResults(experimentId!),
+    enabled: !!experimentId,
+    refetchInterval: 5000,
+  })
   const impactQuery = useQuery({
     queryKey: ['experiments', experimentId, 'design-impact'],
     queryFn: () => experimentsApi.getDesignImpact(experimentId!),
@@ -412,20 +283,12 @@ export function ProtocolCanvasPage() {
             ← Experiments
           </Link>
           {experimentQuery.data && <EditableExperimentName experiment={experimentQuery.data} />}
-          {experimentQuery.data && <TopBarStats experiment={experimentQuery.data} cells={replicatesQuery.data} />}
+          {experimentQuery.data?.locked_at && <span className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary"><Lock className="size-3" /> Locked</span>}
+          {experimentQuery.data && <TopBarStats experiment={experimentQuery.data} cells={replicatesQuery.data} obsoleteRunCount={runResultsQuery.data?.overview.obsolete_replicates ?? 0} />}
           <div className="flex-1" />
           {protocolQuery.data && experimentId && (
             <>
               <ProtocolPublicationControl protocol={protocolQuery.data} experimentId={experimentId} />
-              <RunAllCellsButton
-                protocol={protocolQuery.data}
-                experimentId={experimentId}
-                cellCount={groupReplicatesIntoCells(replicatesQuery.data ?? []).length}
-                replicateCount={replicatesQuery.data?.length ?? 0}
-                pendingReplicateCount={replicatesQuery.data?.filter((replicate) => !replicate.metric_values).length ?? 0}
-                regenerationRequired={impactQuery.data?.regeneration_required ?? false}
-                unboundFactors={unboundFactors}
-              />
             </>
           )}
         </div>
@@ -434,8 +297,13 @@ export function ProtocolCanvasPage() {
           <ExperimentSidePanel
             experiment={experimentQuery.data}
             protocolId={protocolQuery.data?.id}
+            protocol={protocolQuery.data}
             canvasRef={canvasRef}
             isLoading={experimentQuery.isLoading}
+            needsInitialGeneration={impactQuery.data?.has_generated_design === false && impactQuery.data.proposed_cell_count > 0}
+            regenerationRequired={impactQuery.data?.regeneration_required ?? false}
+            unboundFactors={unboundFactors}
+            onResultSelection={setResultSelection}
           />
 
           {protocolQuery.isLoading ? (
@@ -443,7 +311,7 @@ export function ProtocolCanvasPage() {
           ) : protocolQuery.isError || !protocolQuery.data ? (
             <p className="text-sm text-muted-foreground">Could not load this experiment's protocol.</p>
           ) : (
-            <Card className="flex-1 overflow-hidden p-0">
+            <Card className="relative flex-1 overflow-hidden p-0">
               <ReactFlowProvider>
                 <ProtocolCanvas
                   key={protocolQuery.data.id}
@@ -453,8 +321,10 @@ export function ProtocolCanvasPage() {
                   initialGraph={protocolQuery.data.graph}
                   hasUnpublishedChanges={protocolQuery.data.has_unpublished_changes}
                   publishedRevision={protocolQuery.data.published_revision}
+                  experimentLocked={!!experimentQuery.data?.locked_at}
                 />
               </ReactFlowProvider>
+              {experimentId && <ResultsInspectorPanel experimentId={experimentId} selection={resultSelection} onClose={() => setResultSelection(null)} />}
             </Card>
           )}
         </div>

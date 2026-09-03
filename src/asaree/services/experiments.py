@@ -17,7 +17,18 @@ from asaree.models.experiment_dataset import ExperimentDataset
 # No "dataset_id" here any more -- an experiment's datasets are rows in
 # experiment_datasets, not a column, so they're written by
 # set_experiment_datasets rather than by this generic setattr path.
-_SETTABLE_FIELDS = frozenset({"name", "description", "hypothesis", "design_spec", "archived_at"})
+_SETTABLE_FIELDS = frozenset(
+    {
+        "name",
+        "description",
+        "hypothesis",
+        "design_spec",
+        "archived_at",
+        "locked_at",
+        "locked_protocol_revision_id",
+        "locked_design_spec",
+    }
+)
 
 # Placeholder-name allocation for the GUI's one-click create (no
 # name/description gate, you rename on the canvas). The browser used to pick

@@ -2,7 +2,7 @@ import { useRef, useState, type ChangeEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import type { Edge, Node } from '@xyflow/react'
-import { Archive, ArchiveRestore, Download, MoreVertical, Pencil, Text, Upload } from 'lucide-react'
+import { Archive, ArchiveRestore, Download, Lock, LockOpen, MoreVertical, Pencil, Text, Upload } from 'lucide-react'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -10,7 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { applyExperimentRenameToProtocolCache, toPersistedGraph } from '@/lib/protocolGraph'
+import { applyExperimentRenameToProtocolCache, protocolForExperimentQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { sanitizeFilename } from '@/lib/utils'
 import type { ProtocolGraph } from '@/types/protocols'
 import type { DesignSpec } from '@/types/experiments'
@@ -196,6 +196,7 @@ export function ProtocolCanvasMenu({
 }) {
   const [renameOpen, setRenameOpen] = useState(false)
   const [descriptionOpen, setDescriptionOpen] = useState(false)
+  const [lockConfirmOpen, setLockConfirmOpen] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
@@ -215,6 +216,32 @@ export function ProtocolCanvasMenu({
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
       queryClient.invalidateQueries({ queryKey: ['experiments'] })
       if (archive) navigate('/experiments')
+    },
+  })
+  const lockMutation = useMutation({
+    mutationFn: async (lock: boolean) => {
+      if (!lock) return { experiment: await experimentsApi.unlock(experimentId!), protocol: null }
+
+      // The canvas autosave is intentionally debounced. Locking must capture
+      // what is visibly on screen even when the user clicks it inside that
+      // quiet window, so compare the live graph to the server draft, save it
+      // if needed, then publish that exact draft as the lock's revision.
+      const liveGraph = toPersistedGraph(nodes, edges)
+      const current = await protocolsApi.get(protocolId)
+      let publishable = current
+      if (JSON.stringify(current.graph) !== JSON.stringify(liveGraph)) {
+        publishable = await protocolsApi.update(protocolId, { graph: liveGraph })
+      }
+      if (publishable.has_unpublished_changes) {
+        publishable = await protocolsApi.publish(protocolId)
+      }
+      return { experiment: await experimentsApi.lock(experimentId!), protocol: publishable }
+    },
+    onSuccess: ({ experiment: updated, protocol }) => {
+      queryClient.setQueryData(['experiments', experimentId], updated)
+      if (protocol && experimentId) queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), protocol)
+      queryClient.invalidateQueries({ queryKey: ['experiments'] })
+      setLockConfirmOpen(false)
     },
   })
 
@@ -285,6 +312,7 @@ export function ProtocolCanvasMenu({
   }
 
   const isArchived = !!experiment?.archived_at
+  const isLocked = !!experiment?.locked_at
 
   return (
     <>
@@ -301,6 +329,10 @@ export function ProtocolCanvasMenu({
             <Text className="size-4" />
             Edit description
           </DropdownMenuItem>
+          <DropdownMenuItem disabled={!experimentId || lockMutation.isPending} onClick={() => setLockConfirmOpen(true)}>
+            {isLocked ? <LockOpen className="size-4" /> : <Lock className="size-4" />}
+            {isLocked ? 'Unlock for editing…' : 'Lock experiment…'}
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             disabled={!experimentId || archiveMutation.isPending}
@@ -314,7 +346,7 @@ export function ProtocolCanvasMenu({
             <Download className="size-4" />
             Download
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+          <DropdownMenuItem disabled={isLocked} onClick={() => fileInputRef.current?.click()}>
             <Upload className="size-4" />
             Import from file…
           </DropdownMenuItem>
@@ -340,6 +372,23 @@ export function ProtocolCanvasMenu({
             experimentId={experimentId}
             currentDescription={experiment.description}
           />
+          <Dialog open={lockConfirmOpen} onOpenChange={setLockConfirmOpen}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>{isLocked ? 'Unlock experiment for editing?' : 'Lock experiment?'}</DialogTitle>
+              </DialogHeader>
+              <p className="text-sm text-muted-foreground">
+                {isLocked
+                  ? 'Canvas and design changes will be allowed again. Publishing a changed canvas or regenerating a changed design will make earlier runs obsolete.'
+                  : 'This saves and publishes the current canvas, then records it with the design as the approved experiment. Only the replicate count can be changed while locked.'}
+              </p>
+              {lockMutation.isError && <p className="text-sm text-destructive">{lockMutation.error instanceof Error ? lockMutation.error.message : 'Could not update the experiment lock.'}</p>}
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setLockConfirmOpen(false)}>Cancel</Button>
+                <Button onClick={() => lockMutation.mutate(!isLocked)}>{lockMutation.isPending ? 'Saving…' : isLocked ? 'Unlock for editing' : 'Lock experiment'}</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </>

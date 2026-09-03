@@ -42,6 +42,12 @@ class ProtocolRun(Base, TimestampMixin):
     # endpoint and the canvas ever read it, and both read it whole. Same
     # reasoning as Protocol.graph itself.
     node_runs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # Immutable result facts produced by THIS execution attempt, rather than
+    # the mutable latest-attempt projection on FactorialReplicateResult. This
+    # makes a re-run safe: its replacement result can become current without
+    # erasing the scores/evaluation state a user may inspect on an older run.
+    # Shape: {"metric_values": {...}, "metric_evaluation": {...}}.
+    attempt_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # Protocol-level failure (e.g. a cycle rejected at validation time, or an
     # unhandled executor exception) -- distinct from any one node's own error
     # already recorded inside node_runs.

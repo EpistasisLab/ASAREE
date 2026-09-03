@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { displayFactorValue, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
 import { sanitizeFilename } from '@/lib/utils'
-import type { Experiment, ObsoleteRun, ResultCell, ResultNodeRun, ResultReplicate } from '@/types/experiments'
+import type { Experiment, HistoricalRun, ObsoleteRun, ResultCell, ResultNodeRun, ResultReplicate, SupersededRun } from '@/types/experiments'
 import { InfoTooltip } from './InfoTooltip'
 import { RunStepTrace } from './NodeRunOutputPanel'
 
@@ -65,7 +65,13 @@ function statusClass(status: ResultReplicate['status'], obsolete: boolean): stri
 function evaluationStatusLabel(replicate: ResultReplicate): string | null {
   const status = replicate.metric_evaluation?.status
   if (!status) return null
-  return { queued: 'Scoring queued', running: 'Scoring', completed: 'Scored', failed: 'Scoring failed' }[status]
+  return {
+    queued: 'Scoring queued',
+    running: 'Scoring',
+    completed: 'Scored',
+    failed: 'Scoring failed',
+    skipped: 'Scoring skipped (obsolete)',
+  }[status]
 }
 
 function nodeStatusClass(status: string): string {
@@ -222,14 +228,16 @@ function ReplicateResultDetail({ replicate, metricKeys }: {
   )
 }
 
-function historicalRunAsReplicate(replicate: ResultReplicate, historicalRun: ObsoleteRun): ResultReplicate {
+function historicalRunAsReplicate(replicate: ResultReplicate, historicalRun: HistoricalRun): ResultReplicate {
   // The shared detail component needs the stable replicate identity/factors,
   // while the historical run contributes the immutable execution facts.
   return {
     ...replicate,
     ...historicalRun,
-    metric_values: {},
+    metric_values: historicalRun.metric_values ?? {},
+    metric_evaluation: historicalRun.metric_evaluation,
     obsolete_runs: [],
+    superseded_runs: [],
   }
 }
 
@@ -237,6 +245,8 @@ function latestObsoleteRun(replicate: ResultReplicate | null): ObsoleteRun | nul
   if (!replicate?.obsolete || !replicate.run_id) return null
   return {
     run_id: replicate.run_id,
+    metric_values: replicate.metric_values,
+    metric_evaluation: replicate.metric_evaluation,
     status: replicate.status,
     obsolete: true,
     error: replicate.error,
@@ -303,6 +313,7 @@ export function ResultsInspectorPanel({
   const obsoleteRuns = latestStaleRun && !reportedObsoleteRuns.some((run) => run.run_id === latestStaleRun.run_id)
     ? [latestStaleRun, ...reportedObsoleteRuns]
     : reportedObsoleteRuns
+  const supersededRuns: SupersededRun[] = Array.isArray(replicate?.superseded_runs) ? replicate.superseded_runs : []
 
   return (
     <aside className="absolute inset-0 z-20 flex w-full flex-col border-l bg-card shadow-xl" aria-label="Result details">
@@ -318,9 +329,10 @@ export function ResultsInspectorPanel({
                 <TabsList className="w-full rounded-md border bg-muted/50 p-1">
                   <TabsTrigger value="current" className="px-3 data-active:border-primary/30 data-active:bg-primary data-active:text-primary-foreground">Current</TabsTrigger>
                   <TabsTrigger value="obsolete" className="px-3 data-active:border-primary/30 data-active:bg-primary data-active:text-primary-foreground">Obsolete{obsoleteRuns.length > 0 ? ` (${obsoleteRuns.length})` : ''}</TabsTrigger>
+                  <TabsTrigger value="previous" className="px-3 data-active:border-primary/30 data-active:bg-primary data-active:text-primary-foreground">Prior attempts{supersededRuns.length > 0 ? ` (${supersededRuns.length})` : ''}</TabsTrigger>
                 </TabsList>
                 <TabsContent value="current" className="mt-3 flex min-h-0 flex-1 flex-col">
-                  {replicate.obsolete ? (
+                  {replicate.requires_current_attempt ? (
                     <p className="text-sm text-muted-foreground">No result has run against the current canvas version yet. Run this replicate to create one.</p>
                   ) : (
                     <ReplicateResultDetail replicate={replicate} metricKeys={resultsQuery.data.metric_keys} />
@@ -357,10 +369,50 @@ export function ResultsInspectorPanel({
                           </button>
                           {expanded && (
                             <div id={detailId} className="mt-3 border-t pt-3">
-                              <ReplicateResultDetail replicate={historicalRunAsReplicate(replicate, historicalRun)} metricKeys={[]} />
+                              <ReplicateResultDetail replicate={historicalRunAsReplicate(replicate, historicalRun)} metricKeys={Object.keys(historicalRun.metric_values ?? {})} />
                             </div>
                           )}
                         </section>
+                        )
+                      })}
+                    </div>
+                  )}
+                </TabsContent>
+                <TabsContent value="previous" className="mt-3 min-h-0 overflow-y-auto">
+                  {supersededRuns.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">This replicate has no prior attempts on the current canvas version.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {supersededRuns.map((historicalRun) => {
+                        const expanded = expandedObsoleteRuns.has(historicalRun.run_id)
+                        const detailId = `superseded-run-${historicalRun.run_id}`
+                        return (
+                          <section key={historicalRun.run_id} className="rounded-md border p-3">
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 text-left"
+                              aria-expanded={expanded}
+                              aria-controls={detailId}
+                              onClick={() => setExpandedObsoleteRuns((current) => {
+                                const next = new Set(current)
+                                if (next.has(historicalRun.run_id)) next.delete(historicalRun.run_id)
+                                else next.add(historicalRun.run_id)
+                                return next
+                              })}
+                            >
+                              <ChevronDown className={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`} />
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-sm font-medium">Prior attempt from {new Date(historicalRun.updated_at).toLocaleString()}</span>
+                                <span className="mt-0.5 block truncate text-xs text-muted-foreground">Superseded by a later run of this replicate</span>
+                              </span>
+                              <Badge variant="outline">Superseded</Badge>
+                            </button>
+                            {expanded && (
+                              <div id={detailId} className="mt-3 border-t pt-3">
+                                <ReplicateResultDetail replicate={historicalRunAsReplicate(replicate, historicalRun)} metricKeys={Object.keys(historicalRun.metric_values ?? {})} />
+                              </div>
+                            )}
+                          </section>
                         )
                       })}
                     </div>

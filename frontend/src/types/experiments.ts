@@ -274,6 +274,9 @@ export interface ResultReplicate {
   metric_values: Record<string, unknown>
   status: Trial['status']
   obsolete: boolean
+  // The prior attempt is obsolete; this stable replicate slot has no result
+  // yet against the current canvas version.
+  requires_current_attempt?: boolean
   error: string | null
   run_id: string | null
   protocol_revision_id: string | null
@@ -288,24 +291,27 @@ export interface ResultReplicate {
   reported_usage_count: number
   reported_cost_count: number
   metric_evaluation?: {
-    status: 'queued' | 'running' | 'completed' | 'failed'
+    status: 'queued' | 'running' | 'completed' | 'failed' | 'skipped'
     error?: string | null
     evaluator_run_id?: string | null
     metric_ids?: string[]
   } | null
   obsolete_runs: ObsoleteRun[]
+  superseded_runs: SupersededRun[]
 }
 
-// Immutable ProtocolRun records that used an earlier canvas version. This
-// includes the latest stored run when it has since become obsolete, as well as
-// runs superseded by later attempts for the same replicate.
-export interface ObsoleteRun {
+// Read-only facts for a past ProtocolRun attempt. Both obsolete and
+// superseded attempts stay available for inspection, but never participate in
+// current results, CSV, or statistical analysis.
+export interface HistoricalRun {
   run_id: string
   status: Trial['status']
-  obsolete: true
+  obsolete: boolean
   error: string | null
   protocol_revision_id: string | null
   updated_at: string
+  metric_values: Record<string, unknown>
+  metric_evaluation?: ResultReplicate['metric_evaluation']
   duration_seconds: number | null
   node_runs: ResultNodeRun[]
   input_tokens: number | null
@@ -315,6 +321,17 @@ export interface ObsoleteRun {
   agent_run_count: number
   reported_usage_count: number
   reported_cost_count: number
+}
+
+// A prior attempt used an older published canvas revision.
+export interface ObsoleteRun extends HistoricalRun {
+  obsolete: true
+}
+
+// A prior attempt used the current canvas revision, but was replaced by a
+// later run of the same stable replicate slot.
+export interface SupersededRun extends HistoricalRun {
+  obsolete: false
 }
 
 export interface ResultCell {

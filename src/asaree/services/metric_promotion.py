@@ -39,7 +39,12 @@ from motoro.runner import get_run_steps
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.services.factorial_cells import upsert_replicate
-from asaree.services.protocol_runs import get_protocol_run, list_experiment_trials
+from asaree.services.protocol_runs import (
+    get_protocol_run,
+    is_current_replicate_attempt,
+    list_experiment_trials,
+    update_attempt_result,
+)
 
 _TOOL_NAME = "run_model_script"
 # Present as top-level keys in test_metrics.
@@ -138,6 +143,12 @@ async def promote_replicate_score_metrics(
             replicate_label, False, "run_model_script never returned test_metrics (see its own error)"
         )
 
+    # The attempt keeps its own immutable facts even if a newer attempt has
+    # already replaced this replicate. Only the latest attempt may update the
+    # mutable replicate projection used by Results/CSV.
+    await update_attempt_result(db, protocol_run_id, fields={"metric_values": metrics})
+    if not await is_current_replicate_attempt(db, protocol_run_id):
+        return PromotionResult(replicate_label, False, "run has been superseded by a newer attempt")
     # Written back to the design revision the run was planned under, not
     # whatever is current now -- see ProtocolRun.design_revision_id. Null on a
     # run predating that column, which falls back to the current revision.
@@ -159,6 +170,9 @@ async def promote_experiment_score_metrics(db: AsyncSession, *, experiment_id: u
     trials = await list_experiment_trials(db, experiment_id=experiment_id)
     results = []
     for trial in trials:
+        if trial.obsolete:
+            results.append(PromotionResult(trial.replicate_label, False, "run uses an obsolete canvas revision"))
+            continue
         if trial.metric_values:
             continue
         if trial.run_id is None:

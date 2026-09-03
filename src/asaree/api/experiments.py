@@ -772,7 +772,10 @@ async def score_completed_runs_endpoint(
     queued = 0
     for replicate in await list_replicates(db, experiment_id=experiment_id):
         trial = trials.get(replicate.replicate_label)
-        if trial is None or trial.status != "completed" or replicate.run_id is None:
+        # A completed run can still be obsolete when the canvas was published
+        # again after it started. It is excluded from Results, so never spend
+        # a judge call scoring it during this backfill/retry operation either.
+        if trial is None or trial.obsolete or trial.status != "completed" or replicate.run_id is None:
             continue
         await upsert_replicate(
             db,
@@ -804,6 +807,15 @@ async def upsert_replicate_endpoint(
     db: DbSession,
 ) -> ReplicateResponse:
     await _get_owned_experiment(db, experiment_id, user)
+    # This endpoint edits the current replicate projection. If its only run is
+    # against an older canvas, that record is immutable history; users must
+    # create a new attempt before recording new values.
+    trials = await list_experiment_trials(db, experiment_id=experiment_id)
+    trial = next((candidate for candidate in trials if candidate.replicate_label == replicate_label), None)
+    if trial is not None and trial.obsolete:
+        raise HTTPException(
+            status_code=409, detail="This run is obsolete history. Re-run the replicate before recording results."
+        )
     fields = body.model_dump(exclude_unset=True)
     replicate = await upsert_replicate(db, experiment_id=experiment_id, replicate_label=replicate_label, fields=fields)
     return ReplicateResponse.model_validate(replicate)

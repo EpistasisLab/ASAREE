@@ -55,12 +55,14 @@ from asaree.services.factorial_cells import get_replicate, list_replicates, upse
 from asaree.services.metric_evaluation import JUDGE_OUTPUT_CONTRACT, build_metric_judge_prompt, validate_metric_scores
 from asaree.services.metric_promotion import promote_replicate_score_metrics
 from asaree.services.metrics import compose_system_prompt, model_judge_metrics
-from asaree.services.protocol_revisions import get_revision
+from asaree.services.protocol_revisions import get_published_revision, get_revision
 from asaree.services.protocol_runs import (
     create_protocol_run,
     get_cancel_requested_at,
     get_protocol_run,
+    is_current_replicate_attempt,
     set_status,
+    update_attempt_result,
     update_node_run,
 )
 from asaree.services.protocols import get_protocol
@@ -1890,6 +1892,7 @@ def _metric_judge_groups(metrics: list[dict[str, Any]]) -> list[tuple[tuple[str,
 
 async def _set_metric_evaluation_state(
     *,
+    protocol_run_id: uuid.UUID,
     experiment_id: uuid.UUID,
     replicate_label: str,
     revision_id: uuid.UUID | None,
@@ -1899,22 +1902,21 @@ async def _set_metric_evaluation_state(
     evaluator_run_id: str | None = None,
 ) -> None:
     async with get_session() as db:
-        await upsert_replicate(
-            db,
-            experiment_id=experiment_id,
-            replicate_label=replicate_label,
-            revision_id=revision_id,
-            fields={
-                "artifacts": {
-                    "metric_evaluation": {
-                        "status": status,
-                        "metric_ids": metric_ids,
-                        "error": error,
-                        "evaluator_run_id": evaluator_run_id,
-                    }
-                }
-            },
-        )
+        evaluation = {
+            "status": status,
+            "metric_ids": metric_ids,
+            "error": error,
+            "evaluator_run_id": evaluator_run_id,
+        }
+        await update_attempt_result(db, protocol_run_id, fields={"metric_evaluation": evaluation})
+        if await is_current_replicate_attempt(db, protocol_run_id):
+            await upsert_replicate(
+                db,
+                experiment_id=experiment_id,
+                replicate_label=replicate_label,
+                revision_id=revision_id,
+                fields={"artifacts": {"metric_evaluation": evaluation}},
+            )
         await db.commit()
 
 
@@ -1936,6 +1938,22 @@ async def evaluate_protocol_run_metrics(protocol_run_id: uuid.UUID) -> bool:
         experiment = await get_experiment(db, protocol.experiment_id)
         if experiment is None:
             return False
+        superseded = not await is_current_replicate_attempt(db, protocol_run_id)
+        current_published = await get_published_revision(db, protocol)
+        # A queued backfill can race a canvas publish, and an in-flight cell
+        # can finish after a publish too. Check here at the evaluator boundary
+        # (not only when queuing) so neither path spends an LLM judge call on a
+        # result the Results panel considers obsolete.
+        obsolete = current_published is not None and (
+            (
+                protocol_run.protocol_revision_id is not None
+                and protocol_run.protocol_revision_id != current_published.id
+            )
+            or (
+                protocol_run.protocol_revision_id is None
+                and protocol_run.created_at < current_published.published_at
+            )
+        )
         revision = (
             await get_revision(db, protocol_run.protocol_revision_id) if protocol_run.protocol_revision_id else None
         )
@@ -1946,9 +1964,25 @@ async def evaluate_protocol_run_metrics(protocol_run_id: uuid.UUID) -> bool:
     if not configured_metrics:
         return False
     metric_ids = [metric["id"] for metric in configured_metrics]
+    if obsolete or superseded:
+        await _set_metric_evaluation_state(
+            protocol_run_id=protocol_run_id,
+            experiment_id=experiment.id,
+            replicate_label=protocol_run.replicate_label,
+            revision_id=protocol_run.design_revision_id,
+            status="skipped",
+            metric_ids=metric_ids,
+            error=(
+                "Run uses an obsolete canvas revision."
+                if obsolete
+                else "Run has been superseded by a newer attempt."
+            ),
+        )
+        return False
     source = _metric_judge_source(graph, protocol_run.node_runs or {})
     if source is None:
         await _set_metric_evaluation_state(
+            protocol_run_id=protocol_run_id,
             experiment_id=experiment.id,
             replicate_label=protocol_run.replicate_label,
             revision_id=protocol_run.design_revision_id,
@@ -1959,6 +1993,7 @@ async def evaluate_protocol_run_metrics(protocol_run_id: uuid.UUID) -> bool:
         return False
     source_node, output_text = source
     await _set_metric_evaluation_state(
+        protocol_run_id=protocol_run_id,
         experiment_id=experiment.id,
         replicate_label=protocol_run.replicate_label,
         revision_id=protocol_run.design_revision_id,
@@ -2037,6 +2072,7 @@ async def evaluate_protocol_run_metrics(protocol_run_id: uuid.UUID) -> bool:
             scores.update(group_scores)
     except Exception as exc:  # noqa: BLE001 -- evaluator failures must never invalidate a completed task run
         await _set_metric_evaluation_state(
+            protocol_run_id=protocol_run_id,
             experiment_id=experiment.id,
             replicate_label=protocol_run.replicate_label,
             revision_id=protocol_run.design_revision_id,
@@ -2048,23 +2084,23 @@ async def evaluate_protocol_run_metrics(protocol_run_id: uuid.UUID) -> bool:
         logger.exception("experiment_metric_evaluation_failed", extra={"protocol_run_id": str(protocol_run_id)})
         return False
     async with get_session() as db:
-        await upsert_replicate(
-            db,
-            experiment_id=experiment.id,
-            replicate_label=protocol_run.replicate_label,
-            revision_id=protocol_run.design_revision_id,
-            fields={
-                "metric_values": scores,
-                "artifacts": {
-                    "metric_evaluation": {
-                        "status": "completed",
-                        "metric_ids": metric_ids,
-                        "error": None,
-                        "evaluator_run_id": evaluator_run_id,
-                    }
-                },
-            },
+        evaluation = {
+            "status": "completed",
+            "metric_ids": metric_ids,
+            "error": None,
+            "evaluator_run_id": evaluator_run_id,
+        }
+        await update_attempt_result(
+            db, protocol_run_id, fields={"metric_values": scores, "metric_evaluation": evaluation}
         )
+        if await is_current_replicate_attempt(db, protocol_run_id):
+            await upsert_replicate(
+                db,
+                experiment_id=experiment.id,
+                replicate_label=protocol_run.replicate_label,
+                revision_id=protocol_run.design_revision_id,
+                fields={"metric_values": scores, "artifacts": {"metric_evaluation": evaluation}},
+            )
         await db.commit()
     return True
 
@@ -2605,7 +2641,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
     async with get_session() as db:
         await set_status(db, protocol_run_id, status="running")
-        if replicate_label and experiment_id:
+        if replicate_label and experiment_id and await is_current_replicate_attempt(db, protocol_run_id):
             # Pre-write, before any node executes: a crash/timeout mid-run
             # still leaves this cell's provenance recorded (mirrors the
             # notebook's own pre-scoring upsert_replicate call). workspace_id is
@@ -2763,7 +2799,11 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 # {replicate_label}, the same manual step the notebook's own
                 # score_payload is today.
                 sinks = sink_node_ids(graph)
-                if len(sinks) == 1 and node_runs.get(sinks[0], {}).get("status") == "completed":
+                if (
+                    len(sinks) == 1
+                    and node_runs.get(sinks[0], {}).get("status") == "completed"
+                    and await is_current_replicate_attempt(db, protocol_run_id)
+                ):
                     await upsert_replicate(
                         db,
                         experiment_id=experiment_id,

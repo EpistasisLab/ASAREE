@@ -34,7 +34,7 @@ import asaree.models.protocol_revision  # noqa: F401 -- ProtocolRun.protocol_rev
 import asaree.models.user  # noqa: F401 -- registers users for Protocol/ProtocolRun's owner_id FK
 from asaree.config import get_settings
 from asaree.models.database import get_session
-from asaree.services.protocol_execution import run_protocol
+from asaree.services.protocol_execution import evaluate_protocol_run_metrics, run_protocol
 from asaree.services.protocol_runs import fail_protocol_run, get_protocol_run, list_stale_protocol_runs
 from asaree.services.run_tools import gather_tools
 
@@ -143,6 +143,14 @@ async def execute_protocol_run_task(ctx: dict[str, Any], protocol_run_id_str: st
         logger.exception("execute_protocol_run_task_failed", extra={"protocol_run_id": protocol_run_id_str})
         async with get_session() as db:
             await fail_protocol_run(db, protocol_run_id, error=f"{type(e).__name__}: {e}")
+
+
+async def evaluate_protocol_run_metrics_task(ctx: dict[str, Any], protocol_run_id_str: str) -> None:
+    """Backfill or retry generic evaluator metrics without re-running a task."""
+    try:
+        await evaluate_protocol_run_metrics(uuid.UUID(protocol_run_id_str))
+    except Exception:  # noqa: BLE001 -- the evaluator records its own failure where possible
+        logger.exception("evaluate_protocol_run_metrics_task_failed", extra={"protocol_run_id": protocol_run_id_str})
 
 
 async def _fail_protocol_run_now(protocol_run_id: uuid.UUID, error: str) -> None:

@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
-from asaree.services.csv_export import replicates_that_ran, replicates_to_csv
+from asaree.services.csv_export import replicates_that_ran, replicates_to_csv, result_rows_to_csv
 from asaree.services.datasets import get_dataset
 from asaree.services.design_generation import DesignValidationError, generate_design_cells, get_design_impact
 from asaree.services.design_revisions import (
@@ -43,9 +43,11 @@ from asaree.services.experiments import (
 )
 from asaree.services.factorial_analysis import FactorialAnalysisError, analyze_experiment_design, analyze_factorial
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
+from asaree.services.metrics import build_evaluation_context, model_judge_metrics, normalize_design_spec
 from asaree.services.protocol_revisions import get_published_revision, is_draft_published
 from asaree.services.protocol_runs import list_experiment_trials
 from asaree.services.protocols import list_protocols, sync_protocol_names_to_experiment
+from asaree.worker.enqueue import enqueue_metric_evaluation
 
 # For a Content-Disposition filename only -- never touches the experiment's
 # own stored name, just what the browser offers to save the download as.
@@ -148,7 +150,7 @@ def _experiment_response(e: Any, dataset_ids: list[uuid.UUID]) -> ExperimentResp
         hypothesis=e.hypothesis,
         design_type=e.design_type,
         task_brief=e.task_brief,
-        design_spec=e.design_spec,
+        design_spec=normalize_design_spec(e.design_spec),
         dataset_ids=dataset_ids,
         dataset_id=dataset_ids[0] if dataset_ids else None,
         archived_at=e.archived_at,
@@ -300,12 +302,36 @@ async def get_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, d
     return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment_id))
 
 
+class EvaluationContextRequest(BaseModel):
+    context_metric_ids: list[str]
+
+
+class EvaluationContextResponse(BaseModel):
+    context: str
+
+
+@router.post("/{experiment_id}/evaluation-context", response_model=EvaluationContextResponse)
+async def experiment_evaluation_context_endpoint(
+    experiment_id: uuid.UUID, body: EvaluationContextRequest, user: CurrentUser, db: DbSession
+) -> EvaluationContextResponse:
+    """Render the exact context helper used by execution for the inspector preview."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    return EvaluationContextResponse(
+        context=build_evaluation_context((experiment.design_spec or {}).get("metrics"), body.context_metric_ids)
+    )
+
+
 @router.patch("/{experiment_id}", response_model=ExperimentResponse)
 async def update_experiment_endpoint(
     experiment_id: uuid.UUID, body: UpdateExperimentRequest, user: CurrentUser, db: DbSession
 ) -> ExperimentResponse:
     experiment = await _get_owned_experiment(db, experiment_id, user)
     fields = body.model_dump(exclude_unset=True)
+    if "design_spec" in fields:
+        try:
+            fields["design_spec"] = normalize_design_spec(fields["design_spec"], validate_metrics=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     _reject_locked_mutation(experiment, fields)
     if "name" in fields and fields["name"] is not None:
         existing = await get_experiment_by_name(db, fields["name"], owner_id=user.id)
@@ -392,6 +418,11 @@ async def generate_design_endpoint(
     experiment = await _get_owned_experiment(db, experiment_id, user)
     if body is not None:
         fields = body.model_dump(exclude_unset=True)
+        if "design_spec" in fields:
+            try:
+                fields["design_spec"] = normalize_design_spec(fields["design_spec"], validate_metrics=True)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         if fields:
             _reject_locked_mutation(experiment, fields)
             experiment = await update_experiment(db, experiment_id, fields=fields)
@@ -594,10 +625,68 @@ async def get_experiment_run_results_endpoint(
     """
     experiment = await _get_owned_experiment(db, experiment_id, user)
     return RunResultsResponse(
-        **(await summarize_experiment_run_results(
-            db, experiment_id=experiment_id, design_spec=experiment.design_spec
-        ))
+        **(await summarize_experiment_run_results(db, experiment_id=experiment_id, design_spec=experiment.design_spec))
     )
+
+
+@router.get("/{experiment_id}/run-results.csv")
+async def export_run_results_csv_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> Response:
+    """Download the same enriched data shown on the Results tab."""
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    results = await summarize_experiment_run_results(
+        db, experiment_id=experiment_id, design_spec=experiment.design_spec
+    )
+    csv_text = result_rows_to_csv(results["replicates"])
+    filename = _UNSAFE_FILENAME_CHAR.sub("_", experiment.name.strip()) or "experiment"
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}-results.csv"'},
+    )
+
+
+class ScoreCompletedRunsResponse(BaseModel):
+    queued: int
+
+
+@router.post("/{experiment_id}/score-completed-runs", response_model=ScoreCompletedRunsResponse)
+async def score_completed_runs_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
+) -> ScoreCompletedRunsResponse:
+    """Queue post-run judges for completed current-design replicates.
+
+    This is a backfill/retry operation only: it never re-executes the task
+    graph.  Each evaluator reads the run's persisted final output instead.
+    """
+    experiment = await _get_owned_experiment(db, experiment_id, user)
+    configured = model_judge_metrics((experiment.design_spec or {}).get("metrics"))
+    if not configured:
+        raise HTTPException(status_code=409, detail="Configure at least one LLM judge metric before scoring results.")
+    trials = {trial.replicate_label: trial for trial in await list_experiment_trials(db, experiment_id=experiment_id)}
+    queued = 0
+    for replicate in await list_replicates(db, experiment_id=experiment_id):
+        trial = trials.get(replicate.replicate_label)
+        if trial is None or trial.status != "completed" or replicate.run_id is None:
+            continue
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label=replicate.replicate_label,
+            revision_id=replicate.design_revision_id,
+            fields={
+                "artifacts": {
+                    "metric_evaluation": {
+                        "status": "queued",
+                        "metric_ids": [metric["id"] for metric in configured],
+                        "error": None,
+                        "evaluator_run_id": None,
+                    }
+                }
+            },
+        )
+        await enqueue_metric_evaluation(replicate.run_id)
+        queued += 1
+    return ScoreCompletedRunsResponse(queued=queued)
 
 
 @router.put("/{experiment_id}/replicates/{replicate_label}", response_model=ReplicateResponse)
@@ -610,9 +699,7 @@ async def upsert_replicate_endpoint(
 ) -> ReplicateResponse:
     await _get_owned_experiment(db, experiment_id, user)
     fields = body.model_dump(exclude_unset=True)
-    replicate = await upsert_replicate(
-        db, experiment_id=experiment_id, replicate_label=replicate_label, fields=fields
-    )
+    replicate = await upsert_replicate(db, experiment_id=experiment_id, replicate_label=replicate_label, fields=fields)
     return ReplicateResponse.model_validate(replicate)
 
 

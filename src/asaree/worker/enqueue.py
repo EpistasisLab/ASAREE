@@ -43,6 +43,14 @@ async def enqueue_protocol_run(protocol_run_id: uuid.UUID) -> None:
     await pool.enqueue_job("execute_protocol_run_task", str(protocol_run_id), _job_id=f"protocol-run:{protocol_run_id}")
 
 
+async def enqueue_metric_evaluation(protocol_run_id: uuid.UUID) -> None:
+    """Queue an idempotent backfill/retry of configured post-run metrics."""
+    pool = await _get_pool()
+    await pool.enqueue_job(
+        "evaluate_protocol_run_metrics_task", str(protocol_run_id), _job_id=f"metric-evaluation:{protocol_run_id}"
+    )
+
+
 async def dispose_pool() -> None:
     global _pool
     if _pool is not None:

@@ -256,6 +256,8 @@ export function ExperimentSidePanel({
               ) : (
                 <ResultsTab
                   experimentId={experiment.id}
+                  experimentName={experiment.name}
+                  experiment={experiment}
                   onSelectResult={onResultSelection}
                 />
               )}

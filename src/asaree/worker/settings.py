@@ -31,7 +31,12 @@ from asaree.models.database import dispose_engine
 from asaree.redis_client import dispose_redis
 from asaree.services.credential_resolver import resolve as resolve_credentials
 from asaree.services.system_mcp_servers import ensure_system_servers, refresh_system_server_capabilities
-from asaree.worker.tasks import check_stale_runs, execute_protocol_run_task, execute_run_task
+from asaree.worker.tasks import (
+    check_stale_runs,
+    evaluate_protocol_run_metrics_task,
+    execute_protocol_run_task,
+    execute_run_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +62,7 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions = [execute_run_task, execute_protocol_run_task]
+    functions = [execute_run_task, execute_protocol_run_task, evaluate_protocol_run_metrics_task]
     cron_jobs = [cron(check_stale_runs, second={0, 30})]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     on_startup = on_startup

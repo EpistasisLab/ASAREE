@@ -172,6 +172,13 @@ export const experimentsApi = {
   list: (opts?: { includeArchived?: boolean }) =>
     request<Experiment[]>(opts?.includeArchived ? '/experiments?include_archived=true' : '/experiments'),
   get: (id: string) => request<Experiment>(`/experiments/${id}`),
+  evaluationContext: (id: string, contextMetricIds: string[]) =>
+    request<{ context: string }>(`/experiments/${id}/evaluation-context`, {
+      method: 'POST',
+      body: { context_metric_ids: contextMetricIds },
+    }),
+  scoreCompletedRuns: (id: string) =>
+    request<{ queued: number }>(`/experiments/${id}/score-completed-runs`, { method: 'POST' }),
   // Omit `name` and the server allocates the next free "Untitled Experiment N"
   // atomically -- the one-click create in AppHeader relies on that, since a
   // name this client picks from a GET is a guess that another session (or an
@@ -220,6 +227,7 @@ export const experimentsApi = {
   // anywhere in the experiment (see services.csv_export.replicates_to_csv) --
   // a Blob, not JSON, so callers hand it straight to URL.createObjectURL.
   downloadReplicatesCsv: (id: string) => requestBlob(`/experiments/${id}/replicates.csv`),
+  downloadRunResultsCsv: (id: string) => requestBlob(`/experiments/${id}/run-results.csv`),
   // Materializes one cell per combination and its replicate-result children.
   // declared factors, returning the current design's replicates. If the new design
   // isn't the same set of cells as the current one, the current design

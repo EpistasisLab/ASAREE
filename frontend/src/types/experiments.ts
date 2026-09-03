@@ -19,9 +19,30 @@ export interface DesignFactor {
 }
 
 export interface DesignMetric {
+  // Stable instance identity.  Catalog entries also retain their catalog key;
+  // custom and legacy declarations intentionally have no catalog key.
+  id?: string
+  catalogKey?: string
   name: string
+  description?: string
+  kind?: 'runtime' | 'deterministic_evaluator' | 'model_judge' | 'agent_reported' | 'custom'
+  valueType?: 'number' | 'boolean' | 'string'
+  unit?: string
+  // Present only when this metric is evaluated by the controlled post-run
+  // judge. Keeping the rubric with the experiment declaration makes the
+  // resulting score reproducible and lets old/manual metrics remain valid.
+  scoring?: MetricScoringConfig
   primary: boolean
   direction: 'maximize' | 'minimize'
+  [key: string]: unknown
+}
+
+export interface MetricScoringConfig {
+  method: 'model_judge'
+  rubric: string
+  reference?: string
+  min?: number
+  max?: number
 }
 
 // "sequential" (default when design_spec.coordination_strategy is absent --
@@ -257,6 +278,12 @@ export interface ResultReplicate {
   agent_run_count: number
   reported_usage_count: number
   reported_cost_count: number
+  metric_evaluation?: {
+    status: 'queued' | 'running' | 'completed' | 'failed'
+    error?: string | null
+    evaluator_run_id?: string | null
+    metric_ids?: string[]
+  } | null
   obsolete_runs: ObsoleteRun[]
 }
 

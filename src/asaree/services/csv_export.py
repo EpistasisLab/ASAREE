@@ -62,4 +62,45 @@ def replicates_to_csv(replicates: Sequence[Any]) -> str:
     return buf.getvalue()
 
 
-__all__ = ["replicates_that_ran", "replicates_to_csv"]
+def result_rows_to_csv(rows: Sequence[dict[str, Any]]) -> str:
+    """Export the enriched Results response, including runtime telemetry.
+
+    Unlike :func:`replicates_to_csv`, this receives the read-only Results
+    projection.  That lets a CSV include selected runtime metrics without
+    pretending those execution facts were manually persisted score values.
+    """
+    fixed_fields = [
+        "replicate_label",
+        "replicate_number",
+        "cell_label",
+        "status",
+        "obsolete",
+        "run_id",
+        "protocol_revision_id",
+        "updated_at",
+        "duration_seconds",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cost_usd",
+        "error",
+    ]
+    factor_keys = sorted({key for row in rows for key in (row.get("factor_values") or {})})
+    # Runtime metrics are already present in the fixed execution columns.
+    # Avoid duplicate CSV headers while retaining every non-telemetry score.
+    metric_keys = sorted(
+        {key for row in rows for key in (row.get("metric_values") or {}) if key not in fixed_fields}
+    )
+    fields = [*fixed_fields, *factor_keys, *metric_keys]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for source in rows:
+        row = {key: source.get(key, "") for key in fields}
+        row.update(source.get("factor_values") or {})
+        row.update(source.get("metric_values") or {})
+        writer.writerow(row)
+    return buf.getvalue()
+
+
+__all__ = ["replicates_that_ran", "replicates_to_csv", "result_rows_to_csv"]

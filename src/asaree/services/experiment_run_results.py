@@ -24,6 +24,7 @@ from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.factorial_cells import list_replicates
+from asaree.services.metrics import normalize_metrics
 from asaree.services.protocol_runs import list_experiment_trials
 
 
@@ -72,11 +73,7 @@ def _duration_seconds(start: datetime, end: datetime) -> float:
 
 
 def _numeric_metrics(values: dict[str, Any] | None) -> dict[str, float]:
-    return {
-        key: number
-        for key, value in (values or {}).items()
-        if (number := _number(value)) is not None
-    }
+    return {key: number for key, value in (values or {}).items() if (number := _number(value)) is not None}
 
 
 def _mean(values: list[float]) -> float | None:
@@ -96,8 +93,32 @@ def _primary_metric(design_spec: dict[str, Any] | None) -> tuple[str | None, str
     for metric in metrics:
         if isinstance(metric, dict) and metric.get("primary") and isinstance(metric.get("name"), str):
             direction = metric.get("direction")
-            return metric["name"], direction if direction in {"maximize", "minimize"} else "maximize"
+            # Catalog runtime metrics are stored under their telemetry key
+            # (cost_usd, duration_seconds, ...), while their display name is
+            # intentionally human-readable ("Cost", "Duration").
+            key = metric.get("catalogKey") if metric.get("kind") == "runtime" else metric["name"]
+            resolved_key = key if isinstance(key, str) else metric["name"]
+            resolved_direction = direction if direction in {"maximize", "minimize"} else "maximize"
+            return resolved_key, resolved_direction
     return None, "maximize"
+
+
+def _declared_runtime_metrics(design_spec: dict[str, Any] | None, execution: dict[str, Any]) -> dict[str, float]:
+    """Project selected runtime telemetry into the Results metric namespace.
+
+    Telemetry remains execution-owned and is never written into a replicate's
+    persisted ``metric_values`` JSON.  This view merely makes a declared
+    runtime metric selectable and comparable beside promoted score metrics.
+    """
+    metrics = design_spec.get("metrics") if isinstance(design_spec, dict) else None
+    values: dict[str, float] = {}
+    for metric in normalize_metrics(metrics):
+        if metric["kind"] != "runtime" or not isinstance(metric.get("catalogKey"), str):
+            continue
+        value = _number(execution.get(metric["catalogKey"]))
+        if value is not None:
+            values[metric["catalogKey"]] = value
+    return values
 
 
 def _has_execution_evidence(node_run: dict[str, Any]) -> bool:
@@ -300,9 +321,7 @@ async def summarize_experiment_run_results(
             "reported_usage_count": len(
                 {node["agent_run_id"] for node in node_results if node["total_tokens"] is not None}
             ),
-            "reported_cost_count": len(
-                {node["agent_run_id"] for node in node_results if node["cost_usd"] is not None}
-            ),
+            "reported_cost_count": len({node["agent_run_id"] for node in node_results if node["cost_usd"] is not None}),
         }
 
     result_rows: list[dict[str, Any]] = []
@@ -310,17 +329,21 @@ async def summarize_experiment_run_results(
     for replicate in replicates:
         trial = trials_by_label.get(replicate.replicate_label)
         protocol_run = protocol_runs_by_id.get(trial.run_id) if trial and trial.run_id else None
-        execution = execution_detail(protocol_run) if protocol_run is not None else {
-            "duration_seconds": None,
-            "node_runs": [],
-            "input_tokens": None,
-            "output_tokens": None,
-            "total_tokens": None,
-            "cost_usd": None,
-            "agent_run_count": 0,
-            "reported_usage_count": 0,
-            "reported_cost_count": 0,
-        }
+        execution = (
+            execution_detail(protocol_run)
+            if protocol_run is not None
+            else {
+                "duration_seconds": None,
+                "node_runs": [],
+                "input_tokens": None,
+                "output_tokens": None,
+                "total_tokens": None,
+                "cost_usd": None,
+                "agent_run_count": 0,
+                "reported_usage_count": 0,
+                "reported_cost_count": 0,
+            }
+        )
         # The replicate row only names the latest run. It may itself be stale
         # after a later canvas publication, so obsolete history must include
         # that row as well as any preceding executions. Do not make callers
@@ -341,7 +364,12 @@ async def summarize_experiment_run_results(
             if obsolete
         ]
 
-        metrics = _numeric_metrics(replicate.metric_values)
+        # Preserve manually promoted/evaluator output as-is, then layer only
+        # the runtime telemetry the experiment explicitly declared.  This is
+        # a response projection, not a fake score and not a DB write.
+        metric_values = dict(replicate.metric_values or {})
+        metric_values.update(_declared_runtime_metrics(design_spec, execution))
+        metrics = _numeric_metrics(metric_values)
         metric_keys.update(metrics)
         result_rows.append(
             {
@@ -349,9 +377,10 @@ async def summarize_experiment_run_results(
                 "replicate_number": replicate.replicate_number,
                 "cell_label": replicate.cell_label,
                 "factor_values": replicate.factor_values or {},
-                "metric_values": replicate.metric_values or {},
+                "metric_values": metric_values,
                 "status": (
-                    "queued" if trial is not None and trial.status == "pending"
+                    "queued"
+                    if trial is not None and trial.status == "pending"
                     else (trial.status if trial else "not_started")
                 ),
                 "obsolete": bool(trial and trial.obsolete),
@@ -363,6 +392,11 @@ async def summarize_experiment_run_results(
                     else None
                 ),
                 "updated_at": trial.updated_at if trial is not None else replicate.updated_at,
+                "metric_evaluation": (
+                    (replicate.artifacts or {}).get("metric_evaluation")
+                    if isinstance((replicate.artifacts or {}).get("metric_evaluation"), dict)
+                    else None
+                ),
                 "obsolete_runs": sorted(obsolete_runs, key=lambda run: run["updated_at"], reverse=True),
                 **execution,
             }

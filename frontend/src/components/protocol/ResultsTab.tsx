@@ -496,7 +496,18 @@ export function ResultsTab({
 
   return (
     <div className="space-y-4 p-3">
-      <section>
+      <section className="space-y-2">
+        {metricKeys.length > 0 && (
+          <div className="flex items-center justify-end gap-2">
+            <span className="text-xs text-muted-foreground">Results metric</span>
+            <Select value={metricKey ?? undefined} onValueChange={(value) => setMetricPreference(value ?? null)}>
+              <SelectTrigger size="sm" aria-label="Choose comparison metric" title="Choose the metric used throughout results">
+                <SelectValue>{(value) => formatMetricLabel(value ?? '')}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>{metricKeys.map((key) => <SelectItem key={key} value={key}>{formatMetricLabel(key)}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+        )}
         <div className="flex items-start justify-between gap-3 rounded-lg border border-primary/25 bg-primary/5 p-3 shadow-[0_0_20px_-12px_var(--primary)]">
           {bestCell && metricKey ? (
             <div className="min-w-0">
@@ -521,7 +532,7 @@ export function ResultsTab({
         {overview.obsolete_replicates > 0 && <div className="mt-2 flex gap-2 rounded-md border border-[color:var(--chart-4)]/50 bg-[color:var(--chart-4)]/10 px-2.5 py-2 text-xs text-foreground"><AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--chart-4)]" /><span>{overview.obsolete_replicates} run{overview.obsolete_replicates === 1 ? '' : 's'} used an older canvas version and are excluded from current totals.</span></div>}
       </section>
       <section className="space-y-2">
-        <div className="flex items-center justify-between gap-2"><div><h2 className="flex items-center gap-1 text-sm font-medium">Condition ranking<InfoTooltip>Conditions are ranked by the selected metric using current, non-obsolete replicates only.</InfoTooltip></h2><p className="text-xs text-muted-foreground">Current replicates only{metricKey === primaryMetric ? ` · ${primaryMetricDirection === 'minimize' ? 'lower is better' : 'higher is better'}` : ''}</p></div>{metricKeys.length > 0 && <Select value={metricKey ?? undefined} onValueChange={(value) => setMetricPreference(value ?? null)}><SelectTrigger size="sm" aria-label="Choose comparison metric" title="Choose the metric used to rank conditions"><SelectValue>{(value) => formatMetricLabel(value ?? '')}</SelectValue></SelectTrigger><SelectContent>{metricKeys.map((key) => <SelectItem key={key} value={key}>{formatMetricLabel(key)}</SelectItem>)}</SelectContent></Select>}</div>
+        <div><h2 className="flex items-center gap-1 text-sm font-medium">Condition ranking<InfoTooltip>Conditions are ranked by the selected metric using current, non-obsolete replicates only.</InfoTooltip></h2><p className="text-xs text-muted-foreground">Current replicates only{metricKey === primaryMetric ? ` · ${primaryMetricDirection === 'minimize' ? 'lower is better' : 'higher is better'}` : ''}</p></div>
         {metricKeys.length === 0 ? <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">No numeric metrics have been reported yet. Run details and provider usage are still available below.</p> : <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[34rem] text-left text-xs"><thead className="border-b bg-muted/40 text-muted-foreground"><tr><th className="w-10 px-2.5 py-2 font-medium"><span className="flex items-center gap-1">Rank<InfoTooltip>Rank among conditions with a reported value for the selected metric.</InfoTooltip></span></th><th className="px-2.5 py-2 font-medium"><span className="flex items-center gap-1">Condition<InfoTooltip>The factor levels used for this group of replicates.</InfoTooltip></span></th><th className="px-2.5 py-2 text-right font-medium">{formatMetricLabel(metricKey ?? '')}</th><th className="px-2.5 py-2 text-right font-medium">Cost</th><th className="px-2.5 py-2 text-right font-medium">Duration</th><th className="px-2.5 py-2 text-right font-medium"><span className="inline-flex items-center gap-1">Runs<InfoTooltip>Completed current replicates out of all generated replicates for this condition.</InfoTooltip></span></th></tr></thead><tbody>{sortedCells.map((cell, index) => { const value = metricKey ? cell.metric_means[metricKey] : undefined; const ranked = typeof value === 'number'; return <tr key={cell.cell_label} className={`border-b last:border-b-0 ${index === 0 && ranked ? 'bg-primary/5' : 'hover:bg-muted/30'}`}><td className="px-2.5 py-2.5 font-medium text-muted-foreground">{ranked ? index + 1 : '—'}</td><td className="max-w-0 px-2.5 py-2.5"><p className="truncate font-medium text-foreground" title={factorSummary(cell.factor_values)}>{factorSummary(cell.factor_values)}</p>{cell.obsolete_count > 0 && <span className="text-[11px] text-[color:var(--chart-4)]">{cell.obsolete_count} obsolete</span>}</td><td className={`px-2.5 py-2.5 text-right font-medium tabular-nums ${index === 0 && ranked ? 'text-primary' : ''}`}>{ranked ? formatMetricValue(metricKey!, value) : '—'}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{formatCurrency(cell.cost_usd)}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{formatDuration(cell.duration_seconds)}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{cell.current_completed_count}/{cell.replicate_count}</td></tr> })}</tbody></table></div>}
       </section>
       <section className="space-y-2">

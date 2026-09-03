@@ -130,8 +130,8 @@ function CellResultSummary({ cell, metricKeys }: { cell: ResultCell; metricKeys:
   )
 }
 
-function ReplicateTimelineNode({ node }: { node: ResultNodeRun }) {
-  const [open, setOpen] = useState(false)
+function ReplicateTimelineNode({ node, defaultOpen = false }: { node: ResultNodeRun; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen)
   const hasDetails = Boolean(node.error || node.output_text || node.agent_run_id)
 
   return (
@@ -179,6 +179,8 @@ function ReplicateResultDetail({ replicate, metricKeys }: {
   const metrics = metricKeys.filter((key) => typeof replicate.metric_values[key] === 'number')
   const hasUsage = replicate.cost_usd !== null || replicate.total_tokens !== null || replicate.duration_seconds !== null || replicate.agent_run_count > 0
   const timelineOnly = metrics.length === 0 && !hasUsage && !replicate.error
+  const agentNodes = replicate.node_runs.filter((node) => node.agent_run_id)
+  const defaultOpenNodeId = agentNodes.length === 1 ? agentNodes[0].node_id : null
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2">
@@ -199,7 +201,7 @@ function ReplicateResultDetail({ replicate, metricKeys }: {
             <section className="space-y-2">
               <h3 className="text-sm font-medium">Usage</h3>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <Scorecard label="Estimated cost" help="Provider-reported or estimated spend for this replicate’s Agent calls." value={formatCurrency(replicate.cost_usd)} icon={CircleDollarSign} />
+                <Scorecard label="Estimated cost" help="Provider-reported or estimated cost for this replicate’s Agent calls." value={formatCurrency(replicate.cost_usd)} icon={CircleDollarSign} />
                 <Scorecard label="Total tokens" help="Input and output tokens reported by the provider for this replicate." value={formatNumber(replicate.total_tokens)} icon={Coins} />
                 <Scorecard label="Duration" help="Wall-clock time from the protocol run starting to it finishing." value={formatDuration(replicate.duration_seconds)} icon={Clock3} />
                 <Scorecard label="Agent calls" help="Number of Agent runs recorded while executing this replicate." value={String(replicate.agent_run_count)} icon={Cpu} />
@@ -212,7 +214,7 @@ function ReplicateResultDetail({ replicate, metricKeys }: {
             <h3 className="text-sm font-medium">Run timeline</h3>
             {replicate.node_runs.length === 0 ? <p className="text-sm text-muted-foreground">No node-level run details are available.</p> : (
               <ol className={timelineOnly ? 'min-h-0 flex-1 space-y-2' : 'space-y-2'}>
-              {replicate.node_runs.map((node) => <ReplicateTimelineNode key={node.node_id} node={node} />)}
+              {replicate.node_runs.map((node) => <ReplicateTimelineNode key={`${replicate.run_id ?? replicate.replicate_label}-${node.node_id}`} node={node} defaultOpen={node.node_id === defaultOpenNodeId} />)}
             </ol>
           )}
         </section>

@@ -139,7 +139,11 @@ class ExperimentResponse(BaseModel):
     archived_at: datetime | None
     locked_at: datetime | None
     locked_protocol_revision_id: uuid.UUID | None
+    # Kept alongside the lock timestamp so a portable definition can carry
+    # the exact design declaration that was approved for execution.
+    locked_design_spec: dict[str, Any] | None
     created_at: datetime
+    updated_at: datetime
 
 
 def _experiment_response(e: Any, dataset_ids: list[uuid.UUID]) -> ExperimentResponse:
@@ -156,7 +160,9 @@ def _experiment_response(e: Any, dataset_ids: list[uuid.UUID]) -> ExperimentResp
         archived_at=e.archived_at,
         locked_at=e.locked_at,
         locked_protocol_revision_id=e.locked_protocol_revision_id,
+        locked_design_spec=normalize_design_spec(e.locked_design_spec),
         created_at=e.created_at,
+        updated_at=e.updated_at,
     )
 
 

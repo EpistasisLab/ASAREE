@@ -55,3 +55,26 @@ def test_model_judge_scores_require_each_declared_numeric_value_and_respect_boun
     )
     _, error = validate_metric_scores({"scores": {"Knowledge-grounded answer score": 6}}, metrics)
     assert error == "evaluator score for Knowledge-grounded answer score is above its maximum"
+
+
+def test_model_judge_preserves_an_explicit_provider_and_model() -> None:
+    normalized = normalize_metrics(
+        [
+            {
+                "id": "quality",
+                "name": "Quality",
+                "description": "Overall response quality.",
+                "kind": "model_judge",
+                "valueType": "number",
+                "direction": "maximize",
+                "primary": True,
+                "scoring": {
+                    "method": "model_judge",
+                    "rubric": "Score the final answer from 1 to 5.",
+                    "judge": {"provider": "openai", "model": "gpt-5"},
+                },
+            }
+        ],
+        validate_custom_names=True,
+    )
+    assert normalized[0]["scoring"]["judge"] == {"provider": "openai", "model": "gpt-5"}

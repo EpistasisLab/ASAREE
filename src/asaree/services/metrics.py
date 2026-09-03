@@ -71,6 +71,7 @@ _CATALOG_BY_KEY = {str(entry["key"]): entry for entry in METRIC_CATALOG}
 _KINDS = {"runtime", "deterministic_evaluator", "model_judge", "agent_reported", "custom"}
 _VALUE_TYPES = {"number", "boolean", "string"}
 _DIRECTIONS = {"maximize", "minimize"}
+_JUDGE_PROVIDERS = {"anthropic", "openai", "azure_foundry", "openrouter", "local"}
 _DELIMITER = re.compile(r"</?experiment_evaluation_context>", re.IGNORECASE)
 
 
@@ -169,6 +170,15 @@ def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> l
                     normalized_scoring["max"] = float(maximum)
                 if minimum is not None and maximum is not None and minimum > maximum:
                     raise ValueError(f"Model-judge metric {name} must have a minimum no greater than its maximum")
+                judge = scoring.get("judge")
+                if judge is not None:
+                    provider = judge.get("provider") if isinstance(judge, dict) else None
+                    model = judge.get("model") if isinstance(judge, dict) else None
+                    if provider not in _JUDGE_PROVIDERS or not isinstance(model, str) or not model.strip():
+                        if validate_custom_names:
+                            raise ValueError(f"Model-judge metric {name} needs a valid judge provider and model")
+                    else:
+                        normalized_scoring["judge"] = {"provider": provider, "model": model.strip()}
                 metric["scoring"] = normalized_scoring
                 metric["kind"] = "model_judge"
                 metric["valueType"] = "number"

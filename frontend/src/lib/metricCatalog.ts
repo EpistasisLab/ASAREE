@@ -65,6 +65,15 @@ export function normalizeDesignMetrics(metrics: DesignMetric[] | undefined): Des
             : undefined,
           min: typeof (scoring as MetricScoringConfig).min === 'number' ? (scoring as MetricScoringConfig).min : undefined,
           max: typeof (scoring as MetricScoringConfig).max === 'number' ? (scoring as MetricScoringConfig).max : undefined,
+          judge: (scoring as MetricScoringConfig).judge
+            && typeof (scoring as MetricScoringConfig).judge?.provider === 'string'
+            && typeof (scoring as MetricScoringConfig).judge?.model === 'string'
+            && (scoring as MetricScoringConfig).judge!.model.trim()
+            ? {
+                provider: (scoring as MetricScoringConfig).judge!.provider,
+                model: (scoring as MetricScoringConfig).judge!.model.trim(),
+              }
+            : undefined,
         }
       : undefined
     return [{

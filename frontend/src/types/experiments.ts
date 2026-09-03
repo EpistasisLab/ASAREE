@@ -43,6 +43,13 @@ export interface MetricScoringConfig {
   reference?: string
   min?: number
   max?: number
+  // An explicit evaluator model keeps scores comparable when an experiment
+  // varies the task agents' own models. The credential itself is never
+  // persisted: only its provider and chosen model are recorded.
+  judge?: {
+    provider: import('./llmSettings').LLMProvider
+    model: string
+  }
 }
 
 // "sequential" (default when design_spec.coordination_strategy is absent --
@@ -153,7 +160,9 @@ export interface Experiment {
   dataset_id: string | null
   locked_at: string | null
   locked_protocol_revision_id: string | null
+  locked_design_spec: DesignSpec | null
   created_at: string
+  updated_at: string
   archived_at: string | null
 }
 

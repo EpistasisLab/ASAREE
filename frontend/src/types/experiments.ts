@@ -2,8 +2,9 @@ export interface DesignFactor {
   name: string
   levels: unknown[]
   // Short, user-editable names for individual treatments. They are persisted
-  // alongside raw levels and become categorical design-matrix column suffixes
-  // in the Results CSV, so a long system prompt never becomes a CSV header.
+  // alongside raw levels and become categorical factor values in the Results
+  // CSV, so a long system prompt never becomes CSV data outside its secure
+  // execution record.
   level_labels?: string[]
   // Absent means 'string' -- factors created before this field existed keep
   // working unchanged. Drives which control the factor editor renders per

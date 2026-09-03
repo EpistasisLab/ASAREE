@@ -110,7 +110,7 @@ def test_results_csv_includes_projected_runtime_metrics() -> None:
     assert "2.5" in row and "150" in row
 
 
-def test_results_csv_projects_factors_to_a_numeric_design_matrix() -> None:
+def test_results_csv_projects_categorical_factors_to_short_level_labels() -> None:
     csv_text = result_rows_to_csv(
         [
             {
@@ -123,27 +123,69 @@ def test_results_csv_projects_factors_to_a_numeric_design_matrix() -> None:
                 "factor_values": {"critic": False, "model": "large", "temperature": 0.8},
                 "metric_values": {"accuracy": 0.9, "passed": False},
             },
-        ]
+        ],
+        {"factors": [{"name": "model", "levels": ["small", "large"], "level_labels": ["small", "large"]}]},
     )
     rows = list(csv.DictReader(io.StringIO(csv_text)))
 
     assert "critic_enabled" in rows[0]
     assert "temperature" in rows[0]
-    # Categorical factors use treatment coding: alphabetically first "large"
-    # is the reference level, and "small" becomes the indicator column.
-    assert "model_small" in rows[0]
-    assert "model" not in rows[0]
+    assert "model" in rows[0]
     assert rows[0]["critic_enabled"] == "1"
     assert rows[1]["critic_enabled"] == "0"
-    assert rows[0]["model_small"] == "1"
-    assert rows[1]["model_small"] == "0"
+    assert rows[0]["model"] == "small"
+    assert rows[1]["model"] == "large"
     assert rows[0]["temperature"] == "0.2"
     assert rows[1]["temperature"] == "0.8"
     assert rows[0]["passed"] == "1"
     assert rows[1]["passed"] == "0"
 
 
-def test_results_csv_schema_describes_treatment_coding_and_binary_outcomes() -> None:
+def test_results_csv_orders_identity_factors_metrics_then_operational_metadata() -> None:
+    csv_text = result_rows_to_csv(
+        [
+            {
+                "replicate_label": "internal-only",
+                "cell_label": "first_a__later_x",
+                "replicate_number": 2,
+                "factor_values": {"later": "x", "first": "a"},
+                "metric_values": {"Quality": 0.9},
+                "duration_seconds": 12.5,
+                "status": "completed",
+                "run_id": "run-1",
+            }
+        ],
+        {
+            "factors": [
+                {"name": "first", "levels": ["a", "b"], "level_labels": ["level1", "level2"]},
+                {"name": "later", "levels": ["x", "y"], "level_labels": ["level1", "level2"]},
+            ]
+        },
+    )
+
+    header = csv_text.splitlines()[0].split(",")
+    assert header == [
+        "cell_label",
+        "replicate_number",
+        "first",
+        "later",
+        "duration_seconds",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cost_usd",
+        "Quality",
+        "status",
+        "obsolete",
+        "run_id",
+        "protocol_revision_id",
+        "updated_at",
+        "error",
+    ]
+    assert "replicate_label" not in header
+
+
+def test_results_csv_schema_describes_categorical_labels_and_binary_outcomes() -> None:
     schema = result_rows_schema(
         [
             {"factor_values": {"model": "small"}, "metric_values": {"passed": True}},
@@ -151,15 +193,15 @@ def test_results_csv_schema_describes_treatment_coding_and_binary_outcomes() -> 
         ],
         {"passed": "boolean"},
     )
-    factor = next(column for column in schema["columns"] if column["name"] == "model_small")
+    factor = next(column for column in schema["columns"] if column["name"] == "model")
     outcome = next(column for column in schema["columns"] if column["name"] == "passed")
     assert factor == {
-        "name": "model_small",
+        "name": "model",
         "role": "factor",
         "source_factor": "model",
         "encoding": "categorical",
-        "level": "small",
-        "reference_level": "large",
+        "value_type": "string",
+        "levels": ["level1", "level2"],
     }
     assert outcome == {"name": "passed", "role": "outcome", "value_type": "boolean", "cell_aggregation": "mean"}
 
@@ -185,12 +227,16 @@ def test_results_csv_uses_persisted_level_labels_instead_of_long_treatment_value
     schema = result_rows_schema(rows, design_spec=design_spec)
 
     header = csv_text.splitlines()[0]
-    assert "agent_system_prompt_full_description" in header
-    assert "agent_system_prompt_concise_summary" in header
+    assert "agent_system_prompt" in header
     assert "Describe this dataset" not in header
-    treatment = next(column for column in schema["columns"] if column["name"] == "agent_system_prompt_full_description")
-    assert treatment["level_label"] == "full_description"
-    assert treatment["reference_level_label"] == "classifier"
+    exported_rows = list(csv.DictReader(io.StringIO(csv_text)))
+    assert [row["agent_system_prompt"] for row in exported_rows] == [
+        "classifier",
+        "full_description",
+        "concise_summary",
+    ]
+    factor = next(column for column in schema["columns"] if column["name"] == "agent_system_prompt")
+    assert set(factor["levels"]) == {"classifier", "full_description", "concise_summary"}
 
 
 def test_node_labels_prefers_the_canvas_name_over_its_durable_id() -> None:

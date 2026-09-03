@@ -89,8 +89,8 @@ def _declared_level_labels(design_spec: dict[str, Any] | None) -> dict[str, dict
     """Map a persisted factor value to its user-facing analysis label.
 
     Old designs have no labels yet. They use a short ``level1``-style
-    fallback here, while undeclared factor values retain the legacy value-
-    derived header for backwards-compatible direct exports.
+    fallback here, so raw prompts and configuration JSON never leave the
+    execution data as a CSV header or categorical value.
     """
     labels_by_factor: dict[str, dict[str, str]] = {}
     factors = design_spec.get("factors") if isinstance(design_spec, dict) else None
@@ -116,21 +116,32 @@ def _declared_level_labels(design_spec: dict[str, Any] | None) -> dict[str, dict
     return labels_by_factor
 
 
-def _design_matrix_columns(
+def _factor_columns(
     rows: Sequence[dict[str, Any]], *, reserved: Sequence[str], design_spec: dict[str, Any] | None = None
-) -> list[tuple[str, str, str, str | None, str | None]]:
-    """Derive numeric design columns from the dynamic factor JSON.
+) -> list[tuple[str, str, str, dict[str, str] | None]]:
+    """Derive analysis-ready columns from the dynamic factor JSON.
 
     Boolean factors become one 0/1 ``<factor>_enabled`` column. Numeric
-    factors stay numeric. Everything else, including structured configuration
-    factors, is treatment-coded into k-1 0/1 columns; the first canonical
-    level is the reference category, avoiding a rank-deficient matrix when a
-    statistics package includes an intercept.
+    factors stay numeric. Categorical, text, and structured configuration
+    factors use one categorical column containing their short level labels.
+    This preserves all levels without leaking full prompt/configuration
+    values; downstream statistics tools can choose their own contrast coding.
     """
-    factor_keys = sorted({key for row in rows for key in (row.get("factor_values") or {})})
+    discovered_factor_keys = {key for row in rows for key in (row.get("factor_values") or {})}
+    declared_factors = design_spec.get("factors") if isinstance(design_spec, dict) else None
+    declared_factor_keys = [
+        factor["name"]
+        for factor in (declared_factors or [])
+        if isinstance(factor, dict) and isinstance(factor.get("name"), str) and factor["name"] in discovered_factor_keys
+    ]
+    # generate_design's first declared factor is its outer loop, so this is
+    # the most stable (slowest-changing) through least stable order. Any
+    # legacy/externally reported factor absent from the declaration follows in
+    # deterministic alphabetical order.
+    factor_keys = [*declared_factor_keys, *sorted(discovered_factor_keys - set(declared_factor_keys))]
     used = set(reserved)
     labels_by_factor = _declared_level_labels(design_spec)
-    columns: list[tuple[str, str, str, str | None, str | None]] = []
+    columns: list[tuple[str, str, str, dict[str, str] | None]] = []
     for factor_key in factor_keys:
         values = [
             factors[factor_key]
@@ -140,56 +151,54 @@ def _design_matrix_columns(
         factor_name = _column_identifier(factor_key, fallback="factor")
         if values and all(isinstance(value, bool) for value in values):
             suffix = factor_name if factor_name.endswith("_enabled") else f"{factor_name}_enabled"
-            columns.append((_unique_column_name(suffix, used), factor_key, "boolean", None, None))
+            columns.append((_unique_column_name(suffix, used), factor_key, "boolean", None))
         elif values and all(isinstance(value, int | float) and not isinstance(value, bool) for value in values):
-            columns.append((_unique_column_name(factor_name, used), factor_key, "numeric", None, None))
+            columns.append((_unique_column_name(factor_name, used), factor_key, "numeric", None))
         else:
             levels = sorted({_factor_level_key(value) for value in values})
-            for level in levels[1:]:
-                level_label = labels_by_factor.get(factor_key, {}).get(level)
-                level_name = _column_identifier(level_label or level.strip('"'), fallback="level")
-                columns.append(
-                    (
-                        _unique_column_name(f"{factor_name}_{level_name}", used),
-                        factor_key,
-                        "categorical",
-                        level,
-                        level_label,
-                    )
-                )
+            declared = labels_by_factor.get(factor_key, {})
+            labels = {level: declared.get(level, f"level{index}") for index, level in enumerate(levels, start=1)}
+            columns.append((_unique_column_name(factor_name, used), factor_key, "categorical", labels))
     return columns
 
 
-_RESULT_FIXED_FIELDS = [
-    "replicate_label",
-    "replicate_number",
+_RESULT_ID_FIELDS = [
     "cell_label",
-    "status",
-    "obsolete",
-    "run_id",
-    "protocol_revision_id",
-    "updated_at",
+    "replicate_number",
+]
+
+_RESULT_RUNTIME_METRIC_FIELDS = [
     "duration_seconds",
     "input_tokens",
     "output_tokens",
     "total_tokens",
     "cost_usd",
+]
+
+_RESULT_METADATA_FIELDS = [
+    "status",
+    "obsolete",
+    "run_id",
+    "protocol_revision_id",
+    "updated_at",
     "error",
 ]
+
+_RESULT_FIXED_FIELDS = [*_RESULT_ID_FIELDS, *_RESULT_RUNTIME_METRIC_FIELDS, *_RESULT_METADATA_FIELDS]
 
 
 def _result_csv_layout(
     rows: Sequence[dict[str, Any]], design_spec: dict[str, Any] | None = None
-) -> tuple[list[str], list[tuple[str, str, str, str | None, str | None]], list[str]]:
+) -> tuple[list[tuple[str, str, str, dict[str, str] | None]], list[str]]:
     # Runtime metrics are already present in the fixed execution columns.
     # Avoid duplicate CSV headers while retaining every non-telemetry score.
     metric_keys = sorted(
         {key for row in rows for key in (row.get("metric_values") or {}) if key not in _RESULT_FIXED_FIELDS}
     )
-    factor_columns = _design_matrix_columns(
+    factor_columns = _factor_columns(
         rows, reserved=[*_RESULT_FIXED_FIELDS, *metric_keys], design_spec=design_spec
     )
-    return _RESULT_FIXED_FIELDS, factor_columns, metric_keys
+    return factor_columns, metric_keys
 
 
 def result_rows_schema(
@@ -198,42 +207,27 @@ def result_rows_schema(
     metric_aggregations: dict[str, str] | None = None,
     design_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Machine-readable companion metadata for a Results design-matrix CSV."""
-    fixed_fields, factor_columns, metric_keys = _result_csv_layout(rows, design_spec)
-    labels_by_factor = _declared_level_labels(design_spec)
-    factor_levels: dict[str, list[str]] = {}
-    for key in {column[1] for column in factor_columns}:
-        values = []
-        for row in rows:
-            factors = row.get("factor_values")
-            if isinstance(factors, dict) and key in factors:
-                values.append(_factor_level_key(factors[key]))
-        factor_levels[key] = sorted(set(values))
-
+    """Machine-readable companion metadata for a Results analysis CSV."""
+    factor_columns, metric_keys = _result_csv_layout(rows, design_spec)
     factor_metadata = []
-    for column_name, factor_key, kind, level, level_label in factor_columns:
+    for column_name, factor_key, kind, labels in factor_columns:
         column: dict[str, Any] = {
             "name": column_name,
             "role": "factor",
             "source_factor": factor_key,
             "encoding": kind,
         }
-        if kind == "categorical" and level:
-            column["level"] = json.loads(level)
-            reference_level = factor_levels[factor_key][0]
-            column["reference_level"] = json.loads(reference_level)
-            if level_label is not None:
-                column["level_label"] = level_label
-            reference_label = labels_by_factor.get(factor_key, {}).get(reference_level)
-            if reference_label is not None:
-                column["reference_level_label"] = reference_label
+        if kind == "categorical":
+            column["value_type"] = "string"
+            column["levels"] = list((labels or {}).values())
         factor_metadata.append(column)
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "row_unit": "replicate",
         "columns": [
-            *({"name": field, "role": "metadata"} for field in fixed_fields),
+            *({"name": field, "role": "metadata"} for field in _RESULT_ID_FIELDS),
             *factor_metadata,
+            *({"name": field, "role": "metric"} for field in _RESULT_RUNTIME_METRIC_FIELDS),
             *(
                 {
                     "name": key,
@@ -243,6 +237,7 @@ def result_rows_schema(
                 }
                 for key in metric_keys
             ),
+            *({"name": field, "role": "metadata"} for field in _RESULT_METADATA_FIELDS),
         ],
     }
 
@@ -253,11 +248,18 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
     Unlike :func:`replicates_to_csv`, this receives the read-only Results
     projection.  That lets a CSV include selected runtime metrics without
     pretending those execution facts were manually persisted score values.
-    Factor JSON is projected to a numeric design matrix rather than exported
-    as mixed boolean/string/configuration cells.
+    Boolean and numeric factors are projected directly; categorical values
+    become their short persisted level labels rather than raw prompt or
+    configuration payloads.
     """
-    fixed_fields, factor_columns, metric_keys = _result_csv_layout(rows, design_spec)
-    fields = [*fixed_fields, *(column[0] for column in factor_columns), *metric_keys]
+    factor_columns, metric_keys = _result_csv_layout(rows, design_spec)
+    fields = [
+        *_RESULT_ID_FIELDS,
+        *(column[0] for column in factor_columns),
+        *_RESULT_RUNTIME_METRIC_FIELDS,
+        *metric_keys,
+        *_RESULT_METADATA_FIELDS,
+    ]
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
@@ -267,8 +269,8 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
             for key, value in (source.get("metric_values") or {}).items()
         }
         factors = source.get("factor_values") or {}
-        row = {key: source.get(key, metrics.get(key, "")) for key in fixed_fields}
-        for column_name, factor_key, kind, level, _level_label in factor_columns:
+        row = {key: source.get(key, metrics.get(key, "")) for key in _RESULT_FIXED_FIELDS}
+        for column_name, factor_key, kind, labels in factor_columns:
             if factor_key not in factors:
                 continue
             value = factors[factor_key]
@@ -277,7 +279,7 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
             elif kind == "numeric":
                 row[column_name] = value
             else:
-                row[column_name] = int(_factor_level_key(value) == level)
+                row[column_name] = (labels or {}).get(_factor_level_key(value), "")
         row.update({key: metrics.get(key, "") for key in metric_keys})
         writer.writerow(row)
     return buf.getvalue()

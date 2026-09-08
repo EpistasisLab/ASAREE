@@ -20,6 +20,8 @@ function scopeTitle(scope: RunScope): string {
       return scope.title ?? 'Run the experiment?'
     case 'node':
       return `Run "${scope.label}" alone?`
+    case 'conversation':
+      return `Start a conversation with "${scope.entryLabel}"?`
   }
 }
 
@@ -72,7 +74,13 @@ export function RunConfirmDialog({
   // A node-scoped run only ever touches that node plus its own directly
   // wired dependencies -- an issue on some unrelated node elsewhere on the
   // canvas isn't relevant to THIS run, so don't show it here.
-  const relevantNodeIds = scope.type === 'node' ? new Set([scope.nodeId, ...edges.filter((e) => e.target === scope.nodeId).map((e) => e.source)]) : null
+  // A conversation is scoped the same way, just to several nodes: only the
+  // participants and their own wiring can misbehave during one.
+  const scopedNodeIds =
+    scope.type === 'node' ? [scope.nodeId] : scope.type === 'conversation' ? scope.participantIds : null
+  const relevantNodeIds = scopedNodeIds
+    ? new Set([...scopedNodeIds, ...edges.filter((e) => scopedNodeIds.includes(e.target)).map((e) => e.source)])
+    : null
   const issues = relevantNodeIds ? allIssues.filter((issue) => relevantNodeIds.has(issue.nodeId)) : allIssues
 
   return (
@@ -106,6 +114,18 @@ export function RunConfirmDialog({
               {scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount > 0
                 ? ` ${scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount} previously completed replicate${scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount === 1 ? '' : 's'} will be skipped.`
                 : ''}
+            </p>
+          )}
+          {/* Every consultation is a full agent run of its own -- its own
+              Reason/Plan/Act cycle, its own tokens -- so a conversation can
+              cost several times what the same agents cost in a pipeline run.
+              The caps are the messenger's (services/agent_messenger.py); state
+              the spend ceiling here, before the billable click, rather than
+              letting it be discovered from a transcript afterwards. */}
+          {scope.type === 'conversation' && (
+            <p>
+              The entry agent may consult its connected peers, up to 8 consultations nested 2 deep.
+              Each one is a full agent run, so this can cost several times a single-agent run.
             </p>
           )}
           <p>

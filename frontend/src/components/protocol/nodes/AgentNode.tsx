@@ -8,6 +8,7 @@ import type { AgentNodeData, NodeRunStatus } from '@/types/protocols'
 import { boundFactorCount, hasBoundFactor } from '../bindableFields'
 import { connectorLefts } from '../layout'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
+import { useProviderModels } from '../useProviderModels'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
 import { MainEdgeAddStub } from './MainEdgeAddStub'
@@ -33,9 +34,33 @@ export function AgentNode({
   data,
   selected,
 }: NodeProps & {
-  data: AgentNodeData & { runStatus?: NodeRunStatus; missingLlm?: boolean; canRunAlone?: boolean }
+  data: AgentNodeData & {
+    runStatus?: NodeRunStatus
+    missingLlm?: boolean
+    canRunAlone?: boolean
+    // Both injected by ProtocolCanvas: whether a plain Agent-to-Agent edge
+    // reaches this node, and the model its AI connector resolves to. The
+    // canvas supplies the wiring; the capability lookup below is this card's.
+    hasPeers?: boolean
+    llmConfig?: { provider?: string; model?: string } | null
+  }
 }) {
   const badge = nodeRunBadge(data.runStatus)
+  // Peers are offered to the model as function schemas -- that is the only
+  // channel a consultation can be *chosen* through -- so an agent on a model
+  // that can't accept them would know its peers exist and never be able to
+  // ask one. Not a misconfiguration (the run succeeds, the agent just works
+  // alone), so it's a card warning rather than a findNodeConfigIssues entry
+  // that interrupts a Run -- the same call the ReAct "this loop won't loop"
+  // warning makes. `supports_tool_calling` is null for a model litellm
+  // doesn't know, which is "can't tell", so only an explicit false warns.
+  const { models } = useProviderModels(data.hasPeers ? data.llmConfig?.provider : undefined)
+  const peerNeedsToolCalling =
+    !!data.hasPeers && models.find((m) => m.id === data.llmConfig?.model)?.supports_tool_calling === false
+  const warnings = [
+    ...(data.missingLlm ? ["No AI connected -- this agent can't run"] : []),
+    ...(peerNeedsToolCalling ? ["This model can't call tools, so this agent can't consult its connected peers"] : []),
+  ]
   const { updateNodeData } = useReactFlow()
   const { requestRunNode } = useProtocolCanvasActions()
   const isActive = data.active ?? true
@@ -97,7 +122,7 @@ export function AgentNode({
       </div>
       <NodeSummaryLine
         text={data.config?.prompt || data.config?.goal || null}
-        warning={data.missingLlm ? "No AI connected -- this agent can't run" : null}
+        warning={warnings.length > 0 ? warnings : null}
       />
       {/* FOUR connectors live on the TOP edge -- Pattern, Skill, Dataset,
           Knowledge, in that reading order -- all of them "what this agent IS

@@ -65,11 +65,40 @@ export interface NodeRunState {
   rejection_scope?: string | null
 }
 
+// One turn of an agent-to-agent conversation. Identity and ordering are
+// assigned by the backend, never by a model -- see services/agent_messenger.py.
+// `from_agent_id` is the literal string "user" for the opening question and for
+// the entry agent's final answer back to the user; everything else is a canvas
+// node id. `state` is present on replies only (a request carries no outcome),
+// and uses A2A's TaskState vocabulary.
+export interface ConversationMessage {
+  message_id: string
+  sequence: number
+  from_agent_id: string
+  to_agent_id: string
+  parts: { kind: string; text?: string }[]
+  created_at: string
+  state?: 'working' | 'completed' | 'failed' | 'canceled' | 'rejected' | 'input-required'
+}
+
+export interface Conversation {
+  state: string
+  entry_agent_id: string
+  messages: ConversationMessage[]
+}
+
 export interface ProtocolRun {
   id: string
   protocol_id: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  // `limit_reached` is conversation-mode only: the agents were still talking
+  // when a budget (consultation count, depth, or the conversation wall clock)
+  // ran out. Distinct from `failed` because the work up to that point is
+  // sound -- the transcript is worth reading.
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'limit_reached'
   node_runs: Record<string, NodeRunState>
+  // Null for every pipeline run; populated once a conversation-mode run's
+  // agents start talking.
+  conversation: Conversation | null
   error: string | null
   // Both null for a plain graph run. Set together only for a run created by
   // "run all cells" (POST /protocols/{id}/cell-runs) -- factor_values is the

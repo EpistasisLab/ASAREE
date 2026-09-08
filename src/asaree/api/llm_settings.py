@@ -15,6 +15,7 @@ from asaree.services.credential_resolver import SUPPORTED_PROVIDERS
 from asaree.services.llm_connection_check import check_connection
 from asaree.services.llm_model_cache import discover_models_cached, invalidate_models_cache
 from asaree.services.rate_limit import check_rate_limit, record_attempt
+from asaree.services.tool_calling import model_tool_calling_support
 from asaree.services.user_llm_settings import delete_setting, get_setting, list_settings, upsert_setting
 
 router = APIRouter(prefix="/llm-settings", tags=["llm-settings"])
@@ -55,6 +56,15 @@ class LLMModelInfoResponse(BaseModel):
     supports_temperature: bool
     supports_effort: bool
     effort_levels: list[str]
+    # Unlike the three above, this one doesn't come from Motoro's
+    # ModelCapabilities registry -- it's litellm's own function-calling flag,
+    # the same oracle ``model_supports_tool_calling`` uses to pick an agent's
+    # default execution pattern. Surfaced so the canvas can warn that an agent
+    # wired to peers is on a model that can never be sent function schemas, and
+    # so would silently never consult them. Null when litellm has never heard
+    # of the model (any Azure Foundry deployment name, for one) -- "can't tell"
+    # rather than "no", so an unknown model raises no warning.
+    supports_tool_calling: bool | None
 
 
 class LLMSettingModelsResponse(BaseModel):
@@ -180,6 +190,7 @@ async def list_models_endpoint(provider: str, user: CurrentUser, db: DbSession) 
                 supports_temperature=m.capabilities.supports_temperature,
                 supports_effort=m.capabilities.supports_effort,
                 effort_levels=m.capabilities.effort_levels,
+                supports_tool_calling=model_tool_calling_support(provider, m.id),
             )
             for m in models
         ],

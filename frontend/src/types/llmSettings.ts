@@ -51,6 +51,10 @@ export interface LLMModelInfo {
   supports_temperature: boolean
   supports_effort: boolean
   effort_levels: string[]
+  // litellm's function-calling flag rather than the capabilities registry --
+  // null means litellm doesn't know this model (every Azure Foundry deployment
+  // name), so treat it as "can't tell" and warn about nothing.
+  supports_tool_calling: boolean | null
 }
 
 // Matches src/asaree/api/llm_settings.py's LLMConnectionCheckResponse --

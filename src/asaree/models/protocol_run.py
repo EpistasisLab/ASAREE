@@ -48,6 +48,17 @@ class ProtocolRun(Base, TimestampMixin):
     # erasing the scores/evaluation state a user may inspect on an older run.
     # Shape: {"metric_values": {...}, "metric_evaluation": {...}}.
     attempt_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # The agent-to-agent transcript, present only once a run's agents actually
+    # consult each other -- null for every single-agent and pipeline run.
+    # Shape: {"state": <A2A TaskState>, "messages": [{"message_id", "sequence",
+    #         "from_agent_id", "to_agent_id", "parts": [...], "created_at"}, ...]}
+    # Kept alongside node_runs and for the same reason: it is an append-only,
+    # run-scoped document that only the polling endpoint and the canvas read,
+    # and both read it whole. A messages table would add joins without
+    # supporting a query the product needs. `sequence` is stored rather than
+    # inferred from list position so an entry keeps its identity if the
+    # document is ever paged or filtered.
+    conversation: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # Protocol-level failure (e.g. a cycle rejected at validation time, or an
     # unhandled executor exception) -- distinct from any one node's own error
     # already recorded inside node_runs.

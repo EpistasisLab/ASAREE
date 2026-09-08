@@ -36,6 +36,7 @@ from motoro.schemas.agent import ModelConfig
 from motoro.schemas.output import parse_envelope
 from motoro.schemas.pattern import PatternConfig
 from motoro.services.mcp_service import hydrate_registry
+from motoro.services.skill_service import resolve_skills
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,12 +44,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.agent_cards import AgentCard, build_agent_card
 from asaree.services.dataset_workspaces import (
     WorkspaceSeedError,
     fetch_owned_registration,
     head_data_locator,
     seed_cell_workspace,
 )
+from asaree.services.deadline import Deadline, active_deadline
 from asaree.services.design_generation import get_design_impact
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
@@ -1164,6 +1167,122 @@ def _resolve_skill_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]
     return {"skill_ids": skill_ids} if skill_ids else {}
 
 
+def _is_peer_edge(edge: dict[str, Any], nodes: dict[str, dict[str, Any]]) -> bool:
+    """A main (untyped) edge joining two Agent nodes.
+
+    This is the *same* edge a normal pipeline run walks to pass one agent's
+    output to the next -- it is both things, and which one it means is decided
+    by the run mode, not by the edge. A conversation reads it as an undirected
+    "these two may consult each other"; ``run_protocol`` keeps reading it as a
+    directed data-flow. Nothing about the edge is rewritten to say so, which is
+    why a canvas built for a pipeline run needs no migration to support
+    conversation.
+
+    Connector-typed edges (``_CONNECTOR_HANDLES``) are configuration rather than
+    topology, and an Agent<->Critic Gate edge keeps its pipeline meaning, so
+    neither makes a peer.
+    """
+    if edge.get("targetHandle") in _CONNECTOR_HANDLES:
+        return False
+    source = nodes.get(str(edge.get("source")))
+    target = nodes.get(str(edge.get("target")))
+    return source is not None and target is not None and source.get("type") == target.get("type") == "agent"
+
+
+def _connected_agent_ids(graph: dict[str, Any], node_id: str) -> list[str]:
+    """Agent node ids reachable from *node_id* over a peer edge, either way.
+
+    Undirected on purpose: an edge's stored source/target records how the user
+    happened to draw it, not who is allowed to speak. Order is canvas wiring
+    order, and each peer appears once however many edges join the pair.
+    """
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
+    peers: list[str] = []
+    for edge in graph.get("edges") or []:
+        if not _is_peer_edge(edge, nodes):
+            continue
+        source, target = str(edge.get("source")), str(edge.get("target"))
+        if source == node_id:
+            other = target
+        elif target == node_id:
+            other = source
+        else:
+            continue
+        if other != node_id and other not in peers:
+            peers.append(other)
+    return peers
+
+
+def _can_deliver_communication(graph: dict[str, Any], from_agent_id: str, to_agent_id: str) -> bool:
+    """Live authorization check, re-run for every consultation.
+
+    Capability is snapshotted, reachability is live: the cards an agent carries
+    come from the run's published revision, but whether it may still *reach* a
+    peer is answered against the draft ``Protocol.graph`` at call time. Pulling
+    the edge on the canvas stops the next consultation mid-run, which is the
+    behaviour a user unplugging a wire expects.
+    """
+    if from_agent_id == to_agent_id:
+        return False
+    return to_agent_id in _connected_agent_ids(graph, from_agent_id)
+
+
+async def resolve_agent_card(
+    graph: dict[str, Any],
+    node_id: str,
+    *,
+    owner_id: uuid.UUID,
+    metadata: dict[str, Any] | None = None,
+) -> AgentCard | None:
+    """Project one Agent node into the card its peers see.
+
+    ``None`` for a node that is missing or is not an Agent -- invariant 4: a
+    non-agent node is never addressable.
+
+    Reads the same graph the run executes from, so a card can never describe an
+    agent differently from how that agent is about to be configured.
+    """
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
+    node = nodes.get(node_id)
+    if node is None or node.get("type") != "agent":
+        return None
+    config = (node.get("data") or {}).get("config") or {}
+    # The registered skill documents, not the ids: a peer reads names and
+    # descriptions to decide whether this agent is worth asking. Bodies are
+    # never projected -- progressive disclosure is the owning agent's business.
+    skills = await resolve_skills(_resolve_skill_config(graph, node_id), owner_id=owner_id)
+    return build_agent_card(
+        node_id=node_id,
+        label=(node.get("data") or {}).get("label"),
+        description=config.get("description") or "",
+        goal=config.get("goal") or "",
+        skills=[dict(s) for s in skills],
+        model=_resolve_llm_config(graph, node_id).get("model"),
+        metadata=metadata,
+    )
+
+
+async def resolve_available_agents(
+    graph: dict[str, Any],
+    node_id: str,
+    *,
+    owner_id: uuid.UUID,
+    metadata: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Serialized cards for every peer connected to *node_id*, in wiring order.
+
+    ``[]`` when nothing is connected -- which is every existing single-agent and
+    pipeline run, so they carry no new field content, get no prompt section and
+    are bound no new function schemas (invariant 11).
+    """
+    cards: list[dict[str, Any]] = []
+    for peer_id in _connected_agent_ids(graph, node_id):
+        card = await resolve_agent_card(graph, peer_id, owner_id=owner_id, metadata=metadata)
+        if card is not None:
+            cards.append(card.to_dict())
+    return cards
+
+
 def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """``{"execution_pattern": slug, "pattern_params": {slug: {...}}}`` from
     the node's connected execution-pattern node, or ``{}`` if none is
@@ -1581,7 +1700,13 @@ async def _poll_cancel_flag(protocol_run_id: uuid.UUID, cancel_event: asyncio.Ev
 
 
 async def _execute_run_cancellable(
-    *, run_id: uuid.UUID, protocol_run_id: uuid.UUID, available_tools: list[dict[str, Any]], timeout: float
+    *,
+    run_id: uuid.UUID,
+    protocol_run_id: uuid.UUID,
+    available_tools: list[dict[str, Any]],
+    timeout: float,
+    available_agents: list[dict[str, Any]] | None = None,
+    agent_messenger: Any = None,
 ) -> None:
     """Wraps Motoro's execute_run with the poller above, scoped to
     exactly this one run's lifetime -- shared by _run_agent_node and
@@ -1590,16 +1715,54 @@ async def _execute_run_cancellable(
     detected, run_protocol's own between-nodes check means no later node
     ever starts, so nothing else would benefit from a longer-lived poller,
     and tearing this one down between nodes avoids running it during gaps
-    where no agent is actually executing."""
+    where no agent is actually executing.
+
+    ``available_agents``/``agent_messenger`` travel together and are both empty
+    for a pipeline run: cards with no messenger would let an agent see peers it
+    could not reach, and a messenger with no cards would never be called.
+
+    ``timeout`` is enforced through an extendable :class:`Deadline` rather than
+    ``asyncio.wait_for``, so that time this agent spends *blocked on a peer* can
+    be handed back to it -- an agent is charged for its own thinking, never for
+    waiting. With no peers the two are indistinguishable: nothing extends the
+    deadline, and the run is cancelled at exactly ``timeout`` seconds as
+    before."""
     cancel_event = asyncio.Event()
     poller = asyncio.create_task(_poll_cancel_flag(protocol_run_id, cancel_event))
     try:
-        await asyncio.wait_for(
-            execute_run(
-                run_id=run_id, registry=get_registry(), available_tools=available_tools, cancel_event=cancel_event
-            ),
-            timeout=timeout,
-        )
+        # Entered before create_task so the runner's copied context already
+        # holds this frame, which is how a nested peer run reaches back to
+        # extend it (see services.deadline).
+        with active_deadline(Deadline(timeout)) as deadline:
+            runner = asyncio.create_task(
+                execute_run(
+                    run_id=run_id,
+                    registry=get_registry(),
+                    available_tools=available_tools,
+                    cancel_event=cancel_event,
+                    available_agents=available_agents or [],
+                    agent_messenger=agent_messenger,
+                )
+            )
+            try:
+                while True:
+                    if deadline.expired():
+                        raise TimeoutError
+                    # Re-read after every wait rather than waiting once for the
+                    # full span: a consultation may have stopped the clock in
+                    # the meantime, so what looked like the end of the budget
+                    # no longer is. A paged deadline reports a poll interval
+                    # instead of its frozen remainder, which is what makes this
+                    # loop again rather than spin.
+                    done, _ = await asyncio.wait({runner}, timeout=deadline.remaining())
+                    if done:
+                        await runner  # re-raise whatever the run itself raised
+                        return
+            finally:
+                if not runner.done():
+                    runner.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await runner
     finally:
         poller.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -1612,6 +1775,17 @@ async def _sync_durable_agent(*, name: str, owner_id: uuid.UUID, fields: dict[st
     Multiple protocol runs can reach the same canvas node concurrently. The
     durable Motoro Agent is keyed by owner/name, so a losing create retries as
     an update of the row the concurrent request just inserted.
+
+    **Never put per-run state in ``fields``.** Every entry here must come from
+    the node's canvas config or its wired connectors -- i.e. from the protocol
+    itself, which is what this row is a projection of. Run-scoped configuration
+    belongs on the run: ``create_run`` already takes ``model_config_overrides``
+    and ``config_snapshot``. The rule needs stating because this write path
+    makes the mistake cheap to make and expensive to notice: ``update_agent``
+    reads ``None`` as "leave unchanged", so a field written once during one run
+    is never cleared by any later run and quietly contaminates every future one
+    (see ``scripts/repair_contaminated_agents.py``, which cleans up an earlier
+    design that injected a conversation contract this way).
     """
     existing = await get_agent_by_name(name, owner_id=owner_id)
     if existing is not None:
@@ -1636,6 +1810,8 @@ async def _run_agent_node(
     workspace_id: str | None = None,
     ambient_meta: dict[str, Any] | None = None,
     evaluation_metrics: Any = None,
+    available_agents: list[dict[str, Any]] | None = None,
+    agent_messenger: Any = None,
 ) -> tuple[str | None, str | None, uuid.UUID | None]:
     """Create-or-sync the real agent and run it to completion. Returns
     ``(output_text, error, run_id)`` -- exactly one of output_text/error is
@@ -1643,7 +1819,16 @@ async def _run_agent_node(
     populated once ``create_run`` succeeds (even on a later timeout/error),
     since that's what the canvas's Output tab uses to fetch this node's own
     step trace (``GET /runs/{run_id}/steps``); only ``None`` if agent
-    creation/sync itself failed before a run could even be created."""
+    creation/sync itself failed before a run could even be created.
+
+    ``available_agents`` are the serialized peer cards this node may consult
+    (:func:`resolve_available_agents`) and ``agent_messenger`` is how a chosen
+    consultation is delivered. Both default to empty, which is what a pipeline
+    run passes: peers are a conversation-mode capability, so an ordinary run is
+    byte-for-byte what it was before. They are deliberately *not* folded into
+    ``_sync_durable_agent``'s fields -- the card is per-run and derived, and
+    writing it onto the durable agent row is exactly the contamination this
+    design avoids."""
     config = node["data"]["config"]
     # Deterministic, not config["name"]: Agent.name is unique per OWNER, not
     # per protocol, so trusting the freeform (often identically-defaulted)
@@ -1740,7 +1925,12 @@ async def _run_agent_node(
     timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
     try:
         await _execute_run_cancellable(
-            run_id=run.id, protocol_run_id=protocol_run_id, available_tools=gather_tools(agent), timeout=timeout
+            run_id=run.id,
+            protocol_run_id=protocol_run_id,
+            available_tools=gather_tools(agent),
+            timeout=timeout,
+            available_agents=available_agents,
+            agent_messenger=agent_messenger,
         )
     except TimeoutError:
         return None, f"run exceeded its {timeout}s execution budget", run.id
@@ -2487,6 +2677,48 @@ def validate_single_node_runnable(graph: dict[str, Any], node_id: str) -> dict[s
     llm_source = nodes.get(llm_edges[0]["source"])
     if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
         raise ProtocolValidationError(f"Node {_node_display_name(node)!r}'s AI connection must come from an AI node.")
+    return node
+
+
+def validate_conversation_entry(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """Validates an agent can host a conversation. Returns the node dict.
+
+    Scoped to the entry agent and its peers, deliberately *not* to the whole
+    graph: a conversation is a cluster of connected agents, and a half-configured
+    node in some unrelated corner of the same canvas has nothing to do with it.
+
+    Notably absent: any check on how many peer edges the *graph* has. An earlier
+    design required exactly one, which made a third agent on the canvas an error
+    rather than a third participant.
+    """
+    nodes: dict[str, dict[str, Any]] = {str(n["id"]): n for n in graph.get("nodes") or [] if n.get("id")}
+    node = nodes.get(node_id)
+    if node is None:
+        raise ProtocolValidationError(f"No such node: {node_id!r}")
+    if node.get("type") != "agent":
+        raise ProtocolValidationError("Only Agent nodes can start a conversation.")
+
+    peers = _connected_agent_ids(graph, node_id)
+    if not peers:
+        raise ProtocolValidationError(
+            f"{_node_display_name(node)!r} isn't connected to another agent, so it has nobody to talk to. "
+            "Draw an edge between two Agent nodes first."
+        )
+    # The entry agent and every peer it may consult: each needs its own model,
+    # or the consultation fails partway through a run the user already paid for.
+    for participant_id in [node_id, *peers]:
+        participant = nodes[participant_id]
+        llm_edges = _edges_with_handle(graph, participant_id, "ai", direction="incoming")
+        if len(llm_edges) != 1:
+            raise ProtocolValidationError(
+                f"Node {_node_display_name(participant)!r} must have exactly one AI connection "
+                f"(found {len(llm_edges)})."
+            )
+        llm_source = nodes.get(str(llm_edges[0]["source"]))
+        if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
+            raise ProtocolValidationError(
+                f"Node {_node_display_name(participant)!r}'s AI connection must come from an AI node."
+            )
     return node
 
 

@@ -23,7 +23,11 @@ from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.factorial_cells import list_replicates
 
-_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+# "limit_reached" is terminal too: a conversation that spent its consultation
+# budget and could not then produce an answer is finished, not broken, and
+# calling it "failed" would hide the one thing a user needs to know to fix it
+# (see services.agent_messenger's budget constants).
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "limit_reached"})
 
 
 async def create_protocol_run(
@@ -193,6 +197,27 @@ async def update_node_run(
     node_runs = dict(run.node_runs or {})
     node_runs[node_id] = {**node_runs.get(node_id, {}), **patch}
     run.node_runs = node_runs
+    run.last_heartbeat_at = datetime.now(UTC)
+    await db.flush()
+    await db.refresh(run)
+    return run
+
+
+async def update_conversation(
+    db: AsyncSession, protocol_run_id: uuid.UUID, conversation: dict[str, Any]
+) -> ProtocolRun | None:
+    """Checkpoint the whole transcript as one document.
+
+    Assigned whole rather than merged: the messenger holds the authoritative
+    in-memory copy for the life of the run and appends to it, so a partial
+    merge here could only ever reorder what it already knows. Called before a
+    peer is allowed to execute and again after it replies, which is what makes
+    a worker retry able to see exactly how far the conversation got.
+    """
+    run = await get_protocol_run(db, protocol_run_id)
+    if run is None:
+        return None
+    run.conversation = conversation
     run.last_heartbeat_at = datetime.now(UTC)
     await db.flush()
     await db.refresh(run)

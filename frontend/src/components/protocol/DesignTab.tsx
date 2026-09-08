@@ -727,7 +727,8 @@ export function DesignTab({
           <InfoTooltip>
             Declares how the agents in this protocol work together as a multi-agent system -- separate from the
             canvas graph itself, which only wires connections. The graph must actually match whatever you pick here
-            (e.g. "Critic Gate" requires a real Critic Gate node wired in) or running the protocol is rejected.
+            ("Critic Gate" requires a real Critic Gate node wired in; "Peer Collaboration" requires at least two
+            connected Agent nodes, with one of them left unfed to lead) or running the protocol is rejected.
           </InfoTooltip>
         </Label>
         <Select value={coordinationSlug} disabled={isLocked} onValueChange={(value) => value && setCoordinationSlug(value as CoordinationStrategySlug)}>
@@ -738,18 +739,11 @@ export function DesignTab({
             {COORDINATION_STRATEGY_CATALOG.map((s) => (
               <SelectItem key={s.slug} value={s.slug}>
                 {s.label}
-                {!s.implemented && ' (coming soon)'}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
         {selectedStrategy && <p className="text-xs text-muted-foreground">{selectedStrategy.description}</p>}
-        {selectedStrategy && !selectedStrategy.implemented && (
-          <p className="text-xs text-[color:var(--chart-4)]">
-            Not yet implemented -- coming with the ARES pattern migration. Saving this choice declares intent, but running
-            this protocol will be rejected until it's backed.
-          </p>
-        )}
       </div>
 
       <div className="space-y-1.5">

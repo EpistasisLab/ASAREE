@@ -407,15 +407,19 @@ _EXECUTION_PATTERN_SLUGS: dict[str, str] = {
 # mechanism (find_gated_pairs/_run_gated_worker, unchanged) from purely
 # implicit-in-the-graph to an explicit, checked declaration: the graph must
 # actually contain a gated pair, or the declared intent doesn't match
-# reality. The rest mirror ARES's own coordination-category patterns
-# (supervisor/swarm/task-bidding/supervision-tree/event-driven/multi-agent-
-# planning) -- named placeholders pending a later ARES -> Motoro
-# migration (the user's own call), matching this codebase's "declares
-# intent, no runtime effect yet" posture for Memory nodes -- except a
-# placeholder coordination strategy is REJECTED at run time rather than
-# silently inert, since (unlike a Memory node) choosing one is a claim about
-# how the whole graph runs, not a connector with no effect either way.
-_PLACEHOLDER_COORDINATION_STRATEGIES = frozenset(
+# reality. "peer_collaboration" is the third, and the only one that changes how
+# a cell run executes at all: the graph runs as a conversation (see
+# ``services.agent_messenger``) instead of as a one-pass DAG walk, so connected
+# agents can consult each other while working, and each declared cell/replicate
+# still records exactly one result the same way.
+#
+# Six further slugs mirroring ARES's own coordination categories (supervisor/
+# swarm/task-bidding/supervision-tree/event-driven/multi-agent-planning) used to
+# be offered as named placeholders. They were removed from the picker rather
+# than left selectable-but-rejected -- an option that always errors is worse
+# than an option that isn't there. The frozenset stays so an experiment whose
+# design_spec still names one gets that explanation instead of a bare "unknown".
+_RETIRED_COORDINATION_STRATEGIES = frozenset(
     {
         "supervisor_architecture",
         "swarm_architecture",
@@ -427,22 +431,77 @@ _PLACEHOLDER_COORDINATION_STRATEGIES = frozenset(
 )
 
 
-def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, has_gated_pair: bool) -> None:
-    slug = ((design_spec or {}).get("coordination_strategy") or {}).get("slug") or "sequential"
+def coordination_strategy_slug(design_spec: dict[str, Any] | None) -> str:
+    return str(((design_spec or {}).get("coordination_strategy") or {}).get("slug") or "sequential")
+
+
+def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, graph: dict[str, Any]) -> None:
+    """Checks the experiment's declared strategy against the protocol it will
+    run. Takes the whole graph rather than a pre-computed fact about it because
+    each strategy asks a different question of the canvas."""
+    slug = coordination_strategy_slug(design_spec)
     if slug == "sequential":
         return
     if slug == "critic_gate":
-        if not has_gated_pair:
+        if not find_gated_pairs(graph):
             raise ProtocolValidationError(
                 "This experiment's coordination strategy is 'Critic Gate' but this protocol has no Critic Gate "
                 "node wired in -- add one, or change the coordination strategy on the Design tab."
             )
         return
-    if slug in _PLACEHOLDER_COORDINATION_STRATEGIES:
+    if slug == "peer_collaboration":
+        # Resolving the entry agent *is* the validation: it fails unless the
+        # canvas has connected agents and says unambiguously which one leads.
+        validate_conversation_entry(graph, resolve_conversation_entry_id(graph))
+        return
+    if slug in _RETIRED_COORDINATION_STRATEGIES:
         raise ProtocolValidationError(
-            f"Coordination strategy {slug!r} isn't implemented yet -- coming with the ARES pattern migration."
+            f"Coordination strategy {slug!r} was never implemented and is no longer offered -- "
+            "pick another one on the Design tab."
         )
     raise ProtocolValidationError(f"Unknown coordination strategy: {slug!r}")
+
+
+def resolve_conversation_entry_id(graph: dict[str, Any]) -> str:
+    """Which agent the user's question goes to when this graph runs as a
+    conversation.
+
+    Read off the canvas rather than configured separately. A peer edge is
+    undirected for *consultation*, but the user still drew it in a direction,
+    and that direction is the only statement of intent available -- so the entry
+    agent is the peer-connected agent that nothing upstream feeds, i.e. exactly
+    the node a pipeline run would have started at. One agent has to lead; if two
+    are equally plausible starting points there's no honest way to pick, and
+    guessing would silently drop half the canvas out of the run.
+    """
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
+    peer_agents = [nid for nid in nodes if nodes[nid].get("type") == "agent" and _connected_agent_ids(graph, nid)]
+    if not peer_agents:
+        raise ProtocolValidationError(
+            "This experiment's coordination strategy is 'Peer Collaboration' but no two Agent nodes on this "
+            "protocol are connected, so nobody has anyone to talk to -- draw an edge between two agents, or "
+            "change the coordination strategy on the Design tab."
+        )
+    # Connector-typed edges are configuration, not upstream work, so an agent
+    # with only an LLM/Dataset/Tool wired into it is still a starting point.
+    fed = {
+        str(edge.get("target"))
+        for edge in graph.get("edges") or []
+        if edge.get("targetHandle") not in _CONNECTOR_HANDLES
+    }
+    entries = [nid for nid in peer_agents if nid not in fed]
+    if len(entries) == 1:
+        return entries[0]
+    if not entries:
+        raise ProtocolValidationError(
+            "Every connected agent in this protocol has something feeding into it, so there's no obvious agent "
+            "to start the conversation. Leave one agent's main input unwired to make it the one the task goes to."
+        )
+    names = ", ".join(sorted(_node_display_name(nodes[nid]) for nid in entries))
+    raise ProtocolValidationError(
+        f"This protocol has more than one agent that could start the conversation ({names}). Wire them so a "
+        "single agent leads and the others are its peers."
+    )
 
 
 _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
@@ -2134,10 +2193,7 @@ async def evaluate_protocol_run_metrics(protocol_run_id: uuid.UUID) -> bool:
                 protocol_run.protocol_revision_id is not None
                 and protocol_run.protocol_revision_id != current_published.id
             )
-            or (
-                protocol_run.protocol_revision_id is None
-                and protocol_run.created_at < current_published.published_at
-            )
+            or (protocol_run.protocol_revision_id is None and protocol_run.created_at < current_published.published_at)
         )
         revision = (
             await get_revision(db, protocol_run.protocol_revision_id) if protocol_run.protocol_revision_id else None
@@ -2158,9 +2214,7 @@ async def evaluate_protocol_run_metrics(protocol_run_id: uuid.UUID) -> bool:
             status="skipped",
             metric_ids=metric_ids,
             error=(
-                "Run uses an obsolete canvas revision."
-                if obsolete
-                else "Run has been superseded by a newer attempt."
+                "Run uses an obsolete canvas revision." if obsolete else "Run has been superseded by a newer attempt."
             ),
         )
         return False
@@ -2517,7 +2571,7 @@ async def plan_cell_runs(
         )
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
-    validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(graph)))
+    validate_coordination_strategy(design_spec, graph=graph)
     try:
         validate_factor_bindings(design_spec, graph)
     except ValueError as exc:
@@ -2628,7 +2682,7 @@ async def plan_single_replicate_run(
         )
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
-    validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(graph)))
+    validate_coordination_strategy(design_spec, graph=graph)
     try:
         validate_factor_bindings(design_spec, graph)
     except ValueError as exc:
@@ -2856,7 +2910,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
     try:
         order = topological_order(graph)
         gated_by = find_gated_pairs(graph)
-        validate_coordination_strategy(design_spec, has_gated_pair=bool(gated_by))
+        validate_coordination_strategy(design_spec, graph=graph)
     except ProtocolValidationError as e:
         async with get_session() as db:
             await set_status(db, protocol_run_id, status="failed", error=str(e))
@@ -2884,6 +2938,61 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
     node_runs: dict[str, Any] = {}
     failed = False
     cancelled = False
+    # The node whose output_text becomes this cell's result. For a pipeline
+    # that's the graph's single sink; a conversation has no sink to speak of,
+    # so it's the agent that was asked -- the one that writes the final answer.
+    result_node_id: str | None = None
+    failure_status, failure_error = "failed", "one or more nodes failed"
+
+    if coordination_strategy_slug(design_spec) == "peer_collaboration":
+        # Imported here, not at module scope: agent_messenger imports *this*
+        # module, and that direction is what keeps a pipeline run structurally
+        # unable to know conversations exist.
+        from asaree.services.agent_messenger import execute_conversation
+
+        entry_agent_id = resolve_conversation_entry_id(graph)  # already validated above
+        entry_node = next(n for n in graph["nodes"] if str(n.get("id")) == entry_agent_id)
+        ambient_meta, entry_dataset = await _node_run_context(graph, entry_agent_id, workspace_id, owner_id)
+        node_run, conversation_status = await execute_conversation(
+            protocol_run_id,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            graph=graph,
+            entry_agent_id=entry_agent_id,
+            # The entry agent's own prompt, with this cell's factor values
+            # already substituted in -- the task, not a chat message. There is
+            # no upstream to fold in: in a conversation everything the other
+            # agents contribute arrives as a reply, not as a prior node's output.
+            user_input=_build_user_input(
+                entry_node,
+                graph,
+                {},
+                experiment_id=experiment_id,
+                effective_cell_label=effective_cell_label,
+                script_bound="script_path" in ambient_meta,
+                seeded_dataset=entry_dataset.seeded_name,
+                unsplit_dataset=entry_dataset.unsplit_name,
+            ),
+            workspace_id=workspace_id,
+            ambient_meta=ambient_meta,
+            evaluation_metrics=(design_spec or {}).get("metrics"),
+        )
+        node_runs[entry_agent_id] = node_run
+        cancelled = conversation_status == "cancelled"
+        failed = conversation_status in ("failed", "limit_reached")
+        if failed:
+            failure_status = conversation_status
+            failure_error = node_run["error"] or failure_error
+        result_node_id = entry_agent_id
+        # One conversation replaces the whole DAG walk, so there are no pipeline
+        # nodes left to step through. Everything below the loop -- result
+        # write-back, metric promotion, terminal status -- is shared and runs
+        # either way.
+        order = []
+    else:
+        sinks = sink_node_ids(graph)
+        result_node_id = sinks[0] if len(sinks) == 1 else None
+
     for node in order:
         node_id = node["id"]
         if node_id in node_runs:
@@ -3009,12 +3118,15 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         if cancelled:
             await set_status(db, protocol_run_id, status="cancelled")
         elif failed:
-            await set_status(db, protocol_run_id, status="failed", error="one or more nodes failed")
+            # A conversation that ran out of budget gets its own terminal status
+            # rather than being flattened into "failed" -- it's the one failure
+            # mode the user fixes by raising a cap, not by fixing the protocol.
+            await set_status(db, protocol_run_id, status=failure_status, error=failure_error)
         else:
             await set_status(db, protocol_run_id, status="completed")
             if replicate_label and experiment_id:
                 # Post-write, success only: fold the graph's single designated
-                # output (the sink node's raw output_text) into this cell's
+                # output (``result_node_id``'s raw output_text) into this cell's
                 # artifacts. There's still no generic notion of "which
                 # output_contract field is the metric" for an arbitrary graph
                 # -- that's what the best-effort promote_cell_score_metrics
@@ -3024,10 +3136,9 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 # metric_values manually via PUT /experiments/{id}/replicates/
                 # {replicate_label}, the same manual step the notebook's own
                 # score_payload is today.
-                sinks = sink_node_ids(graph)
                 if (
-                    len(sinks) == 1
-                    and node_runs.get(sinks[0], {}).get("status") == "completed"
+                    result_node_id is not None
+                    and node_runs.get(result_node_id, {}).get("status") == "completed"
                     and await is_current_replicate_attempt(db, protocol_run_id)
                 ):
                     await upsert_replicate(
@@ -3036,7 +3147,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                         replicate_label=replicate_label,
                         fields={
                             "artifacts": {
-                                "output_text": node_runs[sinks[0]].get("output_text"),
+                                "output_text": node_runs[result_node_id].get("output_text"),
                                 "protocol_run_id": str(protocol_run_id),
                             }
                         },

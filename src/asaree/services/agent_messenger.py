@@ -13,6 +13,13 @@ reached, a spent budget and a cancelled conversation all come back as an
 read, so it absorbs the outcome and still writes a real answer. Only genuine
 infrastructure failure raises.
 
+**Every turn reads the whole conversation.** A consulted peer is given the
+transcript so far (:meth:`AgentMessenger._briefing`) ahead of the question, so it
+recalls its own earlier turns and can build on what other agents have already
+found. That is one mechanism serving both, because both are the same question --
+what does this turn get to read. The entry agent needs no briefing: it is a
+single continuous run, so its own scratchpad already holds every reply it got.
+
 **Capability is snapshotted; reachability is live.** A peer's card describes it
 as the published revision configures it, so a canvas edit cannot hot-patch a
 run's agents mid-flight. Authorization is re-asked of the *draft* graph on every
@@ -40,9 +47,9 @@ from asaree.services.deadline import deadlines_paused
 from asaree.services.experiments import get_experiment
 from asaree.services.protocol_execution import (
     _AGENT_CANCELLED,
-    _ambient_meta_for,
     _can_deliver_communication,
     _compute_workspace_id,
+    _node_run_context,
     _run_agent_node,
     resolve_available_agents,
 )
@@ -71,6 +78,21 @@ _MAX_CONSULT_DEPTH = 2
 #: Not a node id, and deliberately not a valid one: nothing can address it, and
 #: authorization would refuse if anything tried.
 USER_PARTICIPANT = "user"
+
+#: How much of one earlier message a briefing reproduces. A peer's own analysis
+#: can run to thousands of tokens, and eight of them would crowd out the
+#: question actually being asked. Truncation is marked so the reading model can
+#: tell a cut-off answer from a short one.
+_MAX_BRIEFING_CHARS_PER_MESSAGE = 1500
+
+#: How a non-``completed`` reply is described in a briefing. A turn that was
+#: refused or failed is part of what happened and stays in the transcript, but
+#: it must not read as an answer somebody gave.
+_BRIEFING_STATE_NOTE = {
+    "rejected": " (refused)",
+    "failed": " (could not answer)",
+    "canceled": " (cancelled)",
+}
 
 
 def _text_of(parts: list[dict[str, Any]]) -> str:
@@ -112,6 +134,14 @@ class AgentMessenger:
         self._depth = 0
         self._sequence = 0
         self._messages: list[dict[str, Any]] = []
+        #: Node id -> the label the canvas shows, so a briefing names agents the
+        #: way the user does. Same source ``build_agent_card`` uses, and the same
+        #: node-id fallback, so a peer is called one thing everywhere.
+        self._display_names = {
+            str(n.get("id")): str((n.get("data") or {}).get("label") or "").strip() or str(n.get("id"))
+            for n in graph.get("nodes") or []
+            if n.get("type") == "agent"
+        }
         self._state = "working"
         #: Set when a cap is what stopped the conversation, so the run can land
         #: on ``limit_reached`` rather than looking like a clean completion.
@@ -158,6 +188,65 @@ class AgentMessenger:
         async with get_session() as db:
             await update_conversation(db, self._protocol_run_id, self.conversation)
 
+    # -- briefing ------------------------------------------------------
+
+    def _display_name(self, participant_id: str) -> str:
+        if participant_id == USER_PARTICIPANT:
+            return "The user"
+        return self._display_names.get(participant_id, participant_id)
+
+    def _briefing(self, *, from_agent_id: str, to_agent_id: str, exclude_message_id: str) -> str:
+        """What has already been said, rendered for the agent about to speak.
+
+        This is the whole of both "a peer remembers its own earlier turns" and
+        "agents see each other's work". One mechanism, because they are the same
+        question -- what does this turn get to read -- and splitting them would
+        mean two things to keep consistent.
+
+        Every participant sees the *entire* transcript, not a filtered view: a
+        conversation exists so that agents can build on each other, and deciding
+        for them which of their colleagues' findings are relevant would be the
+        orchestrator doing the reasoning. Everything here happened inside one
+        protocol run owned by one user, so there is nothing to partition.
+
+        Memory is *reconstructed* rather than resumed: a peer still gets a fresh
+        ``AgentRun`` per turn, and this is what carries its history across them.
+        That keeps each consultation separately attributable in the Runs tab and
+        priced on its own, which a resumed run would lose -- and it means a
+        retried worker rebuilds identical context from the checkpointed
+        transcript instead of needing a live run to still exist.
+
+        Returns ``""`` when there is nothing to report, so the very first
+        consultation of a conversation reads exactly as it did before.
+        """
+        entries: list[str] = []
+        for message in self._messages:
+            if message["message_id"] == exclude_message_id:
+                continue
+            body = _text_of(message["parts"])
+            if not body:
+                continue
+            if len(body) > _MAX_BRIEFING_CHARS_PER_MESSAGE:
+                body = body[:_MAX_BRIEFING_CHARS_PER_MESSAGE].rstrip() + " [...truncated]"
+            note = _BRIEFING_STATE_NOTE.get(str(message.get("state") or ""), "")
+            sender = self._display_name(message["from_agent_id"])
+            recipient = self._display_name(message["to_agent_id"])
+            entries.append(f"{sender} -> {recipient}{note}:\n{body}")
+        if not entries:
+            return ""
+        # Second person and the agent's own name together: the transcript refers
+        # to it in the third person, so it has to be able to find itself in what
+        # it is reading.
+        return (
+            f"You are {self._display_name(to_agent_id)}, taking part in a conversation between agents "
+            "working on the same problem. Everything said so far is below, including your own earlier "
+            "turns. Build on it rather than starting over, and don't repeat work that is already done.\n\n"
+            "--- conversation so far ---\n"
+            + "\n\n".join(entries)
+            + "\n--- end of conversation ---\n\n"
+            + f"{self._display_name(from_agent_id)} is now asking you:\n\n"
+        )
+
     # -- delivery ------------------------------------------------------
 
     async def send(
@@ -178,7 +267,7 @@ class AgentMessenger:
         needs is per-protocol-run state held on the instance, and reading run
         state out of the engine's context would be a second source of truth.
         """
-        self.append(from_agent_id=from_agent_id, to_agent_id=to_agent_id, parts=parts)
+        request = self.append(from_agent_id=from_agent_id, to_agent_id=to_agent_id, parts=parts)
 
         refusal = await self._refusal(from_agent_id, to_agent_id)
         if refusal is not None:
@@ -195,7 +284,14 @@ class AgentMessenger:
             # failure is the same unfairness as charging it for a peer's
             # success. The conversation-level cap above keeps ticking.
             with deadlines_paused():
-                output_text, error, run_id = await self._run_peer(to_agent_id, parts)
+                # Built here, before the peer runs, so it is a snapshot of the
+                # conversation as it stood when the question was asked.
+                briefing = self._briefing(
+                    from_agent_id=from_agent_id,
+                    to_agent_id=to_agent_id,
+                    exclude_message_id=request["message_id"],
+                )
+                output_text, error, run_id = await self._run_peer(to_agent_id, parts, briefing=briefing)
         finally:
             self._depth -= 1
 
@@ -282,13 +378,18 @@ class AgentMessenger:
         return None
 
     async def _run_peer(
-        self, to_agent_id: str, parts: list[dict[str, Any]]
+        self, to_agent_id: str, parts: list[dict[str, Any]], *, briefing: str = ""
     ) -> tuple[str | None, str | None, str | None]:
         """Give the peer its own full turn.
 
         A real nested agent run, not a prompt trick: its own Motoro ``AgentRun``,
         so cost, steps and the Runs tab attribute it separately, and its own
         ``available_agents`` so it may consult back within the depth cap.
+
+        *briefing* (:meth:`_briefing`) prefixes the question with the
+        conversation so far. It rides on ``user_input`` because that is the one
+        channel the model actually reads -- ``ambient_meta`` is bound into MCP
+        tool calls and never shown to it.
         """
         node = next((n for n in self._graph.get("nodes") or [] if str(n.get("id")) == to_agent_id), None)
         if node is None:
@@ -299,15 +400,20 @@ class AgentMessenger:
         async with get_session() as db:
             await update_node_run(db, self._protocol_run_id, to_agent_id, {"status": "running"})
 
+        # The same References resolution a pipeline node gets, not just the
+        # bare ambient meta: a consulted peer with a Dataset connector needs its
+        # workspace seeded and its `data_path` bound before it can run a script,
+        # exactly like any other node.
+        ambient_meta, _dataset = await _node_run_context(self._graph, to_agent_id, self._workspace_id, self._owner_id)
         output_text, error, run_id = await _run_agent_node(
             node,
             protocol_id=self._protocol_id,
             protocol_run_id=self._protocol_run_id,
             owner_id=self._owner_id,
-            user_input=_text_of(parts),
+            user_input=f"{briefing}{_text_of(parts)}",
             graph=self._graph,
             workspace_id=self._workspace_id,
-            ambient_meta=_ambient_meta_for(self._graph, to_agent_id, self._workspace_id),
+            ambient_meta=ambient_meta,
             available_agents=await resolve_available_agents(self._graph, to_agent_id, owner_id=self._owner_id),
             agent_messenger=self,
         )
@@ -329,8 +435,20 @@ class AgentMessenger:
         return output_text, error, str(run_id) if run_id else None
 
 
-async def run_conversation(protocol_run_id: uuid.UUID, *, entry_agent_id: str, user_input: str) -> None:
-    """Execute a protocol run in conversation mode.
+async def execute_conversation(
+    protocol_run_id: uuid.UUID,
+    *,
+    protocol_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    graph: dict[str, Any],
+    entry_agent_id: str,
+    user_input: str,
+    workspace_id: str | None,
+    ambient_meta: dict[str, Any] | None = None,
+    evaluation_metrics: Any = None,
+) -> tuple[dict[str, Any], str]:
+    """The conversation itself: seed the transcript, run the entry agent, map
+    its outcome to a terminal conversation state, checkpoint.
 
     Deliberately *not* a turn scheduler. It starts exactly one agent -- the one
     the user addressed -- and consultation is driven from inside that run by the
@@ -339,8 +457,93 @@ async def run_conversation(protocol_run_id: uuid.UUID, *, entry_agent_id: str, u
     ``finish`` action, and the only new thing in its world is that a peer exists
     and can be asked.
 
-    So what remains here is: seed the transcript, run the entry agent, map its
-    outcome to a terminal conversation state, checkpoint.
+    Returns the entry agent's node-run dict and the terminal ``ProtocolRun``
+    status. It writes the node run but deliberately *not* the run's status,
+    because it has two callers with different bookkeeping: :func:`run_conversation`
+    (the user asked an agent a question directly) sets it and stops, while a
+    ``peer_collaboration`` factorial cell run wraps this in the same pre-write /
+    result / metric-promotion path every other cell run uses, and owns the
+    status so that path stays in one place.
+
+    *ambient_meta* is likewise the caller's when it has already resolved the
+    entry agent's References to build *user_input* (a cell run does, to get the
+    dataset and script cues into the prompt) -- resolving it twice would seed
+    the workspace twice.
+    """
+    messenger = AgentMessenger(
+        protocol_id=protocol_id,
+        protocol_run_id=protocol_run_id,
+        owner_id=owner_id,
+        graph=graph,
+        entry_agent_id=entry_agent_id,
+        workspace_id=workspace_id,
+    )
+    messenger.append(
+        from_agent_id=USER_PARTICIPANT,
+        to_agent_id=entry_agent_id,
+        parts=[{"kind": "text", "text": user_input}],
+    )
+
+    node = next(n for n in graph.get("nodes") or [] if str(n.get("id")) == entry_agent_id)
+    async with get_session() as db:
+        await update_node_run(db, protocol_run_id, entry_agent_id, {"status": "running"})
+    await messenger.checkpoint()
+
+    if ambient_meta is None:
+        ambient_meta, _dataset = await _node_run_context(graph, entry_agent_id, workspace_id, owner_id)
+
+    output_text, error, run_id = await _run_agent_node(
+        node,
+        protocol_id=protocol_id,
+        protocol_run_id=protocol_run_id,
+        owner_id=owner_id,
+        user_input=user_input,
+        graph=graph,
+        workspace_id=workspace_id,
+        ambient_meta=ambient_meta,
+        evaluation_metrics=evaluation_metrics,
+        available_agents=await resolve_available_agents(graph, entry_agent_id, owner_id=owner_id),
+        agent_messenger=messenger,
+    )
+
+    cancelled = error == _AGENT_CANCELLED
+    if not cancelled and error is None:
+        messenger.append(
+            from_agent_id=entry_agent_id,
+            to_agent_id=USER_PARTICIPANT,
+            parts=[{"kind": "text", "text": output_text or ""}],
+            state="completed",
+        )
+    # A cap that was hit but absorbed still produced a real answer, so the
+    # conversation is `completed` -- `limit_reached` is reserved for a cap that
+    # actually stopped it. Invariant 7 in the run's own status.
+    if cancelled:
+        state, status = "canceled", "cancelled"
+    elif error is not None:
+        state, status = ("limit_reached", "limit_reached") if messenger.limit_reached else ("failed", "failed")
+    else:
+        state, status = "completed", "completed"
+    messenger.set_state(state)
+    await messenger.checkpoint()
+
+    node_run = {
+        "status": "cancelled" if cancelled else ("failed" if error else "completed"),
+        "output_text": output_text,
+        "error": None if cancelled else error,
+        "run_id": str(run_id) if run_id else None,
+    }
+    async with get_session() as db:
+        await update_node_run(db, protocol_run_id, entry_agent_id, node_run)
+    return node_run, status
+
+
+async def run_conversation(protocol_run_id: uuid.UUID, *, entry_agent_id: str, user_input: str) -> None:
+    """Execute a protocol run in conversation mode, as started from the canvas.
+
+    Loads the run's pinned graph, hands off to :func:`execute_conversation`, and
+    records the terminal status. There is no cell, replicate or score here --
+    this is the user talking to an agent cluster, not an experiment measuring
+    one; that path is ``run_protocol``'s ``peer_collaboration`` branch.
     """
     async with get_session() as db:
         run = await get_protocol_run(db, protocol_run_id)
@@ -369,77 +572,27 @@ async def run_conversation(protocol_run_id: uuid.UUID, *, entry_agent_id: str, u
             await set_status(db, protocol_run_id, status="failed", error="entry agent is not an Agent node")
         return
 
-    workspace_id = _compute_workspace_id(experiment_id, None, protocol_run_id)
-    messenger = AgentMessenger(
+    async with get_session() as db:
+        await set_status(db, protocol_run_id, status="running")
+
+    node_run, status = await execute_conversation(
+        protocol_run_id,
         protocol_id=protocol_id,
-        protocol_run_id=protocol_run_id,
         owner_id=owner_id,
         graph=graph,
         entry_agent_id=entry_agent_id,
-        workspace_id=workspace_id,
-    )
-    messenger.append(
-        from_agent_id=USER_PARTICIPANT,
-        to_agent_id=entry_agent_id,
-        parts=[{"kind": "text", "text": user_input}],
-    )
-
-    async with get_session() as db:
-        await set_status(db, protocol_run_id, status="running")
-        await update_node_run(db, protocol_run_id, entry_agent_id, {"status": "running"})
-    await messenger.checkpoint()
-
-    output_text, error, run_id = await _run_agent_node(
-        node,
-        protocol_id=protocol_id,
-        protocol_run_id=protocol_run_id,
-        owner_id=owner_id,
         user_input=user_input,
-        graph=graph,
-        workspace_id=workspace_id,
-        ambient_meta=_ambient_meta_for(graph, entry_agent_id, workspace_id),
+        workspace_id=_compute_workspace_id(experiment_id, None, protocol_run_id),
         evaluation_metrics=evaluation_metrics,
-        available_agents=await resolve_available_agents(graph, entry_agent_id, owner_id=owner_id),
-        agent_messenger=messenger,
     )
 
-    cancelled = error == _AGENT_CANCELLED
-    if not cancelled and error is None:
-        messenger.append(
-            from_agent_id=entry_agent_id,
-            to_agent_id=USER_PARTICIPANT,
-            parts=[{"kind": "text", "text": output_text or ""}],
-            state="completed",
-        )
-    # A cap that was hit but absorbed still produced a real answer, so the
-    # conversation is `completed` -- `limit_reached` is reserved for a cap that
-    # actually stopped it. Invariant 7 in the run's own status.
-    if cancelled:
-        state, status = "canceled", "cancelled"
-    elif error is not None:
-        state, status = ("limit_reached", "limit_reached") if messenger.limit_reached else ("failed", "failed")
-    else:
-        state, status = "completed", "completed"
-    messenger.set_state(state)
-    await messenger.checkpoint()
-
     async with get_session() as db:
-        await update_node_run(
-            db,
-            protocol_run_id,
-            entry_agent_id,
-            {
-                "status": "cancelled" if cancelled else ("failed" if error else "completed"),
-                "output_text": output_text,
-                "error": None if cancelled else error,
-                "run_id": str(run_id) if run_id else None,
-            },
-        )
-        await set_status(db, protocol_run_id, status=status, error=None if cancelled else error)
+        await set_status(db, protocol_run_id, status=status, error=node_run["error"])
 
 
 __all__ = [
     "USER_PARTICIPANT",
     "AgentMessenger",
+    "execute_conversation",
     "run_conversation",
 ]

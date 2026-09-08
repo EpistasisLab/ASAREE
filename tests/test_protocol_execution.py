@@ -1581,9 +1581,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
         assert received_workspace_ids[0] == f"{experiment_id}/only-cell"
 
         async with get_session() as db:
-            replicate = await get_replicate(
-                db, experiment_id=experiment_id, replicate_label="only-cell"
-            )
+            replicate = await get_replicate(db, experiment_id=experiment_id, replicate_label="only-cell")
             assert replicate is not None
             assert replicate.run_id == run_id
             assert replicate.factor_values == {"Temperature": 0.1}
@@ -1690,9 +1688,7 @@ async def test_run_protocol_survives_score_metric_promotion_failure(
             run = await get_protocol_run(db, run_id)
             assert run is not None
             assert run.status == "completed"
-            replicate = await get_replicate(
-                db, experiment_id=experiment_id, replicate_label=cell_label
-            )
+            replicate = await get_replicate(db, experiment_id=experiment_id, replicate_label=cell_label)
             assert replicate is not None
             assert replicate.artifacts is not None
             assert replicate.artifacts["output_text"] == "worker output"
@@ -2933,38 +2929,84 @@ async def test_run_protocol_tool_source_node_never_gets_its_own_turn(
 # --- Coordination strategy validation (pure) ---------------------------------
 
 
+def _peer_graph(*agent_ids: str) -> dict:
+    """Agents chained left-to-right by plain (untyped) edges, each with its own
+    LLM. That chain is both a pipeline and a peer cluster -- which one it means
+    is the coordination strategy's call, which is exactly what's under test."""
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    for i, agent_id in enumerate(agent_ids):
+        llm_id = f"llm-{agent_id}"
+        agent, llm_edge = _agent_with_llm(agent_id, llm_id)
+        nodes += [_llm_node(llm_id), agent]
+        edges.append(llm_edge)
+        if i:
+            edges.append({"id": f"e{i}", "source": agent_ids[i - 1], "target": agent_id})
+    return {"nodes": nodes, "edges": edges}
+
+
+def _no_peers_graph() -> dict:
+    llm = _llm_node()
+    agent, llm_edge = _agent_with_llm("a")
+    return {"nodes": [llm, agent], "edges": [llm_edge]}
+
+
 def test_coordination_strategy_absent_is_a_noop() -> None:
-    validate_coordination_strategy(None, has_gated_pair=False)
-    validate_coordination_strategy({}, has_gated_pair=False)
+    validate_coordination_strategy(None, graph=_no_peers_graph())
+    validate_coordination_strategy({}, graph=_no_peers_graph())
 
 
 def test_coordination_strategy_sequential_is_a_noop() -> None:
-    validate_coordination_strategy({"coordination_strategy": {"slug": "sequential"}}, has_gated_pair=False)
-    validate_coordination_strategy({"coordination_strategy": {"slug": "sequential"}}, has_gated_pair=True)
+    validate_coordination_strategy({"coordination_strategy": {"slug": "sequential"}}, graph=_no_peers_graph())
+    validate_coordination_strategy({"coordination_strategy": {"slug": "sequential"}}, graph=_peer_graph("a", "b"))
 
 
 def test_coordination_strategy_critic_gate_requires_a_gated_pair() -> None:
     with pytest.raises(ProtocolValidationError, match="no Critic Gate node wired in"):
-        validate_coordination_strategy({"coordination_strategy": {"slug": "critic_gate"}}, has_gated_pair=False)
+        validate_coordination_strategy({"coordination_strategy": {"slug": "critic_gate"}}, graph=_no_peers_graph())
 
 
-def test_coordination_strategy_critic_gate_passes_with_a_gated_pair() -> None:
-    validate_coordination_strategy({"coordination_strategy": {"slug": "critic_gate"}}, has_gated_pair=True)
-
-
-def test_coordination_strategy_placeholder_slug_raises() -> None:
-    with pytest.raises(ProtocolValidationError, match="isn't implemented yet"):
+def test_coordination_strategy_peer_collaboration_needs_connected_agents() -> None:
+    with pytest.raises(ProtocolValidationError, match="no two Agent nodes"):
         validate_coordination_strategy(
-            {"coordination_strategy": {"slug": "supervisor_architecture"}}, has_gated_pair=False
+            {"coordination_strategy": {"slug": "peer_collaboration"}}, graph=_no_peers_graph()
+        )
+
+
+def test_coordination_strategy_peer_collaboration_passes_with_a_peer_edge() -> None:
+    validate_coordination_strategy(
+        {"coordination_strategy": {"slug": "peer_collaboration"}}, graph=_peer_graph("a", "b")
+    )
+
+
+def test_the_conversation_starts_at_the_agent_nothing_feeds() -> None:
+    assert pe.resolve_conversation_entry_id(_peer_graph("a", "b", "c")) == "a"
+
+
+def test_two_equally_plausible_starting_agents_is_an_error() -> None:
+    # a -> c <- b: both a and b are unfed, so there is no honest way to pick.
+    graph = _peer_graph("a", "c")
+    llm_b = _llm_node("llm-b")
+    agent_b, llm_edge_b = _agent_with_llm("b", "llm-b")
+    graph["nodes"] += [llm_b, agent_b]
+    graph["edges"] += [llm_edge_b, {"id": "e-bc", "source": "b", "target": "c"}]
+    with pytest.raises(ProtocolValidationError, match="more than one agent that could start"):
+        pe.resolve_conversation_entry_id(graph)
+
+
+def test_coordination_strategy_retired_slug_raises() -> None:
+    with pytest.raises(ProtocolValidationError, match="no longer offered"):
+        validate_coordination_strategy(
+            {"coordination_strategy": {"slug": "supervisor_architecture"}}, graph=_no_peers_graph()
         )
 
 
 def test_coordination_strategy_unknown_slug_raises() -> None:
     with pytest.raises(ProtocolValidationError, match="Unknown coordination strategy"):
-        validate_coordination_strategy({"coordination_strategy": {"slug": "not-a-real-slug"}}, has_gated_pair=False)
+        validate_coordination_strategy({"coordination_strategy": {"slug": "not-a-real-slug"}}, graph=_no_peers_graph())
 
 
-async def test_run_protocol_rejects_placeholder_coordination_strategy(owner_id: uuid.UUID) -> None:
+async def test_run_protocol_rejects_retired_coordination_strategy(owner_id: uuid.UUID) -> None:
     llm = _llm_node()
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
@@ -2995,7 +3037,62 @@ async def test_run_protocol_rejects_placeholder_coordination_strategy(owner_id: 
             assert fetched is not None
             assert fetched.status == "failed"
             assert fetched.error is not None
-            assert "isn't implemented yet" in fetched.error
+            assert "no longer offered" in fetched.error
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+            await delete_experiment(db, experiment_id)
+
+
+async def test_peer_collaboration_runs_the_graph_as_one_conversation(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same a->b canvas a sequential run would walk node-by-node instead
+    starts one conversation at `a`, and `a`'s answer is the run's result. `b`
+    doesn't run here because nothing asked it to -- consultation is the lead
+    agent's choice, made inside its own run."""
+    import asaree.services.agent_messenger as am
+
+    ran: list[str] = []
+
+    async def fake_run_agent_node(node, **_kwargs):
+        ran.append(node["id"])
+        return f"{node['id']} answered", None, None
+
+    monkeypatch.setattr(am, "_run_agent_node", fake_run_agent_node)
+
+    graph = _peer_graph("a", "b")
+    async with get_session() as db:
+        experiment = await create_experiment(
+            db,
+            name=f"peer-collab-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            design_spec={"coordination_strategy": {"slug": "peer_collaboration"}},
+        )
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db,
+            name=f"peer-collab-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment_id,
+            graph=graph,
+        )
+        protocol_id = protocol.id
+        run_id = (await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)).id
+
+    try:
+        await pe.run_protocol(run_id)
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+            assert fetched is not None
+            assert fetched.status == "completed"
+            assert ran == ["a"]
+            assert fetched.node_runs["a"]["output_text"] == "a answered"
+            assert fetched.conversation["entry_agent_id"] == "a"
+            assert [(m["from_agent_id"], m["to_agent_id"]) for m in fetched.conversation["messages"]] == [
+                ("user", "a"),
+                ("a", "user"),
+            ]
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)

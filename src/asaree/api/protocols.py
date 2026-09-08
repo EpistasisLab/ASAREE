@@ -20,7 +20,6 @@ from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
-    find_gated_pairs,
     plan_cell_runs,
     plan_single_replicate_run,
     topological_order,
@@ -84,6 +83,7 @@ class ProtocolResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+
 class ProtocolRunResponse(BaseModel):
     id: uuid.UUID
     protocol_id: uuid.UUID
@@ -116,6 +116,7 @@ class ProtocolRevisionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
 
 class CreateProtocolRunRequest(BaseModel):
     # Omitted/null -- today's ad-hoc, un-substituted whole-graph run. Set --
@@ -205,9 +206,7 @@ async def _validated_experiment_id(
 
 
 @router.post("", response_model=ProtocolResponse, status_code=201)
-async def create_protocol_endpoint(
-    body: CreateProtocolRequest, user: CurrentUser, db: DbSession
-) -> ProtocolResponse:
+async def create_protocol_endpoint(body: CreateProtocolRequest, user: CurrentUser, db: DbSession) -> ProtocolResponse:
     if await get_protocol_by_name(db, body.name, owner_id=user.id) is not None:
         raise HTTPException(status_code=409, detail="A protocol with this name already exists")
     experiment_id = await _validated_experiment_id(body.experiment_id, db, user)
@@ -272,7 +271,7 @@ async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, d
         topological_order(protocol.graph)
         experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
         design_spec = experiment.design_spec if experiment is not None else None
-        validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(protocol.graph)))
+        validate_coordination_strategy(design_spec, graph=protocol.graph)
         validate_factor_bindings(design_spec, protocol.graph)
     except (ProtocolValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -323,7 +322,7 @@ async def create_protocol_run_endpoint(
             topological_order(revision.graph)
             experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
             design_spec = experiment.design_spec if experiment is not None else None
-            validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(revision.graph)))
+            validate_coordination_strategy(design_spec, graph=revision.graph)
             run = await create_protocol_run(
                 db, protocol_id=protocol_id, owner_id=user.id, protocol_revision_id=revision.id
             )
@@ -350,9 +349,7 @@ async def start_conversation_endpoint(
         validate_conversation_entry(revision.graph, body.entry_agent_id)
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    run = await create_protocol_run(
-        db, protocol_id=protocol_id, owner_id=user.id, protocol_revision_id=revision.id
-    )
+    run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=user.id, protocol_revision_id=revision.id)
     await enqueue_conversation(run.id, entry_agent_id=body.entry_agent_id, user_input=body.user_input)
     return ProtocolRunResponse.model_validate(run)
 

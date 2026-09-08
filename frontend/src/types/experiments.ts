@@ -58,22 +58,13 @@ export interface MetricScoringConfig {
   }
 }
 
-// "sequential" (default when design_spec.coordination_strategy is absent --
-// today's exact existing DAG-handoff behavior) and "critic_gate" (promotes
-// the existing gated-pair mechanism to an explicit declaration) are real.
-// The rest are named placeholders for ARES's own coordination-category
-// patterns, pending a later ARES -> Motoro migration -- selectable and
-// saveable, but services.protocol_execution rejects a run attempted with one
-// of these active. See COORDINATION_STRATEGY_CATALOG for display metadata.
-export type CoordinationStrategySlug =
-  | 'sequential'
-  | 'critic_gate'
-  | 'supervisor_architecture'
-  | 'swarm_architecture'
-  | 'task_bidding'
-  | 'supervision_tree_with_guarded_capabilities'
-  | 'event_driven_reactivity'
-  | 'multi_agent_planning'
+// Every slug here is implemented -- there is deliberately no "coming soon"
+// entry. Six ARES coordination-category placeholders (supervisor, swarm, task
+// bidding, supervision tree, event-driven, multi-agent planning) used to be
+// listed and were removed: an option that always fails at run time is worse
+// than an option that isn't offered. The backend still recognizes those slugs
+// so an experiment saved with one gets a real explanation, not "unknown".
+export type CoordinationStrategySlug = 'sequential' | 'critic_gate' | 'peer_collaboration'
 
 export interface CoordinationStrategyConfig {
   slug: CoordinationStrategySlug
@@ -84,57 +75,25 @@ export const COORDINATION_STRATEGY_CATALOG: {
   slug: CoordinationStrategySlug
   label: string
   description: string
-  implemented: boolean
 }[] = [
   {
     slug: 'sequential',
     label: 'Sequential (default)',
     description: "Each agent's output becomes the next agent's input, following the canvas's own edges in order.",
-    implemented: true,
   },
   {
     slug: 'critic_gate',
     label: 'Critic Gate',
     description: 'A reviewer agent approves or requests revisions at a fixed point in the sequential pipeline.',
-    implemented: true,
   },
   {
-    slug: 'supervisor_architecture',
-    label: 'Supervisor',
-    description: 'One coordinator delegates sub-tasks to worker agents and aggregates their results.',
-    implemented: false,
-  },
-  {
-    slug: 'swarm_architecture',
-    label: 'Swarm',
-    description: 'Agents self-organize around a shared task board -- no fixed coordinator.',
-    implemented: false,
-  },
-  {
-    slug: 'task_bidding',
-    label: 'Task Bidding',
-    description: 'Agents competitively bid for tasks; the best-scoring bid is awarded the work.',
-    implemented: false,
-  },
-  {
-    slug: 'supervision_tree_with_guarded_capabilities',
-    label: 'Supervision Tree',
-    description: 'A hierarchical tree of agents with capability-scoped subtrees and structured failure recovery.',
-    implemented: false,
-  },
-  {
-    slug: 'event_driven_reactivity',
-    label: 'Event-Driven',
-    description: 'Agents react to published events on shared topics instead of a fixed plan.',
-    implemented: false,
-  },
-  {
-    slug: 'multi_agent_planning',
-    label: 'Multi-Agent Planning',
-    description: 'Multiple planner agents propose in parallel; a coordinator merges them into one plan for workers.',
-    implemented: false,
+    slug: 'peer_collaboration',
+    label: 'Peer Collaboration',
+    description:
+      'Connected agents work the task together as a conversation -- the lead agent can consult its peers, and each reply is shared with everyone, instead of handing off once.',
   },
 ]
+
 
 export interface DesignSpec {
   factors?: DesignFactor[]

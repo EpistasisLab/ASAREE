@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import uuid
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -95,7 +96,11 @@ def stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(am, "update_node_run", _update_node_run)
     monkeypatch.setattr(am, "_run_agent_node", _run_agent_node)
     monkeypatch.setattr(am, "resolve_available_agents", _resolve_available_agents)
-    monkeypatch.setattr(am, "_ambient_meta_for", lambda *a, **k: {})
+
+    async def _node_run_context(*_args: Any, **_kwargs: Any) -> tuple[dict[str, Any], Any]:
+        return {}, SimpleNamespace(seeded_name="", unsplit_name="", data_path=None, target_column=None)
+
+    monkeypatch.setattr(am, "_node_run_context", _node_run_context)
     return state
 
 
@@ -196,6 +201,83 @@ async def test_a_silent_peer_still_says_something(stubs: dict[str, Any]) -> None
     reply = await _ask(_messenger())
     assert reply.state == "completed"
     assert reply.text
+
+
+# ----------------------------------------------------------------------
+# Briefing -- what a turn gets to read
+# ----------------------------------------------------------------------
+
+
+async def test_the_first_consultation_carries_only_the_question(stubs: dict[str, Any]) -> None:
+    """Nothing has been said yet, so there is nothing to brief -- and a peer
+    asked once reads exactly what it read before this existed."""
+    await _ask(_messenger())
+    assert stubs["peer_runs"][0][1] == "What is weak here?"
+
+
+async def test_a_peer_asked_twice_is_reminded_of_its_own_earlier_turn(stubs: dict[str, Any]) -> None:
+    """Peer memory. Each turn is still a fresh AgentRun, so without this the
+    second turn would have no idea it had already spoken."""
+    stubs["peer_result"] = ("The sample size is too small.", None, uuid.uuid4())
+    messenger = _messenger()
+    await _ask(messenger)
+    await _ask(messenger, text="How would you fix it?")
+
+    second = stubs["peer_runs"][1][1]
+    assert "The sample size is too small." in second
+    assert "What is weak here?" in second
+    # The live question stays last and is not also quoted as history.
+    assert second.count("How would you fix it?") == 1
+    assert second.endswith("How would you fix it?")
+
+
+async def test_an_agent_sees_what_other_agents_have_already_found(stubs: dict[str, Any]) -> None:
+    """Shared context: Loner's turn must carry Critic's finding, or the two
+    agents are answering in isolation rather than building on each other."""
+    stubs["live_graph"]["edges"].append({"id": "e2", "source": "planner", "target": "loner"})
+    stubs["peer_result"] = ("The outcome is bimodal.", None, uuid.uuid4())
+    messenger = _messenger()
+    await _ask(messenger)
+    await _ask(messenger, to="loner", text="Design a test.")
+
+    loner_input = stubs["peer_runs"][1][1]
+    assert "The outcome is bimodal." in loner_input
+    assert "Critic" in loner_input
+    # And it is told which participant it is, since the transcript names it in
+    # the third person.
+    assert "You are Loner" in loner_input
+
+
+async def test_a_briefing_names_participants_the_way_the_canvas_does(stubs: dict[str, Any]) -> None:
+    messenger = _messenger()
+    messenger.append(from_agent_id=am.USER_PARTICIPANT, to_agent_id="planner", parts=[{"kind": "text", "text": "Go."}])
+    await _ask(messenger)
+    briefed = stubs["peer_runs"][0][1]
+    assert "The user -> Planner" in briefed
+
+
+async def test_a_refused_turn_is_not_presented_as_an_answer(stubs: dict[str, Any]) -> None:
+    """It stays in the briefing -- it is part of what happened -- but a model
+    reading it must not mistake a refusal for a colleague's finding."""
+    messenger = _messenger()
+    await _ask(messenger, to="loner", text="Help?")  # unconnected -> refused
+    await _ask(messenger)
+    briefed = stubs["peer_runs"][0][1]
+    assert "(refused)" in briefed
+
+
+async def test_a_long_earlier_turn_is_truncated_and_says_so(
+    stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Eight full analyses would crowd out the question actually being asked."""
+    monkeypatch.setattr(am, "_MAX_BRIEFING_CHARS_PER_MESSAGE", 20)
+    stubs["peer_result"] = ("x" * 500, None, uuid.uuid4())
+    messenger = _messenger()
+    await _ask(messenger)
+    await _ask(messenger, text="And now?")
+    briefed = stubs["peer_runs"][1][1]
+    assert "[...truncated]" in briefed
+    assert "x" * 500 not in briefed
 
 
 # ----------------------------------------------------------------------

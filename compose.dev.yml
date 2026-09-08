@@ -1,0 +1,46 @@
+# Run the stack against the working trees instead of the built image.
+#
+# For testing a change to ASAREE *and* Motoro together before Motoro is tagged:
+# pyproject.toml pins motoro to a released git tag on purpose (never a floating
+# branch), so the only way to exercise an untagged Motoro is to put its source
+# where the installed package sits. That is exactly what this file does -- no
+# image rebuild, no throwaway tag, and nothing about the pin changes.
+#
+# Explicitly opt in, so it can never be active without being asked for:
+#
+#   docker compose -f compose.yml -f compose.dev.yml up -d --force-recreate \
+#       asaree-migrate asaree-app asaree-worker
+#
+# and drop back to the released pin by leaving the -f off and recreating.
+#
+# The frontend needs nothing here: compose.yml already bind-mounts ./frontend
+# for hot reload, so the UI is live off the working tree either way.
+
+services:
+  # Included because a source change can bring a new Alembic revision with it,
+  # and this one-shot runs from the image like everything else.
+  asaree-migrate:
+    volumes:
+      - ./src:/app/src
+      - ${MOTORO_SRC:-../Motoro/src/motoro}:/app/.venv/lib/python3.13/site-packages/motoro:ro
+
+  asaree-app:
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      # Read-only: the container runs as root, so a writable mount would leave
+      # root-owned __pycache__ directories scattered through the host checkout.
+      # Python simply skips writing bytecode when it can't.
+      #
+      # This is a plain directory overlay rather than an editable install --
+      # safe only while Motoro's own dependencies are unchanged, since uv never
+      # sees it. If Motoro gains a dependency, rebuild against a tag instead.
+      # The bundled MCP servers already spawn with `uv run --no-sync`, so
+      # nothing at runtime tries to reconcile the venv behind this mount.
+      - ${MOTORO_SRC:-../Motoro/src/motoro}:/app/.venv/lib/python3.13/site-packages/motoro:ro
+
+  asaree-worker:
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      - ${MOTORO_SRC:-../Motoro/src/motoro}:/app/.venv/lib/python3.13/site-packages/motoro:ro

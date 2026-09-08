@@ -191,6 +191,43 @@ async def test_design_impact_previews_an_expansion_before_regeneration(experimen
     assert (impact.added_replicate_count, impact.retained_replicate_count, impact.removed_replicate_count) == (4, 2, 0)
 
 
+async def test_cells_without_a_declared_design_never_require_regeneration(experiment_id: uuid.UUID) -> None:
+    """The notebook/SDK flow: cells PUT straight through upsert_replicate onto
+    the revision get_or_create_current opens for them, with no design_spec ever
+    declared (see services/design_revisions.py's module docstring).
+
+    Nothing is planned, so there are no labels to compare against and no design
+    to regenerate. Reporting regeneration_required here permanently 422'd
+    "run all cells" on every notebook-driven experiment."""
+    async with get_session() as db:
+        for label in ("cell-1", "cell-2"):
+            await upsert_replicate(db, experiment_id=experiment_id, replicate_label=label, fields={"factor_values": {}})
+
+    async with get_session() as db:
+        impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=None)
+
+    assert impact.regeneration_required is False
+    assert (impact.current_replicate_count, impact.proposed_replicate_count) == (2, 0)
+
+
+async def test_removing_the_final_factor_without_regenerating_still_requires_regeneration(
+    experiment_id: uuid.UUID,
+) -> None:
+    """The case the empty-factors allowance must not swallow: a design that
+    *had* factors and no longer declares them has genuinely drifted from its
+    materialized cells, and the revision's own recorded spec is what proves it."""
+    async with get_session() as db:
+        await generate_design_cells(
+            db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec={"factors": _TWO_BY_ONE}
+        )
+
+    async with get_session() as db:
+        impact = await get_design_impact(db, experiment_id=experiment_id, design_spec={"factors": []})
+
+    assert impact.regeneration_required is True
+    assert (impact.current_replicate_count, impact.proposed_replicate_count) == (2, 0)
+
+
 async def test_design_counts_cells_separately_from_replicates(experiment_id: uuid.UUID) -> None:
     async with get_session() as db:
         await generate_design_cells(
@@ -313,9 +350,16 @@ async def test_revision_numbers_are_never_reused(experiment_id: uuid.UUID) -> No
 
 def _cells_of(experiment_id: uuid.UUID):  # type: ignore[no-untyped-def]
     from sqlalchemy import select
+    from sqlalchemy.orm import contains_eager
 
+    # contains_eager, not a bare join: every interesting attribute of a
+    # replicate (design_revision_id, experiment_id, factor_values) is a property
+    # that reads through .cell, and a lazy load can't fire from sync property
+    # access under asyncio -- it raises MissingGreenlet. The join is already
+    # there; this just tells the ORM to populate the relationship from it.
     return (
         select(FactorialReplicateResult)
         .join(FactorialReplicateResult.cell)
+        .options(contains_eager(FactorialReplicateResult.cell))
         .where(FactorialCell.experiment_id == experiment_id)
     )

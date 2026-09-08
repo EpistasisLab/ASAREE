@@ -206,9 +206,20 @@ async def get_design_impact(
     current_cell_keys = {
         _cell_key(replicate.factor_values, replicate.replicate_label) for replicate in current_replicates
     }
+    # The label comparison only means something when a factorial matrix is
+    # actually declared. An experiment that never declared one but has cells is
+    # the supported notebook/SDK flow -- cells PUT straight through
+    # ``upsert_replicate`` onto the revision ``get_or_create_current`` opens for
+    # them (see services/design_revisions.py's module docstring). There is
+    # nothing planned to compare those labels against, so requiring a
+    # regeneration would permanently block "run all cells" on an experiment
+    # that has no design to regenerate. Genuine drift -- including a design
+    # whose final factor was removed without regenerating -- still trips the
+    # spec comparison on the left.
+    drifted_labels = bool(material["factors"]) and current_labels != planned_labels
     return DesignImpact(
         has_generated_design=True,
-        regeneration_required=material_design_spec(current.design_spec) != material or current_labels != planned_labels,
+        regeneration_required=material_design_spec(current.design_spec) != material or drifted_labels,
         current_cell_count=len(current_cell_keys),
         proposed_cell_count=len(planned_cell_keys),
         added_cell_count=len(planned_cell_keys - current_cell_keys),

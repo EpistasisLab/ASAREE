@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from 'react'
-import { BaseEdge, EdgeLabelRenderer, EdgeToolbar, getBezierPath, useReactFlow, type EdgeProps } from '@xyflow/react'
+import { BaseEdge, EdgeToolbar, getBezierPath, useReactFlow, type EdgeProps } from '@xyflow/react'
 // Trash2, not an X -- the same glyph NodeHoverToolbar's own Delete button
 // uses, so "remove this thing" looks identical whether the thing is a node or
 // an edge. An X here also collided with the two other X's on the canvas
@@ -26,9 +26,12 @@ import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 //
 // A solid edge is deliberately not one relationship: between two Agent nodes it
 // is BOTH the left-to-right pipeline edge a normal run walks AND the "these two
-// may consult each other" edge a conversation run reads (undirected). The run
-// mode picks which, so the edge itself must not commit to either -- that's why
-// a peer edge gets a caption below rather than a different stroke.
+// may consult each other" edge a Peer Collaboration run reads (undirected). The
+// experiment's coordination strategy picks which, so the edge must not commit to
+// either -- it looks the same in both, and nothing is annotated onto it. An
+// earlier pass captioned peer edges "can consult"; it read as clutter on a
+// canvas where most solid edges qualify, and the Design tab already says which
+// strategy is in force.
 //
 // Note the dashes are NOT the same statement as MemoryNode's dashed ring,
 // which means "not yet functional"; here they only mean "connector, not
@@ -76,7 +79,6 @@ export function InteractEdge({
   targetHandleId,
   style,
   markerEnd,
-  data,
 }: EdgeProps) {
   const [hovered, setHovered] = useState(false)
   const { setEdges } = useReactFlow()
@@ -84,12 +86,6 @@ export function InteractEdge({
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
   const isMainEdge = !sourceHandleId && !targetHandleId
   const isPatternEdge = targetHandleId === 'architectural_pattern'
-  // Stamped by ProtocolCanvas: this main edge joins two Agent nodes, so in a
-  // conversation run it also means "these two may consult each other". It
-  // stays a solid main edge because it is STILL the directed pipeline edge a
-  // normal run walks -- it's both things, and the run mode picks. Hence a
-  // caption rather than a restyle: nothing about the wiring changed.
-  const isPeerEdge = !!(data as { isPeerEdge?: boolean } | undefined)?.isPeerEdge
 
   return (
     <>
@@ -115,20 +111,6 @@ export function InteractEdge({
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       />
-      {/* Same midpoint the toolbar uses, so it yields while hovered rather
-          than sitting under the buttons. --node-label, the same yellow the
-          connector captions use, for the same reason: it annotates the wiring
-          without claiming to be one of the node accent hues. */}
-      {isPeerEdge && !hovered && (
-        <EdgeLabelRenderer>
-          <div
-            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
-            className="pointer-events-none absolute rounded bg-background/70 px-0.5 text-[0.6rem] font-semibold whitespace-nowrap text-[color:var(--node-label)]"
-          >
-            can consult
-          </div>
-        </EdgeLabelRenderer>
-      )}
       {/* Nothing to put in it for a pattern edge -- no delete (see above) and
           no insert -- so it's skipped entirely rather than rendered empty. */}
       <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible={hovered && !isPatternEdge}>

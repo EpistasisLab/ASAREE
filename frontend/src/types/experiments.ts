@@ -89,8 +89,12 @@ export const COORDINATION_STRATEGY_CATALOG: {
   {
     slug: 'peer_collaboration',
     label: 'Peer Collaboration',
+    // The cost ceiling belongs here rather than in RunConfirmDialog: this is
+    // where the choice is actually made, and every consultation is a full agent
+    // run of its own (Reason/Plan/Act cycle, own tokens). The caps are the
+    // messenger's -- services/agent_messenger.py.
     description:
-      'Connected agents work the task together as a conversation -- the lead agent can consult its peers, and each reply is shared with everyone, instead of handing off once.',
+      'Connected agents work the task together as a conversation -- the lead agent can consult its peers, and every reply is shared with everyone, instead of handing off once. Each consultation is a full agent run (up to 8, nested 2 deep), so a cell can cost several times a sequential one.',
   },
 ]
 

@@ -46,11 +46,6 @@ export type RunScope =
       title?: string
     }
   | { type: 'node'; nodeId: string; label: string }
-  // Conversation mode: the entry agent plus every agent it can reach over a
-  // plain Agent-to-Agent edge. Unlike a graph run, the canvas is not the
-  // scope -- an agent with no peer edge never gets a turn -- so the
-  // participants are listed explicitly rather than inferred here.
-  | { type: 'conversation'; entryLabel: string; participantIds: string[] }
 
 export interface RunSummary {
   agentCount: number
@@ -75,12 +70,7 @@ export interface RunSummary {
 // _resolve_dataset_configs do server-side -- kept as a client-side duplicate
 // for the same reason nodeConfigIssues.ts already is.
 export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): RunSummary {
-  const relevantNodes =
-    scope.type === 'node'
-      ? nodesWiredTo(nodes, edges, scope.nodeId)
-      : scope.type === 'conversation'
-        ? dedupeById(scope.participantIds.flatMap((id) => nodesWiredTo(nodes, edges, id)))
-        : nodes
+  const relevantNodes = scope.type === 'node' ? nodesWiredTo(nodes, edges, scope.nodeId) : nodes
 
   const datasets = uniq(
     relevantNodes
@@ -157,13 +147,6 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
 function nodesWiredTo(nodes: Node[], edges: Edge[], targetId: string): Node[] {
   const ids = new Set([targetId, ...edges.filter((e) => e.target === targetId && DEPENDENCY_HANDLES.has(e.targetHandle ?? '')).map((e) => e.source)])
   return nodes.filter((n) => ids.has(n.id))
-}
-
-// Participants share dependencies (one LLM node wired to both agents is the
-// common case), so the per-participant traversals above overlap.
-function dedupeById(candidates: Node[]): Node[] {
-  const byId = new Map(candidates.map((n) => [n.id, n]))
-  return [...byId.values()]
 }
 
 function uniq(values: string[]): string[] {

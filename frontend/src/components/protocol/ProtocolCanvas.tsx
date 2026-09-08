@@ -16,9 +16,8 @@ import {
   type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Lock, MessagesSquare, Plus, Square, X } from 'lucide-react'
+import { Lock, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { newNodeId } from '@/lib/nodeId'
 import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
@@ -477,9 +476,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // Conversation mode's own confirm state. Separate from pendingRunConfirm
   // because the dialog needs two fields filled in (who to ask, and what) before
   // the scope it confirms even exists.
-  const [conversationDialogOpen, setConversationDialogOpen] = useState(false)
-  const [conversationInput, setConversationInput] = useState('')
-  const [conversationEntryAgentId, setConversationEntryAgentId] = useState('')
   const [runId, setRunId] = useState<string | null>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, fitView } = useReactFlow()
@@ -543,12 +539,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       setPendingRunConfirm(null)
       return
     }
-    // Left open on purpose, unlike the node case: the dialog is also where a
-    // failed start reports itself, so it closes in the mutation's onSuccess.
-    if (conversationDialogOpen) {
-      conversationMutation.mutate({ entryAgentId: conversationEntryAgentId, userInput: conversationInput.trim() })
-      return
-    }
     setPendingRunConfirm(null)
   }
 
@@ -574,18 +564,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     onSuccess: (run) => setRunId(run.id),
   })
 
-  // Conversation mode reuses the same runId/runQuery polling as every other
-  // run -- what's new is `conversation` on the polled row, which the transcript
-  // panel reads.
-  const conversationMutation = useMutation({
-    mutationFn: (data: { entryAgentId: string; userInput: string }) => protocolsApi.startConversation(protocolId, data),
-    onSuccess: (run) => {
-      setRunId(run.id)
-      setConversationDialogOpen(false)
-      setConversationInput('')
-    },
-  })
-
   // First refetchInterval-based poll in this codebase -- no existing
   // long-running-job UI to mirror. Function form so polling stops itself
   // once the run reaches a terminal status, rather than polling forever.
@@ -601,7 +579,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   const isRunning =
     runNodeMutation.isPending ||
-    conversationMutation.isPending ||
     (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
 
   // Stop button -- only raises cancel_requested_at; run_protocol's own node
@@ -685,35 +662,26 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     return map
   }, [edges])
 
-  // Who each agent may consult, mirroring services/protocol_execution.py's
-  // _connected_agent_ids: a plain (non-connector) edge joining two Agent nodes,
-  // read undirected. The same edge is still a directed pipeline edge for a
-  // normal run -- it is both, and the run mode decides which. So this adds an
-  // affordance rather than restricting anything.
-  const { peerIdsByAgent, peerEdgeIds } = useMemo(() => {
+  // Who each agent may consult under the Peer Collaboration coordination
+  // strategy, mirroring services/protocol_execution.py's _connected_agent_ids:
+  // a plain (non-connector) edge joining two Agent nodes, read undirected. The
+  // same edge is still a directed pipeline edge for a sequential run -- it is
+  // both, and the experiment's strategy decides which. Nothing on the canvas is
+  // drawn differently for it; this only feeds AgentNode's tool-calling warning,
+  // which is about the agent, not the edge.
+  const peerIdsByAgent = useMemo(() => {
     const nodeTypeById = new Map(nodes.map((n) => [n.id, n.type]))
     const map = new Map<string, string[]>()
-    const edgeIds = new Set<string>()
     const link = (a: string, b: string) => map.set(a, [...(map.get(a) ?? []), b])
     for (const e of edges) {
       if (CONNECTOR_HANDLES.has(e.targetHandle ?? '')) continue
       if (nodeTypeById.get(e.source) !== 'agent' || nodeTypeById.get(e.target) !== 'agent') continue
       if (e.source === e.target) continue
-      edgeIds.add(e.id)
       link(e.source, e.target)
       link(e.target, e.source)
     }
-    return { peerIdsByAgent: map, peerEdgeIds: edgeIds }
+    return map
   }, [nodes, edges])
-
-  // Stamped onto the RENDERED copy only, never onto the persisted `edges`
-  // state -- an edge in a saved graph carries no data of its own, and this is
-  // derived from the graph anyway. InteractEdge reads it to caption the edge
-  // rather than re-deriving both endpoints' node types per edge.
-  const edgesWithPeerFlag = useMemo(
-    () => edges.map((e) => (peerEdgeIds.has(e.id) ? { ...e, data: { ...e.data, isPeerEdge: true } } : e)),
-    [edges, peerEdgeIds],
-  )
 
   // The model each agent will actually run on, resolved through its AI
   // connector. Injected into the node's data rather than read here, because
@@ -735,20 +703,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     () => new Map(nodes.filter((n) => n.type === 'agent').map((n) => [n.id, (n.data as AgentNodeData).label || 'Agent'])),
     [nodes],
   )
-
-  // Every agent that could open a conversation -- it has at least one peer.
-  // The user picks which one they're addressing; the rest participate by being
-  // consulted.
-  const conversationCandidates = useMemo(
-    () => [...agentNames.keys()].filter((id) => (peerIdsByAgent.get(id)?.length ?? 0) > 0).map((id) => ({ id, name: agentNames.get(id)! })),
-    [agentNames, peerIdsByAgent],
-  )
-
-  useEffect(() => {
-    if (!conversationCandidates.some((a) => a.id === conversationEntryAgentId)) {
-      setConversationEntryAgentId(conversationCandidates[0]?.id ?? '')
-    }
-  }, [conversationCandidates, conversationEntryAgentId])
 
   const nodesWithRunStatus = useMemo((): Node[] => {
     return nodes.map((n) => {
@@ -1450,7 +1404,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         <div ref={paneRef} className="relative flex-1">
           <ReactFlow
             nodes={nodesWithRunStatus}
-            edges={edgesWithPeerFlag}
+            edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -1542,23 +1496,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 {cancelRequested ? 'Stopping…' : 'Stop'}
               </Button>
             )}
-            {/* Offered only once two agents are actually wired together --
-                with nobody to consult, a conversation is just a slower
-                single-agent run. */}
-            {conversationCandidates.length > 0 && (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={experimentLocked || isRunning}
-                onClick={() => {
-                  setRunErrorDismissed(false)
-                  setConversationDialogOpen(true)
-                }}
-              >
-                <MessagesSquare className="size-4" />
-                Converse
-              </Button>
-            )}
+            {/* There is deliberately no separate "start a conversation"
+                button here. Whether connected agents collaborate is the
+                experiment's coordination strategy (Design tab), not a second
+                way to press Run -- so an agent conversation is started by
+                running the protocol, like everything else. */}
             <Button
               size="icon"
               className="rounded-full"
@@ -1784,22 +1726,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           }}
         />
       )}
-      {(pendingRunConfirm || conversationDialogOpen) && (
+      {pendingRunConfirm && (
         <RunConfirmDialog
-          scope={
-            pendingRunConfirm ?? {
-              type: 'conversation',
-              entryLabel: agentNames.get(conversationEntryAgentId) ?? 'Agent',
-              participantIds: [conversationEntryAgentId, ...(peerIdsByAgent.get(conversationEntryAgentId) ?? [])],
-            }
-          }
+          scope={pendingRunConfirm}
           nodes={nodes}
           edges={edges}
           queryClient={queryClient}
-          onCancel={() => {
-            setPendingRunConfirm(null)
-            setConversationDialogOpen(false)
-          }}
+          onCancel={() => setPendingRunConfirm(null)}
           onConfirm={confirmPendingRun}
           hasUnpublishedChanges={hasUnpublishedChanges}
           publishedRevision={publishedRevision}
@@ -1812,44 +1745,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 : null
           }
           onPublishAndRun={() => publishAndRunMutation.mutate()}
-          additionalContent={
-            conversationDialogOpen ? (
-              <div className="space-y-3 rounded-md border border-[color:var(--node-label)]/35 bg-[color:var(--node-label)]/5 p-3">
-                <label className="block space-y-1 text-sm">
-                  <span>Ask</span>
-                  <select
-                    value={conversationEntryAgentId}
-                    onChange={(event) => setConversationEntryAgentId(event.target.value)}
-                    className="h-9 w-full rounded-md border bg-background px-2 text-sm"
-                  >
-                    {conversationCandidates.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        {agent.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block space-y-1 text-sm">
-                  <span>To do</span>
-                  <Textarea
-                    value={conversationInput}
-                    onChange={(event) => setConversationInput(event.target.value)}
-                    placeholder="Describe the task for the agent you're addressing…"
-                  />
-                </label>
-              </div>
-            ) : undefined
-          }
-          confirmLabel={conversationDialogOpen ? 'Start conversation' : undefined}
-          confirmDisabled={conversationDialogOpen && (!conversationInput.trim() || !conversationEntryAgentId)}
-          isConfirming={conversationMutation.isPending}
-          confirmError={
-            conversationMutation.error instanceof ApiError && typeof conversationMutation.error.detail === 'string'
-              ? conversationMutation.error.detail
-              : conversationMutation.isError
-                ? 'Could not start the conversation.'
-                : null
-          }
         />
       )}
       {factorPickerNodeId && (

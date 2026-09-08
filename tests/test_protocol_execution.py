@@ -1554,7 +1554,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
             },
         )
         protocol_id = protocol.id
-        await upsert_replicate(
+        replicate = await upsert_replicate(
             db,
             experiment_id=experiment_id,
             replicate_label="only-cell",
@@ -1566,6 +1566,11 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
             owner_id=owner_id,
             replicate_label="only-cell",
             factor_values={"Temperature": 0.1},
+            # Claims the replicate slot, exactly as plan_cell_runs does. Without
+            # it run_protocol's write-back is correctly skipped:
+            # is_current_replicate_attempt reads run.replicate_result_id to decide
+            # whether this run still owns the slot's latest projection.
+            replicate_result_id=replicate.id,
         )
         run_id = run.id
 
@@ -1613,11 +1618,17 @@ async def _run_single_cell_protocol(owner_id: uuid.UUID) -> tuple[uuid.UUID, str
             },
         )
         protocol_id = protocol.id
-        await upsert_replicate(
+        replicate = await upsert_replicate(
             db, experiment_id=experiment_id, replicate_label="only-cell", fields={"factor_values": {}}
         )
         run = await create_protocol_run(
-            db, protocol_id=protocol_id, owner_id=owner_id, replicate_label="only-cell"
+            db,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            replicate_label="only-cell",
+            # Claims the replicate slot the way plan_cell_runs does -- see
+            # is_current_replicate_attempt, which gates run_protocol's write-back.
+            replicate_result_id=replicate.id,
         )
         run_id = run.id
     return experiment_id, "only-cell", protocol_id, run_id
@@ -3034,6 +3045,63 @@ def test_validate_single_node_runnable_accepts_a_valid_standalone_agent() -> Non
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {"nodes": [agent, _llm_node()], "edges": [agent_llm_edge]}
     assert pe.validate_single_node_runnable(graph, "a") is agent
+
+
+# --- validate_conversation_entry ---------------------------------------------
+
+
+def _conversation_graph(*agent_ids: str) -> dict:
+    """Agents in a chain, each with its own LLM, joined by plain main edges."""
+    nodes: list[dict] = [_llm_node()]
+    edges: list[dict] = []
+    for agent_id in agent_ids:
+        agent, llm_edge = _agent_with_llm(agent_id)
+        nodes.append(agent)
+        edges.append(llm_edge)
+    for source, target in zip(agent_ids, agent_ids[1:], strict=False):
+        edges += _edges((source, target))
+    return {"nodes": nodes, "edges": edges}
+
+
+def test_validate_conversation_entry_rejects_a_missing_node() -> None:
+    with pytest.raises(ProtocolValidationError, match="No such node"):
+        pe.validate_conversation_entry(_conversation_graph("a", "b"), "nope")
+
+
+def test_validate_conversation_entry_rejects_a_non_agent_node() -> None:
+    graph = _conversation_graph("a", "b")
+    graph["nodes"].append(_node("g1", "critic_gate"))
+    with pytest.raises(ProtocolValidationError, match="Only Agent nodes"):
+        pe.validate_conversation_entry(graph, "g1")
+
+
+def test_validate_conversation_entry_rejects_an_agent_with_nobody_to_talk_to() -> None:
+    with pytest.raises(ProtocolValidationError, match="nobody to talk to"):
+        pe.validate_conversation_entry(_conversation_graph("a"), "a")
+
+
+def test_validate_conversation_entry_rejects_a_peer_with_no_model() -> None:
+    """A peer's own wiring is checked too: it will really run, and finding out
+    mid-conversation costs the user a run they already paid for."""
+    graph = _conversation_graph("a", "b")
+    graph["edges"] = [e for e in graph["edges"] if e.get("target") != "b" or e.get("targetHandle") != "ai"]
+    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
+        pe.validate_conversation_entry(graph, "a")
+
+
+def test_validate_conversation_entry_accepts_a_third_agent_on_the_canvas() -> None:
+    """Three connected agents are three participants, not an error -- the
+    validator asks nothing about how many peer edges the graph has."""
+    graph = _conversation_graph("a", "b", "c")
+    assert pe.validate_conversation_entry(graph, "b")["id"] == "b"
+
+
+def test_validate_conversation_entry_ignores_an_unrelated_broken_node() -> None:
+    """Scoped to the entry agent and its peers: a half-wired node in another
+    corner of the same canvas has nothing to do with this conversation."""
+    graph = _conversation_graph("a", "b")
+    graph["nodes"].append(_node("stranded", "agent"))
+    assert pe.validate_conversation_entry(graph, "a")["id"] == "a"
 
 
 async def test_run_single_node_ignores_an_unrelated_broken_sibling_node(

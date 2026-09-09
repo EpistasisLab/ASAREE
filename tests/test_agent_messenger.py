@@ -81,11 +81,15 @@ def stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     async def _update_node_run(_db: Any, _run_id: uuid.UUID, node_id: str, patch: dict[str, Any]) -> None:
         state["node_runs"].append((node_id, patch))
 
-    async def _run_agent_node(node: dict[str, Any], **kwargs: Any) -> tuple[str | None, str | None, uuid.UUID | None]:
+    async def _run_agent_node(
+        node: dict[str, Any], **kwargs: Any
+    ) -> tuple[str | None, str | None, uuid.UUID | None, dict[str, Any] | None]:
         state["peer_runs"].append((node["id"], kwargs["user_input"], kwargs["agent_messenger"]))
         result = state["peer_result"]
+        # `peer_result` stays the 3-tuple a test writes; the payload slot is
+        # appended here, since no consultation test cares about it.
         resolved: tuple[str | None, str | None, uuid.UUID | None] = result(kwargs) if callable(result) else result
-        return resolved
+        return (*resolved, None)
 
     async def _resolve_available_agents(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
         return []
@@ -323,7 +327,7 @@ async def test_a_peers_own_consultation_is_attributed_to_the_peer(stubs: dict[st
     the peer -- which is also what its own authorization is checked against."""
     nested: list[Any] = []
 
-    async def _run_agent_node(node: dict[str, Any], **kwargs: Any) -> tuple[str, None, uuid.UUID]:
+    async def _run_agent_node(node: dict[str, Any], **kwargs: Any) -> tuple[str, None, uuid.UUID, None]:
         messenger: AgentMessenger = kwargs["agent_messenger"]
         if node["id"] == "critic":
             nested.append(
@@ -334,7 +338,7 @@ async def test_a_peers_own_consultation_is_attributed_to_the_peer(stubs: dict[st
                     context=None,
                 )
             )
-        return ("A peer answer.", None, uuid.uuid4())
+        return ("A peer answer.", None, uuid.uuid4(), None)
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(am, "_run_agent_node", _run_agent_node)
@@ -405,7 +409,7 @@ async def test_depth_is_capped_and_the_cap_is_a_reply(stubs: dict[str, Any], mon
     monkeypatch.setattr(am, "_MAX_CONSULT_DEPTH", 1)
     nested_replies: list[Any] = []
 
-    async def _run_agent_node(node: dict[str, Any], **kwargs: Any) -> tuple[str, None, uuid.UUID]:
+    async def _run_agent_node(node: dict[str, Any], **kwargs: Any) -> tuple[str, None, uuid.UUID, None]:
         messenger: AgentMessenger = kwargs["agent_messenger"]
         nested_replies.append(
             await messenger.send(
@@ -415,7 +419,7 @@ async def test_depth_is_capped_and_the_cap_is_a_reply(stubs: dict[str, Any], mon
                 context=None,
             )
         )
-        return ("A peer answer.", None, uuid.uuid4())
+        return ("A peer answer.", None, uuid.uuid4(), None)
 
     monkeypatch.setattr(am, "_run_agent_node", _run_agent_node)
     messenger = _messenger()

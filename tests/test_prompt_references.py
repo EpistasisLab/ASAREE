@@ -112,6 +112,55 @@ def test_serialize_is_the_one_place_the_spelling_is_defined() -> None:
     assert ref.raw
 
 
+def test_a_field_reference_splits_into_the_node_and_the_field() -> None:
+    (ref,) = pr.iter_references("{{node:node-msza682j-w2vslmwn.n_rows}}")
+    assert (ref.kind, ref.node_id, ref.field) == ("node", "node-msza682j-w2vslmwn", "n_rows")
+
+
+def test_a_whole_node_reference_has_no_field() -> None:
+    (ref,) = pr.iter_references("{{node:a}}")
+    assert ref.field == ""
+
+
+def test_a_field_reference_still_counts_as_referencing_its_node() -> None:
+    """The property everything downstream leans on: "which senders does this
+    prompt name" must not have to know that fields exist. The canvas's
+    `no reference` edge chip and the Receives panel's `not referenced` chip
+    both ask exactly that question."""
+    assert pr.referenced_node_ids("{{node:a.n_rows}} {{node:b}}") == ["a", "b"]
+
+
+def test_fields_are_reported_per_node_distinct_and_in_order() -> None:
+    assert pr.referenced_node_fields("{{node:a.b}} {{node:c}} {{node:a.x}} {{node:a.b}}") == {"a": ["b", "x"]}
+
+
+def test_a_node_referenced_only_as_a_whole_is_absent_from_the_field_map() -> None:
+    """Absent, not an empty list: the caller is checking names against a
+    declared contract, and `[]` would read as "declares nothing" rather than
+    "asked for nothing"."""
+    assert pr.referenced_node_fields("{{node:a}}") == {}
+
+
+def test_a_field_reference_takes_raw_and_keeps_its_case() -> None:
+    (ref,) = pr.iter_references("{{ NODE:AbC.nRows | raw }}")
+    assert (ref.node_id, ref.field, ref.raw) == ("AbC", "nRows", True)
+
+
+def test_a_field_name_that_is_not_an_identifier_is_not_a_reference() -> None:
+    """Narrower than an id on purpose -- the field becomes an attribute on the
+    model Motoro builds from the contract. A near-miss stays literal text
+    rather than being guessed at."""
+    assert not pr.has_references("{{node:a.9rows}}")
+    assert not pr.has_references("{{node:a.n-rows}}")
+    assert not pr.has_references("{{node:a.}}")
+
+
+def test_serialize_spells_the_field_form_too() -> None:
+    assert pr.serialize_node_reference("n1", field="n_rows") == "{{node:n1.n_rows}}"
+    (ref,) = pr.iter_references(pr.serialize_node_reference("n1", field="n_rows", raw=True))
+    assert (ref.node_id, ref.field, ref.raw) == ("n1", "n_rows", True)
+
+
 def test_empty_and_missing_text_are_not_errors() -> None:
     assert not pr.has_references("")
     assert pr.referenced_node_ids("") == []
@@ -231,6 +280,83 @@ def test_the_error_names_the_nodes_by_label_because_that_is_what_the_user_sees()
         _validate("Review {{node:side}}.")
     assert "Reviewer" in str(exc.value)
     assert "Sidebar" in str(exc.value)
+
+
+def _parser(parser_id: str, agent_id: str, *fields: str, enabled: bool = True) -> dict[str, Any]:
+    """An Output Parser node wired to *agent_id*, declaring *fields* as strings."""
+    return {
+        "node": {
+            "id": parser_id,
+            "type": "output_parser",
+            "data": {
+                "label": "Parser",
+                "config": {
+                    "enabled": enabled,
+                    "output_contract": {
+                        "name": "report",
+                        "fields": [{"name": f, "type": "string"} for f in fields],
+                    },
+                },
+            },
+        },
+        "edge": {
+            "id": f"{parser_id}-{agent_id}",
+            "source": parser_id,
+            "target": agent_id,
+            "sourceHandle": "output_parser",
+            "targetHandle": "output_parser",
+        },
+    }
+
+
+def _validate_with_parser(prompt: str, *fields: str) -> None:
+    parser = _parser("p", "a", *fields)
+    graph = {
+        "nodes": [_agent("a", "Analyst"), parser["node"], _agent("b", "Reviewer", prompt)],
+        "edges": [_edge("a", "b"), parser["edge"]],
+    }
+    validate_prompt_references(CURRENT, graph=graph)
+
+
+def test_a_field_the_producers_parser_declares_passes() -> None:
+    _validate_with_parser("There were {{node:a.n_rows}} rows.", "n_rows", "target_column")
+
+
+def test_a_field_the_producers_parser_does_not_declare_is_refused() -> None:
+    """Design time, against the declaration -- nothing has run yet. A typo
+    would otherwise surface as an empty substitution halfway through a batch."""
+    with pytest.raises(ProtocolValidationError, match="does not declare"):
+        _validate_with_parser("There were {{node:a.n_row}} rows.", "n_rows")
+
+
+def test_the_undeclared_field_error_lists_what_is_declared() -> None:
+    with pytest.raises(ProtocolValidationError) as exc:
+        _validate_with_parser("{{node:a.nope}}", "n_rows", "target_column")
+    assert "n_rows, target_column" in str(exc.value)
+
+
+def test_a_field_reference_to_a_producer_with_no_parser_is_refused() -> None:
+    with pytest.raises(ProtocolValidationError, match="no Output Parser"):
+        _validate("There were {{node:a.n_rows}} rows.")
+
+
+def test_a_disabled_parser_declares_nothing() -> None:
+    """`enabled: false` suspends the extraction, so nothing will be there to
+    read -- the same answer as no parser at all, caught before the run."""
+    parser = _parser("p", "a", "n_rows", enabled=False)
+    graph = {
+        "nodes": [_agent("a", "Analyst"), parser["node"], _agent("b", "Reviewer", "{{node:a.n_rows}}")],
+        "edges": [_edge("a", "b"), parser["edge"]],
+    }
+    with pytest.raises(ProtocolValidationError, match="no Output Parser"):
+        validate_prompt_references(CURRENT, graph=graph)
+
+
+def test_an_out_of_scope_field_reference_reports_the_scope_problem_first() -> None:
+    """One message per prompt, and the wiring is the thing to fix -- naming a
+    field on a node that never runs first is not a field problem."""
+    with pytest.raises(ProtocolValidationError, match="does not run before it"):
+        _validate("{{node:side.n_rows}}")
 
 
 def test_the_legacy_contract_is_not_policed_at_all() -> None:

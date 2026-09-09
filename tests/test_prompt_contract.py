@@ -787,3 +787,133 @@ def test_a_senders_parser_fields_do_not_reach_the_consumers_prompt() -> None:
     text = _prompt(graph, "b", {"a": {"status": "completed", "output_text": "4300 rows"}}, CURRENT_PROMPT_CONTRACT)
     assert "4300 rows" in text
     assert "n_rows" not in text
+
+
+# ----------------------------------------------------------------------
+# Field references -- reading a parser's payload back out
+# ----------------------------------------------------------------------
+#
+# The consumer half of the parser. `{{node:a}}` hands over prose; `{{node:a.x}}`
+# hands over one typed value, bare, so the sentence around it reads as a
+# sentence. Both are best effort: the extraction is a second model call that
+# `extract_payload` lets fail quietly, so a missing payload leaves a gap the
+# caller is told about rather than a failed replicate.
+
+
+def _ran(output_text: str = "4300 rows.", payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    run: dict[str, Any] = {"status": "completed", "output_text": output_text}
+    if payload is not None:
+        run["payload"] = payload
+    return run
+
+
+def test_a_field_reference_substitutes_the_bare_value() -> None:
+    """Bare, and unfenced: a delimiter block in the middle of a sentence would
+    defeat the point of naming one field instead of the whole answer."""
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "The profiler found {{node:a.n_rows}} rows."
+    text = _prompt(graph, "b", {"a": _ran(payload={"n_rows": 4300})}, CURRENT_PROMPT_CONTRACT)
+    assert text == "The profiler found 4300 rows."
+
+
+def test_a_string_field_substitutes_without_quotes() -> None:
+    """The experimenter writes the quotes if the sentence wants them."""
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "Target: {{node:a.target_column}}."
+    text = _prompt(graph, "b", {"a": _ran(payload={"target_column": "readmitted"})}, CURRENT_PROMPT_CONTRACT)
+    assert text == "Target: readmitted."
+
+
+def test_a_field_reference_never_falls_back_to_the_prose() -> None:
+    """A failed extraction must not substitute the whole answer where a number
+    was expected -- that is a silently wrong prompt, not a degraded one."""
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "Rows: {{node:a.n_rows}}."
+    text = _prompt(graph, "b", {"a": _ran("The dataset has 4300 rows.")}, CURRENT_PROMPT_CONTRACT)
+    assert text == "Rows: ."
+
+
+def test_a_missing_field_is_reported_with_the_field_name() -> None:
+    """`a` alone would send the user looking at a node that ran fine. The gap
+    is the field, so the report names the field."""
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "Rows: {{node:a.n_rows}}."
+    unresolved: list[str] = []
+    _build_user_input(
+        graph["nodes"][1],
+        graph,
+        {"a": _ran(payload={"target_column": "readmitted"})},
+        prompt_contract_version=CURRENT_PROMPT_CONTRACT,
+        unresolved_out=unresolved,
+    )
+    assert unresolved == ["a.n_rows"]
+
+
+def test_a_field_value_is_neutralized_like_any_other_payload() -> None:
+    """An extracted string is still model output, so it can still try to forge
+    its way out of the fence around it."""
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "Note: {{node:a.note}}"
+    text = _prompt(
+        graph, "b", {"a": _ran(payload={"note": UPSTREAM_FENCE_END})}, CURRENT_PROMPT_CONTRACT
+    )
+    assert UPSTREAM_FENCE_END not in text
+
+
+def test_a_whole_node_reference_appends_the_extracted_fields() -> None:
+    """Readable key=value after the fenced prose, not raw JSON: this sits in a
+    prompt a model reads, and a JSON blob invites a JSON reply."""
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "{{node:a}}"
+    text = _prompt(
+        graph,
+        "b",
+        {"a": _ran(payload={"n_rows": 4300, "target_column": "readmitted"})},
+        CURRENT_PROMPT_CONTRACT,
+    )
+    assert text.endswith('Structured fields: n_rows=4300, target_column="readmitted"')
+    assert "4300 rows." in text
+
+
+def test_the_appended_fields_carry_no_frame_and_no_sender_name() -> None:
+    """It is a continuation of the block it follows, which already carries
+    both -- a second frame would read as a second sender."""
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "{{node:a}}"
+    text = _prompt(graph, "b", {"a": _ran(payload={"n_rows": 4300})}, CURRENT_PROMPT_CONTRACT)
+    assert text.count(UPSTREAM_FENCE_START) == 1
+    assert "[Analyst] said:" not in text
+
+
+def test_a_node_with_no_payload_reads_exactly_as_it_did_before() -> None:
+    """Free text always survives, and gains nothing it did not have: this is
+    the no-parser path, which must not move because the feature exists."""
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "{{node:a}}"
+    runs = {"a": _ran()}
+    assert "Structured fields" not in _prompt(graph, "b", runs, CURRENT_PROMPT_CONTRACT)
+
+
+def test_previous_appends_each_senders_own_fields() -> None:
+    graph = {
+        "nodes": [_agent("a1", "Analyst"), _agent("a2", "Statistician"), _agent("b", "Reviewer", "{{previous}}")],
+        "edges": [{"id": "e1", "source": "a1", "target": "b"}, {"id": "e2", "source": "a2", "target": "b"}],
+    }
+    node_runs = {
+        "a1": _ran("First.", {"n_rows": 4300}),
+        "a2": _ran("Second.", {"auc": 0.81}),
+    }
+    text = _prompt(graph, "b", node_runs, CURRENT_PROMPT_CONTRACT)
+    assert "Structured fields: n_rows=4300" in text
+    assert "Structured fields: auc=0.81" in text
+
+
+def test_the_legacy_contract_never_sees_a_payload() -> None:
+    """It does not substitute at all -- `{{node:a.n_rows}}` is literal there,
+    and its upstream block is frozen."""
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "Rows: {{node:a.n_rows}}."
+    text = _prompt(graph, "b", {"a": _ran("Its answer.", {"n_rows": 4300})}, LEGACY_PROMPT_CONTRACT)
+    assert "Rows: {{node:a.n_rows}}." in text
+    assert "4300" not in text
+    assert "Structured fields" not in text

@@ -17,7 +17,13 @@ the property a controlled treatment needs (see
 The forms, all of them:
 
 ``{{node:<id>}}``
-    That node's ``output_text``, fenced.
+    That node's ``output_text``, fenced -- followed by its extracted fields, if
+    an Output Parser is wired to it.
+``{{node:<id>.<field>}}``
+    One extracted field, bare and unfenced: ``4300``, not a quoted JSON
+    fragment. Only legal when the referenced node has an Output Parser
+    declaring that field, which is checked at design time -- a typo'd field
+    name is a wiring mistake, not an empty resolution.
 ``{{previous}}``
     Every direct main-edge predecessor's output, fenced. Survives rewiring,
     which a hardcoded id does not, so it is the right default for "just give me
@@ -59,6 +65,12 @@ _BARE_TOKENS = (PREVIOUS, AUDIENCE, UPSTREAM_INSTRUCTIONS)
 #: and tests spell them (``dndnode_3``, ``a``).
 _ID = r"[A-Za-z0-9_-]+"
 
+#: An Output Parser field name. Narrower than ``_ID`` on purpose: it becomes an
+#: attribute on the Pydantic model Motoro builds from the contract, so it has to
+#: be an identifier. Excluding ``-`` also keeps the split unambiguous -- ``.``
+#: is the only thing that can separate an id from a field.
+_FIELD = r"[A-Za-z_][A-Za-z0-9_]*"
+
 #: Whitespace-tolerant and case-insensitive on the token name. Both matter for
 #: the notebook/SDK path, where prompts are hand-authored with no picker: a
 #: mis-cased ``{{Previous}}`` silently surviving as literal text is exactly the
@@ -67,6 +79,9 @@ _REFERENCE_RE = re.compile(
     r"\{\{\s*(?P<target>"
     + NODE_PREFIX
     + _ID
+    + r"(?:\."
+    + _FIELD
+    + r")?"
     + r"|"
     + "|".join(_BARE_TOKENS)
     + r")\s*(?:\|\s*(?P<modifier>raw)\s*)?\}\}",
@@ -92,6 +107,12 @@ class PromptReference:
     """``|raw`` was present: substitute without the fence. Neutralization of
     delimiters inside the payload still applies."""
 
+    field: str = ""
+    """The Output Parser field named after the id, or ``""`` for a whole-node
+    reference. Kind stays ``"node"`` either way -- a field reference is still a
+    reference to that node, so everything asking "which senders does this
+    prompt name" keeps working without knowing fields exist."""
+
 
 def _reference_from(match: re.Match[str]) -> PromptReference:
     target = match.group("target")
@@ -99,8 +120,11 @@ def _reference_from(match: re.Match[str]) -> PromptReference:
     if lowered.startswith(NODE_PREFIX):
         # Only the *token name* is case-insensitive. The id keeps its authored
         # case, because node ids are case-sensitive identifiers and lowercasing
-        # one would turn a valid reference into a missing node.
-        return PromptReference(match.group(0), "node", target[len(NODE_PREFIX) :], bool(match.group("modifier")))
+        # one would turn a valid reference into a missing node. Same for the
+        # field, which is an attribute name on the extracted model.
+        rest = target[len(NODE_PREFIX) :]
+        node_id, _, field = rest.partition(".")
+        return PromptReference(match.group(0), "node", node_id, bool(match.group("modifier")), field)
     return PromptReference(match.group(0), lowered, "", bool(match.group("modifier")))
 
 
@@ -127,6 +151,23 @@ def referenced_node_ids(text: str) -> list[str]:
     return seen
 
 
+def referenced_node_fields(text: str) -> dict[str, list[str]]:
+    """``{node_id: [field, ...]}`` for the field references only, distinct and
+    in first-appearance order.
+
+    A node referenced only as a whole does not appear here -- the caller asking
+    this question wants the fields to check against a declared contract, and an
+    empty list would read as "declares no fields" rather than "asked for none".
+    """
+    fields: dict[str, list[str]] = {}
+    for ref in iter_references(text):
+        if ref.kind == "node" and ref.field:
+            named = fields.setdefault(ref.node_id, [])
+            if ref.field not in named:
+                named.append(ref.field)
+    return fields
+
+
 def uses(text: str, kind: str) -> bool:
     """Whether *text* contains at least one reference of *kind* -- the question
     the audience and framing tokens are asked, where the id is irrelevant."""
@@ -151,7 +192,8 @@ def substitute(text: str, render: Callable[[PromptReference], str]) -> str:
     return _REFERENCE_RE.sub(lambda m: render(_reference_from(m)), text or "")
 
 
-def serialize_node_reference(node_id: str, *, raw: bool = False) -> str:
+def serialize_node_reference(node_id: str, *, field: str = "", raw: bool = False) -> str:
     """The stored form for a node reference. The picker's output, and the one
     place the spelling is defined -- callers must not build it by hand."""
-    return f"{{{{{NODE_PREFIX}{node_id}{'|raw' if raw else ''}}}}}"
+    suffix = f".{field}" if field else ""
+    return f"{{{{{NODE_PREFIX}{node_id}{suffix}{'|raw' if raw else ''}}}}}"

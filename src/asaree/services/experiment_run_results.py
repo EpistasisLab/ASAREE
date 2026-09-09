@@ -213,6 +213,18 @@ def _node_labels(graph: dict[str, Any] | None) -> dict[str, str]:
     return labels
 
 
+def _reference_label(ref: Any, node_labels: dict[str, str]) -> str:
+    """One recorded unresolved reference, as a name the user reads.
+
+    A field reference is recorded whole (``a.n_rows``) because the gap is the
+    field, not the node -- so only the id half is labelled and the field is kept
+    verbatim. Node ids cannot contain a dot, which is what makes the split safe.
+    """
+    node_id, dot, field = str(ref).partition(".")
+    label = node_labels.get(node_id, node_id)
+    return f"{label}.{field}" if dot else label
+
+
 async def _node_labels_by_protocol_run(
     db: AsyncSession, protocol_runs: dict[uuid.UUID, ProtocolRun]
 ) -> dict[uuid.UUID, dict[str, str]]:
@@ -348,7 +360,7 @@ async def summarize_experiment_run_results(
                     # for exactly that reason. Hence the distinct field name:
                     # the ids are gone by the time it leaves here.
                     "unresolved_reference_labels": [
-                        node_labels.get(str(ref), str(ref)) for ref in node_run.get("unresolved_references") or []
+                        _reference_label(ref, node_labels) for ref in node_run.get("unresolved_references") or []
                     ],
                     "agent_run_id": str(agent_run_id) if agent_run_id else None,
                     **usage,

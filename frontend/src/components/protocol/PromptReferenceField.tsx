@@ -46,11 +46,22 @@ function suggestionsFor(scope: PromptReferenceScope): { data: Suggestion[]; pros
         // first working out which node "previous" means.
         detail: first ? `Output of the step before this one — ${first}` : 'Output of the step before this one',
       },
-      ...scope.targets.map((target) => ({
-        token: `{{${target.name}}}`,
-        title: target.name,
-        detail: 'Output of this node',
-      })),
+      // Each node, then the fields its Output Parser declares. The whole-node
+      // entry always comes first: prose is what every node has, and the fields
+      // are the extra a parser buys. A node with no parser has no field rows at
+      // all, which is the picker saying so without a word of explanation.
+      ...scope.targets.flatMap((target) => [
+        {
+          token: `{{${target.name}}}`,
+          title: target.name,
+          detail: target.fields?.length ? 'Full answer, plus its extracted fields' : 'Output of this node',
+        },
+        ...(target.fields ?? []).map((field) => ({
+          token: `{{${target.name}.${field}}}`,
+          title: `${target.name}.${field}`,
+          detail: 'One extracted value, on its own',
+        })),
+      ]),
     ],
     prose: [
       { token: '{{audience}}', title: 'audience', detail: 'Who receives this agent’s output, in a sentence' },

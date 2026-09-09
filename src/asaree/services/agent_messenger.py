@@ -530,7 +530,11 @@ class AgentMessenger:
         ambient_meta, dataset = await _node_run_context(
             self._graph, to_agent_id, self._workspace_id, self._owner_id, stage_plan=self._stage_plan
         )
-        output_text, error, run_id = await _run_agent_node(
+        # A consultation reply is prose the asking agent reads, never a typed
+        # value anything binds to, so whatever the peer's parser extracted (if
+        # it even ran) is discarded here rather than stored under the peer's
+        # node run: this turn isn't that node's own pipeline run.
+        output_text, error, run_id, _extraction = await _run_agent_node(
             node,
             protocol_id=self._protocol_id,
             protocol_run_id=self._protocol_run_id,
@@ -625,7 +629,7 @@ async def execute_conversation(
     # The entry agent's turn is a turn like any other: without this, the peers
     # it consults would be recorded and authorized against an empty stack.
     with messenger.turn(entry_agent_id):
-        output_text, error, run_id = await _run_agent_node(
+        output_text, error, run_id, extraction = await _run_agent_node(
             node,
             protocol_id=protocol_id,
             protocol_run_id=protocol_run_id,
@@ -660,12 +664,13 @@ async def execute_conversation(
     messenger.set_state(state)
     await messenger.checkpoint()
 
-    node_run = {
+    node_run: dict[str, Any] = {
         "status": "cancelled" if cancelled else ("failed" if error else "completed"),
         "output_text": output_text,
         "error": None if cancelled else error,
         "run_id": str(run_id) if run_id else None,
     }
+    node_run.update(extraction or {})
     async with get_session() as db:
         await update_node_run(db, protocol_run_id, entry_agent_id, node_run)
     return node_run, status
@@ -877,7 +882,7 @@ async def execute_supervisor_architecture(
         if extra:
             sections.insert(1, extra)
         with messenger.turn(node_id):
-            output_text, error, run_id = await _run_agent_node(
+            output_text, error, run_id, extraction = await _run_agent_node(
                 nodes[node_id],
                 protocol_id=protocol_id,
                 protocol_run_id=protocol_run_id,
@@ -889,12 +894,13 @@ async def execute_supervisor_architecture(
                 evaluation_metrics=metrics,
                 unsplit_dataset=dataset.unsplit_name,
             )
-        run = {
+        run: dict[str, Any] = {
             "status": "cancelled" if error == _AGENT_CANCELLED else ("failed" if error else "completed"),
             "output_text": output_text,
             "error": None if error == _AGENT_CANCELLED else error,
             "run_id": str(run_id) if run_id else None,
         }
+        run.update(extraction or {})
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, run)
         return run

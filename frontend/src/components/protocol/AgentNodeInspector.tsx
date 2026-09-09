@@ -20,7 +20,7 @@ import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import { RESIZE_HANDLE_CLASSNAME, useResizablePane } from './useResizablePane'
 import { experimentsApi } from '@/api/client'
 import { normalizeDesignMetrics } from '@/lib/metricCatalog'
-import { seedPromptText } from '@/lib/promptReferences'
+import { referenceLabel, seedPromptText } from '@/lib/promptReferences'
 import type { HandoffPeers, PromptReferenceScope } from '@/lib/promptReferences'
 import type { AgentNodeConfig, AgentNodeData, NodeRunState, PromptPreview, ProtocolNode } from '@/types/protocols'
 
@@ -235,7 +235,7 @@ export function AgentNodeInspector({
             </div>
           )}
           <UnresolvedReferencesNote
-            names={(nodeRun?.unresolved_references ?? []).map((id) => referenceScope.names[id] ?? id)}
+            names={(nodeRun?.unresolved_references ?? []).map((ref) => referenceLabel(ref, referenceScope.names))}
           />
         </div>
 

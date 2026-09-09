@@ -57,6 +57,14 @@ export interface NodeRunState {
   // output should be, which reads as an agent that was never told anything
   // rather than one whose sender said nothing.
   unresolved_references?: string[]
+  // What this node's Output Parser extracted, and what it had to say about
+  // doing so. Both absent in the normal case -- no parser, or nothing to
+  // report -- so their presence is itself the answer to "did the extraction
+  // happen". Never a replacement for `output_text`: extraction is a second,
+  // post-hoc model call over an answer that already exists, and it is allowed
+  // to fail without taking the prose down with it.
+  payload?: Record<string, unknown> | null
+  caveats?: string[]
   // Critic Gate only -- absent on a plain agent's NodeRunState. `run_id`
   // above doubles as the CRITIC's own run (not the upstream worker's) for a
   // gate, so its own Sense/Reason/Plan/Act steps are inspectable the same

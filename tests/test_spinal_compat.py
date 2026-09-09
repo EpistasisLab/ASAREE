@@ -314,15 +314,25 @@ def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, An
     not a version bump -- which is exactly why the legacy contract is frozen
     rather than migrated.
 
-    Stated as "the *only* difference is the upstream block" rather than as a
-    literal transformation of one into the other. It began life as
+    Stated as a claim about *scope* rather than as a literal transformation of
+    one into the other. It began life as
     ``legacy.replace(f"[{node_id}]", f"[{label}]") == current``, which was true
     while the current contract was the legacy one with the labels swapped and
-    stopped being true the moment it grew a fence and a framing sentence. The
-    claim worth keeping is the one about scope: whatever the current contract
-    does, it does to that block, and the Dataset/Script cues around it are
-    tool-usage instructions that both contracts share.
+    stopped being true the moment it grew a fence and a framing sentence.
+
+    Two blocks now differ, and both are subtracted below: the upstream block
+    (present only on legacy) and the output-shape block (present only on
+    current -- SF-FTE declares an ``output_contract``, and stating its fields to
+    the agent is the half of that feature which never existed). Everything else,
+    including the Dataset and Script cues, is tool-usage instruction the two
+    contracts share. Subtracting from *both* sides is the honest form of the
+    claim: the current contract does not only remove things.
     """
+
+    def _without(text: str, block: str) -> str:
+        assert block and block in text
+        return "\n\n".join(part for part in text.split("\n\n") if part != block)
+
     dc_gate_id = _AGENTS[0][2]
     fte_id = _AGENTS[1][0]
     node_runs = {dc_gate_id: {"status": "completed", "output_text": "DC accepted v1_dc."}}
@@ -332,7 +342,8 @@ def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, An
     assert "DC accepted v1_dc." in legacy
     assert "DC accepted v1_dc." not in current
     legacy_block = pe._upstream_context_legacy(graph, fte_id, node_runs)
-    assert "\n\n".join(part for part in legacy.split("\n\n") if part != legacy_block) == current
+    shape_block = pe._output_shape_block(pe._resolve_output_contract(graph, fte_id))
+    assert _without(legacy, legacy_block) == _without(current, shape_block)
 
 
 # The node the goldens below are captured on, and the run state they see.

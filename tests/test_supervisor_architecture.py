@@ -86,7 +86,9 @@ def stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     async def _update_node_run(_db: Any, _run_id: uuid.UUID, node_id: str, patch: dict[str, Any]) -> None:
         state["node_runs"].append((node_id, patch))
 
-    async def _run_agent_node(node: dict[str, Any], **kwargs: Any) -> tuple[str | None, str | None, uuid.UUID | None]:
+    async def _run_agent_node(
+        node: dict[str, Any], **kwargs: Any
+    ) -> tuple[str | None, str | None, uuid.UUID | None, dict[str, Any] | None]:
         node_id = node["id"]
         state["turns"].append((node_id, kwargs["user_input"]))
         state["concurrent"] += 1
@@ -99,7 +101,7 @@ def stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             output, error = answer(kwargs) if callable(answer) else answer
         finally:
             state["concurrent"] -= 1
-        return output, error, uuid.uuid4() if error is None else None
+        return output, error, uuid.uuid4() if error is None else None, None
 
     async def _node_run_context(*_args: Any, **kwargs: Any) -> tuple[dict[str, Any], Any]:
         state["run_contexts"].append(kwargs)

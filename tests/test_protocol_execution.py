@@ -1027,7 +1027,7 @@ async def test_gated_worker_approved_first_attempt(monkeypatch: pytest.MonkeyPat
     critic_calls = []
 
     async def fake_run_agent_node(node, **kwargs):
-        return "worker output v1", None, None
+        return "worker output v1", None, None, None
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(kwargs["worker_output"])
@@ -1057,7 +1057,7 @@ async def test_gated_worker_rejected_then_approved_on_revision(monkeypatch: pyte
 
     async def fake_run_agent_node(node, *, user_input, **_kwargs):
         instructions.append(user_input)
-        return f"worker output v{len(instructions)}", None, None
+        return f"worker output v{len(instructions)}", None, None, None
 
     async def fake_run_critic(gate, *, worker_output, **_kwargs):
         critic_calls.append(worker_output)
@@ -1100,7 +1100,7 @@ async def test_gated_worker_force_accepts_without_final_critic_call(monkeypatch:
 
     async def fake_run_agent_node(node, *, user_input, **_kwargs):
         attempts.append(user_input)
-        return f"worker output v{len(attempts)}", None, None
+        return f"worker output v{len(attempts)}", None, None, None
 
     async def fake_run_critic(gate, *, worker_output, **_kwargs):
         critic_calls.append(worker_output)
@@ -1134,7 +1134,7 @@ async def test_gated_worker_disabled_skips_critic_entirely(monkeypatch: pytest.M
     critic_calls = []
 
     async def fake_run_agent_node(node, **kwargs):
-        return "worker output", None, None
+        return "worker output", None, None, None
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(1)
@@ -1153,7 +1153,7 @@ async def test_gated_worker_worker_failure_stops_immediately(monkeypatch: pytest
     critic_calls = []
 
     async def fake_run_agent_node(node, **kwargs):
-        return None, "the LLM call failed", None
+        return None, "the LLM call failed", None, None
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(1)
@@ -1176,7 +1176,7 @@ async def test_gated_worker_worker_failure_stops_immediately(monkeypatch: pytest
 
 async def test_gated_worker_critic_failure_fails_the_pair(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_agent_node(node, **kwargs):
-        return "worker output", None, None
+        return "worker output", None, None, None
 
     async def fake_run_critic(gate, **kwargs):
         return None, "critic run timed out", "critic-run-1"
@@ -1206,7 +1206,7 @@ async def test_gated_worker_cancelled_mid_worker_run(monkeypatch: pytest.MonkeyP
     critic_calls = []
 
     async def fake_run_agent_node(node, **kwargs):
-        return None, pe._AGENT_CANCELLED, "worker-run-1"
+        return None, pe._AGENT_CANCELLED, "worker-run-1", None
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(1)
@@ -1234,7 +1234,7 @@ async def test_gated_worker_cancelled_mid_critic_review(monkeypatch: pytest.Monk
     with that output -- only the gate's own node_run is "cancelled"."""
 
     async def fake_run_agent_node(node, **kwargs):
-        return "real worker output", None, "worker-run-1"
+        return "real worker output", None, "worker-run-1", None
 
     async def fake_run_critic(gate, **kwargs):
         return None, pe._AGENT_CANCELLED, "critic-run-1"
@@ -1712,7 +1712,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
     async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
         received_configs.append(pe._resolve_llm_config(graph, node["id"]))
         received_workspace_ids.append(workspace_id)
-        return f"output for {node['id']}", None, None
+        return f"output for {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -1829,7 +1829,7 @@ async def test_run_protocol_calls_score_metric_promotion_on_cell_completion(
     proves run_protocol actually reaches for it."""
 
     async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
-        return "worker output", None, None
+        return "worker output", None, None, None
 
     calls = []
 
@@ -1858,7 +1858,7 @@ async def test_run_protocol_survives_score_metric_promotion_failure(
     cell's own artifacts write must still land."""
 
     async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
-        return "worker output", None, None
+        return "worker output", None, None, None
 
     async def fake_promote(db, *, experiment_id, replicate_label, protocol_run_id):
         raise RuntimeError("boom")
@@ -1991,7 +1991,7 @@ async def test_run_protocol_deactivated_node_passes_through(
     async def fake_run_agent_node(node, **kwargs):
         nonlocal call_count
         call_count += 1
-        return f"real output from {node['id']}", None, None
+        return f"real output from {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -2027,6 +2027,65 @@ async def test_run_protocol_deactivated_node_passes_through(
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
 
 
+def test_the_extraction_fragment_carries_only_what_there_is() -> None:
+    """A node run gains a key only when there is something in it, so the
+    presence of `payload`/`caveats` is itself the answer to "did the parser
+    produce anything" -- no parser at all and a parser that produced nothing
+    both read as absence, which they are."""
+    from motoro.schemas.output import OutputEnvelope
+
+    assert pe._extraction_fields(None) is None
+    assert pe._extraction_fields(OutputEnvelope(result="x")) is None
+    assert pe._extraction_fields(OutputEnvelope(result="x", payload={"n": 1})) == {"payload": {"n": 1}}
+    assert pe._extraction_fields(OutputEnvelope(result="x", caveats=["guessed"])) == {"caveats": ["guessed"]}
+    # Both together: the extractor can coerce a field and still say it guessed.
+    assert pe._extraction_fields(OutputEnvelope(result="x", payload={"n": 1}, caveats=["guessed"])) == {
+        "payload": {"n": 1},
+        "caveats": ["guessed"],
+    }
+
+
+async def test_run_protocol_stores_the_extraction_beside_the_output_text(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Alongside, never instead of: the prose handoff must not regress because
+    someone connected a parser. A deactivated node's pass-through carries none
+    of it -- the prose it forwards was read against a different node's
+    contract."""
+
+    async def fake_run_agent_node(node, **kwargs):
+        return f"output from {node['id']}", None, None, {"payload": {"n_rows": 4300}, "caveats": ["guessed"]}
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+
+    middle = _node("b", "agent")
+    middle["data"]["active"] = False
+    llm = _llm_node()
+    graph = {
+        "nodes": [llm, _node("a", "agent"), middle],
+        "edges": _edges(("a", "b")) + [_llm_edge(llm["id"], "a"), _llm_edge(llm["id"], "b")],
+    }
+
+    async with get_session() as db:
+        protocol = await create_protocol(db, name=f"payload-test-{uuid.uuid4().hex}", owner_id=owner_id, graph=graph)
+        protocol_id = protocol.id
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run_id = run.id
+
+    try:
+        await pe.run_protocol(run_id)
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+        assert fetched is not None
+        assert fetched.node_runs["a"]["output_text"] == "output from a"
+        assert fetched.node_runs["a"]["payload"] == {"n_rows": 4300}
+        assert fetched.node_runs["a"]["caveats"] == ["guessed"]
+        assert "payload" not in fetched.node_runs["b"]
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+
+
 async def test_run_protocol_honors_cancellation_between_nodes(
     owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2046,7 +2105,7 @@ async def test_run_protocol_honors_cancellation_between_nodes(
             # usage, modeled here as a second, independent session.
             async with get_session() as db:
                 await request_protocol_run_cancellation(db, run_id)
-        return f"output from {node['id']}", None, None
+        return f"output from {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -2095,8 +2154,8 @@ async def test_run_protocol_honors_mid_node_cancellation(owner_id: uuid.UUID, mo
         nonlocal call_count
         call_count += 1
         if node["id"] == "a":
-            return None, pe._AGENT_CANCELLED, uuid.uuid4()
-        return f"output from {node['id']}", None, None
+            return None, pe._AGENT_CANCELLED, uuid.uuid4(), None
+        return f"output from {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -3078,7 +3137,7 @@ async def test_run_protocol_tool_source_node_never_gets_its_own_turn(
     _run_agent_node."""
 
     async def fake_run_agent_node(node, *, graph, **kwargs):
-        return f"output for {node['id']}", None, None
+        return f"output for {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -3752,7 +3811,7 @@ async def test_peer_collaboration_runs_the_graph_as_one_conversation(
 
     async def fake_run_agent_node(node, **_kwargs):
         ran.append(node["id"])
-        return f"{node['id']} answered", None, None
+        return f"{node['id']} answered", None, None, None
 
     monkeypatch.setattr(am, "_run_agent_node", fake_run_agent_node)
 
@@ -3809,7 +3868,7 @@ async def test_supervisor_architecture_runs_every_agent_end_to_end(
 
     async def fake_run_agent_node(node, **_kwargs):
         ran.append(node["id"])
-        return f"{node['id']} answered", None, None
+        return f"{node['id']} answered", None, None, None
 
     monkeypatch.setattr(am, "_run_agent_node", fake_run_agent_node)
 
@@ -3966,7 +4025,7 @@ async def test_run_single_node_ignores_an_unrelated_broken_sibling_node(
     topological_order's full-graph walk cares about that."""
 
     async def fake_run_agent_node(node, *, user_input, **_kwargs):
-        return f"solo output for {node['id']} given {user_input!r}", None, None
+        return f"solo output for {node['id']} given {user_input!r}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -4007,7 +4066,7 @@ async def test_run_single_node_computes_adhoc_workspace_id_when_experiment_linke
 
     async def fake_run_agent_node(node, *, workspace_id=None, **_kwargs):
         received_workspace_ids.append(workspace_id)
-        return f"solo output for {node['id']}", None, None
+        return f"solo output for {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 

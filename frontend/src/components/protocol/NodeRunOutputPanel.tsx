@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { runsApi } from '@/api/client'
 import { nodeRunBadge } from '@/lib/protocolRun'
+import { referenceLabel } from '@/lib/promptReferences'
 import { hashToChartHue } from '@/lib/utils'
 import type { NodeRunState } from '@/types/protocols'
 import type { RunStep } from '@/types/runs'
@@ -187,6 +188,52 @@ export function UnresolvedReferencesNote({ names }: { names: string[] }) {
   )
 }
 
+// What the Output Parser pulled out of the answer above, if one was wired.
+//
+// Below the output, never in place of it: the free text is what the agent
+// wrote, and this is a second, post-hoc reading of it. `font-mono` key=value
+// because these are typed values a consumer binds to, not prose.
+//
+// The caveats are the visible half of "best effort". Motoro's extractor returns
+// `(None, caveats)` rather than raising, so a failed extraction is otherwise
+// indistinguishable from never having wired a parser -- and the user has no
+// other way to find out that the field their next agent references came back
+// empty on purpose.
+function ExtractedFieldsPanel({
+  payload,
+  caveats,
+}: {
+  payload?: Record<string, unknown> | null
+  caveats?: string[]
+}) {
+  const entries = Object.entries(payload ?? {})
+  if (entries.length === 0 && !caveats?.length) return null
+  return (
+    <div className="space-y-1.5">
+      <p className="text-sm font-medium">Extracted fields</p>
+      {entries.length > 0 && (
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg border bg-muted/30 p-3 font-mono text-xs">
+          {entries.map(([key, value]) => (
+            <Fragment key={key}>
+              <dt className="text-[color:var(--primary)]">{key}</dt>
+              <dd className="min-w-0 break-all whitespace-pre-wrap text-muted-foreground">
+                {typeof value === 'string' ? value : JSON.stringify(value)}
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      {caveats?.length ? (
+        <ul className="space-y-1 rounded-lg border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/5 p-3 text-xs text-[color:var(--chart-4)]">
+          {caveats.map((caveat) => (
+            <li key={caveat}>{caveat}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
 // The one piece of ARES's Run Detail page worth reusing here: real
 // observability into what an agent actually did (its Sense/Reason/Plan/Act
 // loop), not a wholesale port of that page. Zero new backend work --
@@ -260,7 +307,9 @@ export function NodeRunOutputPanel({
 
       {/* Received before produced, so the panel reads as the handoff it was. */}
       {showReceivedPrompt && nodeRun.run_id && <ReceivedPromptPanel runId={nodeRun.run_id} />}
-      {showReceivedPrompt && <UnresolvedReferencesNote names={unresolved.map((id) => referenceNames[id] ?? id)} />}
+      {showReceivedPrompt && (
+        <UnresolvedReferencesNote names={unresolved.map((ref) => referenceLabel(ref, referenceNames))} />
+      )}
 
       {nodeRun.error ? (
         <div className="space-y-1.5">
@@ -280,6 +329,8 @@ export function NodeRunOutputPanel({
       ) : (
         <p className="text-sm text-muted-foreground">No output yet.</p>
       )}
+
+      <ExtractedFieldsPanel payload={nodeRun.payload} caveats={nodeRun.caveats} />
 
       {nodeRun.run_id && <RunStepTrace runId={nodeRun.run_id} />}
     </div>

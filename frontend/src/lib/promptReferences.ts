@@ -1,4 +1,4 @@
-import type { ProtocolEdge, ProtocolNode } from '@/types/protocols'
+import type { OutputContract, OutputParserNodeConfig, ProtocolEdge, ProtocolNode } from '@/types/protocols'
 import { isMainEdge } from '@/lib/coordinationStrategy'
 
 /** The reference syntax, on the authoring side.
@@ -29,7 +29,13 @@ const PREVIOUS_RE = /\{\{\s*previous\s*(\|\s*raw\s*)?\}\}/i
 /** The storage form. Mirrors `prompt_references._REFERENCE_RE`'s node arm --
  *  deliberately narrow, because anything it does not match must survive
  *  untouched (a prompt may legitimately ask an agent to emit a template). */
-const STORED_RE = /\{\{\s*node:([A-Za-z0-9_-]+)\s*(\|\s*raw\s*)?\}\}/gi
+const STORED_RE = /\{\{\s*node:([A-Za-z0-9_-]+)(?:\.([A-Za-z_][A-Za-z0-9_]*))?\s*(\|\s*raw\s*)?\}\}/gi
+
+/** An Output Parser field name, on its own. Mirrors `prompt_references._FIELD`:
+ *  it becomes an attribute on the model Motoro builds from the contract, so it
+ *  has to be an identifier -- which is also what makes the display form's
+ *  `Name.field` split unambiguous enough to reverse. */
+const FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /** The display form: any `{{...}}` that is not obviously the storage form.
  *  Labels contain spaces and punctuation, so this is broad on purpose and the
@@ -41,6 +47,12 @@ export interface ReferenceTarget {
   /** What the picker shows and what the prompt displays. Unique across the
    *  canvas -- see `displayNames`. */
   name: string
+  /** The fields this node's Output Parser declares, if one is wired to it.
+   *
+   *  Field references hang off the parser, not off the agent: an agent with no
+   *  parser has no typed output to name, so the picker offers it only as a
+   *  whole. Empty is the normal case. */
+  fields?: string[]
 }
 
 export interface PromptReferenceScope {
@@ -95,6 +107,54 @@ function displayNames(nodes: ProtocolNode[]): Record<string, string> {
   return names
 }
 
+/** Split a display target into its node name and its optional field.
+ *
+ * A full-name match wins outright, so a node literally labelled `Analyst.x`
+ * still round-trips. Otherwise the split is at the LAST dot, and the tail has
+ * to be a bare identifier with no surrounding space -- which is what keeps a
+ * label like `Step 1. Profiler` from being read as a field reference.
+ */
+function splitDisplayTarget(target: string, isName: (candidate: string) => boolean): { name: string; field: string } {
+  const trimmed = target.trim()
+  if (isName(trimmed)) return { name: trimmed, field: '' }
+  const dot = trimmed.lastIndexOf('.')
+  if (dot <= 0) return { name: trimmed, field: '' }
+  const field = trimmed.slice(dot + 1)
+  if (!FIELD_RE.test(field)) return { name: trimmed, field: '' }
+  return { name: trimmed.slice(0, dot), field }
+}
+
+/** The field names a node's Output Parser declares.
+ *
+ * Mirrors `protocol_execution._resolve_output_contract`, including its
+ * precedence: a wired parser wins, a disabled one declares nothing (its
+ * extraction is suspended, so nothing will be there to read), and only a node
+ * with no parser wired at all falls back to the legacy `config.output_contract`
+ * field it may still be carrying.
+ */
+function parserFields(nodes: ProtocolNode[], edges: ProtocolEdge[], nodeId: string): string[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  let wired = false
+  for (const edge of edges) {
+    if (edge.target !== nodeId || edge.targetHandle !== 'output_parser') continue
+    const source = byId.get(edge.source)
+    if (source?.type !== 'output_parser') continue
+    wired = true
+    const config = (source.data as { config?: OutputParserNodeConfig } | undefined)?.config
+    if (config?.enabled === false) continue
+    const names = contractFieldNames(config?.output_contract)
+    if (names.length) return names
+  }
+  if (wired) return []
+  const legacy = (byId.get(nodeId)?.data as { config?: { output_contract?: OutputContract | null } } | undefined)
+    ?.config?.output_contract
+  return contractFieldNames(legacy)
+}
+
+function contractFieldNames(contract: OutputContract | null | undefined): string[] {
+  return (contract?.fields ?? []).map((field) => field.name.trim()).filter(Boolean)
+}
+
 /** Which nodes *nodeId*'s prompt may reference.
  *
  * Mirrors `protocol_execution.referenceable_node_ids`; the backend stays the
@@ -136,7 +196,12 @@ export function promptReferenceScope(
   }
 
   return {
-    targets: nodes.filter((n) => ancestors.has(n.id)).map((n) => ({ id: n.id, name: names[n.id] })),
+    targets: nodes
+      .filter((n) => ancestors.has(n.id))
+      .map((n) => {
+        const fields = parserFields(nodes, edges, n.id)
+        return { id: n.id, name: names[n.id], ...(fields.length ? { fields } : {}) }
+      }),
     names,
   }
 }
@@ -232,7 +297,8 @@ export function usesPreviousToken(stored: string): boolean {
  * identical either way.
  *
  * `{{previous}}` counts for every sender at once, because that is what it
- * expands to.
+ * expands to. A field reference counts as a reference to its node: `{{node:a.x}}`
+ * pulls something in from `a`, so the sender is not un-referenced.
  */
 export function referencedSenderIds(stored: string, receives: ReferenceTarget[]): Set<string> {
   const text = stored ?? ''
@@ -244,13 +310,27 @@ export function referencedSenderIds(stored: string, receives: ReferenceTarget[])
   return referenced
 }
 
+/** One recorded unresolved reference, as a name the user reads.
+ *
+ * The run records ids, and a field reference is recorded whole (`a.n_rows`)
+ * because the gap is the field rather than the node -- so only the id half is
+ * translated. Mirrors `experiment_run_results._reference_label`; node ids
+ * cannot contain a dot, which is what makes the split safe.
+ */
+export function referenceLabel(ref: string, names: Record<string, string>): string {
+  const dot = ref.indexOf('.')
+  if (dot < 0) return names[ref] ?? ref
+  const id = ref.slice(0, dot)
+  return names[id] ? `${names[id]}${ref.slice(dot)}` : ref
+}
+
 /** Storage form -> display form. Ids become labels; everything else is left
  *  exactly as written, including a `{{node:...}}` whose node has been deleted
  *  (shown raw, because there is no name left to show and hiding it would hide
  *  the problem). */
 export function toDisplayPrompt(stored: string, names: Record<string, string>): string {
-  return (stored ?? '').replace(STORED_RE, (whole, id: string, raw?: string) =>
-    names[id] ? `{{${names[id]}${raw ? '|raw' : ''}}}` : whole,
+  return (stored ?? '').replace(STORED_RE, (whole, id: string, field: string | undefined, raw?: string) =>
+    names[id] ? `{{${names[id]}${field ? `.${field}` : ''}${raw ? '|raw' : ''}}}` : whole,
   )
 }
 
@@ -262,11 +342,12 @@ export function toDisplayPrompt(stored: string, names: Record<string, string>): 
  */
 export function toStoredPrompt(display: string, names: Record<string, string>): string {
   const idsByName = new Map(Object.entries(names).map(([id, name]) => [name.toLowerCase(), id]))
+  const isName = (candidate: string) => idsByName.has(candidate.toLowerCase())
   return (display ?? '').replace(DISPLAY_RE, (whole, target: string, raw?: string) => {
-    const trimmed = target.trim()
-    if (BARE_TOKENS.has(trimmed.toLowerCase())) return whole
-    const id = idsByName.get(trimmed.toLowerCase())
-    return id ? `{{node:${id}${raw ? '|raw' : ''}}}` : whole
+    if (BARE_TOKENS.has(target.trim().toLowerCase())) return whole
+    const { name, field } = splitDisplayTarget(target, isName)
+    const id = idsByName.get(name.toLowerCase())
+    return id ? `{{node:${id}${field ? `.${field}` : ''}${raw ? '|raw' : ''}}}` : whole
   })
 }
 
@@ -279,11 +360,16 @@ export function toStoredPrompt(display: string, names: Record<string, string>): 
  */
 export function unresolvedReferences(display: string, names: Record<string, string>): string[] {
   const known = new Set(Object.values(names).map((name) => name.toLowerCase()))
+  const isName = (candidate: string) => known.has(candidate.toLowerCase())
   const found: string[] = []
   for (const match of (display ?? '').matchAll(DISPLAY_RE)) {
     const target = match[1].trim()
-    const lowered = target.toLowerCase()
-    if (BARE_TOKENS.has(lowered) || known.has(lowered)) continue
+    if (BARE_TOKENS.has(target.toLowerCase())) continue
+    // Reported whole (`Analyst.n_rows`) when the *node* is unknown, since that
+    // is what the user typed and what they have to fix. A known node with an
+    // undeclared field is not this warning's business -- publish refuses it
+    // with the declared list, which is more useful than "names no node".
+    if (isName(splitDisplayTarget(target, isName).name)) continue
     if (!found.includes(target)) found.push(target)
   }
   return found
@@ -302,10 +388,13 @@ export function outOfScopeReferences(
 ): string[] {
   const inScope = new Set(scope.targets.map((t) => t.name.toLowerCase()))
   const known = new Map(Object.values(scope.names).map((name) => [name.toLowerCase(), name]))
+  const isName = (candidate: string) => known.has(candidate.toLowerCase())
   const found: string[] = []
   for (const match of (display ?? '').matchAll(DISPLAY_RE)) {
-    const lowered = match[1].trim().toLowerCase()
-    if (BARE_TOKENS.has(lowered) || inScope.has(lowered)) continue
+    const target = match[1].trim()
+    if (BARE_TOKENS.has(target.toLowerCase())) continue
+    const lowered = splitDisplayTarget(target, isName).name.toLowerCase()
+    if (inScope.has(lowered)) continue
     const name = known.get(lowered)
     if (name && !found.includes(name)) found.push(name)
   }

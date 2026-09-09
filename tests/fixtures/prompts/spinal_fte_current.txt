@@ -6,3 +6,9 @@ task_brief: {"domain": "elective spinal fusion surgeries, Cedars-Sinai Medical C
 
 Dataset context:
 A dataset is registered for this run. Call open_workspace() before doing any data work -- it takes no arguments here; which dataset and which workspace both arrive as ambient run context. Its response names what it opened.
+
+Your answer will be read for these specific values, so state each one explicitly:
+- engineering_recipe (object) -- Feature-engineering steps applied
+- encoding_map (object) -- Categorical encoding scheme per column
+- n_features_out (integer) -- Feature count after engineering/encoding
+- notes_for_fs (string) -- Handoff notes for the SF-FS stage

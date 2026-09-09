@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import copy
 import hashlib
+import json
 import logging
 import re
 import uuid
@@ -40,7 +41,7 @@ from motoro.mcp.registry import get_registry
 from motoro.models.run import RunStatus
 from motoro.runner import create_agent, create_run, execute_run, get_agent_by_name, get_run, update_agent
 from motoro.schemas.agent import ModelConfig
-from motoro.schemas.output import parse_envelope
+from motoro.schemas.output import OutputEnvelope, parse_envelope
 from motoro.schemas.pattern import PatternConfig
 from motoro.security.prompt_injection import (
     UPSTREAM_FENCE_END,
@@ -2697,6 +2698,43 @@ def _reference_payload(text: str, *, raw: bool) -> str:
     return neutralize_delimiters(text) if raw else fence_upstream(text)
 
 
+def _format_payload_value(value: Any) -> str:
+    """One extracted field as it substitutes into a sentence.
+
+    Bare: ``{{node:x.n_rows}}`` becomes ``4300``, not ``"4300"`` and not a JSON
+    fragment. The whole point of a field reference is that the sentence around
+    it reads as a sentence, so the experimenter writes the quotes if they want
+    them. Lists and dicts have no bare spelling, so those fall back to JSON --
+    a field reference to one is unusual but not illegal.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool | int | float):
+        return json.dumps(value)
+    return json.dumps(value, default=str)
+
+
+def _payload_fields_line(payload: dict[str, Any]) -> str:
+    """The extracted fields appended to a whole-node reference.
+
+    Readable ``key=value``, not raw JSON: this sits in a prompt an agent reads,
+    and a JSON blob invites it to reply in JSON. Strings are quoted here (unlike
+    the bare single-field form) because without quotes a multi-word value runs
+    into the next pair. No fence and no sender name -- the fenced output_text it
+    follows already carries both, and this is a continuation of that block, not
+    a second one.
+    """
+    if not payload:
+        return ""
+    pairs = [
+        f"{key}={json.dumps(value, default=str) if isinstance(value, str) else _format_payload_value(value)}"
+        for key, value in payload.items()
+    ]
+    return "Structured fields: " + ", ".join(pairs)
+
+
 def _render_reference(
     ref: prompt_references.PromptReference,
     *,
@@ -2720,15 +2758,35 @@ def _render_reference(
     if ref.kind == prompt_references.UPSTREAM_INSTRUCTIONS:
         return _UPSTREAM_INSTRUCTIONS.get(upstream_kind, _UPSTREAM_INSTRUCTIONS["handoff"])
 
+    if ref.field:
+        # A field reference resolves against the payload alone: it names a
+        # typed value, and falling back to the prose when extraction failed
+        # would substitute a whole answer where a number was expected. Best
+        # effort by design -- the parser is post-hoc and may legitimately have
+        # produced nothing -- so this is an empty resolution, recorded like any
+        # other, not a failed run.
+        payload = (node_runs.get(ref.node_id) or {}).get("payload") or {}
+        rendered = _format_payload_value(payload.get(ref.field)) if ref.field in payload else ""
+        if not rendered:
+            unresolved.append(f"{ref.node_id}.{ref.field}")
+            return ""
+        # Neutralized but never fenced: a fence around a bare value would put
+        # a delimiter block in the middle of a sentence.
+        return neutralize_delimiters(rendered)
+
     ids = _upstream_ids(graph, node_id) if ref.kind == prompt_references.PREVIOUS else [ref.node_id]
     nodes = {str(n.get("id")): n for n in graph.get("nodes") or []}
     blocks = []
     for uid in ids:
-        text = node_runs.get(uid, {}).get("output_text")
+        run = node_runs.get(uid) or {}
+        text = run.get("output_text")
         if not text:
             unresolved.append(uid)
             continue
         payload = _reference_payload(str(text), raw=ref.raw)
+        fields = _payload_fields_line(run.get("payload") or {})
+        if fields:
+            payload = f"{payload}\n{fields}"
         # Labelled only where the reference itself cannot say which sender is
         # which: a `{{previous}}` that expanded to several predecessors. A
         # single-node reference needs no label, because the experimenter named
@@ -2827,6 +2885,36 @@ def validate_prompt_references(design_spec: dict[str, Any] | None, *, graph: dic
                         f"{name}'s {field} references {other!r}, which does not run before it. "
                         "A reference only resolves if the referenced node is upstream on the "
                         "same path -- connect them, or reference a node that is."
+                    )
+
+            # Field references are checked against the producer's DECLARED
+            # contract, not against anything a run produced: this is design
+            # time, nothing has run, and a misspelled field would otherwise
+            # surface as an empty substitution in the middle of a batch. The
+            # whole-node form has no equivalent check because prose always
+            # exists; a named field either was declared or was a typo.
+            for referenced, named_fields in prompt_references.referenced_node_fields(prompt).items():
+                if referenced not in known or referenced not in allowed:
+                    continue  # already reported above, with the better message
+                other = _node_display_name(next(n for n in graph["nodes"] if str(n.get("id")) == referenced))
+                contract = _resolve_output_contract(graph, referenced)
+                declared = [
+                    str(spec.get("name") or "").strip()
+                    for spec in (contract or {}).get("fields") or []
+                    if isinstance(spec, dict) and str(spec.get("name") or "").strip()
+                ]
+                for field_name in named_fields:
+                    if field_name in declared:
+                        continue
+                    if not declared:
+                        raise ProtocolValidationError(
+                            f"{name}'s {field} references {other!r}.{field_name}, but {other!r} has no "
+                            "Output Parser declaring any fields. Connect an Output Parser to it, or "
+                            "reference the whole node instead."
+                        )
+                    raise ProtocolValidationError(
+                        f"{name}'s {field} references {other!r}.{field_name}, which {other!r}'s Output "
+                        f"Parser does not declare. It declares: {', '.join(declared)}."
                     )
 
             if prompt_references.uses(prompt, prompt_references.PREVIOUS) and not _upstream_ids(graph, node_id):
@@ -3398,6 +3486,27 @@ async def _sync_durable_agent(*, name: str, owner_id: uuid.UUID, fields: dict[st
         return await update_agent(existing.id, **fields)
 
 
+def _extraction_fields(envelope: OutputEnvelope | None) -> dict[str, Any] | None:
+    """What an Output Parser contributed to one node run, or ``None``.
+
+    Written as a fragment the node run merges rather than as two more return
+    values: both keys are optional, both come from the same place, and a caller
+    that does not care about either can ignore one value instead of two.
+
+    ``caveats`` is kept even when a payload came back -- Motoro's extractor can
+    coerce a field and still report that it guessed -- and an empty list is
+    dropped, so the key's presence means there is something to read.
+    """
+    if envelope is None:
+        return None
+    fields: dict[str, Any] = {}
+    if envelope.payload is not None:
+        fields["payload"] = envelope.payload
+    if envelope.caveats:
+        fields["caveats"] = list(envelope.caveats)
+    return fields or None
+
+
 async def _run_agent_node(
     node: dict[str, Any],
     *,
@@ -3413,14 +3522,24 @@ async def _run_agent_node(
     available_agents: list[dict[str, Any]] | None = None,
     agent_messenger: Any = None,
     unsplit_dataset: str = "",
-) -> tuple[str | None, str | None, uuid.UUID | None]:
+) -> tuple[str | None, str | None, uuid.UUID | None, dict[str, Any] | None]:
     """Create-or-sync the real agent and run it to completion. Returns
-    ``(output_text, error, run_id)`` -- exactly one of output_text/error is
-    ``None``. ``run_id`` is the underlying Motoro AgentRun id -- always
-    populated once ``create_run`` succeeds (even on a later timeout/error),
-    since that's what the canvas's Output tab uses to fetch this node's own
-    step trace (``GET /runs/{run_id}/steps``); only ``None`` if agent
-    creation/sync itself failed before a run could even be created.
+    ``(output_text, error, run_id, extraction)`` -- exactly one of
+    output_text/error is ``None``. ``run_id`` is the underlying Motoro AgentRun
+    id -- always populated once ``create_run`` succeeds (even on a later
+    timeout/error), since that's what the canvas's Output tab uses to fetch
+    this node's own step trace (``GET /runs/{run_id}/steps``); only ``None`` if
+    agent creation/sync itself failed before a run could even be created.
+
+    ``extraction`` is what an Output Parser contributed, ready to merge into the
+    node run: ``payload`` (the envelope's typed object) when the extraction
+    succeeded, ``caveats`` when it had something to say about why it did not.
+    ``None`` when there was no parser, or nothing to report. It is returned
+    *alongside* ``output_text``, never instead of it: extraction is post-hoc and
+    best-effort (``extract_payload`` returns ``(None, caveats)`` rather than
+    raising), so the prose handoff must never depend on it having worked -- and
+    a failed extraction has to be visible rather than merely absent, which is
+    what the caveats are for.
 
     ``available_agents`` are the serialized peer cards this node may consult
     (:func:`resolve_available_agents`) and ``agent_messenger`` is how a chosen
@@ -3547,24 +3666,24 @@ async def _run_agent_node(
             agent_messenger=agent_messenger,
         )
     except TimeoutError:
-        return None, f"run exceeded its {timeout}s execution budget", run.id
+        return None, f"run exceeded its {timeout}s execution budget", run.id, None
     except Exception as e:  # noqa: BLE001 -- same boundary reasoning as execute_run_task
-        return None, f"{type(e).__name__}: {e}", run.id
+        return None, f"{type(e).__name__}: {e}", run.id, None
 
     finished = await get_run(run.id)
     if finished is None:
-        return None, "run vanished after execution", run.id
+        return None, "run vanished after execution", run.id, None
     if finished.status == RunStatus.CANCELLED:
         # finished.error is None on a clean cancellation (Motoro's own
         # runtime never sets error_msg on that path) -- without this check
         # a mid-run Stop would silently fall through and look like a normal
         # completion with an empty output.
-        return None, _AGENT_CANCELLED, run.id
+        return None, _AGENT_CANCELLED, run.id, None
     if finished.error:
-        return None, finished.error, run.id
+        return None, finished.error, run.id, None
     envelope = parse_envelope(finished.output)
     output_text = envelope.result if envelope is not None else (finished.output or "")
-    return output_text, None, run.id
+    return output_text, None, run.id, _extraction_fields(envelope)
 
 
 async def _run_critic(
@@ -3898,6 +4017,24 @@ async def evaluate_protocol_run_metrics(protocol_run_id: uuid.UUID) -> bool:
     return True
 
 
+def _completed_worker_record(
+    output_text: str, attempt: int, run_id_str: str | None, extraction: dict[str, Any] | None
+) -> dict[str, Any]:
+    """The worker half of a gated pair's node run, for the four ways that pair
+    can end with the worker's own output intact (gate disabled, forced accept,
+    critic cancelled, approved). *extraction* is merged in the same way
+    ``run_protocol``'s own node_runs write does.
+    """
+    return {
+        "status": "completed",
+        "output_text": output_text,
+        "error": None,
+        "attempts": attempt + 1,
+        "run_id": run_id_str,
+        **(extraction or {}),
+    }
+
+
 async def _run_gated_worker(
     worker: dict[str, Any],
     gate: dict[str, Any],
@@ -3962,7 +4099,7 @@ async def _run_gated_worker(
     last_critic_run_id: str | None = None
 
     for attempt in range(max_revisions + 1):
-        output_text, error, run_id = await _run_agent_node(
+        output_text, error, run_id, extraction = await _run_agent_node(
             worker,
             protocol_id=protocol_id,
             protocol_run_id=protocol_run_id,
@@ -4002,25 +4139,13 @@ async def _run_gated_worker(
 
         if not enabled:
             return (
-                {
-                    "status": "completed",
-                    "output_text": output_text,
-                    "error": None,
-                    "attempts": attempt + 1,
-                    "run_id": run_id_str,
-                },
+                _completed_worker_record(output_text, attempt, run_id_str, extraction),
                 {"status": "completed", "output_text": output_text, "approved": None, "revisions_used": 0},
             )
 
         if attempt == max_revisions:
             return (
-                {
-                    "status": "completed",
-                    "output_text": output_text,
-                    "error": None,
-                    "attempts": attempt + 1,
-                    "run_id": run_id_str,
-                },
+                _completed_worker_record(output_text, attempt, run_id_str, extraction),
                 {
                     "status": "completed",
                     "output_text": output_text,
@@ -4049,13 +4174,7 @@ async def _run_gated_worker(
             # reports "completed" with its real output_text; just the gate
             # itself is "cancelled".
             return (
-                {
-                    "status": "completed",
-                    "output_text": output_text,
-                    "error": None,
-                    "attempts": attempt + 1,
-                    "run_id": run_id_str,
-                },
+                _completed_worker_record(output_text, attempt, run_id_str, extraction),
                 {"status": "cancelled", "output_text": None, "error": None, "run_id": critic_run_id},
             )
         if verdict_error:
@@ -4075,13 +4194,7 @@ async def _run_gated_worker(
 
         if verdict.get("approved"):
             return (
-                {
-                    "status": "completed",
-                    "output_text": output_text,
-                    "error": None,
-                    "attempts": attempt + 1,
-                    "run_id": run_id_str,
-                },
+                _completed_worker_record(output_text, attempt, run_id_str, extraction),
                 {
                     "status": "completed",
                     "output_text": output_text,
@@ -4403,7 +4516,7 @@ async def _run_single_node(
         seeded_datasets=node_dataset.seeded,
         unsplit_dataset=node_dataset.unsplit_name,
     )
-    output_text, error, run_id = await _run_agent_node(
+    output_text, error, run_id, extraction = await _run_agent_node(
         node,
         protocol_id=protocol_id,
         protocol_run_id=protocol_run_id,
@@ -4415,12 +4528,13 @@ async def _run_single_node(
         evaluation_metrics=evaluation_metrics,
         unsplit_dataset=node_dataset.unsplit_name,
     )
-    node_run = {
+    node_run: dict[str, Any] = {
         "status": "failed" if error else "completed",
         "output_text": output_text,
         "error": error,
         "run_id": str(run_id) if run_id else None,
     }
+    node_run.update(extraction or {})
     async with get_session() as db:
         await update_node_run(db, protocol_run_id, node_id, node_run)
         await set_status(db, protocol_run_id, status="failed" if error else "completed", error=error)
@@ -4724,6 +4838,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         output_text: str | None
         error: str | None
         run_id: uuid.UUID | None
+        # What this node's Output Parser contributed, if one ran.
+        extraction: dict[str, Any] | None
         # Which of this node's references resolved to nothing. Carried onto the
         # node run so the Runs tab can say so: an empty resolution leaves a
         # literal gap in the prompt, which reads as an agent that was simply
@@ -4737,7 +4853,16 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             # that combination), and pure config sources (including
             # mcp_tool) never reach this point at all, so this only ever
             # applies to a plain agent node.
-            output_text, error, run_id = _upstream_output_text(graph, node_id, node_runs), None, None
+            # No extraction: pass-through hands on the UPSTREAM node's prose,
+            # which was read (if at all) against a different node's contract,
+            # so claiming its payload as this node's own typed output would be
+            # a lie about which contract produced it.
+            output_text, error, run_id, extraction = (
+                _upstream_output_text(graph, node_id, node_runs),
+                None,
+                None,
+                None,
+            )
         else:
             ambient_meta, node_dataset = await _node_run_context(
                 graph, node_id, workspace_id, owner_id, stage_plan=stage_plan
@@ -4766,7 +4891,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 audience=_node_audience(graph, node_id, step=chain_steps.get(node_id)),
                 unresolved_out=unresolved,
             )
-            output_text, error, run_id = await _run_agent_node(
+            output_text, error, run_id, extraction = await _run_agent_node(
                 node,
                 protocol_id=protocol_id,
                 protocol_run_id=protocol_run_id,
@@ -4795,6 +4920,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 "error": error,
                 "run_id": str(run_id) if run_id else None,
             }
+            # Alongside output_text, never instead of it: the extraction is an
+            # extra, best-effort read of an answer that already exists. Merged
+            # rather than assigned, so a key only appears when there is
+            # something in it -- the same treatment unresolved_references gets
+            # below.
+            node_runs[node_id].update(extraction or {})
             if unresolved:
                 node_runs[node_id]["unresolved_references"] = unresolved
             if error:

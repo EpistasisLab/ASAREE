@@ -8,12 +8,13 @@ for publication, so its behavior is a **published result**, not an
 implementation detail: a reviewer re-running it must get what the paper says.
 
 Every assertion here therefore pins something a *later* change would otherwise
-alter silently. In particular ``test_prompt_assembly_is_unchanged`` pins the
-assembled prompt text byte-for-byte, because the prompt is the one input to a
-run that no revision pins (``ProtocolRun`` already pins
+alter silently. In particular ``test_every_contract_version_is_pinned_byte_for_byte``
+pins the assembled prompt text byte-for-byte, because the prompt is the one
+input to a run that no revision pins (``ProtocolRun`` already pins
 ``design_revision_id`` and ``protocol_revision_id``) -- so an obviously-good
 improvement to ``_build_user_input`` would change published numbers with
-nothing failing to stop it.
+nothing failing to stop it. It pins *every* registered version, not just v1:
+a format nobody can regenerate is only frozen while somebody remembers it is.
 
 **Rule for changing a golden value here:** don't. A phase that needs the
 assembled prompt to change keeps these assertions as the v1 contract and adds
@@ -42,6 +43,18 @@ from asaree.services.protocol_execution import (
 )
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "spinal_graph.json"
+
+# One assembled prompt per contract version, byte-for-byte. Kept as files
+# rather than string literals only because the spinal agents' task_brief is
+# ~1.6KB of JSON: inlining it twice would bury the assertions it sits between.
+# A golden here is edited by hand or not at all -- there is deliberately no
+# regeneration flag, because "the code changed so the golden changed" is the
+# exact reasoning this file exists to refuse.
+#
+# NOT ``fixtures/prompts/``: ``.gitignore``'s unanchored ``prompts/`` rule
+# matches at any depth, so that name leaves the goldens untracked and the pin
+# imaginary.
+_GOLDEN_PROMPTS = Path(__file__).parent / "fixtures" / "prompt_goldens"
 
 # The experiment's own declaration, as stored in ResearchExperiment.design_spec.
 # Only the parts the executor reads are reproduced -- the strategy (which
@@ -297,6 +310,51 @@ def test_v2_would_have_changed_this_prompt_which_is_why_it_is_a_new_version(grap
     # And only that block moved -- the Dataset/Script cues are tool-usage
     # instructions, not part of what a version freezes.
     assert v1.replace(f"[{dc_gate_id}]", f"[{gate_label}]") == v2
+
+
+# The node the version goldens below are captured on, and the run state they
+# see. SF-FTE exercises every version-sensitive part of the assembly at once: a
+# ``goal`` fallback seed, a real upstream block (its upstream is the DC gate,
+# which is precisely where v1 and v2 disagree), and a wired Dataset connector.
+_GOLDEN_NODE_ID = _AGENTS[1][0]
+_GOLDEN_NODE_RUNS = {_AGENTS[0][2]: {"status": "completed", "output_text": "DC accepted v1_dc."}}
+
+
+@pytest.mark.parametrize("version", sorted(pe._UPSTREAM_CONTEXT_BUILDERS))
+def test_every_contract_version_is_pinned_byte_for_byte(graph: dict[str, Any], version: int) -> None:
+    """An absolute anchor per registered version, and the thing that forces the
+    next one to get an anchor too.
+
+    v1 was already pinned in pieces above. v2 was pinned only *relatively*, by
+    the counterfactual right before this one -- an assertion that genuinely
+    proves v2 changes exactly one thing, but that describes v2 as "v1 with the
+    labels swapped". That description stops being true the moment a v3 exists
+    and the shared assembly around the upstream block grows a section: an edit
+    that leaked into v2's output would keep the counterfactual green as long as
+    it leaked into v1's as well. Both assertions therefore stay -- the golden
+    says what each version *is*, the counterfactual says what separates them.
+
+    Parametrizing over the builder registry rather than over a hand-written
+    list is the point: adding a version to ``_UPSTREAM_CONTEXT_BUILDERS``
+    without capturing its prompt fails here, so pinning a new format is not
+    something a reviewer has to remember to ask for.
+    """
+    golden = _GOLDEN_PROMPTS / f"spinal_fte_v{version}.txt"
+    assert golden.exists(), (
+        f"prompt contract v{version} is registered but has no golden. Capture the assembled "
+        f"prompt for {_GOLDEN_NODE_ID} into {golden}, and READ IT before committing -- a golden "
+        "is a claim about what the prompt should be, not a snapshot of what it happens to be."
+    )
+    actual = _prompt(graph, _GOLDEN_NODE_ID, node_runs=_GOLDEN_NODE_RUNS, prompt_contract_version=version)
+    assert actual == golden.read_text()
+
+
+def test_no_golden_outlives_the_version_it_pins() -> None:
+    """The other direction: a golden left behind for a version that was removed
+    from the registry is asserting nothing, and reads like coverage that isn't
+    there."""
+    on_disk = {int(p.stem.rsplit("_v", 1)[1]) for p in _GOLDEN_PROMPTS.glob("spinal_fte_v*.txt")}
+    assert on_disk == set(pe._UPSTREAM_CONTEXT_BUILDERS)
 
 
 def test_an_upstream_node_with_no_output_contributes_nothing(graph: dict[str, Any]) -> None:

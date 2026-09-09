@@ -394,4 +394,8 @@ export interface DesignImpact {
   added_replicate_count: number
   retained_replicate_count: number
   removed_replicate_count: number
+  // Why an update is needed, not just that it is. 'coordination_strategy_changed'
+  // is the reason the counts above can't express -- it adds and removes no
+  // cells, so on its own it reads as "no change" beside the banner.
+  regeneration_reasons: ('no_design_generated' | 'coordination_strategy_changed' | 'design_matrix_changed' | 'cells_drifted')[]
 }

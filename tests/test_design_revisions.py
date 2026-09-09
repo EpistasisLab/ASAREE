@@ -348,6 +348,106 @@ async def test_revision_numbers_are_never_reused(experiment_id: uuid.UUID) -> No
         assert [r.revision for r in await list_revisions(db, experiment_id=experiment_id)] == [3, 2]
 
 
+def _spec(factors: list[dict], slug: str | None = None) -> dict:
+    spec: dict = {"factors": factors}
+    if slug is not None:
+        spec["coordination_strategy"] = {"slug": slug, "params": {}}
+    return spec
+
+
+async def test_changing_the_coordination_strategy_supersedes_the_revision(experiment_id: uuid.UUID) -> None:
+    """A strategy change drops no cell, so nothing else in the supersede
+    condition catches it -- and merging the new cells in beside the old ones
+    would leave one results table holding two incomparable execution models."""
+    async with get_session() as db:
+        await generate_design_cells(
+            db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec=_spec(_TWO_BY_ONE, "sequential")
+        )
+
+    async with get_session() as db:
+        cells = await generate_design_cells(
+            db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec=_spec(_TWO_BY_ONE, "critic_gate")
+        )
+        assert len(cells) == 2
+
+    async with get_session() as db:
+        summaries = await list_revision_summaries(db, experiment_id=experiment_id)
+        assert [(s.revision.revision, s.cell_count) for s in summaries] == [(2, 2), (1, 2)]
+
+
+async def test_a_strategy_change_does_not_carry_results_forward(experiment_id: uuid.UUID) -> None:
+    """Unlike a shrunk design, where a surviving label's result is as valid as
+    it was. Same label, different execution semantics, different observation --
+    so re-running it is the point, not a cost to be avoided."""
+    async with get_session() as db:
+        cells = await generate_design_cells(
+            db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec=_spec(_TWO_BY_ONE, "sequential")
+        )
+        scored_label = cells[0].replicate_label
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label=scored_label,
+            fields={"metric_values": {"roc_auc": 0.9}},
+        )
+
+    async with get_session() as db:
+        await generate_design_cells(
+            db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec=_spec(_TWO_BY_ONE, "peer_collaboration")
+        )
+
+    async with get_session() as db:
+        current = {r.replicate_label: r for r in await list_replicates(db, experiment_id=experiment_id)}
+        assert current[scored_label].metric_values in (None, {})
+        # The original is still readable under the strategy that produced it.
+        summaries = await list_revision_summaries(db, experiment_id=experiment_id)
+        assert [(s.revision.revision, s.scored_replicate_count) for s in summaries] == [(2, 0), (1, 1)]
+
+
+async def test_design_impact_reports_a_strategy_change_as_the_reason(experiment_id: uuid.UUID) -> None:
+    """The one regeneration reason the counts cannot explain: it adds and
+    removes nothing, so without a reason the tab would show "no change" beside
+    a banner demanding an update."""
+    async with get_session() as db:
+        await generate_design_cells(
+            db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec=_spec(_TWO_BY_ONE, "sequential")
+        )
+
+    async with get_session() as db:
+        impact = await get_design_impact(
+            db, experiment_id=experiment_id, design_spec=_spec(_TWO_BY_ONE, "critic_gate")
+        )
+        assert impact.regeneration_required is True
+        assert impact.regeneration_reasons == ("coordination_strategy_changed",)
+        assert (impact.added_replicate_count, impact.removed_replicate_count) == (0, 0)
+
+
+async def test_an_absent_strategy_matches_an_explicit_sequential(experiment_id: uuid.UUID) -> None:
+    """Every experiment saved before the field existed has no entry, and its
+    cells ran the plain pipeline walk -- which is what 'sequential' names. If
+    those compared unequal, opening any legacy experiment's Design tab would
+    demand a regeneration it doesn't need."""
+    async with get_session() as db:
+        await generate_design_cells(
+            db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec=_spec(_TWO_BY_ONE)
+        )
+
+    async with get_session() as db:
+        impact = await get_design_impact(
+            db, experiment_id=experiment_id, design_spec=_spec(_TWO_BY_ONE, "sequential")
+        )
+        assert impact.regeneration_required is False
+        assert impact.regeneration_reasons == ()
+
+    async with get_session() as db:
+        await generate_design_cells(
+            db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec=_spec(_TWO_BY_ONE, "sequential")
+        )
+
+    async with get_session() as db:
+        assert [r.revision for r in await list_revisions(db, experiment_id=experiment_id)] == [1]
+
+
 def _cells_of(experiment_id: uuid.UUID):  # type: ignore[no-untyped-def]
     from sqlalchemy import select
     from sqlalchemy.orm import contains_eager

@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.services.coordination import coordination_strategy_slug
 from asaree.services.design_revisions import get_current_revision, supersede_and_create
 from asaree.services.factorial_cells import list_replicates, upsert_replicate
 
@@ -151,6 +152,12 @@ class DesignImpact:
     added_replicate_count: int
     retained_replicate_count: int
     removed_replicate_count: int
+    #: Machine-readable reasons regeneration is required, so the Design tab can
+    #: say *why* rather than only that. The counts above explain a factor edit
+    #: on their own -- a strategy change is the case they cannot, because it
+    #: adds and removes nothing and would otherwise read as "no change" next to
+    #: a banner demanding an update.
+    regeneration_reasons: tuple[str, ...] = ()
 
 
 def material_design_spec(design_spec: dict[str, Any] | None) -> dict[str, Any]:
@@ -164,7 +171,21 @@ def material_design_spec(design_spec: dict[str, Any] | None) -> dict[str, Any]:
         {key: value for key, value in factor.items() if key != "level_labels"} if isinstance(factor, dict) else factor
         for factor in factors
     ]
-    return {"factors": material_factors, "replicates": spec.get("replicates") or 1}
+    return {
+        "factors": material_factors,
+        "replicates": spec.get("replicates") or 1,
+        # Not a factor, and it changes no cell's *label* -- but it changes what
+        # every cell MEANS, since the strategy decides how a cell run executes
+        # (a one-pass pipeline walk, a gated pipeline, or a conversation). A
+        # results table holding cells scored under two of those is comparing
+        # nothing. Read through ``coordination_strategy_slug`` so an absent
+        # declaration and an explicit "sequential" compare equal and a legacy
+        # experiment doesn't report a spurious change on every regenerate.
+        "coordination_strategy": coordination_strategy_slug(spec),
+        # `params` is deliberately excluded: it tunes a strategy (worker
+        # parallelism, budgets) without changing which strategy ran, and
+        # retiring every scored cell over a knob would be punitive.
+    }
 
 
 def _planned_replicates(factors: list[dict[str, Any]], replicates: int) -> list[tuple[str, dict[str, Any]]]:
@@ -190,6 +211,7 @@ async def get_design_impact(
         return DesignImpact(
             has_generated_design=False,
             regeneration_required=bool(planned),
+            regeneration_reasons=("no_design_generated",) if planned else (),
             current_cell_count=0,
             proposed_cell_count=len(planned_cell_keys),
             added_cell_count=len(planned_cell_keys),
@@ -217,9 +239,26 @@ async def get_design_impact(
     # whose final factor was removed without regenerating -- still trips the
     # spec comparison on the left.
     drifted_labels = bool(material["factors"]) and current_labels != planned_labels
+    current_material = material_design_spec(current.design_spec)
+    reasons: list[str] = []
+    # Gated on a declared matrix for the same reason ``drifted_labels`` is: on a
+    # notebook/SDK experiment there is no design to regenerate, so demanding one
+    # would block "run all cells" forever -- and regenerating from an empty
+    # factor list would retire the very cells the notebook wrote. The strategy
+    # change is still recorded on the experiment either way; it just isn't a
+    # cell-regeneration reason when there are no generated cells.
+    if bool(material["factors"]) and current_material["coordination_strategy"] != material["coordination_strategy"]:
+        reasons.append("coordination_strategy_changed")
+    if {k: v for k, v in current_material.items() if k != "coordination_strategy"} != {
+        k: v for k, v in material.items() if k != "coordination_strategy"
+    }:
+        reasons.append("design_matrix_changed")
+    if drifted_labels:
+        reasons.append("cells_drifted")
     return DesignImpact(
         has_generated_design=True,
-        regeneration_required=material_design_spec(current.design_spec) != material or drifted_labels,
+        regeneration_required=bool(reasons),
+        regeneration_reasons=tuple(reasons),
         current_cell_count=len(current_cell_keys),
         proposed_cell_count=len(planned_cell_keys),
         added_cell_count=len(planned_cell_keys - current_cell_keys),
@@ -291,7 +330,27 @@ async def generate_design_cells(
     # adds to (or exactly matches) the current design has nothing to orphan.
     dropped = set(existing) - planned_labels
 
-    if current is not None and not dropped:
+    # A strategy change drops nothing -- every factor combination survives it,
+    # so `dropped` is empty and the revision would be reused. But the cells
+    # already scored ran under the old semantics, and merging the new ones in
+    # beside them would put two incomparable execution models in one results
+    # table under one revision number. So it supersedes: the old cells stay
+    # readable as history under the strategy that produced them, and the new
+    # revision starts clean. Nothing carries forward either, unlike a shrunk
+    # design (where a surviving label's result is as valid as it was): a
+    # same-label cell run under a different strategy is a different
+    # observation, so re-running it is the point rather than a cost.
+    # Gated on `planned` for the same reason `get_design_impact` gates its
+    # reason on a declared matrix: with no factors there is nothing to
+    # regenerate, and superseding would retire a notebook-written design in
+    # exchange for an empty revision.
+    strategy_changed = (
+        current is not None
+        and bool(planned)
+        and coordination_strategy_slug(current.design_spec) != coordination_strategy_slug(design_spec)
+    )
+
+    if current is not None and not dropped and not strategy_changed:
         # Keep the revision and merge into its rows -- factor_values is
         # re-merged because a level's *value* can change without changing its
         # slugified label.
@@ -303,7 +362,7 @@ async def generate_design_cells(
     else:
         revision = await supersede_and_create(db, experiment_id=experiment_id, design_spec=design_spec)
         revision_id = revision.id
-        carry_over = existing
+        carry_over = {} if strategy_changed else existing
 
     replicate_results = []
     for label, combo in planned:

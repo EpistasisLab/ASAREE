@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { experimentsApi, llmSettingsApi, protocolsApi } from '@/api/client'
+import { coordinationStrategyIssues } from '@/lib/coordinationStrategy'
 import { unboundFactorNames } from '@/lib/factorBindings'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import { revealsHiddenMcpServers, toolFactorServerId, unboundBindableFields, type UnboundField } from './bindableFields'
@@ -44,6 +45,21 @@ import { LLM_PROVIDER_CATALOG, LLM_PROVIDER_LABELS, type LLMProvider } from '@/t
 
 const AUTOSAVE_DELAY_MS = 800
 
+const REGENERATION_REASON_LABELS: Record<string, string> = {
+  no_design_generated: 'No cells have been generated for this design yet.',
+  coordination_strategy_changed: 'The coordination strategy changed, so every cell would run differently.',
+  design_matrix_changed: 'The factors or replicate count changed.',
+  cells_drifted: 'Some existing cells no longer match this design.',
+}
+
+// Autosaved because none of it changes which cells exist. The coordination
+// strategy is here despite changing how every cell EXECUTES, because losing a
+// user's selection is worse than saving it early: the design REVISION keeps
+// the strategy its cells were generated under, so the moment this saves,
+// `get_design_impact` compares the two and the tab says the cells are out of
+// date. The demand for a regenerate comes from the materialized data rather
+// than from a local draft diff -- which is also what makes it work on an
+// experiment with no factorial matrix at all.
 type MetadataDraft = {
   hypothesis: string
   randomizationSeed: number | null
@@ -528,6 +544,10 @@ export function DesignTab({
   const [coordinationSlug, setCoordinationSlug] = useState<CoordinationStrategySlug>(
     experiment.design_spec?.coordination_strategy?.slug ?? 'sequential',
   )
+  // Held rather than applied while the confirm dialog is open -- see chooseStrategy.
+  const [pendingStrategy, setPendingStrategy] = useState<{ slug: CoordinationStrategySlug; issues: string[] } | null>(
+    null,
+  )
   const metadataDraft: MetadataDraft = { hypothesis, randomizationSeed, metrics, coordinationSlug }
   const metadataDraftKey = JSON.stringify(metadataDraft)
   const matrixDraftKey = JSON.stringify({ factors, replicates })
@@ -593,6 +613,10 @@ export function DesignTab({
       if (latestMetadataDraftKey.current !== saved.metadataKey || latestMatrixDraftKey.current !== saved.matrixKey) return
       queryClient.setQueryData(['experiments', experiment.id], updated)
       queryClient.invalidateQueries({ queryKey: ['experiments'] })
+      // A saved coordination strategy is now compared against the one the
+      // current design revision's cells were generated under, so the
+      // out-of-date verdict changes even though no cell did.
+      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })
     },
   })
   const { mutate: autosaveMetadata, isPending: isAutosavingMetadata } = metadataSaveMutation
@@ -623,13 +647,31 @@ export function DesignTab({
   const totalTrials = validFactors.length > 0 ? combinations * Math.max(replicates ?? 1, 1) : 0
 
   const selectedStrategy = COORDINATION_STRATEGY_CATALOG.find((s) => s.slug === coordinationSlug)
-  const unboundFactors = unboundFactorNames(
-    experiment.design_spec,
-    graphQuery.data
-      ? ({ nodes: graphQuery.data.nodes, edges: graphQuery.data.edges } as unknown as ProtocolGraph)
-      : undefined,
-  )
+  const draftGraph = graphQuery.data
+    ? ({ nodes: graphQuery.data.nodes, edges: graphQuery.data.edges } as unknown as ProtocolGraph)
+    : undefined
+  const unboundFactors = unboundFactorNames(experiment.design_spec, draftGraph)
   const impact = impactQuery.data
+
+  // A design-time mirror of the backend's own strategy validation, so an
+  // incompatible pick says so under the picker rather than being rejected at
+  // publish or run time. Advisory on purpose -- the strategy has to be
+  // selectable before the canvas matches it, or the design loop deadlocks.
+  const strategyIssues = coordinationStrategyIssues(coordinationSlug, draftGraph)
+
+  function chooseStrategy(next: CoordinationStrategySlug) {
+    if (next === coordinationSlug) return
+    const nextIssues = coordinationStrategyIssues(next, draftGraph)
+    // Confirm only when the switch BREAKS a canvas that currently works.
+    // Moving between two already-incompatible states needs no ceremony -- the
+    // inline notice under the picker already says what is wrong, and a dialog
+    // on every pick would train the user to dismiss it.
+    if (nextIssues.length > 0 && strategyIssues.length === 0) {
+      setPendingStrategy({ slug: next, issues: nextIssues })
+      return
+    }
+    setCoordinationSlug(next)
+  }
 
   const isDirty =
     hypothesis !== (experiment.hypothesis ?? '') ||
@@ -731,7 +773,7 @@ export function DesignTab({
             connected Agent nodes, with one of them left unfed to lead) or running the protocol is rejected.
           </InfoTooltip>
         </Label>
-        <Select value={coordinationSlug} disabled={isLocked} onValueChange={(value) => value && setCoordinationSlug(value as CoordinationStrategySlug)}>
+        <Select value={coordinationSlug} disabled={isLocked} onValueChange={(value) => value && chooseStrategy(value as CoordinationStrategySlug)}>
           <SelectTrigger className="w-full" disabled={isLocked}>
             <SelectValue>{() => selectedStrategy?.label ?? coordinationSlug}</SelectValue>
           </SelectTrigger>
@@ -744,7 +786,60 @@ export function DesignTab({
           </SelectContent>
         </Select>
         {selectedStrategy && <p className="text-xs text-muted-foreground">{selectedStrategy.description}</p>}
+        {/* A live mirror of the backend's own check, so the mismatch shows up
+            here instead of as a rejected run. Amber, not destructive: the
+            selection is saved either way, and wiring the canvas to match is a
+            normal next step rather than an error to undo. */}
+        {strategyIssues.length > 0 && (
+          <div className="rounded-md border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/10 px-2.5 py-2 text-xs text-muted-foreground">
+            <p className="font-medium text-foreground">
+              The canvas doesn't match {selectedStrategy?.label ?? coordinationSlug} yet.
+            </p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {strategyIssues.map((issue) => (
+                <li key={issue}>{issue}</li>
+              ))}
+            </ul>
+            <p className="mt-1">Running or publishing this protocol is rejected until the wiring matches.</p>
+          </div>
+        )}
       </div>
+
+      <Dialog open={!!pendingStrategy} onOpenChange={(open) => !open && setPendingStrategy(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Switch to {COORDINATION_STRATEGY_CATALOG.find((s) => s.slug === pendingStrategy?.slug)?.label}?</DialogTitle>
+            <DialogDescription>
+              This canvas currently runs under {selectedStrategy?.label ?? coordinationSlug}. Under the new strategy it
+              doesn't, so the protocol can't run until you rewire it.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
+            {pendingStrategy?.issues.map((issue) => (
+              <li key={issue}>{issue}</li>
+            ))}
+          </ul>
+          <p className="text-xs text-muted-foreground">
+            Nothing on the canvas is deleted, and switching back restores this state. Cells already generated stay
+            readable under the design revision that produced them, but they'll need regenerating before the new
+            strategy's results are comparable.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setPendingStrategy(null)}>
+              Keep {selectedStrategy?.label ?? coordinationSlug}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                if (pendingStrategy) setCoordinationSlug(pendingStrategy.slug)
+                setPendingStrategy(null)
+              }}
+            >
+              Switch anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="space-y-1.5">
         <Label className="flex items-center gap-1.5">
@@ -838,6 +933,14 @@ export function DesignTab({
         {impact?.regeneration_required && !isDirty && (
           <div className="rounded-md border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/10 px-2.5 py-2 text-xs text-muted-foreground">
             <p className="font-medium text-foreground">Cells are out of date.</p>
+            {/* The counts alone can read as "nothing changed" -- a coordination
+                strategy switch regenerates every cell while adding and removing
+                none of them -- so name the reason before showing them. */}
+            {impact.regeneration_reasons.length > 0 && (
+              <p className="mt-1">
+                {impact.regeneration_reasons.map((reason) => REGENERATION_REASON_LABELS[reason] ?? reason).join(' ')}
+              </p>
+            )}
             <p className="mt-1">
               {impact.current_cell_count} → {impact.proposed_cell_count} cells; {impact.current_replicate_count} →{' '}
               {impact.proposed_replicate_count} replicates. Replicates: {impact.added_replicate_count} added,{' '}

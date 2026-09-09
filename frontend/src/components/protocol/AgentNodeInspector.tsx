@@ -87,6 +87,18 @@ export function AgentNodeInspector({
     enabled: !!experimentId,
   })
 
+  // Derived above the `!node` bail-out because the query below is a hook: it has
+  // to run on every render, including the no-selection one, where it's disabled.
+  const metrics = normalizeDesignMetrics(experimentQuery.data?.design_spec?.metrics)
+  const validMetricIds = new Set(metrics.map((metric) => metric.id!))
+  const contextMetricIds = (node?.data.contextMetricIds ?? []).filter((id) => validMetricIds.has(id))
+  const evaluationContextQuery = useQuery({
+    queryKey: ['experiments', experimentId, 'evaluation-context', contextMetricIds],
+    queryFn: () => experimentsApi.evaluationContext(experimentId!, contextMetricIds),
+    enabled: !!experimentId && contextMetricIds.length > 0,
+  })
+  const evaluationContext = evaluationContextQuery.data?.context ?? ''
+
   if (!node) return null
   const data = node.data
   const config = data.config
@@ -103,15 +115,6 @@ export function AgentNodeInspector({
   // canvas, and silently reassigning on click would move a role the user might
   // only have been inspecting.
   const canMarkLead = isPeerCollaboration && (markedLeadAgentId === null || markedLeadAgentId === node.id)
-  const metrics = normalizeDesignMetrics(experimentQuery.data?.design_spec?.metrics)
-  const validMetricIds = new Set(metrics.map((metric) => metric.id!))
-  const contextMetricIds = (data.contextMetricIds ?? []).filter((id) => validMetricIds.has(id))
-  const evaluationContextQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'evaluation-context', contextMetricIds],
-    queryFn: () => experimentsApi.evaluationContext(experimentId!, contextMetricIds),
-    enabled: !!experimentId && contextMetricIds.length > 0,
-  })
-  const evaluationContext = evaluationContextQuery.data?.context ?? ''
 
   function patchConfig(patch: Partial<AgentNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })

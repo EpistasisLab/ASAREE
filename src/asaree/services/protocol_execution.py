@@ -45,6 +45,7 @@ from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.agent_cards import AgentCard, build_agent_card
+from asaree.services.coordination import coordination_strategy_slug
 from asaree.services.dataset_workspaces import (
     WorkspaceSeedError,
     fetch_owned_registration,
@@ -429,10 +430,6 @@ _RETIRED_COORDINATION_STRATEGIES = frozenset(
         "multi_agent_planning",
     }
 )
-
-
-def coordination_strategy_slug(design_spec: dict[str, Any] | None) -> str:
-    return str(((design_spec or {}).get("coordination_strategy") or {}).get("slug") or "sequential")
 
 
 def is_conversation_strategy(design_spec: dict[str, Any] | None) -> bool:

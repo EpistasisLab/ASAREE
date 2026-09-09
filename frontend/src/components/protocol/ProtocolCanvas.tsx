@@ -19,6 +19,7 @@ import '@xyflow/react/dist/style.css'
 import { Lock, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
+import { CONNECTOR_HANDLES } from '@/lib/coordinationStrategy'
 import { newNodeId } from '@/lib/nodeId'
 import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
@@ -129,22 +130,6 @@ const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline
 // services/protocol_execution.py: a server-side folder or an uploaded single
 // concept, both resolved identically into the agent's tool allow-list.
 const KNOWLEDGE_NODE_TYPES = ['okf_bundle', 'okf_document']
-// Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
-// whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
-// Includes the pre-rename "llm" and "resource" spellings for the same reason
-// the backend set does: a graph that hasn't been through migrateLegacyHandles
-// yet must not have its AI/Dataset edges misread as main pipeline edges.
-const CONNECTOR_HANDLES = new Set([
-  'ai',
-  'llm',
-  'tool',
-  'memory',
-  'architectural_pattern',
-  'skill',
-  'dataset',
-  'resource',
-  'knowledge',
-])
 // The four connector slots that live on an Agent's TOP edge (see
 // AgentNode.tsx) -- a node feeding one of these is placed ABOVE its agent,
 // every other slot's source below it.

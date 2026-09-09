@@ -202,6 +202,14 @@ export interface AgentNodeConfig {
   goal: string
   description: string
   system_prompt: string
+  // A plain-English description of the shape the answer should take, appended
+  // to the assembled prompt on the current contract. Deliberately prose and
+  // deliberately unvalidated -- the reader is another language model, which
+  // reads prose fine, so this buys predictable shape without the malformed-
+  // output and refusal failures a schema between two LLMs adds. `output_contract`
+  // below is the typed one, and it exists for a different consumer: tools and
+  // metrics, which cannot read prose.
+  expected_output?: string
   // Model, tool assignment, and execution pattern are no longer fields
   // here -- resolved from the node's required LLM connector, optional Tool
   // connector(s), and optional Architectural Pattern connector instead (see

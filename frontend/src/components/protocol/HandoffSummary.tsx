@@ -60,6 +60,18 @@ export function ReceivesSummary({ peers, prompt }: { peers: HandoffPeers; prompt
           {PREVIOUS_TOKEN} = {peers.receives.map((t) => t.name).join(' + ')}
         </p>
       )}
+      {/* Only the senders this prompt actually pulls in: a shape promised by a
+          node whose output never arrives is not something to reconcile against.
+          Shown to the user, not to the agent -- see `HandoffPeer.expectedOutput`
+          for why the consuming model is deliberately not told. */}
+      {peers.receives
+        .filter((target) => target.expectedOutput && referenced.has(target.id))
+        .map((target) => (
+          <p key={target.id} className="pt-0.5 text-muted-foreground">
+            <span className="text-[color:var(--node-label)]">{target.name}</span> promises:{' '}
+            <span className="italic">{target.expectedOutput}</span>
+          </p>
+        ))}
     </div>
   )
 }

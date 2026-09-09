@@ -141,12 +141,24 @@ export function promptReferenceScope(
   }
 }
 
+export interface HandoffPeer extends ReferenceTarget {
+  /** The peer's own declared Expected output, verbatim.
+   *
+   *  Carried here because the shape a sender promises is only useful to whoever
+   *  reads that sender -- and the consuming *agent* is never told it: the
+   *  current contract has no envelope to put it in, and inventing one would
+   *  reintroduce exactly the unasked-for platform prose that design removed.
+   *  So it is surfaced to the user instead, in the Receives readout, where a
+   *  mismatch is something they can actually act on while wiring. */
+  expectedOutput?: string
+}
+
 export interface HandoffPeers {
   /** Direct main-edge predecessors -- the nodes whose output is handed to this
    *  one, and exactly what `{{previous}}` expands to. */
-  receives: ReferenceTarget[]
+  receives: HandoffPeer[]
   /** Direct main-edge successors. Empty means this node's answer is the run's. */
-  sends: ReferenceTarget[]
+  sends: HandoffPeer[]
 }
 
 /** Who hands off to *nodeId*, and who it hands off to.
@@ -175,7 +187,14 @@ export function handoffPeers(nodes: ProtocolNode[], edges: ProtocolEdge[], nodeI
     }
     // Canvas declaration order, matching the picker -- an edge list's own order
     // is whatever the user happened to draw in.
-    return nodes.filter((n) => ids.includes(n.id)).map((n) => ({ id: n.id, name: names[n.id] }))
+    return nodes
+      .filter((n) => ids.includes(n.id))
+      .map((n) => {
+        const expectedOutput = (
+          (n.data as { config?: { expected_output?: string | null } } | undefined)?.config?.expected_output ?? ''
+        ).trim()
+        return { id: n.id, name: names[n.id], ...(expectedOutput ? { expectedOutput } : {}) }
+      })
   }
   return {
     receives: peers((e) => e.source, (e) => e.target),

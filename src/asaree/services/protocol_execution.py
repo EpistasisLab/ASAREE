@@ -2785,10 +2785,13 @@ def _build_user_input(
     calling it. Empty is the normal case.
 
     On the current contract the prompt's own ``{{...}}`` references are resolved
-    (:mod:`asaree.services.prompt_references`) and no upstream block is appended.
-    The legacy contract does neither -- its format is frozen, so a legacy
-    prompt containing ``{{node:x}}`` keeps that text literally, exactly as the
-    published experiments would have."""
+    (:mod:`asaree.services.prompt_references`) and no upstream block is appended,
+    and the node's ``expected_output`` -- a plain-English description of the
+    shape the answer should take, not a schema and not validated -- is appended
+    last. The legacy contract does none of that: its format is frozen, so a
+    legacy prompt containing ``{{node:x}}`` keeps that text literally and a
+    legacy node's ``expected_output`` is inert, exactly as the published
+    experiments would have."""
     # Resolved once, and used for every contract-dependent decision below, so
     # an unrecognized version cannot get the legacy upstream block but a
     # current-contract extra appended after it.
@@ -2923,6 +2926,18 @@ def _build_user_input(
     # The audience sentence is no longer appended here: it is what a
     # `{{audience}}` reference resolves to, above. Nothing platform-authored
     # goes into a prompt that did not ask for it.
+    #
+    # Expected output is the exception to that rule, and deliberately so. The
+    # rule exists to stop *platform-derived* text -- another node's output, a
+    # generated audience sentence -- from arriving unasked. This is the user's
+    # own prose about their own node, typed into that node's own inspector;
+    # making them insert a second token to make the first textarea do anything
+    # would be ceremony, not consent. Last, because it is the instruction the
+    # model should be holding when it starts writing.
+    expected_output = str((node.get("data", {}).get("config", {}) or {}).get("expected_output") or "").strip()
+    if expected_output and contract != LEGACY_PROMPT_CONTRACT:
+        parts.append(f"Produce your output in this shape:\n{expected_output}")
+
     return "\n\n".join(parts)
 
 

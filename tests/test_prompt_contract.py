@@ -614,3 +614,57 @@ def test_an_experiment_with_no_recorded_version_gains_none() -> None:
 
 def test_clearing_the_design_spec_entirely_is_left_alone() -> None:
     assert _preserved_prompt_contract_version({"prompt_contract_version": 2}, None) is None
+
+
+# ----------------------------------------------------------------------
+# Expected output
+# ----------------------------------------------------------------------
+#
+# The one thing the current contract appends that the prompt did not ask for --
+# and the exception is deliberate: it is the user's own prose about their own
+# node, not platform-derived text about someone else's.
+
+
+def _with_expected(shape: str, prompt: str = "Do the thing.") -> dict[str, Any]:
+    graph = {"nodes": [_agent("a", "Analyst", prompt)], "edges": []}
+    graph["nodes"][0]["data"]["config"]["expected_output"] = shape
+    return graph
+
+
+def test_expected_output_is_appended_to_the_current_contracts_prompt() -> None:
+    text = _prompt(_with_expected("A bulleted list of risks."), "a", {}, CURRENT_PROMPT_CONTRACT)
+    assert "Produce your output in this shape:\nA bulleted list of risks." in text
+
+
+def test_expected_output_comes_last_so_it_is_the_final_instruction() -> None:
+    text = _prompt(_with_expected("A bulleted list."), "a", {}, CURRENT_PROMPT_CONTRACT)
+    assert text.endswith("Produce your output in this shape:\nA bulleted list.")
+
+
+def test_an_absent_expected_output_changes_nothing() -> None:
+    graph = {"nodes": [_agent("a", "Analyst")], "edges": []}
+    blank = _prompt(_with_expected(""), "a", {}, CURRENT_PROMPT_CONTRACT)
+    assert _prompt(graph, "a", {}, CURRENT_PROMPT_CONTRACT) == blank
+    assert "Produce your output" not in _prompt(_with_expected("   "), "a", {}, CURRENT_PROMPT_CONTRACT)
+
+
+def test_the_legacy_contract_ignores_expected_output_entirely() -> None:
+    """Its format is frozen: a field added after those experiments ran must not
+    change a byte of what they get."""
+    graph = {"nodes": [_agent("a", "Analyst")], "edges": []}
+    assert _prompt(_with_expected("A bulleted list."), "a", {}, LEGACY_PROMPT_CONTRACT) == _prompt(
+        graph, "a", {}, LEGACY_PROMPT_CONTRACT
+    )
+
+
+def test_a_senders_expected_output_does_not_reach_the_consumers_prompt() -> None:
+    """It is surfaced to the *user*, in the Receives readout, not to the
+    consuming model: the current contract has no envelope to carry it, and
+    inventing one would put platform prose into a prompt that asked for a
+    payload."""
+    graph = _two_step()
+    graph["nodes"][0]["data"]["config"]["expected_output"] = "A bulleted list of risks."
+    graph["nodes"][1]["data"]["config"]["prompt"] = "Review {{previous}}."
+    text = _prompt(graph, "b", {"a": {"status": "completed", "output_text": "- risk one"}}, CURRENT_PROMPT_CONTRACT)
+    assert "- risk one" in text
+    assert "A bulleted list of risks." not in text

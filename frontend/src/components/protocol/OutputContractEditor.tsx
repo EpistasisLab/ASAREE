@@ -47,7 +47,9 @@ export function OutputContractEditor({
         <div>
           <Label>Output contract</Label>
           <p className="text-xs text-muted-foreground">
-            Extracts a typed payload from this agent's output -- how a later stage reads what came before it.
+            Extracts a typed payload from this agent's output — for consumers that cannot read prose: a tool taking
+            an argument, a metric reading a number. It sits in a different tab from Expected output on purpose, and
+            answers a different question: that one shapes what the next <em>agent</em> reads, in plain English.
           </p>
         </div>
         <Switch

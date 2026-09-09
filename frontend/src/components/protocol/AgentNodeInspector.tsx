@@ -328,6 +328,41 @@ export function AgentNodeInspector({
                 )}
               </FactorBindableField>
 
+              <FactorBindableField
+                experimentId={experimentId}
+                fieldPath="config.expected_output"
+                defaultLabel="Expected output"
+                nodeLabel={data.label || 'Agent'}
+                levelType="text"
+                currentValue={config.expected_output ?? ''}
+                boundFactorName={bindings['config.expected_output']}
+                onBind={(name) => bindFactor('config.expected_output', name)}
+                onUnbind={() => unbindFactor('config.expected_output')}
+              >
+                {(trigger) => (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="node-expected-output" className="flex items-center gap-1.5">
+                      Expected output — Optional
+                      {trigger}
+                    </Label>
+                    <Textarea
+                      id="node-expected-output"
+                      rows={2}
+                      placeholder="A bulleted list of risks, one per line, each naming the column it concerns."
+                      value={config.expected_output ?? ''}
+                      onChange={(e) => patchConfig({ expected_output: e.target.value })}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      What shape the answer should take, in plain English — appended to the prompt above. It is a
+                      hint to the model, not a rule: nothing parses or validates it, and a run does not fail for
+                      ignoring it. Downstream agents see it in their Input panel, so it is also how you tell the
+                      next step what to expect. For a typed contract that tools and metrics can read instead, use
+                      Output contract in Settings.
+                    </p>
+                  </div>
+                )}
+              </FactorBindableField>
+
               <div className="space-y-1.5">
                 <Label htmlFor="node-goal">Goal — Optional</Label>
                 <Textarea id="node-goal" rows={2} value={config.goal} onChange={(e) => patchConfig({ goal: e.target.value })} />

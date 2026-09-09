@@ -538,3 +538,168 @@ async def test_an_agent_that_overruns_on_its_own_still_times_out(monkeypatch: py
 
     with pytest.raises(TimeoutError):
         await pe._execute_run_cancellable(run_id=uuid.uuid4(), protocol_run_id=RUN_ID, available_tools=[], timeout=0.1)
+
+
+# ----------------------------------------------------------------------
+# The stale-data-path guard
+# ----------------------------------------------------------------------
+
+
+def _moving_head(monkeypatch: pytest.MonkeyPatch, paths: list[str]) -> None:
+    """Make head_data_locator return `paths` in order, one per call."""
+    calls = iter(paths)
+
+    def _locator(_workspace_id: str) -> tuple[str, str]:
+        return next(calls, paths[-1]), "outcome"
+
+    monkeypatch.setattr(am, "head_data_locator", _locator)
+
+
+async def test_a_peer_that_moves_head_warns_the_caller_its_path_is_stale(
+    stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real defect this catches: the caller's `data_path` was bound into
+    ambient _meta at the start of its turn and Motoro reads that frozen copy
+    for the rest of the run, so a peer accepting a stage leaves the caller
+    quietly fitting on the pre-consultation matrix."""
+    _moving_head(monkeypatch, ["/ws/v1/train.parquet", "/ws/v2/train.parquet"])
+    reply = await _ask(_messenger(workspace_id="ws-1"))
+    assert reply.state == "completed"
+    assert reply.text.startswith("A peer answer.")
+    assert "advanced this workspace to a new version of the data" in reply.text
+    assert "Do not pass data_path" in reply.text
+
+
+async def test_a_peer_that_leaves_head_alone_adds_no_note(
+    stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The common case -- a peer that only gives an opinion. A warning here
+    would train the model to ignore it."""
+    _moving_head(monkeypatch, ["/ws/v1/train.parquet", "/ws/v1/train.parquet"])
+    reply = await _ask(_messenger(workspace_id="ws-1"))
+    assert reply.text == "A peer answer."
+
+
+async def test_a_run_with_no_workspace_is_never_warned(
+    stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No workspace means no bound path to go stale, and head_data_locator must
+    not even be asked -- it takes a workspace id."""
+
+    def _explode(_workspace_id: str) -> tuple[str, str]:
+        raise AssertionError("head_data_locator called without a workspace")
+
+    monkeypatch.setattr(am, "head_data_locator", _explode)
+    reply = await _ask(_messenger())
+    assert reply.text == "A peer answer."
+
+
+async def test_a_failed_consultation_is_not_decorated_with_a_stale_note(
+    stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A peer that errored has its own thing to say; stacking a data warning on
+    top of a failure would bury it."""
+    _moving_head(monkeypatch, ["/ws/v1/train.parquet", "/ws/v2/train.parquet"])
+    stubs["peer_result"] = (None, "boom", None)
+    reply = await _ask(_messenger(workspace_id="ws-1"))
+    assert reply.state == "failed"
+    assert "advanced this workspace" not in reply.text
+
+
+# ----------------------------------------------------------------------
+# Sequential handoffs as a transcript
+# ----------------------------------------------------------------------
+
+
+def _chain_graph() -> dict[str, Any]:
+    return {
+        "nodes": [_agent("a", "Analyst"), _agent("b", "Modeler"), _agent("c", "Scorer")],
+        "edges": [
+            {"id": "e1", "source": "a", "target": "b"},
+            {"id": "e2", "source": "b", "target": "c"},
+        ],
+    }
+
+
+async def _transcript(stubs: dict[str, Any], node_runs: dict[str, Any], state: str = "completed") -> dict[str, Any]:
+    await am.record_sequential_transcript(
+        RUN_ID,
+        protocol_id=PROTOCOL_ID,
+        owner_id=OWNER,
+        graph=_chain_graph(),
+        chain=["a", "b", "c"],
+        node_runs=node_runs,
+        entry_prompt="Fit a model.",
+        state=state,
+    )
+    return stubs["checkpoints"][-1]
+
+
+async def test_a_completed_chain_reads_as_a_conversation(stubs: dict[str, Any]) -> None:
+    """A sequential handoff IS one agent sending its work to another, so it
+    belongs in the same transcript a peer conversation gets -- the user was
+    otherwise reading five node-output panels and reconstructing the order."""
+    conversation = await _transcript(
+        stubs,
+        {
+            "a": {"status": "completed", "output_text": "Cleaned."},
+            "b": {"status": "completed", "output_text": "Fitted."},
+            "c": {"status": "completed", "output_text": "AUC 0.81."},
+        }
+    )
+    assert conversation["state"] == "completed"
+    assert conversation["entry_agent_id"] == "a"
+    assert [(m["from_agent_id"], m["to_agent_id"]) for m in conversation["messages"]] == [
+        (am.USER_PARTICIPANT, "a"),
+        ("a", "b"),
+        ("b", "c"),
+        ("c", am.USER_PARTICIPANT),
+    ]
+    assert [m["sequence"] for m in conversation["messages"]] == [1, 2, 3, 4]
+    assert am._text_of(conversation["messages"][0]["parts"]) == "Fit a model."
+    assert am._text_of(conversation["messages"][3]["parts"]) == "AUC 0.81."
+
+
+async def test_the_transcript_stops_where_the_chain_stopped(stubs: dict[str, Any]) -> None:
+    """A step that never ran has nothing to hand on, and a placeholder for it
+    would read as an agent that answered."""
+    conversation = await _transcript(
+        stubs,
+        {
+            "a": {"status": "completed", "output_text": "Cleaned."},
+            "b": {"status": "failed", "output_text": None, "error": "tool exploded"},
+            "c": {"status": "skipped"},
+        },
+        state="failed",
+    )
+    assert [(m["from_agent_id"], m["to_agent_id"]) for m in conversation["messages"]] == [
+        (am.USER_PARTICIPANT, "a"),
+        ("a", "b"),
+        ("b", "c"),
+    ]
+    assert conversation["messages"][2]["state"] == "failed"
+    assert "tool exploded" in am._text_of(conversation["messages"][2]["parts"])
+    assert conversation["state"] == "failed"
+
+
+async def test_a_chain_cancelled_before_its_second_agent_records_only_what_happened(
+    stubs: dict[str, Any],
+) -> None:
+    conversation = await _transcript(
+        stubs,
+        {"a": {"status": "cancelled", "output_text": None}, "b": {"status": "skipped"}, "c": {"status": "skipped"}},
+        state="canceled",
+    )
+    assert [(m["from_agent_id"], m["to_agent_id"]) for m in conversation["messages"]] == [
+        (am.USER_PARTICIPANT, "a"),
+        ("a", "b"),
+    ]
+    assert conversation["messages"][1]["state"] == "canceled"
+
+
+async def test_the_transcript_charges_no_budget_and_runs_no_agent(stubs: dict[str, Any]) -> None:
+    """It is a *view* of a run that already happened. Routing a chain through
+    the conversation executor instead would hand the handoff decision back to
+    the models, which is the one thing the sequential strategy forbids."""
+    await _transcript(stubs, {k: {"status": "completed", "output_text": k} for k in ("a", "b", "c")})
+    assert stubs["peer_runs"] == []

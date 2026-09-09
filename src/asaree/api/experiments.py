@@ -447,6 +447,25 @@ async def experiment_evaluation_context_endpoint(
     )
 
 
+def _preserved_prompt_contract_version(
+    current: dict[str, Any] | None, incoming: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Carry an experiment's recorded prompt format across a ``design_spec`` write.
+
+    ``design_spec`` is a full replacement, so any caller that PATCHes a spec it
+    built from scratch -- the SDK, the notebook, an older client -- would drop
+    this key and silently move the experiment back to v1, changing what every
+    subsequent run's agents are told. The version is stamped once at creation
+    and is not a user-editable field, so preserving it is the only correct
+    reading of an omission. An explicit value in *incoming* still wins, which
+    is how an import can restore an experiment at the version it was run under.
+    """
+    recorded = (current or {}).get("prompt_contract_version")
+    if recorded is None or incoming is None or "prompt_contract_version" in incoming:
+        return incoming
+    return {**incoming, "prompt_contract_version": recorded}
+
+
 @router.patch("/{experiment_id}", response_model=ExperimentResponse)
 async def update_experiment_endpoint(
     experiment_id: uuid.UUID, body: UpdateExperimentRequest, user: CurrentUser, db: DbSession
@@ -458,6 +477,7 @@ async def update_experiment_endpoint(
             fields["design_spec"] = normalize_design_spec(fields["design_spec"], validate_metrics=True)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        fields["design_spec"] = _preserved_prompt_contract_version(experiment.design_spec, fields["design_spec"])
     _reject_locked_mutation(experiment, fields)
     if "name" in fields and fields["name"] is not None:
         existing = await get_experiment_by_name(db, fields["name"], owner_id=user.id)

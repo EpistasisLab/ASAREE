@@ -60,6 +60,7 @@ from asaree.services.factorial_cells import get_replicate, list_replicates, upse
 from asaree.services.metric_evaluation import JUDGE_OUTPUT_CONTRACT, build_metric_judge_prompt, validate_metric_scores
 from asaree.services.metric_promotion import promote_replicate_score_metrics
 from asaree.services.metrics import compose_system_prompt, model_judge_metrics
+from asaree.services.prompt_contract import DEFAULT_PROMPT_CONTRACT_VERSION, prompt_contract_version
 from asaree.services.protocol_revisions import get_published_revision, get_revision
 from asaree.services.protocol_runs import (
     create_protocol_run,
@@ -1791,6 +1792,68 @@ def _upstream_output_text(graph: dict[str, Any], node_id: str, node_runs: dict[s
     return "\n\n".join(parts)
 
 
+def _node_seed_prompt(node: dict[str, Any]) -> str:
+    """The node's own instruction, before ASAREE wraps anything around it.
+
+    ``prompt`` is the field meant to change per run; ``goal`` is a persistent
+    objective and only stands in when no prompt is set; the canvas label is the
+    last resort. Shared by ``_build_user_input`` (where it's the first block)
+    and the sequential transcript (where it's what the user is shown as having
+    asked), so the two can't disagree about which field is the instruction.
+    """
+    data: dict[str, Any] = node.get("data") or {}
+    config: dict[str, Any] = data.get("config") or {}
+    return str(config.get("prompt") or config.get("goal") or data.get("label", ""))
+
+
+def _upstream_context_v1(graph: dict[str, Any], node_id: str, node_runs: dict[str, Any]) -> str:
+    """The v1 upstream block. **Frozen** -- do not edit this function.
+
+    ``[dndnode_3]: ...`` -- the raw canvas node id, which is what every
+    published experiment's agents were shown, the spinal pipeline's included.
+    It is a poor label and v2 replaces it; changing it here instead would have
+    changed those experiments' results. See :mod:`asaree.services.prompt_contract`.
+    """
+    upstream_ids = _upstream_ids(graph, node_id)
+    blocks = [
+        f"[{uid}]: {node_runs[uid]['output_text']}" for uid in upstream_ids if node_runs.get(uid, {}).get("output_text")
+    ]
+    return "Upstream context:\n" + "\n\n".join(blocks) if blocks else ""
+
+
+def _upstream_context_v2(graph: dict[str, Any], node_id: str, node_runs: dict[str, Any]) -> str:
+    """The v2 upstream block: the sender's canvas label instead of its node id.
+
+    A model reads ``[Feature Engineer]`` as an author and ``[dndnode_3]`` as
+    noise, and the label is also what the user sees on the canvas and in the
+    transcript -- so one upstream step is now called one thing everywhere.
+    Unlabelled nodes fall back to ``_node_display_name``'s type placeholder, the
+    same text a validation error would use, and the node id is appended only
+    when two upstream nodes resolve to the same name -- "which of the two" is
+    the one question the id actually answers.
+    """
+    upstream_ids = _upstream_ids(graph, node_id)
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or []}
+    names = {uid: _node_display_name(nodes.get(uid) or {"id": uid}) for uid in upstream_ids}
+    ambiguous = {name for name in names.values() if list(names.values()).count(name) > 1}
+    blocks = []
+    for uid in upstream_ids:
+        if not node_runs.get(uid, {}).get("output_text"):
+            continue
+        label = f"{names[uid]} ({uid})" if names[uid] in ambiguous else names[uid]
+        blocks.append(f"[{label}]: {node_runs[uid]['output_text']}")
+    return "Upstream context:\n" + "\n\n".join(blocks) if blocks else ""
+
+
+#: Version -> the upstream-context builder it uses. Only this block differs
+#: between contract versions so far; the Dataset and Script cues below are
+#: tool-usage instructions that have to track the tools that actually exist, so
+#: freezing them per version would hand a rerun stale instructions. What keeps
+#: v1's *whole* prompt honest is the byte-for-byte golden assertion in
+#: ``tests/test_spinal_compat.py``, not a duplicated function body.
+_UPSTREAM_CONTEXT_BUILDERS = {1: _upstream_context_v1, 2: _upstream_context_v2}
+
+
 def _build_user_input(
     node: dict[str, Any],
     graph: dict[str, Any],
@@ -1801,6 +1864,7 @@ def _build_user_input(
     script_bound: bool = False,
     seeded_dataset: str = "",
     unsplit_dataset: str = "",
+    prompt_contract_version: int = DEFAULT_PROMPT_CONTRACT_VERSION,
 ) -> str:
     """The node's own prompt (falling back to its goal, then its canvas
     label), plus (flat, unstructured -- a deliberate V1 simplification) each
@@ -1837,18 +1901,17 @@ def _build_user_input(
 
     *unsplit_dataset* is the same resolver's other outcome: a registration with
     no train/test split, bound as a plain file. Mutually exclusive with
-    *seeded_dataset* -- a dataset has a split or it doesn't."""
-    data: dict[str, Any] = node.get("data") or {}
-    config: dict[str, Any] = data.get("config", {})
-    seed: str = config.get("prompt") or config.get("goal") or data.get("label", "")
-    parts = [seed]
+    *seeded_dataset* -- a dataset has a split or it doesn't.
 
-    upstream_ids = _upstream_ids(graph, node["id"])
-    upstream_context = [
-        f"[{uid}]: {node_runs[uid]['output_text']}" for uid in upstream_ids if node_runs.get(uid, {}).get("output_text")
-    ]
+    *prompt_contract_version* selects the upstream-context format (see
+    :mod:`asaree.services.prompt_contract`). An unknown version falls back to
+    v1, the format every experiment has always been able to run under."""
+    parts = [_node_seed_prompt(node)]
+
+    build_upstream = _UPSTREAM_CONTEXT_BUILDERS.get(prompt_contract_version, _upstream_context_v1)
+    upstream_context = build_upstream(graph, node["id"], node_runs)
     if upstream_context:
-        parts.append("Upstream context:\n" + "\n\n".join(upstream_context))
+        parts.append(upstream_context)
 
     dataset_configs = _resolve_dataset_configs(graph, node["id"])
     if dataset_configs and experiment_id is not None and effective_cell_label is not None:
@@ -2580,6 +2643,7 @@ async def _run_gated_worker(
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
     evaluation_metrics: Any = None,
+    contract_version: int = DEFAULT_PROMPT_CONTRACT_VERSION,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Generalizes the notebook's ``run_stage`` revision loop (cell 19):
     run worker -> if the gate is enabled, run critic on its output -> on
@@ -2607,6 +2671,7 @@ async def _run_gated_worker(
         script_bound="script_path" in worker_ambient,
         seeded_dataset=worker_dataset.seeded_name,
         unsplit_dataset=worker_dataset.unsplit_name,
+        prompt_contract_version=contract_version,
     )
     instruction = base_instruction
     # Tracks the most recent critic verdict/run across attempts so the
@@ -3149,6 +3214,10 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
     effective_cell_label = _effective_cell_label(replicate_label, protocol_run_id)
     workspace_id = _compute_workspace_id(experiment_id, replicate_label, protocol_run_id)
+    # Resolved once for the whole run, then passed down. Re-reading design_spec
+    # at each prompt-building site would let an edit made mid-run produce a run
+    # whose earlier nodes used one format and its later nodes another.
+    contract_version = prompt_contract_version(design_spec)
 
     async with get_session() as db:
         await set_status(db, protocol_run_id, status="running")
@@ -3203,6 +3272,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 script_bound="script_path" in ambient_meta,
                 seeded_dataset=entry_dataset.seeded_name,
                 unsplit_dataset=entry_dataset.unsplit_name,
+                prompt_contract_version=contract_version,
             ),
             workspace_id=workspace_id,
             ambient_meta=ambient_meta,
@@ -3276,6 +3346,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 experiment_id=experiment_id,
                 effective_cell_label=effective_cell_label,
                 evaluation_metrics=(design_spec or {}).get("metrics"),
+                contract_version=contract_version,
             )
             node_runs[node_id] = worker_run
             node_runs[gate["id"]] = gate_run
@@ -3311,6 +3382,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 script_bound="script_path" in ambient_meta,
                 seeded_dataset=node_dataset.seeded_name,
                 unsplit_dataset=node_dataset.unsplit_name,
+                prompt_contract_version=contract_version,
             )
             output_text, error, run_id = await _run_agent_node(
                 node,
@@ -3343,6 +3415,34 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 failed = True
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, node_runs[node_id])
+
+    if coordination_strategy_slug(design_spec) == "sequential" and contract_version >= 2:
+        # A chain's handoffs are agent-to-agent messages, so they get the same
+        # transcript a conversation does -- v2 only, because writing one on a v1
+        # experiment would add a panel to a published run's UI without any
+        # change to what executed. Best-effort: a transcript is a view of a run
+        # that already happened, and failing to render it must not fail the run.
+        chain = sequential_chain_order(graph)
+        if len(chain) >= 2:
+            from asaree.services.agent_messenger import record_sequential_transcript
+
+            head = next((n for n in graph["nodes"] if str(n.get("id")) == chain[0]), None)
+            try:
+                await record_sequential_transcript(
+                    protocol_run_id,
+                    protocol_id=protocol_id,
+                    owner_id=owner_id,
+                    graph=graph,
+                    chain=chain,
+                    node_runs=node_runs,
+                    # The head's own configured prompt, not the full built
+                    # user_input: the Dataset/Script cues are plumbing, and a
+                    # transcript is meant to read as what was asked.
+                    entry_prompt=_node_seed_prompt(head) if head else "",
+                    state="canceled" if cancelled else ("failed" if failed else "completed"),
+                )
+            except Exception:
+                logger.exception("sequential_transcript_failed", extra={"protocol_run_id": str(protocol_run_id)})
 
     should_evaluate_metrics = False
     async with get_session() as db:

@@ -32,6 +32,7 @@ from typing import Any
 import pytest
 
 from asaree.services import protocol_execution as pe
+from asaree.services.prompt_contract import prompt_contract_version
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
     find_gated_pairs,
@@ -265,6 +266,32 @@ def test_the_upstream_context_block_is_unchanged(graph: dict[str, Any]) -> None:
     node_runs = {dc_gate_id: {"status": "completed", "output_text": "DC accepted v1_dc."}}
     text = _prompt(graph, fte_id, node_runs=node_runs)
     assert f"Upstream context:\n[{dc_gate_id}]: DC accepted v1_dc." in text
+
+
+def test_the_spinal_experiment_resolves_to_v1(graph: dict[str, Any]) -> None:
+    """The pin itself. The spinal experiment's ``design_spec`` predates
+    ``prompt_contract_version``, so what actually keeps it on v1 is the absent
+    key resolving to 1 -- not a value anybody wrote."""
+    assert prompt_contract_version(None) == 1
+    assert prompt_contract_version({"factors": [], "replicates": 3}) == 1
+
+
+def test_v2_would_have_changed_this_prompt_which_is_why_it_is_a_new_version(graph: dict[str, Any]) -> None:
+    """The counterfactual, asserted against the real graph: the improvement
+    that v2 makes is not cosmetic on this pipeline -- it rewrites the label of
+    every handoff in it. Had it shipped as an edit rather than a version, every
+    published number would have come from a different prompt."""
+    dc_gate_id = _AGENTS[0][2]
+    fte_id = _AGENTS[1][0]
+    node_runs = {dc_gate_id: {"status": "completed", "output_text": "DC accepted v1_dc."}}
+    v1 = _prompt(graph, fte_id, node_runs=node_runs)
+    v2 = _prompt(graph, fte_id, node_runs=node_runs, prompt_contract_version=2)
+    assert v1 != v2
+    gate_label = next(n["data"]["label"] for n in graph["nodes"] if n["id"] == dc_gate_id)
+    assert f"Upstream context:\n[{gate_label}]: DC accepted v1_dc." in v2
+    # And only that block moved -- the Dataset/Script cues are tool-usage
+    # instructions, not part of what a version freezes.
+    assert v1.replace(f"[{dc_gate_id}]", f"[{gate_label}]") == v2
 
 
 def test_an_upstream_node_with_no_output_contributes_nothing(graph: dict[str, Any]) -> None:

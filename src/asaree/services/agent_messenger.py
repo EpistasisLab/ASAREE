@@ -45,6 +45,7 @@ from typing import Any
 from motoro.engine.ports import AgentReply
 
 from asaree.models.database import get_session
+from asaree.services.dataset_workspaces import head_data_locator
 from asaree.services.deadline import deadlines_paused
 from asaree.services.experiments import get_experiment
 from asaree.services.protocol_execution import (
@@ -323,6 +324,15 @@ class AgentMessenger:
 
         await self.checkpoint()
 
+        # The caller's ``data_path`` was bound into its ambient ``_meta`` when
+        # its turn started, and Motoro copies that dict once per run
+        # (``RunContext.ambient_meta``) then reads the frozen copy on every tool
+        # call. So if the peer about to run accepts a stage, HEAD moves and the
+        # caller resumes still pointing at the pre-consultation matrix --
+        # silently fitting on stale data. Invariant 5 makes the two turns
+        # sequential, which prevents a race but not this.
+        head_before = head_data_locator(self._workspace_id)[0] if self._workspace_id else ""
+
         self._executions += 1
         # The caller's own clock stops for exactly this span, failures
         # included: it waited either way, and charging it for a peer's
@@ -358,9 +368,34 @@ class AgentMessenger:
         return await self._reply(
             to_agent_id,
             sender_id,
-            text or "The agent finished without producing an answer.",
+            (text or "The agent finished without producing an answer.") + self._stale_data_note(head_before),
             state="completed",
             task_id=run_id,
+        )
+
+    def _stale_data_note(self, head_before: str) -> str:
+        """A warning appended to a reply when the peer moved the workspace HEAD.
+
+        Addressed to the calling *model*, because it is the only party that can
+        act on it: its bound ``data_path`` is frozen for the rest of its run
+        (see :meth:`send`), so the fix is to stop using the path argument and
+        let the workspace tools resolve HEAD themselves. Told rather than
+        silently corrected because correcting it would mean reaching into
+        Motoro's already-copied ``RunContext.ambient_meta``; Phase 4's per-agent
+        slots remove the window structurally instead.
+        """
+        if not self._workspace_id:
+            return ""
+        head_after = head_data_locator(self._workspace_id)[0]
+        if not head_after or head_after == head_before:
+            return ""
+        return (
+            "\n\n[SYSTEM] While you were waiting, that agent advanced this workspace to a new "
+            "version of the data. The file path you were given at the start of your turn now "
+            "points at the OLD version. Do not pass data_path (or test_path/target_column) to any "
+            "tool from here on -- call the workspace and sklearn tools with those arguments omitted "
+            "so they resolve the current HEAD, and call workspace_status() first if you need to see "
+            "what changed."
         )
 
     async def _reply(
@@ -584,6 +619,103 @@ async def execute_conversation(
     async with get_session() as db:
         await update_node_run(db, protocol_run_id, entry_agent_id, node_run)
     return node_run, status
+
+
+async def record_sequential_transcript(
+    protocol_run_id: uuid.UUID,
+    *,
+    protocol_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    graph: dict[str, Any],
+    chain: list[str],
+    node_runs: dict[str, Any],
+    entry_prompt: str,
+    state: str,
+) -> None:
+    """Render a finished sequential run as an A2A conversation document.
+
+    A sequential handoff *is* one agent sending its work to another, so it
+    belongs in the same transcript a peer conversation gets -- the user was
+    reading a chain run's handoffs out of five separate node-output panels and
+    reconstructing the order by hand. Writing it here costs one row update and
+    the transcript panel (``ConversationTranscript.tsx``) already renders any
+    ``Conversation``, so the UI is free.
+
+    Deliberately the **message layer only**, not :func:`execute_conversation`:
+    the chain is executed by ``run_protocol``'s topological walk, which is the
+    entire point of the sequential strategy (every node runs, in order, with no
+    agent deciding whether to hand off). Routing it through the conversation
+    executor would hand that decision back to the models. Nothing here can
+    influence execution -- no budget is charged, no peer is run, no
+    authorization is asked.
+
+    Written once, after the walk, rather than appended between nodes: the
+    canvas already shows per-node progress live, so an incremental transcript
+    would buy nothing and would put a second write inside the two different
+    branches (plain node, gated pair) that complete an agent's turn.
+
+    *chain* is ``sequential_chain_order``'s output, so a non-agent node between
+    two agents (a Critic Gate, a Script) is already collapsed away -- the
+    transcript shows the handoff the user drew, not the plumbing it passed
+    through. *entry_prompt* is the head agent's own built ``user_input``, which
+    stands in as what the user asked.
+    """
+    messenger = AgentMessenger(
+        protocol_id=protocol_id,
+        protocol_run_id=protocol_run_id,
+        owner_id=owner_id,
+        graph=graph,
+        entry_agent_id=chain[0],
+        workspace_id=None,
+    )
+    messenger.append(
+        from_agent_id=USER_PARTICIPANT,
+        to_agent_id=chain[0],
+        parts=[{"kind": "text", "text": entry_prompt}],
+    )
+
+    def _outcome(node_id: str) -> tuple[str, str]:
+        run = node_runs.get(node_id) or {}
+        status = str(run.get("status") or "skipped")
+        text = str(run.get("output_text") or "")
+        if status == "completed":
+            return "completed", text or "The agent finished without producing an answer."
+        if status == "cancelled":
+            return "canceled", "This step was cancelled."
+        if status == "failed":
+            return "failed", f"This step failed: {run.get('error') or 'unknown error'}"
+        return "failed", "This step did not run."
+
+    for sender, recipient in zip(chain, chain[1:], strict=False):
+        # A step the walk never reached has nothing to hand on, and a
+        # placeholder message for it would read as an agent that answered.
+        if str((node_runs.get(sender) or {}).get("status") or "skipped") == "skipped":
+            break
+        run_state, text = _outcome(sender)
+        messenger.append(
+            from_agent_id=sender,
+            to_agent_id=recipient,
+            parts=[{"kind": "text", "text": text}],
+            state=run_state,
+        )
+        # A failed or cancelled step is where the chain stopped, so nothing
+        # downstream of it has a turn to record.
+        if run_state != "completed":
+            break
+    else:
+        # Every handoff was recorded, so the walk reached the last agent -- and
+        # the last agent answers the user, not another agent.
+        tail = chain[-1]
+        tail_state, tail_text = _outcome(tail)
+        messenger.append(
+            from_agent_id=tail,
+            to_agent_id=USER_PARTICIPANT,
+            parts=[{"kind": "text", "text": tail_text}],
+            state=tail_state,
+        )
+
+    messenger.set_state(state)
+    await messenger.checkpoint()
 
 
 async def run_conversation(protocol_run_id: uuid.UUID, *, entry_agent_id: str, user_input: str) -> None:

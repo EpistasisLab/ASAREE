@@ -23,6 +23,7 @@ services:
     volumes:
       - ./src:/app/src
       - ${MOTORO_SRC:-../Motoro/src/motoro}:/app/.venv/lib/python3.13/site-packages/motoro:ro
+      - ./workspace-core/src/asaree_workspace_core:/app/workspace-core/src/asaree_workspace_core:ro
 
   asaree-app:
     volumes:
@@ -38,9 +39,16 @@ services:
       # The bundled MCP servers already spawn with `uv run --no-sync`, so
       # nothing at runtime tries to reconcile the venv behind this mount.
       - ${MOTORO_SRC:-../Motoro/src/motoro}:/app/.venv/lib/python3.13/site-packages/motoro:ro
+      # Same idea for the workspace package. Unlike `src`, it is COPYed into
+      # the image and installed editable *inside* it, so a new module there (a
+      # stage plan, say) is invisible until the image is rebuilt. Overlaying the
+      # package directory rather than the project keeps the editable install's
+      # own recorded path valid.
+      - ./workspace-core/src/asaree_workspace_core:/app/workspace-core/src/asaree_workspace_core:ro
 
   asaree-worker:
     volumes:
       - ./data:/app/data
       - ./src:/app/src
       - ${MOTORO_SRC:-../Motoro/src/motoro}:/app/.venv/lib/python3.13/site-packages/motoro:ro
+      - ./workspace-core/src/asaree_workspace_core:/app/workspace-core/src/asaree_workspace_core:ro

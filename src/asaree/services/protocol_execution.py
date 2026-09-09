@@ -231,7 +231,18 @@ class ProtocolValidationError(Exception):
 # main pipeline edge and turn a perfectly good graph into a cycle/ordering
 # error.
 _CONNECTOR_HANDLES = frozenset(
-    {"ai", "llm", "tool", "memory", "architectural_pattern", "dataset", "resource", "skill", "knowledge"}
+    {
+        "ai",
+        "llm",
+        "tool",
+        "memory",
+        "architectural_pattern",
+        "dataset",
+        "resource",
+        "skill",
+        "knowledge",
+        "output_parser",
+    }
 )
 
 # Each connector slot accepts a FAMILY of node types, not one exact type --
@@ -325,6 +336,23 @@ _OKF_DOCUMENT_NODE_TYPES = frozenset({"okf_document"})
 # _resolve_knowledge_config reads. Everything downstream treats the two
 # interchangeably, so only this union has to know both exist.
 _KNOWLEDGE_NODE_TYPES = _OKF_BUNDLE_NODE_TYPES | _OKF_DOCUMENT_NODE_TYPES
+# An Output Parser node carries the field spec Motoro's output_contract
+# machinery extracts a typed payload with (motoro.services.output_contract's
+# extract_payload). It used to be a field on the agent itself
+# (``config.output_contract``) and became a node for the same reason model,
+# tools and pattern did -- see _run_agent_node's own comment -- but with one
+# extra argument the others don't have: extraction is a *second LLM call* per
+# run, made after the agent has already finished writing, so its cost has to
+# be visible on the canvas rather than buried in one node's settings tab.
+#
+# Being a node also fixes what the field could not: a parser contributes its
+# field list to the producer's prompt (_output_shape_block), so the extractor
+# reads text that was actually asked to contain the fields it wants. The field
+# never did that -- the agent was never told the contract existed.
+#
+# Capped at one, like Memory and unlike Tool/Skill/Knowledge: two field specs
+# for one output is an ambiguity, not a richer declaration.
+_OUTPUT_PARSER_NODE_TYPES = frozenset({"output_parser"})
 
 # Every node type that's a pure config source -- never gets its own execution
 # turn, never a pipeline "final output" (see sink_node_ids/run_protocol's
@@ -339,6 +367,7 @@ _PURE_CONFIG_SOURCE_TYPES = (
     | _SCRIPT_NODE_TYPES
     | _SKILL_NODE_TYPES
     | _KNOWLEDGE_NODE_TYPES
+    | _OUTPUT_PARSER_NODE_TYPES
 )
 
 # Which connector handle each pure-config-source node type may exclusively
@@ -367,6 +396,7 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "tool" for t in _SCRIPT_NODE_TYPES},
     **{t: "skill" for t in _SKILL_NODE_TYPES},
     **{t: "knowledge" for t in _KNOWLEDGE_NODE_TYPES},
+    **{t: "output_parser" for t in _OUTPUT_PARSER_NODE_TYPES},
 }
 # The user-facing name of each connector slot -- mirrors
 # CONNECTOR_SLOT_LABELS on the frontend, so a validation error always names
@@ -381,6 +411,7 @@ _HANDLE_LABELS: dict[str, str] = {
     "resource": "Dataset",  # pre-rename spelling, same slot -- see _LEGACY_DATASET_HANDLES
     "skill": "Skill",
     "knowledge": "Knowledge",
+    "output_parser": "Output Parser",
 }
 
 # Connector slots have been renamed twice since graphs started being saved,
@@ -892,6 +923,7 @@ _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "skill": "Skill",
     "okf_bundle": "OKF Bundle",
     "okf_document": "OKF Document",
+    "output_parser": "Output Parser",
     "pattern_reason_act": "Reason + Act",
     "pattern_single_agent_baseline": "Single-Agent Baseline",
     "llm_anthropic": "Anthropic",
@@ -1050,6 +1082,7 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
         dataset_slot_edges = _edges_with_handle(graph, nid, "dataset", direction="incoming")
         skill_edges = _edges_with_handle(graph, nid, "skill", direction="incoming")
         knowledge_edges = _edges_with_handle(graph, nid, "knowledge", direction="incoming")
+        parser_edges = _edges_with_handle(graph, nid, "output_parser", direction="incoming")
         if node_type == "agent":
             # The Tool connector accepts a family of source types -- an
             # mcp_tool node contributes a callable capability, while a
@@ -1132,10 +1165,42 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
                         f"Node {name!r}'s Architectural Pattern connection must come from an Architectural "
                         "Pattern node."
                     )
-        elif tool_edges or memory_edges or pattern_edges or dataset_slot_edges or skill_edges or knowledge_edges:
+            # Capped at one, like Memory -- see _OUTPUT_PARSER_NODE_TYPES.
+            if len(parser_edges) > 1:
+                raise ProtocolValidationError(
+                    f"Node {name!r} can have at most one Output Parser connection (found {len(parser_edges)})."
+                )
+            for edge in parser_edges:
+                parser_source = nodes.get(edge["source"])
+                if parser_source is None or parser_source.get("type") not in _OUTPUT_PARSER_NODE_TYPES:
+                    raise ProtocolValidationError(
+                        f"Node {name!r}'s Output Parser connection must come from an Output Parser node."
+                    )
+            # A wired parser AND the agent's own legacy `config.output_contract`
+            # is genuinely ambiguous -- both are complete field specs for the
+            # same output, and picking one by precedence would silently ignore
+            # the other. Refused here rather than resolved, because the fix is
+            # a two-second decision the user is better placed to make than a
+            # rule is. The legacy field on its own keeps working forever
+            # (_resolve_output_contract): every published revision that has one
+            # is immutable, and the SDK can still set it.
+            if parser_edges and ((node.get("data") or {}).get("config") or {}).get("output_contract"):
+                raise ProtocolValidationError(
+                    f"Node {name!r} has both an Output Parser connection and its own stored output contract. "
+                    "Convert the stored one to a node, or remove it, so there is one output shape."
+                )
+        elif (
+            tool_edges
+            or memory_edges
+            or pattern_edges
+            or dataset_slot_edges
+            or skill_edges
+            or knowledge_edges
+            or parser_edges
+        ):
             raise ProtocolValidationError(
-                f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or "
-                f"Knowledge connection (node {name!r})."
+                f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, "
+                f"Knowledge, or Output Parser connection (node {name!r})."
             )
 
         if node_type in _NODE_TYPE_TO_HANDLE:
@@ -2217,6 +2282,97 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
     return {"server_names": server_names, "tool_names": tool_names}
 
 
+def _resolve_output_contract(graph: dict[str, Any], node_id: str) -> dict[str, Any] | None:
+    """The Motoro ``output_contract`` field spec for this agent -- from its
+    wired Output Parser node, or, failing that, from the agent's own legacy
+    ``config.output_contract``. ``None`` when it has neither, which is the
+    common case and means no payload extraction happens at all.
+
+    **The legacy fallback is permanent, not a deprecation ramp.** Two reasons,
+    both structural rather than a matter of how long anyone waits:
+
+    * Every ``ProtocolRevision`` is an immutable snapshot that ``run_protocol``
+      loads, and revisions carrying the field already exist and are already
+      pointed at by finished runs. A data migration that rewrote them would be
+      editing published artifacts; one that didn't would break them.
+    * ``POST /agents`` still accepts ``output_contract`` (see
+      :mod:`asaree.api.agents`), so a *new* graph can arrive with the field set,
+      from the SDK or a notebook, at any time. There is no cutover date after
+      which nothing produces one.
+
+    So this is unlike ``_LEGACY_AI_HANDLES``, which covers a rename whose
+    stored data really was migrated: nothing here ever becomes dead code.
+
+    The two sources are never merged and never race -- ``topological_order``
+    refuses a graph that has both on one node, so by the time this runs at most
+    one is set. The parser is checked first anyway, so that ordering is not
+    load-bearing.
+
+    A disabled parser node (``config.enabled is False``) contributes nothing,
+    the same way a disabled Tool or Knowledge node does: that is the canvas's
+    way of costing out the extra LLM call for one run without deleting the
+    field spec.
+
+    Note the fallback is reached only when **no parser node is wired at all**,
+    not whenever the parser yields nothing. A wired-but-disabled or
+    wired-but-empty parser resolves to ``None``, because "off for this run" has
+    to mean off -- reaching past it to a stored field would run a contract the
+    user had just switched away from."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    wired = False
+    for edge in _edges_with_handle(graph, node_id, "output_parser", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") not in _OUTPUT_PARSER_NODE_TYPES:
+            continue
+        wired = True
+        parser_config = (source.get("data") or {}).get("config") or {}
+        if not parser_config.get("enabled", True):
+            continue
+        contract = parser_config.get("output_contract")
+        if contract:
+            return dict(contract)
+    if wired:
+        return None
+    node = nodes.get(node_id) or {}
+    legacy = ((node.get("data") or {}).get("config") or {}).get("output_contract")
+    return dict(legacy) if legacy else None
+
+
+def _output_shape_block(contract: dict[str, Any] | None) -> str:
+    """The producer-side prompt block naming the fields its Output Parser will
+    extract, or ``""`` when there is no contract.
+
+    This is the half of ``output_contract`` that never existed. Motoro's
+    ``extract_payload`` is a *post-hoc* extractor: it makes a second LLM call
+    to coerce text the agent has already finished, and the agent is never told
+    the contract exists. So the extractor was being asked to pull ``n_rows``
+    out of prose that had no reason to contain ``n_rows``. Stating the fields
+    up front costs nothing and is the one thing that makes the extraction
+    likely to succeed.
+
+    Deliberately a readable field list, not a JSON schema or an instruction to
+    emit JSON. The agent's job is unchanged -- write the answer -- and the
+    parser's job is unchanged. What changes is only that the answer now knows
+    which facts it is expected to contain. Composes with Expected output rather
+    than replacing it: that one is prose about form ("a bulleted list, one risk
+    per line"), this is a list of facts."""
+    fields = (contract or {}).get("fields") or []
+    lines = []
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        name = str(field.get("name") or "").strip()
+        if not name:
+            continue
+        type_ = str(field.get("type") or "").strip()
+        description = str(field.get("description") or "").strip()
+        suffix = f" -- {description}" if description else ""
+        lines.append(f"- {name} ({type_}){suffix}" if type_ else f"- {name}{suffix}")
+    if not lines:
+        return ""
+    return "Your answer will be read for these specific values, so state each one explicitly:\n" + "\n".join(lines)
+
+
 def _resolve_dataset_tool_config(
     graph: dict[str, Any], node_id: str, *, unsplit_dataset: str = ""
 ) -> dict[str, Any]:
@@ -2938,6 +3094,16 @@ def _build_user_input(
     if expected_output and contract != LEGACY_PROMPT_CONTRACT:
         parts.append(f"Produce your output in this shape:\n{expected_output}")
 
+    # After Expected output, because it is more specific: that one describes the
+    # answer's form, this names the facts an Output Parser is about to extract
+    # from it (see _output_shape_block). Current contract only, like everything
+    # else appended here -- the legacy format is frozen, and the spinal
+    # experiments resolve to it, so the agents that carry a contract today keep
+    # the prompts they have always had.
+    shape_block = _output_shape_block(_resolve_output_contract(graph, node["id"]))
+    if shape_block and contract != LEGACY_PROMPT_CONTRACT:
+        parts.append(shape_block)
+
     return "\n\n".join(parts)
 
 
@@ -3275,6 +3441,10 @@ async def _run_agent_node(
     # config -- resolved from its required LLM connector, its (optional,
     # repeatable) Tool connectors, and its optional Architectural Pattern
     # connector instead (topological_order already validated their shape).
+    # output_contract joined them, with one extra argument the others didn't
+    # need: extraction is a second LLM call per run, so its cost belongs on the
+    # canvas. Unlike the three above, the node's own field is still read as a
+    # fallback and always will be -- see _resolve_output_contract.
     model_config_data = {k: v for k, v in _resolve_llm_config(graph, node["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
     # Four connectors feed one allow-list. The Knowledge connector's OKF
@@ -3333,7 +3503,10 @@ async def _run_agent_node(
             "pattern_config": pattern_config,
             "tool_config": tool_config,
             "skill_config": skill_config,
-            "output_contract": config.get("output_contract"),
+            # From the wired Output Parser node, falling back to the agent's own
+            # stored field for graphs that predate it -- see
+            # _resolve_output_contract for why that fallback is permanent.
+            "output_contract": _resolve_output_contract(graph, node["id"]),
             "budget_limit_usd": config.get("budget_limit_usd"),
             "max_run_duration_seconds": config.get("max_run_duration_seconds"),
         },

@@ -214,6 +214,13 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       // ships as declared capability only, matching Memory's existing
       // status everywhere else in this codebase.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
+    case 'output_parser':
+      // Only `enabled`, not the field spec itself: "structured output vs.
+      // prose" is a real treatment to compare (and the only way to A/B the
+      // extra model call the parser costs), whereas varying the SHAPE across
+      // cells would give each cell a different set of extracted values, which
+      // nothing downstream could compare.
+      return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     // Each pattern node type's OWN config fields -- distinct from the
     // agent's synthetic `pattern_override` above, which swaps the node TYPE
     // entirely. These vary a single param while keeping the same pattern
@@ -375,6 +382,7 @@ function derivePatternOverrideCurrentValue(agentNode: Node, edges: Edge[], nodes
 function isConnectorNodeType(type: string | undefined): boolean {
   return (
     type === 'memory' ||
+    type === 'output_parser' ||
     type === 'mcp_tool' ||
     type === 'mcp_scikit_learn' ||
     type === 'mcp_client_tool' ||

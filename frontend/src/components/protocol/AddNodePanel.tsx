@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, Atom, BookMarked, Bot, BrainCircuit, Cloud, Code2, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
+import { ArrowRight, Atom, BookMarked, Bot, Braces, BrainCircuit, Cloud, Code2, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DATASET_BROWSE } from './datasetCatalog'
@@ -122,6 +122,12 @@ const NODE_CATALOG = [
     label: 'OKF Documents',
     description: 'Upload a single Markdown concept an Agent reads and rewrites as it works',
     icon: FileText,
+  },
+  {
+    type: 'output_parser',
+    label: 'Output Parser',
+    description: "Reads named, typed fields back out of an Agent's answer -- costs one extra model call per run",
+    icon: Braces,
   },
   {
     type: 'script',

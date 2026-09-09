@@ -31,6 +31,7 @@ const DEPENDENCY_HANDLES = new Set([
   'dataset',
   'resource',
   'knowledge',
+  'output_parser',
 ])
 
 export type RunScope =

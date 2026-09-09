@@ -7,6 +7,7 @@ import type {
   DatasetNodeData,
   LlmNodeData,
   McpToolNodeData,
+  OutputParserNodeData,
   ReasonActPatternNodeData,
   ScriptNodeData,
   OkfBundleNodeData,
@@ -166,6 +167,17 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
               `OKF document is no longer stored${config.document_title ? ` ("${config.document_title}")` : ''}`,
             )
           }
+        }
+        break
+      }
+      case 'output_parser': {
+        const config = (node.data as OutputParserNodeData).config
+        // Same wording and same check as OutputParserNode's own badge. A
+        // contract with no named field appends nothing to the agent's prompt
+        // and extracts nothing back out, so the node is inert -- and the extra
+        // model call it costs would be spent on an empty schema.
+        if (!(config?.output_contract?.fields ?? []).some((field) => field.name.trim())) {
+          issues.push('No fields declared')
         }
         break
       }

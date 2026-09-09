@@ -668,3 +668,122 @@ def test_a_senders_expected_output_does_not_reach_the_consumers_prompt() -> None
     text = _prompt(graph, "b", {"a": {"status": "completed", "output_text": "- risk one"}}, CURRENT_PROMPT_CONTRACT)
     assert "- risk one" in text
     assert "A bulleted list of risks." not in text
+
+
+# ----------------------------------------------------------------------
+# The Output Parser node's shape block
+# ----------------------------------------------------------------------
+#
+# The half of `output_contract` that never existed. Motoro's extract_payload is
+# a post-hoc extractor -- a second LLM call over text the agent already
+# finished -- and the agent was never told the contract existed, so the
+# extractor was pulling `n_rows` out of prose with no reason to contain it.
+# Wiring a parser now states the fields up front. Like everything else appended
+# here, current contract only.
+
+
+def _with_parser(fields: list[dict[str, Any]], *, legacy: bool = False, enabled: bool = True) -> dict[str, Any]:
+    """An agent whose field spec arrives either from a wired Output Parser node
+    or (``legacy``) from its own stored ``config.output_contract``. Both must
+    produce the same prompt -- that is what makes the fallback safe."""
+    agent = _agent("a", "Analyst")
+    contract = {"name": "DCReport", "fields": fields}
+    if legacy:
+        agent["data"]["config"]["output_contract"] = contract
+        return {"nodes": [agent], "edges": []}
+    parser_config: dict[str, Any] = {"output_contract": contract}
+    if not enabled:
+        parser_config["enabled"] = False
+    return {
+        "nodes": [agent, {"id": "p1", "type": "output_parser", "data": {"label": "", "config": parser_config}}],
+        "edges": [{"id": "p1-a", "source": "p1", "target": "a", "targetHandle": "output_parser"}],
+    }
+
+
+def test_a_wired_parsers_fields_are_named_in_the_producers_prompt() -> None:
+    text = _prompt(
+        _with_parser([{"name": "n_rows", "type": "integer", "description": "Row count after cleaning"}]),
+        "a",
+        {},
+        CURRENT_PROMPT_CONTRACT,
+    )
+    assert "state each one explicitly:" in text
+    assert "- n_rows (integer) -- Row count after cleaning" in text
+
+
+def test_a_field_with_no_description_still_names_its_type() -> None:
+    text = _prompt(_with_parser([{"name": "n_rows", "type": "integer"}]), "a", {}, CURRENT_PROMPT_CONTRACT)
+    assert "- n_rows (integer)" in text
+    assert "--" not in text.split("state each one explicitly:")[1]
+
+
+def test_a_legacy_stored_contract_produces_the_same_block_as_a_wired_parser() -> None:
+    """The fallback is permanent, so the two paths must not drift: an SDK-created
+    agent carrying the field gets exactly the prompt the canvas would build."""
+    fields = [{"name": "n_rows", "type": "integer", "description": "Row count"}]
+    wired = _prompt(_with_parser(fields), "a", {}, CURRENT_PROMPT_CONTRACT)
+    stored = _prompt(_with_parser(fields, legacy=True), "a", {}, CURRENT_PROMPT_CONTRACT)
+    assert wired == stored
+
+
+def test_alias_types_are_printed_as_stored() -> None:
+    """`object`/`array`/`number` are what the spinal contracts actually hold --
+    Motoro's _TYPE_MAP accepts them, and nothing may rewrite them to tidy a
+    dropdown."""
+    text = _prompt(
+        _with_parser([{"name": "recipe", "type": "object"}, {"name": "k", "type": "number"}], legacy=True),
+        "a",
+        {},
+        CURRENT_PROMPT_CONTRACT,
+    )
+    assert "- recipe (object)" in text
+    assert "- k (number)" in text
+
+
+def test_a_disabled_parser_appends_nothing() -> None:
+    graph = {"nodes": [_agent("a", "Analyst")], "edges": []}
+    off = _with_parser([{"name": "n_rows", "type": "integer"}], enabled=False)
+    assert _prompt(off, "a", {}, CURRENT_PROMPT_CONTRACT) == _prompt(graph, "a", {}, CURRENT_PROMPT_CONTRACT)
+
+
+def test_a_contract_with_no_usable_fields_appends_nothing() -> None:
+    graph = {"nodes": [_agent("a", "Analyst")], "edges": []}
+    baseline = _prompt(graph, "a", {}, CURRENT_PROMPT_CONTRACT)
+    assert _prompt(_with_parser([]), "a", {}, CURRENT_PROMPT_CONTRACT) == baseline
+    assert _prompt(_with_parser([{"name": "  ", "type": "integer"}]), "a", {}, CURRENT_PROMPT_CONTRACT) == baseline
+
+
+def test_the_legacy_contract_ignores_the_parser_entirely() -> None:
+    """Frozen format: the spinal experiments all carry contracts and resolve to
+    this contract, so their prompts must not move by a byte."""
+    graph = {"nodes": [_agent("a", "Analyst")], "edges": []}
+    assert _prompt(
+        _with_parser([{"name": "n_rows", "type": "integer"}]), "a", {}, LEGACY_PROMPT_CONTRACT
+    ) == _prompt(graph, "a", {}, LEGACY_PROMPT_CONTRACT)
+
+
+def test_the_shape_block_comes_after_expected_output() -> None:
+    """Expected output describes the answer's form; the parser names the facts
+    it must contain. More specific goes last."""
+    graph = _with_parser([{"name": "n_rows", "type": "integer"}])
+    graph["nodes"][0]["data"]["config"]["expected_output"] = "A short paragraph."
+    text = _prompt(graph, "a", {}, CURRENT_PROMPT_CONTRACT)
+    assert text.index("A short paragraph.") < text.index("state each one explicitly:")
+
+
+def test_a_senders_parser_fields_do_not_reach_the_consumers_prompt() -> None:
+    """Same rule as Expected output: the shape a producer promises is shown to
+    the user, not narrated to the consuming model."""
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "Review {{previous}}."
+    graph["nodes"].append(
+        {
+            "id": "p1",
+            "type": "output_parser",
+            "data": {"label": "", "config": {"output_contract": {"name": "R", "fields": [{"name": "n_rows"}]}}},
+        }
+    )
+    graph["edges"].append({"id": "p1-a", "source": "p1", "target": "a", "targetHandle": "output_parser"})
+    text = _prompt(graph, "b", {"a": {"status": "completed", "output_text": "4300 rows"}}, CURRENT_PROMPT_CONTRACT)
+    assert "4300 rows" in text
+    assert "n_rows" not in text

@@ -2244,7 +2244,7 @@ def test_tool_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
     ):
         topological_order(graph)
 
@@ -2368,7 +2368,7 @@ def test_dataset_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
     ):
         topological_order(graph)
 
@@ -2428,7 +2428,7 @@ def test_script_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
     ):
         topological_order(graph)
 
@@ -2489,7 +2489,7 @@ def test_skill_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
     ):
         topological_order(graph)
 
@@ -2782,7 +2782,7 @@ def test_architectural_pattern_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
     ):
         topological_order(graph)
 
@@ -3110,6 +3110,151 @@ async def test_run_protocol_tool_source_node_never_gets_its_own_turn(
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
+
+
+# --- Output Parser connector (pure) ------------------------------------------
+
+_CONTRACT = {"name": "DCReport", "fields": [{"name": "n_rows", "type": "integer", "description": "Row count"}]}
+
+
+def _parser_node(node_id: str = "p1", contract: dict | None = None, enabled: bool | None = None) -> dict:
+    config: dict = {"output_contract": contract if contract is not None else _CONTRACT}
+    if enabled is not None:
+        config["enabled"] = enabled
+    return {"id": node_id, "type": "output_parser", "data": {"label": "", "config": config}}
+
+
+def _parser_edge(source: str, target: str) -> dict:
+    return {
+        "id": f"{source}-{target}-output_parser",
+        "source": source,
+        "target": target,
+        "targetHandle": "output_parser",
+    }
+
+
+def _agent_with_parser(*, legacy: dict | None = None, enabled: bool | None = None) -> dict:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    if legacy is not None:
+        agent["data"]["config"]["output_contract"] = legacy
+    return {
+        "nodes": [_llm_node(), agent, _parser_node(enabled=enabled)],
+        "edges": [agent_llm_edge, _parser_edge("p1", "a")],
+    }
+
+
+def test_wired_output_parser_resolves_its_contract() -> None:
+    assert pe._resolve_output_contract(_agent_with_parser(), "a") == _CONTRACT
+
+
+def test_no_parser_and_no_legacy_field_resolves_none() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [_llm_node(), agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_output_contract(graph, "a") is None
+
+
+def test_legacy_stored_contract_still_resolves_with_no_parser_wired() -> None:
+    """The permanent fallback: 8 published revisions carry this field, and
+    ``POST /agents`` can still set it, so it is never dead code."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    agent["data"]["config"]["output_contract"] = _CONTRACT
+    graph = {"nodes": [_llm_node(), agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_output_contract(graph, "a") == _CONTRACT
+    # ...and such a graph is still a valid graph, not one that now needs fixing.
+    topological_order(graph)
+
+
+def test_legacy_contract_types_are_not_normalised() -> None:
+    """The stored spinal contracts use ``object``/``array``/``number``, which
+    Motoro's own _TYPE_MAP accepts as aliases. Nothing here may rewrite them."""
+    contract = {"name": "FTEReport", "fields": [{"name": "recipe", "type": "object"}, {"name": "k", "type": "number"}]}
+    agent, agent_llm_edge = _agent_with_llm("a")
+    agent["data"]["config"]["output_contract"] = contract
+    resolved = pe._resolve_output_contract({"nodes": [_llm_node(), agent], "edges": [agent_llm_edge]}, "a")
+    assert resolved is not None
+    assert [f["type"] for f in resolved["fields"]] == ["object", "number"]
+
+
+def test_disabled_output_parser_contributes_nothing() -> None:
+    assert pe._resolve_output_contract(_agent_with_parser(enabled=False), "a") is None
+
+
+def test_disabled_parser_does_not_fall_back_to_a_legacy_field() -> None:
+    """Disabling the parser means "no extraction this run". Quietly reaching
+    past it to a stored field would be a different contract than either."""
+    graph = _agent_with_parser(legacy=_CONTRACT, enabled=False)
+    # The graph itself is refused (below), but were it ever reached, disabling
+    # must not resurrect the legacy field.
+    assert pe._resolve_output_contract(graph, "a") is None
+
+
+def test_multiple_output_parser_connections_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _parser_node("p1"), _parser_node("p2")],
+        "edges": [agent_llm_edge, _parser_edge("p1", "a"), _parser_edge("p2", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="at most one Output Parser connection"):
+        topological_order(graph)
+
+
+def test_parser_plus_legacy_contract_on_one_node_raises() -> None:
+    with pytest.raises(ProtocolValidationError, match="both an Output Parser connection and its own stored"):
+        topological_order(_agent_with_parser(legacy=_CONTRACT))
+
+
+def test_output_parser_connection_source_must_be_a_parser_node() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _memory_node("m1")],
+        "edges": [agent_llm_edge, _parser_edge("m1", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="Output Parser connection must come from an Output Parser"):
+        topological_order(graph)
+
+
+def test_output_parser_connection_on_critic_gate_raises() -> None:
+    """A critic's verdict schema is CRITIC_OUTPUT_CONTRACT, fixed by the
+    executor -- the connector is deliberately agent-only."""
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    gate_llm_edge = _llm_edge("llm", "g1")
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate"), _parser_node("p1")],
+        "edges": [
+            worker_llm_edge,
+            gate_llm_edge,
+            {"id": "w1-g1", "source": "w1", "target": "g1"},
+            _parser_edge("p1", "g1"),
+        ],
+    }
+    with pytest.raises(
+        ProtocolValidationError,
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
+    ):
+        topological_order(graph)
+
+
+def test_output_parser_node_with_plain_outgoing_edge_raises() -> None:
+    """A pure config source may only emit into its own connector -- an
+    output_parser wired into the main pipeline is not a pipeline step."""
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _parser_node("p1")],
+        "edges": [agent_llm_edge, {"id": "p1-a", "source": "p1", "target": "a"}],
+    }
+    with pytest.raises(ProtocolValidationError):
+        topological_order(graph)
+
+
+def test_output_parser_is_never_a_sink() -> None:
+    """It's a pure config source, so it must not be mistaken for the
+    pipeline's final output."""
+    graph = _agent_with_parser()
+    assert pe.sink_node_ids(graph) == ["a"]
 
 
 # --- Coordination strategy validation (pure) ---------------------------------

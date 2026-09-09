@@ -26,6 +26,7 @@ export interface ProtocolNode {
     | CriticGateNodeData
     | LlmNodeData
     | MemoryNodeData
+    | OutputParserNodeData
     | DatasetNodeData
     | ScriptNodeData
     | SkillNodeData
@@ -210,6 +211,11 @@ export interface AgentNodeConfig {
   // below is the typed one, and it exists for a different consumer: tools and
   // metrics, which cannot read prose.
   expected_output?: string
+  // "I want typed output" -- turns on the Output Parser connector so one can be
+  // wired. Persisted rather than component state because declared-but-not-yet-
+  // connected is a real, legitimate state that has to survive a reload, the
+  // same shape as a declared-but-unbound factor. Absent means off.
+  require_output_parser?: boolean
   // Model, tool assignment, and execution pattern are no longer fields
   // here -- resolved from the node's required LLM connector, optional Tool
   // connector(s), and optional Architectural Pattern connector instead (see
@@ -217,6 +223,16 @@ export interface AgentNodeConfig {
   // services.protocol_execution's _resolve_llm_config/_resolve_tool_config/
   // _resolve_pattern_config) -- deliberately kept out of a node's own
   // settings.
+  //
+  // **Legacy.** This is now the Output Parser connector's job
+  // (OutputParserNodeConfig above), and no new graph gets one from the canvas:
+  // there is no editor for it in this node's inspector any more, only a banner
+  // offering to convert it to a node. It is still READ forever, though, and is
+  // not a deprecation ramp -- every ProtocolRevision carrying one is an
+  // immutable snapshot that finished runs point at, and POST /agents still
+  // accepts the field, so the SDK can set it on a brand-new graph at any time.
+  // See services.protocol_execution's _resolve_output_contract. Having both
+  // this and a wired parser on one node is refused at publish.
   output_contract: OutputContract | null
   budget_limit_usd: number | null
   max_run_duration_seconds: number | null
@@ -431,6 +447,48 @@ export function defaultMemoryNodeData(label = 'Memory'): MemoryNodeData {
       enabled: true,
     },
   }
+}
+
+// An "Output Parser" node carries the field spec that turns an Agent's prose
+// answer into a typed payload -- the `output_contract` that used to be a field
+// in the agent's own Settings tab. It became a node for the same reason model,
+// tools and pattern did, plus one argument they didn't have: extraction is a
+// *second LLM call* per run (Motoro's extract_payload runs after the agent has
+// already finished writing), so its cost belongs somewhere visible rather than
+// buried in one node's settings.
+//
+// Being a node also fixes what the field couldn't: a wired parser contributes
+// its field list to the producer's prompt (services.protocol_execution's
+// _output_shape_block), so the extractor reads text that was actually asked to
+// contain the fields it wants. The field never did that -- the agent was never
+// told the contract existed.
+//
+// One node type, not several: Motoro has exactly one extraction mechanism. A
+// JSON-schema paste would be an editor mode inside this node; deterministic
+// (regex/JSONPath) extraction would be a genuinely different mechanism and a
+// second node type, but it doesn't exist in core yet.
+export interface OutputParserNodeConfig {
+  output_contract: OutputContract | null
+  // Absent means enabled, matching `active`'s own convention (AgentNodeData).
+  // Unlike Memory's, this has a real runtime effect: disabling is how you stop
+  // paying for the extra LLM call for a run without deleting the field spec.
+  // _resolve_output_contract deliberately does NOT fall back to the agent's
+  // legacy stored contract when a wired parser is disabled -- "off" means off.
+  enabled?: boolean
+}
+
+export interface OutputParserNodeData {
+  label: string
+  config: OutputParserNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultOutputParserNodeData(label = 'Output Parser'): OutputParserNodeData {
+  // One blank field rather than none: an empty contract appends nothing to the
+  // prompt and extracts nothing, so a parser with no fields is a node that
+  // silently does nothing. Starting with a row makes the next step obvious.
+  return { label, config: { output_contract: { name: '', fields: [{ name: '', type: 'string', description: '' }] }, enabled: true } }
 }
 
 // A "Dataset" node -- declares which registered dataset an Agent's

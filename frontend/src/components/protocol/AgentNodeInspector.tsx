@@ -14,7 +14,6 @@ import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField
 import { ReceivesSummary, SendsSummary } from './HandoffSummary'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { NodeRunOutputPanel, ReceivedPromptPanel, UnresolvedReferencesNote } from './NodeRunOutputPanel'
-import { OutputContractEditor } from './OutputContractEditor'
 import { PromptPreviewPanel } from './PromptPreviewPanel'
 import { PromptReferenceField } from './PromptReferenceField'
 import { useProtocolCanvasActions } from './ProtocolCanvasContext'
@@ -68,6 +67,7 @@ export function AgentNodeInspector({
   markedLeadAgentId,
   referenceScope,
   handoffPeers,
+  wiredOutputParserLabel,
   fetchPromptPreview,
   nodeRun,
   onChange,
@@ -85,6 +85,10 @@ export function AgentNodeInspector({
   // Who hands off to this node and who it hands off to. Same reasoning again --
   // it's the wiring around the node, which only the canvas can see.
   handoffPeers: HandoffPeers
+  // The label of the Output Parser node wired into this agent, or null if
+  // none is. Same reasoning as markedLeadAgentId: it's wiring, which only the
+  // canvas can see.
+  wiredOutputParserLabel: string | null
   // Assembles the real prompt server-side against the live canvas. A callback
   // rather than an id pair because the graph it posts is the unsaved one on
   // screen, which only ProtocolCanvas holds.
@@ -94,7 +98,7 @@ export function AgentNodeInspector({
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
-  const { requestMakeFactor } = useProtocolCanvasActions()
+  const { requestMakeFactor, requestConnectorAdd, convertLegacyOutputContract } = useProtocolCanvasActions()
   // Measured at drag start so each pane's ceiling accounts for what the other
   // one is currently taking; read through a ref because the two hooks below
   // would otherwise have to reference each other's not-yet-declared width.
@@ -162,6 +166,11 @@ export function AgentNodeInspector({
   // canvas, and silently reassigning on click would move a role the user might
   // only have been inspecting.
   const canMarkLead = leadRole !== null && (markedLeadAgentId === null || markedLeadAgentId === node.id)
+  // The pre-node way of declaring an output shape, still honoured by the
+  // executor when no parser node is wired (see _resolve_output_contract).
+  // Its presence swaps the section below into the convert-it banner: an agent
+  // is never allowed to have both at once.
+  const legacyContract = config.output_contract
 
   function patchConfig(patch: Partial<AgentNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
@@ -356,12 +365,82 @@ export function AgentNodeInspector({
                       What shape the answer should take, in plain English — appended to the prompt above. It is a
                       hint to the model, not a rule: nothing parses or validates it, and a run does not fail for
                       ignoring it. Downstream agents see it in their Input panel, so it is also how you tell the
-                      next step what to expect. For a typed contract that tools and metrics can read instead, use
-                      Output contract in Settings.
+                      next step what to expect. To also read named, typed values back out of the answer, connect
+                      an Output Parser below.
                     </p>
                   </div>
                 )}
               </FactorBindableField>
+
+              {/* Directly under Expected output, because the two are one
+                  decision at two prices: the field alone is a free prompt
+                  hint, and adding the parser buys typed extraction for one
+                  extra model call. Splitting them across tabs is what made
+                  the old Settings-tab contract invisible. */}
+              <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                <Label className="text-sm">Output parser</Label>
+                {legacyContract ? (
+                  // Read-only on purpose: this contract is still live (the
+                  // executor falls back to it whenever no parser node is
+                  // wired), but it is no longer editable here -- the number
+                  // of agents carrying one can only go down. Editing means
+                  // converting first.
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      This agent carries an output contract stored on the node itself, from before parsers were
+                      canvas nodes. It still runs, and still costs an extra model call — but it is invisible on the
+                      canvas, and it tells the agent nothing about what to write. Convert it to see and edit it.
+                    </p>
+                    <div className="rounded border bg-background/60 p-2 font-mono text-[11px]">
+                      <div className="text-muted-foreground">{legacyContract.name || '(unnamed)'}</div>
+                      {(legacyContract.fields ?? []).map((field, i) => (
+                        <div key={i} className="truncate">
+                          {field.name || '(unnamed)'}
+                          <span className="text-muted-foreground"> ({field.type})</span>
+                        </div>
+                      ))}
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => convertLegacyOutputContract(node.id)}>
+                      Convert to an Output Parser node
+                    </Button>
+                  </>
+                ) : wiredOutputParserLabel !== null ? (
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">{wiredOutputParserLabel || 'Output Parser'}</span> is
+                    connected. Open it on the canvas to edit the fields it extracts.
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Reads named, typed values back out of this agent's answer, and tells the agent to state them.
+                      Costs one extra model call per run, made after the answer is written.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => requestConnectorAdd({ nodeId: node.id, slot: 'output_parser' })}
+                    >
+                      Connect an Output Parser
+                    </Button>
+                    {/* The connector is hidden on an agent that has no parser
+                        and hasn't asked for one (see AgentNode's
+                        showOutputParser) -- this is how you get it drawn
+                        without going through the button above, e.g. to drag
+                        an existing parser node onto it. */}
+                    <label
+                      htmlFor={`require-output-parser-${node.id}`}
+                      className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted/50"
+                    >
+                      <Checkbox
+                        id={`require-output-parser-${node.id}`}
+                        checked={config.require_output_parser === true}
+                        onCheckedChange={(checked) => patchConfig({ require_output_parser: checked === true })}
+                      />
+                      Show the Output Parser connector on this agent
+                    </label>
+                  </>
+                )}
+              </div>
 
               <div className="space-y-1.5">
                 <Label htmlFor="node-goal">Goal — Optional</Label>
@@ -468,7 +547,6 @@ export function AgentNodeInspector({
                 </div>
               </div>
 
-              <OutputContractEditor value={config.output_contract} onChange={(next) => patchConfig({ output_contract: next })} />
             </TabsContent>
           </Tabs>
         </div>

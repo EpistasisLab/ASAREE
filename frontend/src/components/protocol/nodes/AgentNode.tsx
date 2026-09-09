@@ -1,4 +1,4 @@
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useNodeConnections, useReactFlow, type NodeProps } from '@xyflow/react'
 import { Bot } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { cardAccent } from '@/lib/utils'
@@ -75,6 +75,22 @@ export function AgentNode({
   const { updateNodeData } = useReactFlow()
   const { requestRunNode } = useProtocolCanvasActions()
   const isActive = data.active ?? true
+
+  // The Output Parser slot is the one connector that is normally NOT drawn:
+  // most agents answer in prose and shouldn't pay for a seventh caption on a
+  // card that already has six. It appears when the user asks for it in the
+  // inspector (`require_output_parser`), when something is already wired to
+  // it, or when this agent still carries a legacy stored contract (the
+  // inspector's Convert button is right there, and the slot is where the
+  // converted node lands).
+  //
+  // The already-wired clause is load-bearing, not defensive: React Flow drops
+  // an edge whose target handle isn't rendered, so a graph loaded with a
+  // parser edge but the toggle off would silently lose the edge -- and, since
+  // the canvas autosaves, lose it for good.
+  const parserConnections = useNodeConnections({ id, handleType: 'target', handleId: 'output_parser' })
+  const showOutputParser =
+    !!data.config?.require_output_parser || parserConnections.length > 0 || !!data.config?.output_contract
 
   return (
     <div
@@ -327,6 +343,26 @@ export function AgentNode({
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.tool}>Tool</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="tool" left={CONNECTOR_LEFT.tool} alwaysVisible />
+      {/* Output Parser -- the field spec the agent's finished answer is read
+          back into. Last on the bottom edge, at 95%: it's the only connector
+          here that acts AFTER the agent has run, so it sits at the end of the
+          row the run reads left-to-right (AI -> Memory -> Tool -> Parser).
+          Capped at one (no `alwaysVisible`) -- two contracts would be two
+          answers to "what shape is this agent's output". */}
+      {showOutputParser && (
+        <>
+          <Handle
+            type="target"
+            id="output_parser"
+            position={Position.Bottom}
+            style={{ left: CONNECTOR_LEFT.output_parser }}
+            title="Output Parser -- extracts typed fields from this agent's answer (one extra model call per run)"
+            className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+          />
+          <ConnectorHandleLabel left={CONNECTOR_LEFT.output_parser}>Parser</ConnectorHandleLabel>
+          <ConnectorAddStub nodeId={id} slot="output_parser" left={CONNECTOR_LEFT.output_parser} />
+        </>
+      )}
       <Handle
         type="source"
         position={Position.Right}

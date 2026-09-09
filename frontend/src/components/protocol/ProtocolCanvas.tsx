@@ -36,6 +36,7 @@ import {
   defaultMemoryNodeData,
   defaultOpenAiLlmNodeData,
   defaultOpenRouterLlmNodeData,
+  defaultOutputParserNodeData,
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
   defaultSingleAgentBaselinePatternNodeData,
@@ -49,6 +50,7 @@ import type {
   MemoryNodeData,
   OkfBundleNodeData,
   OkfDocumentNodeData,
+  OutputParserNodeData,
   ProtocolEdge,
   ProtocolGraph,
   ProtocolNode,
@@ -86,6 +88,7 @@ import {
 } from './mcpServerCatalog'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { MemoryNodeInspector } from './MemoryNodeInspector'
+import { OutputParserNodeInspector } from './OutputParserNodeInspector'
 import {
   ProtocolCanvasActionsProvider,
   type ConnectorAddRequest,
@@ -115,6 +118,7 @@ import { LlmNode } from './nodes/LlmNode'
 import { McpClientToolNode } from './nodes/McpClientToolNode'
 import { McpToolNode } from './nodes/McpToolNode'
 import { MemoryNode } from './nodes/MemoryNode'
+import { OutputParserNode } from './nodes/OutputParserNode'
 import { ReasonActPatternNode } from './nodes/ReasonActPatternNode'
 import { ScriptNode } from './nodes/ScriptNode'
 import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatternNode'
@@ -159,6 +163,7 @@ const NODE_TYPES = {
   llm_openrouter: LlmNode,
   llm_local: LlmNode,
   memory: MemoryNode,
+  output_parser: OutputParserNode,
   dataset: DatasetNode,
   skill: SkillNode,
   okf_bundle: OkfBundleNode,
@@ -205,6 +210,7 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'llm_openrouter') return defaultOpenRouterLlmNodeData()
   if (nodeType === 'llm_local') return defaultLocalLlmNodeData()
   if (nodeType === 'memory') return defaultMemoryNodeData()
+  if (nodeType === 'output_parser') return defaultOutputParserNodeData()
   if (nodeType === 'dataset') return defaultDatasetNodeData()
   if (nodeType === 'script') return defaultScriptNodeData()
   if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData()
@@ -265,6 +271,7 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   ai: { allowedTypes: LLM_NODE_TYPES, title: 'Add AI' },
   tool: { allowedTypes: [MCP_SERVER_BROWSE, 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
+  output_parser: { allowedTypes: ['output_parser'], title: 'Add Output Parser' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
   dataset: { allowedTypes: [DATASET_BROWSE], title: 'Add Dataset' },
@@ -735,6 +742,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     () => handoffPeers(nodes as unknown as ProtocolNode[], edges as unknown as ProtocolEdge[], selectedNodeId),
     [nodes, edges, selectedNodeId],
   )
+  // The Output Parser wired into the selected agent, if any -- its label, or
+  // null for "none". Same reasoning as markedLeadAgentId again: the inspector
+  // sees one node, and whether a parser hangs off it is wiring.
+  const selectedOutputParserLabel = useMemo(() => {
+    if (!selectedNodeId) return null
+    const edge = edges.find((e) => e.target === selectedNodeId && e.targetHandle === 'output_parser')
+    if (!edge) return null
+    return (nodes.find((n) => n.id === edge.source)?.data as OutputParserNodeData | undefined)?.label ?? ''
+  }, [nodes, edges, selectedNodeId])
   // The prompt preview is assembled by the backend from the graph on screen,
   // which includes edits autosave hasn't flushed. Sent rather than read back
   // server-side for that reason; nothing is written.
@@ -1013,9 +1029,79 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
     [experimentId, experimentLocked],
   )
+  // Moves an agent's stored `config.output_contract` onto a real Output Parser
+  // node -- see ProtocolCanvasContext for why this is a button rather than
+  // something that happens on load. Everything lands in one pair of setNodes/
+  // setEdges calls: the intermediate state (contract on the node AND on the
+  // agent) is exactly the one topological_order refuses to publish.
+  const convertLegacyOutputContract = useCallback(
+    (nodeId: string) => {
+      if (experimentLocked) return
+      const agent = nodes.find((n) => n.id === nodeId)
+      const contract = (agent?.data as AgentNodeData | undefined)?.config?.output_contract
+      if (!agent || !contract) return
+      const desired = {
+        x: agent.position.x + connectorNodeOffsetX(agent.type, 'output_parser'),
+        y: agent.position.y + 160,
+      }
+      const position = findFreePosition(nodes.map((n) => n.position), desired, CONNECTOR_CHILD_CLEARANCE)
+      const parserId = newNodeId()
+      // The contract is copied across as-is, field types included: normalising
+      // Motoro's aliases (integer -> int, and so on) here would silently
+      // diverge this draft from the published revisions production runs still
+      // execute. Converting changes WHERE the contract lives, nothing else.
+      const parserData = defaultOutputParserNodeData()
+      parserData.config.output_contract = contract
+      setNodes((nds) =>
+        nds
+          .map((n) =>
+            n.id === nodeId
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    config: {
+                      ...(n.data as AgentNodeData).config,
+                      output_contract: null,
+                      // Keeps the connector drawn once the field that was
+                      // revealing it is gone.
+                      require_output_parser: true,
+                    },
+                  },
+                }
+              : n,
+          )
+          .concat({ id: parserId, type: 'output_parser', position, data: parserData }),
+      )
+      setEdges((eds) =>
+        eds.concat({
+          id: newNodeId(),
+          source: parserId,
+          sourceHandle: 'output_parser',
+          target: nodeId,
+          targetHandle: 'output_parser',
+        }),
+      )
+    },
+    [experimentLocked, nodes, setNodes, setEdges],
+  )
   const canvasActions = useMemo(
-    () => ({ requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode, requestMakeFactor }),
-    [requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode, requestMakeFactor],
+    () => ({
+      requestConnectorAdd,
+      requestMainEdgeAdd,
+      requestEdgeInsert,
+      requestRunNode,
+      requestMakeFactor,
+      convertLegacyOutputContract,
+    }),
+    [
+      requestConnectorAdd,
+      requestMainEdgeAdd,
+      requestEdgeInsert,
+      requestRunNode,
+      requestMakeFactor,
+      convertLegacyOutputContract,
+    ],
   )
 
   // Backing data for the per-node factor picker above -- fetched only while
@@ -1449,6 +1535,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | CriticGateNodeData
       | LlmNodeData
       | MemoryNodeData
+      | OutputParserNodeData
       | DatasetNodeData
       | SkillNodeData
       | OkfBundleNodeData
@@ -1491,6 +1578,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           )
         case 'memory':
           return sourceNode.type === 'memory' && targetNode.type === 'agent'
+        case 'output_parser':
+          // Agent only, deliberately not critic_gate: a gate's answer is a
+          // pass/fail decision the executor already reads structurally, so
+          // there is nothing for a contract to extract.
+          return sourceNode.type === 'output_parser' && targetNode.type === 'agent'
         case 'architectural_pattern':
           return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
         case 'skill':
@@ -1516,6 +1608,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           const sourceCanFeedMainFlow =
             !LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'memory' &&
+            sourceNode.type !== 'output_parser' &&
             !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'dataset' &&
             sourceNode.type !== 'skill' &&
@@ -1796,6 +1889,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
           />
+        ) : selectedNode?.type === 'output_parser' ? (
+          <OutputParserNodeInspector
+            node={{ id: selectedNode.id, type: 'output_parser', position: selectedNode.position, data: selectedNode.data as OutputParserNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
         ) : selectedNode?.type === 'dataset' ? (
           <DatasetNodeInspector
             node={{ id: selectedNode.id, type: 'dataset', position: selectedNode.position, data: selectedNode.data as DatasetNodeData }}
@@ -1875,6 +1977,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               markedLeadAgentId={markedLeadAgentId}
               referenceScope={referenceScope}
               handoffPeers={selectedHandoffPeers}
+              wiredOutputParserLabel={selectedOutputParserLabel}
               fetchPromptPreview={fetchPromptPreview}
               nodeRun={runQuery.data?.node_runs[selectedNode.id]}
               onChange={updateNodeData}

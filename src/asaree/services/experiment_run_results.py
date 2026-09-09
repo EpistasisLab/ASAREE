@@ -183,6 +183,7 @@ _NODE_TYPE_FALLBACK_LABELS = {
     "skill": "Skill",
     "okf_bundle": "OKF Bundle",
     "okf_document": "OKF Document",
+    "output_parser": "Output Parser",
     "reason_act_pattern": "Reason + Act",
     "single_agent_baseline_pattern": "Single-Agent Baseline",
 }

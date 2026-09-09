@@ -360,25 +360,27 @@ export function AgentNodeInspector({
                 onUnbind={() => unbindFactor('config.system_prompt')}
               >
                 {(trigger) => (
-                  <div className="w-full space-y-1.5">
-                    <Label htmlFor="node-system-prompt" className="flex items-center gap-1.5">
-                      System prompt — Optional
-                      {trigger}
-                    </Label>
-                    <Textarea
-                      id="node-system-prompt"
-                      rows={6}
-                      className="font-mono text-xs"
-                      value={config.system_prompt}
-                      onChange={(e) => patchConfig({ system_prompt: e.target.value })}
-                      placeholder={defaultSystemPrompt(data.label, 'Agent')}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Behavioral instructions layered on top of the Reason + Act pattern's own built-in system
-                      prompt. Leave blank to use the explicit default shown above instead (this agent's own canvas
-                      label, not a bare/uninstructed mode).
-                    </p>
-                  </div>
+                  <PromptReferenceField
+                    // Same remount-on-node-switch reason as Prompt above: the
+                    // field holds a local display draft keyed to one node.
+                    key={node.id}
+                    id="node-system-prompt"
+                    label="System prompt — Optional"
+                    trigger={trigger}
+                    rows={6}
+                    className="font-mono text-xs"
+                    value={config.system_prompt}
+                    scope={referenceScope}
+                    placeholder={defaultSystemPrompt(data.label, 'Agent')}
+                    onChange={(system_prompt) => patchConfig({ system_prompt })}
+                    description={
+                      <>
+                        Behavioral instructions layered on top of the Reason + Act pattern's own built-in system
+                        prompt. Leave blank to use the explicit default shown above instead (this agent's own canvas
+                        label, not a bare/uninstructed mode). References resolve here the same way they do in Prompt.
+                      </>
+                    }
+                  />
                 )}
               </FactorBindableField>
 

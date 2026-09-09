@@ -69,6 +69,7 @@ export function PromptReferenceField({
   description,
   rows = 4,
   className,
+  placeholder,
   value,
   scope,
   trigger,
@@ -81,6 +82,9 @@ export function PromptReferenceField({
   description?: ReactNode
   rows?: number
   className?: string
+  /** Shown when empty. The System prompt uses it to display the exact default
+   *  it falls back to, which its own description then refers to. */
+  placeholder?: string
   /** Storage form -- `{{node:<id>}}`, exactly what the run resolves. */
   value: string
   scope: PromptReferenceScope
@@ -176,6 +180,14 @@ export function PromptReferenceField({
       accept(matches[highlight])
     } else if (event.key === 'Escape') {
       event.preventDefault()
+      // Escape dismisses the innermost thing, not the whole inspector. The
+      // dialog's own dismissal listens for keydown on `document` (base-ui's
+      // useDismiss, bubble phase) and it also has an onKeyDown on the popup,
+      // so both the native and the React path have to be cut here -- without
+      // this, closing the suggestion list throws away every unsaved edit in
+      // the node behind it. Only reached while the list is open (see the
+      // guard above), so Escape still closes the inspector otherwise.
+      event.stopPropagation()
       setOpen(false)
       setTriggerStart(null)
     }
@@ -216,6 +228,7 @@ export function PromptReferenceField({
         ref={textareaRef}
         rows={rows}
         className={className}
+        placeholder={placeholder}
         value={draft}
         onChange={(e) => handleChange(e.target.value, e.target.selectionStart)}
         onKeyDown={handleKeyDown}

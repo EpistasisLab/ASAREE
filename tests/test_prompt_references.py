@@ -21,6 +21,7 @@ import pytest
 from asaree.services import prompt_references as pr
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
+    _build_system_prompt,
     referenceable_node_ids,
     validate_prompt_references,
 )
@@ -237,3 +238,85 @@ def test_the_legacy_contract_is_not_policed_at_all() -> None:
     so validating it would refuse an experiment retroactively."""
     _validate("Review {{node:side}}.", spec=None)
     _validate("Review {{previous}}.", spec={"prompt_contract_version": 1})
+
+
+# ----------------------------------------------------------------------
+# The System prompt field
+# ----------------------------------------------------------------------
+#
+# Same picker, same syntax, same rules -- the tests below exist because that
+# equivalence is the whole claim. A token that resolved in Prompt and arrived
+# as literal `{{node:a}}` text in System prompt would be the worst outcome of
+# offering the picker in both boxes.
+
+
+def _validate_system(system_prompt: str, *, spec: dict[str, Any] | None = CURRENT) -> None:
+    reviewer = _agent("b", "Reviewer")
+    reviewer["data"]["config"]["system_prompt"] = system_prompt
+    graph = {
+        "nodes": [_agent("a", "Analyst"), _agent("side", "Sidebar"), reviewer],
+        "edges": [_edge("a", "b")],
+    }
+    validate_prompt_references(spec, graph=graph)
+
+
+def test_a_system_prompt_reference_is_policed_like_a_prompt_reference() -> None:
+    _validate_system("You review {{node:a}}.")
+    with pytest.raises(ProtocolValidationError, match="does not run before it"):
+        _validate_system("You review {{node:side}}.")
+
+
+def test_a_refused_system_prompt_says_which_box_to_open() -> None:
+    """The message is the only thing telling the user which of the node's two
+    reference-bearing fields the bad token is in."""
+    with pytest.raises(ProtocolValidationError) as exc:
+        _validate_system("You review {{node:side}}.")
+    assert "system prompt" in str(exc.value)
+
+
+def test_a_system_prompt_resolves_its_references_on_the_current_contract() -> None:
+    reviewer = _agent("b", "Reviewer")
+    reviewer["data"]["config"]["system_prompt"] = "You review the analyst's work: {{node:a}}"
+    graph = {"nodes": [_agent("a", "Analyst"), reviewer], "edges": [_edge("a", "b")]}
+    node_runs = {"a": {"status": "completed", "output_text": "42 rows, no nulls."}}
+
+    rendered = _build_system_prompt(reviewer, graph, node_runs, prompt_contract_version=2)
+    assert rendered is not None
+    assert "42 rows, no nulls." in rendered
+    assert "{{node:a}}" not in rendered
+
+
+def test_a_system_prompt_stays_literal_on_the_legacy_contract() -> None:
+    """Its bytes are frozen: substituting now would change a prompt a published
+    experiment already ran on."""
+    reviewer = _agent("b", "Reviewer")
+    reviewer["data"]["config"]["system_prompt"] = "You review {{node:a}}"
+    graph = {"nodes": [_agent("a", "Analyst"), reviewer], "edges": [_edge("a", "b")]}
+    node_runs = {"a": {"status": "completed", "output_text": "42 rows."}}
+
+    assert _build_system_prompt(reviewer, graph, node_runs) == "You review {{node:a}}"
+
+
+def test_no_system_prompt_returns_none_so_the_caller_keeps_its_own_default() -> None:
+    """Not the empty string: what an unset System prompt becomes is
+    ``_run_agent_node``'s decision, and answering it here too would give two
+    answers to drift apart."""
+    assert _build_system_prompt(_agent("b", "Reviewer"), {"nodes": [], "edges": []}, {}) is None
+
+
+def test_an_empty_system_prompt_reference_is_reported_not_raised() -> None:
+    """Same out-parameter the user prompt uses, so the Runs tab reports the
+    node rather than which of its fields had the gap."""
+    reviewer = _agent("b", "Reviewer")
+    reviewer["data"]["config"]["system_prompt"] = "You review {{node:a}}"
+    graph = {"nodes": [_agent("a", "Analyst"), reviewer], "edges": [_edge("a", "b")]}
+    unresolved: list[str] = []
+
+    _build_system_prompt(
+        reviewer,
+        graph,
+        {"a": {"status": "completed", "output_text": ""}},
+        prompt_contract_version=2,
+        unresolved_out=unresolved,
+    )
+    assert unresolved == ["a"]

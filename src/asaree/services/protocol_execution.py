@@ -2643,32 +2643,41 @@ def validate_prompt_references(design_spec: dict[str, Any] | None, *, graph: dic
         node_id = node.get("id")
         if not node_id:
             continue
-        prompt = _node_seed_prompt(node)
-        if not prompt_references.has_references(prompt):
-            continue
-        name = _node_display_name(node)
-        allowed = set(referenceable_node_ids(graph, node_id))
-        known = {str(n.get("id")) for n in graph.get("nodes") or []}
+        # Both reference-bearing fields, checked identically: the picker is
+        # offered in the System prompt box too, and it tells the user there
+        # that publishing will be refused for an out-of-scope reference. The
+        # field name goes into the message so a rejected publish says which
+        # box to open.
+        fields = [("prompt", _node_seed_prompt(node))]
+        system_prompt = (node.get("data", {}).get("config", {}) or {}).get("system_prompt")
+        if system_prompt:
+            fields.append(("system prompt", str(system_prompt)))
+        for field, prompt in fields:
+            if not prompt_references.has_references(prompt):
+                continue
+            name = _node_display_name(node)
+            allowed = set(referenceable_node_ids(graph, node_id))
+            known = {str(n.get("id")) for n in graph.get("nodes") or []}
 
-        for referenced in prompt_references.referenced_node_ids(prompt):
-            if referenced not in known:
-                raise ProtocolValidationError(
-                    f"{name}'s prompt references a node that no longer exists ({referenced}). "
-                    "Remove the reference or reconnect the node that replaced it."
-                )
-            if referenced not in allowed:
-                other = _node_display_name(next(n for n in graph["nodes"] if str(n.get("id")) == referenced))
-                raise ProtocolValidationError(
-                    f"{name}'s prompt references {other!r}, which does not run before it. "
-                    "A reference only resolves if the referenced node is upstream on the "
-                    "same path -- connect them, or reference a node that is."
-                )
+            for referenced in prompt_references.referenced_node_ids(prompt):
+                if referenced not in known:
+                    raise ProtocolValidationError(
+                        f"{name}'s {field} references a node that no longer exists ({referenced}). "
+                        "Remove the reference or reconnect the node that replaced it."
+                    )
+                if referenced not in allowed:
+                    other = _node_display_name(next(n for n in graph["nodes"] if str(n.get("id")) == referenced))
+                    raise ProtocolValidationError(
+                        f"{name}'s {field} references {other!r}, which does not run before it. "
+                        "A reference only resolves if the referenced node is upstream on the "
+                        "same path -- connect them, or reference a node that is."
+                    )
 
-        if prompt_references.uses(prompt, prompt_references.PREVIOUS) and not _upstream_ids(graph, node_id):
-            raise ProtocolValidationError(
-                f"{name}'s prompt uses {{{{previous}}}} but nothing is connected to its input. "
-                "Connect an upstream node, or reference one explicitly."
-            )
+            if prompt_references.uses(prompt, prompt_references.PREVIOUS) and not _upstream_ids(graph, node_id):
+                raise ProtocolValidationError(
+                    f"{name}'s {field} uses {{{{previous}}}} but nothing is connected to its input. "
+                    "Connect an upstream node, or reference one explicitly."
+                )
 
 
 #: Stored contract -> the upstream-context builder it selects. Two entries, not
@@ -2917,6 +2926,60 @@ def _build_user_input(
     return "\n\n".join(parts)
 
 
+def _build_system_prompt(
+    node: dict[str, Any],
+    graph: dict[str, Any],
+    node_runs: dict[str, Any],
+    *,
+    prompt_contract_version: int = LEGACY_PROMPT_CONTRACT,
+    upstream_kind: str = "handoff",
+    audience: str = "",
+    unresolved_out: list[str] | None = None,
+) -> str | None:
+    """The user-authored System prompt with its references resolved, or
+    ``None`` when the node has none.
+
+    ``None`` rather than an empty string so the caller keeps its own
+    ``_default_system_prompt`` fallback -- deciding what an unset system prompt
+    becomes is :func:`_run_agent_node`'s job, and duplicating it here would give
+    two answers to drift apart.
+
+    The System prompt gets the same references the user prompt does because the
+    picker offers them in both boxes; a token that resolved in one field and
+    arrived as literal ``{{node:...}}`` text in the other would be the worse
+    outcome. Note what that means: a referenced upstream output is *model* text
+    landing at the highest-trust position in the request. It is fenced by
+    :func:`fence_upstream` exactly as in the user prompt (same
+    :func:`_render_reference`), which is what keeps it quotable material rather
+    than instructions -- but a user who writes ``{{previous}}`` into a system
+    prompt is choosing that placement, so it is theirs to choose deliberately.
+
+    Legacy stays literal, for the same reason :func:`_build_user_input` does:
+    that contract's prompts are frozen, and substituting into one now would
+    change bytes a published experiment already ran on.
+    """
+    authored = (node.get("data", {}).get("config", {}) or {}).get("system_prompt")
+    if not authored:
+        return None
+    contract = (
+        prompt_contract_version if prompt_contract_version in _UPSTREAM_CONTEXT_BUILDERS else LEGACY_PROMPT_CONTRACT
+    )
+    if contract == LEGACY_PROMPT_CONTRACT:
+        return str(authored)
+    rendered, unresolved = _resolve_prompt_references(
+        str(authored), graph, node["id"], node_runs, upstream_kind=upstream_kind, audience=audience
+    )
+    if unresolved:
+        if unresolved_out is not None:
+            unresolved_out.extend(unresolved)
+        logger.warning(
+            "system prompt references resolved empty: node=%s referenced=%s",
+            node["id"],
+            ",".join(unresolved),
+        )
+    return rendered
+
+
 #: The cell label a preview claims to be for. Never written anywhere -- it only
 #: has to be non-None, because that is what gates the Dataset block on.
 _PREVIEW_CELL_LABEL = "preview"
@@ -3162,6 +3225,7 @@ async def _run_agent_node(
     owner_id: uuid.UUID,
     user_input: str,
     graph: dict[str, Any],
+    system_prompt: str | None = None,
     workspace_id: str | None = None,
     ambient_meta: dict[str, Any] | None = None,
     evaluation_metrics: Any = None,
@@ -3229,11 +3293,17 @@ async def _run_agent_node(
     # ("You are {name}. {description}") would use `agent_name` here, an
     # internal "protocol-{protocol_id}-{node_id}" bookkeeping id no user
     # ever sees, not this agent's actual canvas identity.
-    base_system_prompt = config.get("system_prompt") or _default_system_prompt(label, "Agent")
+    #
+    # The *system_prompt* argument, when given, is that same authored field
+    # with its ``{{...}}`` references already resolved (:func:`_build_system_prompt`) --
+    # resolution needs `node_runs`, which this function does not have. Falling
+    # back to the raw field keeps the call sites that have nothing to resolve
+    # against (a single-node run) working unchanged.
+    base_system_prompt = system_prompt or config.get("system_prompt") or _default_system_prompt(label, "Agent")
     # The saved System prompt remains exactly what the user authored.  This
     # transient layer is added only for the current run and only for metric
     # IDs the Agent explicitly selected; it never grants scoring tools.
-    system_prompt = compose_system_prompt(
+    composed_system_prompt = compose_system_prompt(
         base_system_prompt, evaluation_metrics, (node.get("data") or {}).get("contextMetricIds")
     )
 
@@ -3243,7 +3313,7 @@ async def _run_agent_node(
         fields={
             "goal": config.get("goal") or "",
             "description": description,
-            "system_prompt": system_prompt,
+            "system_prompt": composed_system_prompt,
             "model_config": model_config,
             "pattern_config": pattern_config,
             "tool_config": tool_config,
@@ -3690,6 +3760,10 @@ async def _run_gated_worker(
         # far side of it, not the critic (see _node_audience).
         audience=audience,
     )
+    # Also computed once: like the instruction, it does not vary by attempt.
+    worker_system_prompt = _build_system_prompt(
+        worker, graph, node_runs, prompt_contract_version=contract_version, audience=audience
+    )
     instruction = base_instruction
     # Tracks the most recent critic verdict/run across attempts so the
     # forced-accept branch (which never calls the critic for its own final
@@ -3707,6 +3781,7 @@ async def _run_gated_worker(
             owner_id=owner_id,
             user_input=instruction,
             graph=graph,
+            system_prompt=worker_system_prompt,
             workspace_id=workspace_id,
             ambient_meta=worker_ambient,
             evaluation_metrics=evaluation_metrics,
@@ -4492,6 +4567,17 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 audience=_node_audience(graph, node_id, step=chain_steps.get(node_id)),
                 unresolved_out=unresolved,
             )
+            # Same `unresolved` list as the user prompt: a reference that
+            # resolved to nothing left the same gap wherever it was written,
+            # and the Runs tab reports the node, not the field.
+            node_system_prompt = _build_system_prompt(
+                node,
+                graph,
+                node_runs,
+                prompt_contract_version=contract_version,
+                audience=_node_audience(graph, node_id, step=chain_steps.get(node_id)),
+                unresolved_out=unresolved,
+            )
             output_text, error, run_id = await _run_agent_node(
                 node,
                 protocol_id=protocol_id,
@@ -4499,6 +4585,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 owner_id=owner_id,
                 user_input=user_input,
                 graph=graph,
+                system_prompt=node_system_prompt,
                 workspace_id=workspace_id,
                 ambient_meta=ambient_meta,
                 evaluation_metrics=(design_spec or {}).get("metrics"),

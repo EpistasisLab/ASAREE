@@ -49,21 +49,17 @@ from motoro.engine.ports import AgentReply
 from asaree.models.database import get_session
 from asaree.services.dataset_workspaces import head_data_locator
 from asaree.services.deadline import deadlines_paused
-from asaree.services.experiments import get_experiment
 from asaree.services.prompt_contract import DEFAULT_PROMPT_CONTRACT_VERSION
 from asaree.services.protocol_execution import (
     _AGENT_CANCELLED,
     SupervisorRoles,
     _build_user_input,
     _can_deliver_communication,
-    _compute_workspace_id,
     _node_run_context,
     _run_agent_node,
     resolve_available_agents,
-    stage_plan_spec,
 )
-from asaree.services.protocol_revisions import get_revision
-from asaree.services.protocol_runs import get_protocol_run, set_status, update_conversation, update_node_run
+from asaree.services.protocol_runs import get_protocol_run, update_conversation, update_node_run
 from asaree.services.protocols import get_protocol
 
 logger = logging.getLogger(__name__)
@@ -591,11 +587,9 @@ async def execute_conversation(
 
     Returns the entry agent's node-run dict and the terminal ``ProtocolRun``
     status. It writes the node run but deliberately *not* the run's status,
-    because it has two callers with different bookkeeping: :func:`run_conversation`
-    (the user asked an agent a question directly) sets it and stops, while a
-    ``peer_collaboration`` factorial cell run wraps this in the same pre-write /
-    result / metric-promotion path every other cell run uses, and owns the
-    status so that path stays in one place.
+    because its caller owns it: a ``peer_collaboration`` factorial cell run
+    wraps this in the same pre-write / result / metric-promotion path every
+    other cell run uses, so the status stays written in one place.
 
     *ambient_meta* is likewise the caller's when it has already resolved the
     entry agent's References to build *user_input* (a cell run does, to get the
@@ -1125,63 +1119,8 @@ async def record_sequential_transcript(
     await messenger.checkpoint()
 
 
-async def run_conversation(protocol_run_id: uuid.UUID, *, entry_agent_id: str, user_input: str) -> None:
-    """Execute a protocol run in conversation mode, as started from the canvas.
-
-    Loads the run's pinned graph, hands off to :func:`execute_conversation`, and
-    records the terminal status. There is no cell, replicate or score here --
-    this is the user talking to an agent cluster, not an experiment measuring
-    one; that path is ``run_protocol``'s ``peer_collaboration`` branch.
-    """
-    async with get_session() as db:
-        run = await get_protocol_run(db, protocol_run_id)
-        if run is None:
-            return
-        protocol = await get_protocol(db, run.protocol_id)
-        if protocol is None:
-            await set_status(db, protocol_run_id, status="failed", error="protocol no longer exists")
-            return
-        protocol_id, owner_id, graph = protocol.id, run.owner_id, protocol.graph
-        if run.protocol_revision_id is not None:
-            revision = await get_revision(db, run.protocol_revision_id)
-            if revision is None:
-                await set_status(
-                    db, protocol_run_id, status="failed", error="published protocol revision no longer exists"
-                )
-                return
-            graph = revision.graph
-        experiment_id = protocol.experiment_id
-        experiment = await get_experiment(db, experiment_id) if experiment_id else None
-        evaluation_metrics = (experiment.design_spec or {}).get("metrics") if experiment is not None else None
-
-    node = next((n for n in graph.get("nodes") or [] if str(n.get("id")) == entry_agent_id), None)
-    if node is None or node.get("type") != "agent":
-        async with get_session() as db:
-            await set_status(db, protocol_run_id, status="failed", error="entry agent is not an Agent node")
-        return
-
-    async with get_session() as db:
-        await set_status(db, protocol_run_id, status="running")
-
-    node_run, status = await execute_conversation(
-        protocol_run_id,
-        protocol_id=protocol_id,
-        owner_id=owner_id,
-        graph=graph,
-        entry_agent_id=entry_agent_id,
-        user_input=user_input,
-        workspace_id=_compute_workspace_id(experiment_id, None, protocol_run_id),
-        evaluation_metrics=evaluation_metrics,
-        stage_plan=stage_plan_spec(experiment.design_spec if experiment is not None else None),
-    )
-
-    async with get_session() as db:
-        await set_status(db, protocol_run_id, status=status, error=node_run["error"])
-
-
 __all__ = [
     "USER_PARTICIPANT",
     "AgentMessenger",
     "execute_conversation",
-    "run_conversation",
 ]

@@ -34,7 +34,6 @@ import asaree.models.protocol_revision  # noqa: F401 -- ProtocolRun.protocol_rev
 import asaree.models.user  # noqa: F401 -- registers users for Protocol/ProtocolRun's owner_id FK
 from asaree.config import get_settings
 from asaree.models.database import get_session
-from asaree.services.agent_messenger import run_conversation
 from asaree.services.protocol_execution import evaluate_protocol_run_metrics, run_protocol
 from asaree.services.protocol_runs import fail_protocol_run, get_protocol_run, list_stale_protocol_runs
 from asaree.services.run_tools import gather_tools
@@ -105,26 +104,6 @@ async def execute_protocol_run_task(ctx: dict[str, Any], protocol_run_id_str: st
     graph (real agent runs, real tool calls -- not safe to assume idempotent).
     """
     await _guarded_protocol_run(protocol_run_id_str, run_protocol)
-
-
-async def execute_conversation_task(
-    ctx: dict[str, Any], protocol_run_id_str: str, entry_agent_id: str, user_input: str
-) -> None:
-    """The conversation-mode counterpart of ``execute_protocol_run_task``.
-
-    A separate arq function rather than a flag on the run row: which mode a run
-    is in is decided once, by the endpoint that started it, and a row column
-    would let a retry of a pipeline run wander into conversation mode (or the
-    reverse) if it were ever written wrong. The entry agent and the opening
-    question ride as job arguments because nothing else needs them persisted --
-    the transcript records them the moment the run starts.
-    """
-    await _guarded_protocol_run(
-        protocol_run_id_str,
-        lambda protocol_run_id: run_conversation(
-            protocol_run_id, entry_agent_id=entry_agent_id, user_input=user_input
-        ),
-    )
 
 
 async def _guarded_protocol_run(

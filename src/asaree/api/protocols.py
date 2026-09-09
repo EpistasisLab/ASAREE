@@ -25,7 +25,6 @@ from asaree.services.protocol_execution import (
     plan_cell_runs,
     plan_single_replicate_run,
     topological_order,
-    validate_conversation_entry,
     validate_coordination_strategy,
     validate_single_node_runnable,
     validate_stage_plan,
@@ -50,7 +49,7 @@ from asaree.services.protocols import (
     list_protocols,
     update_protocol,
 )
-from asaree.worker.enqueue import enqueue_conversation, enqueue_protocol_run
+from asaree.worker.enqueue import enqueue_protocol_run
 
 router = APIRouter(prefix="/protocols", tags=["protocols"])
 
@@ -128,18 +127,6 @@ class CreateProtocolRunRequest(BaseModel):
     # the same as one entry of "Run all cells" but picked by name instead of
     # running every not-yet-completed replicate at once.
     replicate_label: str | None = None
-
-
-class StartConversationRequest(BaseModel):
-    """Address one agent on the canvas and let it consult its connected peers.
-
-    Only an entry point and an opening question: who else may participate comes
-    from the graph, not from this body, so a client cannot widen a run's reach
-    by naming extra agents.
-    """
-
-    entry_agent_id: str
-    user_input: str
 
 
 class CellRunBatchRequest(BaseModel):
@@ -337,28 +324,6 @@ async def create_protocol_run_endpoint(
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await enqueue_protocol_run(run.id)
-    return ProtocolRunResponse.model_validate(run)
-
-
-@router.post("/{protocol_id}/conversations", response_model=ProtocolRunResponse, status_code=201)
-async def start_conversation_endpoint(
-    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession, body: StartConversationRequest
-) -> ProtocolRunResponse:
-    """Start a conversation-mode run: address one agent, and let it consult the
-    peers it is connected to.
-
-    The same ``ProtocolRun`` a pipeline run uses, against the same published
-    revision -- what differs is only which worker function walks it. Peers are a
-    capability of the run mode, not a different kind of protocol.
-    """
-    protocol = await _get_owned_protocol(db, protocol_id, user)
-    revision = await _require_published_revision(db, protocol)
-    try:
-        validate_conversation_entry(revision.graph, body.entry_agent_id)
-    except ProtocolValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=user.id, protocol_revision_id=revision.id)
-    await enqueue_conversation(run.id, entry_agent_id=body.entry_agent_id, user_input=body.user_input)
     return ProtocolRunResponse.model_validate(run)
 
 

@@ -284,21 +284,6 @@ export const protocolsApi = {
   // runnable Agent (see validate_single_node_runnable). Same polling shape
   // as a plain run (getRun), just with node_runs carrying only this one key.
   runNode: (id: string, nodeId: string) => request<ProtocolRun>(`/protocols/${id}/nodes/${nodeId}/run`, { method: 'POST' }),
-  // Ad-hoc conversation: address one agent with a question of your own and let
-  // it consult the peers it's wired to. Returns the same ProtocolRun a pipeline
-  // run does -- poll getRun the same way; what's new is `conversation` on the
-  // response, the transcript as it grows. 422 if the entry agent isn't an Agent
-  // node, has no peers, or any participant is missing its single LLM connection.
-  //
-  // No GUI caller: the canvas deliberately has no second Run button, so agents
-  // collaborate by the experiment's Peer Collaboration coordination strategy
-  // instead. Kept as the programmatic path -- this is the only way to start a
-  // conversation with a question that isn't the entry agent's node prompt.
-  startConversation: (id: string, data: { entryAgentId: string; userInput: string }) =>
-    request<ProtocolRun>(`/protocols/${id}/conversations`, {
-      method: 'POST',
-      body: { entry_agent_id: data.entryAgentId, user_input: data.userInput },
-    }),
   getRevision: (id: string, revisionId: string) => request<ProtocolRevision>(`/protocols/${id}/revisions/${revisionId}`),
   getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
   // Only raises cancel_requested_at -- a no-op (200, unchanged row) once the

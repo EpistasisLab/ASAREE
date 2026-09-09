@@ -43,23 +43,6 @@ async def enqueue_protocol_run(protocol_run_id: uuid.UUID) -> None:
     await pool.enqueue_job("execute_protocol_run_task", str(protocol_run_id), _job_id=f"protocol-run:{protocol_run_id}")
 
 
-async def enqueue_conversation(protocol_run_id: uuid.UUID, *, entry_agent_id: str, user_input: str) -> None:
-    """Same idempotent-enqueue pattern, for asaree.worker.tasks.execute_conversation_task.
-
-    Shares the ``protocol-run:`` job-id namespace with :func:`enqueue_protocol_run`
-    on purpose: both execute the same row, so a run must never be able to have
-    one of each queued against it.
-    """
-    pool = await _get_pool()
-    await pool.enqueue_job(
-        "execute_conversation_task",
-        str(protocol_run_id),
-        entry_agent_id,
-        user_input,
-        _job_id=f"protocol-run:{protocol_run_id}",
-    )
-
-
 async def enqueue_metric_evaluation(protocol_run_id: uuid.UUID) -> None:
     """Queue an idempotent backfill/retry of configured post-run metrics."""
     pool = await _get_pool()

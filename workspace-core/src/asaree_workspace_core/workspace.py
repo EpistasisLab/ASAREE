@@ -15,7 +15,7 @@ Leakage safety is unchanged and structural: the caller fits every statistic on
 the **train** partition only and applies it to both; this module just persists
 the resulting pair. The test partition is written but never surfaced to the agent.
 
-Layout::
+Layout (format 1 — one implicit dataset per cell)::
 
     {root}/{experiment_id}/{cell_label}/
         state.json
@@ -24,8 +24,40 @@ Layout::
         v3_fs/   {train,test}.parquet
         manifests/  {dc,fte,fs}.json
 
+Layout (format 2 — named slots)::
+
+    {root}/{experiment_id}/{cell_label}/
+        state.json                      {"format_version": 2, "slots": {...}}
+        dataset=spinal/v1_dc/  {train,test}.parquet
+        dataset=spinal/manifests/  {dc,fte,fs}.json
+        dataset=controls/v1_dc/  ...
+        agent=dndnode_3/...
+
 ``v0_raw`` is not copied — it references the registered upload's parquet paths,
 which are already the frozen train/test split.
+
+Slots
+-----
+A *slot* is an independently staged lineage inside one cell's workspace: its own
+``target_column``, its own ``versions`` list and its own HEAD. Two namespaces
+use it today — ``dataset:<name>`` for a seeded registration, and
+``agent:<node_id>`` for one agent's private scratch — but the mechanism is
+general, which is the point: multi-dataset pipelines, parallel workers writing
+without contention, and the per-stage scratch dirs are all the same question of
+"whose lineage is this".
+
+**Format 1 is not migrated on disk.** A reader that finds a state file with no
+``format_version`` upgrades it *in memory* to a single :data:`LEGACY_SLOT`, and
+a writer keeps writing format 1 for as long as that stays the only slot. Real
+published workspaces exist on disk; an in-memory upgrade leaves a rollback
+possible where an on-disk one would not, and the format only changes when a
+second slot genuinely arrives.
+
+**Ambiguity is an error, never a guess.** Every slot-taking method defaults to
+the sole slot when there is exactly one -- which is what makes a single-dataset
+caller unaware that slots exist -- and raises naming the candidates when there
+is more than one. Silently picking the first would be a guess dressed as a
+default, the same reason ``resolve_dataset_name`` refuses to choose.
 """
 
 from __future__ import annotations
@@ -58,9 +90,42 @@ SEED_VERSION = "v0_raw"
 # plain, traversal-safe token (no separators, no parent refs, not absolute).
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._=,-]*$")
 
+# The slot a format-1 state file is read as, and the slot every single-dataset
+# workspace keeps using. It deliberately lives at the workspace root rather than
+# in a "dataset=default/" subdirectory: version dirs and manifests for this slot
+# must stay exactly where format 1 put them, including after the workspace gains
+# a second slot and the state file moves to format 2.
+LEGACY_SLOT = "dataset:default"
+
+DATASET_SLOT_PREFIX = "dataset:"
+AGENT_SLOT_PREFIX = "agent:"
+
+CURRENT_FORMAT_VERSION = 2
+
 
 class WorkspaceError(Exception):
     """Raised for malformed workspace ids or inconsistent on-disk state."""
+
+
+def dataset_slot(name: str) -> str:
+    """The slot key for a seeded dataset registration."""
+    return f"{DATASET_SLOT_PREFIX}{name}"
+
+
+def agent_slot(node_id: str) -> str:
+    """The slot key for one agent's private scratch lineage."""
+    return f"{AGENT_SLOT_PREFIX}{node_id}"
+
+
+def _slot_token(slot: str) -> str:
+    """A slot key as a single traversal-safe path component.
+
+    ``:`` is not in ``_SAFE_COMPONENT``'s alphabet (and is awkward in paths on
+    some filesystems), so the namespace separator becomes ``=``:
+    ``dataset:spinal`` -> ``dataset=spinal``. The prefix is kept so the two
+    namespaces can never collide on a shared name.
+    """
+    return _safe(slot.replace(":", "="), what="slot")
 
 
 def _safe(component: str, *, what: str) -> str:
@@ -105,6 +170,14 @@ def _file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _seed_train(slot_state: dict[str, Any]) -> str:
+    """The v0 seed's train path for one slot — its dataset identity."""
+    seed = next(
+        (v for v in slot_state.get("versions", []) if v.get("id") == SEED_VERSION), None
+    )
+    return str((seed or {}).get("train") or "")
+
+
 @dataclass
 class VersionRef:
     """One materialized dataset version's on-disk location + provenance."""
@@ -120,11 +193,18 @@ class VersionRef:
 
 
 class Workspace:
-    """A per-cell versioned dataset workspace backed by a directory on disk."""
+    """One slot of a per-cell versioned dataset workspace on disk.
 
-    def __init__(self, workspace_id: str, root: str | None = None) -> None:
+    An instance is bound to a single slot: ``load_state`` returns *that slot's*
+    ``{target_column, head, versions}`` and every read/write path is scoped to
+    it, which is why the staging methods below never mention slots. Pass
+    ``slot=None`` (the common case) to bind to the sole slot.
+    """
+
+    def __init__(self, workspace_id: str, root: str | None = None, *, slot: str | None = None) -> None:
         self.workspace_id = workspace_id
         self.dir = _resolve_dir(workspace_id, root)
+        self.requested_slot = slot
 
     # --- paths ---
 
@@ -133,28 +213,111 @@ class Workspace:
         return self.dir / "state.json"
 
     @property
+    def slot(self) -> str:
+        """The slot key this instance resolves to against the state on disk."""
+        return self._resolve_slot(self._document())
+
+    @property
+    def slot_dir(self) -> Path:
+        slot = self.slot
+        return self.dir if slot == LEGACY_SLOT else self.dir / _slot_token(slot)
+
+    @property
     def manifests_dir(self) -> Path:
-        return self.dir / "manifests"
+        return self.slot_dir / "manifests"
 
     def version_dir(self, version_id: str) -> Path:
-        return self.dir / _safe(version_id, what="version_id")
+        return self.slot_dir / _safe(version_id, what="version_id")
 
     def exists(self) -> bool:
         return self.state_path.is_file()
 
     # --- state ---
 
-    def load_state(self) -> dict[str, Any]:
+    def _document(self) -> dict[str, Any]:
+        """The whole state file, normalized to the slot shape *in memory only*.
+
+        A format-1 file (no ``format_version``, no ``slots``) is the flat
+        ``{target_column, head, versions}`` document every workspace written
+        before slots existed has. It reads as a one-slot document and is never
+        rewritten on that account — see the module docstring.
+        """
         if not self.exists():
             raise WorkspaceError(f"workspace not initialized: {self.workspace_id}")
-        return json.loads(self.state_path.read_text())
+        raw = json.loads(self.state_path.read_text())
+        if isinstance(raw.get("slots"), dict):
+            return raw
+        return {"format_version": 1, "slots": {LEGACY_SLOT: raw}}
 
-    def _save_state(self, state: dict[str, Any]) -> None:
+    def _save_document(self, doc: dict[str, Any]) -> None:
+        slots = doc.get("slots") or {}
+        # Write format 1 back as format 1 for as long as the legacy slot is the
+        # only one. The format changes when a second slot actually arrives, not
+        # because something read the file.
+        payload: dict[str, Any]
+        if list(slots) == [LEGACY_SLOT]:
+            payload = dict(slots[LEGACY_SLOT])
+            # ``name`` is a format-2 field, and the legacy slot's would be the
+            # placeholder "default" rather than a dataset anyone named -- so it
+            # is dropped, keeping a format-1 file byte-shaped exactly as before
+            # slots existed. Resolution does not need it: a sole slot answers to
+            # any name (see _resolve_slot).
+            payload.pop("name", None)
+        else:
+            payload = {"format_version": CURRENT_FORMAT_VERSION, "slots": slots}
         self.dir.mkdir(parents=True, exist_ok=True)
         # Atomic write: a crash mid-write must never truncate the pointer of record.
         tmp = self.state_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False) + "\n")
+        tmp.write_text(json.dumps(payload, indent=1, ensure_ascii=False) + "\n")
         tmp.replace(self.state_path)
+
+    def _resolve_slot(self, doc: dict[str, Any]) -> str:
+        """Which slot of ``doc`` this instance addresses.
+
+        Resolution order: the exact key, then a slot recording that ``name``,
+        then — only when there is exactly one slot — that slot. The last rule is
+        what lets a caller name a dataset that a format-1 file never recorded,
+        and it is safe precisely because a single slot leaves nothing to choose
+        between. Anything else raises naming the candidates.
+        """
+        slots: dict[str, Any] = doc.get("slots") or {}
+        names = list(slots)
+        if not names:
+            raise WorkspaceError(f"workspace {self.workspace_id} has no slots")
+        requested = self.requested_slot
+        if requested is None:
+            if len(names) == 1:
+                return names[0]
+            raise WorkspaceError(
+                f"workspace {self.workspace_id} holds several slots "
+                f"({', '.join(sorted(names))}) — name the one to use"
+            )
+        if requested in slots:
+            return requested
+        bare = requested.split(":", 1)[-1]
+        by_name = [key for key, state in slots.items() if str(state.get("name") or "") == bare]
+        if len(by_name) == 1:
+            return by_name[0]
+        if len(names) == 1:
+            return names[0]
+        raise WorkspaceError(
+            f"workspace {self.workspace_id} has no slot {requested!r} — "
+            f"available: {', '.join(sorted(names))}"
+        )
+
+    def slots(self) -> dict[str, dict[str, Any]]:
+        """Every slot in this workspace, keyed by slot key."""
+        return dict(self._document().get("slots") or {})
+
+    def load_state(self) -> dict[str, Any]:
+        """This slot's ``{target_column, head, versions}``."""
+        doc = self._document()
+        return cast("dict[str, Any]", doc["slots"][self._resolve_slot(doc)])
+
+    def _save_state(self, state: dict[str, Any]) -> None:
+        doc = self._document()
+        doc["slots"][self._resolve_slot(doc)] = state
+        self._save_document(doc)
 
     @property
     def target_column(self) -> str:
@@ -171,19 +334,41 @@ class Workspace:
         seed_train_path: str,
         seed_test_path: str,
         root: str | None = None,
+        slot: str | None = None,
     ) -> Workspace:
-        """Open (create if absent) a workspace seeded from a pre-split upload.
+        """Open (create if absent) a workspace slot seeded from a pre-split upload.
 
-        Idempotent: re-opening an existing workspace loads its state unchanged,
-        so a resumed cell keeps every accepted version. The v0 seed references
-        the upload parquet paths directly — the split is already frozen there.
+        Idempotent per slot: re-opening keeps every accepted version, so a
+        resumed cell continues where it stopped. The v0 seed references the
+        upload parquet paths directly — the split is already frozen there.
+
+        Slots are identified by key. The one exception is a format-1 workspace,
+        whose single slot recorded no name at all: naming a dataset there adopts
+        that slot when the seed matches, which is what keeps an existing
+        single-dataset workspace on format 1 instead of growing a redundant
+        second slot beside it. Reusing a key for a *different* seed is refused —
+        a slot holds one dataset.
         """
-        ws = cls(workspace_id, root=root)
-        if ws.exists():
+        ws = cls(workspace_id, root=root, slot=slot)
+        doc: dict[str, Any] = (
+            ws._document() if ws.exists() else {"format_version": CURRENT_FORMAT_VERSION, "slots": {}}
+        )
+        slots: dict[str, Any] = doc["slots"]
+
+        key = slot or LEGACY_SLOT
+        if key not in slots and list(slots) == [LEGACY_SLOT] and _seed_train(slots[LEGACY_SLOT]) == seed_train_path:
+            ws.requested_slot = LEGACY_SLOT
             return ws
-        ws.dir.mkdir(parents=True, exist_ok=True)
-        ws.manifests_dir.mkdir(parents=True, exist_ok=True)
-        state = {
+        if key in slots:
+            if _seed_train(slots[key]) != seed_train_path:
+                raise WorkspaceError(
+                    f"slot {key!r} of workspace {workspace_id} is already seeded from a "
+                    "different dataset — a slot holds one dataset, so use a distinct slot"
+                )
+            ws.requested_slot = key
+            return ws
+        slots[key] = {
+            "name": key.split(":", 1)[-1],
             "target_column": target_column,
             "head": SEED_VERSION,
             "versions": [
@@ -198,7 +383,9 @@ class Workspace:
                 }
             ],
         }
-        ws._save_state(state)
+        ws.requested_slot = key
+        ws._save_document(doc)
+        ws.manifests_dir.mkdir(parents=True, exist_ok=True)
         return ws
 
     # --- version lookup ---

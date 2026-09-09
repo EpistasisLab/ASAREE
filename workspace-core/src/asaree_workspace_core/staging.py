@@ -30,6 +30,7 @@ def commit_stage(
     rationale: str = "",
     run_id: str = "",
     root: str | None = None,
+    slot: str | None = None,
 ) -> dict[str, Any]:
     """Write a stage's current (train, test) matrices as its workspace version.
 
@@ -43,7 +44,7 @@ def commit_stage(
     WorkspaceError on any failure so the calling tool reports it and the agent
     retries (a failed persist must never look like success).
     """
-    ws = Workspace(workspace_id, root=root)
+    ws = Workspace(workspace_id, root=root, slot=slot)
     if not ws.exists():
         raise WorkspaceError(
             f"workspace {workspace_id!r} is not open — call open_workspace first."
@@ -79,6 +80,7 @@ def commit_fs_selection(
     method: str,
     run_id: str = "",
     root: str | None = None,
+    slot: str | None = None,
 ) -> dict[str, Any]:
     """Commit ``v3_fs`` = the (already encoded) FTE matrix restricted to *selected*.
 
@@ -97,6 +99,7 @@ def commit_fs_selection(
         learned={"method": method, "selected_features": keep, "n_selected": len(keep)},
         run_id=run_id,
         root=root,
+        slot=slot,
     )
     return {
         "version": m["output_version"],

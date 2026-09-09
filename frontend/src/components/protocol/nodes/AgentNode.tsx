@@ -223,17 +223,18 @@ export function AgentNode({
       <ConnectorHandleLabel left={CONNECTOR_LEFT.skill} side="top">Skill</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="skill" left={CONNECTOR_LEFT.skill} side="top" alwaysVisible />
       {/* Dataset -- the data an agent works ON, as opposed to the Tool
-          connector's "capabilities it works WITH". CAPPED at one, unlike
-          Skill/Knowledge/Tool: a cell's workspace is keyed by
-          experiment_id/cell_label alone, so it holds exactly one dataset --
-          seed_cell_workspace refuses a second, and wiring several only ever
-          pushed that collision onto the agent to resolve from the prompt.
-          Running one experiment across several datasets is a FACTOR
+          connector's "capabilities it works WITH". UNCAPPED, like
+          Skill/Knowledge/Tool: a cell's workspace holds one dataset per named
+          SLOT (dataset:<name>), so several wired datasets each get their own
+          independently staged lineage and the agent picks between them by
+          passing slot="..." to the workspace tools. Wiring order is the order
+          _build_user_input lists them in. It was capped at one for a while
+          (one workspace, one dataset, seed_cell_workspace refusing a second),
+          which is why the cap came and went before slots existed.
+          Still distinct from COMPARING datasets, which is a FACTOR
           (levelType 'dataset_config' -- the inspector title row's "Make
-          factor" button), which varies the dataset per cell and so keeps one
-          dataset per workspace. It was briefly uncapped between those two
-          designs; graphs saved then can still carry several, which
-          _resolve_dataset_configs and _build_user_input still handle.
+          factor" button): that varies WHICH dataset a cell gets, rather than
+          giving one cell several at once.
           The slot is named after the node type because that node is its only
           member; it was briefly called "Resource", and before that it shared
           the Tool slot outright, so older graphs carry dataset edges on
@@ -250,11 +251,11 @@ export function AgentNode({
         id="dataset"
         position={Position.Top}
         style={{ left: CONNECTOR_LEFT.dataset }}
-        title="Dataset -- the registered dataset this agent operates on (one; make it a factor to compare several)"
+        title="Dataset -- the registered datasets this agent operates on (each gets its own workspace slot)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.dataset} side="top">Dataset</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="dataset" left={CONNECTOR_LEFT.dataset} side="top" />
+      <ConnectorAddStub nodeId={id} slot="dataset" left={CONNECTOR_LEFT.dataset} side="top" alwaysVisible />
       {/* Knowledge -- registered OKF bundles, each a directory of Markdown
           concepts on the SERVER's disk that the agent reads AND writes as it
           works (see OkfBundleNodeData). Its own slot rather than sharing

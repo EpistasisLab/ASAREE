@@ -24,7 +24,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from asaree_workspace_core import SEED_VERSION, Workspace, WorkspaceError
+from asaree_workspace_core import Workspace, WorkspaceError
 
 from asaree.models.database import get_session
 from asaree.services.datasets import get_dataset_by_name
@@ -48,12 +48,13 @@ class WorkspaceSeedError(Exception):
 
 @dataclass(frozen=True)
 class SeededWorkspace:
-    """A workspace open at ``v0_raw`` (or later, if the cell is resuming)."""
+    """A workspace slot open at ``v0_raw`` (or later, if the cell is resuming)."""
 
     workspace: Workspace
     dataset_name: str
     target_column: str
     data_dictionary_available: bool
+    slot: str = ""
 
 
 async def fetch_owned_registration(name: str, owner_id: uuid.UUID) -> dict[str, Any] | None:
@@ -93,6 +94,11 @@ def publish_data_dictionary(ws: Workspace, dictionary_json: str | None) -> bool:
     and the file lands inside a workspace named for its own experiment/cell,
     so it's scoped exactly like the parquet beside it.
 
+    Written into the *slot's* directory, which is the workspace root for the
+    single-dataset case and a per-slot subdirectory once a cell holds several --
+    two datasets in one cell each describe their own columns, so one file at the
+    root would have the second overwrite the first's.
+
     Returns whether a dictionary is available for this cell. A write failure is
     swallowed on purpose: a dictionary is an aid to an agent, never a
     precondition for the run, and the reader falls back to the API anyway.
@@ -100,28 +106,39 @@ def publish_data_dictionary(ws: Workspace, dictionary_json: str | None) -> bool:
     if not dictionary_json:
         return False
     try:
-        ws.dir.mkdir(parents=True, exist_ok=True)
-        path = ws.dir / DATA_DICTIONARY_FILENAME
+        target_dir = ws.slot_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        path = target_dir / DATA_DICTIONARY_FILENAME
         # Atomic, and rewritten on every open so an edited registration can't
         # leave a resumed cell reading a stale copy.
-        tmp = ws.dir / f"{DATA_DICTIONARY_FILENAME}.tmp"
+        tmp = target_dir / f"{DATA_DICTIONARY_FILENAME}.tmp"
         tmp.write_text(dictionary_json)
         tmp.replace(path)
-    except OSError as e:
+    except (OSError, WorkspaceError) as e:
         logger.warning("workspace_data_dictionary_write_failed", extra={"workspace": ws.workspace_id, "error": str(e)})
     return True
 
 
 async def seed_cell_workspace(
-    *, workspace_id: str, dataset_name: str, owner_id: uuid.UUID, target_column: str = ""
+    *,
+    workspace_id: str,
+    dataset_name: str,
+    owner_id: uuid.UUID,
+    target_column: str = "",
+    slot: str | None = None,
 ) -> SeededWorkspace:
-    """Open (creating if absent) *workspace_id*, seeded from a registration.
+    """Open (creating if absent) a slot of *workspace_id*, seeded from a registration.
 
     Seeds ``v0_raw`` from the dataset's pre-split train/test parquet -- the
     split is frozen at upload and never re-split -- and publishes the data
     dictionary alongside it. Idempotent: a cell that already has accepted
     stages keeps them, which is what makes this safe to call unconditionally
     at the start of every agent turn as well as from the MCP tool.
+
+    *slot* is ``None`` for the single-dataset case, which keeps the workspace in
+    the pre-slot on-disk format (see :mod:`asaree_workspace_core.workspace`).
+    Pass ``dataset_slot(name)`` when a cell holds several datasets; each then
+    gets its own lineage, target column and HEAD.
 
     Raises :class:`WorkspaceSeedError` on anything that leaves the cell
     without usable data.
@@ -153,40 +170,34 @@ async def seed_cell_workspace(
             "and can make their own split (train_test_split) -- or split the dataset in ASAREE first."
         )
 
+    # A second dataset opened into the same cell used to be rejected outright:
+    # Workspace.open was idempotent per *workspace*, so it silently handed back
+    # the first dataset's data, and "a cell workspace holds one dataset" was the
+    # honest thing to say about that shape. It now holds one dataset per SLOT,
+    # so several coexist -- Workspace.open still refuses to reseed one slot from
+    # a different dataset, which is the collision that remains a real error.
     try:
         ws = Workspace.open(
             workspace_id,
             target_column=resolved_target,
             seed_train_path=reg["train_path"],
             seed_test_path=reg["test_path"],
+            slot=slot,
         )
+        resolved_slot = ws.slot
     except (WorkspaceError, FileNotFoundError, OSError) as e:
         raise WorkspaceSeedError(f"workspace: {e}") from e
-
-    # Workspace.open is idempotent by design (a resumed cell must keep its
-    # accepted versions), which means a SECOND dataset opened into the same
-    # cell silently gets the first one's data back. A cell workspace is keyed
-    # by experiment_id/cell_label only -- the dataset name is not part of the
-    # id -- so two datasets cannot both live here, and the ambient
-    # workspace_id every downstream stage tool resolves is a single value
-    # anyway. Report the collision instead of handing back a workspace holding
-    # data the caller didn't ask for.
-    seeded = next((v for v in ws.load_state().get("versions", []) if v.get("id") == SEED_VERSION), None)
-    if seeded is not None and seeded.get("train") not in (None, reg["train_path"]):
-        raise WorkspaceSeedError(
-            f"workspace {workspace_id!r} is already seeded from a different dataset. "
-            f"A cell workspace holds one dataset; {dataset_name!r} needs its own cell."
-        )
 
     return SeededWorkspace(
         workspace=ws,
         dataset_name=dataset_name,
         target_column=resolved_target,
         data_dictionary_available=publish_data_dictionary(ws, reg.get("dictionary_json")),
+        slot=resolved_slot,
     )
 
 
-def head_data_locator(workspace_id: str) -> tuple[str, str]:
+def head_data_locator(workspace_id: str, slot: str | None = None) -> tuple[str, str]:
     """``(train parquet path, target column)`` for *workspace_id*'s HEAD, or
     ``("", "")`` when there's nothing to point at.
 
@@ -214,9 +225,14 @@ def head_data_locator(workspace_id: str) -> tuple[str, str]:
     yet" is the expected answer, not a fault (every caller asks before knowing
     whether this cell has a workspace at all), so it returns quietly; only a
     workspace that exists and still can't be read is worth a log line.
+
+    With several slots and no *slot* named, there is no single HEAD to point at
+    and this returns ``("", "")`` -- deliberately, so the ambient ``data_path``
+    is simply absent rather than one dataset picked out of several. See
+    :func:`slot_data_locators` for the per-slot view a caller can offer instead.
     """
     try:
-        ws = Workspace(workspace_id)
+        ws = Workspace(workspace_id, slot=slot)
         if not ws.exists():
             return "", ""
         state = ws.load_state()
@@ -229,3 +245,42 @@ def head_data_locator(workspace_id: str) -> tuple[str, str]:
         logger.warning("workspace_head_locator_failed", extra={"workspace_id": workspace_id, "error": str(e)})
         return "", ""
     return (train, target) if train else ("", "")
+
+
+def slot_data_locators(workspace_id: str) -> dict[str, dict[str, str]]:
+    """Every slot's HEAD locator, keyed by slot -- the multi-dataset view.
+
+    :func:`head_data_locator` answers "the" HEAD and so has nothing to say once
+    a cell holds several datasets. This answers the question that replaces it:
+    which lineages are here, and where does each one's current matrix live. It
+    is what an agent is shown when it has to choose (``workspace_status``, and
+    the ambient reference the prompt points at), so the choice is made from the
+    real slot keys rather than guessed.
+
+    Total, for the same reasons as :func:`head_data_locator`: an unseeded or
+    unreadable workspace is ``{}``.
+    """
+    try:
+        ws = Workspace(workspace_id)
+        if not ws.exists():
+            return {}
+        slots = ws.slots()
+    except WorkspaceError:
+        return {}
+    except (OSError, ValueError) as e:
+        logger.warning("workspace_slot_locators_failed", extra={"workspace_id": workspace_id, "error": str(e)})
+        return {}
+
+    locators: dict[str, dict[str, str]] = {}
+    for key, state in slots.items():
+        head = next((v for v in state.get("versions", []) if v.get("id") == state.get("head")), None)
+        train = str((head or {}).get("train") or "")
+        if not train:
+            continue
+        locators[key] = {
+            "name": str(state.get("name") or key.split(":", 1)[-1]),
+            "head": str(state.get("head") or ""),
+            "data_path": train,
+            "target_column": str(state.get("target_column") or ""),
+        }
+    return locators

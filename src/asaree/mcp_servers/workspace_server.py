@@ -30,10 +30,12 @@ from asaree_workspace_core import (
     STAGE_VERSION,
     Workspace,
     WorkspaceError,
+    dataset_slot,
     make_workspace_id,
     provenance,
     resolve_dataset_name_from_ctx,
     resolve_owner_id_from_ctx,
+    resolve_slot_from_ctx,
     resolve_workspace_id_from_ctx,
 )
 from mcp.server import FastMCP
@@ -90,8 +92,19 @@ def _scratch_dir(ws: Workspace, stage: str) -> Path:
     server or importing anything beyond stdlib os/pathlib. That formula is the
     ENTIRE contract a domain server needs: two conventional file names inside
     this directory, nothing about state.json or versioning.
+
+    Scoped to the slot's directory, which for a single-dataset workspace IS the
+    workspace root — so the formula above is unchanged for every workspace that
+    holds one dataset, which is the only shape a domain server can address.
+    **That is the current boundary of multi-slot support**: the staged
+    DC/FTE/FS pipeline runs against one slot per cell, because a domain server
+    computes this path from a workspace id and has no slot to compute it from.
+    A second dataset's slot is fully usable through this server and through the
+    path-taking tools (``data_slots`` in the run's ambient meta) — it just
+    can't have its own independent DC attempt in flight. Threading a slot into
+    the domain servers is the follow-on if that becomes the ask.
     """
-    return ws.dir / ".scratch" / stage
+    return ws.slot_dir / ".scratch" / stage
 
 
 def _seed_scratch(ws: Workspace, stage: str, target: str) -> None:
@@ -239,6 +252,7 @@ async def open_workspace(
     name: str = "",
     target_column: str = "",
     stage: str = "",
+    slot: str = "",
     ctx: Context[Any, Any, Any] | None = None,
 ) -> str:
     """Open (create if absent) the on-disk workspace for one pipeline cell.
@@ -278,6 +292,11 @@ async def open_workspace(
             stage's current working matrix into its scratch directory, so the
             calling domain server's tools have a clean starting point. Omit for
             stages still on the old shared-library flow.
+        slot: Which slot of the cell's workspace to open this dataset into.
+            Optional and rarely needed — it defaults to a slot named for the
+            dataset, so opening two datasets into one cell gives each its own
+            lineage, target column and HEAD without you naming anything. The
+            response echoes the slot to pass to later staging calls.
     """
     # Both halves of the workspace id, or neither: a half-specified pair would
     # have to be reconciled against the ambient id, and there is no sensible
@@ -324,6 +343,11 @@ async def open_workspace(
             dataset_name=resolved_name,
             owner_id=owner_id,
             target_column=target_column,
+            # Named for the dataset rather than left implicit: a cell holding a
+            # second dataset must not reseed the first one's slot, and
+            # Workspace.open absorbs this back into an existing single-slot
+            # workspace when the seed matches, so the common case is unchanged.
+            slot=slot or dataset_slot(resolved_name),
         )
     except WorkspaceSeedError as e:
         return json.dumps({"error": str(e), "workspace_id": workspace_id})
@@ -345,6 +369,7 @@ async def open_workspace(
         # Echoed because both may have been resolved from ambient _meta rather
         # than passed: the caller should be able to see what it actually opened.
         "dataset_name": resolved_name,
+        "slot": seeded.slot,
         "head": ws.load_state().get("head"),
         "target_column": resolved_target,
         "n_train": int(len(X_train)),
@@ -376,6 +401,12 @@ def workspace_status(workspace_id: str = "", ctx: Context[Any, Any, Any] | None 
     empty ``accepted_stages``. Otherwise returns HEAD, accepted stages (skipped on
     resume), and a per-version summary.
 
+    Reports every slot the workspace holds. With one dataset — the usual case —
+    that slot's HEAD/target/versions are also reported at the top level, so a
+    caller that has never heard of slots reads exactly what it always did. With
+    several, the top-level keys are omitted rather than filled in from one of
+    them: there is no single HEAD, and ``slots`` is the answer.
+
     Args:
         workspace_id: ``"{experiment_id}/{cell_label}"``. Optional — resolved from
             the ambient request ``_meta`` when omitted.
@@ -387,26 +418,45 @@ def workspace_status(workspace_id: str = "", ctx: Context[Any, Any, Any] | None 
         return json.dumps({"error": f"workspace: {e}"})
     if not ws.exists():
         return json.dumps({"workspace_id": wid, "exists": False, "head": None, "accepted_stages": [], "versions": []})
-    state = ws.load_state()
-    accepted = [s for s in _STAGES if ws.has_accepted(s)]
-    versions = [
-        {"id": v.get("id"), "stage": v.get("stage"), "accepted": bool(v.get("accepted")), "run_id": v.get("run_id", "")}
-        for v in state.get("versions", [])
-    ]
-    return json.dumps(
-        {
-            "workspace_id": wid,
-            "exists": True,
-            "head": state.get("head"),
-            "target_column": state.get("target_column"),
-            "accepted_stages": accepted,
-            "versions": versions,
+
+    def _summary(slot_state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "head": slot_state.get("head"),
+            "target_column": slot_state.get("target_column"),
+            "versions": [
+                {
+                    "id": v.get("id"),
+                    "stage": v.get("stage"),
+                    "accepted": bool(v.get("accepted")),
+                    "run_id": v.get("run_id", ""),
+                }
+                for v in slot_state.get("versions", [])
+            ],
         }
-    )
+
+    try:
+        slots = ws.slots()
+    except WorkspaceError as e:
+        return json.dumps({"error": f"workspace: {e}"})
+    response: dict[str, Any] = {"workspace_id": wid, "exists": True}
+    per_slot: dict[str, Any] = {}
+    for key, slot_state in slots.items():
+        scoped = Workspace(wid, slot=key)
+        per_slot[key] = {
+            "name": slot_state.get("name") or key.split(":", 1)[-1],
+            "accepted_stages": [s for s in _STAGES if scoped.has_accepted(s)],
+            **_summary(slot_state),
+        }
+    response["slots"] = per_slot
+    if len(per_slot) == 1:
+        response.update(next(iter(per_slot.values())))
+    return json.dumps(response)
 
 
 @mcp.tool()
-def accept_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
+def accept_stage(
+    stage: str, workspace_id: str = "", slot: str = "", ctx: Context[Any, Any, Any] | None = None
+) -> str:
     """Accept a stage's output and advance HEAD to it (critic-gated).
 
     The ONLY operation that advances HEAD, so a rejected or never-committed stage
@@ -423,10 +473,15 @@ def accept_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any]
     Args:
         stage: one of ``dc``, ``fte``, ``fs``.
         workspace_id: ``"{experiment_id}/{cell_label}"``. Optional — resolved from _meta.
+        slot: Which dataset slot of this cell's workspace the call is about.
+            Optional — omit it when the cell holds one dataset (the usual case)
+            and it resolves to that one. With several open, omitting it is an
+            error listing them, because picking one would be a guess; the slot
+            keys are in your prompt and in workspace_status().
     """
     try:
         wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
-        ws = Workspace(wid)
+        ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
         if stage not in STAGE_VERSION:
@@ -473,7 +528,9 @@ def accept_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any]
 
 
 @mcp.tool()
-def reset_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
+def reset_stage(
+    stage: str, workspace_id: str = "", slot: str = "", ctx: Context[Any, Any, Any] | None = None
+) -> str:
     """Discard a stage's in-progress attempt so a re-run starts clean.
 
     Called by the orchestrator before a critic revision. For a SCRATCH_STAGES
@@ -489,10 +546,15 @@ def reset_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] 
     Args:
         stage: one of ``dc``, ``fte``, ``fs``.
         workspace_id: ``"{experiment_id}/{cell_label}"``. Optional — resolved from _meta.
+        slot: Which dataset slot of this cell's workspace the call is about.
+            Optional — omit it when the cell holds one dataset (the usual case)
+            and it resolves to that one. With several open, omitting it is an
+            error listing them, because picking one would be a guess; the slot
+            keys are in your prompt and in workspace_status().
     """
     try:
         wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
-        ws = Workspace(wid)
+        ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
         if stage not in STAGE_VERSION:
@@ -520,7 +582,9 @@ def reset_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] 
 
 
 @mcp.tool()
-def check_stage_gate(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
+def check_stage_gate(
+    stage: str, workspace_id: str = "", slot: str = "", ctx: Context[Any, Any, Any] | None = None
+) -> str:
     """Run the structural post-stage assertions on a committed stage version.
 
     Deterministic backstop (no agent). Per stage: the committed version exists with
@@ -530,10 +594,15 @@ def check_stage_gate(stage: str, workspace_id: str = "", ctx: Context[Any, Any, 
     Args:
         stage: one of ``dc``, ``fte``, ``fs``.
         workspace_id: optional; resolved from _meta when omitted.
+        slot: Which dataset slot of this cell's workspace the call is about.
+            Optional — omit it when the cell holds one dataset (the usual case)
+            and it resolves to that one. With several open, omitting it is an
+            error listing them, because picking one would be a guess; the slot
+            keys are in your prompt and in workspace_status().
     """
     try:
         wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
-        ws = Workspace(wid)
+        ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"passed": False, "errors": [f"workspace {wid!r} not initialized."]})
         if stage not in STAGE_VERSION:
@@ -566,16 +635,23 @@ def check_stage_gate(stage: str, workspace_id: str = "", ctx: Context[Any, Any, 
 
 
 @mcp.tool()
-def read_stage_manifest(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
+def read_stage_manifest(
+    stage: str, workspace_id: str = "", slot: str = "", ctx: Context[Any, Any, Any] | None = None
+) -> str:
     """Return a committed stage's provenance manifest (learned params + rationale).
 
     Args:
         stage: one of ``dc``, ``fte``, ``fs``.
         workspace_id: optional; resolved from _meta when omitted.
+        slot: Which dataset slot of this cell's workspace the call is about.
+            Optional — omit it when the cell holds one dataset (the usual case)
+            and it resolves to that one. With several open, omitting it is an
+            error listing them, because picking one would be a guess; the slot
+            keys are in your prompt and in workspace_status().
     """
     try:
         wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
-        ws = Workspace(wid)
+        ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
         if stage not in STAGE_VERSION:
@@ -589,7 +665,9 @@ def read_stage_manifest(stage: str, workspace_id: str = "", ctx: Context[Any, An
 
 
 @mcp.tool()
-def read_scratch_learned(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
+def read_scratch_learned(
+    stage: str, workspace_id: str = "", slot: str = "", ctx: Context[Any, Any, Any] | None = None
+) -> str:
     """Return a SCRATCH_STAGES stage's current in-progress attempt's learned
     block — the provenance a domain server has written to its scratch dir so
     far this attempt, before accept_stage ever promotes it (or reset_stage
@@ -603,10 +681,15 @@ def read_scratch_learned(stage: str, workspace_id: str = "", ctx: Context[Any, A
     Args:
         stage: one of ``dc``, ``fte``, ``fs``.
         workspace_id: optional; resolved from _meta when omitted.
+        slot: Which dataset slot of this cell's workspace the call is about.
+            Optional — omit it when the cell holds one dataset (the usual case)
+            and it resolves to that one. With several open, omitting it is an
+            error listing them, because picking one would be a guess; the slot
+            keys are in your prompt and in workspace_status().
     """
     try:
         wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
-        ws = Workspace(wid)
+        ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
     except WorkspaceError as e:

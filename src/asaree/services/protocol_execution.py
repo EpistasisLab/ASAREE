@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from asaree_workspace_core import WORKSPACE_ROOT
+from asaree_workspace_core import WORKSPACE_ROOT, dataset_slot
 from motoro.mcp.registry import get_registry
 from motoro.models.run import RunStatus
 from motoro.runner import create_agent, create_run, execute_run, get_agent_by_name, get_run, update_agent
@@ -51,6 +51,7 @@ from asaree.services.dataset_workspaces import (
     fetch_owned_registration,
     head_data_locator,
     seed_cell_workspace,
+    slot_data_locators,
 )
 from asaree.services.deadline import Deadline, active_deadline
 from asaree.services.design_generation import get_design_impact
@@ -1189,6 +1190,14 @@ def _ambient_meta_for(graph: dict[str, Any], node_id: str, workspace_id: str | N
       seeded contributes nothing here -- and ``_node_run_context`` then falls
       back to the wired dataset's own raw file, which is how an unsplit
       dataset (one that has no workspace at all) reaches those tools.
+      A workspace holding SEVERAL slots binds no ``data_path`` at all: there
+      is no single HEAD, and picking one dataset out of several would be a
+      guess. ``data_slots`` carries the per-slot view instead.
+    * ``data_slots`` -- present only when the workspace holds more than one
+      slot: ``{slot: {name, head, data_path, target_column}}``, so a tool that
+      takes a path can be pointed at a specific lineage and ``workspace_status``
+      can report all of them. Left absent in the ordinary one-dataset case so
+      nothing has to read it to find "the" dataset.
     * ``script_path`` -- where the wired Script node's code was written. The
       code used to be pasted into the prompt for the model to copy back out
       into a tool argument; a script-running tool reads the file instead, so
@@ -1207,11 +1216,15 @@ def _ambient_meta_for(graph: dict[str, Any], node_id: str, workspace_id: str | N
     if dataset_names:
         meta["dataset_names"] = dataset_names
     if workspace_id:
-        data_path, target_column = head_data_locator(workspace_id)
-        if data_path:
-            meta["data_path"] = data_path
-        if target_column:
-            meta["target_column"] = target_column
+        locators = slot_data_locators(workspace_id)
+        if len(locators) > 1:
+            meta["data_slots"] = locators
+        else:
+            data_path, target_column = head_data_locator(workspace_id)
+            if data_path:
+                meta["data_path"] = data_path
+            if target_column:
+                meta["target_column"] = target_column
     code = (_resolve_script_config(graph, node_id) or {}).get("code")
     if code:
         script_path = _materialize_script(workspace_id, node_id, str(code))
@@ -1229,19 +1242,29 @@ class NodeDataset:
 
     * *seeded* -- the registration has a frozen train/test split, so this
       cell's workspace was opened at HEAD before the turn started and there is
-      nothing for the agent to call.
+      nothing for the agent to call. One entry per wired dataset, each in its
+      own workspace slot, in canvas wiring order.
     * *unsplit* -- the registration is a raw file with no split. There is no
       workspace, and ``data_path``/``target_column`` name that file so the
       agent can split it itself with ``scikit-learn-mcp``. Splitting in ASAREE
       is optional by design, so this is an ordinary state, not a broken one.
-    * neither -- no Dataset wired, several wired, or the seeding failed; the
-      prompt falls back to asking for an ``open_workspace`` call.
+    * neither -- no Dataset wired, or every seeding failed; the prompt falls
+      back to asking for an ``open_workspace`` call.
     """
 
-    seeded_name: str = ""
+    # (dataset name, workspace slot key) per seeded dataset. The slot is
+    # carried rather than recomputed because it is not always
+    # ``dataset:<name>``: a workspace already in the pre-slot on-disk format
+    # keeps its single unnamed slot, and the prompt has to name the slot the
+    # agent's tool calls will actually accept.
+    seeded: tuple[tuple[str, str], ...] = ()
     unsplit_name: str = ""
     data_path: str = ""
     target_column: str = ""
+
+    @property
+    def seeded_names(self) -> tuple[str, ...]:
+        return tuple(name for name, _slot in self.seeded)
 
 
 async def _resolve_node_dataset(
@@ -1260,13 +1283,13 @@ async def _resolve_node_dataset(
     Idempotent and safe to call on every turn: ``Workspace.open`` resumes a
     cell that already has accepted stages rather than resetting it.
 
-    Deliberately seeds only when EXACTLY ONE dataset is wired, mirroring
-    ``asaree_workspace_core.resolve_dataset_name``'s own rule. A cell workspace
-    is keyed by ``experiment_id/cell_label`` alone, so several wired datasets
-    are a real choice with no defensible default -- picking the first would be
-    a guess dressed up as automation. Those runs keep the old flow: the prompt
-    lists the candidates and the agent calls ``open_workspace(name=...)``,
-    which reports the collision if it opens a second one.
+    Seeds EVERY wired dataset, each into its own workspace slot. This used to
+    seed only when exactly one was wired, because a cell's workspace held one
+    implicit lineage and several datasets were a choice with no defensible
+    default. Slots remove the choice: two datasets are two lineages in the same
+    cell, so both get opened and the agent is told which slot each one is in.
+    A single dataset stays slot-less (``slot=None``), which is what keeps its
+    workspace in the pre-slot on-disk format -- see ``seed_cell_workspace``.
 
     A failure here is logged and swallowed, never raised: a run whose dataset
     registration is broken should still start and let the agent surface the
@@ -1276,37 +1299,58 @@ async def _resolve_node_dataset(
     reported as *unsplit* rather than seeded -- see :class:`NodeDataset`.
     """
     names = [str(c["dataset_name"]) for c in _resolve_dataset_configs(graph, node_id) if c.get("dataset_name")]
-    if len(names) != 1:
+    if not names:
         return NodeDataset()
-    name = names[0]
+    solo = len(names) == 1
 
-    reg = await fetch_owned_registration(name, owner_id)
-    if reg is None:
-        logger.warning("workspace_preseed_failed", extra={"node_id": node_id, "dataset": name, "error": "not found"})
-        return NodeDataset()
-    if not (reg.get("train_path") and reg.get("test_path")):
-        # Unsplit: no workspace to seed (``seed_cell_workspace`` says why), so
-        # the raw file itself becomes the run's dataset and the agent makes its
-        # own split with the sklearn tools. Not a failure and not logged as one
-        # -- registration stores only a raw file, and splitting is a separate
-        # optional action a researcher is entitled to skip.
-        return NodeDataset(
-            unsplit_name=name,
-            data_path=str(reg.get("raw_path") or ""),
-            target_column=str(reg.get("target_column") or ""),
-        )
-
-    if not workspace_id:
-        return NodeDataset()
-    try:
-        seeded = await seed_cell_workspace(workspace_id=workspace_id, dataset_name=name, owner_id=owner_id)
-    except WorkspaceSeedError as e:
-        logger.warning(
-            "workspace_preseed_failed",
-            extra={"workspace_id": workspace_id, "node_id": node_id, "dataset": name, "error": str(e)},
-        )
-        return NodeDataset()
-    return NodeDataset(seeded_name=seeded.dataset_name)
+    seeded: list[tuple[str, str]] = []
+    for name in names:
+        reg = await fetch_owned_registration(name, owner_id)
+        if reg is None:
+            logger.warning(
+                "workspace_preseed_failed", extra={"node_id": node_id, "dataset": name, "error": "not found"}
+            )
+            continue
+        if not (reg.get("train_path") and reg.get("test_path")):
+            # Unsplit: no workspace to seed (``seed_cell_workspace`` says why),
+            # so the raw file itself becomes the run's dataset and the agent
+            # makes its own split with the sklearn tools. Not a failure and not
+            # logged as one -- registration stores only a raw file, and
+            # splitting is a separate optional action a researcher may skip.
+            #
+            # Only bindable when it is the ONLY wired dataset: the ambient
+            # data_path is a single value, so an unsplit dataset alongside
+            # others has nowhere to be bound and is left for the agent to open
+            # (it has no workspace slot either -- a slot is a staged lineage
+            # over a frozen split).
+            if solo:
+                return NodeDataset(
+                    unsplit_name=name,
+                    data_path=str(reg.get("raw_path") or ""),
+                    target_column=str(reg.get("target_column") or ""),
+                )
+            logger.warning(
+                "workspace_preseed_skipped",
+                extra={"node_id": node_id, "dataset": name, "error": "unsplit dataset among several"},
+            )
+            continue
+        if not workspace_id:
+            continue
+        try:
+            opened = await seed_cell_workspace(
+                workspace_id=workspace_id,
+                dataset_name=name,
+                owner_id=owner_id,
+                slot=None if solo else dataset_slot(name),
+            )
+        except WorkspaceSeedError as e:
+            logger.warning(
+                "workspace_preseed_failed",
+                extra={"workspace_id": workspace_id, "node_id": node_id, "dataset": name, "error": str(e)},
+            )
+            continue
+        seeded.append((opened.dataset_name, opened.slot))
+    return NodeDataset(seeded=tuple(seeded))
 
 
 async def _node_run_context(
@@ -1355,15 +1399,20 @@ def _resolve_dataset_configs(graph: dict[str, Any], node_id: str) -> list[dict[s
     ``{"dataset_id": ..., "dataset_name": ...}`` configs in canvas wiring
     order -- ``[]`` when none is connected.
 
-    A list rather than a single config for compatibility, not because several
-    is the intended shape: the Dataset connector was briefly uncapped and
-    graphs saved in that window can still carry two or more. It is capped at
-    one again (see ``AgentNode.tsx``), because a cell's workspace is keyed by
-    ``experiment_id/cell_label`` alone and therefore holds exactly one dataset
-    -- ``seed_cell_workspace`` rejects a second. Comparing datasets is a
-    ``dataset_config`` FACTOR instead: ``apply_factor_bindings`` replaces this
-    node's whole ``data.config`` per cell (it runs before anything here), so
-    each cell resolves to a one-element list naming its own dataset.
+    Several IS the intended shape now, and the connector is uncapped to match
+    (see ``AgentNode.tsx``). It was capped at one for a while because a cell's
+    workspace held one implicit lineage keyed by ``experiment_id/cell_label``
+    alone, so a second dataset had nowhere to go -- ``seed_cell_workspace``
+    rejected it outright. Workspace *slots* give each one its own lineage,
+    target column and HEAD inside the same cell, which is what a pipeline
+    joining two cohorts needs.
+
+    Note the two questions this does not answer: *comparing* datasets is a
+    ``dataset_config`` FACTOR, not several connectors -- ``apply_factor_bindings``
+    replaces this node's whole ``data.config`` per cell (it runs before anything
+    here), so each cell of that design resolves to a one-element list naming its
+    own dataset. Several connectors means "this step works with all of these at
+    once", which is a different experiment.
 
     Scans the Dataset handle plus both spellings it has been saved under
     before -- the short-lived ``resource`` one and the Tool handle it
@@ -1862,7 +1911,7 @@ def _build_user_input(
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
     script_bound: bool = False,
-    seeded_dataset: str = "",
+    seeded_datasets: tuple[tuple[str, str], ...] = (),
     unsplit_dataset: str = "",
     prompt_contract_version: int = DEFAULT_PROMPT_CONTRACT_VERSION,
 ) -> str:
@@ -1893,15 +1942,17 @@ def _build_user_input(
     workspace directory to write it to -- the code is inlined here as before,
     because a prompt the model can copy from beats no script at all.
 
-    *seeded_dataset* says ASAREE already opened the cell's workspace on the
-    agent's behalf (``_resolve_node_dataset``). When it did, the Dataset
-    block stops asking for a tool call at all and just says the data is there
-    -- opening a workspace was never a decision worth spending an agent turn
-    on, and a step the agent can't skip is a step it can't get wrong.
+    *seeded_datasets* are the ``(dataset name, workspace slot)`` pairs ASAREE
+    already opened on the agent's behalf (``_resolve_node_dataset``). When
+    anything was seeded, the Dataset block stops asking for a tool call at all
+    and just says the data is there -- opening a workspace was never a decision
+    worth spending an agent turn on, and a step the agent can't skip is a step
+    it can't get wrong. With several, the slot keys are named, because which
+    dataset a call is about is the one part of that no ambient value can decide.
 
     *unsplit_dataset* is the same resolver's other outcome: a registration with
     no train/test split, bound as a plain file. Mutually exclusive with
-    *seeded_dataset* -- a dataset has a split or it doesn't.
+    *seeded_datasets* -- a dataset has a split or it doesn't.
 
     *prompt_contract_version* selects the upstream-context format (see
     :mod:`asaree.services.prompt_contract`). An unknown version falls back to
@@ -1916,19 +1967,37 @@ def _build_user_input(
     dataset_configs = _resolve_dataset_configs(graph, node["id"])
     if dataset_configs and experiment_id is not None and effective_cell_label is not None:
         dataset_names = [str(c["dataset_name"]) for c in dataset_configs]
-        if seeded_dataset:
+        if len(seeded_datasets) == 1:
             # Nothing to call: the workspace was seeded before this turn, and
             # every workspace/domain tool resolves it from ambient _meta. Named
             # rather than left implicit so the agent can report what it worked
             # on, and so a wrong wiring is visible in the transcript.
             parts.append(
                 "Dataset context:\n"
-                f"Your data is already open: the dataset {seeded_dataset!r} is loaded into this "
+                f"Your data is already open: the dataset {seeded_datasets[0][0]!r} is loaded into this "
                 "cell's workspace at HEAD. Do NOT call open_workspace -- the workspace tools and "
                 "the sklearn tools all resolve it from ambient run context, so omit any "
                 "data_path/workspace_id/target_column argument and never build one out of an id "
                 "another tool reported (a workspace id is not a file path). Start with the "
                 "analysis itself. (workspace_status() reports the current state if you need it.)"
+            )
+        elif seeded_datasets:
+            # Several datasets, each already open in its own workspace slot.
+            # The one thing ambient context cannot decide is WHICH -- that is a
+            # real choice about the analysis -- so the slot keys stay in the
+            # prompt, and only the keys: everything else still resolves
+            # ambiently. Slots are named, not positional, so a tool call that
+            # omits one gets an error listing them rather than a default.
+            listed = "\n".join(f'- {name!r} -> slot="{slot}"' for name, slot in seeded_datasets)
+            parts.append(
+                "Dataset context:\n"
+                f"{len(seeded_datasets)} datasets are already open in this cell's workspace, each in "
+                f"its own slot at its own HEAD:\n{listed}\n"
+                "Do NOT call open_workspace -- they are all loaded. Pass slot=\"...\" to the workspace "
+                "and staging tools to say which one a call is about; omit every other argument, since "
+                "the workspace itself arrives as ambient run context. Each slot stages independently, "
+                "so accepting a stage in one does not touch the others. "
+                "(workspace_status() lists the slots and their current state.)"
             )
         elif unsplit_dataset:
             # No workspace and no frozen split -- the raw file is bound as the
@@ -1958,32 +2027,20 @@ def _build_user_input(
                 "as ambient run context. Its response names what it opened."
             )
         else:
-            # `name` is the one thing _meta can't decide for the agent: the
-            # ambient fallback deliberately refuses to guess among several, so
-            # the names stay in the prompt. experiment_id/cell_label still do
+            # Several wired and none of them pre-seeded -- an unlinked protocol
+            # run (no workspace id at all), or every registration was broken or
+            # unsplit. `name` is the one thing _meta can't decide for the agent:
+            # the ambient fallback deliberately refuses to guess among several,
+            # so the names stay in the prompt. experiment_id/cell_label still do
             # not -- they come from the ambient workspace_id.
-            #
-            # And that ambient workspace_id is exactly why this says "pick
-            # one": a cell's workspace is keyed by experiment_id/cell_label
-            # alone, so all of these would resolve to the same directory.
-            # open_workspace now refuses the second one rather than silently
-            # returning the first one's data (it used to claim, wrongly, that
-            # each name got its own workspace).
-            #
-            # A LEGACY path now: the connector is capped at one again, and
-            # the real fix landed as the per-dataset cell -- a
-            # ``dataset_config`` factor, whose levels are whole Dataset
-            # configs, so each cell gets its own dataset in its own
-            # workspace. Only a graph saved while the connector was uncapped
-            # still reaches this branch.
             listed = "\n".join(f'- "{n}"' for n in dataset_names)
             parts.append(
                 "Dataset context:\n"
                 f"{len(dataset_names)} datasets are registered for this run:\n{listed}\n"
-                "Call open_workspace(name=...) with the ONE this cell should work on, before doing "
-                "any data work. `name` is the only argument to pass; the rest arrives as ambient "
-                "run context. This cell has a single workspace, so it holds a single dataset -- "
-                "opening a second here is an error, not a second workspace."
+                "Call open_workspace(name=...) for each one you need, before doing any data work. "
+                "`name` is the only argument to pass; the rest arrives as ambient run context. Each "
+                "dataset opens into its own slot of this cell's workspace and stages independently, "
+                "so pass slot=\"...\" (the response names it) to say which one a later call is about."
             )
 
     script_config = _resolve_script_config(graph, node["id"])
@@ -2669,7 +2726,7 @@ async def _run_gated_worker(
         experiment_id=experiment_id,
         effective_cell_label=effective_cell_label,
         script_bound="script_path" in worker_ambient,
-        seeded_dataset=worker_dataset.seeded_name,
+        seeded_datasets=worker_dataset.seeded,
         unsplit_dataset=worker_dataset.unsplit_name,
         prompt_contract_version=contract_version,
     )
@@ -3112,7 +3169,7 @@ async def _run_single_node(
         experiment_id=experiment_id,
         effective_cell_label=effective_cell_label,
         script_bound="script_path" in ambient_meta,
-        seeded_dataset=node_dataset.seeded_name,
+        seeded_datasets=node_dataset.seeded,
         unsplit_dataset=node_dataset.unsplit_name,
     )
     output_text, error, run_id = await _run_agent_node(
@@ -3270,7 +3327,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 experiment_id=experiment_id,
                 effective_cell_label=effective_cell_label,
                 script_bound="script_path" in ambient_meta,
-                seeded_dataset=entry_dataset.seeded_name,
+                seeded_datasets=entry_dataset.seeded,
                 unsplit_dataset=entry_dataset.unsplit_name,
                 prompt_contract_version=contract_version,
             ),
@@ -3380,7 +3437,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 experiment_id=experiment_id,
                 effective_cell_label=effective_cell_label,
                 script_bound="script_path" in ambient_meta,
-                seeded_dataset=node_dataset.seeded_name,
+                seeded_datasets=node_dataset.seeded,
                 unsplit_dataset=node_dataset.unsplit_name,
                 prompt_contract_version=contract_version,
             )

@@ -22,7 +22,7 @@ from typing import Any
 
 import pandas as pd
 
-from .workspace import Workspace, WorkspaceError
+from .workspace import Workspace, WorkspaceError, dataset_slot
 
 # Namespaced key Motoro injects into the MCP request ``_meta`` (mirrors
 # ``META_KEY_WORKSPACE_ID`` in ``motoro.mcp.adapters`` exactly — this
@@ -182,10 +182,32 @@ def resolve_workspace_id(
     return resolved
 
 
+def resolve_slot(explicit: str, meta: Mapping[str, Any] | None) -> str | None:
+    """Resolve which workspace slot a call means, or ``None`` for "the sole one".
+
+    Mirrors :func:`resolve_dataset_name`: an explicit argument wins, otherwise
+    the single wired dataset's slot when there is exactly one. With several
+    wired there is a real choice, so this returns ``None`` and lets
+    :class:`~.workspace.Workspace` raise naming the candidates rather than
+    guessing here — the error belongs where the actual slot keys are known.
+    """
+    explicit = (explicit or "").strip()
+    if explicit:
+        return explicit
+    names = dataset_names_from_meta(meta)
+    return dataset_slot(names[0]) if len(names) == 1 else None
+
+
+def resolve_slot_from_ctx(explicit: str, ctx: Any) -> str | None:
+    """Convenience: :func:`resolve_slot` against a FastMCP ctx's ambient meta."""
+    return resolve_slot(explicit, meta_mapping_from_ctx(ctx))
+
+
 def resolve_matrix_from_head(
     workspace_id: str,
     *,
     root: str | None = None,
+    slot: str | None = None,
 ) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
     """Load ``(X_train, y_train, X_test, y_test)`` from the workspace HEAD.
 
@@ -195,7 +217,7 @@ def resolve_matrix_from_head(
     ``workspace_id``. Raises :class:`WorkspaceError` when the workspace is
     absent or malformed, so a missing context can never resolve to wrong data.
     """
-    ws = Workspace(workspace_id, root=root)
+    ws = Workspace(workspace_id, root=root, slot=slot)
     if not ws.exists():
         raise WorkspaceError(f"workspace {workspace_id!r} not initialized")
     return ws.read_head()
@@ -206,13 +228,14 @@ def resolve_stage_input(
     stage: str,
     *,
     root: str | None = None,
+    slot: str | None = None,
 ) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
     """Load the ``(X_train, y_train, X_test, y_test)`` a stage should start from.
 
     A stage reads the prior accepted stage's output (or the ``v0_raw`` seed for
     the first stage) — the input side of the leakage-safe staged handoff.
     """
-    ws = Workspace(workspace_id, root=root)
+    ws = Workspace(workspace_id, root=root, slot=slot)
     if not ws.exists():
         raise WorkspaceError(f"workspace {workspace_id!r} not initialized")
     return ws.read_stage_input(stage)
@@ -223,6 +246,7 @@ def resolve_stage_working(
     stage: str,
     *,
     root: str | None = None,
+    slot: str | None = None,
 ) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
     """Load a stage's working matrix — its committed (unaccepted) version if
     present, else the stage input.
@@ -232,7 +256,7 @@ def resolve_stage_working(
     ``v1_dc``; the second FTE tool (``fit_preprocessor``) reads ``build_features``'
     committed ``v2_fte``. See :meth:`Workspace.read_stage_working`.
     """
-    ws = Workspace(workspace_id, root=root)
+    ws = Workspace(workspace_id, root=root, slot=slot)
     if not ws.exists():
         raise WorkspaceError(f"workspace {workspace_id!r} not initialized")
     return ws.read_stage_working(stage)

@@ -1411,20 +1411,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         case 'skill':
           return sourceNode.type === 'skill' && targetNode.type === 'agent'
         case 'dataset':
-          // The one slot with a cardinality check here, not just a hidden
-          // "+" stub (see AgentNode.tsx's Dataset comment, and ai/memory
-          // above, which are capped the same way but rely on the stub
-          // alone). A second dataset on one agent isn't merely unsupported
-          // -- every cell resolves ONE workspace, so seed_cell_workspace
-          // rejects it at run time, after the run has already started.
-          // Comparing datasets is a 'dataset_config' factor instead.
-          return (
-            sourceNode.type === 'dataset' &&
-            targetNode.type === 'agent' &&
-            !edges.some(
-              (e) => e.target === connection.target && e.targetHandle === 'dataset' && e.source !== connection.source,
-            )
-          )
+          // Uncapped: a cell's workspace holds one dataset per named SLOT, so
+          // several datasets on one agent is a supported shape, not a run-time
+          // error (see AgentNode.tsx's Dataset comment). Wiring order is the
+          // order the agent's prompt lists the slots in. Note this is still
+          // distinct from COMPARING datasets across cells, which is a
+          // 'dataset_config' factor.
+          return sourceNode.type === 'dataset' && targetNode.type === 'agent'
         case 'knowledge':
           // The one connector with two source types -- bundles and uploaded
           // documents are interchangeable here, since both resolve to the same

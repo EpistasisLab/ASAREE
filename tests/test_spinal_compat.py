@@ -239,7 +239,12 @@ def test_the_seeded_dataset_block_is_unchanged(graph: dict[str, Any]) -> None:
     This text tells the model NOT to call ``open_workspace`` and not to
     fabricate path arguments; it is load-bearing prompt engineering, and the
     spinal DC agent runs down this branch on every cell."""
-    text = _prompt(graph, _AGENTS[0][0], seeded_dataset=_DATASET_NAME)
+    # One seeded dataset, which is the spinal shape: the block below must stay
+    # byte-identical to what it was before workspaces gained named slots. The
+    # slot key is deliberately absent from it -- naming a slot only makes sense
+    # once there are several, and this branch is the one the spinal DC agent
+    # takes on every cell.
+    text = _prompt(graph, _AGENTS[0][0], seeded_datasets=((_DATASET_NAME, "dataset:default"),))
     assert (
         "Dataset context:\n"
         f"Your data is already open: the dataset {_DATASET_NAME!r} is loaded into this "

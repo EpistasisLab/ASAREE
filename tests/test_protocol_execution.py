@@ -402,7 +402,7 @@ def test_build_user_input_states_the_dataset_is_already_open_when_preseeded() ->
         {},
         experiment_id=uuid.UUID(int=1),
         effective_cell_label="tier_a__rep_0",
-        seeded_dataset="spinal-fusion-v1",
+        seeded_datasets=(("spinal-fusion-v1", "dataset:default"),),
     )
     assert "already open" in result
     assert "spinal-fusion-v1" in result  # named, so the transcript shows what it worked on
@@ -457,13 +457,9 @@ async def test_sync_durable_agent_recovers_from_a_concurrent_create(monkeypatch:
     assert updates == [(existing.id, {"goal": "Do the work."})]
 
 
-async def test_preseed_skipped_without_a_workspace_or_with_several_datasets(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # An unlinked protocol run has no cell workspace to seed, and several wired
-    # datasets are a real choice with no defensible default (mirrors
-    # resolve_dataset_name's own len == 1 rule) -- those keep the agent-driven
-    # open_workspace(name=...).
+async def test_preseed_skipped_without_a_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An unlinked protocol run has no cell workspace to seed, so there is
+    # nowhere to put a slot -- it keeps the agent-driven open_workspace(name=...).
     async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
         return _registration()
 
@@ -475,6 +471,27 @@ async def test_preseed_skipped_without_a_workspace_or_with_several_datasets(
     }
     assert await pe._resolve_node_dataset(one, "a", None, uuid.UUID(int=7)) == pe.NodeDataset()
 
+
+async def test_several_wired_datasets_each_get_their_own_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Several datasets used to be refused outright (one workspace, one dataset)
+    # and fell back to the agent-driven open. A workspace now holds one dataset
+    # per named slot, so every wired dataset is seeded and the slot key travels
+    # with the name -- the prompt has to tell the agent which slot="..." its
+    # tool calls will accept.
+    seen: list[str | None] = []
+
+    async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
+        return _registration()
+
+    async def _seed(**kwargs: object) -> object:
+        slot = kwargs["slot"]
+        seen.append(slot)  # type: ignore[arg-type]
+        name = str(kwargs["dataset_name"])
+        return SimpleNamespace(dataset_name=name, slot=str(slot or "dataset:default"))
+
+    monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
+    monkeypatch.setattr(pe, "seed_cell_workspace", _seed)
+    agent, agent_llm_edge = _agent_with_llm("a")
     many = {
         "nodes": [
             agent,
@@ -483,8 +500,45 @@ async def test_preseed_skipped_without_a_workspace_or_with_several_datasets(
         ],
         "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
     }
-    # Still before any DB access at all: the len == 1 rule is checked first.
-    assert await pe._resolve_node_dataset(many, "a", "exp/cell", uuid.UUID(int=7)) == pe.NodeDataset()
+    resolved = await pe._resolve_node_dataset(many, "a", "exp/cell", uuid.UUID(int=7))
+    assert resolved.seeded == (("cohort-a", "dataset:cohort-a"), ("cohort-b", "dataset:cohort-b"))
+    assert seen == ["dataset:cohort-a", "dataset:cohort-b"]
+
+    # A lone dataset still seeds with slot=None, so its workspace keeps the
+    # pre-slot on-disk layout untouched.
+    seen.clear()
+    solo = {
+        "nodes": [agent, _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1")],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a")],
+    }
+    await pe._resolve_node_dataset(solo, "a", "exp/cell", uuid.UUID(int=7))
+    assert seen == [None]
+
+
+def test_build_user_input_names_the_slot_of_each_seeded_dataset() -> None:
+    # With several open there is no "the" workspace dataset, so the prompt
+    # lists them with the slot key each tool call needs; leaving the agent to
+    # guess would silently read whichever slot came first.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [
+            agent,
+            _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1"),
+            _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2"),
+        ],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
+    }
+    result = pe._build_user_input(
+        agent,
+        graph,
+        {},
+        experiment_id=uuid.UUID(int=1),
+        effective_cell_label="tier_a__rep_0",
+        seeded_datasets=(("cohort-a", "dataset:cohort-a"), ("cohort-b", "dataset:cohort-b")),
+    )
+    assert 'slot="dataset:cohort-a"' in result
+    assert 'slot="dataset:cohort-b"' in result
+    assert "Do NOT call open_workspace" in result
 
 
 async def test_preseed_failure_falls_back_to_the_agent_driven_open(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -508,7 +562,7 @@ async def test_preseed_failure_falls_back_to_the_agent_driven_open(monkeypatch: 
     assert await pe._resolve_node_dataset(graph, "a", "exp/cell", uuid.UUID(int=7)) == pe.NodeDataset()
 
     result = pe._build_user_input(
-        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0", seeded_dataset=""
+        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0", seeded_datasets=()
     )
     assert "Call open_workspace()" in result
 
@@ -540,7 +594,7 @@ async def test_an_unsplit_dataset_binds_its_raw_file_instead_of_a_workspace(
 
     ambient, dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
     assert dataset.unsplit_name == "spine-raw"
-    assert dataset.seeded_name == ""
+    assert dataset.seeded == ()
     assert ambient["data_path"] == "/data/spine/raw.csv"
     assert ambient["target_column"] == "outcome"
 
@@ -787,7 +841,7 @@ async def test_node_run_context_seeds_before_reading_head(monkeypatch: pytest.Mo
 
     async def _seed(graph: dict, node_id: str, workspace_id: str | None, owner_id: uuid.UUID) -> pe.NodeDataset:
         calls.append("seed")
-        return pe.NodeDataset(seeded_name="spinal-fusion-v1")
+        return pe.NodeDataset(seeded=(("spinal-fusion-v1", "dataset:default"),))
 
     def _locator(workspace_id: str) -> tuple[str, str]:
         calls.append("locator")
@@ -802,7 +856,7 @@ async def test_node_run_context_seeds_before_reading_head(monkeypatch: pytest.Mo
     }
     ambient, dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
     assert calls == ["seed", "locator"]
-    assert dataset.seeded_name == "spinal-fusion-v1"
+    assert dataset.seeded_names == ("spinal-fusion-v1",)
     assert ambient["data_path"] == "/ws/train.parquet"
 
 

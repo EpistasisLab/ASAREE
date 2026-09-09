@@ -193,6 +193,40 @@ def test_a_reference_that_resolves_to_nothing_leaves_a_gap_rather_than_failing()
     assert _prompt(graph, "b", {"a": {"status": "completed", "output_text": ""}}, 2) == "Review this: "
 
 
+def test_an_empty_resolution_is_reported_to_a_caller_that_asks() -> None:
+    """The gap above is indistinguishable, in the finished prompt, from an agent
+    that was simply never told anything -- so the ids are handed back for the
+    Runs tab to name, rather than left for someone to infer from a blank."""
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "Review {{previous}} and {{node:a}}."
+    node = graph["nodes"][1]
+    unresolved: list[str] = []
+    _build_user_input(
+        node,
+        graph,
+        {"a": {"status": "completed", "output_text": ""}},
+        prompt_contract_version=2,
+        unresolved_out=unresolved,
+    )
+    # Once per reference, not once per node: two references to the same empty
+    # sender are two gaps in the text.
+    assert unresolved == ["a", "a"]
+
+
+def test_a_reference_that_resolves_is_reported_as_nothing() -> None:
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "Review this: {{previous}}"
+    unresolved: list[str] = []
+    _build_user_input(
+        graph["nodes"][1],
+        graph,
+        {"a": {"status": "completed", "output_text": "Findings."}},
+        prompt_contract_version=2,
+        unresolved_out=unresolved,
+    )
+    assert unresolved == []
+
+
 def test_raw_drops_the_fence_but_never_the_neutralization() -> None:
     """The fence is a formatting choice an experimenter may decline. Defusing a
     forged delimiter is not: a payload that can forge one can close Motoro's

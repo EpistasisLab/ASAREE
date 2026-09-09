@@ -2704,6 +2704,7 @@ def _build_user_input(
     upstream_kind: str = "handoff",
     upstream_ids: list[str] | None = None,
     audience: str = "",
+    unresolved_out: list[str] | None = None,
 ) -> str:
     """The node's own prompt (falling back to its goal, then its canvas
     label), plus (flat, unstructured -- a deliberate V1 simplification) each
@@ -2768,6 +2769,12 @@ def _build_user_input(
     replies are not a prior node's output either, so the sentence would be a lie
     on both.
 
+    *unresolved_out*, when given, collects the node ids whose referenced output
+    was empty. An out-parameter rather than a second return value because five
+    of the six call sites do not care and one of them is an inline argument
+    expression -- and because the string this returns is the whole point of
+    calling it. Empty is the normal case.
+
     On the current contract the prompt's own ``{{...}}`` references are resolved
     (:mod:`asaree.services.prompt_references`) and no upstream block is appended.
     The legacy contract does neither -- its format is frozen, so a legacy
@@ -2786,9 +2793,11 @@ def _build_user_input(
             seed, graph, node["id"], node_runs, upstream_kind=upstream_kind, audience=audience
         )
         if unresolved:
-            # Recorded, not raised -- see _render_reference. Surfacing this in
-            # the Runs tab is Phase 3's job; a log line is what stops it being
-            # invisible until then.
+            # Recorded, not raised -- see _render_reference. The out-parameter
+            # is what the Runs tab reads; the log line is for a call site that
+            # did not pass one.
+            if unresolved_out is not None:
+                unresolved_out.extend(unresolved)
             logger.warning(
                 "prompt references resolved empty: node=%s referenced=%s",
                 node["id"],
@@ -2906,6 +2915,108 @@ def _build_user_input(
     # `{{audience}}` reference resolves to, above. Nothing platform-authored
     # goes into a prompt that did not ask for it.
     return "\n\n".join(parts)
+
+
+#: The cell label a preview claims to be for. Never written anywhere -- it only
+#: has to be non-None, because that is what gates the Dataset block on.
+_PREVIEW_CELL_LABEL = "preview"
+
+
+async def _preview_node_dataset(graph: dict[str, Any], node_id: str, owner_id: uuid.UUID) -> NodeDataset:
+    """:func:`_resolve_node_dataset`'s answer, without doing any of the work.
+
+    That function seeds the cell's workspace as a side effect, which a preview
+    must not do -- so this repeats only its *classification* (registered and
+    split -> seeded; registered without a split and alone -> unsplit; neither ->
+    nothing) against the same registration read and the same slot naming.
+
+    The one thing it cannot know is what ``seed_cell_workspace`` would report
+    back: a workspace already in the pre-slot on-disk format keeps a single
+    unnamed slot regardless of what was asked for. A preview names the slot the
+    canvas implies, which is what a workspace created fresh for the next cell
+    will actually use.
+    """
+    names = [str(c["dataset_name"]) for c in _resolve_dataset_configs(graph, node_id) if c.get("dataset_name")]
+    if not names:
+        return NodeDataset()
+    solo = len(names) == 1
+
+    seeded: list[tuple[str, str]] = []
+    for name in names:
+        reg = await fetch_owned_registration(name, owner_id)
+        if reg is None:
+            continue
+        if not (reg.get("train_path") and reg.get("test_path")):
+            if solo:
+                return NodeDataset(
+                    unsplit_name=name,
+                    data_path=str(reg.get("raw_path") or ""),
+                    target_column=str(reg.get("target_column") or ""),
+                )
+            continue
+        seeded.append((name, "" if solo else dataset_slot(name)))
+    return NodeDataset(seeded=tuple(seeded))
+
+
+async def preview_node_prompt(
+    graph: dict[str, Any],
+    node_id: str,
+    *,
+    owner_id: uuid.UUID,
+    experiment_id: uuid.UUID | None = None,
+    design_spec: dict[str, Any] | None = None,
+) -> str:
+    """The exact prompt this agent would be given, assembled from the draft canvas.
+
+    Wraps :func:`_build_user_input` rather than re-deriving anything: a preview
+    that drifts from the real prompt is worse than no preview, so the only
+    difference between this and a run is what it is given to work with.
+
+    Upstream output is the one thing that genuinely does not exist yet, so each
+    referenceable ancestor stands in as ``<output of "Name">``. Every ancestor
+    gets one, not just the direct predecessors -- ``referenceable_node_ids`` is
+    the same set the picker offers, so a reach-back reference previews as
+    something rather than as a gap it would not really leave.
+
+    Creates nothing: no ``ProtocolRun``, no agent run, no workspace (see
+    :func:`_preview_node_dataset`).
+
+    Raises :class:`ProtocolValidationError` for a node that is not an agent --
+    only an agent is given a prompt, and previewing a connector would be
+    inventing one.
+    """
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
+    node = nodes.get(node_id)
+    if node is None:
+        raise ProtocolValidationError(f"No node {node_id!r} on this canvas.")
+    if node.get("type") != "agent":
+        raise ProtocolValidationError(f"{_node_display_name(node)} is not an agent, so it is never given a prompt.")
+
+    node_runs = {
+        upstream_id: {
+            "status": "completed",
+            "output_text": f'<output of "{_node_display_name(nodes[upstream_id])}">',
+            "error": None,
+        }
+        for upstream_id in referenceable_node_ids(graph, node_id)
+        if upstream_id in nodes
+    }
+    dataset = await _preview_node_dataset(graph, node_id, owner_id)
+    return _build_user_input(
+        node,
+        graph,
+        node_runs,
+        experiment_id=experiment_id,
+        effective_cell_label=_PREVIEW_CELL_LABEL,
+        # True exactly when the run would have a workspace to write the script
+        # into (_materialize_script) -- which is what an experiment-linked run
+        # always has, and an unlinked one never does.
+        script_bound=experiment_id is not None,
+        seeded_datasets=dataset.seeded,
+        unsplit_dataset=dataset.unsplit_name,
+        prompt_contract_version=prompt_contract_version(design_spec),
+        audience=_node_audience(graph, node_id, step=_chain_steps(graph, design_spec).get(node_id)),
+    )
 
 
 def _build_revision_instruction(base_instruction: str, verdict: dict[str, Any], previous_output: str) -> str:
@@ -4350,6 +4461,11 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         output_text: str | None
         error: str | None
         run_id: uuid.UUID | None
+        # Which of this node's references resolved to nothing. Carried onto the
+        # node run so the Runs tab can say so: an empty resolution leaves a
+        # literal gap in the prompt, which reads as an agent that was simply
+        # never told anything rather than one whose sender produced nothing.
+        unresolved: list[str] = []
         if not _is_node_active(node):
             # Deactivated: skip this node's own logic entirely -- its
             # upstream input passes straight through as its output
@@ -4374,6 +4490,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 unsplit_dataset=node_dataset.unsplit_name,
                 prompt_contract_version=contract_version,
                 audience=_node_audience(graph, node_id, step=chain_steps.get(node_id)),
+                unresolved_out=unresolved,
             )
             output_text, error, run_id = await _run_agent_node(
                 node,
@@ -4403,6 +4520,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 "error": error,
                 "run_id": str(run_id) if run_id else None,
             }
+            if unresolved:
+                node_runs[node_id]["unresolved_references"] = unresolved
             if error:
                 failed = True
         async with get_session() as db:

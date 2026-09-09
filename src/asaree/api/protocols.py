@@ -19,11 +19,13 @@ from pydantic import BaseModel
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
+from asaree.services.prompt_contract import prompt_contract_version
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
     is_conversation_strategy,
     plan_cell_runs,
     plan_single_replicate_run,
+    preview_node_prompt,
     topological_order,
     validate_coordination_strategy,
     validate_prompt_references,
@@ -153,6 +155,22 @@ class CellRunBatchResponse(BaseModel):
     skipped: int
     protocol_revision_id: uuid.UUID
     protocol_revision: int
+
+
+class PromptPreviewRequest(BaseModel):
+    # The canvas to assemble against. Sent because the inspector previews what
+    # is on screen, including edits autosave has not flushed yet; omitted, the
+    # stored draft stands in. Nothing is written either way.
+    graph: dict[str, Any] | None = None
+
+
+class PromptPreviewResponse(BaseModel):
+    text: str
+    # Which prompt contract assembled it. Stated because the two contracts
+    # produce visibly different prompts and an experiment is pinned to one at
+    # creation -- without this, "why does my prompt look different" has no
+    # answer on screen.
+    contract_version: int
 
 
 async def _get_owned_protocol(db: DbSession, protocol_id: uuid.UUID, user: CurrentUser) -> Any:
@@ -350,6 +368,34 @@ async def run_single_node_endpoint(
     )
     await enqueue_protocol_run(run.id)
     return ProtocolRunResponse.model_validate(run)
+
+
+@router.post("/{protocol_id}/nodes/{node_id}/prompt-preview", response_model=PromptPreviewResponse)
+async def preview_node_prompt_endpoint(
+    protocol_id: uuid.UUID, node_id: str, body: PromptPreviewRequest, user: CurrentUser, db: DbSession
+) -> PromptPreviewResponse:
+    """What this agent's prompt would look like, without running anything.
+
+    Read-only despite being a POST: the canvas being previewed is the one on
+    screen, which the client sends rather than the server reading back a draft
+    autosave that may be a beat behind what was just typed. Creates no run of
+    any kind (see ``preview_node_prompt``); the 200 is a rendering, not a
+    resource.
+    """
+    protocol = await _get_owned_protocol(db, protocol_id, user)
+    experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
+    design_spec = experiment.design_spec if experiment is not None else None
+    try:
+        text = await preview_node_prompt(
+            body.graph if body.graph is not None else protocol.graph,
+            node_id,
+            owner_id=user.id,
+            experiment_id=protocol.experiment_id,
+            design_spec=design_spec,
+        )
+    except ProtocolValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PromptPreviewResponse(text=text, contract_version=prompt_contract_version(design_spec))
 
 
 @router.post("/{protocol_id}/cell-runs", response_model=CellRunBatchResponse, status_code=201)

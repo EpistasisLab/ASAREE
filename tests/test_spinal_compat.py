@@ -50,11 +50,7 @@ _FIXTURE = Path(__file__).parent / "fixtures" / "spinal_graph.json"
 # A golden here is edited by hand or not at all -- there is deliberately no
 # regeneration flag, because "the code changed so the golden changed" is the
 # exact reasoning this file exists to refuse.
-#
-# NOT ``fixtures/prompts/``: ``.gitignore``'s unanchored ``prompts/`` rule
-# matches at any depth, so that name leaves the goldens untracked and the pin
-# imaginary.
-_GOLDEN_PROMPTS = Path(__file__).parent / "fixtures" / "prompt_goldens"
+_GOLDEN_PROMPTS = Path(__file__).parent / "fixtures" / "prompts"
 
 # The experiment's own declaration, as stored in ResearchExperiment.design_spec.
 # Only the parts the executor reads are reproduced -- the strategy (which

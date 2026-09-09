@@ -54,9 +54,59 @@ def _placeholders(graph: dict[str, Any], *node_ids: str) -> dict[str, Any]:
             "status": "completed",
             "output_text": f'<output of "{by_id[node_id]["data"]["label"]}">',
             "error": None,
+            "payload": {},
         }
         for node_id in node_ids
     }
+
+
+def _wire_parser(graph: dict[str, Any], target: str, *fields: str) -> None:
+    graph["nodes"].append(
+        {
+            "id": f"parser-{target}",
+            "type": "output_parser",
+            "data": {
+                "label": "Parser",
+                "config": {
+                    "output_contract": {
+                        "name": "shape",
+                        "fields": [{"name": f, "type": "integer"} for f in fields],
+                    }
+                },
+            },
+        }
+    )
+    graph["edges"].append(
+        {"id": f"e-parser-{target}", "source": f"parser-{target}", "target": target, "targetHandle": "output_parser"}
+    )
+
+
+# ----------------------------------------------------------------------
+# Field references
+# ----------------------------------------------------------------------
+
+
+async def test_a_field_reference_previews_as_that_field_not_as_a_hole() -> None:
+    """The failure this replaces rendered `The dataset has  rows.` -- a sentence
+    with a gap in it, which reads as a broken prompt rather than as a value that
+    does not exist until the run."""
+    graph = _chain("Profile it.", "It has {{node:a.n_rows}} rows.")
+    _wire_parser(graph, "a", "n_rows", "n_cols")
+
+    preview = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec=CURRENT)
+
+    assert 'It has <n_rows of "Agent A"> rows.' in preview
+
+
+async def test_a_field_the_parser_does_not_declare_still_previews_as_the_gap_it_will_be() -> None:
+    """Standing in for every field asked for would hide a wiring mistake the
+    run would really hit -- the preview may be unfinished, never wrong."""
+    graph = _chain("Profile it.", "It has {{node:a.n_columns}} columns.")
+    _wire_parser(graph, "a", "n_rows")
+
+    preview = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec=CURRENT)
+
+    assert "It has  columns." in preview
 
 
 # ----------------------------------------------------------------------

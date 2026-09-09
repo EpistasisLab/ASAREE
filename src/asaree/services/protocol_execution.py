@@ -3290,6 +3290,31 @@ async def _preview_node_dataset(graph: dict[str, Any], node_id: str, owner_id: u
     return NodeDataset(seeded=tuple(seeded))
 
 
+def _preview_node_run(graph: dict[str, Any], node: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """One upstream node's stand-in run for :func:`preview_node_prompt`.
+
+    The payload stands in field by field, for the same reason ``output_text``
+    does: a field reference that previews as nothing renders a sentence with a
+    hole in it (``The dataset has  rows.``), which reads as a broken prompt
+    rather than as a value that does not exist yet. Only the fields the node's
+    Output Parser actually declares get a stand-in, so referencing one it does
+    not declare still previews as the gap it will really be -- the preview is
+    allowed to be unfinished, never to be wrong.
+    """
+    name = _node_display_name(node)
+    contract = _resolve_output_contract(graph, node_id) or {}
+    return {
+        "status": "completed",
+        "output_text": f'<output of "{name}">',
+        "error": None,
+        "payload": {
+            field["name"]: f'<{field["name"]} of "{name}">'
+            for field in contract.get("fields") or []
+            if field.get("name")
+        },
+    }
+
+
 async def preview_node_prompt(
     graph: dict[str, Any],
     node_id: str,
@@ -3325,11 +3350,7 @@ async def preview_node_prompt(
         raise ProtocolValidationError(f"{_node_display_name(node)} is not an agent, so it is never given a prompt.")
 
     node_runs = {
-        upstream_id: {
-            "status": "completed",
-            "output_text": f'<output of "{_node_display_name(nodes[upstream_id])}">',
-            "error": None,
-        }
+        upstream_id: _preview_node_run(graph, nodes[upstream_id], upstream_id)
         for upstream_id in referenceable_node_ids(graph, node_id)
         if upstream_id in nodes
     }

@@ -1,8 +1,10 @@
 import { ArrowLeft, ArrowRight } from 'lucide-react'
 import { PREVIOUS_TOKEN, referencedSenderIds, usesPreviousToken, type HandoffPeers } from '@/lib/promptReferences'
 
-// Who hands off to this agent and who it hands off to, stated in words above
-// the prompt.
+// Who hands off to this agent, and who it hands off to -- split into two
+// components because the Agent inspector puts them at opposite ends of itself:
+// Receives heads the Input pane, Sends heads the Output pane, so each sits with
+// the data it describes rather than both floating above the prompt.
 //
 // This is the readout that makes the model legible: it says that step 5 does
 // NOT see step 1, which is the single most surprising thing about a chain, and
@@ -15,18 +17,20 @@ import { PREVIOUS_TOKEN, referencedSenderIds, usesPreviousToken, type HandoffPee
 // Dataset, Memory, Tool) are never on a main edge and so never appear here,
 // and a reach-back to an earlier step is a separate, deliberate act that the
 // reference picker covers.
-export function HandoffSummary({ peers, prompt }: { peers: HandoffPeers; prompt: string }) {
+
+const ROW_CLASSNAME = 'space-y-1.5 rounded-md border bg-muted/20 p-3 font-mono text-xs'
+
+export function ReceivesSummary({ peers, prompt }: { peers: HandoffPeers; prompt: string }) {
   const referenced = referencedSenderIds(prompt, peers.receives)
   const usesPrevious = peers.receives.length > 0 && usesPreviousToken(prompt)
 
   return (
-    <div className="space-y-1.5 rounded-md border bg-muted/20 p-3 font-mono text-xs">
+    <div className={ROW_CLASSNAME}>
       <div className="flex gap-2">
-        <span className="w-16 shrink-0 text-muted-foreground">Receives</span>
         <ArrowLeft className="mt-0.5 size-3 shrink-0 text-[color:var(--node-label)]" aria-hidden="true" />
         <span className="min-w-0 flex-1">
           {peers.receives.length === 0 ? (
-            <span className="text-muted-foreground">(nothing — this is the first step)</span>
+            <span className="text-muted-foreground">Nothing — this is the first step.</span>
           ) : (
             <span className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
               {peers.receives.map((target) => (
@@ -49,17 +53,6 @@ export function HandoffSummary({ peers, prompt }: { peers: HandoffPeers; prompt:
           )}
         </span>
       </div>
-      <div className="flex gap-2">
-        <span className="w-16 shrink-0 text-muted-foreground">Sends</span>
-        <ArrowRight className="mt-0.5 size-3 shrink-0 text-[color:var(--node-label)]" aria-hidden="true" />
-        <span className="min-w-0 flex-1">
-          {peers.sends.length === 0 ? (
-            <span className="text-muted-foreground">(final output)</span>
-          ) : (
-            <span className="break-all">{peers.sends.map((t) => t.name).join(', ')}</span>
-          )}
-        </span>
-      </div>
       {usesPrevious && (
         // The one reference whose meaning depends on the wiring rather than on
         // what is written, so the wiring is where it has to be expanded.
@@ -67,6 +60,26 @@ export function HandoffSummary({ peers, prompt }: { peers: HandoffPeers; prompt:
           {PREVIOUS_TOKEN} = {peers.receives.map((t) => t.name).join(' + ')}
         </p>
       )}
+    </div>
+  )
+}
+
+export function SendsSummary({ peers }: { peers: HandoffPeers }) {
+  return (
+    <div className={ROW_CLASSNAME}>
+      <div className="flex gap-2">
+        <ArrowRight className="mt-0.5 size-3 shrink-0 text-[color:var(--node-label)]" aria-hidden="true" />
+        <span className="min-w-0 flex-1">
+          {peers.sends.length === 0 ? (
+            <span className="text-muted-foreground">Nothing downstream — this is the final output.</span>
+          ) : (
+            // Availability only: whether each of these actually uses what it is
+            // handed is a fact about *its* prompt, which is stated in its own
+            // inspector rather than guessed at from here.
+            <span className="break-all">{peers.sends.map((t) => t.name).join(', ')}</span>
+          )}
+        </span>
+      </div>
     </div>
   )
 }

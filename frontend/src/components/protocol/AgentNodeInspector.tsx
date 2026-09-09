@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useRef } from 'react'
 import { Bot } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
@@ -11,13 +11,14 @@ import { Textarea } from '@/components/ui/textarea'
 import { defaultSystemPrompt } from './defaultSystemPrompt'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
-import { HandoffSummary } from './HandoffSummary'
+import { ReceivesSummary, SendsSummary } from './HandoffSummary'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
-import { NodeRunOutputPanel } from './NodeRunOutputPanel'
+import { NodeRunOutputPanel, ReceivedPromptPanel, UnresolvedReferencesNote } from './NodeRunOutputPanel'
 import { OutputContractEditor } from './OutputContractEditor'
 import { PromptPreviewPanel } from './PromptPreviewPanel'
 import { PromptReferenceField } from './PromptReferenceField'
 import { useProtocolCanvasActions } from './ProtocolCanvasContext'
+import { RESIZE_HANDLE_CLASSNAME, useResizablePane } from './useResizablePane'
 import { experimentsApi } from '@/api/client'
 import { normalizeDesignMetrics } from '@/lib/metricCatalog'
 import { seedPromptText } from '@/lib/promptReferences'
@@ -25,15 +26,14 @@ import type { HandoffPeers, PromptReferenceScope } from '@/lib/promptReferences'
 import type { AgentNodeConfig, AgentNodeData, NodeRunState, PromptPreview, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = nodeAccent('agent')
-const DEFAULT_OUTPUT_PANE_WIDTH = 384
-const MIN_OUTPUT_PANE_WIDTH = 280
-const MAX_OUTPUT_PANE_WIDTH = 760
-const OUTPUT_PANE_WIDTH_STORAGE_KEY = 'asaree:agent-output-pane-width'
 
-function outputPaneWidth(): number {
-  const raw = typeof window !== 'undefined' ? Number(window.localStorage.getItem(OUTPUT_PANE_WIDTH_STORAGE_KEY)) : NaN
-  return Number.isFinite(raw) ? Math.min(MAX_OUTPUT_PANE_WIDTH, Math.max(MIN_OUTPUT_PANE_WIDTH, raw)) : DEFAULT_OUTPUT_PANE_WIDTH
-}
+// The middle column is where the actual editing happens, so neither side pane
+// may drag it below a width its labels and textareas still work at. Enforced
+// at drag start (see useResizablePane) against the frame's measured width.
+const MIN_PARAMETERS_WIDTH = 380
+// The two 16px handles plus the padding either side of each -- the layout cost
+// of the gutters, which the panes themselves don't get to spend.
+const GUTTER_WIDTH = 96
 
 // A node's setup opens as a large centered floating window over the dimmed
 // canvas, not a sidebar or an edge-to-edge takeover.
@@ -44,12 +44,24 @@ function outputPaneWidth(): number {
 // unaffected by which Parameters/Settings tab is active) is shared with the
 // other node inspectors via `NodeInspectorDialog` -- see that file for why.
 //
-// Parameters/Settings (left, tabbed) splits what defines the agent's
-// behavior/identity from what constrains its execution. Output is a
-// right-hand side pane (always visible, not a third tab) instead -- run
-// results are something you check
-// *while* adjusting Parameters, not a destination you tab away to and lose
-// your editing context to get to. See NodeRunOutputPanel.
+// Three columns: Input, then Parameters/Settings, then Output -- laid out in
+// the direction data actually travels, so the agent's configuration sits
+// literally between what it is handed and what it produces.
+//
+// Input and Output are always-visible panes rather than tabs because both are
+// things you check *while* adjusting Parameters, not destinations you tab away
+// to and lose your editing context to get to. Both are drag-resizable and
+// remember their width: how much room the evidence deserves against the form
+// depends on whether you're building a prompt or reading a run, and that
+// changes minute to minute.
+//
+// The split also decides where the handoff readout goes. Receives heads Input
+// and Sends heads Output, each above the data it describes, and "the prompt
+// this agent received" is input -- so on a run that already happened it appears
+// on the left, not buried under the output it produced.
+//
+// Parameters/Settings (middle, tabbed) splits what defines the agent's
+// behavior/identity from what constrains its execution.
 export function AgentNodeInspector({
   node,
   experimentId,
@@ -83,21 +95,33 @@ export function AgentNodeInspector({
   onClose: () => void
 }) {
   const { requestMakeFactor } = useProtocolCanvasActions()
-  const [outputWidth, setOutputWidth] = useState(outputPaneWidth)
-  const [resizingOutput, setResizingOutput] = useState(false)
-  const outputDragStart = useRef<{ x: number; width: number } | null>(null)
+  // Measured at drag start so each pane's ceiling accounts for what the other
+  // one is currently taking; read through a ref because the two hooks below
+  // would otherwise have to reference each other's not-yet-declared width.
+  const columnsRef = useRef<HTMLDivElement>(null)
+  const widthsRef = useRef({ input: 0, output: 0 })
+  const roomFor = (other: 'input' | 'output') =>
+    (columnsRef.current?.clientWidth ?? Number.POSITIVE_INFINITY) - widthsRef.current[other] - MIN_PARAMETERS_WIDTH - GUTTER_WIDTH
 
-  useEffect(() => {
-    if (!resizingOutput) return
-    const previousCursor = document.body.style.cursor
-    const previousSelect = document.body.style.userSelect
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    return () => {
-      document.body.style.cursor = previousCursor
-      document.body.style.userSelect = previousSelect
-    }
-  }, [resizingOutput])
+  const inputPane = useResizablePane({
+    storageKey: 'asaree:agent-input-pane-width',
+    defaultWidth: 340,
+    minWidth: 260,
+    maxWidth: 700,
+    side: 'left',
+    resolveMaxWidth: () => roomFor('output'),
+    recomputeKey: node?.id ?? '',
+  })
+  const outputPane = useResizablePane({
+    storageKey: 'asaree:agent-output-pane-width',
+    defaultWidth: 384,
+    minWidth: 280,
+    maxWidth: 760,
+    side: 'right',
+    resolveMaxWidth: () => roomFor('input'),
+    recomputeKey: node?.id ?? '',
+  })
+  widthsRef.current = { input: inputPane.width, output: outputPane.width }
 
   const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
@@ -160,24 +184,6 @@ export function AgentNodeInspector({
     onChange(node!.id, { ...data, contextMetricIds: next.filter((id) => validMetricIds.has(id)) })
   }
 
-  function startOutputResize(event: ReactPointerEvent<HTMLDivElement>) {
-    event.currentTarget.setPointerCapture(event.pointerId)
-    outputDragStart.current = { x: event.clientX, width: outputWidth }
-    setResizingOutput(true)
-  }
-
-  function moveOutputResize(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!outputDragStart.current) return
-    setOutputWidth(Math.round(Math.min(MAX_OUTPUT_PANE_WIDTH, Math.max(MIN_OUTPUT_PANE_WIDTH, outputDragStart.current.width + outputDragStart.current.x - event.clientX))))
-  }
-
-  function endOutputResize() {
-    if (!outputDragStart.current) return
-    outputDragStart.current = null
-    setResizingOutput(false)
-    window.localStorage.setItem(OUTPUT_PANE_WIDTH_STORAGE_KEY, String(outputWidth))
-  }
-
   return (
     <NodeInspectorDialog
       open
@@ -195,8 +201,45 @@ export function AgentNodeInspector({
       onDelete={() => onDelete(node.id)}
       onClose={onClose}
     >
-      <div className="flex h-full">
-        <div className="mr-4 min-w-0 flex-1 overflow-y-auto">
+      <div ref={columnsRef} className="flex h-full">
+        <div className="min-w-0 shrink-0 space-y-3 overflow-y-auto pr-4" style={{ width: inputPane.width }}>
+          <p className="text-sm font-semibold">Input</p>
+          {/* First, because it is the context everything below is read
+              against: an edge grants availability and a reference grants use,
+              so "what am I even given?" has to be answerable before the
+              assembled prompt underneath means anything. */}
+          <ReceivesSummary peers={handoffPeers} prompt={seedPromptText(node)} />
+          <PromptPreviewPanel
+            // The panel holds the last text it assembled; on a node switch
+            // that text describes the previous node, so it starts over.
+            key={node.id}
+            signature={JSON.stringify(data)}
+            fetchPreview={() => fetchPromptPreview(node.id)}
+          />
+          {/* Below the design-time preview, because it supersedes it: a
+              placeholder proves nothing about a run that actually happened. */}
+          {nodeRun?.run_id && (
+            // Boxed to match the preview above it -- in this pane the two are a
+            // matched pair, where elsewhere the panel is one item in a list.
+            <div className="rounded-md border bg-muted/20 p-3">
+              <ReceivedPromptPanel runId={nodeRun.run_id} />
+            </div>
+          )}
+          <UnresolvedReferencesNote
+            names={(nodeRun?.unresolved_references ?? []).map((id) => referenceScope.names[id] ?? id)}
+          />
+        </div>
+
+        <div
+          role="separator"
+          aria-label="Resize input panel"
+          aria-orientation="vertical"
+          title="Drag to resize input panel"
+          className={RESIZE_HANDLE_CLASSNAME}
+          {...inputPane.handleProps}
+        />
+
+        <div className="mx-4 min-w-0 flex-1 overflow-y-auto">
           <Tabs defaultValue="parameters">
             <TabsList>
               <TabsTrigger value="parameters">Parameters</TabsTrigger>
@@ -249,12 +292,6 @@ export function AgentNodeInspector({
                 </div>
               )}
 
-              {/* Above the prompt, because it is the context the prompt is
-                  written against: an edge grants availability and a reference
-                  grants use, so "what am I even given?" has to be answerable
-                  before the sentence referencing it makes sense. */}
-              <HandoffSummary peers={handoffPeers} prompt={seedPromptText(node)} />
-
               <FactorBindableField
                 experimentId={experimentId}
                 nodeId={node.id}
@@ -300,17 +337,6 @@ export function AgentNodeInspector({
                   Prompt when one isn't given.
                 </p>
               </div>
-
-              {/* After Goal, not between it and Prompt: the preview resolves
-                  Prompt-falling-back-to-Goal, so it only tells the whole truth
-                  once both fields are above it. */}
-              <PromptPreviewPanel
-                // The panel holds the last text it assembled; on a node switch
-                // that text describes the previous node, so it starts over.
-                key={node.id}
-                signature={JSON.stringify(data)}
-                fetchPreview={() => fetchPromptPreview(node.id)}
-              />
 
               <div className="space-y-1.5">
                 <Label htmlFor="node-description">Description — Optional</Label>
@@ -415,15 +441,18 @@ export function AgentNodeInspector({
           aria-label="Resize output panel"
           aria-orientation="vertical"
           title="Drag to resize output panel"
-          className="relative w-4 shrink-0 cursor-col-resize touch-none rounded hover:bg-primary/10 before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-border hover:before:bg-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onPointerDown={startOutputResize}
-          onPointerMove={moveOutputResize}
-          onPointerUp={endOutputResize}
-          onPointerCancel={endOutputResize}
+          className={RESIZE_HANDLE_CLASSNAME}
+          {...outputPane.handleProps}
         />
-        <div className="shrink-0 space-y-3 overflow-y-auto pl-4" style={{ width: outputWidth }}>
+
+        <div className="min-w-0 shrink-0 space-y-3 overflow-y-auto pl-4" style={{ width: outputPane.width }}>
           <p className="text-sm font-semibold">Output</p>
-          <NodeRunOutputPanel nodeRun={nodeRun} referenceNames={referenceScope.names} />
+          {/* Mirroring Receives on the far side: who this answer is handed to,
+              stated above the answer itself. */}
+          <SendsSummary peers={handoffPeers} />
+          {/* The received prompt lives in the Input pane instead -- see the
+              layout note at the top of this file. */}
+          <NodeRunOutputPanel nodeRun={nodeRun} referenceNames={referenceScope.names} showReceivedPrompt={false} />
         </div>
       </div>
     </NodeInspectorDialog>

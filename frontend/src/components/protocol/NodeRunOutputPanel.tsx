@@ -169,6 +169,24 @@ export function ReceivedPromptPanel({ runId }: { runId: string }) {
   )
 }
 
+// A reference that resolved to nothing, named.
+//
+// Not an error: an agent that correctly produced nothing is a legitimate
+// result. But the prompt above it just has a gap where that output should be,
+// which reads as an agent that was never told anything, and only this says
+// otherwise. Shared so the live inspector and the immutable result timeline
+// word it identically; both pass names, having resolved ids their own way.
+export function UnresolvedReferencesNote({ names }: { names: string[] }) {
+  const unique = [...new Set(names)]
+  if (unique.length === 0) return null
+  return (
+    <p className="rounded-lg border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/5 p-3 text-xs text-[color:var(--chart-4)]">
+      This prompt referenced {unique.join(', ')}, which produced no output — so the reference resolved to nothing and
+      left a gap in the prompt.
+    </p>
+  )
+}
+
 // The one piece of ARES's Run Detail page worth reusing here: real
 // observability into what an agent actually did (its Sense/Reason/Plan/Act
 // loop), not a wholesale port of that page. Zero new backend work --
@@ -181,6 +199,7 @@ export function ReceivedPromptPanel({ runId }: { runId: string }) {
 export function NodeRunOutputPanel({
   nodeRun,
   referenceNames = {},
+  showReceivedPrompt = true,
 }: {
   nodeRun: NodeRunState | undefined
   // Node id -> display name, for naming a reference that resolved empty. The
@@ -188,6 +207,10 @@ export function NodeRunOutputPanel({
   // reference picker uses, so the two surfaces call the same node the same
   // thing. An id with no entry falls back to itself rather than disappearing.
   referenceNames?: Record<string, string>
+  // False where the surrounding layout already has a dedicated Input pane (the
+  // Agent inspector) -- what an agent was handed is input, and showing it in
+  // both columns would say the split means less than it does.
+  showReceivedPrompt?: boolean
 }) {
   const badge = nodeRunBadge(nodeRun?.status)
   const unresolved = nodeRun?.unresolved_references ?? []
@@ -236,17 +259,8 @@ export function NodeRunOutputPanel({
       )}
 
       {/* Received before produced, so the panel reads as the handoff it was. */}
-      {nodeRun.run_id && <ReceivedPromptPanel runId={nodeRun.run_id} />}
-
-      {unresolved.length > 0 && (
-        // Not an error: an agent that correctly produced nothing is a
-        // legitimate result. But the prompt above has a silent gap where that
-        // output should be, and only this says so.
-        <p className="rounded-lg border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/5 p-3 text-sm text-[color:var(--chart-4)]">
-          This prompt referenced {[...new Set(unresolved)].map((id) => referenceNames[id] ?? id).join(', ')}, which
-          produced no output — so the reference resolved to nothing and left a gap in the prompt.
-        </p>
-      )}
+      {showReceivedPrompt && nodeRun.run_id && <ReceivedPromptPanel runId={nodeRun.run_id} />}
+      {showReceivedPrompt && <UnresolvedReferencesNote names={unresolved.map((id) => referenceNames[id] ?? id)} />}
 
       {nodeRun.error ? (
         <div className="space-y-1.5">

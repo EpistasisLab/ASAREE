@@ -11,7 +11,7 @@ import { displayFactorValue, formatMetricLabel, formatMetricValue } from '@/lib/
 import { sanitizeFilename } from '@/lib/utils'
 import type { Experiment, HistoricalRun, ObsoleteRun, ResultCell, ResultNodeRun, ResultReplicate, SupersededRun } from '@/types/experiments'
 import { InfoTooltip } from './InfoTooltip'
-import { ReceivedPromptPanel, RunStepTrace } from './NodeRunOutputPanel'
+import { ReceivedPromptPanel, RunStepTrace, UnresolvedReferencesNote } from './NodeRunOutputPanel'
 
 function formatNumber(value: number | null, maximumFractionDigits = 0): string {
   if (value === null || !Number.isFinite(value)) return 'Not reported'
@@ -199,15 +199,7 @@ function ReplicateTimelineNode({ node, defaultOpen = false }: { node: ResultNode
           {/* Received before produced, so one node reads as the handoff it
               was: what it was given, then what it made of it. */}
           {node.agent_run_id && <ReceivedPromptPanel runId={node.agent_run_id} />}
-          {(node.unresolved_reference_labels?.length ?? 0) > 0 && (
-            // Not an error: an agent that correctly produced nothing is a
-            // legitimate result. But the prompt above has a silent gap where
-            // that output should be, and only this says so.
-            <p className="rounded border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/5 px-2 py-1.5 text-xs text-[color:var(--chart-4)]">
-              This prompt referenced {node.unresolved_reference_labels!.join(', ')}, which produced no output — so the
-              reference resolved to nothing and left a gap in the prompt above.
-            </p>
-          )}
+          <UnresolvedReferencesNote names={node.unresolved_reference_labels ?? []} />
           {node.output_text ? (
             <section className="space-y-1.5">
               <h4 className="text-xs font-medium">Output</h4>

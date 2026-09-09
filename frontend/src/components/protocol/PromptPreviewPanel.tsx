@@ -81,7 +81,10 @@ export function PromptPreviewPanel({
           className="flex cursor-pointer items-center gap-1.5 text-sm font-medium hover:text-primary"
         >
           {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-          Preview what this agent receives
+          {/* Future tense, pairing with `ReceivedPromptPanel`'s past tense
+              directly below it in the Input pane: the same question asked of a
+              design and of a run that already happened. */}
+          Prompt this agent will receive
         </button>
         {open && preview && (
           <>

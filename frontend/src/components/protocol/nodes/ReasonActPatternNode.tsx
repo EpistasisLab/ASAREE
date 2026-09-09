@@ -22,7 +22,7 @@ export function ReasonActPatternNode({
   id,
   data,
   selected,
-}: NodeProps & { data: ReasonActPatternNodeData & { hostHasNoTools?: boolean; hostHasIdlePeers?: boolean } }) {
+}: NodeProps & { data: ReasonActPatternNodeData & { hostHasNoTools?: boolean } }) {
   // An agent's execution pattern must never go to zero (see
   // ProtocolCanvas.tsx's nonDeletablePatternNodeIds), so once this is
   // actually wired into an agent, its hover toolbar offers Swap instead of
@@ -46,16 +46,8 @@ export function ReasonActPatternNode({
   // AGENT's wiring rather than this node's own config -- including, under Peer
   // Collaboration, a connected peer, which is callable in its own right (see
   // that flag's comment) and so keeps the loop going with no tools at all.
-  // Two sentences for one condition, because the second case looks like a bug
-  // from the outside: under any strategy but Peer Collaboration a connected
-  // agent is the NEXT STEP, not a callee -- the run never passes it as
-  // `available_agents` -- so naming its absence would contradict the canvas.
   if (data.hostHasNoTools)
-    warnings.push(
-      data.hostHasIdlePeers
-        ? 'Nothing callable on the agent -- the connected agent is the next step in the chain, not something this one can call, so the loop ends after one turn. Switch the strategy to Peer Collaboration to let it consult, or connect a tool, skill or knowledge source.'
-        : 'Nothing callable on the agent (no tools, skills, knowledge or peers) -- the loop ends after one turn',
-    )
+    warnings.push('Nothing callable on the agent (no tools, skills, knowledge or peers) -- the loop ends after one turn')
 
   return (
     <CircleNode

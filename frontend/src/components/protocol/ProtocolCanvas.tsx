@@ -857,13 +857,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             !!patternHostId &&
             !agentIdsWithCallableTools.has(patternHostId) &&
             !(isPeerCollaboration && (peerIdsByAgent.get(patternHostId)?.length ?? 0) > 0),
-          // ...and whether the reason it has nothing callable is that its peers
-          // are sitting right there, uncallable under this strategy. Same
-          // warning, different sentence: told "no peers" while looking at a
-          // wired agent, the honest reading is that the validation is broken,
-          // not that the strategy changed what the edge means.
-          hostHasIdlePeers:
-            !!patternHostId && !isPeerCollaboration && (peerIdsByAgent.get(patternHostId)?.length ?? 0) > 0,
         },
       }
     })

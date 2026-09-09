@@ -76,7 +76,14 @@ export function ConversationTranscript({
   const [collapsed, setCollapsed] = useState(false)
 
   return (
-    <aside className="absolute right-3 bottom-3 z-10 max-h-[45%] w-[min(28rem,calc(100%-1.5rem))] overflow-y-auto rounded-lg border border-[color:var(--node-label)]/35 bg-card/95 p-3 shadow-[0_0_16px_-6px_var(--node-label)] backdrop-blur">
+    // Positioned by the top-left overlay column in ProtocolCanvas, not by
+    // itself, so it can't collide with the lock badge it shares that corner
+    // with (nor with the MiniMap, whose corner it used to sit in). `min-h-0`
+    // lets it shrink inside that flex column rather than overflowing it, the
+    // scroll lives on the message list below so the header stays put while you
+    // read, and `pointer-events-auto` opts back in to the events that column
+    // waives.
+    <aside className="pointer-events-auto flex min-h-0 w-full flex-col rounded-lg border border-[color:var(--node-label)]/35 bg-card/95 p-3 shadow-[0_0_16px_-6px_var(--node-label)] backdrop-blur">
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
@@ -94,7 +101,7 @@ export function ConversationTranscript({
           )}
         </span>
       </button>
-      <div className={collapsed ? 'hidden' : 'mt-2 space-y-2'}>
+      <div className={collapsed ? 'hidden' : 'mt-2 min-h-0 space-y-2 overflow-y-auto'}>
         {conversation.messages.map((message) => {
           const badge = message.state ? REPLY_BADGE[message.state] : undefined
           const failed = message.state === 'failed'

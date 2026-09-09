@@ -1586,13 +1586,26 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               edges={edges}
             />
           </div>
-          {experimentLocked && (
-            <div className="absolute top-3 left-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-background/95 px-2.5 py-1.5 text-xs font-medium shadow-sm">
-              <Lock className="size-3.5" /> Canvas locked
+          {/* One top-left column rather than two independently-positioned
+              overlays: the lock badge and the transcript are both anchored
+              here, and stacking them is what keeps them from landing on top of
+              each other. `items-start` so each stays its own natural width.
+              Top-LEFT because bottom-right is the MiniMap's corner and
+              top-right is the Add/menu buttons'. The column itself is
+              `pointer-events-none` so the empty space it reserves stays part of
+              the canvas -- panning and node drags must still work under it --
+              and each child turns events back on for itself. */}
+          {(experimentLocked || runQuery.data?.conversation) && (
+            <div className="pointer-events-none absolute top-3 left-3 z-10 flex max-h-[55%] w-[min(28rem,calc(100%-1.5rem))] flex-col items-start gap-2">
+              {experimentLocked && (
+                <div className="pointer-events-auto inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary/30 bg-background/95 px-2.5 py-1.5 text-xs font-medium shadow-sm">
+                  <Lock className="size-3.5" /> Canvas locked
+                </div>
+              )}
+              {runQuery.data?.conversation && (
+                <ConversationTranscript conversation={runQuery.data.conversation} agentNames={agentNames} />
+              )}
             </div>
-          )}
-          {runQuery.data?.conversation && (
-            <ConversationTranscript conversation={runQuery.data.conversation} agentNames={agentNames} />
           )}
         </div>
         {addPanelOpen && serverBrowserOpen ? (

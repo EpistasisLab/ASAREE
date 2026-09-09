@@ -19,9 +19,10 @@ import '@xyflow/react/dist/style.css'
 import { Lock, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
-import { CONNECTOR_HANDLES } from '@/lib/coordinationStrategy'
+import { CONNECTOR_HANDLES, isMainEdge } from '@/lib/coordinationStrategy'
 import { newNodeId } from '@/lib/nodeId'
-import { promptReferenceScope } from '@/lib/promptReferences'
+import { LEGACY_PROMPT_CONTRACT, promptContractVersion } from '@/lib/promptContract'
+import { handoffPeers, promptReferenceScope, referencedSenderIds, seedPromptText } from '@/lib/promptReferences'
 import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import {
@@ -726,6 +727,25 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       promptReferenceScope(nodes as unknown as ProtocolNode[], edges as unknown as ProtocolEdge[], nodeId),
     [nodes, edges],
   )
+  // Who is wired to the selected node, either way -- the inspector's
+  // Receives/Sends readout. Direct neighbours, unlike referenceScope's
+  // transitive ancestry: this one answers "what is wired to me", which is what
+  // a user checks against the canvas in front of them.
+  const selectedHandoffPeers = useMemo(
+    () => handoffPeers(nodes as unknown as ProtocolNode[], edges as unknown as ProtocolEdge[], selectedNodeId),
+    [nodes, edges, selectedNodeId],
+  )
+  // The prompt preview is assembled by the backend from the graph on screen,
+  // which includes edits autosave hasn't flushed. Sent rather than read back
+  // server-side for that reason; nothing is written.
+  const fetchPromptPreview = useCallback(
+    (nodeId: string) =>
+      protocolsApi.promptPreview(protocolId, nodeId, {
+        nodes: nodes as unknown as ProtocolNode[],
+        edges: edges as unknown as ProtocolEdge[],
+      }),
+    [protocolId, nodes, edges],
+  )
 
   // The model each agent will actually run on, resolved through its AI
   // connector. Injected into the node's data rather than read here, because
@@ -839,6 +859,41 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     isSequential,
     mainEdgeSlots,
   ])
+
+  // Which main edges carry nothing.
+  //
+  // Since an edge grants availability and a reference grants use, a wired
+  // handoff that no reference asks for looks exactly like one that works. This
+  // is the only place a user sees the difference without opening the receiving
+  // agent, so it belongs on the canvas rather than only in the inspector.
+  //
+  // Skipped entirely on the legacy contract: there, every predecessor's output
+  // is handed over whether the prompt asks for it or not, so no edge carries
+  // nothing and the marker would be a lie.
+  // Resolved outside the memo so it depends on the version number rather than
+  // on design_spec's object identity, which changes on every refetch.
+  const promptContract = promptContractVersion(experimentQuery.data?.design_spec)
+  const edgesWithFlow = useMemo((): Edge[] => {
+    if (promptContract === LEGACY_PROMPT_CONTRACT) return edges
+    const protocolNodes = nodes as unknown as ProtocolNode[]
+    const protocolEdges = edges as unknown as ProtocolEdge[]
+    const carriesNothing = new Set<string>()
+    for (const node of nodes) {
+      // Only an agent has a prompt to reference anything from; an edge into a
+      // Critic Gate or a Script is plumbing that passes output along on its
+      // own terms.
+      if (node.type !== 'agent') continue
+      const peers = handoffPeers(protocolNodes, protocolEdges, node.id)
+      if (peers.receives.length === 0) continue
+      const used = referencedSenderIds(seedPromptText(node as unknown as ProtocolNode), peers.receives)
+      for (const edge of edges) {
+        if (edge.target !== node.id || !isMainEdge(edge as unknown as ProtocolEdge)) continue
+        if (!used.has(edge.source)) carriesNothing.add(edge.id)
+      }
+    }
+    if (carriesNothing.size === 0) return edges
+    return edges.map((e) => (carriesNothing.has(e.id) ? { ...e, data: { ...e.data, carriesNoReference: true } } : e))
+  }, [nodes, edges, promptContract])
 
   // Same protection, one layer up -- the architectural_pattern EDGE itself
   // must not be removable on its own (InteractEdge never renders a hover
@@ -1514,7 +1569,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         <div ref={paneRef} className="relative flex-1">
           <ReactFlow
             nodes={nodesWithRunStatus}
-            edges={edges}
+            edges={edgesWithFlow}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -1819,6 +1874,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               experimentId={experimentId}
               markedLeadAgentId={markedLeadAgentId}
               referenceScope={referenceScope}
+              handoffPeers={selectedHandoffPeers}
+              fetchPromptPreview={fetchPromptPreview}
               nodeRun={runQuery.data?.node_runs[selectedNode.id]}
               onChange={updateNodeData}
               onDelete={requestDeleteNode}

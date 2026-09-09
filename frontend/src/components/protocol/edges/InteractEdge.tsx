@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from 'react'
-import { BaseEdge, EdgeToolbar, getBezierPath, useReactFlow, type EdgeProps } from '@xyflow/react'
+import { BaseEdge, EdgeLabelRenderer, EdgeToolbar, getBezierPath, useReactFlow, type EdgeProps } from '@xyflow/react'
 // Trash2, not an X -- the same glyph NodeHoverToolbar's own Delete button
 // uses, so "remove this thing" looks identical whether the thing is a node or
 // an edge. An X here also collided with the two other X's on the canvas
@@ -79,6 +79,7 @@ export function InteractEdge({
   targetHandleId,
   style,
   markerEnd,
+  data,
 }: EdgeProps) {
   const [hovered, setHovered] = useState(false)
   const { setEdges } = useReactFlow()
@@ -86,6 +87,9 @@ export function InteractEdge({
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
   const isMainEdge = !sourceHandleId && !targetHandleId
   const isPatternEdge = targetHandleId === 'architectural_pattern'
+  // Injected by ProtocolCanvas (edgesWithFlow), which is the only thing that
+  // can see both ends' prompts. Never set on the legacy contract -- see there.
+  const carriesNoReference = (data as { carriesNoReference?: boolean } | undefined)?.carriesNoReference === true
 
   return (
     <>
@@ -111,6 +115,24 @@ export function InteractEdge({
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       />
+      {/* An edge that carries nothing, said on the edge itself.
+          A small muted chip at the midpoint rather than a caption: an earlier
+          pass captioned edges in words and it read as clutter (see above), and
+          this must not shout -- a step whose prompt stands alone is a
+          legitimate design, sometimes the treatment being tested. The dashes
+          are left alone deliberately; they already mean "connector, not
+          pipeline" and this is neither. */}
+      {carriesNoReference && (
+        <EdgeLabelRenderer>
+          <div
+            className="pointer-events-auto absolute cursor-help rounded-sm border border-[color:var(--chart-4)]/40 bg-card px-1 py-px text-[0.6rem] leading-tight text-[color:var(--chart-4)]"
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+            title="Wired, but the receiving agent's prompt never references this sender, so nothing travels along this edge. Add a reference in that agent's prompt to pass its output along."
+          >
+            no reference
+          </div>
+        </EdgeLabelRenderer>
+      )}
       {/* Nothing to put in it for a pattern edge -- no delete (see above) and
           no insert -- so it's skipped entirely rather than rendered empty. */}
       <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible={hovered && !isPatternEdge}>

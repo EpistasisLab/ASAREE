@@ -340,6 +340,15 @@ async def summarize_experiment_run_results(
                     "status": node_run.get("status", "unknown"),
                     "output_text": node_run.get("output_text"),
                     "error": node_run.get("error"),
+                    # Labels, not ids -- the walk records ids (see
+                    # ``_build_user_input``'s ``unresolved_out``) but the only
+                    # consumer is a sentence saying which sender produced
+                    # nothing, and this surface already resolves ids to labels
+                    # for exactly that reason. Hence the distinct field name:
+                    # the ids are gone by the time it leaves here.
+                    "unresolved_reference_labels": [
+                        node_labels.get(str(ref), str(ref)) for ref in node_run.get("unresolved_references") or []
+                    ],
                     "agent_run_id": str(agent_run_id) if agent_run_id else None,
                     **usage,
                 }

@@ -21,6 +21,11 @@ const BARE_TOKENS = new Set(['previous', 'audience', 'upstream_instructions'])
 
 export const PREVIOUS_TOKEN = '{{previous}}'
 
+/** `{{previous}}` in a stored prompt. Not global: every caller only asks
+ *  whether it is there at all, and a `lastIndex` carried between calls on a
+ *  shared global regex is a bug waiting to happen. */
+const PREVIOUS_RE = /\{\{\s*previous\s*(\|\s*raw\s*)?\}\}/i
+
 /** The storage form. Mirrors `prompt_references._REFERENCE_RE`'s node arm --
  *  deliberately narrow, because anything it does not match must survive
  *  untouched (a prompt may legitimately ask an agent to emit a template). */
@@ -134,6 +139,90 @@ export function promptReferenceScope(
     targets: nodes.filter((n) => ancestors.has(n.id)).map((n) => ({ id: n.id, name: names[n.id] })),
     names,
   }
+}
+
+export interface HandoffPeers {
+  /** Direct main-edge predecessors -- the nodes whose output is handed to this
+   *  one, and exactly what `{{previous}}` expands to. */
+  receives: ReferenceTarget[]
+  /** Direct main-edge successors. Empty means this node's answer is the run's. */
+  sends: ReferenceTarget[]
+}
+
+/** Who hands off to *nodeId*, and who it hands off to.
+ *
+ * One edge each way, not the transitive ancestry `promptReferenceScope`
+ * returns: this answers "what is wired to me", which is the thing a user can
+ * check against the canvas in front of them. Reach-back is a separate,
+ * deliberate act and shows up in the picker instead.
+ *
+ * Lives here rather than in a graph module because the `receives` list *is*
+ * `{{previous}}`'s expansion (mirroring `_upstream_ids`, which is what the
+ * backend resolves that token against), and because it shares this module's
+ * display naming -- the same node has to read as the same name in the picker,
+ * in the prompt, and in this readout.
+ */
+export function handoffPeers(nodes: ProtocolNode[], edges: ProtocolEdge[], nodeId: string | null): HandoffPeers {
+  const names = displayNames(nodes)
+  if (!nodeId) return { receives: [], sends: [] }
+  const known = new Set(nodes.map((n) => n.id))
+  const peers = (pick: (edge: ProtocolEdge) => string, match: (edge: ProtocolEdge) => string) => {
+    const ids: string[] = []
+    for (const edge of edges) {
+      if (!isMainEdge(edge) || match(edge) !== nodeId) continue
+      const id = pick(edge)
+      if (id !== nodeId && known.has(id) && !ids.includes(id)) ids.push(id)
+    }
+    // Canvas declaration order, matching the picker -- an edge list's own order
+    // is whatever the user happened to draw in.
+    return nodes.filter((n) => ids.includes(n.id)).map((n) => ({ id: n.id, name: names[n.id] }))
+  }
+  return {
+    receives: peers((e) => e.source, (e) => e.target),
+    sends: peers((e) => e.target, (e) => e.source),
+  }
+}
+
+/** The text a node's references are actually resolved in.
+ *
+ * Mirrors `_node_seed_prompt`: `prompt`, falling back to `goal`, falling back
+ * to the label -- so a reference written in Goal on a node with no Prompt is
+ * live, and the same reference becomes inert the moment a Prompt is typed.
+ * Anywhere that asks "does this node reference X" has to ask it of this string
+ * and not of `config.prompt` alone.
+ */
+export function seedPromptText(node: ProtocolNode): string {
+  const data = (node.data ?? {}) as { label?: string; config?: { prompt?: string | null; goal?: string | null } }
+  return data.config?.prompt || data.config?.goal || data.label || ''
+}
+
+/** Whether a stored prompt uses `{{previous}}`.
+ *
+ * Its own answer, unlike every other reference, is not in the text: it means
+ * whatever the wiring currently means. So the readout that shows the wiring is
+ * the place that has to expand it. */
+export function usesPreviousToken(stored: string): boolean {
+  return PREVIOUS_RE.test(stored ?? '')
+}
+
+/** Which of a node's senders its *stored* prompt actually pulls in.
+ *
+ * After Phase 2 an edge grants availability and a reference grants use, so a
+ * sender missing from this set is wired up and still sends nothing. Naming them
+ * is the only way that stops being invisible -- the edge on the canvas looks
+ * identical either way.
+ *
+ * `{{previous}}` counts for every sender at once, because that is what it
+ * expands to.
+ */
+export function referencedSenderIds(stored: string, receives: ReferenceTarget[]): Set<string> {
+  const text = stored ?? ''
+  if (PREVIOUS_RE.test(text)) return new Set(receives.map((t) => t.id))
+  const referenced = new Set<string>()
+  for (const match of text.matchAll(STORED_RE)) {
+    if (receives.some((t) => t.id === match[1])) referenced.add(match[1])
+  }
+  return referenced
 }
 
 /** Storage form -> display form. Ids become labels; everything else is left

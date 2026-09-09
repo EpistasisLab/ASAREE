@@ -11,15 +11,18 @@ import { Textarea } from '@/components/ui/textarea'
 import { defaultSystemPrompt } from './defaultSystemPrompt'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
+import { HandoffSummary } from './HandoffSummary'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { NodeRunOutputPanel } from './NodeRunOutputPanel'
 import { OutputContractEditor } from './OutputContractEditor'
+import { PromptPreviewPanel } from './PromptPreviewPanel'
 import { PromptReferenceField } from './PromptReferenceField'
 import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import { experimentsApi } from '@/api/client'
 import { normalizeDesignMetrics } from '@/lib/metricCatalog'
-import type { PromptReferenceScope } from '@/lib/promptReferences'
-import type { AgentNodeConfig, AgentNodeData, NodeRunState, ProtocolNode } from '@/types/protocols'
+import { seedPromptText } from '@/lib/promptReferences'
+import type { HandoffPeers, PromptReferenceScope } from '@/lib/promptReferences'
+import type { AgentNodeConfig, AgentNodeData, NodeRunState, PromptPreview, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = nodeAccent('agent')
 const DEFAULT_OUTPUT_PANE_WIDTH = 384
@@ -52,6 +55,8 @@ export function AgentNodeInspector({
   experimentId,
   markedLeadAgentId,
   referenceScope,
+  handoffPeers,
+  fetchPromptPreview,
   nodeRun,
   onChange,
   onDelete,
@@ -65,6 +70,13 @@ export function AgentNodeInspector({
   // What this node's prompt may reference, resolved from the graph for the same
   // reason as markedLeadAgentId: the inspector only ever sees its own node.
   referenceScope: PromptReferenceScope
+  // Who hands off to this node and who it hands off to. Same reasoning again --
+  // it's the wiring around the node, which only the canvas can see.
+  handoffPeers: HandoffPeers
+  // Assembles the real prompt server-side against the live canvas. A callback
+  // rather than an id pair because the graph it posts is the unsaved one on
+  // screen, which only ProtocolCanvas holds.
+  fetchPromptPreview: (nodeId: string) => Promise<PromptPreview>
   nodeRun?: NodeRunState
   onChange: (nodeId: string, data: AgentNodeData) => void
   onDelete: (nodeId: string) => void
@@ -237,6 +249,12 @@ export function AgentNodeInspector({
                 </div>
               )}
 
+              {/* Above the prompt, because it is the context the prompt is
+                  written against: an edge grants availability and a reference
+                  grants use, so "what am I even given?" has to be answerable
+                  before the sentence referencing it makes sense. */}
+              <HandoffSummary peers={handoffPeers} prompt={seedPromptText(node)} />
+
               <FactorBindableField
                 experimentId={experimentId}
                 nodeId={node.id}
@@ -282,6 +300,17 @@ export function AgentNodeInspector({
                   Prompt when one isn't given.
                 </p>
               </div>
+
+              {/* After Goal, not between it and Prompt: the preview resolves
+                  Prompt-falling-back-to-Goal, so it only tells the whole truth
+                  once both fields are above it. */}
+              <PromptPreviewPanel
+                // The panel holds the last text it assembled; on a node switch
+                // that text describes the previous node, so it starts over.
+                key={node.id}
+                signature={JSON.stringify(data)}
+                fetchPreview={() => fetchPromptPreview(node.id)}
+              />
 
               <div className="space-y-1.5">
                 <Label htmlFor="node-description">Description — Optional</Label>
@@ -394,7 +423,7 @@ export function AgentNodeInspector({
         />
         <div className="shrink-0 space-y-3 overflow-y-auto pl-4" style={{ width: outputWidth }}>
           <p className="text-sm font-semibold">Output</p>
-          <NodeRunOutputPanel nodeRun={nodeRun} />
+          <NodeRunOutputPanel nodeRun={nodeRun} referenceNames={referenceScope.names} />
         </div>
       </div>
     </NodeInspectorDialog>

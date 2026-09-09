@@ -12,6 +12,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { experimentsApi, llmSettingsApi, protocolsApi } from '@/api/client'
 import { coordinationStrategyIssues } from '@/lib/coordinationStrategy'
+import {
+  CURRENT_PROMPT_CONTRACT,
+  LEGACY_PROMPT_CONTRACT,
+  promptContractSummary,
+  promptContractVersion,
+} from '@/lib/promptContract'
 import { unboundFactorNames } from '@/lib/factorBindings'
 import { promptReferenceScope } from '@/lib/promptReferences'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
@@ -680,6 +686,7 @@ export function DesignTab({
   const totalTrials = validFactors.length > 0 ? combinations * Math.max(replicates ?? 1, 1) : 0
 
   const selectedStrategy = COORDINATION_STRATEGY_CATALOG.find((s) => s.slug === coordinationSlug)
+  const contractVersion = promptContractVersion(experiment.design_spec)
   const draftGraph = graphQuery.data
     ? ({ nodes: graphQuery.data.nodes, edges: graphQuery.data.edges } as unknown as ProtocolGraph)
     : undefined
@@ -837,6 +844,28 @@ export function DesignTab({
             <p className="mt-1">Running or publishing this protocol is rejected until the wiring matches.</p>
           </div>
         )}
+      </div>
+
+      {/* Read-only, and deliberately so: the contract is stamped at creation
+          so that improving the prompt can never change an already-published
+          experiment's numbers. Stated because the two contracts produce
+          visibly different prompts, which makes "why does my prompt look
+          different from that other experiment's" unanswerable without it. */}
+      <div className="space-y-1.5">
+        <Label className="flex items-center gap-1.5">
+          Prompt contract
+          <InfoTooltip>
+            Which prompt format this experiment's agents run under. Fixed when the experiment was created and not
+            editable -- a published result has to keep the exact prompt that produced it. Create a new experiment to
+            run under the current format.
+          </InfoTooltip>
+        </Label>
+        <p className="font-mono text-xs text-foreground">
+          v{contractVersion}
+          {contractVersion === LEGACY_PROMPT_CONTRACT && ' (legacy)'}
+          {contractVersion === CURRENT_PROMPT_CONTRACT && ' (current)'}
+        </p>
+        <p className="text-xs text-muted-foreground">{promptContractSummary(contractVersion)}</p>
       </div>
 
       <Dialog open={!!pendingStrategy} onOpenChange={(open) => !open && setPendingStrategy(null)}>

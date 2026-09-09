@@ -50,6 +50,12 @@ export interface NodeRunState {
   run_id?: string | null
   output_text?: string | null
   error?: string | null
+  // Node ids this node's prompt referenced that resolved to nothing (the
+  // sender ran and produced no text). Absent, not empty, in the normal case.
+  // Worth surfacing because the assembled prompt just has a gap where the
+  // output should be, which reads as an agent that was never told anything
+  // rather than one whose sender said nothing.
+  unresolved_references?: string[]
   // Critic Gate only -- absent on a plain agent's NodeRunState. `run_id`
   // above doubles as the CRITIC's own run (not the upstream worker's) for a
   // gate, so its own Sense/Reason/Plan/Act steps are inspectable the same
@@ -121,6 +127,18 @@ export interface ProtocolRun {
   cancel_requested_at: string | null
   created_at: string
   updated_at: string
+}
+
+// POST /protocols/{id}/nodes/{nodeId}/prompt-preview -- the prompt an agent
+// would be given, assembled by the same code a real run uses, with a
+// `<output of "Name">` placeholder wherever upstream output would go. Nothing
+// is created; this is a rendering, not a resource.
+export interface PromptPreview {
+  text: string
+  // Which prompt contract assembled it. The two produce visibly different
+  // prompts and an experiment is pinned to one at creation, so the preview has
+  // to say which one it is speaking for.
+  contract_version: number
 }
 
 export interface ProtocolRevision {

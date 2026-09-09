@@ -256,6 +256,11 @@ export interface ResultNodeRun {
   status: string
   output_text: string | null
   error: string | null
+  // Senders this node's prompt referenced that produced nothing, by label
+  // (already resolved server-side -- see experiment_run_results). Empty in the
+  // normal case. The assembled prompt just has a gap where their output should
+  // be, so without this it reads as an agent that was never told anything.
+  unresolved_reference_labels?: string[]
   agent_run_id: string | null
   input_tokens: number | null
   output_tokens: number | null

@@ -2,6 +2,11 @@ export interface Run {
   id: string
   agent_id: string
   status: string
+  // The exact user message this run was given. On a protocol run that is the
+  // fully assembled prompt -- the agent's own ask with every reference already
+  // resolved -- which is what makes a handoff verifiable from stored data
+  // rather than from a token echoed through a prompt.
+  input: string
   run_metadata: Record<string, unknown> | null
   created_at: string
 }

@@ -150,6 +150,12 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
   switch (node.type) {
     case 'agent':
       return [
+        // The run's own ask, and the field `{{...}}` references resolve in --
+        // so a prompt factor's levels are how "does reference placement
+        // matter?" becomes a runnable treatment. A level replaces the WHOLE
+        // value, so each one has to carry its own reference; that's what
+        // FactorEditorDialog's per-level picker is for.
+        { fieldPath: 'config.prompt', label: 'Prompt', levelType: 'text' },
         { fieldPath: 'config.system_prompt', label: 'System prompt', levelType: 'text' },
         { fieldPath: 'active', label: 'Active', levelType: 'boolean' },
         // A synthetic field, not a real config value the frontend otherwise
@@ -315,6 +321,25 @@ export function toolFactorServerId(nodes: Node[], factorName: string): string | 
     if (data?.factor_bindings?.['config.tool_names'] === factorName) return data.config?.server_id ?? null
   }
   return null
+}
+
+// The canvas field an existing factor is bound to, when exactly one node binds
+// it -- what FactorEditorDialog needs to know whose upstream nodes a prompt
+// level may reference. Same scan as toolFactorServerId above, but the answer
+// has to be unambiguous: a factor bound on two nodes has two different sets of
+// nodes running before it, and there is no single correct picker to show, so
+// this returns null and the level stays a plain textarea.
+export function factorBoundField(nodes: Node[], factorName: string): { nodeId: string; fieldPath: string } | null {
+  let found: { nodeId: string; fieldPath: string } | null = null
+  for (const node of nodes) {
+    const bindings = (node.data as { factor_bindings?: Record<string, string> })?.factor_bindings ?? {}
+    for (const [fieldPath, name] of Object.entries(bindings)) {
+      if (name !== factorName) continue
+      if (found) return null
+      found = { nodeId: node.id, fieldPath }
+    }
+  }
+  return found
 }
 
 function getPath(data: Record<string, unknown>, dottedPath: string): unknown {

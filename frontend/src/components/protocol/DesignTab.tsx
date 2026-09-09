@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import { Info, Pencil, Plus, X } from 'lucide-react'
@@ -13,8 +13,15 @@ import { Textarea } from '@/components/ui/textarea'
 import { experimentsApi, llmSettingsApi, protocolsApi } from '@/api/client'
 import { coordinationStrategyIssues } from '@/lib/coordinationStrategy'
 import { unboundFactorNames } from '@/lib/factorBindings'
+import { promptReferenceScope } from '@/lib/promptReferences'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
-import { revealsHiddenMcpServers, toolFactorServerId, unboundBindableFields, type UnboundField } from './bindableFields'
+import {
+  factorBoundField,
+  revealsHiddenMcpServers,
+  toolFactorServerId,
+  unboundBindableFields,
+  type UnboundField,
+} from './bindableFields'
 import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import { InfoTooltip } from './InfoTooltip'
@@ -32,7 +39,7 @@ import {
   type MetricValueType,
 } from '@/lib/metricCatalog'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
-import type { ProtocolGraph } from '@/types/protocols'
+import type { ProtocolEdge, ProtocolGraph, ProtocolNode } from '@/types/protocols'
 import {
   COORDINATION_STRATEGY_CATALOG,
   type CoordinationStrategySlug,
@@ -119,6 +126,24 @@ function useProtocolGraph(protocolId: string | undefined) {
   })
 }
 
+// What a prompt factor's levels may reference, for any node on the canvas.
+// Both dialog entry points below need it: "Add factor" because the field is
+// picked inside the dialog, "Edit factor" because the binding it resolves
+// points at a node this tab never rendered.
+function usePromptScopeFor(protocolId: string | undefined) {
+  const graphQuery = useProtocolGraph(protocolId)
+  const graph = graphQuery.data
+  return useCallback(
+    (nodeId: string) =>
+      promptReferenceScope(
+        (graph?.nodes ?? []) as unknown as ProtocolNode[],
+        (graph?.edges ?? []) as unknown as ProtocolEdge[],
+        nodeId,
+      ),
+    [graph],
+  )
+}
+
 function AddFactorButton({
   experiment,
   protocolId,
@@ -136,6 +161,7 @@ function AddFactorButton({
   const queryClient = useQueryClient()
 
   const graphQuery = useProtocolGraph(protocolId)
+  const promptScopeFor = usePromptScopeFor(protocolId)
 
   const createMutation = useMutation({
     mutationFn: async ({ factor, field }: { factor: DesignFactor; field: UnboundField }) => {
@@ -170,6 +196,7 @@ function AddFactorButton({
           onOpenChange={setDialogOpen}
           factor={{ name: '', levels: [], level_type: 'string' }}
           revealHiddenServers={revealsHiddenMcpServers(graphQuery.data?.nodes ?? [])}
+          promptScopeFor={promptScopeFor}
           pickableFields={fields}
           existingNames={existingNames}
           onSave={(factor, field) => {
@@ -221,6 +248,7 @@ function FactorsEditor({
   const [editingFactor, setEditingFactor] = useState<{ index: number; draft: DesignFactor } | null>(null)
   const queryClient = useQueryClient()
   const graphQuery = useProtocolGraph(protocolId)
+  const promptScopeFor = usePromptScopeFor(protocolId)
 
   const deleteMutation = useMutation({
     mutationFn: async (name: string) => {
@@ -298,6 +326,11 @@ function FactorsEditor({
           // tools to offer (see bindableFields.ts's toolFactorServerId).
           toolServerId={toolFactorServerId(graphQuery.data?.nodes ?? [], editingFactor.draft.name)}
           revealHiddenServers={revealsHiddenMcpServers(graphQuery.data?.nodes ?? [])}
+          // Same idea one step further along: a factor edited from here was
+          // bound somewhere else entirely, so which node its levels belong to
+          // has to be recovered from the canvas's own factor_bindings.
+          boundField={factorBoundField(graphQuery.data?.nodes ?? [], editingFactor.draft.name)}
+          promptScopeFor={promptScopeFor}
           onSave={(next) => editMutation.mutate({ oldName: editingFactor.draft.name, next })}
         />
       )}

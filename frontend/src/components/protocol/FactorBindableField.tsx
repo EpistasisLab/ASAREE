@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react'
-import { useNodes } from '@xyflow/react'
+import { useCallback, useState, type ReactNode } from 'react'
+import { useEdges, useNodes } from '@xyflow/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Split, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -10,6 +10,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { experimentsApi } from '@/api/client'
+import { promptReferenceScope } from '@/lib/promptReferences'
+import type { ProtocolEdge, ProtocolNode } from '@/types/protocols'
 import { revealsHiddenMcpServers } from './bindableFields'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import {
@@ -78,10 +80,8 @@ export function MakeNodeFactorButton({ onClick }: { onClick: () => void }) {
 // disproportionate.
 export function FactorBindableField({
   experimentId,
-  // No longer read internally (the removed "Factor name" Input used to key
-  // its id off this) -- kept in the prop signature since every call site
-  // still passes it to document which field this instance guards.
-  fieldPath: _fieldPath,
+  nodeId,
+  fieldPath,
   defaultLabel,
   nodeLabel,
   levelType,
@@ -94,6 +94,11 @@ export function FactorBindableField({
   children,
 }: {
   experimentId: string | null
+  // The owning node, when the field's levels need to know which node they
+  // belong to -- only a prompt field does today, so that the level editor can
+  // offer the same references the node inspector does. Everything else leaves
+  // it off and loses nothing.
+  nodeId?: string
   fieldPath: string
   defaultLabel: string
   // The owning node's own current display label (e.g. data.label || 'Agent')
@@ -132,6 +137,13 @@ export function FactorBindableField({
   // This component only ever renders inside a node inspector on the canvas,
   // so the graph is right there in context -- no prop-drilling needed.
   const nodes = useNodes()
+  const edges = useEdges()
+  // Only read for a prompt field (see nodeId above); resolving it here keeps
+  // the dialog's own memo stable while the inspector re-renders per keystroke.
+  const promptScopeFor = useCallback(
+    (id: string) => promptReferenceScope(nodes as ProtocolNode[], edges as ProtocolEdge[], id),
+    [nodes, edges],
+  )
 
   const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
@@ -220,6 +232,8 @@ export function FactorBindableField({
           onOpenChange={setOpen}
           toolServerId={toolServerId}
           revealHiddenServers={revealsHiddenMcpServers(nodes)}
+          boundField={nodeId ? { nodeId, fieldPath } : null}
+          promptScopeFor={promptScopeFor}
           factor={{
             name: factorName,
             levels: structured ? seedStructuredLevels(currentValue, levelType) : seedLevels(currentValue),

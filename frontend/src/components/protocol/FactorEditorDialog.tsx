@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Split, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { datasetsApi, mcpServersApi } from '@/api/client'
+import { isPromptReferenceField, type PromptReferenceScope } from '@/lib/promptReferences'
 import { cardAccent, cn, hashToChartHue, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
 import { pickToolNamesForServer, selectableMcpServers, type UnboundField } from './bindableFields'
 import { useProviderModels } from './useProviderModels'
@@ -29,6 +30,7 @@ import {
 import { ModelField } from './ModelField'
 import { NODE_INSPECTOR_CONTENT_CLASSNAME } from './NodeInspectorDialog'
 import { PROVIDER_META } from './nodes/LlmNode'
+import { PromptReferenceField } from './PromptReferenceField'
 import { PythonCodeEditor } from './PythonCodeEditor'
 import type { DesignFactor } from '@/types/experiments'
 
@@ -516,6 +518,8 @@ export function FactorEditorDialog({
   emptyPickerMessage,
   toolServerId,
   revealHiddenServers,
+  boundField,
+  promptScopeFor,
   onSave,
 }: {
   open: boolean
@@ -551,6 +555,19 @@ export function FactorEditorDialog({
   // factor" isn't accurate for a node type with nothing bindable on it at
   // all (e.g. a Pattern connector node).
   emptyPickerMessage?: string
+  // The canvas field this factor is ALREADY bound to, when the caller can
+  // resolve it unambiguously. Only used to scope the prompt reference picker
+  // below; in field-picker mode the field being picked supersedes it.
+  boundField?: { nodeId: string; fieldPath: string } | null
+  // What a prompt level may reference, for a given node. Passed by the callers
+  // that can see the canvas graph; without it a `text` level stays the plain
+  // textarea it was before references existed, which is also what every
+  // non-prompt text field (a system prompt, a description) gets.
+  //
+  // Needed here rather than resolved by the caller because a picked field is
+  // chosen inside this dialog, so which node the levels belong to isn't known
+  // until then.
+  promptScopeFor?: (nodeId: string) => PromptReferenceScope
   // `field` is only present when this save came from picking one of
   // pickableFields -- the caller uses it to write the binding onto the
   // actual canvas node (this dialog has no way to do that itself).
@@ -628,6 +645,22 @@ export function FactorEditorDialog({
     onSave({ name, levels: parsedLevels, level_labels: labels, level_type: levelType }, selectedField ?? undefined)
     onOpenChange(false)
   }
+
+  // A factor bound to the prompt replaces it whole, per cell -- so a level
+  // that doesn't carry its own reference is a cell where nothing upstream
+  // reaches the agent. Offering the same picker here is what keeps that from
+  // being a thing you only discover by reading the run's transcript.
+  const promptField = selectedField ?? boundField
+  const promptScope = useMemo(
+    () =>
+      promptScopeFor && promptField && isPromptReferenceField(promptField.fieldPath)
+        ? promptScopeFor(promptField.nodeId)
+        : null,
+    // Identity-stable so PromptReferenceField's own memos don't recompute on
+    // every keystroke in a sibling level.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [promptScopeFor, promptField?.nodeId, promptField?.fieldPath],
+  )
 
   const accent = hashToChartHue(name || 'factor')
   const filteredFields = (pickableFields ?? []).filter((f) =>
@@ -720,6 +753,12 @@ export function FactorEditorDialog({
                   <p className="text-xs text-muted-foreground">Levels: true, false</p>
                 ) : levelType === 'text' ? (
                   <div className="space-y-2">
+                    {promptScope && (
+                      <p className="text-xs text-muted-foreground">
+                        Each level replaces the whole prompt, so a level that references nothing is a cell where no
+                        upstream output reaches this agent. Add the references you want to each level.
+                      </p>
+                    )}
                     {(levels as string[]).map((level, i) => (
                       <div key={i} className="flex items-start gap-1.5">
                         <div className="flex-1 space-y-1.5">
@@ -729,12 +768,23 @@ export function FactorEditorDialog({
                             value={levelLabels[i] ?? ''}
                             onChange={(e) => setLevelLabels((ls) => ls.map((label, j) => (j === i ? e.target.value : label)))}
                           />
-                          <Textarea
-                            rows={6}
-                            className="font-mono text-xs"
-                            value={level}
-                            onChange={(e) => setLevels((ls) => ls.map((l, j) => (j === i ? e.target.value : l)))}
-                          />
+                          {promptScope ? (
+                            <PromptReferenceField
+                              id={`level-${i}-value`}
+                              rows={6}
+                              className="font-mono text-xs"
+                              value={level}
+                              scope={promptScope}
+                              onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
+                            />
+                          ) : (
+                            <Textarea
+                              rows={6}
+                              className="font-mono text-xs"
+                              value={level}
+                              onChange={(e) => setLevels((ls) => ls.map((l, j) => (j === i ? e.target.value : l)))}
+                            />
+                          )}
                         </div>
                         <Button
                           variant="ghost"

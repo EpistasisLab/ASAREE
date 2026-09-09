@@ -14,9 +14,11 @@ import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { NodeRunOutputPanel } from './NodeRunOutputPanel'
 import { OutputContractEditor } from './OutputContractEditor'
+import { PromptReferenceField } from './PromptReferenceField'
 import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import { experimentsApi } from '@/api/client'
 import { normalizeDesignMetrics } from '@/lib/metricCatalog'
+import type { PromptReferenceScope } from '@/lib/promptReferences'
 import type { AgentNodeConfig, AgentNodeData, NodeRunState, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = nodeAccent('agent')
@@ -49,6 +51,7 @@ export function AgentNodeInspector({
   node,
   experimentId,
   markedLeadAgentId,
+  referenceScope,
   nodeRun,
   onChange,
   onDelete,
@@ -59,6 +62,9 @@ export function AgentNodeInspector({
   // Which agent on the canvas already carries the lead marker, if any -- the
   // inspector can't see its siblings, so ProtocolCanvas resolves it.
   markedLeadAgentId: string | null
+  // What this node's prompt may reference, resolved from the graph for the same
+  // reason as markedLeadAgentId: the inspector only ever sees its own node.
+  referenceScope: PromptReferenceScope
   nodeRun?: NodeRunState
   onChange: (nodeId: string, data: AgentNodeData) => void
   onDelete: (nodeId: string) => void
@@ -231,14 +237,41 @@ export function AgentNodeInspector({
                 </div>
               )}
 
-              <div className="space-y-1.5">
-                <Label htmlFor="node-prompt">Prompt (User Message) — Optional</Label>
-                <Textarea id="node-prompt" rows={2} value={config.prompt} onChange={(e) => patchConfig({ prompt: e.target.value })} />
-                <p className="text-xs text-muted-foreground">
-                  The task for this run -- what you're actually asking this agent to do. Leave blank to fall back
-                  to Goal (or, once wired to an earlier step, that step's own output).
-                </p>
-              </div>
+              <FactorBindableField
+                experimentId={experimentId}
+                nodeId={node.id}
+                fieldPath="config.prompt"
+                defaultLabel="Prompt"
+                nodeLabel={data.label || 'Agent'}
+                levelType="text"
+                currentValue={config.prompt}
+                boundFactorName={bindings['config.prompt']}
+                onBind={(name) => bindFactor('config.prompt', name)}
+                onUnbind={() => unbindFactor('config.prompt')}
+              >
+                {(trigger) => (
+                  <PromptReferenceField
+                    // Remount on a node switch: the field keeps a local display
+                    // draft, which must be re-derived from the node now being
+                    // edited rather than carried over from the last one.
+                    key={node.id}
+                    id="node-prompt"
+                    label="Prompt (User Message) — Optional"
+                    trigger={trigger}
+                    rows={4}
+                    value={config.prompt}
+                    scope={referenceScope}
+                    onChange={(prompt) => patchConfig({ prompt })}
+                    description={
+                      <>
+                        The task for this run -- what you're actually asking this agent to do. An earlier step's output
+                        reaches this agent only where you reference it, so wiring alone passes nothing. Leave blank to
+                        fall back to Goal.
+                      </>
+                    }
+                  />
+                )}
+              </FactorBindableField>
 
               <div className="space-y-1.5">
                 <Label htmlFor="node-goal">Goal — Optional</Label>

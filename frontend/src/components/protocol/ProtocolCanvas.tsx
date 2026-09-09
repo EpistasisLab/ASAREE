@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { CONNECTOR_HANDLES } from '@/lib/coordinationStrategy'
 import { newNodeId } from '@/lib/nodeId'
+import { promptReferenceScope } from '@/lib/promptReferences'
 import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import {
@@ -47,6 +48,7 @@ import type {
   MemoryNodeData,
   OkfBundleNodeData,
   OkfDocumentNodeData,
+  ProtocolEdge,
   ProtocolGraph,
   ProtocolNode,
   ReasonActPatternNodeData,
@@ -705,6 +707,24 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const markedLeadAgentId = useMemo(
     () => nodes.find((n) => n.type === 'agent' && (n.data as AgentNodeData).conversation_lead === true)?.id ?? null,
     [nodes],
+  )
+
+  // Same reasoning as markedLeadAgentId: the inspector edits one node and can't
+  // see the wiring around it, so which upstream outputs that node's prompt may
+  // reference is resolved here. Recomputed on every rewire, which is the point
+  // -- the picker has to answer "what's available to me" while the canvas is
+  // being drawn, not at publish time.
+  const referenceScope = useMemo(
+    () => promptReferenceScope(nodes as unknown as ProtocolNode[], edges as unknown as ProtocolEdge[], selectedNodeId),
+    [nodes, edges, selectedNodeId],
+  )
+  // The same answer for an arbitrary node, which the factor-level editor needs
+  // -- the field a factor binds to is picked inside that dialog, so the node
+  // isn't known until then.
+  const promptScopeFor = useCallback(
+    (nodeId: string) =>
+      promptReferenceScope(nodes as unknown as ProtocolNode[], edges as unknown as ProtocolEdge[], nodeId),
+    [nodes, edges],
   )
 
   // The model each agent will actually run on, resolved through its AI
@@ -1798,6 +1818,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               node={{ id: selectedNode.id, type: selectedNode.type ?? 'agent', position: selectedNode.position, data: selectedNode.data as AgentNodeData }}
               experimentId={experimentId}
               markedLeadAgentId={markedLeadAgentId}
+              referenceScope={referenceScope}
               nodeRun={runQuery.data?.node_runs[selectedNode.id]}
               onChange={updateNodeData}
               onDelete={requestDeleteNode}
@@ -1862,6 +1883,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           existingNames={factorPickerExistingNames}
           emptyPickerMessage={`${(factorPickerNode?.data as { label?: string })?.label || 'This node'} has no fields that can be turned into a factor.`}
           revealHiddenServers={revealsHiddenMcpServers(nodes)}
+          promptScopeFor={promptScopeFor}
           onSave={(factor, field) => {
             if (field) createFactorMutation.mutate({ factor, field })
           }}

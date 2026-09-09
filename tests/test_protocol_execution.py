@@ -347,13 +347,22 @@ def test_a_reader_downstream_of_a_deactivated_node_sees_that_nodes_name() -> Non
     the honest answer -- it is the node whose slot that text arrived in, and
     relabelling it as the original author would hide that a step was skipped.
     Both contracts already behave this way; the envelope must not change it.
+
+    On the current contract the text has to be asked for, and it labels its
+    blocks only on a fan-in, so ``d`` is here to make the attribution visible at
+    all -- the point under test is whose name appears, not how many senders
+    there are.
     """
     a = _node("a", "agent", {"prompt": "Draft it"}, label="Drafter")
     b = _node("b", "agent", {"prompt": "Polish it"}, label="Editor")
     b["data"]["active"] = False
-    c = _node("c", "agent", {"prompt": "Publish it"}, label="Publisher")
-    graph = {"nodes": [a, b, c], "edges": _edges(("a", "b"), ("b", "c"))}
-    node_runs: dict = {"a": {"status": "completed", "output_text": "draft text here"}}
+    d = _node("d", "agent", {"prompt": "Fact-check it"}, label="Checker")
+    c = _node("c", "agent", {"prompt": "Publish: {{previous}}"}, label="Publisher")
+    graph = {"nodes": [a, b, d, c], "edges": _edges(("a", "b"), ("b", "c"), ("d", "c"))}
+    node_runs: dict = {
+        "a": {"status": "completed", "output_text": "draft text here"},
+        "d": {"status": "completed", "output_text": "checked"},
+    }
     node_runs["b"] = {"status": "completed", "output_text": pe._upstream_output_text(graph, "b", node_runs)}
     legacy = pe._build_user_input(c, graph, node_runs, prompt_contract_version=1)
     current = pe._build_user_input(c, graph, node_runs, prompt_contract_version=2)

@@ -26,6 +26,7 @@ from asaree.services.protocol_execution import (
     plan_single_replicate_run,
     topological_order,
     validate_coordination_strategy,
+    validate_prompt_references,
     validate_single_node_runnable,
     validate_stage_plan,
 )
@@ -265,6 +266,7 @@ async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, d
         design_spec = experiment.design_spec if experiment is not None else None
         validate_coordination_strategy(design_spec, graph=protocol.graph)
         validate_stage_plan(design_spec)
+        validate_prompt_references(design_spec, graph=protocol.graph)
         topological_order(protocol.graph, require_acyclic=not is_conversation_strategy(design_spec))
         validate_factor_bindings(design_spec, protocol.graph)
     except (ProtocolValidationError, ValueError) as exc:
@@ -317,6 +319,7 @@ async def create_protocol_run_endpoint(
             design_spec = experiment.design_spec if experiment is not None else None
             validate_coordination_strategy(design_spec, graph=revision.graph)
             validate_stage_plan(design_spec)
+            validate_prompt_references(design_spec, graph=revision.graph)
             topological_order(revision.graph, require_acyclic=not is_conversation_strategy(design_spec))
             run = await create_protocol_run(
                 db, protocol_id=protocol_id, owner_id=user.id, protocol_revision_id=revision.id

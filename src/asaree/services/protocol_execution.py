@@ -42,7 +42,12 @@ from motoro.runner import create_agent, create_run, execute_run, get_agent_by_na
 from motoro.schemas.agent import ModelConfig
 from motoro.schemas.output import parse_envelope
 from motoro.schemas.pattern import PatternConfig
-from motoro.security.prompt_injection import UPSTREAM_FENCE_END, UPSTREAM_FENCE_START, fence_upstream
+from motoro.security.prompt_injection import (
+    UPSTREAM_FENCE_END,
+    UPSTREAM_FENCE_START,
+    fence_upstream,
+    neutralize_delimiters,
+)
 from motoro.services.mcp_service import hydrate_registry
 from motoro.services.skill_service import resolve_skills
 from sqlalchemy import select
@@ -52,6 +57,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services import prompt_references
 from asaree.services.agent_cards import AgentCard, build_agent_card
 from asaree.services.coordination import coordination_strategy_slug
 from asaree.services.dataset_workspaces import (
@@ -1251,6 +1257,56 @@ def _upstream_ids(graph: dict[str, Any], node_id: str) -> list[str]:
     ]
 
 
+def referenceable_node_ids(graph: dict[str, Any], node_id: str) -> list[str]:
+    """Which nodes *node_id*'s prompt may reference, in canvas declaration order.
+
+    Exactly the nodes that provably run before this one: its main-edge
+    ancestors, transitively. This single function answers the question for both
+    sides of the feature, and that is the point --
+
+    * the inspector's picker offers this set, so a user cannot insert a
+      reference that will be refused later, and
+    * :func:`validate_prompt_references` rejects anything outside it.
+
+    Two rules fall out of following **main** edges only (:func:`_upstream_ids`),
+    rather than every edge:
+
+    * A connector node (llm/memory/pattern/mcp_tool/dataset) is never
+      referenceable. Its "output" is an inert placeholder, so a reference to one
+      would resolve to noise -- the same reason it is excluded from upstream
+      context.
+    * A node on a parallel branch is never referenceable, even though the
+      topological walk happens to put it earlier. There is no ordering guarantee
+      between branches, so such a reference cannot be relied on to resolve. Only
+      ancestry, not walk position, establishes "runs before".
+
+    Transitive, not just direct predecessors: on ``A -> B -> C``, C may
+    reference A. That is the whole reach-back capability, and it costs nothing
+    here because ``node_runs`` already retains every executed node for the whole
+    run.
+    """
+    upstream: dict[str, list[str]] = {}
+    for edge in graph.get("edges") or []:
+        if edge.get("targetHandle") in _CONNECTOR_HANDLES:
+            continue
+        source, target = edge.get("source"), edge.get("target")
+        if source and target:
+            upstream.setdefault(target, []).append(source)
+
+    ancestors: set[str] = set()
+    # Iterative, and guarded by `ancestors` itself: this runs during validation,
+    # which is exactly when the graph may still contain the cycle that
+    # `topological_order` is about to reject.
+    frontier = list(upstream.get(node_id) or [])
+    while frontier:
+        current = frontier.pop()
+        if current in ancestors or current == node_id:
+            continue
+        ancestors.add(current)
+        frontier.extend(upstream.get(current) or [])
+    return [nid for n in graph.get("nodes") or [] if (nid := n.get("id")) in ancestors]
+
+
 # design_spec factor names (e.g. "Azure Foundry:Model", "Critic enabled") are
 # free text, joined into a real cell_label like "Azure Foundry:Effort_medium__
 # Azure Foundry:Model_claude-sonnet-5__Critic enabled_false" -- a string
@@ -2380,8 +2436,25 @@ def _upstream_context(
     published depends on it, so the handoff design happens here in place; its
     golden in ``tests/test_spinal_compat.py`` is a change-detector that puts the
     diff in front of a reviewer, not a promise the text will not move.
+
+    **Only composed messages reach this function now.** An automatic block is no
+    longer appended on the pipeline path: an edge grants availability and a
+    ``{{...}}`` reference in the prompt grants use, so nothing arrives in a
+    prompt the experimenter did not ask for (see
+    :mod:`asaree.services.prompt_references`). ``upstream_ids is None`` is what
+    says "derive it from the graph", i.e. the pipeline, and that case returns
+    ``""``.
+
+    What survives is the case with no prompt to put a reference in: the
+    messenger composes a supervisor's brief at runtime
+    (``agent_messenger._turn``) and passes its senders explicitly. There is no
+    user-authored prompt for that dispatch, so suppressing it would delete the
+    message rather than hand control of it to anybody. Those callers keep the
+    fenced, framed block exactly as before.
     """
-    ids = _upstream_ids(graph, node_id) if upstream_ids is None else upstream_ids
+    if upstream_ids is None:
+        return ""
+    ids = upstream_ids
     nodes = {str(n.get("id")): n for n in graph.get("nodes") or []}
     names = {uid: _node_display_name(nodes.get(uid) or {"id": uid}) for uid in ids}
     ambiguous = {name for name in names.values() if list(names.values()).count(name) > 1}
@@ -2451,6 +2524,151 @@ def _chain_steps(graph: dict[str, Any], design_spec: dict[str, Any] | None) -> d
     if len(chain) < 2:
         return {}
     return {nid: (i + 1, len(chain)) for i, nid in enumerate(chain)}
+
+
+def _reference_payload(text: str, *, raw: bool) -> str:
+    """One referenced output, ready to sit in a prompt.
+
+    Fenced by default. Delimiters are constant across every treatment and assert
+    nothing, so unlike a framing sentence they are not a confound -- which is
+    why the fence stayed automatic when the prose became opt-in.
+
+    ``|raw`` drops the fence for an experimenter who wants their sentence to
+    read as one sentence, but **not** the neutralization: a payload that can
+    forge a delimiter can make the text after it look like quoted material, or
+    close Motoro's outer ``<<<USER_DATA>>>`` fence. That part is never a choice.
+    """
+    return neutralize_delimiters(text) if raw else fence_upstream(text)
+
+
+def _render_reference(
+    ref: prompt_references.PromptReference,
+    *,
+    graph: dict[str, Any],
+    node_id: str,
+    node_runs: dict[str, Any],
+    upstream_kind: str,
+    audience: str,
+    unresolved: list[str],
+) -> str:
+    """What one ``{{...}}`` becomes. Appends to *unresolved* as a side effect.
+
+    An empty resolution is recorded rather than raised: an agent that correctly
+    produced nothing is a legitimate result, and failing the replicate would
+    discard valid experimental data. Recording it is what keeps the other
+    outcome -- a cell that ran with an empty variable and looks clean in the
+    results table -- from being silent.
+    """
+    if ref.kind == prompt_references.AUDIENCE:
+        return audience
+    if ref.kind == prompt_references.UPSTREAM_INSTRUCTIONS:
+        return _UPSTREAM_INSTRUCTIONS.get(upstream_kind, _UPSTREAM_INSTRUCTIONS["handoff"])
+
+    ids = _upstream_ids(graph, node_id) if ref.kind == prompt_references.PREVIOUS else [ref.node_id]
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or []}
+    blocks = []
+    for uid in ids:
+        text = node_runs.get(uid, {}).get("output_text")
+        if not text:
+            unresolved.append(uid)
+            continue
+        payload = _reference_payload(str(text), raw=ref.raw)
+        # Labelled only where the reference itself cannot say which sender is
+        # which: a `{{previous}}` that expanded to several predecessors. A
+        # single-node reference needs no label, because the experimenter named
+        # the node -- adding one there would be platform prose in a prompt that
+        # asked for a payload.
+        if len(ids) > 1:
+            payload = f"[{_node_display_name(nodes.get(uid) or {'id': uid})}] said:\n{payload}"
+        blocks.append(payload)
+    return "\n\n".join(blocks)
+
+
+def _resolve_prompt_references(
+    text: str,
+    graph: dict[str, Any],
+    node_id: str,
+    node_runs: dict[str, Any],
+    *,
+    upstream_kind: str = "handoff",
+    audience: str = "",
+) -> tuple[str, list[str]]:
+    """Substitute every reference in *text*; returns it plus the ids that
+    resolved to nothing.
+
+    The caller decides what to do with the second value -- see
+    :func:`_render_reference` on why it is reported rather than raised.
+    """
+    unresolved: list[str] = []
+    rendered = prompt_references.substitute(
+        text,
+        lambda ref: _render_reference(
+            ref,
+            graph=graph,
+            node_id=node_id,
+            node_runs=node_runs,
+            upstream_kind=upstream_kind,
+            audience=audience,
+            unresolved=unresolved,
+        ),
+    )
+    return rendered, unresolved
+
+
+def validate_prompt_references(design_spec: dict[str, Any] | None, *, graph: dict[str, Any]) -> None:
+    """Refuse a graph whose prompts point at something that can never resolve.
+
+    Design time, not run time: a reference that cannot resolve is a wiring
+    mistake, and the user can only act on it while looking at the canvas. Raised
+    from the same place :func:`validate_coordination_strategy` and
+    :func:`validate_stage_plan` are called, so it lands at publish/plan/run
+    rather than halfway through a batch.
+
+    Checked against :func:`referenceable_node_ids`, the same set the picker
+    offers, so the two cannot disagree about what is legal.
+
+    Skipped entirely on the legacy contract, which does not substitute at all:
+    there, ``{{node:x}}`` is literal prompt text, and rejecting it would refuse
+    an experiment that has always run fine.
+
+    A node with predecessors and *no* reference is deliberately **not** an
+    error. An agent that starts fresh is a legitimate design and this is how it
+    is expressed now that nothing is automatic. It is also the "graph looks
+    wired, nothing flows" case, which is why the canvas has to mark it -- a
+    validation error would refuse a valid experiment instead.
+    """
+    if prompt_contract_version(design_spec) == LEGACY_PROMPT_CONTRACT:
+        return
+    for node in graph.get("nodes") or []:
+        node_id = node.get("id")
+        if not node_id:
+            continue
+        prompt = _node_seed_prompt(node)
+        if not prompt_references.has_references(prompt):
+            continue
+        name = _node_display_name(node)
+        allowed = set(referenceable_node_ids(graph, node_id))
+        known = {str(n.get("id")) for n in graph.get("nodes") or []}
+
+        for referenced in prompt_references.referenced_node_ids(prompt):
+            if referenced not in known:
+                raise ProtocolValidationError(
+                    f"{name}'s prompt references a node that no longer exists ({referenced}). "
+                    "Remove the reference or reconnect the node that replaced it."
+                )
+            if referenced not in allowed:
+                other = _node_display_name(next(n for n in graph["nodes"] if str(n.get("id")) == referenced))
+                raise ProtocolValidationError(
+                    f"{name}'s prompt references {other!r}, which does not run before it. "
+                    "A reference only resolves if the referenced node is upstream on the "
+                    "same path -- connect them, or reference a node that is."
+                )
+
+        if prompt_references.uses(prompt, prompt_references.PREVIOUS) and not _upstream_ids(graph, node_id):
+            raise ProtocolValidationError(
+                f"{name}'s prompt uses {{{{previous}}}} but nothing is connected to its input. "
+                "Connect an upstream node, or reference one explicitly."
+            )
 
 
 #: Stored contract -> the upstream-context builder it selects. Two entries, not
@@ -2542,19 +2760,42 @@ def _build_user_input(
     dispatch does not have to be a direct edge) passes it explicitly rather
     than hoping the topology agrees.
 
-    *audience* is what happens to this agent's output (:func:`_node_audience`),
-    appended last because it is about after, not about now. Empty by default
-    and passed only on the pipeline paths: a supervisor does not "pass its
-    output to" the workers it dispatches, and a conversation's replies are not
-    a prior node's output either, so the sentence would be a lie on both."""
-    parts = [_node_seed_prompt(node)]
+    *audience* is what happens to this agent's output (:func:`_node_audience`).
+    It is no longer appended: it is what a ``{{audience}}`` reference in the
+    prompt renders to, so a prompt that did not ask for it does not get it.
+    Empty by default and passed only on the pipeline paths: a supervisor does
+    not "pass its output to" the workers it dispatches, and a conversation's
+    replies are not a prior node's output either, so the sentence would be a lie
+    on both.
 
+    On the current contract the prompt's own ``{{...}}`` references are resolved
+    (:mod:`asaree.services.prompt_references`) and no upstream block is appended.
+    The legacy contract does neither -- its format is frozen, so a legacy
+    prompt containing ``{{node:x}}`` keeps that text literally, exactly as the
+    published experiments would have."""
     # Resolved once, and used for every contract-dependent decision below, so
     # an unrecognized version cannot get the legacy upstream block but a
     # current-contract extra appended after it.
     contract = prompt_contract_version if prompt_contract_version in _UPSTREAM_CONTEXT_BUILDERS else (
         LEGACY_PROMPT_CONTRACT
     )
+
+    seed = _node_seed_prompt(node)
+    if contract != LEGACY_PROMPT_CONTRACT:
+        seed, unresolved = _resolve_prompt_references(
+            seed, graph, node["id"], node_runs, upstream_kind=upstream_kind, audience=audience
+        )
+        if unresolved:
+            # Recorded, not raised -- see _render_reference. Surfacing this in
+            # the Runs tab is Phase 3's job; a log line is what stops it being
+            # invisible until then.
+            logger.warning(
+                "prompt references resolved empty: node=%s referenced=%s",
+                node["id"],
+                ",".join(unresolved),
+            )
+    parts = [seed]
+
     upstream_context = _UPSTREAM_CONTEXT_BUILDERS[contract](
         graph, node["id"], node_runs, upstream_kind=upstream_kind, upstream_ids=upstream_ids
     )
@@ -2661,12 +2902,9 @@ def _build_user_input(
             f"run_model_script's `code`):\n```python\n{script_code}\n```"
         )
 
-    # Gated on the contract, not just on the caller: the legacy format is
-    # frozen, and a call site that passes an audience has no way to know
-    # which contract the experiment it is running is pinned to.
-    if audience and contract != LEGACY_PROMPT_CONTRACT:
-        parts.append(audience)
-
+    # The audience sentence is no longer appended here: it is what a
+    # `{{audience}}` reference resolves to, above. Nothing platform-authored
+    # goes into a prompt that did not ask for it.
     return "\n\n".join(parts)
 
 
@@ -3527,6 +3765,7 @@ async def plan_cell_runs(
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, graph=graph)
     validate_stage_plan(design_spec)
+    validate_prompt_references(design_spec, graph=graph)
     conversation = is_conversation_strategy(design_spec)
     topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
     if not conversation:
@@ -3642,6 +3881,7 @@ async def plan_single_replicate_run(
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, graph=graph)
     validate_stage_plan(design_spec)
+    validate_prompt_references(design_spec, graph=graph)
     conversation = is_conversation_strategy(design_spec)
     topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
     if not conversation:
@@ -3892,6 +4132,9 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
     try:
         validate_coordination_strategy(design_spec, graph=graph)
         validate_stage_plan(design_spec)
+        # After apply_factor_bindings above, so a reference that arrived as a
+        # factor level is checked as the text the agent will actually get.
+        validate_prompt_references(design_spec, graph=graph)
         order = topological_order(graph, require_acyclic=not is_conversation_strategy(design_spec))
         gated_by = find_gated_pairs(graph)
     except ProtocolValidationError as e:

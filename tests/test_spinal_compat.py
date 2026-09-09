@@ -302,9 +302,17 @@ def test_the_spinal_experiment_resolves_to_the_legacy_contract(graph: dict[str, 
 
 def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, Any]) -> None:
     """The counterfactual, asserted against the real graph: what the current
-    contract does is not cosmetic on this pipeline -- it rewrites every handoff
+    contract does is not cosmetic on this pipeline -- it removes every handoff
     in it. Had it shipped as an edit to the frozen format rather than as a
     second one, every published number would have come from a different prompt.
+
+    The direction of the change is worth being blunt about. These prompts were
+    written when the upstream block was automatic, so none of them contains a
+    reference; under the current contract, where an edge grants availability and
+    only a reference grants use, SF-FTE is handed nothing at all. Reproducing
+    this pipeline on the current contract is therefore a prompt-rewriting job,
+    not a version bump -- which is exactly why the legacy contract is frozen
+    rather than migrated.
 
     Stated as "the *only* difference is the upstream block" rather than as a
     literal transformation of one into the other. It began life as
@@ -312,7 +320,7 @@ def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, An
     while the current contract was the legacy one with the labels swapped and
     stopped being true the moment it grew a fence and a framing sentence. The
     claim worth keeping is the one about scope: whatever the current contract
-    does, it does inside that block, and the Dataset/Script cues around it are
+    does, it does to that block, and the Dataset/Script cues around it are
     tool-usage instructions that both contracts share.
     """
     dc_gate_id = _AGENTS[0][2]
@@ -321,11 +329,10 @@ def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, An
     legacy = _prompt(graph, fte_id, node_runs=node_runs)
     current = _prompt(graph, fte_id, node_runs=node_runs, prompt_contract_version=CURRENT_PROMPT_CONTRACT)
     assert legacy != current
-    gate_label = next(n["data"]["label"] for n in graph["nodes"] if n["id"] == dc_gate_id)
-    assert f"Upstream context:\n[{gate_label}] said:" in current
+    assert "DC accepted v1_dc." in legacy
+    assert "DC accepted v1_dc." not in current
     legacy_block = pe._upstream_context_legacy(graph, fte_id, node_runs)
-    current_block = pe._upstream_context(graph, fte_id, node_runs)
-    assert legacy.replace(legacy_block, current_block) == current
+    assert "\n\n".join(part for part in legacy.split("\n\n") if part != legacy_block) == current
 
 
 # The node the goldens below are captured on, and the run state they see.
@@ -355,9 +362,11 @@ def _assert_golden(graph: dict[str, Any], contract: int) -> None:
         # ``None``, so that if this experiment's strategy were ever read
         # differently the golden would move with it: ``critic_gate`` yields no
         # numbering today, since only ``sequential`` gets "step N of M".
-        # Passed for *both* contracts on purpose -- the legacy golden must show
-        # it being dropped, since a call site cannot know which contract the
-        # experiment it runs is pinned to.
+        # Passed for *both* contracts on purpose, and dropped by both goldens:
+        # the legacy format refuses it outright, and the current one only emits
+        # it where a prompt spells `{{audience}}`, which none of these do. A
+        # call site cannot know which contract it is running under, so passing
+        # it unconditionally is the correct thing for the walk to do.
         audience=pe._node_audience(
             graph, _GOLDEN_NODE_ID, step=pe._chain_steps(graph, _SPINAL_DESIGN_SPEC).get(_GOLDEN_NODE_ID)
         ),

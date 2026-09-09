@@ -846,6 +846,7 @@ async def test_node_run_context_seeds_before_reading_head(monkeypatch: pytest.Mo
         owner_id: uuid.UUID,
         *,
         slot_prefix: str | None = None,
+        stage_plan: object = None,
     ) -> pe.NodeDataset:
         calls.append("seed")
         return pe.NodeDataset(seeded=(("spinal-fusion-v1", "dataset:default"),))

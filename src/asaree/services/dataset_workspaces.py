@@ -24,7 +24,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from asaree_workspace_core import Workspace, WorkspaceError
+from asaree_workspace_core import StagePlanError, Workspace, WorkspaceError
 
 from asaree.models.database import get_session
 from asaree.services.datasets import get_dataset_by_name
@@ -126,6 +126,7 @@ async def seed_cell_workspace(
     owner_id: uuid.UUID,
     target_column: str = "",
     slot: str | None = None,
+    stage_plan: Any = None,
 ) -> SeededWorkspace:
     """Open (creating if absent) a slot of *workspace_id*, seeded from a registration.
 
@@ -139,6 +140,12 @@ async def seed_cell_workspace(
     the pre-slot on-disk format (see :mod:`asaree_workspace_core.workspace`).
     Pass ``dataset_slot(name)`` when a cell holds several datasets; each then
     gets its own lineage, target column and HEAD.
+
+    *stage_plan* is the experiment's declared pipeline (a preset name or an
+    inline plan; ``None`` means the default ``tabular_ml`` preset). It is a
+    property of the cell rather than of the slot -- two datasets staged in one
+    cell go through the same stages -- so it is only ever recorded once, on
+    first open, and re-opening with a different one is refused.
 
     Raises :class:`WorkspaceSeedError` on anything that leaves the cell
     without usable data.
@@ -183,9 +190,10 @@ async def seed_cell_workspace(
             seed_train_path=reg["train_path"],
             seed_test_path=reg["test_path"],
             slot=slot,
+            stage_plan=stage_plan,
         )
         resolved_slot = ws.slot
-    except (WorkspaceError, FileNotFoundError, OSError) as e:
+    except (WorkspaceError, StagePlanError, FileNotFoundError, OSError) as e:
         raise WorkspaceSeedError(f"workspace: {e}") from e
 
     return SeededWorkspace(

@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from asaree_workspace_core import WORKSPACE_ROOT, dataset_slot
+from asaree_workspace_core import WORKSPACE_ROOT, StagePlanError, dataset_slot, resolve_stage_plan
 from motoro.mcp.registry import get_registry
 from motoro.models.run import RunStatus
 from motoro.runner import create_agent, create_run, execute_run, get_agent_by_name, get_run, update_agent
@@ -56,6 +56,7 @@ from asaree.services.dataset_workspaces import (
 )
 from asaree.services.deadline import Deadline, active_deadline
 from asaree.services.design_generation import get_design_impact
+from asaree.services.design_revisions import get_revision as get_design_revision
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
@@ -470,6 +471,36 @@ def is_conversation_strategy(design_spec: dict[str, Any] | None) -> bool:
     either.
     """
     return coordination_strategy_slug(design_spec) in _CONVERSATION_STRATEGIES
+
+
+def stage_plan_spec(design_spec: dict[str, Any] | None) -> Any:
+    """The workspace stage plan this experiment declares, or ``None`` for the default.
+
+    Returned unresolved, on purpose: ``asaree_workspace_core.stages`` owns what a
+    plan means (and rejects a malformed one), while this only knows where the
+    declaration lives. ``None`` is passed straight through to the workspace,
+    where it means "adopt whatever this cell already stages through" rather than
+    "the default preset" -- so an experiment that never declared a plan behaves
+    exactly as it did before plans existed.
+    """
+    return (design_spec or {}).get("stage_plan") or None
+
+
+def validate_stage_plan(design_spec: dict[str, Any] | None) -> None:
+    """Reject a malformed declared stage plan before anything runs.
+
+    Checked alongside :func:`validate_coordination_strategy` rather than left to
+    the first seeding call, which happens inside a run whose failure is logged
+    and swallowed: a typo'd gate rule would otherwise silently give the whole
+    experiment the default pipeline and look like it worked.
+    """
+    spec = stage_plan_spec(design_spec)
+    if spec is None:
+        return
+    try:
+        resolve_stage_plan(spec)
+    except StagePlanError as e:
+        raise ProtocolValidationError(f"This experiment's stage plan is not usable: {e}") from e
 
 
 def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, graph: dict[str, Any]) -> None:
@@ -1319,6 +1350,7 @@ async def _resolve_node_dataset(
     owner_id: uuid.UUID,
     *,
     slot_prefix: str | None = None,
+    stage_plan: Any = None,
 ) -> NodeDataset:
     """Seed this cell's workspace from the wired dataset before the agent runs.
 
@@ -1348,6 +1380,13 @@ async def _resolve_node_dataset(
     several become ``<prefix>:<dataset name>``. Naming rather than deriving it
     here keeps this function free of any opinion about which strategy is
     running.
+
+    *stage_plan* is the experiment's declared pipeline
+    (``design_spec.stage_plan``, resolved by ``asaree_workspace_core.stages``).
+    It is recorded on the cell's workspace the first time one is created and
+    fixed thereafter, so it is passed on every seeding call rather than only the
+    first: which node happens to create the workspace depends on which agent has
+    a Dataset wired, and that is not something to have to reason about.
 
     A failure here is logged and swallowed, never raised: a run whose dataset
     registration is broken should still start and let the agent surface the
@@ -1405,6 +1444,7 @@ async def _resolve_node_dataset(
                 dataset_name=name,
                 owner_id=owner_id,
                 slot=slot,
+                stage_plan=stage_plan,
             )
         except WorkspaceSeedError as e:
             logger.warning(
@@ -1423,6 +1463,7 @@ async def _node_run_context(
     owner_id: uuid.UUID,
     *,
     slot_prefix: str | None = None,
+    stage_plan: Any = None,
 ) -> tuple[dict[str, Any], NodeDataset]:
     """``(ambient_meta, dataset)`` for one node -- everything the node's
     References contribute, resolved together so the three call sites (gated
@@ -1444,7 +1485,9 @@ async def _node_run_context(
     to the slots that were just seeded for it, so a worker sharing a cell
     workspace with several sibling workers still sees exactly one HEAD -- its
     own -- rather than everybody's."""
-    dataset = await _resolve_node_dataset(graph, node_id, workspace_id, owner_id, slot_prefix=slot_prefix)
+    dataset = await _resolve_node_dataset(
+        graph, node_id, workspace_id, owner_id, slot_prefix=slot_prefix, stage_plan=stage_plan
+    )
     ambient_meta = _ambient_meta_for(
         graph,
         node_id,
@@ -2957,6 +3000,7 @@ async def _run_gated_worker(
     effective_cell_label: str | None = None,
     evaluation_metrics: Any = None,
     contract_version: int = DEFAULT_PROMPT_CONTRACT_VERSION,
+    stage_plan: Any = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Generalizes the notebook's ``run_stage`` revision loop (cell 19):
     run worker -> if the gate is enabled, run critic on its output -> on
@@ -2974,7 +3018,9 @@ async def _run_gated_worker(
     # Computed once for the whole revision loop: every attempt reruns the same
     # worker against the same references, so re-materializing the script per
     # attempt would only rewrite an identical file.
-    worker_ambient, worker_dataset = await _node_run_context(graph, worker["id"], workspace_id, owner_id)
+    worker_ambient, worker_dataset = await _node_run_context(
+        graph, worker["id"], workspace_id, owner_id, stage_plan=stage_plan
+    )
     base_instruction = _build_user_input(
         worker,
         graph,
@@ -3170,6 +3216,7 @@ async def plan_cell_runs(
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, graph=graph)
+    validate_stage_plan(design_spec)
     conversation = is_conversation_strategy(design_spec)
     topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
     if not conversation:
@@ -3284,6 +3331,7 @@ async def plan_single_replicate_run(
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, graph=graph)
+    validate_stage_plan(design_spec)
     conversation = is_conversation_strategy(design_spec)
     topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
     if not conversation:
@@ -3417,7 +3465,10 @@ async def _run_single_node(
     async with get_session() as db:
         experiment = await get_experiment(db, experiment_id) if experiment_id else None
     evaluation_metrics = (experiment.design_spec or {}).get("metrics") if experiment is not None else None
-    ambient_meta, node_dataset = await _node_run_context(graph, node["id"], workspace_id, owner_id)
+    single_design_spec = experiment.design_spec if experiment is not None else None
+    ambient_meta, node_dataset = await _node_run_context(
+        graph, node["id"], workspace_id, owner_id, stage_plan=stage_plan_spec(single_design_spec)
+    )
     user_input = _build_user_input(
         node,
         graph,
@@ -3496,6 +3547,17 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         target_node_id = run.target_node_id
         experiment = await get_experiment(db, experiment_id) if experiment_id else None
         design_spec = experiment.design_spec if experiment is not None else None
+        # The stage plan comes from the PINNED revision's snapshot, not from the
+        # live design_spec: a plan edit made while this replicate was queued
+        # would otherwise stage a cell through a pipeline its own design never
+        # declared. Everything else here still reads the live spec, which is the
+        # pre-existing behaviour; the plan is singled out because it is the one
+        # design field that writes durable, versioned artifacts to disk.
+        pinned_spec = design_spec
+        if design_revision_id is not None:
+            pinned = await get_design_revision(db, design_revision_id)
+            if pinned is not None and pinned.design_spec is not None:
+                pinned_spec = pinned.design_spec
 
     if target_node_id:
         await _run_single_node(
@@ -3518,6 +3580,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
     try:
         validate_coordination_strategy(design_spec, graph=graph)
+        validate_stage_plan(design_spec)
         order = topological_order(graph, require_acyclic=not is_conversation_strategy(design_spec))
         gated_by = find_gated_pairs(graph)
     except ProtocolValidationError as e:
@@ -3531,6 +3594,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
     # at each prompt-building site would let an edit made mid-run produce a run
     # whose earlier nodes used one format and its later nodes another.
     contract_version = prompt_contract_version(design_spec)
+    stage_plan = stage_plan_spec(pinned_spec)
 
     async with get_session() as db:
         await set_status(db, protocol_run_id, status="running")
@@ -3565,7 +3629,9 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
         entry_agent_id = resolve_conversation_entry_id(graph)  # already validated above
         entry_node = next(n for n in graph["nodes"] if str(n.get("id")) == entry_agent_id)
-        ambient_meta, entry_dataset = await _node_run_context(graph, entry_agent_id, workspace_id, owner_id)
+        ambient_meta, entry_dataset = await _node_run_context(
+            graph, entry_agent_id, workspace_id, owner_id, stage_plan=stage_plan
+        )
         node_run, conversation_status = await execute_conversation(
             protocol_run_id,
             protocol_id=protocol_id,
@@ -3590,6 +3656,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             workspace_id=workspace_id,
             ambient_meta=ambient_meta,
             evaluation_metrics=(design_spec or {}).get("metrics"),
+            stage_plan=stage_plan,
         )
         node_runs[entry_agent_id] = node_run
         cancelled = conversation_status == "cancelled"
@@ -3611,7 +3678,9 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         # Only the seed prompt and the cell's factor values -- the supervisor's
         # own Dataset/Script cues are rebuilt inside each of its two turns,
         # which is where the slot keys it will actually be given are known.
-        ambient_meta, supervisor_dataset = await _node_run_context(graph, roles.supervisor, workspace_id, owner_id)
+        ambient_meta, supervisor_dataset = await _node_run_context(
+            graph, roles.supervisor, workspace_id, owner_id, stage_plan=stage_plan
+        )
         node_run, supervisor_status = await execute_supervisor_architecture(
             protocol_run_id,
             protocol_id=protocol_id,
@@ -3635,6 +3704,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             experiment_id=experiment_id,
             effective_cell_label=effective_cell_label,
             contract_version=contract_version,
+            stage_plan=stage_plan,
         )
         node_runs[roles.supervisor] = node_run
         cancelled = supervisor_status == "cancelled"
@@ -3703,6 +3773,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 effective_cell_label=effective_cell_label,
                 evaluation_metrics=(design_spec or {}).get("metrics"),
                 contract_version=contract_version,
+                stage_plan=stage_plan,
             )
             node_runs[node_id] = worker_run
             node_runs[gate["id"]] = gate_run
@@ -3728,7 +3799,9 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             # applies to a plain agent node.
             output_text, error, run_id = _upstream_output_text(graph, node_id, node_runs), None, None
         else:
-            ambient_meta, node_dataset = await _node_run_context(graph, node_id, workspace_id, owner_id)
+            ambient_meta, node_dataset = await _node_run_context(
+                graph, node_id, workspace_id, owner_id, stage_plan=stage_plan
+            )
             user_input = _build_user_input(
                 node,
                 graph,

@@ -60,6 +60,7 @@ from asaree.services.protocol_execution import (
     _node_run_context,
     _run_agent_node,
     resolve_available_agents,
+    stage_plan_spec,
 )
 from asaree.services.protocol_revisions import get_revision
 from asaree.services.protocol_runs import get_protocol_run, set_status, update_conversation, update_node_run
@@ -135,6 +136,7 @@ class AgentMessenger:
         graph: dict[str, Any],
         entry_agent_id: str,
         workspace_id: str | None = None,
+        stage_plan: Any = None,
     ) -> None:
         #: The *revision* graph -- capability: who each peer is and how it runs.
         #: Authorization reads the live draft graph instead, on every call.
@@ -143,6 +145,10 @@ class AgentMessenger:
         self._protocol_run_id = protocol_run_id
         self._owner_id = owner_id
         self._workspace_id = workspace_id
+        #: The experiment's declared workspace stage plan, carried so a peer
+        #: consulted mid-conversation seeds into the same pipeline as everyone
+        #: else. ``None`` means "whatever this cell already stages through".
+        self._stage_plan = stage_plan
         self._entry_agent_id = entry_agent_id
         self._started_at = time.monotonic()
         self._executions = 0
@@ -525,7 +531,9 @@ class AgentMessenger:
         # bare ambient meta: a consulted peer with a Dataset connector needs its
         # workspace seeded and its `data_path` bound before it can run a script,
         # exactly like any other node.
-        ambient_meta, _dataset = await _node_run_context(self._graph, to_agent_id, self._workspace_id, self._owner_id)
+        ambient_meta, _dataset = await _node_run_context(
+            self._graph, to_agent_id, self._workspace_id, self._owner_id, stage_plan=self._stage_plan
+        )
         output_text, error, run_id = await _run_agent_node(
             node,
             protocol_id=self._protocol_id,
@@ -567,6 +575,7 @@ async def execute_conversation(
     workspace_id: str | None,
     ambient_meta: dict[str, Any] | None = None,
     evaluation_metrics: Any = None,
+    stage_plan: Any = None,
 ) -> tuple[dict[str, Any], str]:
     """The conversation itself: seed the transcript, run the entry agent, map
     its outcome to a terminal conversation state, checkpoint.
@@ -598,6 +607,7 @@ async def execute_conversation(
         graph=graph,
         entry_agent_id=entry_agent_id,
         workspace_id=workspace_id,
+        stage_plan=stage_plan,
     )
     messenger.append(
         from_agent_id=USER_PARTICIPANT,
@@ -611,7 +621,9 @@ async def execute_conversation(
     await messenger.checkpoint()
 
     if ambient_meta is None:
-        ambient_meta, _dataset = await _node_run_context(graph, entry_agent_id, workspace_id, owner_id)
+        ambient_meta, _dataset = await _node_run_context(
+            graph, entry_agent_id, workspace_id, owner_id, stage_plan=stage_plan
+        )
 
     # The entry agent's turn is a turn like any other: without this, the peers
     # it consults would be recorded and authorized against an empty stack.
@@ -751,6 +763,7 @@ async def execute_supervisor_architecture(
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
     contract_version: int = DEFAULT_PROMPT_CONTRACT_VERSION,
+    stage_plan: Any = None,
 ) -> tuple[dict[str, Any], str]:
     """Run one cell as a supervisor dispatching to workers.
 
@@ -791,6 +804,7 @@ async def execute_supervisor_architecture(
         graph=graph,
         entry_agent_id=roles.supervisor,
         workspace_id=workspace_id,
+        stage_plan=stage_plan,
     )
     started_at = time.monotonic()
     deadline = _MAX_SUPERVISOR_TURN_DURATION.total_seconds() * roles.execution_budget
@@ -828,7 +842,7 @@ async def execute_supervisor_architecture(
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, {"status": "running"})
         ambient_meta, dataset = await _node_run_context(
-            graph, node_id, workspace_id, owner_id, slot_prefix=slot_prefix
+            graph, node_id, workspace_id, owner_id, slot_prefix=slot_prefix, stage_plan=stage_plan
         )
         prompt = _build_user_input(
             nodes[node_id],
@@ -1153,6 +1167,7 @@ async def run_conversation(protocol_run_id: uuid.UUID, *, entry_agent_id: str, u
         user_input=user_input,
         workspace_id=_compute_workspace_id(experiment_id, None, protocol_run_id),
         evaluation_metrics=evaluation_metrics,
+        stage_plan=stage_plan_spec(experiment.design_spec if experiment is not None else None),
     )
 
     async with get_session() as db:

@@ -11,6 +11,16 @@ the same on-disk format, the same way ASAREE itself depends on Motoro.
 from __future__ import annotations
 
 from . import provenance, staging
+from .stages import (
+    DEFAULT_STAGE_PLAN,
+    GATE_RULES,
+    PRESETS,
+    TABULAR_ML,
+    Stage,
+    StagePlan,
+    StagePlanError,
+    resolve_stage_plan,
+)
 from .context import (
     META_KEY_DATASET_NAMES,
     META_KEY_OWNER_ID,
@@ -49,6 +59,14 @@ from .workspace import (
 __all__ = [
     "provenance",
     "staging",
+    "DEFAULT_STAGE_PLAN",
+    "GATE_RULES",
+    "PRESETS",
+    "TABULAR_ML",
+    "Stage",
+    "StagePlan",
+    "StagePlanError",
+    "resolve_stage_plan",
     "META_KEY_DATASET_NAMES",
     "META_KEY_OWNER_ID",
     "META_KEY_WORKSPACE_ID",

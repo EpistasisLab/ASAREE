@@ -387,6 +387,75 @@ def test_stage_plan_spec_reads_the_declaration_and_defaults_to_none() -> None:
     assert pe.stage_plan_spec({"stage_plan": {"name": "x", "stages": _CUSTOM}}) == {"name": "x", "stages": _CUSTOM}
 
 
+def _staged_graph(*stage_servers: str, enabled: bool = True) -> dict[str, Any]:
+    """One agent per stage server, chained so the topological order is the
+    argument order -- the shape a staged pipeline canvas actually has."""
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    for i, server in enumerate(stage_servers):
+        agent = f"a{i}"
+        nodes.append({"id": agent, "type": "agent", "data": {"label": agent.upper(), "config": {}}})
+        nodes.append(
+            {
+                "id": f"t{i}",
+                "type": "mcp_tool",
+                "data": {"config": {"enabled": enabled, "server_name": server}},
+            }
+        )
+        edges.append({"source": f"t{i}", "target": agent, "sourceHandle": "tool", "targetHandle": "tool"})
+        if i:
+            edges.append({"source": f"a{i - 1}", "target": agent})
+    return {"nodes": nodes, "edges": edges}
+
+
+def test_a_spinal_shaped_canvas_derives_to_the_default_plan() -> None:
+    """The backward-compatibility contract, stated as a no-op. A canvas wiring
+    all three stage servers must derive to ``None``, not to an inline copy of
+    ``tabular_ml``: ``None`` is the same value that canvas resolved before
+    deriving existed, so nothing new lands in ``state.json``. See
+    tests/test_spinal_compat.py."""
+    assert pe.derive_stage_plan(_staged_graph("asaree-sklearn-dc", "asaree-sklearn-fte", "asaree-sklearn-fs")) is None
+
+
+def test_a_canvas_with_no_stage_server_derives_to_nothing() -> None:
+    """Every generic agent team. They never stage, so a derived plan would be a
+    pipeline for artifacts that are never produced."""
+    assert pe.derive_stage_plan({"nodes": [], "edges": []}) is None
+    assert pe.derive_stage_plan(_staged_graph("scikit-learn-mcp")) is None
+
+
+def test_a_partial_pipeline_derives_only_the_stages_it_wires() -> None:
+    """The bug deriving fixes. A canvas wiring DC and FS but no FTE used to get
+    the full triple regardless, so FS looked for a v2_fte version nothing had
+    accepted and the run stalled on a lineage error with no visible connection
+    to the wiring. Versions are renumbered by position so there is no gap."""
+    plan = pe.derive_stage_plan(_staged_graph("asaree-sklearn-dc", "asaree-sklearn-fs"))
+    assert plan is not None
+    assert [(s["id"], s["version_id"]) for s in plan["stages"]] == [("dc", "v1_dc"), ("fs", "v2_fs")]
+    # The preset's meaning for a stage it knows survives renumbering -- the same
+    # server writes the stage either way, so its gate still applies.
+    assert plan["stages"][0]["gate"] == {"missing": "none"}
+    assert plan["stages"][1]["fixed_input"] is True
+    resolve_stage_plan(plan)  # and the derived shape is one the core accepts
+
+
+def test_a_disabled_tool_node_is_not_a_stage() -> None:
+    """Disabling the node is how a user takes a stage out of the pipeline, so
+    the derived plan has to agree with the tool grant that reads the same flag."""
+    assert pe.derive_stage_plan(_staged_graph("asaree-sklearn-dc", enabled=False)) is None
+
+
+def test_a_declared_plan_wins_over_the_canvas() -> None:
+    """The SDK escape hatch. Deriving is how the GUI gets a plan, because there
+    is no field for one; a notebook that names a plan outright is describing a
+    pipeline the canvas could not express, so the canvas must not override it."""
+    graph = _staged_graph("asaree-sklearn-dc", "asaree-sklearn-fs")
+    assert pe.stage_plan_spec({"stage_plan": "tabular_ml"}, graph=graph) == "tabular_ml"
+    assert pe.stage_plan_spec({}, graph=graph) == pe.derive_stage_plan(graph)
+    # No graph at all (the notebook path) is still the default.
+    assert pe.stage_plan_spec({}) is None
+
+
 def test_a_malformed_plan_is_rejected_before_anything_runs() -> None:
     """Seeding failures are logged and swallowed inside a run, so a bad plan
     caught only there would look like a working experiment on the default

@@ -29,7 +29,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from asaree_workspace_core import WORKSPACE_ROOT, StagePlanError, dataset_slot, resolve_stage_plan
+from asaree_workspace_core import (
+    TABULAR_ML,
+    WORKSPACE_ROOT,
+    StagePlanError,
+    dataset_slot,
+    resolve_stage_plan,
+)
 from motoro.mcp.registry import get_registry
 from motoro.models.run import RunStatus
 from motoro.runner import create_agent, create_run, execute_run, get_agent_by_name, get_run, update_agent
@@ -80,6 +86,7 @@ from asaree.services.system_mcp_servers import (
     SCIKIT_LEARN_SERVER_NAME,
     SCRIPT_AGENT_TOOLS,
     SCRIPT_SERVER_NAME,
+    STAGE_WRITING_SERVERS,
     UNSPLIT_DATASET_AGENT_TOOLS,
     WORKSPACE_AGENT_TOOLS,
     WORKSPACE_SERVER_NAME,
@@ -475,17 +482,99 @@ def is_conversation_strategy(design_spec: dict[str, Any] | None) -> bool:
     return coordination_strategy_slug(design_spec) in _CONVERSATION_STRATEGIES
 
 
-def stage_plan_spec(design_spec: dict[str, Any] | None) -> Any:
-    """The workspace stage plan this experiment declares, or ``None`` for the default.
+def _derived_stage(stage_id: str, position: int) -> dict[str, Any]:
+    """One derived stage descriptor, keeping the preset's meaning where it has one.
+
+    A stage id the preset knows (``dc``/``fte``/``fs``) comes back with the
+    preset's label, gate and ``fixed_input`` intact -- those are the domain
+    invariants that make the stage worth gating at all, and the server writing
+    the stage is the same server either way. Only ``version_id`` is renumbered,
+    to this stage's actual position, so a canvas that wires DC and FS without
+    FTE produces ``v1_dc -> v2_fs`` rather than a gap.
+    """
+    known = next((stage for stage in TABULAR_ML.stages if stage.id == stage_id), None)
+    raw = known.as_dict() if known is not None else {"id": stage_id, "label": stage_id}
+    return {**raw, "version_id": f"v{position}_{stage_id}"}
+
+
+def derive_stage_plan(graph: dict[str, Any]) -> Any:
+    """The stage plan this canvas already describes, or ``None`` for the default.
+
+    A stage plan is not something a user should have to write down: the canvas
+    has already said which staged steps this experiment has, by which
+    stage-writing MCP servers it wires into its agents
+    (``system_mcp_servers.STAGE_WRITING_SERVERS``). Reading it back off the
+    wiring keeps the graph the single source of truth, the same way the
+    coordination strategies read their topology off it rather than off a second
+    declaration that can disagree.
+
+    Order is the agents' own pipeline order (:func:`_kahn_order`), because a
+    stage reads the accepted output of the stage before it and that ordering is
+    exactly what the canvas draws. The unvalidated walk, deliberately: this runs
+    against a half-wired draft too, and a canvas that isn't runnable yet should
+    say so through validation, not by making stage derivation raise.
+
+    Returns ``None`` -- meaning the default preset, byte for byte -- in the two
+    cases where deriving must change nothing:
+
+    * the canvas wires no stage server at all, which is every generic agent team
+      (they never stage, so the plan is irrelevant to them), and
+    * the derived stages are ``tabular_ml``'s exactly, which is the published
+      spinal canvas. Returning ``None`` rather than an equal-looking inline copy
+      is deliberate: it is the same value that canvas resolved before deriving
+      existed, so nothing is recorded in ``state.json`` and the on-disk format
+      cannot drift. See ``tests/test_spinal_compat.py``.
+
+    The case that is *not* a no-op is a partial pipeline. A canvas wiring DC and
+    FS but no FTE used to get the full triple regardless, so FS read a version
+    FTE never accepted and the run stalled on a lineage error the user had no
+    way to connect to the wiring. Now that canvas simply has two stages.
+    """
+    nodes, ordered, _ = _kahn_order(graph)
+    stage_ids: list[str] = []
+    for nid in ordered:
+        node = nodes[nid]
+        if node.get("type") != "agent":
+            continue
+        for edge in _edges_with_handle(graph, nid, "tool", direction="incoming"):
+            source = nodes.get(str(edge.get("source")))
+            if source is None or source.get("type") not in _MCP_TOOL_NODE_TYPES:
+                continue
+            config = (source.get("data") or {}).get("config") or {}
+            if not config.get("enabled", True):
+                continue
+            stage_id = STAGE_WRITING_SERVERS.get(str(config.get("server_name") or ""))
+            if stage_id is not None and stage_id not in stage_ids:
+                stage_ids.append(stage_id)
+    if not stage_ids or stage_ids == TABULAR_ML.ids:
+        return None
+    return {
+        "name": "canvas",
+        "stages": [_derived_stage(stage_id, i + 1) for i, stage_id in enumerate(stage_ids)],
+    }
+
+
+def stage_plan_spec(design_spec: dict[str, Any] | None, *, graph: dict[str, Any] | None = None) -> Any:
+    """The workspace stage plan for this run, or ``None`` for the default.
 
     Returned unresolved, on purpose: ``asaree_workspace_core.stages`` owns what a
     plan means (and rejects a malformed one), while this only knows where the
-    declaration lives. ``None`` is passed straight through to the workspace,
+    declaration comes from. ``None`` is passed straight through to the workspace,
     where it means "adopt whatever this cell already stages through" rather than
     "the default preset" -- so an experiment that never declared a plan behaves
     exactly as it did before plans existed.
+
+    Two sources, in this order. An explicit ``design_spec["stage_plan"]`` wins:
+    it is the SDK/notebook escape hatch for a pipeline the canvas cannot express,
+    and the only way to name a preset outright. Otherwise the plan is derived
+    from the canvas (:func:`derive_stage_plan`) -- which is how the GUI gets one,
+    since there is deliberately no stage-plan field in the Design tab for a user
+    to fill in.
     """
-    return (design_spec or {}).get("stage_plan") or None
+    declared = (design_spec or {}).get("stage_plan") or None
+    if declared is not None:
+        return declared
+    return derive_stage_plan(graph) if graph is not None else None
 
 
 def validate_stage_plan(design_spec: dict[str, Any] | None) -> None:
@@ -495,8 +584,13 @@ def validate_stage_plan(design_spec: dict[str, Any] | None) -> None:
     the first seeding call, which happens inside a run whose failure is logged
     and swallowed: a typo'd gate rule would otherwise silently give the whole
     experiment the default pipeline and look like it worked.
+
+    Only the *declared* plan is checked -- deliberately no graph argument. A
+    derived plan is built by :func:`derive_stage_plan` out of a fixed registry,
+    so it cannot carry a typo; the thing that can is the SDK escape hatch, and
+    that is what this guards.
     """
-    spec = stage_plan_spec(design_spec)
+    spec = (design_spec or {}).get("stage_plan") or None
     if spec is None:
         return
     try:
@@ -842,6 +936,35 @@ def _adjacency(
     return nodes, downstream, upstream
 
 
+def _kahn_order(graph: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[str], bool]:
+    """The dependency-order walk on its own, with no opinion about validity.
+
+    Split out of :func:`topological_order` for callers that only want to know
+    what order the canvas draws -- :func:`derive_stage_plan` reads a half-built
+    graph while the user is still wiring it, and a missing AI connection there
+    is a thing to report on the canvas, not a reason for stage derivation to
+    raise. Returns the node map, the walk, and whether every node was reached
+    (``False`` is the cycle signature); unreached nodes are appended in
+    declaration order so the walk always covers the graph.
+    """
+    nodes, downstream, upstream = _adjacency(graph)
+    in_degree = {nid: len(ups) for nid, ups in upstream.items()}
+    queue = [nid for nid, deg in in_degree.items() if deg == 0]
+    ordered: list[str] = []
+    while queue:
+        nid = queue.pop(0)
+        ordered.append(nid)
+        for nxt in downstream[nid]:
+            in_degree[nxt] -= 1
+            if in_degree[nxt] == 0:
+                queue.append(nxt)
+    complete = len(ordered) == len(nodes)
+    if not complete:
+        reached = set(ordered)
+        ordered.extend(nid for nid in nodes if nid not in reached)
+    return nodes, ordered, complete
+
+
 def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) -> list[dict[str, Any]]:
     """Kahn's algorithm. Raises :class:`ProtocolValidationError` on an empty
     graph, a cycle (any node Kahn's algorithm can't reach stays with a
@@ -860,26 +983,12 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
     unreachable are appended in declaration order, since with the sort's
     premise gone there is no order left to claim.
     """
-    nodes, downstream, upstream = _adjacency(graph)
+    _, downstream, _ = _adjacency(graph)
+    nodes, ordered, complete = _kahn_order(graph)
     if not nodes:
         raise ProtocolValidationError("This protocol has no nodes.")
-
-    in_degree = {nid: len(ups) for nid, ups in upstream.items()}
-    queue = [nid for nid, deg in in_degree.items() if deg == 0]
-    ordered: list[str] = []
-    while queue:
-        nid = queue.pop(0)
-        ordered.append(nid)
-        for nxt in downstream[nid]:
-            in_degree[nxt] -= 1
-            if in_degree[nxt] == 0:
-                queue.append(nxt)
-
-    if len(ordered) != len(nodes):
-        if require_acyclic:
-            raise ProtocolValidationError("This protocol's graph has a cycle -- it can't be run in dependency order.")
-        reached = set(ordered)
-        ordered.extend(nid for nid in nodes if nid not in reached)
+    if not complete and require_acyclic:
+        raise ProtocolValidationError("This protocol's graph has a cycle -- it can't be run in dependency order.")
 
     for nid, node in nodes.items():
         if node.get("type") != "critic_gate":
@@ -3487,7 +3596,7 @@ async def _run_single_node(
     evaluation_metrics = (experiment.design_spec or {}).get("metrics") if experiment is not None else None
     single_design_spec = experiment.design_spec if experiment is not None else None
     ambient_meta, node_dataset = await _node_run_context(
-        graph, node["id"], workspace_id, owner_id, stage_plan=stage_plan_spec(single_design_spec)
+        graph, node["id"], workspace_id, owner_id, stage_plan=stage_plan_spec(single_design_spec, graph=graph)
     )
     user_input = _build_user_input(
         node,
@@ -3615,7 +3724,10 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
     # at each prompt-building site would let an edit made mid-run produce a run
     # whose earlier nodes used one format and its later nodes another.
     contract_version = prompt_contract_version(design_spec)
-    stage_plan = stage_plan_spec(pinned_spec)
+    # Derived from the *pinned* graph, not the live canvas, for the same reason
+    # the prompt contract is resolved once here: a canvas edit mid-run must not
+    # change which stages this run's later nodes are staging through.
+    stage_plan = stage_plan_spec(pinned_spec, graph=graph)
 
     async with get_session() as db:
         await set_status(db, protocol_run_id, status="running")

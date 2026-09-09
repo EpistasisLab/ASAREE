@@ -40,11 +40,7 @@ import {
   type DesignMetric,
   type Experiment,
   type MetricScoringConfig,
-  type StagePlanSpec,
-  type StagePlanStage,
 } from '@/types/experiments'
-import { isDefaultStagePlan, stagePlanDeclaration, stagePlanIssues, stagesOf } from '@/lib/stagePlan'
-import { StagePlanEditor } from './StagePlanEditor'
 import { LLM_PROVIDER_CATALOG, LLM_PROVIDER_LABELS, type LLMProvider } from '@/types/llmSettings'
 
 const AUTOSAVE_DELAY_MS = 800
@@ -52,7 +48,6 @@ const AUTOSAVE_DELAY_MS = 800
 const REGENERATION_REASON_LABELS: Record<string, string> = {
   no_design_generated: 'No cells have been generated for this design yet.',
   coordination_strategy_changed: 'The coordination strategy changed, so every cell would run differently.',
-  stage_plan_changed: 'The workspace stages changed, so every cell would run a different pipeline.',
   design_matrix_changed: 'The factors or replicate count changed.',
   cells_drifted: 'Some existing cells no longer match this design.',
 }
@@ -65,17 +60,11 @@ const REGENERATION_REASON_LABELS: Record<string, string> = {
 // date. The demand for a regenerate comes from the materialized data rather
 // than from a local draft diff -- which is also what makes it work on an
 // experiment with no factorial matrix at all.
-//
-// The stage plan rides along for the same reason and with the same
-// consequence: `get_design_impact` compares it against the revision its cells
-// were staged under, so saving it early is what surfaces "cells are out of
-// date" rather than hiding the mismatch until a run fails.
 type MetadataDraft = {
   hypothesis: string
   randomizationSeed: number | null
   metrics: DesignMetric[]
   coordinationSlug: CoordinationStrategySlug
-  stagePlan: StagePlanSpec | undefined
 }
 
 type MetadataSave = {
@@ -559,16 +548,7 @@ export function DesignTab({
   const [pendingStrategy, setPendingStrategy] = useState<{ slug: CoordinationStrategySlug; issues: string[] } | null>(
     null,
   )
-  // Two pieces of state rather than one nullable plan: the stages stay editable
-  // while the preset is selected (so switching to Custom and back doesn't
-  // discard an in-progress edit, and the preset can be listed read-only from
-  // the same array), and `stagePlanDeclaration` collapses them into the one
-  // value the server stores -- `undefined` for the preset, never an inline copy
-  // of it. See lib/stagePlan.ts.
-  const [stagePlanCustom, setStagePlanCustom] = useState(() => !isDefaultStagePlan(experiment.design_spec))
-  const [stagePlanStages, setStagePlanStages] = useState<StagePlanStage[]>(() => stagesOf(experiment.design_spec))
-  const stagePlan = stagePlanDeclaration(stagePlanCustom, stagePlanStages)
-  const metadataDraft: MetadataDraft = { hypothesis, randomizationSeed, metrics, coordinationSlug, stagePlan }
+  const metadataDraft: MetadataDraft = { hypothesis, randomizationSeed, metrics, coordinationSlug }
   const metadataDraftKey = JSON.stringify(metadataDraft)
   const matrixDraftKey = JSON.stringify({ factors, replicates })
   const latestMetadataDraftKey = useRef(metadataDraftKey)
@@ -587,8 +567,6 @@ export function DesignTab({
     setRandomizationSeed(experiment.design_spec?.randomization_seed ?? null)
     setMetrics(normalizeDesignMetrics(experiment.design_spec?.metrics))
     setCoordinationSlug(experiment.design_spec?.coordination_strategy?.slug ?? 'sequential')
-    setStagePlanCustom(!isDefaultStagePlan(experiment.design_spec))
-    setStagePlanStages(stagesOf(experiment.design_spec))
   }, [experiment])
 
   function designDraft() {
@@ -607,11 +585,6 @@ export function DesignTab({
         randomization_seed: randomizationSeed,
         metrics: metrics.filter((m) => m.name.trim() !== ''),
         coordination_strategy: { slug: coordinationSlug, params: experiment.design_spec?.coordination_strategy?.params ?? {} },
-        // Explicitly null rather than omitted when the preset is selected: the
-        // spread above carries the stored plan forward, and an undefined key
-        // vanishes from the JSON body, so switching back from Custom has to
-        // say so to clear it.
-        stage_plan: stagePlan ?? null,
       },
     }
   }
@@ -630,7 +603,6 @@ export function DesignTab({
           randomization_seed: draft.randomizationSeed,
           metrics: draft.metrics.filter((metric) => metric.name.trim() !== ''),
           coordination_strategy: { slug: draft.coordinationSlug, params: fresh.design_spec?.coordination_strategy?.params ?? {} },
-          stage_plan: draft.stagePlan ?? null,
         },
       })
     },
@@ -678,12 +650,7 @@ export function DesignTab({
   const draftGraph = graphQuery.data
     ? ({ nodes: graphQuery.data.nodes, edges: graphQuery.data.edges } as unknown as ProtocolGraph)
     : undefined
-  const hasDatasetNode = (graphQuery.data?.nodes ?? []).some((node) => node.type === 'dataset')
   const unboundFactors = unboundFactorNames(experiment.design_spec, draftGraph)
-  // Blocks generation for the same reason an unbound factor does: the backend
-  // rejects a malformed plan at plan/publish/run time, and a design that can't
-  // run is not worth materializing cells for.
-  const stageIssues = stagePlanCustom ? stagePlanIssues(stagePlanStages) : []
   const impact = impactQuery.data
 
   // A design-time mirror of the backend's own strategy validation, so an
@@ -706,19 +673,13 @@ export function DesignTab({
     setCoordinationSlug(next)
   }
 
-  // Compared as the stored declaration rather than as the local pair, so
-  // switching to Custom and back -- or an inline plan that happens to be the
-  // preset -- isn't a change.
-  const stagePlanChanged =
-    JSON.stringify(stagePlan ?? null) !== JSON.stringify(stagePlanDeclaration(!isDefaultStagePlan(experiment.design_spec), stagesOf(experiment.design_spec)) ?? null)
   const isDirty =
     hypothesis !== (experiment.hypothesis ?? '') ||
     JSON.stringify(factors) !== JSON.stringify(experiment.design_spec?.factors ?? []) ||
     replicates !== (experiment.design_spec?.replicates ?? 1) ||
     randomizationSeed !== (experiment.design_spec?.randomization_seed ?? null) ||
     JSON.stringify(metrics) !== JSON.stringify(experiment.design_spec?.metrics ?? []) ||
-    coordinationSlug !== (experiment.design_spec?.coordination_strategy?.slug ?? 'sequential') ||
-    stagePlanChanged
+    coordinationSlug !== (experiment.design_spec?.coordination_strategy?.slug ?? 'sequential')
   const matrixDraftChanged =
     JSON.stringify(factors) !== JSON.stringify(experiment.design_spec?.factors ?? []) ||
     replicates !== (experiment.design_spec?.replicates ?? 1)
@@ -726,8 +687,7 @@ export function DesignTab({
     hypothesis !== (experiment.hypothesis ?? '') ||
     randomizationSeed !== (experiment.design_spec?.randomization_seed ?? null) ||
     JSON.stringify(metrics) !== JSON.stringify(experiment.design_spec?.metrics ?? []) ||
-    coordinationSlug !== (experiment.design_spec?.coordination_strategy?.slug ?? 'sequential') ||
-    stagePlanChanged
+    coordinationSlug !== (experiment.design_spec?.coordination_strategy?.slug ?? 'sequential')
   const canGenerate = validFactors.length > 0 || impact?.regeneration_required === true
   const needsDesignUpdate = matrixDraftChanged || impact?.regeneration_required === true
   const metadataSaveKey = `${metadataDraftKey}:${matrixDraftKey}`
@@ -882,30 +842,6 @@ export function DesignTab({
         </DialogContent>
       </Dialog>
 
-      {/* Only shown when a Dataset node is on the canvas: nothing else creates
-          a workspace, so on an experiment with no dataset this section would
-          be a pipeline for a thing that never gets staged. */}
-      {hasDatasetNode && (
-        <div className="space-y-1.5">
-          <Label className="flex items-center gap-1.5">
-            Workspace stages
-            <InfoTooltip>
-              The staged pipeline this experiment's dataset workspaces run through. Each stage gives the agent a
-              scratch area to iterate in, then a promotion gate that has to pass before its work becomes a versioned
-              artifact the next stage reads. A cell's pipeline is fixed the first time its workspace is opened, so
-              changing this needs the cells regenerated.
-            </InfoTooltip>
-          </Label>
-          <StagePlanEditor
-            custom={stagePlanCustom}
-            stages={stagePlanStages}
-            disabled={isLocked}
-            onCustomChange={setStagePlanCustom}
-            onStagesChange={setStagePlanStages}
-          />
-        </div>
-      )}
-
       <div className="space-y-1.5">
         <Label className="flex items-center gap-1.5">
           Experimental factors and levels
@@ -1025,8 +961,7 @@ export function DesignTab({
             generateMutation.isPending ||
             isAutosavingMetadata ||
             !canGenerate ||
-            unboundFactors.length > 0 ||
-            stageIssues.length > 0
+            unboundFactors.length > 0
           }
           onClick={() => generateMutation.mutate()}
         >

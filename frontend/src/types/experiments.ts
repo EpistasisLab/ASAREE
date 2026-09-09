@@ -114,85 +114,6 @@ export const COORDINATION_STRATEGY_CATALOG: {
 ]
 
 
-// The staged pipeline a dataset workspace runs through. Mirrors
-// asaree_workspace_core.stages -- that module owns what a plan means and is the
-// only thing that validates one; this is the shape the Design tab edits.
-//
-// `gate` is a CLOSED schema, not an expression language: the only keys are the
-// ones in STAGE_GATE_RULES below, and an unknown key or value is rejected when
-// the plan resolves. An empty gate is legitimate (only the two universal
-// train/test consistency checks apply), which is what makes non-tabular staged
-// work possible at all.
-export interface StagePlanStage {
-  id: string
-  label: string
-  // Names the version this stage's accepted output becomes in the workspace's
-  // lineage. Derived from position + id (`v2_annotate`) rather than typed --
-  // it's a path component on disk, and a plan is fixed once a cell has been
-  // staged through it.
-  version_id?: string
-  // Whether the stage gets a scratch area an agent iterates in before
-  // promoting. Every built-in stage does; false means write-once.
-  scratch?: boolean
-  // True for a stage that re-reads one unchanging input pair instead of
-  // chaining off the previous stage's working copy (the preset's `fs`), so its
-  // tools can be called in any order.
-  fixed_input?: boolean
-  gate?: Record<string, string>
-}
-
-export interface StagePlanSpec {
-  name: string
-  stages: StagePlanStage[]
-}
-
-// The one built-in preset, and the default when nothing is declared: the
-// three-stage tabular-ML pipeline the platform shipped with. Immutable on the
-// backend -- picking "Custom" copies these stages into an inline plan rather
-// than editing the preset, because a published result depends on what its
-// stages meant.
-export const TABULAR_ML_STAGES: StagePlanStage[] = [
-  { id: 'dc', label: 'Data cleaning', version_id: 'v1_dc', gate: { missing: 'none' } },
-  { id: 'fte', label: 'Feature transformation & engineering', version_id: 'v2_fte', gate: {} },
-  { id: 'fs', label: 'Feature selection', version_id: 'v3_fs', fixed_input: true, gate: { columns: 'subset_of_input' } },
-]
-
-// Every gate rule the backend accepts, as `rule:value` pairs. Kept in the same
-// order the checks run in so the editor reads like the gate report an agent
-// gets back. The two `columns` rules are mutually exclusive (same key).
-export const STAGE_GATE_RULES: {
-  key: string
-  value: string
-  label: string
-  description: string
-}[] = [
-  {
-    key: 'missing',
-    value: 'none',
-    label: 'No missing values',
-    description: "Rejects a promotion that leaves any NaN in either partition -- the preset's data-cleaning gate.",
-  },
-  {
-    key: 'columns',
-    value: 'subset_of_input',
-    label: 'Columns are a subset of the input',
-    description:
-      "Rejects a column this stage's own input never had, so a selection stage can't invent features while claiming to select them.",
-  },
-  {
-    key: 'columns',
-    value: 'non_increasing',
-    label: "Column count doesn't grow",
-    description: 'Looser than the subset rule: allows renames and derived columns, but not a widening matrix.',
-  },
-  {
-    key: 'rows',
-    value: 'preserved',
-    label: 'Row count preserved',
-    description: 'Rejects dropping or adding rows -- for a stage that annotates or transforms in place.',
-  },
-]
-
 export interface DesignSpec {
   factors?: DesignFactor[]
   // Copies per factor-level combination (default 1 when absent).
@@ -204,11 +125,13 @@ export interface DesignSpec {
   // -- lets the Design tab show "Metrics" before any cell has run.
   metrics?: DesignMetric[]
   coordination_strategy?: CoordinationStrategyConfig
-  // Which staged pipeline this experiment's dataset workspaces use. Absent (or
-  // the string `'tabular_ml'`) means the built-in preset; anything else is an
-  // inline plan. Only meaningful when the canvas has a Dataset node -- nothing
-  // else creates a workspace.
-  stage_plan?: string | StagePlanSpec | null
+  // Which staged pipeline this experiment's dataset workspaces use. There is
+  // deliberately no UI for this: a canvas-built experiment leaves it absent and
+  // the backend derives the plan from which stage-writing MCP servers the
+  // canvas wires. It stays declared here (untyped -- the shape is
+  // asaree_workspace_core's, not the GUI's) purely so a spread that rebuilds
+  // design_spec carries an SDK-declared plan through instead of erasing it.
+  stage_plan?: unknown
   // Which version of the prompt format this experiment's agents are given
   // (absent == v1). Deliberately not editable anywhere in the UI: it's stamped
   // at creation so that improving the prompt can't change an already-published
@@ -500,13 +423,11 @@ export interface DesignImpact {
   retained_replicate_count: number
   removed_replicate_count: number
   // Why an update is needed, not just that it is. 'coordination_strategy_changed'
-  // and 'stage_plan_changed' are the reasons the counts above can't express --
-  // each adds and removes no cells, so on its own it reads as "no change"
-  // beside the banner.
+  // is the reason the counts above can't express -- it adds and removes no
+  // cells, so on its own it reads as "no change" beside the banner.
   regeneration_reasons: (
     | 'no_design_generated'
     | 'coordination_strategy_changed'
-    | 'stage_plan_changed'
     | 'design_matrix_changed'
     | 'cells_drifted'
   )[]

@@ -24,7 +24,6 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from asaree_workspace_core import StagePlanError, resolve_stage_plan
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
@@ -187,26 +186,14 @@ def material_design_spec(design_spec: dict[str, Any] | None) -> dict[str, Any]:
         # parallelism, budgets) without changing which strategy ran, and
         # retiring every scored cell over a knob would be punitive.
         #
-        # Same reasoning as the strategy, one step further: the stage plan
-        # decides which staged artifacts a cell's workspace even has, so cells
-        # staged through two different pipelines are not comparable. Resolved
-        # rather than compared raw so absent, ``"tabular_ml"`` and an inline
-        # copy of the preset are all the same declaration.
-        "stage_plan": _material_stage_plan(spec),
+        # `stage_plan` is excluded too, for a different reason: there is no GUI
+        # field for it, so on every canvas-built experiment it is derived from
+        # the wiring at run time (``protocol_execution.derive_stage_plan``) and
+        # is not in ``design_spec`` at all -- comparing it here would compare
+        # two absent values forever. What remains is the SDK escape hatch, and
+        # the canvas rewiring that really does change the pipeline already trips
+        # a regeneration through the factor bindings it moves.
     }
-
-
-def _material_stage_plan(spec: dict[str, Any]) -> Any:
-    """The declared stage plan, normalized for comparison.
-
-    A malformed plan is returned as-is instead of raising: this feeds a read-only
-    impact endpoint, and ``validate_stage_plan`` is what refuses one at
-    publish/plan/run time with an error the user can act on.
-    """
-    try:
-        return resolve_stage_plan(spec.get("stage_plan") or None).as_dict()
-    except StagePlanError:
-        return spec.get("stage_plan")
 
 
 def _planned_replicates(factors: list[dict[str, Any]], replicates: int) -> list[tuple[str, dict[str, Any]]]:
@@ -270,9 +257,7 @@ async def get_design_impact(
     # cell-regeneration reason when there are no generated cells.
     if bool(material["factors"]) and current_material["coordination_strategy"] != material["coordination_strategy"]:
         reasons.append("coordination_strategy_changed")
-    if bool(material["factors"]) and current_material["stage_plan"] != material["stage_plan"]:
-        reasons.append("stage_plan_changed")
-    _executional = {"coordination_strategy", "stage_plan"}
+    _executional = {"coordination_strategy"}
     if {k: v for k, v in current_material.items() if k not in _executional} != {
         k: v for k, v in material.items() if k not in _executional
     }:

@@ -133,6 +133,27 @@ SYSTEM_MCP_SERVERS: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
+# Which workspace stage each bundled stage-writing server produces -- its own
+# module-level ``STAGE`` constant, mirrored here.
+#
+# This is what lets a canvas declare its own pipeline without anybody typing it
+# out: the stage names were never the user's to choose, because each of these
+# servers hardcodes the one stage it writes and refuses any other
+# (``open_workspace(..., stage='dc')``). So the honest reading of "which stages
+# does this experiment have" is "which of these servers does the canvas wire",
+# and ``protocol_execution.derive_stage_plan`` is what asks it.
+#
+# Mirrored rather than imported because the executor has to answer that question
+# before any server subprocess is spawned. Deliberately only the three that
+# stage: eda/model/stats read a workspace without producing a version, so they
+# are not steps in the lineage.
+STAGE_WRITING_SERVERS: Final[dict[str, str]] = {
+    "asaree-sklearn-dc": "dc",
+    "asaree-sklearn-fte": "fte",
+    "asaree-sklearn-fs": "fs",
+}
+
+
 def command_for(module: str) -> str:
     """The stored ``command`` for a bundled server module.
 

@@ -8,19 +8,25 @@ for publication, so its behavior is a **published result**, not an
 implementation detail: a reviewer re-running it must get what the paper says.
 
 Every assertion here therefore pins something a *later* change would otherwise
-alter silently. In particular ``test_every_contract_version_is_pinned_byte_for_byte``
-pins the assembled prompt text byte-for-byte, because the prompt is the one
-input to a run that no revision pins (``ProtocolRun`` already pins
-``design_revision_id`` and ``protocol_revision_id``) -- so an obviously-good
-improvement to ``_build_user_input`` would change published numbers with
-nothing failing to stop it. It pins *every* registered version, not just v1:
-a format nobody can regenerate is only frozen while somebody remembers it is.
+alter silently. In particular ``test_the_legacy_prompt_is_pinned_byte_for_byte``
+pins the assembled prompt text, because the prompt is the one input to a run
+that no revision pins (``ProtocolRun`` already pins ``design_revision_id`` and
+``protocol_revision_id``) -- so an obviously-good improvement to
+``_build_user_input`` would change published numbers with nothing failing to
+stop it.
 
-**Rule for changing a golden value here:** don't. A phase that needs the
-assembled prompt to change keeps these assertions as the v1 contract and adds
-its new output under an explicit ``prompt_contract_version``, so the diff shows
-both formats. Editing a golden string to make a test pass silently retracts the
-paper's reproducibility claim.
+**Rule for changing a golden value here:** don't -- with one stated exception.
+The legacy golden is a **contract**: it is the text that produced the paper's
+numbers, and editing it to make a test pass silently retracts the
+reproducibility claim. A change that needs the assembled prompt to move belongs
+in the *current* contract, which is a separate format the spinal experiment
+never selects.
+
+The current golden is the exception, and it is a **snapshot**, not a contract.
+Nothing published runs under it, so it is expected to change while the handoff
+design is built out; it exists so those changes arrive as a reviewable diff
+instead of silently. Updating it is legitimate. Updating it without reading it
+is not.
 """
 
 from __future__ import annotations
@@ -33,7 +39,11 @@ from typing import Any
 import pytest
 
 from asaree.services import protocol_execution as pe
-from asaree.services.prompt_contract import prompt_contract_version
+from asaree.services.prompt_contract import (
+    CURRENT_PROMPT_CONTRACT,
+    LEGACY_PROMPT_CONTRACT,
+    prompt_contract_version,
+)
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
     find_gated_pairs,
@@ -44,7 +54,7 @@ from asaree.services.protocol_execution import (
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "spinal_graph.json"
 
-# One assembled prompt per contract version, byte-for-byte. Kept as files
+# One assembled prompt per stored contract, byte-for-byte. Kept as files
 # rather than string literals only because the spinal agents' task_brief is
 # ~1.6KB of JSON: inlining it twice would bury the assertions it sits between.
 # A golden here is edited by hand or not at all -- there is deliberately no
@@ -271,9 +281,9 @@ def test_the_upstream_context_block_is_unchanged(graph: dict[str, Any]) -> None:
     ``[{node_id}]: {output}`` under a bare "Upstream context:" header is how
     every handoff in the published pipeline was framed. The node id is opaque
     and naming the sending agent instead is plainly better -- which is exactly
-    why this is pinned: that improvement must arrive as
-    ``prompt_contract_version`` 2 with the spinal experiment left on 1, not as
-    an edit to this format.
+    why this is pinned: that improvement had to arrive as the *current*
+    contract with the spinal experiment left on the legacy one, not as an edit
+    to this format.
     """
     dc_gate_id = _AGENTS[0][2]  # Critic (DC) -- FTE's actual upstream, not SF-DC
     fte_id = _AGENTS[1][0]
@@ -282,75 +292,91 @@ def test_the_upstream_context_block_is_unchanged(graph: dict[str, Any]) -> None:
     assert f"Upstream context:\n[{dc_gate_id}]: DC accepted v1_dc." in text
 
 
-def test_the_spinal_experiment_resolves_to_v1(graph: dict[str, Any]) -> None:
+def test_the_spinal_experiment_resolves_to_the_legacy_contract(graph: dict[str, Any]) -> None:
     """The pin itself. The spinal experiment's ``design_spec`` predates
-    ``prompt_contract_version``, so what actually keeps it on v1 is the absent
-    key resolving to 1 -- not a value anybody wrote."""
-    assert prompt_contract_version(None) == 1
-    assert prompt_contract_version({"factors": [], "replicates": 3}) == 1
+    ``prompt_contract_version``, so what actually keeps it on the frozen format
+    is the absent key resolving to it -- not a value anybody wrote."""
+    assert prompt_contract_version(None) == LEGACY_PROMPT_CONTRACT
+    assert prompt_contract_version({"factors": [], "replicates": 3}) == LEGACY_PROMPT_CONTRACT
 
 
-def test_v2_would_have_changed_this_prompt_which_is_why_it_is_a_new_version(graph: dict[str, Any]) -> None:
-    """The counterfactual, asserted against the real graph: the improvement
-    that v2 makes is not cosmetic on this pipeline -- it rewrites the label of
-    every handoff in it. Had it shipped as an edit rather than a version, every
-    published number would have come from a different prompt."""
+def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, Any]) -> None:
+    """The counterfactual, asserted against the real graph: the improvement the
+    current contract makes is not cosmetic on this pipeline -- it rewrites the
+    label of every handoff in it. Had it shipped as an edit to the frozen format
+    rather than as a second one, every published number would have come from a
+    different prompt."""
     dc_gate_id = _AGENTS[0][2]
     fte_id = _AGENTS[1][0]
     node_runs = {dc_gate_id: {"status": "completed", "output_text": "DC accepted v1_dc."}}
-    v1 = _prompt(graph, fte_id, node_runs=node_runs)
-    v2 = _prompt(graph, fte_id, node_runs=node_runs, prompt_contract_version=2)
-    assert v1 != v2
+    legacy = _prompt(graph, fte_id, node_runs=node_runs)
+    current = _prompt(graph, fte_id, node_runs=node_runs, prompt_contract_version=CURRENT_PROMPT_CONTRACT)
+    assert legacy != current
     gate_label = next(n["data"]["label"] for n in graph["nodes"] if n["id"] == dc_gate_id)
-    assert f"Upstream context:\n[{gate_label}]: DC accepted v1_dc." in v2
+    assert f"Upstream context:\n[{gate_label}]: DC accepted v1_dc." in current
     # And only that block moved -- the Dataset/Script cues are tool-usage
-    # instructions, not part of what a version freezes.
-    assert v1.replace(f"[{dc_gate_id}]", f"[{gate_label}]") == v2
+    # instructions, not part of what either contract freezes.
+    assert legacy.replace(f"[{dc_gate_id}]", f"[{gate_label}]") == current
 
 
-# The node the version goldens below are captured on, and the run state they
-# see. SF-FTE exercises every version-sensitive part of the assembly at once: a
+# The node the goldens below are captured on, and the run state they see.
+# SF-FTE exercises every contract-sensitive part of the assembly at once: a
 # ``goal`` fallback seed, a real upstream block (its upstream is the DC gate,
-# which is precisely where v1 and v2 disagree), and a wired Dataset connector.
+# which is precisely where the two contracts disagree), and a wired Dataset
+# connector.
 _GOLDEN_NODE_ID = _AGENTS[1][0]
 _GOLDEN_NODE_RUNS = {_AGENTS[0][2]: {"status": "completed", "output_text": "DC accepted v1_dc."}}
 
+#: Stored contract -> the golden file holding its assembled prompt. Kept beside
+#: the builder registry rather than derived from it so that adding a contract
+#: without deciding what its golden is called fails loudly.
+_GOLDEN_NAMES = {LEGACY_PROMPT_CONTRACT: "legacy", CURRENT_PROMPT_CONTRACT: "current"}
 
-@pytest.mark.parametrize("version", sorted(pe._UPSTREAM_CONTEXT_BUILDERS))
-def test_every_contract_version_is_pinned_byte_for_byte(graph: dict[str, Any], version: int) -> None:
-    """An absolute anchor per registered version, and the thing that forces the
-    next one to get an anchor too.
 
-    v1 was already pinned in pieces above. v2 was pinned only *relatively*, by
-    the counterfactual right before this one -- an assertion that genuinely
-    proves v2 changes exactly one thing, but that describes v2 as "v1 with the
-    labels swapped". That description stops being true the moment a v3 exists
-    and the shared assembly around the upstream block grows a section: an edit
-    that leaked into v2's output would keep the counterfactual green as long as
-    it leaked into v1's as well. Both assertions therefore stay -- the golden
-    says what each version *is*, the counterfactual says what separates them.
-
-    Parametrizing over the builder registry rather than over a hand-written
-    list is the point: adding a version to ``_UPSTREAM_CONTEXT_BUILDERS``
-    without capturing its prompt fails here, so pinning a new format is not
-    something a reviewer has to remember to ask for.
-    """
-    golden = _GOLDEN_PROMPTS / f"spinal_fte_v{version}.txt"
-    assert golden.exists(), (
-        f"prompt contract v{version} is registered but has no golden. Capture the assembled "
-        f"prompt for {_GOLDEN_NODE_ID} into {golden}, and READ IT before committing -- a golden "
-        "is a claim about what the prompt should be, not a snapshot of what it happens to be."
-    )
-    actual = _prompt(graph, _GOLDEN_NODE_ID, node_runs=_GOLDEN_NODE_RUNS, prompt_contract_version=version)
+def _assert_golden(graph: dict[str, Any], contract: int) -> None:
+    golden = _GOLDEN_PROMPTS / f"spinal_fte_{_GOLDEN_NAMES[contract]}.txt"
+    actual = _prompt(graph, _GOLDEN_NODE_ID, node_runs=_GOLDEN_NODE_RUNS, prompt_contract_version=contract)
     assert actual == golden.read_text()
 
 
-def test_no_golden_outlives_the_version_it_pins() -> None:
-    """The other direction: a golden left behind for a version that was removed
-    from the registry is asserting nothing, and reads like coverage that isn't
-    there."""
-    on_disk = {int(p.stem.rsplit("_v", 1)[1]) for p in _GOLDEN_PROMPTS.glob("spinal_fte_v*.txt")}
-    assert on_disk == set(pe._UPSTREAM_CONTEXT_BUILDERS)
+def test_the_legacy_prompt_is_pinned_byte_for_byte(graph: dict[str, Any]) -> None:
+    """The reproducibility guarantee, and the reason this file exists.
+
+    This is a **contract**: the exact text the published pipeline's agents were
+    given. If it fails, either the assembly changed under the frozen format --
+    which is the bug this whole module exists to catch -- or somebody edited the
+    golden, which retracts the paper's reproducibility claim. Neither is fixed
+    by updating this file.
+    """
+    _assert_golden(graph, LEGACY_PROMPT_CONTRACT)
+
+
+def test_the_current_prompt_matches_its_recorded_snapshot(graph: dict[str, Any]) -> None:
+    """A change-detector, **not** a contract -- the one place in this file where
+    updating the golden is a legitimate move.
+
+    Nothing published runs under the current contract, so it is free to evolve
+    while the handoff design is built out. What it is not free to do is evolve
+    *unnoticed*: this pins it so an intended prompt change arrives as a visible
+    diff in review rather than as a silent behavior shift nobody looked at.
+
+    Updating it is fine. Updating it without reading it is not.
+    """
+    _assert_golden(graph, CURRENT_PROMPT_CONTRACT)
+
+
+def test_every_registered_contract_has_a_golden() -> None:
+    """What stops a third contract from arriving unpinned.
+
+    Restoring a real version ladder at release means adding entries to
+    ``_UPSTREAM_CONTEXT_BUILDERS``; each one needs a golden and a test that says
+    which kind it is. Asserting both directions also catches a golden left
+    behind for a contract that was removed, which reads like coverage that is
+    not there.
+    """
+    assert set(_GOLDEN_NAMES) == set(pe._UPSTREAM_CONTEXT_BUILDERS)
+    on_disk = {p.stem.rsplit("_", 1)[1] for p in _GOLDEN_PROMPTS.glob("spinal_fte_*.txt")}
+    assert on_disk == set(_GOLDEN_NAMES.values())
 
 
 def test_an_upstream_node_with_no_output_contributes_nothing(graph: dict[str, Any]) -> None:

@@ -49,7 +49,7 @@ from motoro.engine.ports import AgentReply
 from asaree.models.database import get_session
 from asaree.services.dataset_workspaces import head_data_locator
 from asaree.services.deadline import deadlines_paused
-from asaree.services.prompt_contract import DEFAULT_PROMPT_CONTRACT_VERSION
+from asaree.services.prompt_contract import LEGACY_PROMPT_CONTRACT
 from asaree.services.protocol_execution import (
     _AGENT_CANCELLED,
     SupervisorRoles,
@@ -760,7 +760,7 @@ async def execute_supervisor_architecture(
     parallel_workers: bool = True,
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
-    contract_version: int = DEFAULT_PROMPT_CONTRACT_VERSION,
+    contract_version: int = LEGACY_PROMPT_CONTRACT,
     stage_plan: Any = None,
 ) -> tuple[dict[str, Any], str]:
     """Run one cell as a supervisor dispatching to workers.

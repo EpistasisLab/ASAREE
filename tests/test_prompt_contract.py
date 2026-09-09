@@ -14,8 +14,8 @@ from typing import Any
 
 from asaree.api.experiments import _preserved_prompt_contract_version
 from asaree.services.prompt_contract import (
-    DEFAULT_PROMPT_CONTRACT_VERSION,
-    LATEST_PROMPT_CONTRACT_VERSION,
+    CURRENT_PROMPT_CONTRACT,
+    LEGACY_PROMPT_CONTRACT,
     prompt_contract_version,
 )
 from asaree.services.protocol_execution import _build_user_input
@@ -70,8 +70,8 @@ def test_the_default_is_never_moved_off_v1() -> None:
     """A guard on the constant itself: bumping this would retroactively change
     every pre-versioning experiment, which is the one thing this module exists
     to prevent."""
-    assert DEFAULT_PROMPT_CONTRACT_VERSION == 1
-    assert LATEST_PROMPT_CONTRACT_VERSION >= DEFAULT_PROMPT_CONTRACT_VERSION
+    assert LEGACY_PROMPT_CONTRACT == 1
+    assert CURRENT_PROMPT_CONTRACT >= LEGACY_PROMPT_CONTRACT
 
 
 # ----------------------------------------------------------------------

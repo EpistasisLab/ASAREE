@@ -9,14 +9,30 @@ naming the upstream agent instead of printing its raw canvas node id, say --
 would silently change the numbers of every already-published experiment that
 was rerun afterwards. That is not a refactor, it's a data-integrity bug.
 
-So the format is versioned and the version is stored on the experiment:
+**But only published results need that protection, and there is exactly one.**
+The handoff format is still being designed; freezing every intermediate shape
+would make each improvement pay for a guarantee nobody is relying on. So there
+are two contracts, not a version ladder:
 
-* **Absent means v1**, and v1 is frozen. Every experiment that existed before
-  this module -- the published spinal pipeline included -- is v1, permanently,
-  and ``tests/test_spinal_compat.py`` asserts its prompt byte-for-byte.
-* **v2** is stamped on newly created experiments and is where improvements go.
+* :data:`LEGACY_PROMPT_CONTRACT` -- frozen forever, and **absence means this**.
+  Every experiment predating this module is legacy, the published spinal
+  pipeline included, and ``tests/test_spinal_compat.py`` asserts its assembled
+  prompt byte-for-byte. This is the one that exists to keep a paper
+  reproducible; it has no other job and takes no improvements.
+* :data:`CURRENT_PROMPT_CONTRACT` -- everything else. It is where the handoff
+  design happens, and it is **expected to change** while the feature is being
+  built. Its golden is a change-detector so a diff shows up in review, not a
+  reproducibility promise.
 
-The version is resolved once per run and threaded down, rather than re-read
+The stored value stays an integer (``design_spec["prompt_contract_version"]``)
+because real rows already carry it and the frontend reads it.
+
+**At release, freeze the current contract into a real numbered version and
+restore the ladder.** The dispatch structure below is deliberately left intact
+so that is a small change rather than a rewrite -- the discipline is postponed
+because there are no users yet, not discarded.
+
+The contract is resolved once per run and threaded down, rather than re-read
 from ``design_spec`` at each place that builds a prompt, so a mid-run edit to
 the experiment cannot produce a run that used two formats.
 
@@ -29,27 +45,30 @@ from __future__ import annotations
 
 from typing import Any
 
-#: What an experiment with no recorded version is. Never change this: it is the
-#: contract every pre-versioning experiment was run under.
-DEFAULT_PROMPT_CONTRACT_VERSION = 1
+#: The frozen contract, and what an experiment with no recorded version is.
+#: Never change this or the format it selects: it is what every pre-versioning
+#: experiment -- the published spinal pipeline included -- was run under.
+LEGACY_PROMPT_CONTRACT = 1
 
-#: What a newly created experiment gets. Bump when a new version ships.
-LATEST_PROMPT_CONTRACT_VERSION = 2
+#: What a newly created experiment gets: the format currently being designed.
+#: Expected to evolve in place while the handoff feature is built; give it a
+#: number of its own only when something published depends on it.
+CURRENT_PROMPT_CONTRACT = 2
 
 
 def prompt_contract_version(design_spec: dict[str, Any] | None) -> int:
-    """The prompt format version *design_spec* declares, defaulting to v1.
+    """The prompt format *design_spec* declares, defaulting to the legacy one.
 
-    Anything unparseable resolves to v1 rather than raising or to the latest:
-    a corrupted value must not silently reformat a published experiment's
-    prompts, and refusing to run at all would be a worse failure than running
-    the format the experiment has always used.
+    Anything unparseable resolves to legacy rather than raising or to the
+    current format: a corrupted value must not silently reformat a published
+    experiment's prompts, and refusing to run at all would be a worse failure
+    than running the format the experiment has always used.
     """
     raw = (design_spec or {}).get("prompt_contract_version")
     try:
         version = int(raw)  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        return DEFAULT_PROMPT_CONTRACT_VERSION
-    if version < DEFAULT_PROMPT_CONTRACT_VERSION:
-        return DEFAULT_PROMPT_CONTRACT_VERSION
+        return LEGACY_PROMPT_CONTRACT
+    if version < LEGACY_PROMPT_CONTRACT:
+        return LEGACY_PROMPT_CONTRACT
     return version

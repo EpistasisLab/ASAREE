@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.experiment_dataset import ExperimentDataset
-from asaree.services.prompt_contract import LATEST_PROMPT_CONTRACT_VERSION
+from asaree.services.prompt_contract import CURRENT_PROMPT_CONTRACT
 
 # No "dataset_id" here any more -- an experiment's datasets are rows in
 # experiment_datasets, not a column, so they're written by
@@ -76,7 +76,7 @@ async def create_experiment(
     # already-published experiment's numbers. A caller that passes its own
     # version wins, so a test or an import can pin one deliberately.
     spec = dict(design_spec or {})
-    spec.setdefault("prompt_contract_version", LATEST_PROMPT_CONTRACT_VERSION)
+    spec.setdefault("prompt_contract_version", CURRENT_PROMPT_CONTRACT)
     experiment = ResearchExperiment(
         name=name,
         description=description,

@@ -69,7 +69,11 @@ from asaree.services.factorial_cells import get_replicate, list_replicates, upse
 from asaree.services.metric_evaluation import JUDGE_OUTPUT_CONTRACT, build_metric_judge_prompt, validate_metric_scores
 from asaree.services.metric_promotion import promote_replicate_score_metrics
 from asaree.services.metrics import compose_system_prompt, model_judge_metrics
-from asaree.services.prompt_contract import DEFAULT_PROMPT_CONTRACT_VERSION, prompt_contract_version
+from asaree.services.prompt_contract import (
+    CURRENT_PROMPT_CONTRACT,
+    LEGACY_PROMPT_CONTRACT,
+    prompt_contract_version,
+)
 from asaree.services.protocol_revisions import get_published_revision, get_revision
 from asaree.services.protocol_runs import (
     create_protocol_run,
@@ -2281,13 +2285,17 @@ def _node_seed_prompt(node: dict[str, Any]) -> str:
     return str(config.get("prompt") or config.get("goal") or data.get("label", ""))
 
 
-def _upstream_context_v1(graph: dict[str, Any], node_id: str, node_runs: dict[str, Any]) -> str:
-    """The v1 upstream block. **Frozen** -- do not edit this function.
+def _upstream_context_legacy(graph: dict[str, Any], node_id: str, node_runs: dict[str, Any]) -> str:
+    """The frozen upstream block. **Do not edit this function.**
 
     ``[dndnode_3]: ...`` -- the raw canvas node id, which is what every
     published experiment's agents were shown, the spinal pipeline's included.
-    It is a poor label and v2 replaces it; changing it here instead would have
-    changed those experiments' results. See :mod:`asaree.services.prompt_contract`.
+    It is a poor label and :func:`_upstream_context` replaces it; changing it
+    here instead would have changed those experiments' results.
+
+    This exists to keep one submitted paper reproducible and has no other job.
+    Improvements go in :func:`_upstream_context`, never here -- however obvious
+    they look. See :mod:`asaree.services.prompt_contract`.
     """
     upstream_ids = _upstream_ids(graph, node_id)
     blocks = [
@@ -2296,16 +2304,22 @@ def _upstream_context_v1(graph: dict[str, Any], node_id: str, node_runs: dict[st
     return "Upstream context:\n" + "\n\n".join(blocks) if blocks else ""
 
 
-def _upstream_context_v2(graph: dict[str, Any], node_id: str, node_runs: dict[str, Any]) -> str:
-    """The v2 upstream block: the sender's canvas label instead of its node id.
+def _upstream_context(graph: dict[str, Any], node_id: str, node_runs: dict[str, Any]) -> str:
+    """The current upstream block, and the one that evolves.
 
-    A model reads ``[Feature Engineer]`` as an author and ``[dndnode_3]`` as
-    noise, and the label is also what the user sees on the canvas and in the
-    transcript -- so one upstream step is now called one thing everywhere.
-    Unlabelled nodes fall back to ``_node_display_name``'s type placeholder, the
-    same text a validation error would use, and the node id is appended only
-    when two upstream nodes resolve to the same name -- "which of the two" is
-    the one question the id actually answers.
+    Names the sender by its canvas label instead of its node id: a model reads
+    ``[Feature Engineer]`` as an author and ``[dndnode_3]`` as noise, and the
+    label is also what the user sees on the canvas and in the transcript -- so
+    one upstream step is called one thing everywhere. Unlabelled nodes fall back
+    to ``_node_display_name``'s type placeholder, the same text a validation
+    error would use, and the node id is appended only when two upstream nodes
+    resolve to the same name -- "which of the two" is the one question the id
+    actually answers.
+
+    Unlike :func:`_upstream_context_legacy` this is **not** frozen. Nothing
+    published depends on it, so the handoff design happens here in place; its
+    golden in ``tests/test_spinal_compat.py`` is a change-detector that puts the
+    diff in front of a reviewer, not a promise the text will not move.
     """
     upstream_ids = _upstream_ids(graph, node_id)
     nodes = {str(n.get("id")): n for n in graph.get("nodes") or []}
@@ -2320,13 +2334,23 @@ def _upstream_context_v2(graph: dict[str, Any], node_id: str, node_runs: dict[st
     return "Upstream context:\n" + "\n\n".join(blocks) if blocks else ""
 
 
-#: Version -> the upstream-context builder it uses. Only this block differs
-#: between contract versions so far; the Dataset and Script cues below are
-#: tool-usage instructions that have to track the tools that actually exist, so
-#: freezing them per version would hand a rerun stale instructions. What keeps
-#: v1's *whole* prompt honest is the byte-for-byte golden assertion in
-#: ``tests/test_spinal_compat.py``, not a duplicated function body.
-_UPSTREAM_CONTEXT_BUILDERS = {1: _upstream_context_v1, 2: _upstream_context_v2}
+#: Stored contract -> the upstream-context builder it selects. Two entries, not
+#: a version ladder: one frozen format for the published experiment and one
+#: current format that is still being designed (see
+#: :mod:`asaree.services.prompt_contract`).
+#:
+#: Only this block differs between them so far; the Dataset and Script cues
+#: below are tool-usage instructions that have to track the tools that actually
+#: exist, so freezing those per contract would hand a rerun stale instructions.
+#: What keeps the legacy contract's *whole* prompt honest is the byte-for-byte
+#: golden in ``tests/test_spinal_compat.py``, not a duplicated function body.
+#:
+#: Kept as a dispatch table even with two entries so that restoring a real
+#: version ladder at release is an entry, not a rewrite.
+_UPSTREAM_CONTEXT_BUILDERS = {
+    LEGACY_PROMPT_CONTRACT: _upstream_context_legacy,
+    CURRENT_PROMPT_CONTRACT: _upstream_context,
+}
 
 
 def _build_user_input(
@@ -2339,7 +2363,7 @@ def _build_user_input(
     script_bound: bool = False,
     seeded_datasets: tuple[tuple[str, str], ...] = (),
     unsplit_dataset: str = "",
-    prompt_contract_version: int = DEFAULT_PROMPT_CONTRACT_VERSION,
+    prompt_contract_version: int = LEGACY_PROMPT_CONTRACT,
 ) -> str:
     """The node's own prompt (falling back to its goal, then its canvas
     label), plus (flat, unstructured -- a deliberate V1 simplification) each
@@ -2381,11 +2405,12 @@ def _build_user_input(
     *seeded_datasets* -- a dataset has a split or it doesn't.
 
     *prompt_contract_version* selects the upstream-context format (see
-    :mod:`asaree.services.prompt_contract`). An unknown version falls back to
-    v1, the format every experiment has always been able to run under."""
+    :mod:`asaree.services.prompt_contract`). An unrecognized value falls back to
+    the legacy contract, the format every experiment has always been able to
+    run under."""
     parts = [_node_seed_prompt(node)]
 
-    build_upstream = _UPSTREAM_CONTEXT_BUILDERS.get(prompt_contract_version, _upstream_context_v1)
+    build_upstream = _UPSTREAM_CONTEXT_BUILDERS.get(prompt_contract_version, _upstream_context_legacy)
     upstream_context = build_upstream(graph, node["id"], node_runs)
     if upstream_context:
         parts.append(upstream_context)
@@ -2419,7 +2444,7 @@ def _build_user_input(
                 "Dataset context:\n"
                 f"{len(seeded_datasets)} datasets are already open in this cell's workspace, each in "
                 f"its own slot at its own HEAD:\n{listed}\n"
-                "Do NOT call open_workspace -- they are all loaded. Pass slot=\"...\" to the workspace "
+                'Do NOT call open_workspace -- they are all loaded. Pass slot="..." to the workspace '
                 "and staging tools to say which one a call is about; omit every other argument, since "
                 "the workspace itself arrives as ambient run context. Each slot stages independently, "
                 "so accepting a stage in one does not touch the others. "
@@ -2466,7 +2491,7 @@ def _build_user_input(
                 "Call open_workspace(name=...) for each one you need, before doing any data work. "
                 "`name` is the only argument to pass; the rest arrives as ambient run context. Each "
                 "dataset opens into its own slot of this cell's workspace and stages independently, "
-                "so pass slot=\"...\" (the response names it) to say which one a later call is about."
+                'so pass slot="..." (the response names it) to say which one a later call is about.'
             )
 
     script_config = _resolve_script_config(graph, node["id"])
@@ -3127,7 +3152,7 @@ async def _run_gated_worker(
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
     evaluation_metrics: Any = None,
-    contract_version: int = DEFAULT_PROMPT_CONTRACT_VERSION,
+    contract_version: int = LEGACY_PROMPT_CONTRACT,
     stage_plan: Any = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Generalizes the notebook's ``run_stage`` revision loop (cell 19):

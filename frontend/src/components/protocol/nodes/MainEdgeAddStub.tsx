@@ -2,18 +2,30 @@ import type { MouseEvent } from 'react'
 import { Plus } from 'lucide-react'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 
-// The main pipeline handle's own "+" affordance -- always visible
-// (unlike ConnectorAddStub, which hides once a named slot has its one
-// connection): agent<->agent wiring means "these two can interact," and
-// fan-out/fan-in are both unrestricted (any number of edges), so there's
-// always room for one more, the same way Tool's stub never hides either.
-export function MainEdgeAddStub({ nodeId, direction }: { nodeId: string; direction: 'incoming' | 'outgoing' }) {
+// The main pipeline handle's own "+" affordance. Visible whenever the side it
+// sits on can still take an edge, which depends on the experiment's
+// coordination strategy: under Peer Collaboration or Critic Gate fan-out and
+// fan-in are both unrestricted, so it never hides (the way Tool's stub never
+// does either), but under Sequential the chain rule caps each side at one, and
+// then it hides like a filled connector slot -- ProtocolCanvas decides which
+// and passes `full`.
+export function MainEdgeAddStub({
+  nodeId,
+  direction,
+  full,
+}: {
+  nodeId: string
+  direction: 'incoming' | 'outgoing'
+  full?: boolean
+}) {
   const { requestMainEdgeAdd } = useProtocolCanvasActions()
 
   function handleClick(e: MouseEvent) {
     e.stopPropagation()
     requestMainEdgeAdd({ nodeId, direction })
   }
+
+  if (full) return null
 
   const isOutgoing = direction === 'outgoing'
   return (

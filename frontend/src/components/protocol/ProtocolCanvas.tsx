@@ -743,9 +743,30 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     [nodes],
   )
 
-  // Whether an agent's lead marker is in force. Read here rather than on the
-  // node card so the card stays a pure render of what it's handed.
-  const isPeerCollaboration = experimentQuery.data?.design_spec?.coordination_strategy?.slug === 'peer_collaboration'
+  // The experiment's declared coordination strategy, which decides what the
+  // main handles MEAN -- whether a lead marker is in force, and whether the
+  // main flow is capped at one edge per side. Read here rather than on the node
+  // card so the card stays a pure render of what it's handed. Absent (an
+  // experiment saved before the field existed) is 'sequential', matching
+  // `coordination_strategy_slug` on the backend.
+  const coordinationSlug = experimentQuery.data?.design_spec?.coordination_strategy?.slug ?? 'sequential'
+  const isPeerCollaboration = coordinationSlug === 'peer_collaboration'
+  const isSequential = coordinationSlug === 'sequential'
+
+  // Which main-flow sides are already taken. Only consulted under
+  // 'sequential', where the chain rule caps each side at one edge
+  // (validate_sequential_chain), so the "+" stub can hide instead of offering
+  // a connection the backend would reject at publish time.
+  const mainEdgeSlots = useMemo(() => {
+    const incoming = new Set<string>()
+    const outgoing = new Set<string>()
+    for (const e of edges) {
+      if (CONNECTOR_HANDLES.has(e.targetHandle ?? '')) continue
+      incoming.add(e.target)
+      outgoing.add(e.source)
+    }
+    return { incoming, outgoing }
+  }, [edges])
 
   const nodesWithRunStatus = useMemo((): Node[] => {
     return nodes.map((n) => {
@@ -768,6 +789,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             n.type === 'agent' &&
             isPeerCollaboration &&
             (n.data as AgentNodeData).conversation_lead === true,
+          // Under Sequential the chain rule caps each main side at one edge, so
+          // the "+" affordance has to match the rule rather than the rule
+          // ambushing the user after they've drawn the edge.
+          mainInFull: isSequential && mainEdgeSlots.incoming.has(n.id),
+          mainOutFull: isSequential && mainEdgeSlots.outgoing.has(n.id),
           // Only meaningful once the pattern is actually wired to an agent --
           // an orphaned pattern node has no loop to warn about.
           // A peer is a callable capability too: both Motoro execution paths
@@ -795,6 +821,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     peerIdsByAgent,
     llmConfigByAgent,
     isPeerCollaboration,
+    isSequential,
+    mainEdgeSlots,
   ])
 
   // Same protection, one layer up -- the architectural_pattern EDGE itself
@@ -1417,12 +1445,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           // documents are interchangeable here, since both resolve to the same
           // per-directory OKF server.
           return KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
-        default:
+        default: {
           // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool/
           // dataset/skill/knowledge/script nodes have no main handle to drag from in
           // the first place, so this mostly guards against a stray
           // connection, not real interactive use.
-          return (
+          const sourceCanFeedMainFlow =
             !LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'memory' &&
             !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
@@ -1431,10 +1459,22 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             !KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'script' &&
             !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '')
+          if (!sourceCanFeedMainFlow) return false
+          // Under Sequential the main flow is a chain: one edge out of each
+          // node, one into each. Enforced here so the canvas refuses the fork
+          // as you draw it, rather than validate_sequential_chain rejecting the
+          // whole protocol at publish time. Other strategies leave the main
+          // flow unrestricted -- a fork is exactly the shape Peer Collaboration
+          // exists for, and a Critic Gate pipeline routes around agents.
+          if (!isSequential) return true
+          return (
+            !edges.some((e) => e.source === connection.source && !CONNECTOR_HANDLES.has(e.targetHandle ?? '')) &&
+            !edges.some((e) => e.target === connection.target && !CONNECTOR_HANDLES.has(e.targetHandle ?? ''))
           )
+        }
       }
     },
-    [nodes, edges],
+    [nodes, edges, isSequential],
   )
 
   function deleteNode(nodeId: string) {

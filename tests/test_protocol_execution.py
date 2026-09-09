@@ -2956,9 +2956,106 @@ def test_coordination_strategy_absent_is_a_noop() -> None:
     validate_coordination_strategy({}, graph=_no_peers_graph())
 
 
-def test_coordination_strategy_sequential_is_a_noop() -> None:
-    validate_coordination_strategy({"coordination_strategy": {"slug": "sequential"}}, graph=_no_peers_graph())
-    validate_coordination_strategy({"coordination_strategy": {"slug": "sequential"}}, graph=_peer_graph("a", "b"))
+_SEQUENTIAL = {"coordination_strategy": {"slug": "sequential"}}
+
+
+def _chain_graph(*agent_ids: str) -> dict:
+    """A labelled version of ``_peer_graph`` -- the sequential errors name the
+    offending agents, so the labels are part of what's under test."""
+    graph = _peer_graph(*agent_ids)
+    for node in graph["nodes"]:
+        if node["type"] == "agent":
+            node["data"] = {**node["data"], "label": node["id"].upper()}
+    return graph
+
+
+def _add_agent(graph: dict, agent_id: str, *edges: tuple[str, str]) -> dict:
+    llm_id = f"llm-{agent_id}"
+    agent, llm_edge = _agent_with_llm(agent_id, llm_id)
+    agent["data"] = {**agent["data"], "label": agent_id.upper()}
+    graph["nodes"] += [_llm_node(llm_id), agent]
+    graph["edges"].append(llm_edge)
+    graph["edges"] += [{"id": f"e-{s}-{t}", "source": s, "target": t} for s, t in edges]
+    return graph
+
+
+def test_sequential_accepts_a_chain() -> None:
+    validate_coordination_strategy(_SEQUENTIAL, graph=_no_peers_graph())  # one agent, nothing wired
+    validate_coordination_strategy(_SEQUENTIAL, graph=_chain_graph("a", "b"))
+    validate_coordination_strategy(_SEQUENTIAL, graph=_chain_graph("a", "b", "c"))
+    assert pe.sequential_chain_order(_chain_graph("a", "b", "c")) == ["a", "b", "c"]
+
+
+def test_sequential_accepts_a_graph_with_no_agents_at_all() -> None:
+    # Not a runnable protocol, but "no agents" is not the chain rule's
+    # complaint to make -- the every-agent-needs-an-LLM check owns that.
+    validate_coordination_strategy(_SEQUENTIAL, graph={"nodes": [_llm_node()], "edges": []})
+
+
+def test_sequential_rejects_a_fork() -> None:
+    graph = _add_agent(_chain_graph("a", "b"), "c", ("a", "c"))
+    with pytest.raises(ProtocolValidationError, match=r"'A' hands off to more than one agent \(B, C\)"):
+        validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_rejects_a_fan_in() -> None:
+    graph = _add_agent(_chain_graph("a", "b"), "c", ("c", "b"))
+    with pytest.raises(ProtocolValidationError, match=r"More than one agent hands off to 'B' \(A, C\)"):
+        validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_rejects_two_disjoint_chains() -> None:
+    graph = _add_agent(_add_agent(_chain_graph("a", "b"), "c"), "d", ("c", "d"))
+    with pytest.raises(ProtocolValidationError, match=r"2 separate agent chains, starting at A, C"):
+        validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_rejects_a_chain_with_a_detached_cycle() -> None:
+    # a -> b, plus c <-> d off to one side: one head, but the pair is
+    # unreachable from it, so a run would never get to them.
+    graph = _add_agent(_add_agent(_chain_graph("a", "b"), "c", ("d", "c")), "d", ("c", "d"))
+    with pytest.raises(ProtocolValidationError, match="cannot be reached from the start of the chain"):
+        validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_rejects_a_loop() -> None:
+    graph = _cycle_peer_graph("a", "b", "c")
+    with pytest.raises(ProtocolValidationError, match="nowhere to start"):
+        validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_ignores_connector_fan_in() -> None:
+    """One LLM node feeding every agent in the chain is the normal shape. It is
+    a fan-in on the graph and must not read as one on the chain."""
+    graph = _chain_graph("a", "b", "c")
+    graph["nodes"] = [n for n in graph["nodes"] if n["type"] != "llm_anthropic"] + [_llm_node("shared")]
+    graph["edges"] = [e for e in graph["edges"] if e.get("targetHandle") != "ai"]
+    graph["edges"] += [_llm_edge("shared", a) for a in ("a", "b", "c")]
+    validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_ignores_non_agent_nodes_between_two_agents() -> None:
+    """A critic gate sitting between two agents keeps the chain a chain: only
+    ``agent -> agent`` edges count, so the gate is not a third link."""
+    graph = _chain_graph("a", "b")
+    graph["edges"] = [e for e in graph["edges"] if not (e["source"] == "a" and e["target"] == "b")]
+    graph["nodes"].append(_node("gate", "critic_gate"))
+    graph["edges"] += _edges(("a", "gate"), ("gate", "b"))
+    validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+    # The gate is not an agent, so it is not in the handoff order either.
+    assert pe.sequential_chain_order(graph) == ["a", "b"]
+
+
+def test_the_chain_rule_does_not_apply_to_the_other_strategies() -> None:
+    """A fork is exactly the shape ``peer_collaboration`` exists for, and the
+    spinal ``critic_gate`` family is 5 agents wired through gates. Neither may
+    pick up ``sequential``'s cardinality limits."""
+    fork = _add_agent(_chain_graph("a", "b"), "c", ("a", "c"))
+    validate_coordination_strategy({"coordination_strategy": {"slug": "peer_collaboration"}}, graph=fork)
+    gated = _chain_graph("a")
+    gated["nodes"].append(_node("gate", "critic_gate"))
+    gated["edges"] += _edges(("a", "gate"))
+    validate_coordination_strategy({"coordination_strategy": {"slug": "critic_gate"}}, graph=gated)
 
 
 def test_coordination_strategy_critic_gate_requires_a_gated_pair() -> None:

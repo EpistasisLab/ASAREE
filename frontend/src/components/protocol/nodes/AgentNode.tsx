@@ -47,6 +47,11 @@ export function AgentNode({
     // coordinating by Peer Collaboration. Not the raw flag -- the strategy
     // lives on the experiment, which this card doesn't query.
     isConversationLead?: boolean
+    // The canvas's too: whether this node's main-flow sides can still take an
+    // edge. Only ever true under Sequential, where the chain rule caps each at
+    // one -- see ProtocolCanvas's `mainEdgeSlots`.
+    mainInFull?: boolean
+    mainOutFull?: boolean
   }
 }) {
   const badge = nodeRunBadge(data.runStatus)
@@ -106,16 +111,17 @@ export function AgentNode({
           Left/right no longer mean strict sequential handoff -- they mean
           "this agent can interact with that one" (which coordination
           strategy is active decides what "interact" actually does at
-          runtime, see design_spec.coordination_strategy). Fan-out/fan-in
-          are both unrestricted, so the "+" stub never hides (unlike a
-          capped connector slot). */}
+          runtime, see design_spec.coordination_strategy). That same strategy
+          decides the cardinality: unrestricted under Peer Collaboration and
+          Critic Gate, but exactly one per side under Sequential, where the
+          chain rule applies and the "+" stub hides once a side is taken. */}
       <Handle
         type="target"
         position={Position.Left}
         title="Connect to another agent (or a Critic Gate)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <MainEdgeAddStub nodeId={id} direction="incoming" />
+      <MainEdgeAddStub nodeId={id} direction="incoming" full={data.mainInFull} />
       <div className="flex items-center gap-1.5">
         <Bot className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
         {/* Renaming happens in the Inspector's own title now (click it,
@@ -320,7 +326,7 @@ export function AgentNode({
         title="Connect to another agent (or a Critic Gate)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <MainEdgeAddStub nodeId={id} direction="outgoing" />
+      <MainEdgeAddStub nodeId={id} direction="outgoing" full={data.mainOutFull} />
     </div>
   )
 }

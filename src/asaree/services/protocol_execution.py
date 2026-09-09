@@ -460,6 +460,7 @@ def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, graph:
     each strategy asks a different question of the canvas."""
     slug = coordination_strategy_slug(design_spec)
     if slug == "sequential":
+        validate_sequential_chain(graph)
         return
     if slug == "critic_gate":
         if not find_gated_pairs(graph):
@@ -479,6 +480,156 @@ def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, graph:
             "pick another one on the Design tab."
         )
     raise ProtocolValidationError(f"Unknown coordination strategy: {slug!r}")
+
+
+def _sequential_agent_links(graph: dict[str, Any]) -> tuple[list[str], dict[str, list[str]], dict[str, list[str]]]:
+    """The agent-to-agent handoff graph of *graph*: ``(agents, successors,
+    predecessors)``, each mapping keyed by every agent id.
+
+    A handoff is an agent-to-agent **path** over main edges, not necessarily a
+    single edge, because non-agent nodes on the main flow are passthrough
+    plumbing rather than links in the chain: the spinal pipeline's own shape is
+    ``agent -> critic_gate -> agent``, and a Script node between two agents is
+    just as legitimate. Counting raw edges would read both as two disjoint
+    one-agent chains.
+
+    Connector edges (LLM, Dataset, Pattern, Tool, ...) are excluded outright.
+    They are configuration, and their fan-in must stay unrestricted -- one LLM
+    node feeding every agent in a chain is the normal shape, not a fork.
+    """
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
+    agents = [nid for nid, node in nodes.items() if node.get("type") == "agent"]
+    downstream: dict[str, list[str]] = {nid: [] for nid in nodes}
+    for edge in graph.get("edges") or []:
+        if edge.get("targetHandle") in _CONNECTOR_HANDLES:
+            continue
+        source, target = str(edge.get("source")), str(edge.get("target"))
+        if source in nodes and target in nodes:
+            downstream[source].append(target)
+
+    successors: dict[str, list[str]] = {nid: [] for nid in agents}
+    predecessors: dict[str, list[str]] = {nid: [] for nid in agents}
+    for agent_id in agents:
+        # Breadth-first through the non-agent plumbing, stopping at the first
+        # agent on each branch. `seen` also makes a cycle in that plumbing
+        # terminate rather than spin.
+        frontier = list(downstream[agent_id])
+        seen = {agent_id}
+        while frontier:
+            current = frontier.pop(0)
+            if current in seen:
+                continue
+            seen.add(current)
+            if nodes[current].get("type") == "agent":
+                if current not in successors[agent_id]:
+                    successors[agent_id].append(current)
+                    predecessors[current].append(agent_id)
+                continue
+            frontier.extend(downstream[current])
+    return agents, successors, predecessors
+
+
+def sequential_chain_order(graph: dict[str, Any]) -> list[str]:
+    """The agents of a ``sequential`` protocol, in the order they hand off.
+
+    Returns ``[]`` for a graph with no agents. Assumes the chain rule already
+    holds -- :func:`validate_sequential_chain` is what establishes that, and it
+    calls this to do the walk.
+    """
+    agents, successors, predecessors = _sequential_agent_links(graph)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for head in [nid for nid in agents if not predecessors[nid]]:
+        cursor: str | None = head
+        while cursor is not None and cursor not in seen:
+            ordered.append(cursor)
+            seen.add(cursor)
+            following = successors[cursor]
+            cursor = following[0] if following else None
+    # A cycle has no head at all, so its members are unreachable from one --
+    # appended in declaration order so the caller can still name them.
+    ordered.extend(nid for nid in agents if nid not in seen)
+    return ordered
+
+
+def validate_sequential_chain(graph: dict[str, Any]) -> None:
+    """``sequential`` means a chain, not any DAG.
+
+    This branch used to be a bare ``return``, so the strategy imposed no shape
+    at all: an agent could fan out to three others, or three could fan into one,
+    and the run would still be called "sequential" because ``run_protocol``
+    walks whatever ``topological_order`` hands it. The walk itself has always
+    been mandatory and exhaustive -- there is no handoff tool and no way for an
+    agent to skip its successor -- so what was missing was never the execution
+    guarantee, only the guarantee that the *topology* is what the word says.
+
+    Checked over the agent handoff graph (see :func:`_sequential_agent_links`),
+    so a critic gate or a Script node between two agents keeps the chain a
+    chain, and connector fan-in is not a fork.
+
+    Zero agents, and one agent with nothing wired to it, are both valid -- that
+    is the single-agent case, and every ``sequential`` experiment that existed
+    when this check landed. The rule is enforced hard rather than grandfathered
+    behind a flag because none of them had a single agent-to-agent handoff to
+    break.
+    """
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
+    agents, successors, predecessors = _sequential_agent_links(graph)
+    if len(agents) < 2:
+        return
+
+    def _name(node_id: str) -> str:
+        return _node_display_name(nodes[node_id])
+
+    for nid in agents:
+        if len(successors[nid]) > 1:
+            names = ", ".join(sorted(_name(t) for t in successors[nid]))
+            raise ProtocolValidationError(
+                f"{_name(nid)!r} hands off to more than one agent ({names}), but this experiment's coordination "
+                "strategy is 'Sequential', where each agent has exactly one successor. Remove the extra "
+                "connections, or switch the strategy to 'Peer Collaboration' on the Design tab."
+            )
+        if len(predecessors[nid]) > 1:
+            names = ", ".join(sorted(_name(s) for s in predecessors[nid]))
+            raise ProtocolValidationError(
+                f"More than one agent hands off to {_name(nid)!r} ({names}), but this experiment's coordination "
+                "strategy is 'Sequential', where each agent has exactly one predecessor. Remove the extra "
+                "connections, or switch the strategy to 'Peer Collaboration' on the Design tab."
+            )
+
+    heads = [nid for nid in agents if not predecessors[nid]]
+    if not heads:
+        raise ProtocolValidationError(
+            "Every agent in this protocol is fed by another agent, so a 'Sequential' run has nowhere to start -- "
+            "which is what happens when the agents are wired in a loop. Break the loop so one agent leads, or "
+            "switch the strategy to 'Peer Collaboration' on the Design tab."
+        )
+
+    # More than one head, or an agent no head can reach, both mean the same
+    # thing: the canvas holds several independent runs rather than one. Reported
+    # as separate messages because the fix differs -- join them, or delete the
+    # stranded one.
+    ordered = sequential_chain_order(graph)
+    reachable: set[str] = set()
+    cursor: str | None = heads[0]
+    while cursor is not None and cursor not in reachable:
+        reachable.add(cursor)
+        following = successors[cursor]
+        cursor = following[0] if following else None
+    if len(heads) > 1:
+        names = ", ".join(sorted(_name(nid) for nid in heads))
+        raise ProtocolValidationError(
+            f"This protocol has {len(heads)} separate agent chains, starting at {names}. A 'Sequential' experiment "
+            "runs one chain -- connect them end to end, or switch the strategy to 'Peer Collaboration' on the "
+            "Design tab."
+        )
+    stranded = [nid for nid in ordered if nid not in reachable]
+    if stranded:
+        names = ", ".join(sorted(_name(nid) for nid in stranded))
+        raise ProtocolValidationError(
+            f"{names} cannot be reached from the start of the chain, so a 'Sequential' run would never get to "
+            "them. Wire them into the chain, or switch the strategy to 'Peer Collaboration' on the Design tab."
+        )
 
 
 #: Agent node ``data`` flag marking that agent as the one a conversation starts

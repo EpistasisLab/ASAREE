@@ -43,6 +43,10 @@ export function AgentNode({
     // canvas supplies the wiring; the capability lookup below is this card's.
     hasPeers?: boolean
     llmConfig?: { provider?: string; model?: string } | null
+    // Also the canvas's: `data.conversation_lead` AND the experiment actually
+    // coordinating by Peer Collaboration. Not the raw flag -- the strategy
+    // lives on the experiment, which this card doesn't query.
+    isConversationLead?: boolean
   }
 }) {
   const badge = nodeRunBadge(data.runStatus)
@@ -119,6 +123,21 @@ export function AgentNode({
         <span className="truncate text-xs font-medium" title={data.label}>
           {data.label || 'Agent'}
         </span>
+        {/* Inline on the title row rather than hung off a corner: all three
+            corners are spoken for (run status and the factor badge share the
+            top-right, the Pattern/Skill captions sit above the top-left), and
+            "this is the agent that leads" reads as part of the node's identity
+            anyway. `outline` so it states a role without competing with the
+            run-status badge, which is the thing that actually changes. */}
+        {data.isConversationLead && (
+          <Badge
+            variant="outline"
+            title="The conversation starts here -- this agent gets the task and its answer is the recorded result"
+            className="h-4 shrink-0 border-[color:var(--card-accent)]/60 px-1.5 text-[10px] text-[color:var(--card-accent)]"
+          >
+            Lead
+          </Badge>
+        )}
       </div>
       <NodeSummaryLine
         text={data.config?.prompt || data.config?.goal || null}

@@ -435,6 +435,25 @@ def coordination_strategy_slug(design_spec: dict[str, Any] | None) -> str:
     return str(((design_spec or {}).get("coordination_strategy") or {}).get("slug") or "sequential")
 
 
+def is_conversation_strategy(design_spec: dict[str, Any] | None) -> bool:
+    """Whether this experiment's cells execute as a conversation rather than a
+    pipeline, which decides how much of the pipeline's structural validation
+    still applies to the canvas.
+
+    Two of those requirements -- that the graph is acyclic, and that it has
+    exactly one sink whose output is the deliverable -- describe walking a graph
+    in dependency order, not being a valid graph. ``run_protocol``'s
+    ``peer_collaboration`` branch discards the topological sort outright and
+    takes the result from the conversation lead, so neither requirement is a
+    fact about a valid conversation, and both reject the topology this strategy
+    exists for: agents wired to each other in a loop, which has no unfed node to
+    start from and no sink at all. Every other check (a non-empty graph,
+    critic-gate shape, factor bindings) is about the canvas itself and still
+    applies.
+    """
+    return coordination_strategy_slug(design_spec) == "peer_collaboration"
+
+
 def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, graph: dict[str, Any]) -> None:
     """Checks the experiment's declared strategy against the protocol it will
     run. Takes the whole graph rather than a pre-computed fact about it because
@@ -462,17 +481,41 @@ def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, graph:
     raise ProtocolValidationError(f"Unknown coordination strategy: {slug!r}")
 
 
+#: Agent node ``data`` flag marking that agent as the one a conversation starts
+#: at. An explicit override of the wiring rule in
+#: :func:`resolve_conversation_entry_id`, deliberately not a second mechanism
+#: alongside it -- see that function for when each applies.
+_CONVERSATION_LEAD_FIELD = "conversation_lead"
+
+
+def _is_marked_lead(node: dict[str, Any]) -> bool:
+    data = node.get("data")
+    return isinstance(data, dict) and data.get(_CONVERSATION_LEAD_FIELD) is True
+
+
 def resolve_conversation_entry_id(graph: dict[str, Any]) -> str:
     """Which agent the user's question goes to when this graph runs as a
     conversation.
 
-    Read off the canvas rather than configured separately. A peer edge is
-    undirected for *consultation*, but the user still drew it in a direction,
-    and that direction is the only statement of intent available -- so the entry
-    agent is the peer-connected agent that nothing upstream feeds, i.e. exactly
-    the node a pipeline run would have started at. One agent has to lead; if two
-    are equally plausible starting points there's no honest way to pick, and
-    guessing would silently drop half the canvas out of the run.
+    Two sources, in this order: an agent explicitly marked as the lead on the
+    canvas wins, and failing that it's derived from the wiring -- the
+    peer-connected agent that nothing feeds, i.e. exactly the node a pipeline
+    run would have started at. A peer edge is undirected for *consultation*, but
+    the user still drew it in a direction, and absent a marker that direction is
+    the only statement of intent available.
+
+    Derivation alone is not enough, because it quietly assumes a DAG. The
+    topology this strategy most invites -- every agent wired to every other --
+    is a cycle, and in a cycle *every* agent is fed, so the derivation finds no
+    candidate at all and could only tell the user to unwire something. The
+    marker is how you say "this one leads" without breaking the shape you meant
+    to draw. Derivation stays the default so a plain chain still needs no
+    configuration, and so nothing saved before the marker existed changes
+    behavior.
+
+    One agent has to lead either way: its answer is the run's result, so if two
+    are equally plausible there's no honest way to pick, and guessing would
+    silently drop half the canvas out of the run.
     """
     nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
     peer_agents = [nid for nid in nodes if nodes[nid].get("type") == "agent" and _connected_agent_ids(graph, nid)]
@@ -482,6 +525,25 @@ def resolve_conversation_entry_id(graph: dict[str, Any]) -> str:
             "protocol are connected, so nobody has anyone to talk to -- draw an edge between two agents, or "
             "change the coordination strategy on the Design tab."
         )
+
+    marked = [nid for nid in nodes if nodes[nid].get("type") == "agent" and _is_marked_lead(nodes[nid])]
+    if len(marked) > 1:
+        names = ", ".join(sorted(_node_display_name(nodes[nid]) for nid in marked))
+        raise ProtocolValidationError(
+            f"More than one agent is marked as the conversation lead ({names}). Only one agent can lead a "
+            "conversation -- unmark the others."
+        )
+    if marked:
+        # Checked against the peer cluster rather than just the graph: honoring
+        # a marker on an unconnected agent would run a "conversation" with one
+        # participant, which is the one case where the marker must not win.
+        if marked[0] not in peer_agents:
+            raise ProtocolValidationError(
+                f"{_node_display_name(nodes[marked[0]])!r} is marked as the conversation lead but isn't connected "
+                "to another agent, so it has nobody to talk to. Connect it to a peer, or mark a different agent."
+            )
+        return marked[0]
+
     # Connector-typed edges are configuration, not upstream work, so an agent
     # with only an LLM/Dataset/Tool wired into it is still a starting point.
     fed = {
@@ -495,12 +557,13 @@ def resolve_conversation_entry_id(graph: dict[str, Any]) -> str:
     if not entries:
         raise ProtocolValidationError(
             "Every connected agent in this protocol has something feeding into it, so there's no obvious agent "
-            "to start the conversation. Leave one agent's main input unwired to make it the one the task goes to."
+            "to start the conversation -- which is what happens whenever the agents are wired in a loop. Mark one "
+            "of them as the conversation lead in its node settings, or leave one agent's main input unwired."
         )
     names = ", ".join(sorted(_node_display_name(nodes[nid]) for nid in entries))
     raise ProtocolValidationError(
-        f"This protocol has more than one agent that could start the conversation ({names}). Wire them so a "
-        "single agent leads and the others are its peers."
+        f"This protocol has more than one agent that could start the conversation ({names}). Mark one of them as "
+        "the conversation lead in its node settings, or wire them so a single agent leads."
     )
 
 
@@ -571,14 +634,24 @@ def _adjacency(
     return nodes, downstream, upstream
 
 
-def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
+def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) -> list[dict[str, Any]]:
     """Kahn's algorithm. Raises :class:`ProtocolValidationError` on an empty
     graph, a cycle (any node Kahn's algorithm can't reach stays with a
     nonzero in-degree, which is exactly the cycle signature), or a malformed
     critic-gate topology: a ``critic_gate`` node must have exactly one
     incoming edge, from an ``agent`` node, and that agent node's *only*
     outgoing edge must be to this gate -- no fan-out around a gate, since
-    anything wanting the reviewed output must consume it after the gate."""
+    anything wanting the reviewed output must consume it after the gate.
+
+    *require_acyclic* exists because the acyclic requirement is the only one of
+    those three that is a fact about *walking* a graph in dependency order
+    rather than a fact about a valid graph. A ``peer_collaboration`` run never
+    walks one -- see ``is_conversation_strategy`` -- so it passes ``False`` to
+    keep the empty-graph and critic-gate checks while dropping the check that
+    would reject the topology that strategy exists for. Nodes a cycle leaves
+    unreachable are appended in declaration order, since with the sort's
+    premise gone there is no order left to claim.
+    """
     nodes, downstream, upstream = _adjacency(graph)
     if not nodes:
         raise ProtocolValidationError("This protocol has no nodes.")
@@ -595,7 +668,10 @@ def topological_order(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 queue.append(nxt)
 
     if len(ordered) != len(nodes):
-        raise ProtocolValidationError("This protocol's graph has a cycle -- it can't be run in dependency order.")
+        if require_acyclic:
+            raise ProtocolValidationError("This protocol's graph has a cycle -- it can't be run in dependency order.")
+        reached = set(ordered)
+        ordered.extend(nid for nid in nodes if nid not in reached)
 
     for nid, node in nodes.items():
         if node.get("type") != "critic_gate":
@@ -2563,15 +2639,19 @@ async def plan_cell_runs(
     ``create_protocol_run_endpoint`` already uses for a plain run."""
     if experiment_id is None:
         raise ProtocolValidationError("This protocol has no linked experiment to run replicates for.")
-    topological_order(graph)  # raises ProtocolValidationError on a cycle/empty graph
-    sinks = sink_node_ids(graph)
-    if len(sinks) != 1:
-        raise ProtocolValidationError(
-            f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
-        )
+    # Strategy first, so its own message wins over a pipeline requirement that
+    # may not apply to this canvas at all -- see is_conversation_strategy.
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, graph=graph)
+    conversation = is_conversation_strategy(design_spec)
+    topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
+    if not conversation:
+        sinks = sink_node_ids(graph)
+        if len(sinks) != 1:
+            raise ProtocolValidationError(
+                f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
+            )
     try:
         validate_factor_bindings(design_spec, graph)
     except ValueError as exc:
@@ -2674,15 +2754,18 @@ async def plan_single_replicate_run(
     batch resume, so there's nothing to protect it from."""
     if experiment_id is None:
         raise ProtocolValidationError("This protocol has no linked experiment to run a replicate for.")
-    topological_order(graph)  # raises ProtocolValidationError on a cycle/empty graph
-    sinks = sink_node_ids(graph)
-    if len(sinks) != 1:
-        raise ProtocolValidationError(
-            f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
-        )
+    # Same order and same reason as plan_cell_runs above.
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, graph=graph)
+    conversation = is_conversation_strategy(design_spec)
+    topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
+    if not conversation:
+        sinks = sink_node_ids(graph)
+        if len(sinks) != 1:
+            raise ProtocolValidationError(
+                f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
+            )
     try:
         validate_factor_bindings(design_spec, graph)
     except ValueError as exc:
@@ -2908,9 +2991,9 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         graph = apply_factor_bindings(graph, factor_values)
 
     try:
-        order = topological_order(graph)
-        gated_by = find_gated_pairs(graph)
         validate_coordination_strategy(design_spec, graph=graph)
+        order = topological_order(graph, require_acyclic=not is_conversation_strategy(design_spec))
+        gated_by = find_gated_pairs(graph)
     except ProtocolValidationError as e:
         async with get_session() as db:
             await set_status(db, protocol_run_id, status="failed", error=str(e))

@@ -1,9 +1,10 @@
 """Protocols -- the executable agent/tool graph a visual canvas edits.
 
 The graph itself is freely editable JSON the canvas reads and writes whole.
-``POST /{id}/runs`` compiles it (topological order, rejecting a cycle/empty
-graph before anything is created) and hands the walk to the worker --
-mirroring ``POST /runs``'s own create-then-enqueue shape.
+``POST /{id}/runs`` compiles it (topological order, rejecting an empty graph
+before anything is created, and a cycle unless the experiment coordinates by
+conversation -- see ``is_conversation_strategy``) and hands the walk to the
+worker -- mirroring ``POST /runs``'s own create-then-enqueue shape.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
+    is_conversation_strategy,
     plan_cell_runs,
     plan_single_replicate_run,
     topological_order,
@@ -268,10 +270,13 @@ async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, d
                 detail="Experiment is locked. Unlock it before publishing a changed canvas.",
             )
     try:
-        topological_order(protocol.graph)
+        # Strategy before shape: the acyclic requirement is a pipeline
+        # requirement, and a peer_collaboration canvas isn't run as one -- see
+        # is_conversation_strategy.
         experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
         design_spec = experiment.design_spec if experiment is not None else None
         validate_coordination_strategy(design_spec, graph=protocol.graph)
+        topological_order(protocol.graph, require_acyclic=not is_conversation_strategy(design_spec))
         validate_factor_bindings(design_spec, protocol.graph)
     except (ProtocolValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -319,10 +324,10 @@ async def create_protocol_run_endpoint(
                 protocol_revision_id=revision.id,
             )
         else:
-            topological_order(revision.graph)
             experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
             design_spec = experiment.design_spec if experiment is not None else None
             validate_coordination_strategy(design_spec, graph=revision.graph)
+            topological_order(revision.graph, require_acyclic=not is_conversation_strategy(design_spec))
             run = await create_protocol_run(
                 db, protocol_id=protocol_id, owner_id=user.id, protocol_revision_id=revision.id
             )

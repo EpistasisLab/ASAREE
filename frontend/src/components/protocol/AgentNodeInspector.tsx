@@ -48,6 +48,7 @@ function outputPaneWidth(): number {
 export function AgentNodeInspector({
   node,
   experimentId,
+  markedLeadAgentId,
   nodeRun,
   onChange,
   onDelete,
@@ -55,6 +56,9 @@ export function AgentNodeInspector({
 }: {
   node: (ProtocolNode & { data: AgentNodeData }) | null
   experimentId: string | null
+  // Which agent on the canvas already carries the lead marker, if any -- the
+  // inspector can't see its siblings, so ProtocolCanvas resolves it.
+  markedLeadAgentId: string | null
   nodeRun?: NodeRunState
   onChange: (nodeId: string, data: AgentNodeData) => void
   onDelete: (nodeId: string) => void
@@ -87,6 +91,18 @@ export function AgentNodeInspector({
   const data = node.data
   const config = data.config
   const bindings = data.factor_bindings ?? {}
+  // The lead marker is meaningless under any other coordination strategy, so
+  // it isn't offered under one -- a checkbox that does nothing on the
+  // overwhelmingly common single-agent/sequential experiment is worse than an
+  // absent one. An already-marked agent still keeps its flag through a strategy
+  // change; nothing reads it, and switching back shouldn't silently lose it.
+  const isPeerCollaboration = experimentQuery.data?.design_spec?.coordination_strategy?.slug === 'peer_collaboration'
+  // Exactly one agent can lead (two is a server-side validation error), so once
+  // one is marked the checkbox is offered on that agent alone -- unmark it there
+  // to move the role. Showing it everywhere would invite creating an invalid
+  // canvas, and silently reassigning on click would move a role the user might
+  // only have been inspecting.
+  const canMarkLead = isPeerCollaboration && (markedLeadAgentId === null || markedLeadAgentId === node.id)
   const metrics = normalizeDesignMetrics(experimentQuery.data?.design_spec?.metrics)
   const validMetricIds = new Set(metrics.map((metric) => metric.id!))
   const contextMetricIds = (data.contextMetricIds ?? []).filter((id) => validMetricIds.has(id))
@@ -162,6 +178,36 @@ export function AgentNodeInspector({
             </TabsList>
 
             <TabsContent value="parameters" className="space-y-4 pt-2">
+              {/* First, above Prompt: which agent leads decides whose prompt
+                  becomes the task and whose answer gets scored, so it frames
+                  everything below it rather than being one more setting. It
+                  only renders under Peer Collaboration, and only on the agent
+                  that may still take the role (see canMarkLead), so it costs
+                  the common single-agent case no vertical space at all. */}
+              {canMarkLead && (
+                <div className="space-y-2 rounded-md border bg-muted/20 p-3">
+                  <label
+                    htmlFor={`conversation-lead-${node.id}`}
+                    className="flex cursor-pointer items-start gap-2 rounded px-1 py-1 hover:bg-muted/50"
+                  >
+                    <Checkbox
+                      id={`conversation-lead-${node.id}`}
+                      checked={data.conversation_lead === true}
+                      onCheckedChange={(checked) => onChange(node.id, { ...data, conversation_lead: checked === true })}
+                    />
+                    <span className="min-w-0">
+                      <span className="text-sm font-medium">Conversation lead</span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        This experiment coordinates by Peer Collaboration, so the task goes to one agent, which can
+                        consult the peers it's wired to while it works. That agent's answer is what gets recorded and
+                        scored. Leave this off to pick the lead from the wiring instead -- the connected agent nothing
+                        feeds into. Mark it when the agents are wired in a loop, where there is no such agent.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              )}
+
               <div className="space-y-1.5">
                 <Label htmlFor="node-prompt">Prompt (User Message) — Optional</Label>
                 <Textarea id="node-prompt" rows={2} value={config.prompt} onChange={(e) => patchConfig({ prompt: e.target.value })} />

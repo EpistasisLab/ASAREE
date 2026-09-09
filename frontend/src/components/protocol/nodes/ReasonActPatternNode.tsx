@@ -43,8 +43,11 @@ export function ReasonActPatternNode({
   // nothing callable bound, motoro's reason_act ends on turn one (its own
   // `implicit_final_answer` path), so the arm is a single LLM call wearing a
   // ReAct label. Computed in ProtocolCanvas.tsx, since it depends on the
-  // AGENT's wiring rather than this node's own config.
-  if (data.hostHasNoTools) warnings.push('No tools, skills or knowledge on the agent -- the loop ends after one turn')
+  // AGENT's wiring rather than this node's own config -- including, under Peer
+  // Collaboration, a connected peer, which is callable in its own right (see
+  // that flag's comment) and so keeps the loop going with no tools at all.
+  if (data.hostHasNoTools)
+    warnings.push('Nothing callable on the agent (no tools, skills, knowledge or peers) -- the loop ends after one turn')
 
   return (
     <CircleNode

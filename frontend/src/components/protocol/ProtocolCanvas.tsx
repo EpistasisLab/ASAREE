@@ -516,11 +516,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     requestAnimationFrame(() => fitView({ maxZoom: DEFAULT_ZOOM, duration: 300 }))
   }, [edges, experimentLocked, fitView, setNodes])
 
-  // Read-only subscription to the linked experiment, purely so the dataset
-  // sync below sees 'dataset_config' factor levels (see its own comment).
+  // Read-only subscription to the linked experiment, for two things the canvas
+  // can't read off the graph: the 'dataset_config' factor levels the dataset
+  // sync below needs (see its own comment), and the coordination strategy,
+  // which decides whether an agent's "Lead" marker means anything yet.
   // Same query key the page and FactorBindableField already use, so this
   // shares their cache entry rather than adding a request of its own.
-  const experimentFactorsQuery = useQuery({
+  const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
     queryFn: () => experimentsApi.get(experimentId!),
     enabled: !!experimentId,
@@ -683,6 +685,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     return map
   }, [nodes, edges])
 
+  // The agent currently marked as the conversation lead, if any. Read off the
+  // graph rather than tracked in state so it survives a canvas reload, and
+  // computed here rather than in the inspector because the inspector only ever
+  // sees the one node it's editing. Feeds the inspector's rule that the
+  // checkbox is offered on the marked agent and on nobody else once a lead
+  // exists -- the marker is single-valued (two is a validation error
+  // server-side), so the UI shouldn't let you create the second one.
+  const markedLeadAgentId = useMemo(
+    () => nodes.find((n) => n.type === 'agent' && (n.data as AgentNodeData).conversation_lead === true)?.id ?? null,
+    [nodes],
+  )
+
   // The model each agent will actually run on, resolved through its AI
   // connector. Injected into the node's data rather than read here, because
   // whether that model can be sent function schemas needs the provider's model
@@ -704,6 +718,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     [nodes],
   )
 
+  // Whether an agent's lead marker is in force. Read here rather than on the
+  // node card so the card stays a pure render of what it's handed.
+  const isPeerCollaboration = experimentQuery.data?.design_spec?.coordination_strategy?.slug === 'peer_collaboration'
+
   const nodesWithRunStatus = useMemo((): Node[] => {
     return nodes.map((n) => {
       const patternHostId = patternHostIds.get(n.id)
@@ -717,9 +735,27 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           canRunAlone: n.type === 'agent' && !agentIdsWithUpstream.has(n.id),
           hasPeers: n.type === 'agent' && (peerIdsByAgent.get(n.id)?.length ?? 0) > 0,
           llmConfig: n.type === 'agent' ? llmConfigByAgent.get(n.id) ?? null : null,
+          // Gated on the strategy, not just the flag: a "Lead" badge left over
+          // from a Peer Collaboration experiment that has since been switched
+          // to Sequential would claim a role nothing acts on. The flag itself
+          // is kept (see AgentNodeInspector) -- only the badge is conditional.
+          isConversationLead:
+            n.type === 'agent' &&
+            isPeerCollaboration &&
+            (n.data as AgentNodeData).conversation_lead === true,
           // Only meaningful once the pattern is actually wired to an agent --
           // an orphaned pattern node has no loop to warn about.
-          hostHasNoTools: !!patternHostId && !agentIdsWithCallableTools.has(patternHostId),
+          // A peer is a callable capability too: both Motoro execution paths
+          // append `agents_to_openai_format(available_agents)` to the function
+          // payload independently of tools (engine/act.py, reason_act.py), so
+          // an agent whose only capability is a peer still gets a payload and
+          // the loop can run past one turn. Gated on the strategy because
+          // `available_agents` is only passed under Peer Collaboration -- under
+          // any other one the original warning is still exactly right.
+          hostHasNoTools:
+            !!patternHostId &&
+            !agentIdsWithCallableTools.has(patternHostId) &&
+            !(isPeerCollaboration && (peerIdsByAgent.get(patternHostId)?.length ?? 0) > 0),
         },
       }
     })
@@ -733,6 +769,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     patternHostIds,
     peerIdsByAgent,
     llmConfigByAgent,
+    isPeerCollaboration,
   ])
 
   // Same protection, one layer up -- the architectural_pattern EDGE itself
@@ -1219,7 +1256,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // use (TanStack dedupes by key, so it costs no extra request), which is
   // what makes a factor save here land immediately: FactorBindableField
   // invalidates that exact key on success.
-  const factors = experimentFactorsQuery.data?.design_spec?.factors ?? EMPTY_FACTORS
+  const factors = experimentQuery.data?.design_spec?.factors ?? EMPTY_FACTORS
   const lastSyncedDatasetIdsRef = useRef(JSON.stringify(datasetIdsInGraph(initialGraph.nodes as Node[])))
   useEffect(() => {
     if (!experimentId) return
@@ -1694,6 +1731,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             <AgentNodeInspector
               node={{ id: selectedNode.id, type: selectedNode.type ?? 'agent', position: selectedNode.position, data: selectedNode.data as AgentNodeData }}
               experimentId={experimentId}
+              markedLeadAgentId={markedLeadAgentId}
               nodeRun={runQuery.data?.node_runs[selectedNode.id]}
               onChange={updateNodeData}
               onDelete={requestDeleteNode}

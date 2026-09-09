@@ -2994,6 +2994,90 @@ def test_two_equally_plausible_starting_agents_is_an_error() -> None:
         pe.resolve_conversation_entry_id(graph)
 
 
+def _mark_lead(graph: dict, *agent_ids: str) -> dict:
+    """Set the canvas's explicit conversation-lead flag on some agent nodes."""
+    for node in graph["nodes"]:
+        if node["id"] in agent_ids:
+            node["data"] = {**(node.get("data") or {}), "conversation_lead": True}
+    return graph
+
+
+def _cycle_peer_graph(*agent_ids: str) -> dict:
+    """The topology the lead marker exists for: the chain's last agent wired
+    back to its first, so every agent is fed and the wiring rule has no
+    candidate at all to pick."""
+    graph = _peer_graph(*agent_ids)
+    graph["edges"].append({"id": "e-cycle", "source": agent_ids[-1], "target": agent_ids[0]})
+    return graph
+
+
+def test_a_marked_lead_wins_over_the_wiring() -> None:
+    # a -> b -> c would derive "a"; the marker is an override, not a tiebreak.
+    assert pe.resolve_conversation_entry_id(_mark_lead(_peer_graph("a", "b", "c"), "c")) == "c"
+
+
+def test_a_cycle_has_no_derivable_lead() -> None:
+    with pytest.raises(ProtocolValidationError, match="wired in a loop"):
+        pe.resolve_conversation_entry_id(_cycle_peer_graph("a", "b", "c"))
+
+
+def test_a_marked_lead_resolves_a_cycle() -> None:
+    """The whole point of the marker: everyone wired to everyone is the shape
+    this strategy invites, and it must not have to be broken to run."""
+    assert pe.resolve_conversation_entry_id(_mark_lead(_cycle_peer_graph("a", "b", "c"), "b")) == "b"
+
+
+def test_two_marked_leads_is_an_error() -> None:
+    with pytest.raises(ProtocolValidationError, match="More than one agent is marked"):
+        pe.resolve_conversation_entry_id(_mark_lead(_peer_graph("a", "b", "c"), "a", "c"))
+
+
+def test_a_marked_lead_with_no_peers_is_an_error() -> None:
+    """Marking an agent that has nobody to talk to must not win -- that would
+    run a "conversation" with a single participant."""
+    graph = _peer_graph("a", "b")
+    llm_c = _llm_node("llm-c")
+    agent_c, llm_edge_c = _agent_with_llm("c", "llm-c")
+    graph["nodes"] += [llm_c, agent_c]
+    graph["edges"].append(llm_edge_c)
+    with pytest.raises(ProtocolValidationError, match="isn't connected to another agent"):
+        pe.resolve_conversation_entry_id(_mark_lead(graph, "c"))
+
+
+_PEER_SPEC = {"coordination_strategy": {"slug": "peer_collaboration"}}
+
+
+def test_is_conversation_strategy() -> None:
+    assert pe.is_conversation_strategy(_PEER_SPEC) is True
+    assert pe.is_conversation_strategy({"coordination_strategy": {"slug": "critic_gate"}}) is False
+    assert pe.is_conversation_strategy(None) is False
+
+
+def test_a_cycle_is_still_rejected_for_a_pipeline() -> None:
+    with pytest.raises(ProtocolValidationError, match="has a cycle"):
+        pe.topological_order(_cycle_peer_graph("a", "b", "c"))
+
+
+def test_a_conversation_may_contain_a_cycle() -> None:
+    """The lead marker resolves the *entry agent* in a loop; this is what makes
+    the same loop publishable and runnable. Every node still comes back -- the
+    order is meaningless, and run_protocol's conversation branch discards it."""
+    graph = _cycle_peer_graph("a", "b", "c")
+    ordered = pe.topological_order(graph, require_acyclic=False)
+    assert {n["id"] for n in ordered} == {n["id"] for n in graph["nodes"]}
+
+
+def test_an_empty_graph_is_rejected_even_for_a_conversation() -> None:
+    """require_acyclic drops one check, not all of them."""
+    with pytest.raises(ProtocolValidationError, match="no nodes"):
+        pe.topological_order({"nodes": [], "edges": []}, require_acyclic=False)
+
+
+def test_coordination_strategy_accepts_a_marked_lead_in_a_cycle() -> None:
+    """End to end over the guard both the publish endpoint and run_protocol call."""
+    pe.validate_coordination_strategy(_PEER_SPEC, graph=_mark_lead(_cycle_peer_graph("a", "b", "c"), "b"))
+
+
 def test_coordination_strategy_retired_slug_raises() -> None:
     with pytest.raises(ProtocolValidationError, match="no longer offered"):
         validate_coordination_strategy(

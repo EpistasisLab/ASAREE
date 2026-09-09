@@ -214,6 +214,16 @@ export interface AgentNodeData {
   // _upstream_output_text). Toggled via the canvas's per-node hover
   // toolbar, not exposed in the inspector.
   active?: boolean
+  // Marks this agent as the one a Peer Collaboration conversation starts at --
+  // it receives the task, may consult its connected peers while working, and
+  // its answer is what gets recorded and scored. Absent/false means the lead is
+  // derived from the wiring instead (the peer-connected agent nothing feeds).
+  // The marker exists because that derivation assumes a DAG: agents wired in a
+  // loop -- the topology this strategy most invites -- have no unfed agent to
+  // derive from. See services/protocol_execution.py's
+  // resolve_conversation_entry_id, which owns both rules. Only meaningful under
+  // that strategy, so the inspector only offers it there.
+  conversation_lead?: boolean
   [key: string]: unknown
 }
 

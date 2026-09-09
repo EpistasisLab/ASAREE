@@ -531,7 +531,7 @@ class AgentMessenger:
         # bare ambient meta: a consulted peer with a Dataset connector needs its
         # workspace seeded and its `data_path` bound before it can run a script,
         # exactly like any other node.
-        ambient_meta, _dataset = await _node_run_context(
+        ambient_meta, dataset = await _node_run_context(
             self._graph, to_agent_id, self._workspace_id, self._owner_id, stage_plan=self._stage_plan
         )
         output_text, error, run_id = await _run_agent_node(
@@ -545,6 +545,7 @@ class AgentMessenger:
             ambient_meta=ambient_meta,
             available_agents=await resolve_available_agents(self._graph, to_agent_id, owner_id=self._owner_id),
             agent_messenger=self,
+            unsplit_dataset=dataset.unsplit_name,
         )
         # The canvas shows a consulted peer as a node that ran, because it did.
         # A peer consulted twice keeps only its latest turn here; the full
@@ -576,6 +577,7 @@ async def execute_conversation(
     ambient_meta: dict[str, Any] | None = None,
     evaluation_metrics: Any = None,
     stage_plan: Any = None,
+    unsplit_dataset: str = "",
 ) -> tuple[dict[str, Any], str]:
     """The conversation itself: seed the transcript, run the entry agent, map
     its outcome to a terminal conversation state, checkpoint.
@@ -621,9 +623,10 @@ async def execute_conversation(
     await messenger.checkpoint()
 
     if ambient_meta is None:
-        ambient_meta, _dataset = await _node_run_context(
+        ambient_meta, entry_dataset = await _node_run_context(
             graph, entry_agent_id, workspace_id, owner_id, stage_plan=stage_plan
         )
+        unsplit_dataset = unsplit_dataset or entry_dataset.unsplit_name
 
     # The entry agent's turn is a turn like any other: without this, the peers
     # it consults would be recorded and authorized against an empty stack.
@@ -640,6 +643,7 @@ async def execute_conversation(
             evaluation_metrics=evaluation_metrics,
             available_agents=await resolve_available_agents(graph, entry_agent_id, owner_id=owner_id),
             agent_messenger=messenger,
+            unsplit_dataset=unsplit_dataset,
         )
 
     cancelled = error == _AGENT_CANCELLED
@@ -869,6 +873,7 @@ async def execute_supervisor_architecture(
                 workspace_id=workspace_id,
                 ambient_meta=ambient_meta,
                 evaluation_metrics=metrics,
+                unsplit_dataset=dataset.unsplit_name,
             )
         run = {
             "status": "cancelled" if error == _AGENT_CANCELLED else ("failed" if error else "completed"),

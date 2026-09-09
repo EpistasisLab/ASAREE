@@ -653,6 +653,35 @@ def test_dataset_connector_grants_the_workspace_tools() -> None:
     assert pe._resolve_dataset_tool_config(bare, "a") == {"server_names": [], "tool_names": []}
 
 
+def test_an_unsplit_dataset_grants_the_tools_its_prompt_names() -> None:
+    """The gap the first sequential demo run fell into: an unsplit registration
+    has no workspace, so the Dataset block tells the agent NOT to call
+    open_workspace and to use describe_dataset/describe_split/train_test_split
+    instead -- and none of those were in the allow-list, so the run ended with
+    the model reporting the missing tools rather than profiling the data."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spinal-fusion")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    resolved = pe._resolve_dataset_tool_config(graph, "a", unsplit_dataset="spinal-fusion")
+    assert resolved["server_names"] == ["asaree-workspace", "scikit-learn-mcp"]
+    # Exactly the three the prompt names, no more: fitting a model is a real
+    # choice about the analysis, so the rest of that server still takes a Tool
+    # node. Asserted as a set so a new sklearn tool cannot leak in silently.
+    sklearn = {name for name in resolved["tool_names"] if name.startswith("scikit-learn-mcp.")}
+    assert sklearn == {
+        "scikit-learn-mcp.describe_dataset",
+        "scikit-learn-mcp.describe_split",
+        "scikit-learn-mcp.train_test_split",
+    }
+    # The workspace tools stay: workspace_status answering "nothing here" beats
+    # a missing tool, and a split dataset gets no sklearn grant at all.
+    assert "asaree-workspace.workspace_status" in resolved["tool_names"]
+    split = pe._resolve_dataset_tool_config(graph, "a")
+    assert split["server_names"] == ["asaree-workspace"]
+
+
 def test_script_connector_grants_the_script_runner() -> None:
     # Wiring a Script node is the whole gesture, exactly like Dataset above:
     # before this, a script was only runnable if the user ALSO wired one of the

@@ -73,6 +73,27 @@ WORKSPACE_AGENT_TOOLS: Final[tuple[str, ...]] = (
 # agent's tool list.
 SCRIPT_AGENT_TOOLS: Final[tuple[str, ...]] = ("run_wired_script",)
 
+# The third implicit grant, for the case the first one cannot serve: a Dataset
+# whose registration has no train/test split. There is no workspace for one, so
+# every tool in WORKSPACE_AGENT_TOOLS above is inapplicable and the prompt says
+# so outright ("Do NOT call open_workspace") -- then tells the agent to use
+# these three instead. Without the grant that instruction named tools the agent
+# did not have, and the run ended with the model reporting the gap rather than
+# doing the work. Same defect ``_resolve_dataset_tool_config`` and
+# ``_resolve_script_tool_config`` exist to fix, in the one dataset shape
+# neither covered.
+#
+# Deliberately only the three the prompt names, not the whole server: the
+# model-fitting tools alongside them are a real choice about the analysis, and
+# an agent that needs them should say so by wiring a Tool node. Granting them
+# implicitly would hand every dataset-wired agent a modelling harness it never
+# asked for.
+UNSPLIT_DATASET_AGENT_TOOLS: Final[tuple[str, ...]] = (
+    "describe_dataset",
+    "describe_split",
+    "train_test_split",
+)
+
 # (server name, module to run). Every module here is importable from this
 # repo's own venv -- asaree.* is ASAREE, motoro.* comes from the pinned Motoro
 # dependency, and the asaree_sklearn_* packages are the mcp-servers/ path

@@ -77,8 +77,10 @@ from asaree.services.protocol_runs import (
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
 from asaree.services.system_mcp_servers import (
+    SCIKIT_LEARN_SERVER_NAME,
     SCRIPT_AGENT_TOOLS,
     SCRIPT_SERVER_NAME,
+    UNSPLIT_DATASET_AGENT_TOOLS,
     WORKSPACE_AGENT_TOOLS,
     WORKSPACE_SERVER_NAME,
 )
@@ -2045,7 +2047,9 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
     return {"server_names": server_names, "tool_names": tool_names}
 
 
-def _resolve_dataset_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+def _resolve_dataset_tool_config(
+    graph: dict[str, Any], node_id: str, *, unsplit_dataset: str = ""
+) -> dict[str, Any]:
     """The Dataset connector's contribution to the tool allow-list: ASAREE's
     own ``asaree-workspace`` server, shaped like ``_resolve_tool_config``'s
     output so it merges with the rest.
@@ -2061,13 +2065,27 @@ def _resolve_dataset_tool_config(graph: dict[str, Any], node_id: str) -> dict[st
     Unlike Tool and Knowledge, the grant is implicit, so the tools are a fixed
     list (``WORKSPACE_AGENT_TOOLS``) rather than whatever a node cached: there
     is no node here whose checkboxes could express a narrower choice.
+
+    *unsplit_dataset* names a wired registration that has no train/test split
+    (``_resolve_node_dataset``'s other outcome). There is no workspace for one,
+    so the workspace grant above is inapplicable -- and ``_build_user_input``'s
+    Dataset block says exactly that, then points the agent at
+    ``describe_dataset``/``describe_split``/``train_test_split``. Those come
+    from ``scikit-learn-mcp``, so they are granted with it: naming a tool in the
+    prompt and leaving it out of the allow-list is the precise defect this
+    function and ``_resolve_script_tool_config`` were written to fix, and the
+    unsplit case was the one dataset shape neither covered. The workspace tools
+    stay granted alongside them -- ``workspace_status`` reporting "no workspace
+    here" is a better answer than a missing tool.
     """
     if not _resolve_dataset_configs(graph, node_id):
         return {"server_names": [], "tool_names": []}
-    return {
-        "server_names": [WORKSPACE_SERVER_NAME],
-        "tool_names": [f"{WORKSPACE_SERVER_NAME}.{name}" for name in WORKSPACE_AGENT_TOOLS],
-    }
+    server_names = [WORKSPACE_SERVER_NAME]
+    tool_names = [f"{WORKSPACE_SERVER_NAME}.{name}" for name in WORKSPACE_AGENT_TOOLS]
+    if unsplit_dataset:
+        server_names.append(SCIKIT_LEARN_SERVER_NAME)
+        tool_names.extend(f"{SCIKIT_LEARN_SERVER_NAME}.{name}" for name in UNSPLIT_DATASET_AGENT_TOOLS)
+    return {"server_names": server_names, "tool_names": tool_names}
 
 
 def _resolve_script_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
@@ -2514,6 +2532,7 @@ async def _run_agent_node(
     evaluation_metrics: Any = None,
     available_agents: list[dict[str, Any]] | None = None,
     agent_messenger: Any = None,
+    unsplit_dataset: str = "",
 ) -> tuple[str | None, str | None, uuid.UUID | None]:
     """Create-or-sync the real agent and run it to completion. Returns
     ``(output_text, error, run_id)`` -- exactly one of output_text/error is
@@ -2554,7 +2573,7 @@ async def _run_agent_node(
     tool_config = _merge_tool_configs(
         _resolve_tool_config(graph, node["id"]),
         _resolve_knowledge_config(graph, node["id"]),
-        _resolve_dataset_tool_config(graph, node["id"]),
+        _resolve_dataset_tool_config(graph, node["id"], unsplit_dataset=unsplit_dataset),
         _resolve_script_tool_config(graph, node["id"]),
     )
     pattern_config_data = _resolve_pattern_config(graph, node["id"])
@@ -3052,6 +3071,7 @@ async def _run_gated_worker(
             workspace_id=workspace_id,
             ambient_meta=worker_ambient,
             evaluation_metrics=evaluation_metrics,
+            unsplit_dataset=worker_dataset.unsplit_name,
         )
         run_id_str = str(run_id) if run_id else None
         if error == _AGENT_CANCELLED:
@@ -3489,6 +3509,7 @@ async def _run_single_node(
         workspace_id=workspace_id,
         ambient_meta=ambient_meta,
         evaluation_metrics=evaluation_metrics,
+        unsplit_dataset=node_dataset.unsplit_name,
     )
     node_run = {
         "status": "failed" if error else "completed",
@@ -3657,6 +3678,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             ambient_meta=ambient_meta,
             evaluation_metrics=(design_spec or {}).get("metrics"),
             stage_plan=stage_plan,
+            unsplit_dataset=entry_dataset.unsplit_name,
         )
         node_runs[entry_agent_id] = node_run
         cancelled = conversation_status == "cancelled"
@@ -3823,6 +3845,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 workspace_id=workspace_id,
                 ambient_meta=ambient_meta,
                 evaluation_metrics=(design_spec or {}).get("metrics"),
+                unsplit_dataset=node_dataset.unsplit_name,
             )
 
         if error == _AGENT_CANCELLED:

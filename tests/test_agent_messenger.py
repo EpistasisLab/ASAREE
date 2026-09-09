@@ -116,9 +116,14 @@ def _messenger(**kwargs: Any) -> AgentMessenger:
 
 
 async def _ask(messenger: AgentMessenger, to: str = "critic", text: str = "What is weak here?") -> Any:
-    return await messenger.send(
-        from_agent_id="planner", to_agent_id=to, parts=[{"kind": "text", "text": text}], context=None
-    )
+    # Inside the entry agent's own turn, the way execute_conversation runs it --
+    # the sender and the consultation depth both come from the turn stack, so a
+    # bare send() here would be asking from nobody's turn. `from_agent_id` is
+    # passed because the port requires it and is deliberately ignored (see send).
+    with messenger.turn("planner"):
+        return await messenger.send(
+            from_agent_id="planner", to_agent_id=to, parts=[{"kind": "text", "text": text}], context=None
+        )
 
 
 # ----------------------------------------------------------------------
@@ -291,6 +296,55 @@ async def test_an_unconnected_agent_cannot_be_consulted(stubs: dict[str, Any]) -
     assert reply.state == "rejected"
     assert "not connected" in reply.text
     assert stubs["peer_runs"] == []
+
+
+async def test_the_engines_idea_of_the_sender_is_ignored(stubs: dict[str, Any]) -> None:
+    """Regression: what Motoro passes as ``from_agent_id`` is
+    ``RunContext.agent_id`` -- the *durable* Agent row for the turn, never a
+    canvas node id -- so authorizing against it rejected every real
+    consultation. The sender is the innermost turn on the stack instead.
+    """
+    messenger = _messenger()
+    with messenger.turn("planner"):
+        reply = await messenger.send(
+            from_agent_id=str(uuid.uuid4()),  # a durable agent id, as the engine sends it
+            to_agent_id="critic",
+            parts=[{"kind": "text", "text": "What is weak here?"}],
+            context=None,
+        )
+    assert reply.state == "completed"
+    assert [m["from_agent_id"] for m in messenger.conversation["messages"]] == ["planner", "critic"]
+
+
+async def test_a_peers_own_consultation_is_attributed_to_the_peer(stubs: dict[str, Any]) -> None:
+    """The stack, not the caller, is what makes a nested question come *from*
+    the peer -- which is also what its own authorization is checked against."""
+    nested: list[Any] = []
+
+    async def _run_agent_node(node: dict[str, Any], **kwargs: Any) -> tuple[str, None, uuid.UUID]:
+        messenger: AgentMessenger = kwargs["agent_messenger"]
+        if node["id"] == "critic":
+            nested.append(
+                await messenger.send(
+                    from_agent_id=str(uuid.uuid4()),
+                    to_agent_id="planner",
+                    parts=[{"kind": "text", "text": "Clarify?"}],
+                    context=None,
+                )
+            )
+        return ("A peer answer.", None, uuid.uuid4())
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(am, "_run_agent_node", _run_agent_node)
+    try:
+        messenger = _messenger()
+        assert (await _ask(messenger)).state == "completed"
+    finally:
+        monkeypatch.undo()
+    assert [r.state for r in nested] == ["completed"]
+    senders = [m["from_agent_id"] for m in messenger.conversation["messages"]]
+    # planner->critic, critic->planner (nested), planner's reply, critic's reply.
+    assert senders == ["planner", "critic", "planner", "critic"]
 
 
 async def test_pulling_the_edge_mid_run_stops_the_next_consultation(stubs: dict[str, Any]) -> None:

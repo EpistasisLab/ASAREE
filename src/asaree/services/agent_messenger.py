@@ -37,6 +37,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -131,8 +133,16 @@ class AgentMessenger:
         self._entry_agent_id = entry_agent_id
         self._started_at = time.monotonic()
         self._executions = 0
-        self._depth = 0
         self._sequence = 0
+        #: Canvas node ids of the agents whose turns are currently on the stack,
+        #: innermost last. This -- not anything the engine hands back -- is who
+        #: is speaking: invariant 2 says the runtime assigns sender identity, and
+        #: invariant 5 (one agent at a time, a consulting agent blocked on its
+        #: peer) is exactly what makes a stack the right shape. Motoro's own
+        #: ``from_agent_id`` is ``RunContext.agent_id``, the *durable* Agent row
+        #: for this turn, which is not a node id and so can't be authorized
+        #: against the graph at all -- see :meth:`send`.
+        self._turn_stack: list[str] = []
         self._messages: list[dict[str, Any]] = []
         #: Node id -> the label the canvas shows, so a briefing names agents the
         #: way the user does. Same source ``build_agent_card`` uses, and the same
@@ -146,6 +156,32 @@ class AgentMessenger:
         #: Set when a cap is what stopped the conversation, so the run can land
         #: on ``limit_reached`` rather than looking like a clean completion.
         self.limit_reached = False
+
+    # -- turns ---------------------------------------------------------
+
+    @contextmanager
+    def turn(self, node_id: str) -> Iterator[None]:
+        """Mark *node_id* as the agent now speaking, for the duration of its run.
+
+        Every agent turn in a conversation is wrapped in this -- the entry
+        agent's included -- so that a consultation raised from inside it is
+        attributed to the right canvas node without trusting anything the engine
+        or the model supplies.
+        """
+        self._turn_stack.append(node_id)
+        try:
+            yield
+        finally:
+            self._turn_stack.pop()
+
+    @property
+    def _depth(self) -> int:
+        """How deeply consultations are nested right now.
+
+        The entry agent's own turn is not a consultation, so it doesn't count --
+        depth 0 is "the agent the user addressed is asking its first peer".
+        """
+        return max(len(self._turn_stack) - 1, 0)
 
     # -- transcript ----------------------------------------------------
 
@@ -263,46 +299,56 @@ class AgentMessenger:
         consultation still appears in the transcript (invariant 10) -- a
         silently dropped question is exactly the failure this makes debuggable.
 
-        ``context`` is the engine's ``RunContext``. Unused: everything this
-        needs is per-protocol-run state held on the instance, and reading run
-        state out of the engine's context would be a second source of truth.
-        """
-        request = self.append(from_agent_id=from_agent_id, to_agent_id=to_agent_id, parts=parts)
+        ``from_agent_id`` is the engine's view of the caller -- ``RunContext``'s
+        durable ``agent_id``, the reusable Agent row this turn ran as. That is
+        the wrong identity here and is deliberately **ignored**: authorization,
+        the transcript and the briefing all speak in canvas node ids, one
+        durable agent can back turns for more than one node, and taking the
+        sender from outside would put identity in the caller's hands (invariant
+        2). The agent speaking is whichever turn is innermost on the stack --
+        see :meth:`turn`.
 
-        refusal = await self._refusal(from_agent_id, to_agent_id)
+        ``context`` is the engine's ``RunContext``. Unused for the same reason:
+        everything this needs is per-protocol-run state held on the instance,
+        and reading run state out of the engine's context would be a second
+        source of truth.
+        """
+        sender_id = self._turn_stack[-1] if self._turn_stack else self._entry_agent_id
+        request = self.append(from_agent_id=sender_id, to_agent_id=to_agent_id, parts=parts)
+
+        refusal = await self._refusal(sender_id, to_agent_id)
         if refusal is not None:
-            logger.info("consultation refused (%s -> %s): %s", from_agent_id, to_agent_id, refusal)
-            return await self._reply(to_agent_id, from_agent_id, refusal, state="rejected")
+            logger.info("consultation refused (%s -> %s): %s", sender_id, to_agent_id, refusal)
+            return await self._reply(to_agent_id, sender_id, refusal, state="rejected")
 
         await self.checkpoint()
 
         self._executions += 1
-        self._depth += 1
-        try:
-            # The caller's own clock stops for exactly this span, failures
-            # included: it waited either way, and charging it for a peer's
-            # failure is the same unfairness as charging it for a peer's
-            # success. The conversation-level cap above keeps ticking.
-            with deadlines_paused():
-                # Built here, before the peer runs, so it is a snapshot of the
-                # conversation as it stood when the question was asked.
-                briefing = self._briefing(
-                    from_agent_id=from_agent_id,
-                    to_agent_id=to_agent_id,
-                    exclude_message_id=request["message_id"],
-                )
+        # The caller's own clock stops for exactly this span, failures
+        # included: it waited either way, and charging it for a peer's
+        # failure is the same unfairness as charging it for a peer's
+        # success. The conversation-level cap above keeps ticking.
+        with deadlines_paused():
+            # Built here, before the peer runs, so it is a snapshot of the
+            # conversation as it stood when the question was asked.
+            briefing = self._briefing(
+                from_agent_id=sender_id,
+                to_agent_id=to_agent_id,
+                exclude_message_id=request["message_id"],
+            )
+            # `turn` is what makes the peer the sender of anything IT asks, and
+            # is also what advances the depth this consultation is nested at.
+            with self.turn(to_agent_id):
                 output_text, error, run_id = await self._run_peer(to_agent_id, parts, briefing=briefing)
-        finally:
-            self._depth -= 1
 
         if error == _AGENT_CANCELLED:
             return await self._reply(
-                to_agent_id, from_agent_id, "The consultation was cancelled.", state="canceled", task_id=run_id
+                to_agent_id, sender_id, "The consultation was cancelled.", state="canceled", task_id=run_id
             )
         if error is not None:
             return await self._reply(
                 to_agent_id,
-                from_agent_id,
+                sender_id,
                 f"The agent could not answer: {error}",
                 state="failed",
                 task_id=run_id,
@@ -311,7 +357,7 @@ class AgentMessenger:
         text = (output_text or "").strip()
         return await self._reply(
             to_agent_id,
-            from_agent_id,
+            sender_id,
             text or "The agent finished without producing an answer.",
             state="completed",
             task_id=run_id,
@@ -492,19 +538,22 @@ async def execute_conversation(
     if ambient_meta is None:
         ambient_meta, _dataset = await _node_run_context(graph, entry_agent_id, workspace_id, owner_id)
 
-    output_text, error, run_id = await _run_agent_node(
-        node,
-        protocol_id=protocol_id,
-        protocol_run_id=protocol_run_id,
-        owner_id=owner_id,
-        user_input=user_input,
-        graph=graph,
-        workspace_id=workspace_id,
-        ambient_meta=ambient_meta,
-        evaluation_metrics=evaluation_metrics,
-        available_agents=await resolve_available_agents(graph, entry_agent_id, owner_id=owner_id),
-        agent_messenger=messenger,
-    )
+    # The entry agent's turn is a turn like any other: without this, the peers
+    # it consults would be recorded and authorized against an empty stack.
+    with messenger.turn(entry_agent_id):
+        output_text, error, run_id = await _run_agent_node(
+            node,
+            protocol_id=protocol_id,
+            protocol_run_id=protocol_run_id,
+            owner_id=owner_id,
+            user_input=user_input,
+            graph=graph,
+            workspace_id=workspace_id,
+            ambient_meta=ambient_meta,
+            evaluation_metrics=evaluation_metrics,
+            available_agents=await resolve_available_agents(graph, entry_agent_id, owner_id=owner_id),
+            agent_messenger=messenger,
+        )
 
     cancelled = error == _AGENT_CANCELLED
     if not cancelled and error is None:

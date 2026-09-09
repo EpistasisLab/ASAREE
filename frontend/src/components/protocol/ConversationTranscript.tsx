@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { Conversation, ConversationMessage } from '@/types/protocols'
 
 // The literal id the backend uses for the human on both ends of a
@@ -66,14 +68,33 @@ export function ConversationTranscript({
 }) {
   const nameOf = (id: string) => (id === USER_PARTICIPANT ? 'You' : agentNames.get(id) ?? id)
   const stateLabel = CONVERSATION_STATE_LABEL[conversation.state] ?? conversation.state
+  // Collapsible because the canvas now opens on the protocol's most recent run
+  // rather than only on one launched in this tab, so this panel is present the
+  // whole time you're editing a Peer Collaboration graph -- not just while
+  // watching a run finish. Collapsed keeps the header, which is the part that
+  // says a conversation happened at all.
+  const [collapsed, setCollapsed] = useState(false)
 
   return (
     <aside className="absolute right-3 bottom-3 z-10 max-h-[45%] w-[min(28rem,calc(100%-1.5rem))] overflow-y-auto rounded-lg border border-[color:var(--node-label)]/35 bg-card/95 p-3 shadow-[0_0_16px_-6px_var(--node-label)] backdrop-blur">
-      <div className="mb-2 flex items-center justify-between gap-2">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex w-full items-center justify-between gap-2 rounded text-left hover:opacity-80"
+        aria-expanded={!collapsed}
+      >
         <p className="text-sm font-medium text-[color:var(--node-label)]">Agent conversation</p>
-        <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{stateLabel}</span>
-      </div>
-      <div className="space-y-2">
+        <span className="flex items-center gap-1.5">
+          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{stateLabel}</span>
+          <span className="text-xs text-muted-foreground">{conversation.messages.length}</span>
+          {collapsed ? (
+            <ChevronUp className="size-3.5 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="size-3.5 text-muted-foreground" />
+          )}
+        </span>
+      </button>
+      <div className={collapsed ? 'hidden' : 'mt-2 space-y-2'}>
         {conversation.messages.map((message) => {
           const badge = message.state ? REPLY_BADGE[message.state] : undefined
           const failed = message.state === 'failed'

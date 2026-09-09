@@ -579,6 +579,31 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
   })
 
+  // What this protocol last did. `runId` above is React state set only by the
+  // mutation that launches a run, so before this the canvas could only ever
+  // show a run started in this very browser tab: a reload dropped the run it
+  // was watching, and a run started outside the GUI (the SDK, a notebook, a
+  // direct API call) could never be watched at all -- its node statuses,
+  // outputs and conversation transcript existed but had no way to be reached.
+  // list_protocol_runs is newest-first, so [0] is the latest.
+  const protocolRunsQuery = useQuery({
+    queryKey: ['protocols', protocolId, 'runs'],
+    queryFn: () => protocolsApi.listRuns(protocolId),
+  })
+
+  // Seeded once and only into an empty slot: a run launched here must win over
+  // whatever happened to be newest when the page loaded, and re-seeding on
+  // every refetch would yank the view off the run the user is watching the
+  // moment someone else's run lands.
+  const seededLatestRun = useRef(false)
+  useEffect(() => {
+    if (seededLatestRun.current || runId) return
+    const latest = protocolRunsQuery.data?.[0]
+    if (!latest) return
+    seededLatestRun.current = true
+    setRunId(latest.id)
+  }, [protocolRunsQuery.data, runId])
+
   const isRunning =
     runNodeMutation.isPending ||
     (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))

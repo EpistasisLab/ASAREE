@@ -422,6 +422,48 @@ async def test_design_impact_reports_a_strategy_change_as_the_reason(experiment_
         assert (impact.added_replicate_count, impact.removed_replicate_count) == (0, 0)
 
 
+async def test_design_impact_reports_a_stage_plan_change_as_the_reason(experiment_id: uuid.UUID) -> None:
+    """Same shape as the strategy change and for the same reason: a different
+    staged pipeline adds and removes no cell, but cells staged through two
+    different pipelines have different artifacts and are not comparable."""
+    spec = _spec(_TWO_BY_ONE, "sequential")
+    async with get_session() as db:
+        await generate_design_cells(db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec=spec)
+
+    async with get_session() as db:
+        impact = await get_design_impact(
+            db,
+            experiment_id=experiment_id,
+            design_spec={
+                **spec,
+                "stage_plan": {"name": "custom", "stages": [{"id": "ingest", "label": "Ingest"}]},
+            },
+        )
+        assert impact.regeneration_required is True
+        assert impact.regeneration_reasons == ("stage_plan_changed",)
+        assert (impact.added_replicate_count, impact.removed_replicate_count) == (0, 0)
+
+
+async def test_an_absent_stage_plan_matches_the_preset_by_any_name(experiment_id: uuid.UUID) -> None:
+    """Every experiment predating the field has no entry and staged through the
+    hardcoded dc/fte/fs triple, which is what the ``tabular_ml`` preset names.
+    An inline copy of it is the same declaration too -- if any of these
+    compared unequal, opening a legacy experiment's Design tab would demand a
+    regeneration it doesn't need."""
+    from asaree_workspace_core import TABULAR_ML
+
+    spec = _spec(_TWO_BY_ONE, "sequential")
+    async with get_session() as db:
+        await generate_design_cells(db, experiment_id=experiment_id, factors=_TWO_BY_ONE, design_spec=spec)
+
+    for declared in ("tabular_ml", {"preset": "tabular_ml"}, TABULAR_ML.as_dict()):
+        async with get_session() as db:
+            impact = await get_design_impact(
+                db, experiment_id=experiment_id, design_spec={**spec, "stage_plan": declared}
+            )
+            assert impact.regeneration_reasons == (), declared
+
+
 async def test_an_absent_strategy_matches_an_explicit_sequential(experiment_id: uuid.UUID) -> None:
     """Every experiment saved before the field existed has no entry, and its
     cells ran the plain pipeline walk -- which is what 'sequential' names. If

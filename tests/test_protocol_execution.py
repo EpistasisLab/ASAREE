@@ -327,6 +327,92 @@ def test_build_user_input_appends_upstream_context_after_prompt() -> None:
     assert result == "Polish the draft\n\nUpstream context:\n[u]: draft text here"
 
 
+# --- deactivated pass-through ------------------------------------------------
+
+
+def test_a_deactivated_node_passes_its_input_through_with_no_label_of_its_own() -> None:
+    """The pass-through is the predecessor's text *verbatim*. If it stamped the
+    predecessor's name into the text, the reader downstream would see that name
+    nested inside a block attributed to the deactivated node."""
+    a = _node("a", "agent", {"prompt": "Draft it"}, label="Drafter")
+    b = _node("b", "agent", {"prompt": "Polish it"}, label="Editor")
+    b["data"]["active"] = False
+    graph = {"nodes": [a, b], "edges": _edges(("a", "b"))}
+    assert pe._upstream_output_text(graph, "b", {"a": {"output_text": "draft text here"}}) == "draft text here"
+
+
+def test_a_reader_downstream_of_a_deactivated_node_sees_that_nodes_name() -> None:
+    """Attribution follows the graph the run actually walked, not the graph the
+    user would have drawn with the node removed. Naming the deactivated node is
+    the honest answer -- it is the node whose slot that text arrived in, and
+    relabelling it as the original author would hide that a step was skipped.
+    Both contracts already behave this way; the envelope must not change it.
+    """
+    a = _node("a", "agent", {"prompt": "Draft it"}, label="Drafter")
+    b = _node("b", "agent", {"prompt": "Polish it"}, label="Editor")
+    b["data"]["active"] = False
+    c = _node("c", "agent", {"prompt": "Publish it"}, label="Publisher")
+    graph = {"nodes": [a, b, c], "edges": _edges(("a", "b"), ("b", "c"))}
+    node_runs: dict = {"a": {"status": "completed", "output_text": "draft text here"}}
+    node_runs["b"] = {"status": "completed", "output_text": pe._upstream_output_text(graph, "b", node_runs)}
+    legacy = pe._build_user_input(c, graph, node_runs, prompt_contract_version=1)
+    current = pe._build_user_input(c, graph, node_runs, prompt_contract_version=2)
+    assert "[b]: draft text here" in legacy
+    assert "[Editor] said:" in current
+    assert "draft text here" in current
+    assert "Drafter" not in current
+
+
+# --- _chain_steps ------------------------------------------------------------
+
+
+def _spec(slug: str) -> dict:
+    return {"coordination_strategy": {"slug": slug}}
+
+
+def test_a_sequential_chain_is_numbered_end_to_end() -> None:
+    graph = {
+        "nodes": [_node(nid, "agent", {}, label=nid.upper()) for nid in ("a", "b", "c")],
+        "edges": _edges(("a", "b"), ("b", "c")),
+    }
+    assert pe._chain_steps(graph, _spec("sequential")) == {
+        "a": (1, 3),
+        "b": (2, 3),
+        "c": (3, 3),
+    }
+
+
+def test_plumbing_does_not_take_up_a_step_number() -> None:
+    """"Step 2 of 3" must count the agents the user drew, not the critic gates
+    between them -- the same reason the audience line looks past them."""
+    graph = {
+        "nodes": [
+            _node("a", "agent", {}, label="SF-DC"),
+            _node("g", "critic_gate", {}, label="Critic (DC)"),
+            _node("b", "agent", {}, label="SF-FTE"),
+        ],
+        "edges": _edges(("a", "g"), ("g", "b")),
+    }
+    assert pe._chain_steps(graph, _spec("sequential")) == {"a": (1, 2), "b": (2, 2)}
+
+
+def test_a_non_sequential_strategy_is_not_numbered() -> None:
+    """A supervisor fan-out has no step 2 of 3, so it gets no number rather than
+    a confidently wrong one."""
+    graph = {
+        "nodes": [_node(nid, "agent", {}, label=nid.upper()) for nid in ("s", "w1", "w2")],
+        "edges": _edges(("s", "w1"), ("s", "w2")),
+    }
+    for slug in ("supervisor_architecture", "peer_collaboration", "hierarchical_delegation"):
+        assert pe._chain_steps(graph, _spec(slug)) == {}
+
+
+def test_a_lone_agent_is_not_numbered() -> None:
+    """"Step 1 of 1" adds nothing to "you are the final step"."""
+    graph = {"nodes": [_node("a", "agent", {}, label="Solo")], "edges": []}
+    assert pe._chain_steps(graph, _spec("sequential")) == {}
+
+
 def test_build_user_input_cues_dataset_without_dictating_ids() -> None:
     # The ids the prompt used to spell out -- experiment_id, cell_label, the
     # dataset name -- all reach open_workspace as ambient _meta now. Anything

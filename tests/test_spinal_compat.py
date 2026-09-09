@@ -301,11 +301,20 @@ def test_the_spinal_experiment_resolves_to_the_legacy_contract(graph: dict[str, 
 
 
 def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, Any]) -> None:
-    """The counterfactual, asserted against the real graph: the improvement the
-    current contract makes is not cosmetic on this pipeline -- it rewrites the
-    label of every handoff in it. Had it shipped as an edit to the frozen format
-    rather than as a second one, every published number would have come from a
-    different prompt."""
+    """The counterfactual, asserted against the real graph: what the current
+    contract does is not cosmetic on this pipeline -- it rewrites every handoff
+    in it. Had it shipped as an edit to the frozen format rather than as a
+    second one, every published number would have come from a different prompt.
+
+    Stated as "the *only* difference is the upstream block" rather than as a
+    literal transformation of one into the other. It began life as
+    ``legacy.replace(f"[{node_id}]", f"[{label}]") == current``, which was true
+    while the current contract was the legacy one with the labels swapped and
+    stopped being true the moment it grew a fence and a framing sentence. The
+    claim worth keeping is the one about scope: whatever the current contract
+    does, it does inside that block, and the Dataset/Script cues around it are
+    tool-usage instructions that both contracts share.
+    """
     dc_gate_id = _AGENTS[0][2]
     fte_id = _AGENTS[1][0]
     node_runs = {dc_gate_id: {"status": "completed", "output_text": "DC accepted v1_dc."}}
@@ -313,10 +322,10 @@ def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, An
     current = _prompt(graph, fte_id, node_runs=node_runs, prompt_contract_version=CURRENT_PROMPT_CONTRACT)
     assert legacy != current
     gate_label = next(n["data"]["label"] for n in graph["nodes"] if n["id"] == dc_gate_id)
-    assert f"Upstream context:\n[{gate_label}]: DC accepted v1_dc." in current
-    # And only that block moved -- the Dataset/Script cues are tool-usage
-    # instructions, not part of what either contract freezes.
-    assert legacy.replace(f"[{dc_gate_id}]", f"[{gate_label}]") == current
+    assert f"Upstream context:\n[{gate_label}] said:" in current
+    legacy_block = pe._upstream_context_legacy(graph, fte_id, node_runs)
+    current_block = pe._upstream_context(graph, fte_id, node_runs)
+    assert legacy.replace(legacy_block, current_block) == current
 
 
 # The node the goldens below are captured on, and the run state they see.
@@ -335,7 +344,24 @@ _GOLDEN_NAMES = {LEGACY_PROMPT_CONTRACT: "legacy", CURRENT_PROMPT_CONTRACT: "cur
 
 def _assert_golden(graph: dict[str, Any], contract: int) -> None:
     golden = _GOLDEN_PROMPTS / f"spinal_fte_{_GOLDEN_NAMES[contract]}.txt"
-    actual = _prompt(graph, _GOLDEN_NODE_ID, node_runs=_GOLDEN_NODE_RUNS, prompt_contract_version=contract)
+    actual = _prompt(
+        graph,
+        _GOLDEN_NODE_ID,
+        node_runs=_GOLDEN_NODE_RUNS,
+        prompt_contract_version=contract,
+        # What ``run_protocol``'s walk passes, so the goldens are what a real
+        # run gives SF-FTE rather than what a bare builder call produces. The
+        # step comes from the experiment's own declaration rather than a literal
+        # ``None``, so that if this experiment's strategy were ever read
+        # differently the golden would move with it: ``critic_gate`` yields no
+        # numbering today, since only ``sequential`` gets "step N of M".
+        # Passed for *both* contracts on purpose -- the legacy golden must show
+        # it being dropped, since a call site cannot know which contract the
+        # experiment it runs is pinned to.
+        audience=pe._node_audience(
+            graph, _GOLDEN_NODE_ID, step=pe._chain_steps(graph, _SPINAL_DESIGN_SPEC).get(_GOLDEN_NODE_ID)
+        ),
+    )
     assert actual == golden.read_text()
 
 

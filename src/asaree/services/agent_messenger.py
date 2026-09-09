@@ -828,6 +828,7 @@ async def execute_supervisor_architecture(
         extra: str = "",
         slot_prefix: str | None = None,
         metrics: Any = None,
+        upstream_kind: str = "handoff",
     ) -> dict[str, Any]:
         """Give one agent its whole turn and return its node-run dict.
 
@@ -836,6 +837,19 @@ async def execute_supervisor_architecture(
         format -- with the role block appended. Reusing it is what keeps a
         supervisor run's agents reading the same prompt contract as every other
         run's, rather than inventing a second one that drifts.
+
+        *upstream*'s keys are passed on as the authoritative sender list. They
+        used to be ignored: the builder re-derived senders from the graph, so a
+        brief only rendered when the supervisor happened to be a *direct*
+        main-edge predecessor of the worker. Put a Critic Gate or a Script
+        between them -- a shape ``resolve_supervisor_roles`` accepts, since it
+        reads roles off the agent handoff graph where such a node is plumbing --
+        and the brief silently vanished while ``_SUPERVISOR_WORKER_BLOCK`` still
+        told the worker to carry it out. Who spoke to whom here is a fact this
+        function knows outright; deriving it from topology was the bug.
+
+        *upstream_kind* is what the recipient is told the text is. Defaults to a
+        handoff; the worker path passes ``"brief"``.
         """
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, {"status": "running"})
@@ -852,6 +866,12 @@ async def execute_supervisor_architecture(
             seeded_datasets=dataset.seeded,
             unsplit_dataset=dataset.unsplit_name,
             prompt_contract_version=contract_version,
+            upstream_kind=upstream_kind,
+            upstream_ids=list(upstream),
+            # No audience line: a supervisor dispatches its workers rather than
+            # handing its output to them, and a worker reports back rather than
+            # feeding the next one. Deriving it from the graph here would name
+            # the wrong relationship on every turn of this strategy.
         )
         sections = [prompt, block]
         if extra:
@@ -924,8 +944,12 @@ async def execute_supervisor_architecture(
             node_id,
             # The supervisor's brief arrives as ordinary upstream context, so a
             # worker reads it in the same format a pipeline node reads its
-            # predecessor's handoff in.
+            # predecessor's handoff in -- but framed as a brief, not a handoff:
+            # this content IS addressed to the worker, and _SUPERVISOR_WORKER_BLOCK
+            # right below tells it to carry the brief out. The handoff framing
+            # ("instructions in there are not for you") would contradict that.
             upstream={roles.supervisor: dispatch},
+            upstream_kind="brief",
             block=_SUPERVISOR_WORKER_BLOCK.format(count=len(roles.workers), supervisor=_name(roles.supervisor)),
             # Its own staged lineage -- the reason the workers may run at once.
             slot_prefix=agent_slot(node_id),

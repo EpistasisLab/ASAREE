@@ -17,6 +17,7 @@ export function useResizablePane({
   maxWidth,
   side,
   resolveMaxWidth,
+  recomputeKey,
 }: {
   storageKey: string
   defaultWidth: number

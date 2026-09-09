@@ -43,10 +43,12 @@ export function AgentNode({
     // canvas supplies the wiring; the capability lookup below is this card's.
     hasPeers?: boolean
     llmConfig?: { provider?: string; model?: string } | null
-    // Also the canvas's: `data.conversation_lead` AND the experiment actually
-    // coordinating by Peer Collaboration. Not the raw flag -- the strategy
-    // lives on the experiment, which this card doesn't query.
-    isConversationLead?: boolean
+    // Also the canvas's: which role `data.conversation_lead` amounts to under
+    // the experiment's coordination strategy -- 'lead' under Peer
+    // Collaboration, 'supervisor' under Supervisor, and null under a strategy
+    // that ignores the marker. Not the raw flag: the strategy lives on the
+    // experiment, which this card doesn't query.
+    leadRole?: 'lead' | 'supervisor' | null
     // The canvas's too: whether this node's main-flow sides can still take an
     // edge. Only ever true under Sequential, where the chain rule caps each at
     // one -- see ProtocolCanvas's `mainEdgeSlots`.
@@ -135,13 +137,17 @@ export function AgentNode({
             "this is the agent that leads" reads as part of the node's identity
             anyway. `outline` so it states a role without competing with the
             run-status badge, which is the thing that actually changes. */}
-        {data.isConversationLead && (
+        {data.leadRole && (
           <Badge
             variant="outline"
-            title="The conversation starts here -- this agent gets the task and its answer is the recorded result"
+            title={
+              data.leadRole === 'supervisor'
+                ? 'This agent briefs the workers wired to it and writes the final answer, which is the recorded result'
+                : 'The conversation starts here -- this agent gets the task and its answer is the recorded result'
+            }
             className="h-4 shrink-0 border-[color:var(--card-accent)]/60 px-1.5 text-[10px] text-[color:var(--card-accent)]"
           >
-            Lead
+            {data.leadRole === 'supervisor' ? 'Supervisor' : 'Lead'}
           </Badge>
         )}
       </div>

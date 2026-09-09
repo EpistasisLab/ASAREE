@@ -62,9 +62,14 @@ export interface MetricScoringConfig {
 // entry. Six ARES coordination-category placeholders (supervisor, swarm, task
 // bidding, supervision tree, event-driven, multi-agent planning) used to be
 // listed and were removed: an option that always fails at run time is worse
-// than an option that isn't offered. The backend still recognizes those slugs
-// so an experiment saved with one gets a real explanation, not "unknown".
-export type CoordinationStrategySlug = 'sequential' | 'critic_gate' | 'peer_collaboration'
+// than an option that isn't offered. The backend still recognizes the five that
+// remain unbuilt, so an experiment saved with one gets a real explanation, not
+// "unknown" -- supervisor came back off that list once it was actually built.
+export type CoordinationStrategySlug =
+  | 'sequential'
+  | 'critic_gate'
+  | 'peer_collaboration'
+  | 'supervisor_architecture'
 
 export interface CoordinationStrategyConfig {
   slug: CoordinationStrategySlug
@@ -95,6 +100,16 @@ export const COORDINATION_STRATEGY_CATALOG: {
     // messenger's -- services/agent_messenger.py.
     description:
       'Connected agents work the task together as a conversation -- the lead agent can consult its peers, and every reply is shared with everyone, instead of handing off once. Each consultation is a full agent run (up to 8, nested 2 deep), so a cell can cost several times a sequential one.',
+  },
+  {
+    slug: 'supervisor_architecture',
+    label: 'Supervisor',
+    // The contrast with Peer Collaboration is the whole reason to pick one over
+    // the other, so it's stated rather than left to be discovered at run time:
+    // there, the lead *may* consult; here, ASAREE dispatches every worker
+    // itself. The turn count is the topology's, which is why no cap is quoted.
+    description:
+      'One supervisor agent briefs the workers wired to it, they all run (in parallel by default), an optional reviewer assesses their output advisorily, and the supervisor writes the final answer. Every one of those turns is dispatched by ASAREE, so no worker can be skipped -- a cell costs one agent run per agent, plus a second for the supervisor.',
   },
 ]
 

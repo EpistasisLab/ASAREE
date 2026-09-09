@@ -736,6 +736,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // `coordination_strategy_slug` on the backend.
   const coordinationSlug = experimentQuery.data?.design_spec?.coordination_strategy?.slug ?? 'sequential'
   const isPeerCollaboration = coordinationSlug === 'peer_collaboration'
+  const isSupervisor = coordinationSlug === 'supervisor_architecture'
   const isSequential = coordinationSlug === 'sequential'
 
   // Which main-flow sides are already taken. Only consulted under
@@ -770,10 +771,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           // from a Peer Collaboration experiment that has since been switched
           // to Sequential would claim a role nothing acts on. The flag itself
           // is kept (see AgentNodeInspector) -- only the badge is conditional.
-          isConversationLead:
-            n.type === 'agent' &&
-            isPeerCollaboration &&
-            (n.data as AgentNodeData).conversation_lead === true,
+          // One marker, two strategies, two words for it: `conversation_lead`
+          // says "starts the conversation" under Peer Collaboration and "is the
+          // supervisor" under Supervisor, so the badge names the role the
+          // running strategy will actually give it rather than a generic "Lead".
+          leadRole:
+            n.type === 'agent' && (n.data as AgentNodeData).conversation_lead === true
+              ? isPeerCollaboration
+                ? 'lead'
+                : isSupervisor
+                  ? 'supervisor'
+                  : null
+              : null,
           // Under Sequential the chain rule caps each main side at one edge, so
           // the "+" affordance has to match the rule rather than the rule
           // ambushing the user after they've drawn the edge.
@@ -806,6 +815,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     peerIdsByAgent,
     llmConfigByAgent,
     isPeerCollaboration,
+    isSupervisor,
     isSequential,
     mainEdgeSlots,
   ])

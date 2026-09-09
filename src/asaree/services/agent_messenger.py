@@ -34,6 +34,7 @@ are byte-for-byte unaffected) structural rather than a promise.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -42,14 +43,18 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from asaree_workspace_core import agent_slot
 from motoro.engine.ports import AgentReply
 
 from asaree.models.database import get_session
 from asaree.services.dataset_workspaces import head_data_locator
 from asaree.services.deadline import deadlines_paused
 from asaree.services.experiments import get_experiment
+from asaree.services.prompt_contract import DEFAULT_PROMPT_CONTRACT_VERSION
 from asaree.services.protocol_execution import (
     _AGENT_CANCELLED,
+    SupervisorRoles,
+    _build_user_input,
     _can_deliver_communication,
     _compute_workspace_id,
     _node_run_context,
@@ -109,9 +114,16 @@ class AgentMessenger:
     checkpoints it to ``ProtocolRun.conversation`` around every peer execution,
     which is what lets a worker retry see exactly how far it got.
 
-    Not concurrency-safe, by design: invariant 5 is that one agent executes at a
-    time and a consulting agent blocks on its peer's reply, so ``sequence`` and
-    the budget counters are only ever touched from a single logical call stack.
+    The consultation path (:meth:`send`) is single-threaded by design:
+    invariant 5 is that one agent executes at a time and a consulting agent
+    blocks on its peer's reply, so ``sequence``, the budget counters and the
+    turn stack are only ever touched from a single logical call stack.
+
+    :func:`execute_supervisor_architecture` is the deliberate exception -- it
+    dispatches workers concurrently rather than having a model ask for them --
+    and it uses the *transcript* only, through :meth:`record`, which is locked.
+    It never calls :meth:`send`, so nothing about the budget or the turn stack
+    is ever touched concurrently.
     """
 
     def __init__(
@@ -145,6 +157,9 @@ class AgentMessenger:
         #: against the graph at all -- see :meth:`send`.
         self._turn_stack: list[str] = []
         self._messages: list[dict[str, Any]] = []
+        #: Guards append-then-checkpoint for the one caller that runs agents
+        #: concurrently -- see :meth:`record`. Uncontended everywhere else.
+        self._lock = asyncio.Lock()
         #: Node id -> the label the canvas shows, so a briefing names agents the
         #: way the user does. Same source ``build_agent_card`` uses, and the same
         #: node-id fallback, so a peer is called one thing everywhere.
@@ -224,6 +239,31 @@ class AgentMessenger:
     async def checkpoint(self) -> None:
         async with get_session() as db:
             await update_conversation(db, self._protocol_run_id, self.conversation)
+
+    async def record(
+        self,
+        *,
+        from_agent_id: str,
+        to_agent_id: str,
+        parts: list[dict[str, Any]],
+        state: str | None = None,
+    ) -> dict[str, Any]:
+        """:meth:`append` and :meth:`checkpoint` as one atomic step.
+
+        For :func:`execute_supervisor_architecture`, whose workers really do run
+        concurrently -- the one place invariant 5 (one agent at a time) does not
+        hold, because ASAREE dispatches those turns itself rather than one model
+        blocking on another. ``append`` alone is already safe under asyncio (it
+        touches ``_sequence`` and the list with no await in between), but the
+        checkpoint that follows does await, so two finishing workers could
+        otherwise write the transcript out of order and leave a stale document
+        as the last word. The lock makes "assign a sequence, then persist"
+        indivisible.
+        """
+        async with self._lock:
+            message = self.append(from_agent_id=from_agent_id, to_agent_id=to_agent_id, parts=parts, state=state)
+            await self.checkpoint()
+        return message
 
     # -- briefing ------------------------------------------------------
 
@@ -619,6 +659,354 @@ async def execute_conversation(
     async with get_session() as db:
         await update_node_run(db, protocol_run_id, entry_agent_id, node_run)
     return node_run, status
+
+
+#: Wall-clock budget per forced turn of a supervisor run. Multiplied by the
+#: topology's own execution count (``SupervisorRoles.execution_budget``) to get
+#: the run's backstop, rather than being a flat number the way a conversation's
+#: is: a conversation's turn count is decided by models and has to be capped
+#: from outside, while a supervisor run's is decided by the canvas and is known
+#: before anything starts. Parallel workers make this generous, which is the
+#: point -- it is a backstop against a wedged run, not a scheduling target.
+_MAX_SUPERVISOR_TURN_DURATION = timedelta(minutes=5)
+
+#: Appended to the supervisor's FIRST turn. It writes the brief every worker
+#: receives, so it has to know that it is writing for them and not answering
+#: yet -- left to infer it, a model answers the question itself and the workers
+#: get a finished analysis to "help" with.
+_SUPERVISOR_DISPATCH_BLOCK = (
+    "Coordination:\n"
+    "You are the supervisor of this run. {count} worker agents report to you: {workers}. "
+    "This turn is the BRIEF you send them, not the answer -- write the instructions and the division of "
+    "labour, addressed to the workers, naming who does what. They run {mode} immediately after this turn "
+    "and cannot ask you anything, so anything they need must be in what you write now. Do not attempt the "
+    "task yourself here. You will see everything they produce{review_clause}, and you write the final "
+    "answer in a later turn."
+)
+
+#: Appended to each worker's turn.
+_SUPERVISOR_WORKER_BLOCK = (
+    "Coordination:\n"
+    "You are one of {count} worker agents on this run, reporting to {supervisor}. Its brief is above. Do "
+    "your part of it and report back with your findings -- you cannot consult the supervisor or the other "
+    "workers, and this is your only turn, so a partial result reported plainly is better than a guess "
+    "presented as fact. Say what you could not do and why."
+)
+
+#: Appended to the reviewer's turn. The verdict is advisory by explicit
+#: decision: the reviewer reports, the supervisor decides. A binding gate is
+#: what the Critic Gate strategy is for.
+_SUPERVISOR_REVIEW_BLOCK = (
+    "Coordination:\n"
+    "You are the quality reviewer for this run. Every worker's output is above. Assess it -- what is "
+    "sound, what is wrong, what is missing, what should not be relied on -- and report to {supervisor}. "
+    "Your verdict is ADVISORY: you are not approving or blocking anything, and the supervisor decides "
+    "what to do with it, so be specific about severity rather than issuing a pass/fail."
+)
+
+#: Appended to the supervisor's SECOND turn, together with the collected work.
+_SUPERVISOR_SYNTHESIS_BLOCK = (
+    "Coordination:\n"
+    "Your workers have finished and their output is above. This turn is the FINAL ANSWER to the original "
+    "task -- it is what this run delivers, so write it in full rather than commenting on your workers. "
+    "Reconcile whatever they disagree on, and account for anything a worker could not do instead of "
+    "passing the gap on silently.{review_clause}"
+)
+
+_SUPERVISOR_ADVISORY_CLAUSE = (
+    " The reviewer's assessment is advisory -- weigh it and say so when you overrule it, but it does not "
+    "decide the answer."
+)
+
+
+def _supervisor_report(display_name: str, run: dict[str, Any]) -> str:
+    """One agent's turn rendered for the next agent's prompt.
+
+    A failed or skipped worker is reported as such rather than omitted: the
+    supervisor's job includes noticing that a third of the work is missing, and
+    a silently shorter list of contributions is exactly how that goes unnoticed.
+    """
+    status = str(run.get("status") or "skipped")
+    if status == "completed":
+        return f"--- {display_name} ---\n{str(run.get('output_text') or '').strip() or '(no output)'}"
+    if status == "cancelled":
+        return f"--- {display_name} ---\n(this agent's turn was cancelled and produced nothing)"
+    if status == "failed":
+        reason = run.get("error") or "unknown error"
+        return f"--- {display_name} ---\n(this agent failed and produced nothing: {reason})"
+    return f"--- {display_name} ---\n(this agent did not run)"
+
+
+async def execute_supervisor_architecture(
+    protocol_run_id: uuid.UUID,
+    *,
+    protocol_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    graph: dict[str, Any],
+    roles: SupervisorRoles,
+    user_input: str,
+    workspace_id: str | None,
+    evaluation_metrics: Any = None,
+    parallel_workers: bool = True,
+    experiment_id: uuid.UUID | None = None,
+    effective_cell_label: str | None = None,
+    contract_version: int = DEFAULT_PROMPT_CONTRACT_VERSION,
+) -> tuple[dict[str, Any], str]:
+    """Run one cell as a supervisor dispatching to workers.
+
+    Four forced stages -- supervisor brief, all workers, the optional reviewer,
+    supervisor synthesis -- and the word that matters is *forced*. Peer
+    Collaboration can express this shape as a graph, but consultation there is a
+    function schema the model chooses to call, so a supervisor that decides two
+    of its three workers suffice produces a run that isn't comparable to one
+    that used all three. An experiment measures a fixed treatment; ASAREE
+    dispatches every worker itself, which is what makes "all three ran" a
+    property of the design rather than of the model's mood. Same guarantee the
+    Sequential strategy makes, one topology up.
+
+    Workers run concurrently unless *parallel_workers* is false. That is safe
+    only because each one stages into its own ``agent:<node_id>`` workspace slot
+    (Phase 4) -- on a shared lineage, two workers accepting a stage would move
+    HEAD out from under each other. Serial mode exists for the case where that
+    isolation is not what the user wants (workers deliberately building on each
+    other's staged data) and for reproducing a run turn by turn.
+
+    A failed worker does not abort its siblings and does not fail the run: the
+    failure is reported to the supervisor in place of that worker's output, and
+    the supervisor decides what the answer is without it. That is the same
+    stance as the advisory reviewer -- the supervisor holds the pen. A run fails
+    only when the supervisor itself fails, or when *every* worker did, since
+    then there is nothing to synthesize and a confident final answer would be
+    fabricated.
+
+    Returns the supervisor's final node run (this cell's result) and the
+    terminal ``ProtocolRun`` status, matching :func:`execute_conversation` so
+    ``run_protocol``'s shared write-back path handles both.
+    """
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
+    messenger = AgentMessenger(
+        protocol_id=protocol_id,
+        protocol_run_id=protocol_run_id,
+        owner_id=owner_id,
+        graph=graph,
+        entry_agent_id=roles.supervisor,
+        workspace_id=workspace_id,
+    )
+    started_at = time.monotonic()
+    deadline = _MAX_SUPERVISOR_TURN_DURATION.total_seconds() * roles.execution_budget
+    limit_reached = False
+
+    def _name(node_id: str) -> str:
+        return messenger._display_name(node_id)
+
+    worker_names = ", ".join(_name(nid) for nid in roles.workers)
+    review_clause = _SUPERVISOR_ADVISORY_CLAUSE if roles.reviewer else ""
+
+    await messenger.record(
+        from_agent_id=USER_PARTICIPANT,
+        to_agent_id=roles.supervisor,
+        parts=[{"kind": "text", "text": user_input}],
+    )
+
+    async def _turn(
+        node_id: str,
+        *,
+        upstream: dict[str, Any],
+        block: str,
+        extra: str = "",
+        slot_prefix: str | None = None,
+        metrics: Any = None,
+    ) -> dict[str, Any]:
+        """Give one agent its whole turn and return its node-run dict.
+
+        The prompt is built by ``_build_user_input`` exactly as a pipeline node's
+        is -- same seed prompt, same Dataset/Script cues, same upstream-context
+        format -- with the role block appended. Reusing it is what keeps a
+        supervisor run's agents reading the same prompt contract as every other
+        run's, rather than inventing a second one that drifts.
+        """
+        async with get_session() as db:
+            await update_node_run(db, protocol_run_id, node_id, {"status": "running"})
+        ambient_meta, dataset = await _node_run_context(
+            graph, node_id, workspace_id, owner_id, slot_prefix=slot_prefix
+        )
+        prompt = _build_user_input(
+            nodes[node_id],
+            graph,
+            upstream,
+            experiment_id=experiment_id,
+            effective_cell_label=effective_cell_label,
+            script_bound="script_path" in ambient_meta,
+            seeded_datasets=dataset.seeded,
+            unsplit_dataset=dataset.unsplit_name,
+            prompt_contract_version=contract_version,
+        )
+        sections = [prompt, block]
+        if extra:
+            sections.insert(1, extra)
+        with messenger.turn(node_id):
+            output_text, error, run_id = await _run_agent_node(
+                nodes[node_id],
+                protocol_id=protocol_id,
+                protocol_run_id=protocol_run_id,
+                owner_id=owner_id,
+                user_input="\n\n".join(s for s in sections if s),
+                graph=graph,
+                workspace_id=workspace_id,
+                ambient_meta=ambient_meta,
+                evaluation_metrics=metrics,
+            )
+        run = {
+            "status": "cancelled" if error == _AGENT_CANCELLED else ("failed" if error else "completed"),
+            "output_text": output_text,
+            "error": None if error == _AGENT_CANCELLED else error,
+            "run_id": str(run_id) if run_id else None,
+        }
+        async with get_session() as db:
+            await update_node_run(db, protocol_run_id, node_id, run)
+        return run
+
+    async def _cancelled() -> bool:
+        async with get_session() as db:
+            run = await get_protocol_run(db, protocol_run_id)
+        return run is not None and run.cancel_requested_at is not None
+
+    async def _skip(node_id: str, reason: str) -> dict[str, Any]:
+        run = {"status": "skipped", "output_text": None, "error": reason, "run_id": None}
+        async with get_session() as db:
+            await update_node_run(db, protocol_run_id, node_id, run)
+        return run
+
+    # -- 1. the supervisor's brief -------------------------------------
+    dispatch = await _turn(
+        roles.supervisor,
+        upstream={},
+        block=_SUPERVISOR_DISPATCH_BLOCK.format(
+            count=len(roles.workers),
+            workers=worker_names,
+            mode="in parallel" if parallel_workers else "one after another",
+            review_clause=f", reviewed by {_name(roles.reviewer)}" if roles.reviewer else "",
+        ),
+    )
+    if dispatch["status"] != "completed":
+        # Nothing was briefed, so nothing downstream has anything to do. The
+        # supervisor's own failure is the run's failure -- see the docstring.
+        for node_id in (*roles.workers, *(r for r in [roles.reviewer] if r)):
+            await _skip(node_id, "the supervisor did not produce a brief")
+        state = "canceled" if dispatch["status"] == "cancelled" else "failed"
+        messenger.set_state(state)
+        await messenger.checkpoint()
+        return dispatch, "cancelled" if state == "canceled" else "failed"
+
+    brief = str(dispatch["output_text"] or "")
+
+    # -- 2. every worker, none skipped ---------------------------------
+    async def _worker(node_id: str) -> tuple[str, dict[str, Any]]:
+        await messenger.record(
+            from_agent_id=roles.supervisor,
+            to_agent_id=node_id,
+            parts=[{"kind": "text", "text": brief}],
+        )
+        run = await _turn(
+            node_id,
+            # The supervisor's brief arrives as ordinary upstream context, so a
+            # worker reads it in the same format a pipeline node reads its
+            # predecessor's handoff in.
+            upstream={roles.supervisor: dispatch},
+            block=_SUPERVISOR_WORKER_BLOCK.format(count=len(roles.workers), supervisor=_name(roles.supervisor)),
+            # Its own staged lineage -- the reason the workers may run at once.
+            slot_prefix=agent_slot(node_id),
+        )
+        await messenger.record(
+            from_agent_id=node_id,
+            to_agent_id=roles.supervisor,
+            parts=[{"kind": "text", "text": _supervisor_report(_name(node_id), run)}],
+            state="completed" if run["status"] == "completed" else str(run["status"]),
+        )
+        return node_id, run
+
+    if await _cancelled():
+        worker_runs = {nid: await _skip(nid, "the run was cancelled") for nid in roles.workers}
+    elif parallel_workers:
+        # gather, not a TaskGroup: one worker raising must not cancel its
+        # siblings, and _turn already turns an agent failure into a run dict, so
+        # anything that reaches here is infrastructure and is re-raised below.
+        worker_runs = dict(await asyncio.gather(*(_worker(nid) for nid in roles.workers)))
+    else:
+        worker_runs = dict([await _worker(nid) for nid in roles.workers])
+
+    # -- 3. the advisory reviewer --------------------------------------
+    collected = "\n\n".join(_supervisor_report(_name(nid), worker_runs[nid]) for nid in roles.workers)
+    review: dict[str, Any] | None = None
+    if roles.reviewer is not None:
+        if await _cancelled():
+            review = await _skip(roles.reviewer, "the run was cancelled")
+        elif time.monotonic() - started_at >= deadline:
+            limit_reached = True
+            review = await _skip(roles.reviewer, "this run reached its time limit before the review")
+        else:
+            await messenger.record(
+                from_agent_id=roles.supervisor,
+                to_agent_id=roles.reviewer,
+                parts=[{"kind": "text", "text": collected}],
+            )
+            review = await _turn(
+                roles.reviewer,
+                # `collected` rather than upstream=worker_runs: upstream context
+                # carries only the nodes that produced output, so a worker that
+                # failed would be invisible here -- and "a third of this run is
+                # missing" is exactly the kind of thing a reviewer is for.
+                upstream={},
+                extra=f"Every worker's report:\n\n{collected}",
+                block=_SUPERVISOR_REVIEW_BLOCK.format(supervisor=_name(roles.supervisor)),
+            )
+            await messenger.record(
+                from_agent_id=roles.reviewer,
+                to_agent_id=roles.supervisor,
+                parts=[{"kind": "text", "text": _supervisor_report(_name(roles.reviewer), review)}],
+                state="completed" if review["status"] == "completed" else str(review["status"]),
+            )
+
+    # -- 4. the supervisor synthesizes ---------------------------------
+    # Deliberately NOT guarded by the deadline or by a cancel check: this turn
+    # is what the run delivers, and skipping it would throw away every turn
+    # already paid for. A Stop click still interrupts it mid-flight through
+    # Motoro's own cancel poller, which is the granularity the rest of
+    # run_protocol uses too.
+    gathered = collected
+    if review is not None:
+        gathered += "\n\n" + _supervisor_report(f"{_name(roles.reviewer or '')} (advisory review)", review)
+    final = await _turn(
+        roles.supervisor,
+        upstream={},
+        extra=f"Your workers' reports:\n\n{gathered}",
+        block=_SUPERVISOR_SYNTHESIS_BLOCK.format(review_clause=review_clause if review is not None else ""),
+        metrics=evaluation_metrics,
+    )
+    await messenger.record(
+        from_agent_id=roles.supervisor,
+        to_agent_id=USER_PARTICIPANT,
+        parts=[{"kind": "text", "text": str(final["output_text"] or "")}],
+        state="completed" if final["status"] == "completed" else str(final["status"]),
+    )
+
+    everyone_failed = bool(roles.workers) and all(worker_runs[nid]["status"] != "completed" for nid in roles.workers)
+    if final["status"] == "cancelled":
+        state, status = "canceled", "cancelled"
+    elif final["status"] != "completed":
+        state, status = "failed", "failed"
+    elif everyone_failed:
+        state, status = "failed", "failed"
+        final = {**final, "status": "failed", "error": "every worker failed, so there was nothing to synthesize"}
+        async with get_session() as db:
+            await update_node_run(db, protocol_run_id, roles.supervisor, final)
+    elif limit_reached:
+        state, status = "limit_reached", "limit_reached"
+    else:
+        state, status = "completed", "completed"
+    messenger.set_state(state)
+    await messenger.checkpoint()
+    return final, status
 
 
 async def record_sequential_transcript(

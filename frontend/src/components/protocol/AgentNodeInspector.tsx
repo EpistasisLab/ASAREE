@@ -108,13 +108,18 @@ export function AgentNodeInspector({
   // overwhelmingly common single-agent/sequential experiment is worse than an
   // absent one. An already-marked agent still keeps its flag through a strategy
   // change; nothing reads it, and switching back shouldn't silently lose it.
-  const isPeerCollaboration = experimentQuery.data?.design_spec?.coordination_strategy?.slug === 'peer_collaboration'
+  // Both strategies read the SAME `conversation_lead` field, deliberately: it
+  // marks "the agent this strategy hands the task to", which is the lead under
+  // one and the supervisor under the other, so the two never disagree about
+  // who that is and switching strategy doesn't need a re-mark.
+  const strategySlug = experimentQuery.data?.design_spec?.coordination_strategy?.slug
+  const leadRole = strategySlug === 'peer_collaboration' ? 'lead' : strategySlug === 'supervisor_architecture' ? 'supervisor' : null
   // Exactly one agent can lead (two is a server-side validation error), so once
   // one is marked the checkbox is offered on that agent alone -- unmark it there
   // to move the role. Showing it everywhere would invite creating an invalid
   // canvas, and silently reassigning on click would move a role the user might
   // only have been inspecting.
-  const canMarkLead = isPeerCollaboration && (markedLeadAgentId === null || markedLeadAgentId === node.id)
+  const canMarkLead = leadRole !== null && (markedLeadAgentId === null || markedLeadAgentId === node.id)
 
   function patchConfig(patch: Partial<AgentNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
@@ -184,9 +189,10 @@ export function AgentNodeInspector({
               {/* First, above Prompt: which agent leads decides whose prompt
                   becomes the task and whose answer gets scored, so it frames
                   everything below it rather than being one more setting. It
-                  only renders under Peer Collaboration, and only on the agent
-                  that may still take the role (see canMarkLead), so it costs
-                  the common single-agent case no vertical space at all. */}
+                  only renders under the two strategies that read the marker,
+                  and only on the agent that may still take the role (see
+                  canMarkLead), so it costs the common single-agent case no
+                  vertical space at all. */}
               {canMarkLead && (
                 <div className="space-y-2 rounded-md border bg-muted/20 p-3">
                   <label
@@ -199,12 +205,26 @@ export function AgentNodeInspector({
                       onCheckedChange={(checked) => onChange(node.id, { ...data, conversation_lead: checked === true })}
                     />
                     <span className="min-w-0">
-                      <span className="text-sm font-medium">Conversation lead</span>
+                      <span className="text-sm font-medium">
+                        {leadRole === 'supervisor' ? 'Supervisor' : 'Conversation lead'}
+                      </span>
                       <span className="mt-0.5 block text-xs text-muted-foreground">
-                        This experiment coordinates by Peer Collaboration, so the task goes to one agent, which can
-                        consult the peers it's wired to while it works. That agent's answer is what gets recorded and
-                        scored. Leave this off to pick the lead from the wiring instead -- the connected agent nothing
-                        feeds into. Mark it when the agents are wired in a loop, where there is no such agent.
+                        {leadRole === 'supervisor' ? (
+                          <>
+                            This experiment coordinates by Supervisor, so the task goes to one agent, which briefs the
+                            agents it hands off to and then writes the final answer from what they report back. That
+                            answer is what gets recorded and scored. Leave this off to pick the supervisor from the
+                            wiring instead -- the agent that hands off to others and nothing feeds into.
+                          </>
+                        ) : (
+                          <>
+                            This experiment coordinates by Peer Collaboration, so the task goes to one agent, which can
+                            consult the peers it's wired to while it works. That agent's answer is what gets recorded
+                            and scored. Leave this off to pick the lead from the wiring instead -- the connected agent
+                            nothing feeds into. Mark it when the agents are wired in a loop, where there is no such
+                            agent.
+                          </>
+                        )}
                       </span>
                     </span>
                   </label>

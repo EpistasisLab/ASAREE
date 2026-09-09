@@ -24,6 +24,7 @@ import hashlib
 import logging
 import re
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -416,15 +417,22 @@ _EXECUTION_PATTERN_SLUGS: dict[str, str] = {
 # agents can consult each other while working, and each declared cell/replicate
 # still records exactly one result the same way.
 #
-# Six further slugs mirroring ARES's own coordination categories (supervisor/
-# swarm/task-bidding/supervision-tree/event-driven/multi-agent-planning) used to
+# "supervisor_architecture" is the fourth, and the second that changes how a
+# cell run executes: one supervisor dispatches to N workers (in parallel by
+# default), an optional reviewer reports on their output, and the supervisor
+# synthesizes. Every one of those turns is forced by ASAREE rather than chosen
+# by a model -- see ``resolve_supervisor_roles`` and
+# ``execute_supervisor_architecture``.
+#
+# Five further slugs mirroring ARES's own coordination categories (swarm/
+# task-bidding/supervision-tree/event-driven/multi-agent-planning) used to
 # be offered as named placeholders. They were removed from the picker rather
 # than left selectable-but-rejected -- an option that always errors is worse
 # than an option that isn't there. The frozenset stays so an experiment whose
 # design_spec still names one gets that explanation instead of a bare "unknown".
+# ``supervisor_architecture`` was in it until it was actually built.
 _RETIRED_COORDINATION_STRATEGIES = frozenset(
     {
-        "supervisor_architecture",
         "swarm_architecture",
         "task_bidding",
         "supervision_tree_with_guarded_capabilities",
@@ -432,6 +440,10 @@ _RETIRED_COORDINATION_STRATEGIES = frozenset(
         "multi_agent_planning",
     }
 )
+
+#: Strategies whose cells are orchestrated turn by turn instead of walked as a
+#: DAG -- see :func:`is_conversation_strategy` for what that suspends.
+_CONVERSATION_STRATEGIES = frozenset({"peer_collaboration", "supervisor_architecture"})
 
 
 def is_conversation_strategy(design_spec: dict[str, Any] | None) -> bool:
@@ -449,8 +461,15 @@ def is_conversation_strategy(design_spec: dict[str, Any] | None) -> bool:
     start from and no sink at all. Every other check (a non-empty graph,
     critic-gate shape, factor bindings) is about the canvas itself and still
     applies.
+
+    ``supervisor_architecture`` is here for the same reason and not by analogy:
+    its target topology -- workers reporting to a reviewer that reports to the
+    supervisor -- is a cycle through the supervisor, and its result comes from
+    the supervisor rather than from a sink. It is orchestrated turn by turn
+    (:func:`execute_supervisor_architecture`), so it never walks the sort
+    either.
     """
-    return coordination_strategy_slug(design_spec) == "peer_collaboration"
+    return coordination_strategy_slug(design_spec) in _CONVERSATION_STRATEGIES
 
 
 def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, graph: dict[str, Any]) -> None:
@@ -472,6 +491,12 @@ def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, graph:
         # Resolving the entry agent *is* the validation: it fails unless the
         # canvas has connected agents and says unambiguously which one leads.
         validate_conversation_entry(graph, resolve_conversation_entry_id(graph))
+        return
+    if slug == "supervisor_architecture":
+        # Reading the roles *is* the validation, the same way it is for peer:
+        # it fails unless the canvas says unambiguously who supervises, who
+        # works and who reviews.
+        resolve_supervisor_roles(graph)
         return
     if slug in _RETIRED_COORDINATION_STRATEGIES:
         raise ProtocolValidationError(
@@ -1163,7 +1188,9 @@ def _materialize_script(workspace_id: str | None, node_id: str, code: str) -> st
     return str(path)
 
 
-def _ambient_meta_for(graph: dict[str, Any], node_id: str, workspace_id: str | None = None) -> dict[str, Any]:
+def _ambient_meta_for(
+    graph: dict[str, Any], node_id: str, workspace_id: str | None = None, *, slots: tuple[str, ...] = ()
+) -> dict[str, Any]:
     """The node's Reference-route values, for Motoro's caller-ambient ``_meta``.
 
     Motoro lifts ``run_metadata["ambient_meta"]`` onto every MCP tool call as
@@ -1208,6 +1235,12 @@ def _ambient_meta_for(graph: dict[str, Any], node_id: str, workspace_id: str | N
     Add to this rather than to the prompt whenever a new connector contributes
     an id or a path pointing at something held elsewhere.
 
+    *slots* narrows the workspace view to the slots this node actually owns,
+    which is how a parallel worker under ``supervisor_architecture`` gets its
+    own lineage's HEAD as ``data_path`` rather than the whole cell's
+    ``data_slots``. Empty (the default) means the whole workspace, which is
+    every other caller and the behavior that predates slots.
+
     ``{}`` when nothing is wired -- Motoro skips an absent/empty dict, so the
     wire call is unchanged for a node with no references.
     """
@@ -1217,8 +1250,20 @@ def _ambient_meta_for(graph: dict[str, Any], node_id: str, workspace_id: str | N
         meta["dataset_names"] = dataset_names
     if workspace_id:
         locators = slot_data_locators(workspace_id)
+        if slots:
+            locators = {key: value for key, value in locators.items() if key in slots}
         if len(locators) > 1:
             meta["data_slots"] = locators
+        elif slots and len(locators) == 1:
+            # Narrowed to exactly one, so it has a HEAD to name -- and it must
+            # be read from that slot rather than from the workspace, which by
+            # now holds every other agent's slot too.
+            only = next(iter(locators.values()))
+            data_path, target_column = str(only.get("data_path") or ""), str(only.get("target_column") or "")
+            if data_path:
+                meta["data_path"] = data_path
+            if target_column:
+                meta["target_column"] = target_column
         else:
             data_path, target_column = head_data_locator(workspace_id)
             if data_path:
@@ -1268,7 +1313,12 @@ class NodeDataset:
 
 
 async def _resolve_node_dataset(
-    graph: dict[str, Any], node_id: str, workspace_id: str | None, owner_id: uuid.UUID
+    graph: dict[str, Any],
+    node_id: str,
+    workspace_id: str | None,
+    owner_id: uuid.UUID,
+    *,
+    slot_prefix: str | None = None,
 ) -> NodeDataset:
     """Seed this cell's workspace from the wired dataset before the agent runs.
 
@@ -1290,6 +1340,14 @@ async def _resolve_node_dataset(
     cell, so both get opened and the agent is told which slot each one is in.
     A single dataset stays slot-less (``slot=None``), which is what keeps its
     workspace in the pre-slot on-disk format -- see ``seed_cell_workspace``.
+
+    *slot_prefix* overrides that namespace entirely, giving this node a private
+    lineage nobody else stages into: ``supervisor_architecture`` passes
+    ``agent:<node_id>`` so its workers can run in parallel without one accepting
+    a stage out from under another. A single dataset lands in the prefix itself;
+    several become ``<prefix>:<dataset name>``. Naming rather than deriving it
+    here keeps this function free of any opinion about which strategy is
+    running.
 
     A failure here is logged and swallowed, never raised: a run whose dataset
     registration is broken should still start and let the agent surface the
@@ -1336,12 +1394,17 @@ async def _resolve_node_dataset(
             continue
         if not workspace_id:
             continue
+        slot: str | None
+        if slot_prefix:
+            slot = slot_prefix if solo else f"{slot_prefix}:{name}"
+        else:
+            slot = None if solo else dataset_slot(name)
         try:
             opened = await seed_cell_workspace(
                 workspace_id=workspace_id,
                 dataset_name=name,
                 owner_id=owner_id,
-                slot=None if solo else dataset_slot(name),
+                slot=slot,
             )
         except WorkspaceSeedError as e:
             logger.warning(
@@ -1354,7 +1417,12 @@ async def _resolve_node_dataset(
 
 
 async def _node_run_context(
-    graph: dict[str, Any], node_id: str, workspace_id: str | None, owner_id: uuid.UUID
+    graph: dict[str, Any],
+    node_id: str,
+    workspace_id: str | None,
+    owner_id: uuid.UUID,
+    *,
+    slot_prefix: str | None = None,
 ) -> tuple[dict[str, Any], NodeDataset]:
     """``(ambient_meta, dataset)`` for one node -- everything the node's
     References contribute, resolved together so the three call sites (gated
@@ -1369,9 +1437,20 @@ async def _node_run_context(
     An unsplit dataset supplies that path itself, and only as a fallback: a
     workspace HEAD always wins, because a cell that has one has already moved
     past the raw file (and a later Score step must fit on the engineered
-    matrix, not on the upload)."""
-    dataset = await _resolve_node_dataset(graph, node_id, workspace_id, owner_id)
-    ambient_meta = _ambient_meta_for(graph, node_id, workspace_id)
+    matrix, not on the upload).
+
+    *slot_prefix* gives this node a private workspace lineage (see
+    :func:`_resolve_node_dataset`). When it is set the ambient view is narrowed
+    to the slots that were just seeded for it, so a worker sharing a cell
+    workspace with several sibling workers still sees exactly one HEAD -- its
+    own -- rather than everybody's."""
+    dataset = await _resolve_node_dataset(graph, node_id, workspace_id, owner_id, slot_prefix=slot_prefix)
+    ambient_meta = _ambient_meta_for(
+        graph,
+        node_id,
+        workspace_id,
+        slots=tuple(slot for _name, slot in dataset.seeded) if slot_prefix else (),
+    )
     if dataset.data_path and "data_path" not in ambient_meta:
         ambient_meta["data_path"] = dataset.data_path
         if dataset.target_column:
@@ -1520,6 +1599,183 @@ def _is_peer_edge(edge: dict[str, Any], nodes: dict[str, dict[str, Any]]) -> boo
     source = nodes.get(str(edge.get("source")))
     target = nodes.get(str(edge.get("target")))
     return source is not None and target is not None and source.get("type") == target.get("type") == "agent"
+
+
+@dataclass(frozen=True)
+class SupervisorRoles:
+    """Who plays what in a ``supervisor_architecture`` run.
+
+    Derived from the wiring rather than declared per node, so there is no
+    second place to keep in sync with the canvas -- the only explicit marker is
+    the existing ``conversation_lead``, reused to name the supervisor when the
+    wiring alone is ambiguous.
+    """
+
+    supervisor: str
+    workers: tuple[str, ...]
+    reviewer: str | None = None
+
+    @property
+    def execution_budget(self) -> int:
+        """How many agent turns one run of this topology takes.
+
+        Topology-derived rather than a flat cap, because every turn here is
+        forced by ASAREE: the supervisor dispatches, each worker runs once, the
+        reviewer runs once, the supervisor synthesizes. There is no model
+        deciding to consult, so there is nothing to bound -- this number is a
+        description of the run, and the cost estimate the user is owed.
+        """
+        return 2 + len(self.workers) + (1 if self.reviewer else 0)
+
+
+def _supervisor_workers_run_in_parallel(design_spec: dict[str, Any] | None) -> bool:
+    """Whether this experiment's workers are dispatched at once.
+
+    Parallel by default -- the fan-out is the point of the topology, and each
+    worker stages into its own workspace slot, so there is nothing for them to
+    race over. ``coordination_strategy.params.parallel_workers = false`` opts
+    one experiment out, for the case where workers are meant to build on each
+    other's staged data, or where a run needs to be reproduced turn by turn.
+
+    Anything other than an explicit ``false`` means parallel, so a params dict
+    carrying an unrelated key, or a value some other tool wrote, can never
+    quietly halve a run's throughput.
+    """
+    params = ((design_spec or {}).get("coordination_strategy") or {}).get("params") or {}
+    return params.get("parallel_workers") is not False
+
+
+def _supervisor_candidates(
+    agents: list[str],
+    successors: dict[str, list[str]],
+    predecessors: dict[str, list[str]],
+) -> list[str]:
+    """Which agents the *wiring* alone says could be the supervisor.
+
+    Two rules, tried in order, because the target topology defeats the obvious
+    one. "The agent nothing feeds into" reads a supervisor off a fan-out
+    cleanly -- but the moment a reviewer reports its findings back, the
+    supervisor is fed too and no agent is unfed at all, so that rule finds
+    nobody on the very shape this strategy was built for.
+
+    So when there is no unfed agent, fall back to the widest fan-out: in a loop
+    the supervisor is still the agent dispatching to the most others (three
+    workers against the reviewer's one report). A tie is left ambiguous rather
+    than broken arbitrarily -- a three-agent ring genuinely is symmetric, and
+    the marker is how the user says which way round it goes.
+
+    Order matters: the unfed rule wins whenever it applies, so a canvas whose
+    head fans out more narrowly than some agent downstream of it still resolves
+    to the head the user drew.
+    """
+    unfed = [nid for nid in agents if successors[nid] and not predecessors[nid]]
+    if unfed:
+        return unfed
+    widest = max((len(successors[nid]) for nid in agents), default=0)
+    if not widest:
+        return []
+    return [nid for nid in agents if len(successors[nid]) == widest]
+
+
+def resolve_supervisor_roles(graph: dict[str, Any]) -> SupervisorRoles:
+    """Read a supervisor topology off the canvas, or say why it isn't one.
+
+    The target shape is one supervisor fanning out to N workers, with an
+    optional reviewer that sees the workers' output and reports back. Roles come
+    from the agent handoff graph (:func:`_sequential_agent_links`), so a Critic
+    Gate or a Script between two agents is plumbing, not a role:
+
+    * **supervisor** -- the agent marked ``conversation_lead`` if one is (the
+      same marker Peer Collaboration uses; a second marker field would be two
+      ways to say one thing), else whichever agent the wiring points to (see
+      :func:`_supervisor_candidates`).
+    * **workers** -- every agent the supervisor hands off to.
+    * **reviewer** -- the one remaining agent, which must be connected to at
+      least two others. It is deliberately the agent the supervisor does *not*
+      point at: direction is how the canvas distinguishes "I am dispatching work
+      to you" from "you report on the work". Draw the reviewer's edge toward the
+      supervisor and the workers' edges toward the reviewer.
+
+    Raises :class:`ProtocolValidationError` naming the offending agents for
+    anything else -- notably two agents the supervisor dispatches to that are
+    also wired to each other, which is a peer mesh rather than a supervisor
+    tree and belongs under Peer Collaboration.
+    """
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
+    agents, successors, predecessors = _sequential_agent_links(graph)
+
+    def _name(node_id: str) -> str:
+        return _node_display_name(nodes[node_id])
+
+    def _names(ids: Iterable[str]) -> str:
+        return ", ".join(sorted(_name(nid) for nid in ids))
+
+    if len(agents) < 2:
+        raise ProtocolValidationError(
+            "This experiment's coordination strategy is 'Supervisor' but this protocol has fewer than two Agent "
+            "nodes, so there is nobody to supervise -- add worker agents, or change the coordination strategy on "
+            "the Design tab."
+        )
+
+    marked = [nid for nid in agents if _is_marked_lead(nodes[nid])]
+    if len(marked) > 1:
+        raise ProtocolValidationError(
+            f"More than one agent is marked as the supervisor ({_names(marked)}). A supervisor run has exactly "
+            "one -- unmark the others."
+        )
+    if marked:
+        supervisor = marked[0]
+    else:
+        candidates = _supervisor_candidates(agents, successors, predecessors)
+        if len(candidates) != 1:
+            detail = (
+                f"more than one agent could be ({_names(candidates)})"
+                if candidates
+                else "no agent hands off to another, so none of them leads"
+            )
+            raise ProtocolValidationError(
+                f"This protocol doesn't say which agent supervises the others -- {detail}. Mark the supervisor in "
+                "its node settings, or wire it so exactly one agent hands off to the others without being fed by "
+                "one."
+            )
+        supervisor = candidates[0]
+
+    workers = tuple(successors[supervisor])
+    if not workers:
+        raise ProtocolValidationError(
+            f"{_name(supervisor)!r} supervises this run but hands off to no other agent, so there are no workers "
+            "to dispatch to. Connect it to the agents it should delegate to."
+        )
+
+    rest = [nid for nid in agents if nid != supervisor and nid not in workers]
+    if len(rest) > 1:
+        raise ProtocolValidationError(
+            f"{_names(rest)} are neither the supervisor nor agents it hands off to. A supervisor run has one "
+            "supervisor, its workers, and at most one reviewer -- connect them to the supervisor to make them "
+            "workers, or delete them."
+        )
+    reviewer = rest[0] if rest else None
+    if reviewer is not None and len(_connected_agent_ids(graph, reviewer)) < 2:
+        raise ProtocolValidationError(
+            f"{_name(reviewer)!r} reviews this run but is connected to only one other agent, so it has almost "
+            "nothing to review. Connect it to the workers whose output it should see, or connect it to the "
+            "supervisor to make it a worker instead."
+        )
+
+    # Worker-to-worker edges make this a mesh, not a tree. Rejected rather than
+    # tolerated because the whole guarantee of this strategy is that ASAREE
+    # dispatches every worker itself: an edge between two workers says they talk
+    # to each other, which nothing here would ever honor.
+    worker_set = set(workers)
+    for nid in workers:
+        peers = sorted(worker_set.intersection(_connected_agent_ids(graph, nid)))
+        if peers:
+            raise ProtocolValidationError(
+                f"{_name(nid)!r} is wired to another worker ({_names(peers)}), but under 'Supervisor' the workers "
+                "report to the supervisor, not to each other. Remove that connection, or switch the strategy to "
+                "'Peer Collaboration' on the Design tab."
+            )
+    return SupervisorRoles(supervisor=supervisor, workers=workers, reviewer=reviewer)
 
 
 def _connected_agent_ids(graph: dict[str, Any], node_id: str) -> list[str]:
@@ -3346,6 +3602,49 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         # nodes left to step through. Everything below the loop -- result
         # write-back, metric promotion, terminal status -- is shared and runs
         # either way.
+        order = []
+    elif coordination_strategy_slug(design_spec) == "supervisor_architecture":
+        from asaree.services.agent_messenger import execute_supervisor_architecture
+
+        roles = resolve_supervisor_roles(graph)  # already validated above
+        supervisor_node = next(n for n in graph["nodes"] if str(n.get("id")) == roles.supervisor)
+        # Only the seed prompt and the cell's factor values -- the supervisor's
+        # own Dataset/Script cues are rebuilt inside each of its two turns,
+        # which is where the slot keys it will actually be given are known.
+        ambient_meta, supervisor_dataset = await _node_run_context(graph, roles.supervisor, workspace_id, owner_id)
+        node_run, supervisor_status = await execute_supervisor_architecture(
+            protocol_run_id,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            graph=graph,
+            roles=roles,
+            user_input=_build_user_input(
+                supervisor_node,
+                graph,
+                {},
+                experiment_id=experiment_id,
+                effective_cell_label=effective_cell_label,
+                script_bound="script_path" in ambient_meta,
+                seeded_datasets=supervisor_dataset.seeded,
+                unsplit_dataset=supervisor_dataset.unsplit_name,
+                prompt_contract_version=contract_version,
+            ),
+            workspace_id=workspace_id,
+            evaluation_metrics=(design_spec or {}).get("metrics"),
+            parallel_workers=_supervisor_workers_run_in_parallel(design_spec),
+            experiment_id=experiment_id,
+            effective_cell_label=effective_cell_label,
+            contract_version=contract_version,
+        )
+        node_runs[roles.supervisor] = node_run
+        cancelled = supervisor_status == "cancelled"
+        failed = supervisor_status in ("failed", "limit_reached")
+        if failed:
+            failure_status = supervisor_status
+            failure_error = node_run["error"] or failure_error
+        # The supervisor holds the pen: it wrote the brief and it wrote the
+        # answer, so its final turn is the cell's result.
+        result_node_id = roles.supervisor
         order = []
     else:
         sinks = sink_node_ids(graph)

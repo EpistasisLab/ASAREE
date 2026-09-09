@@ -770,7 +770,8 @@ export function DesignTab({
             Declares how the agents in this protocol work together as a multi-agent system -- separate from the
             canvas graph itself, which only wires connections. The graph must actually match whatever you pick here
             ("Critic Gate" requires a real Critic Gate node wired in; "Peer Collaboration" requires at least two
-            connected Agent nodes, with one of them left unfed to lead) or running the protocol is rejected.
+            connected Agent nodes, with one of them left unfed to lead; "Supervisor" requires one agent handing off to
+            the workers, plus at most one further agent to review them) or running the protocol is rejected.
           </InfoTooltip>
         </Label>
         <Select value={coordinationSlug} disabled={isLocked} onValueChange={(value) => value && chooseStrategy(value as CoordinationStrategySlug)}>

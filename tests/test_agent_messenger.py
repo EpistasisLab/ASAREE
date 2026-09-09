@@ -58,6 +58,7 @@ def stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "cancel_requested_at": None,
         "live_graph": _graph(),
         "peer_runs": [],
+        "run_contexts": [],
         # A tuple, or a callable taking the _run_agent_node kwargs and
         # returning one -- the callable form is how a test asserts on state
         # mid-consultation.
@@ -97,8 +98,9 @@ def stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(am, "_run_agent_node", _run_agent_node)
     monkeypatch.setattr(am, "resolve_available_agents", _resolve_available_agents)
 
-    async def _node_run_context(*_args: Any, **_kwargs: Any) -> tuple[dict[str, Any], Any]:
-        return {}, SimpleNamespace(seeded_name="", unsplit_name="", data_path=None, target_column=None)
+    async def _node_run_context(*_args: Any, **kwargs: Any) -> tuple[dict[str, Any], Any]:
+        state["run_contexts"].append(kwargs)
+        return {}, SimpleNamespace(seeded=(), unsplit_name="", data_path=None, target_column=None)
 
     monkeypatch.setattr(am, "_node_run_context", _node_run_context)
     return state

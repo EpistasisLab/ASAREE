@@ -110,6 +110,61 @@ export function coordinationStrategyIssues(slug: CoordinationStrategySlug, graph
     return []
   }
 
+  if (slug === 'supervisor_architecture') {
+    // Mirrors resolve_supervisor_roles. Same order, same first-failure-wins
+    // shape, so the canvas and the publish button never disagree about which
+    // problem to name first.
+    if (agents.length < 2) return ['This protocol has fewer than two Agent nodes, so there is nobody to supervise.']
+    const marked = agents.filter((id) => (nodes.get(id)!.data as AgentNodeData).conversation_lead === true)
+    if (marked.length > 1) {
+      return [`More than one agent is marked as the supervisor (${marked.map(name).sort().join(', ')}).`]
+    }
+    let supervisor: string
+    if (marked.length === 1) {
+      supervisor = marked[0]
+    } else {
+      // Mirrors _supervisor_candidates: the agent nothing feeds into, or -- in
+      // a loop, which the target topology is once the reviewer reports back --
+      // the one dispatching to the most others.
+      const unfed = agents.filter((id) => successors.get(id)!.length && predecessors.get(id)!.length === 0)
+      const widest = Math.max(0, ...agents.map((id) => successors.get(id)!.length))
+      const candidates = unfed.length
+        ? unfed
+        : widest
+          ? agents.filter((id) => successors.get(id)!.length === widest)
+          : []
+      if (candidates.length !== 1) {
+        return [
+          candidates.length
+            ? `More than one agent could be the supervisor (${candidates.map(name).sort().join(', ')}). Mark one in its node settings.`
+            : 'No agent hands off to another, so none of them leads. Mark the supervisor in its node settings.',
+        ]
+      }
+      supervisor = candidates[0]
+    }
+    const workers = successors.get(supervisor)!
+    if (!workers.length) return [`${name(supervisor)} hands off to no other agent, so there are no workers.`]
+    const rest = agents.filter((id) => id !== supervisor && !workers.includes(id))
+    if (rest.length > 1) {
+      return [
+        `${rest.map(name).sort().join(', ')} are neither the supervisor nor agents it hands off to. A supervisor run has one supervisor, its workers, and at most one reviewer.`,
+      ]
+    }
+    // Undirected adjacency, matching _connected_agent_ids: how the user drew an
+    // edge says who dispatches, but "is connected to" ignores its direction.
+    const neighbours = (id: string) => [...successors.get(id)!, ...predecessors.get(id)!]
+    if (rest.length === 1 && new Set(neighbours(rest[0])).size < 2) {
+      return [`${name(rest[0])} reviews this run but is connected to only one other agent.`]
+    }
+    for (const id of workers) {
+      const peers = neighbours(id).filter((other) => workers.includes(other))
+      if (peers.length) {
+        return [`${name(id)} is wired to another worker (${peers.map(name).sort().join(', ')}), which is a peer mesh.`]
+      }
+    }
+    return []
+  }
+
   // sequential -- the chain rule, mirroring validate_sequential_chain.
   if (agents.length < 2) return []
   const issues: string[] = []

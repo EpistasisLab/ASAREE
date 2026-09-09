@@ -839,7 +839,14 @@ async def test_node_run_context_seeds_before_reading_head(monkeypatch: pytest.Mo
     # HEAD version, which doesn't exist until the pre-seed has created it.
     calls: list[str] = []
 
-    async def _seed(graph: dict, node_id: str, workspace_id: str | None, owner_id: uuid.UUID) -> pe.NodeDataset:
+    async def _seed(
+        graph: dict,
+        node_id: str,
+        workspace_id: str | None,
+        owner_id: uuid.UUID,
+        *,
+        slot_prefix: str | None = None,
+    ) -> pe.NodeDataset:
         calls.append("seed")
         return pe.NodeDataset(seeded=(("spinal-fusion-v1", "dataset:default"),))
 
@@ -3229,10 +3236,193 @@ def test_coordination_strategy_accepts_a_marked_lead_in_a_cycle() -> None:
     pe.validate_coordination_strategy(_PEER_SPEC, graph=_mark_lead(_cycle_peer_graph("a", "b", "c"), "b"))
 
 
+# ----------------------------------------------------------------------
+# Supervisor architecture -- roles read off the wiring
+# ----------------------------------------------------------------------
+
+_SUPERVISOR_SPEC = {"coordination_strategy": {"slug": "supervisor_architecture"}}
+
+
+def _labelled(graph: dict) -> dict:
+    """Uppercase labels on every agent -- the errors name agents, so the label
+    is part of what's asserted."""
+    for node in graph["nodes"]:
+        if node["type"] == "agent":
+            node["data"] = {**node["data"], "label": node["id"].upper()}
+    return graph
+
+
+def _supervisor_graph(*, reviewer: bool = True, workers: int = 3) -> dict:
+    """The target topology the user asked ASAREE to support: one supervisor, N
+    workers hanging off it, and a QC agent that sees every worker and reports
+    back to the supervisor.
+
+    Note the QC edges point INTO the reviewer from the workers and OUT of it to
+    the supervisor. That direction is what makes it a reviewer rather than a
+    fourth worker (see resolve_supervisor_roles).
+    """
+    graph = _labelled(_peer_graph("sup"))
+    worker_ids = [f"w{i}" for i in range(1, workers + 1)]
+    for worker_id in worker_ids:
+        _add_agent(graph, worker_id, ("sup", worker_id))
+    if reviewer:
+        _add_agent(graph, "qc", *[(worker_id, "qc") for worker_id in worker_ids], ("qc", "sup"))
+    return graph
+
+
+def test_supervisor_reads_the_target_topology() -> None:
+    roles = pe.resolve_supervisor_roles(_supervisor_graph())
+    assert roles.supervisor == "sup"
+    assert roles.workers == ("w1", "w2", "w3")
+    assert roles.reviewer == "qc"
+    # supervisor brief + 3 workers + review + synthesis
+    assert roles.execution_budget == 6
+
+
+def test_supervisor_without_a_reviewer_is_fine() -> None:
+    roles = pe.resolve_supervisor_roles(_supervisor_graph(reviewer=False))
+    assert roles.reviewer is None
+    assert roles.execution_budget == 5
+
+
+def test_supervisor_topology_passes_the_shared_guard() -> None:
+    """End to end over the same function the publish endpoint and run_protocol
+    call -- reading the roles *is* the validation."""
+    validate_coordination_strategy(_SUPERVISOR_SPEC, graph=_supervisor_graph())
+
+
+def test_supervisor_is_a_conversation_strategy() -> None:
+    """Which is what suspends the acyclic check: the reviewer's report back to
+    the supervisor closes a loop, and that loop is the topology, not a bug."""
+    assert pe.is_conversation_strategy(_SUPERVISOR_SPEC) is True
+    pe.topological_order(_supervisor_graph(), require_acyclic=False)
+    with pytest.raises(ProtocolValidationError, match="has a cycle"):
+        pe.topological_order(_supervisor_graph())
+
+
+def test_supervisor_rejects_a_worker_wired_to_another_worker() -> None:
+    graph = _supervisor_graph(reviewer=False, workers=2)
+    graph["edges"].append({"id": "e-w1-w2", "source": "w1", "target": "w2"})
+    with pytest.raises(ProtocolValidationError, match=r"'W1' is wired to another worker \(W2\)"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=graph)
+
+
+def test_supervisor_rejects_two_marked_supervisors() -> None:
+    graph = _mark_lead(_supervisor_graph(reviewer=False), "sup", "w1")
+    with pytest.raises(ProtocolValidationError, match=r"More than one agent is marked as the supervisor \(SUP, W1\)"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=graph)
+
+
+def test_supervisor_rejects_a_supervisor_with_no_workers() -> None:
+    """Two agents, neither wired to the other: one is marked, and marking
+    doesn't invent anybody to dispatch to."""
+    graph = _labelled(_peer_graph("sup"))
+    _add_agent(graph, "w1")
+    with pytest.raises(ProtocolValidationError, match="hands off to no other agent"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=_mark_lead(graph, "sup"))
+
+
+def test_supervisor_rejects_a_single_agent() -> None:
+    with pytest.raises(ProtocolValidationError, match="fewer than two Agent nodes"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=_no_peers_graph())
+
+
+def test_supervisor_rejects_an_ambiguous_head() -> None:
+    """Two agents fanning out to the same worker: either could be the
+    supervisor, so the canvas has to say which."""
+    graph = _labelled(_peer_graph("sup"))
+    _add_agent(graph, "w1", ("sup", "w1"))
+    _add_agent(graph, "other", ("other", "w1"))
+    with pytest.raises(ProtocolValidationError, match=r"more than one agent could be \(OTHER, SUP\)"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=graph)
+
+
+def test_supervisor_rejects_a_symmetric_ring() -> None:
+    """Three agents in a ring: every one dispatches to exactly one other, so
+    the wiring says nothing about which is in charge. The target topology
+    resolves in a loop only because the supervisor fans out wider than the
+    reviewer reports back (see _supervisor_candidates)."""
+    with pytest.raises(ProtocolValidationError, match=r"more than one agent could be \(A, B, C\)"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=_labelled(_cycle_peer_graph("a", "b", "c")))
+
+
+def test_supervisor_marker_resolves_an_ambiguous_head() -> None:
+    """Same graph, and the marker is how the user resolves it -- 'other' becomes
+    the one leftover agent, i.e. the reviewer."""
+    graph = _labelled(_peer_graph("sup"))
+    _add_agent(graph, "w1", ("sup", "w1"))
+    _add_agent(graph, "other", ("other", "w1"), ("other", "sup"))
+    roles = pe.resolve_supervisor_roles(_mark_lead(graph, "sup"))
+    assert (roles.supervisor, roles.workers, roles.reviewer) == ("sup", ("w1",), "other")
+
+
+def test_supervisor_rejects_more_than_one_leftover_agent() -> None:
+    """Two agents that the supervisor doesn't dispatch to can't both be the
+    reviewer, and ASAREE will not guess which one it dispatches."""
+    graph = _supervisor_graph(reviewer=False, workers=2)
+    _add_agent(graph, "qc1", ("w1", "qc1"), ("qc1", "sup"))
+    _add_agent(graph, "qc2", ("w2", "qc2"), ("qc2", "sup"))
+    with pytest.raises(ProtocolValidationError, match="QC1, QC2 are neither the supervisor nor"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=graph)
+
+
+def test_supervisor_rejects_a_reviewer_with_only_one_connection() -> None:
+    """A "reviewer" hanging off one worker reviews a third of the run. It's
+    almost always a mis-drawn edge, and the error says how to fix it either way."""
+    graph = _supervisor_graph(reviewer=False, workers=2)
+    _add_agent(graph, "qc", ("w1", "qc"))
+    with pytest.raises(ProtocolValidationError, match="'QC' reviews this run but is connected to only one"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=graph)
+
+
+def test_supervisor_roles_ignore_plumbing_between_agents() -> None:
+    """A Script node between the supervisor and a worker is plumbing, not a
+    role -- the handoff is a path, the same way sequential_chain_order reads it."""
+    graph = _labelled(_peer_graph("sup"))
+    _add_agent(graph, "w1", ("sup", "w1"))
+    _add_agent(graph, "w2")
+    graph["nodes"].append({"id": "script", "type": "script", "data": {"label": "Prep"}})
+    graph["edges"] += [
+        {"id": "e-sup-script", "source": "sup", "target": "script"},
+        {"id": "e-script-w2", "source": "script", "target": "w2"},
+    ]
+    roles = pe.resolve_supervisor_roles(graph)
+    assert roles.workers == ("w1", "w2")
+
+
+def test_supervisor_workers_are_parallel_unless_opted_out() -> None:
+    assert pe._supervisor_workers_run_in_parallel(None) is True
+    assert pe._supervisor_workers_run_in_parallel(_SUPERVISOR_SPEC) is True
+    assert pe._supervisor_workers_run_in_parallel({"coordination_strategy": {"slug": "x", "params": {}}}) is True
+    # Only an explicit false opts out -- an unrelated key must not halve a run.
+    assert (
+        pe._supervisor_workers_run_in_parallel(
+            {"coordination_strategy": {"slug": "x", "params": {"something_else": 1}}}
+        )
+        is True
+    )
+    assert (
+        pe._supervisor_workers_run_in_parallel(
+            {"coordination_strategy": {"slug": "x", "params": {"parallel_workers": False}}}
+        )
+        is False
+    )
+
+
+def test_peer_collaboration_is_unaffected_by_the_supervisor_rules() -> None:
+    """The supervisor topology is a legal peer cluster too, and a peer mesh the
+    supervisor rules reject stays legal under Peer Collaboration -- the strategy
+    decides what the wiring means, which is the whole point of the dropdown."""
+    validate_coordination_strategy(_PEER_SPEC, graph=_mark_lead(_supervisor_graph(), "sup"))
+    mesh = _supervisor_graph(reviewer=False, workers=2)
+    mesh["edges"].append({"id": "e-w1-w2", "source": "w1", "target": "w2"})
+    validate_coordination_strategy(_PEER_SPEC, graph=mesh)
+
+
 def test_coordination_strategy_retired_slug_raises() -> None:
     with pytest.raises(ProtocolValidationError, match="no longer offered"):
         validate_coordination_strategy(
-            {"coordination_strategy": {"slug": "supervisor_architecture"}}, graph=_no_peers_graph()
+            {"coordination_strategy": {"slug": "swarm_architecture"}}, graph=_no_peers_graph()
         )
 
 
@@ -3328,6 +3518,67 @@ async def test_peer_collaboration_runs_the_graph_as_one_conversation(
                 ("user", "a"),
                 ("a", "user"),
             ]
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+            await delete_experiment(db, experiment_id)
+
+
+async def test_supervisor_architecture_runs_every_agent_end_to_end(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The contrast with the peer test above is the point: the same fan-out
+    canvas leaves `b` unrun under Peer Collaboration (nothing asked it to) and
+    runs every agent under Supervisor, because ASAREE dispatches the turns
+    rather than offering them. `run_protocol`'s own branch is what's under test
+    here -- the orchestration itself is covered in test_supervisor_architecture.
+    """
+    import asaree.services.agent_messenger as am
+
+    ran: list[str] = []
+
+    async def fake_run_agent_node(node, **_kwargs):
+        ran.append(node["id"])
+        return f"{node['id']} answered", None, None
+
+    monkeypatch.setattr(am, "_run_agent_node", fake_run_agent_node)
+
+    graph = _supervisor_graph(reviewer=False, workers=2)
+    async with get_session() as db:
+        experiment = await create_experiment(
+            db,
+            name=f"supervisor-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            design_spec=_SUPERVISOR_SPEC,
+        )
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db,
+            name=f"supervisor-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment_id,
+            graph=graph,
+        )
+        protocol_id = protocol.id
+        run_id = (await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)).id
+
+    try:
+        await pe.run_protocol(run_id)
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+            assert fetched is not None
+            assert fetched.status == "completed"
+            assert sorted(ran) == ["sup", "sup", "w1", "w2"]
+            # The supervisor's synthesis is the cell's result -- its node run is
+            # what the write-back path scores, not whichever node a topological
+            # sort happened to end on.
+            assert fetched.node_runs["sup"]["output_text"] == "sup answered"
+            assert {nid: r["status"] for nid, r in fetched.node_runs.items()} == {
+                "sup": "completed",
+                "w1": "completed",
+                "w2": "completed",
+            }
+            assert fetched.conversation["entry_agent_id"] == "sup"
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)

@@ -414,8 +414,7 @@ export function AgentNodeInspector({
                     ) : (
                       <>
                         <p className="text-xs text-[color:var(--chart-4)]">
-                          Connect an Output Parser node to say what the format is. Until you do, this agent is asked
-                          for nothing in particular and answers in prose like any other.
+                          Connect an Output Parser node to define the format.
                         </p>
                         <Button
                           size="sm"

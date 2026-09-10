@@ -598,6 +598,10 @@ class DesignImpactResponse(BaseModel):
     added_replicate_count: int
     retained_replicate_count: int
     removed_replicate_count: int
+    # Why an update is required, not just that it is -- a coordination-strategy
+    # change adds and removes no cells, so the counts alone would read as "no
+    # change" beside the banner demanding one.
+    regeneration_reasons: list[str] = []
 
 
 @router.get("/{experiment_id}/design-impact", response_model=DesignImpactResponse)

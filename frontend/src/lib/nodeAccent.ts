@@ -4,7 +4,7 @@
 //
 // This replaces hashToChartHue(nodeKind) for canvas nodes. Hashing was fine
 // while the palette was wider than the set of things being colored, but there
-// are thirteen node kinds and five --chart-* hues, so repeats weren't a risk,
+// are fourteen node kinds and five --chart-* hues, so repeats weren't a risk,
 // they were arithmetic -- and they landed on exactly the pairs a reader
 // confuses: Skill and AI, Dataset and Knowledge, Pattern and Script all came
 // out the same color. Color on this canvas answers "what kind of node is
@@ -44,6 +44,9 @@ const NODE_ACCENTS: Record<string, string> = {
   memory: 'var(--node-6)',
   okf_document: 'var(--node-7)',
   okf_bundle: 'var(--node-8)',
+  // Kind fourteen, added rather than moved: nothing above changed hue to make
+  // room for it (see index.css's --node-9 for why the slot is where it is).
+  output_parser: 'var(--node-9)',
 }
 
 /** The accent color for a canvas node kind — pass the same key the node card

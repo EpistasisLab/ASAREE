@@ -1,9 +1,10 @@
 """Protocols -- the executable agent/tool graph a visual canvas edits.
 
 The graph itself is freely editable JSON the canvas reads and writes whole.
-``POST /{id}/runs`` compiles it (topological order, rejecting a cycle/empty
-graph before anything is created) and hands the walk to the worker --
-mirroring ``POST /runs``'s own create-then-enqueue shape.
+``POST /{id}/runs`` compiles it (topological order, rejecting an empty graph
+before anything is created, and a cycle unless the experiment coordinates by
+conversation -- see ``is_conversation_strategy``) and hands the walk to the
+worker -- mirroring ``POST /runs``'s own create-then-enqueue shape.
 """
 
 from __future__ import annotations
@@ -20,12 +21,15 @@ from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
-    find_gated_pairs,
+    is_conversation_strategy,
     plan_cell_runs,
     plan_single_replicate_run,
+    preview_node_prompt,
     topological_order,
     validate_coordination_strategy,
+    validate_prompt_references,
     validate_single_node_runnable,
+    validate_stage_plan,
 )
 from asaree.services.protocol_revisions import (
     get_published_revision,
@@ -83,6 +87,7 @@ class ProtocolResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+
 class ProtocolRunResponse(BaseModel):
     id: uuid.UUID
     protocol_id: uuid.UUID
@@ -95,6 +100,9 @@ class ProtocolRunResponse(BaseModel):
     design_revision_id: uuid.UUID | None
     protocol_revision_id: uuid.UUID | None
     target_node_id: str | None
+    # Null for every pipeline run. Populated once a conversation-mode run's
+    # agents start talking -- see models/protocol_run.py for the shape.
+    conversation: dict[str, Any] | None = None
     cancel_requested_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -112,6 +120,7 @@ class ProtocolRevisionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
 
 class CreateProtocolRunRequest(BaseModel):
     # Omitted/null -- today's ad-hoc, un-substituted whole-graph run. Set --
@@ -145,6 +154,17 @@ class CellRunBatchResponse(BaseModel):
     skipped: int
     protocol_revision_id: uuid.UUID
     protocol_revision: int
+
+
+class PromptPreviewRequest(BaseModel):
+    # The canvas to assemble against. Sent because the inspector previews what
+    # is on screen, including edits autosave has not flushed yet; omitted, the
+    # stored draft stands in. Nothing is written either way.
+    graph: dict[str, Any] | None = None
+
+
+class PromptPreviewResponse(BaseModel):
+    text: str
 
 
 async def _get_owned_protocol(db: DbSession, protocol_id: uuid.UUID, user: CurrentUser) -> Any:
@@ -189,9 +209,7 @@ async def _validated_experiment_id(
 
 
 @router.post("", response_model=ProtocolResponse, status_code=201)
-async def create_protocol_endpoint(
-    body: CreateProtocolRequest, user: CurrentUser, db: DbSession
-) -> ProtocolResponse:
+async def create_protocol_endpoint(body: CreateProtocolRequest, user: CurrentUser, db: DbSession) -> ProtocolResponse:
     if await get_protocol_by_name(db, body.name, owner_id=user.id) is not None:
         raise HTTPException(status_code=409, detail="A protocol with this name already exists")
     experiment_id = await _validated_experiment_id(body.experiment_id, db, user)
@@ -253,10 +271,15 @@ async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, d
                 detail="Experiment is locked. Unlock it before publishing a changed canvas.",
             )
     try:
-        topological_order(protocol.graph)
+        # Strategy before shape: the acyclic requirement is a pipeline
+        # requirement, and a peer_collaboration canvas isn't run as one -- see
+        # is_conversation_strategy.
         experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
         design_spec = experiment.design_spec if experiment is not None else None
-        validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(protocol.graph)))
+        validate_coordination_strategy(design_spec, graph=protocol.graph)
+        validate_stage_plan(design_spec)
+        validate_prompt_references(graph=protocol.graph)
+        topological_order(protocol.graph, require_acyclic=not is_conversation_strategy(design_spec))
         validate_factor_bindings(design_spec, protocol.graph)
     except (ProtocolValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -304,10 +327,12 @@ async def create_protocol_run_endpoint(
                 protocol_revision_id=revision.id,
             )
         else:
-            topological_order(revision.graph)
             experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
             design_spec = experiment.design_spec if experiment is not None else None
-            validate_coordination_strategy(design_spec, has_gated_pair=bool(find_gated_pairs(revision.graph)))
+            validate_coordination_strategy(design_spec, graph=revision.graph)
+            validate_stage_plan(design_spec)
+            validate_prompt_references(graph=revision.graph)
+            topological_order(revision.graph, require_acyclic=not is_conversation_strategy(design_spec))
             run = await create_protocol_run(
                 db, protocol_id=protocol_id, owner_id=user.id, protocol_revision_id=revision.id
             )
@@ -337,6 +362,31 @@ async def run_single_node_endpoint(
     )
     await enqueue_protocol_run(run.id)
     return ProtocolRunResponse.model_validate(run)
+
+
+@router.post("/{protocol_id}/nodes/{node_id}/prompt-preview", response_model=PromptPreviewResponse)
+async def preview_node_prompt_endpoint(
+    protocol_id: uuid.UUID, node_id: str, body: PromptPreviewRequest, user: CurrentUser, db: DbSession
+) -> PromptPreviewResponse:
+    """What this agent's prompt would look like, without running anything.
+
+    Read-only despite being a POST: the canvas being previewed is the one on
+    screen, which the client sends rather than the server reading back a draft
+    autosave that may be a beat behind what was just typed. Creates no run of
+    any kind (see ``preview_node_prompt``); the 200 is a rendering, not a
+    resource.
+    """
+    protocol = await _get_owned_protocol(db, protocol_id, user)
+    try:
+        text = await preview_node_prompt(
+            body.graph if body.graph is not None else protocol.graph,
+            node_id,
+            owner_id=user.id,
+            experiment_id=protocol.experiment_id,
+        )
+    except ProtocolValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PromptPreviewResponse(text=text)
 
 
 @router.post("/{protocol_id}/cell-runs", response_model=CellRunBatchResponse, status_code=201)

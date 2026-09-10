@@ -15,7 +15,7 @@ Leakage safety is unchanged and structural: the caller fits every statistic on
 the **train** partition only and applies it to both; this module just persists
 the resulting pair. The test partition is written but never surfaced to the agent.
 
-Layout::
+Layout (format 1 — one implicit dataset per cell)::
 
     {root}/{experiment_id}/{cell_label}/
         state.json
@@ -24,8 +24,50 @@ Layout::
         v3_fs/   {train,test}.parquet
         manifests/  {dc,fte,fs}.json
 
+Layout (format 2 — named slots)::
+
+    {root}/{experiment_id}/{cell_label}/
+        state.json                      {"format_version": 2, "slots": {...}}
+        dataset=spinal/v1_dc/  {train,test}.parquet
+        dataset=spinal/manifests/  {dc,fte,fs}.json
+        dataset=controls/v1_dc/  ...
+        agent=dndnode_3/...
+
 ``v0_raw`` is not copied — it references the registered upload's parquet paths,
 which are already the frozen train/test split.
+
+Slots
+-----
+A *slot* is an independently staged lineage inside one cell's workspace: its own
+``target_column``, its own ``versions`` list and its own HEAD. Two namespaces
+use it today — ``dataset:<name>`` for a seeded registration, and
+``agent:<node_id>`` for one agent's private scratch — but the mechanism is
+general, which is the point: multi-dataset pipelines, parallel workers writing
+without contention, and the per-stage scratch dirs are all the same question of
+"whose lineage is this".
+
+**Format 1 is not migrated on disk.** A reader that finds a state file with no
+``format_version`` upgrades it *in memory* to a single :data:`LEGACY_SLOT`, and
+a writer keeps writing format 1 for as long as that stays the only slot. Real
+published workspaces exist on disk; an in-memory upgrade leaves a rollback
+possible where an on-disk one would not, and the format only changes when a
+second slot genuinely arrives.
+
+Stages
+------
+Which stages a workspace has is its :class:`~.stages.StagePlan`, not a constant
+— see ``stages.py``. The plan is recorded in ``state.json`` **only when it is
+not the default preset**, so a ``tabular_ml`` workspace's state file stays
+byte-shaped exactly as it was before plans existed (and, being format 1, stays
+format 1). The plan is a property of the *cell*, shared by every slot in it: two
+datasets staged side by side go through the same pipeline, which is the whole
+point of running them in one cell.
+
+**Ambiguity is an error, never a guess.** Every slot-taking method defaults to
+the sole slot when there is exactly one -- which is what makes a single-dataset
+caller unaware that slots exist -- and raises naming the candidates when there
+is more than one. Silently picking the first would be a guess dressed as a
+default, the same reason ``resolve_dataset_name`` refuses to choose.
 """
 
 from __future__ import annotations
@@ -40,6 +82,8 @@ from typing import Any, cast
 
 import pandas as pd
 
+from .stages import DEFAULT_STAGE_PLAN, TABULAR_ML, Stage, StagePlan, resolve_stage_plan
+
 # ASAREE's own workspace-server process spawns as a child of the ASAREE
 # backend (stdio), so it shares the backend's filesystem automatically — no
 # bind mount needed (unlike ARES's separate backend/worker containers, the
@@ -48,19 +92,55 @@ import pandas as pd
 # default convention (asaree.config.AsareeSettings).
 WORKSPACE_ROOT = os.environ.get("ASAREE_DATASET_WORKSPACE_DIR", "./data/workspaces")
 
-# Ordered pipeline stages and their canonical output version. Each stage reads
-# the previous stage's accepted output (or the v0 seed for the first stage).
-STAGES: list[str] = ["dc", "fte", "fs"]
-STAGE_VERSION: dict[str, str] = {"dc": "v1_dc", "fte": "v2_fte", "fs": "v3_fs"}
+# The default pipeline's stages and their canonical output versions, kept as
+# module constants because they are what every caller that predates stage plans
+# imports. They are now a *view* of the ``tabular_ml`` preset rather than the
+# definition of "the stages" — a workspace's actual stages come from its own
+# plan (:attr:`Workspace.stage_plan`), which defaults to this same preset.
+STAGES: list[str] = TABULAR_ML.ids
+STAGE_VERSION: dict[str, str] = TABULAR_ML.version_by_stage
 SEED_VERSION = "v0_raw"
 
 # A workspace_id is "{experiment_id}/{cell_label}". Each component must be a
 # plain, traversal-safe token (no separators, no parent refs, not absolute).
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._=,-]*$")
 
+# The slot a format-1 state file is read as, and the slot every single-dataset
+# workspace keeps using. It deliberately lives at the workspace root rather than
+# in a "dataset=default/" subdirectory: version dirs and manifests for this slot
+# must stay exactly where format 1 put them, including after the workspace gains
+# a second slot and the state file moves to format 2.
+LEGACY_SLOT = "dataset:default"
+
+DATASET_SLOT_PREFIX = "dataset:"
+AGENT_SLOT_PREFIX = "agent:"
+
+CURRENT_FORMAT_VERSION = 2
+
 
 class WorkspaceError(Exception):
     """Raised for malformed workspace ids or inconsistent on-disk state."""
+
+
+def dataset_slot(name: str) -> str:
+    """The slot key for a seeded dataset registration."""
+    return f"{DATASET_SLOT_PREFIX}{name}"
+
+
+def agent_slot(node_id: str) -> str:
+    """The slot key for one agent's private scratch lineage."""
+    return f"{AGENT_SLOT_PREFIX}{node_id}"
+
+
+def _slot_token(slot: str) -> str:
+    """A slot key as a single traversal-safe path component.
+
+    ``:`` is not in ``_SAFE_COMPONENT``'s alphabet (and is awkward in paths on
+    some filesystems), so the namespace separator becomes ``=``:
+    ``dataset:spinal`` -> ``dataset=spinal``. The prefix is kept so the two
+    namespaces can never collide on a shared name.
+    """
+    return _safe(slot.replace(":", "="), what="slot")
 
 
 def _safe(component: str, *, what: str) -> str:
@@ -105,6 +185,14 @@ def _file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _seed_train(slot_state: dict[str, Any]) -> str:
+    """The v0 seed's train path for one slot — its dataset identity."""
+    seed = next(
+        (v for v in slot_state.get("versions", []) if v.get("id") == SEED_VERSION), None
+    )
+    return str((seed or {}).get("train") or "")
+
+
 @dataclass
 class VersionRef:
     """One materialized dataset version's on-disk location + provenance."""
@@ -120,11 +208,31 @@ class VersionRef:
 
 
 class Workspace:
-    """A per-cell versioned dataset workspace backed by a directory on disk."""
+    """One slot of a per-cell versioned dataset workspace on disk.
 
-    def __init__(self, workspace_id: str, root: str | None = None) -> None:
+    An instance is bound to a single slot: ``load_state`` returns *that slot's*
+    ``{target_column, head, versions}`` and every read/write path is scoped to
+    it, which is why the staging methods below never mention slots. Pass
+    ``slot=None`` (the common case) to bind to the sole slot.
+    """
+
+    def __init__(
+        self,
+        workspace_id: str,
+        root: str | None = None,
+        *,
+        slot: str | None = None,
+        stage_plan: Any = None,
+    ) -> None:
         self.workspace_id = workspace_id
         self.dir = _resolve_dir(workspace_id, root)
+        self.requested_slot = slot
+        # Only a fallback for a workspace that records no plan (i.e. every
+        # workspace on the default preset, and every one written before plans
+        # existed). What is on disk always wins — see :attr:`stage_plan`.
+        self.requested_stage_plan: StagePlan | None = (
+            resolve_stage_plan(stage_plan) if stage_plan is not None else None
+        )
 
     # --- paths ---
 
@@ -133,32 +241,154 @@ class Workspace:
         return self.dir / "state.json"
 
     @property
+    def slot(self) -> str:
+        """The slot key this instance resolves to against the state on disk."""
+        return self._resolve_slot(self._document())
+
+    @property
+    def slot_dir(self) -> Path:
+        slot = self.slot
+        return self.dir if slot == LEGACY_SLOT else self.dir / _slot_token(slot)
+
+    @property
     def manifests_dir(self) -> Path:
-        return self.dir / "manifests"
+        return self.slot_dir / "manifests"
 
     def version_dir(self, version_id: str) -> Path:
-        return self.dir / _safe(version_id, what="version_id")
+        return self.slot_dir / _safe(version_id, what="version_id")
 
     def exists(self) -> bool:
         return self.state_path.is_file()
 
     # --- state ---
 
-    def load_state(self) -> dict[str, Any]:
+    def _document(self) -> dict[str, Any]:
+        """The whole state file, normalized to the slot shape *in memory only*.
+
+        A format-1 file (no ``format_version``, no ``slots``) is the flat
+        ``{target_column, head, versions}`` document every workspace written
+        before slots existed has. It reads as a one-slot document and is never
+        rewritten on that account — see the module docstring.
+        """
         if not self.exists():
             raise WorkspaceError(f"workspace not initialized: {self.workspace_id}")
-        return json.loads(self.state_path.read_text())
+        raw = json.loads(self.state_path.read_text())
+        if isinstance(raw.get("slots"), dict):
+            return raw
+        return {"format_version": 1, "slots": {LEGACY_SLOT: raw}}
 
-    def _save_state(self, state: dict[str, Any]) -> None:
+    def _save_document(self, doc: dict[str, Any]) -> None:
+        slots = doc.get("slots") or {}
+        plan = doc.get("stage_plan")
+        # Write format 1 back as format 1 for as long as the legacy slot is the
+        # only one. The format changes when a second slot actually arrives, not
+        # because something read the file. A recorded stage plan has the same
+        # effect: it is only ever recorded when it is NOT the default preset (see
+        # `open`), and a pipeline that isn't the default one has no format-1
+        # spelling to preserve.
+        payload: dict[str, Any]
+        if list(slots) == [LEGACY_SLOT] and not plan:
+            payload = dict(slots[LEGACY_SLOT])
+            # ``name`` is a format-2 field, and the legacy slot's would be the
+            # placeholder "default" rather than a dataset anyone named -- so it
+            # is dropped, keeping a format-1 file byte-shaped exactly as before
+            # slots existed. Resolution does not need it: a sole slot answers to
+            # any name (see _resolve_slot).
+            payload.pop("name", None)
+        else:
+            payload = {"format_version": CURRENT_FORMAT_VERSION, "slots": slots}
+            if plan:
+                payload["stage_plan"] = plan
         self.dir.mkdir(parents=True, exist_ok=True)
         # Atomic write: a crash mid-write must never truncate the pointer of record.
         tmp = self.state_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, indent=1, ensure_ascii=False) + "\n")
+        tmp.write_text(json.dumps(payload, indent=1, ensure_ascii=False) + "\n")
         tmp.replace(self.state_path)
+
+    def _resolve_slot(self, doc: dict[str, Any]) -> str:
+        """Which slot of ``doc`` this instance addresses.
+
+        Resolution order: the exact key, then a slot recording that ``name``,
+        then — only when there is exactly one slot — that slot. The last rule is
+        what lets a caller name a dataset that a format-1 file never recorded,
+        and it is safe precisely because a single slot leaves nothing to choose
+        between. Anything else raises naming the candidates.
+        """
+        slots: dict[str, Any] = doc.get("slots") or {}
+        names = list(slots)
+        if not names:
+            raise WorkspaceError(f"workspace {self.workspace_id} has no slots")
+        requested = self.requested_slot
+        if requested is None:
+            if len(names) == 1:
+                return names[0]
+            raise WorkspaceError(
+                f"workspace {self.workspace_id} holds several slots "
+                f"({', '.join(sorted(names))}) — name the one to use"
+            )
+        if requested in slots:
+            return requested
+        bare = requested.split(":", 1)[-1]
+        by_name = [key for key, state in slots.items() if str(state.get("name") or "") == bare]
+        if len(by_name) == 1:
+            return by_name[0]
+        if len(names) == 1:
+            return names[0]
+        raise WorkspaceError(
+            f"workspace {self.workspace_id} has no slot {requested!r} — "
+            f"available: {', '.join(sorted(names))}"
+        )
+
+    def slots(self) -> dict[str, dict[str, Any]]:
+        """Every slot in this workspace, keyed by slot key."""
+        return dict(self._document().get("slots") or {})
+
+    def load_state(self) -> dict[str, Any]:
+        """This slot's ``{target_column, head, versions}``."""
+        doc = self._document()
+        return cast("dict[str, Any]", doc["slots"][self._resolve_slot(doc)])
+
+    def _save_state(self, state: dict[str, Any]) -> None:
+        doc = self._document()
+        doc["slots"][self._resolve_slot(doc)] = state
+        self._save_document(doc)
 
     @property
     def target_column(self) -> str:
         return str(self.load_state()["target_column"])
+
+    # --- stages ---
+
+    @property
+    def stage_plan(self) -> StagePlan:
+        """Which stages this workspace has, in order.
+
+        What is recorded on disk wins over what this instance was constructed
+        with: a caller holding a stale plan must not be able to stage against a
+        pipeline the workspace was never built for. A workspace that records
+        nothing — the default preset, or anything written before plans existed —
+        falls back to the constructor's plan and then to
+        :data:`~.stages.DEFAULT_STAGE_PLAN`.
+        """
+        recorded = self._document().get("stage_plan") if self.exists() else None
+        if recorded:
+            return resolve_stage_plan(recorded)
+        return self.requested_stage_plan or DEFAULT_STAGE_PLAN
+
+    def _stage(self, stage: str) -> Stage:
+        """This workspace's descriptor for *stage*.
+
+        Raises a :class:`WorkspaceError` rather than letting the plan's own
+        ``StagePlanError`` out: from a caller's point of view naming a stage this
+        workspace does not have is bad state to reconcile, not a malformed plan.
+        """
+        plan = self.stage_plan
+        if not plan.has(stage):
+            raise WorkspaceError(
+                f"unknown stage: {stage!r} — this workspace's stage plan "
+                f"({plan.name}) has: {', '.join(plan.ids)}"
+            )
+        return plan.stage(stage)
 
     # --- lifecycle ---
 
@@ -171,19 +401,73 @@ class Workspace:
         seed_train_path: str,
         seed_test_path: str,
         root: str | None = None,
+        slot: str | None = None,
+        stage_plan: Any = None,
     ) -> Workspace:
-        """Open (create if absent) a workspace seeded from a pre-split upload.
+        """Open (create if absent) a workspace slot seeded from a pre-split upload.
 
-        Idempotent: re-opening an existing workspace loads its state unchanged,
-        so a resumed cell keeps every accepted version. The v0 seed references
-        the upload parquet paths directly — the split is already frozen there.
+        Idempotent per slot: re-opening keeps every accepted version, so a
+        resumed cell continues where it stopped. The v0 seed references the
+        upload parquet paths directly — the split is already frozen there.
+
+        Slots are identified by key. The one exception is a format-1 workspace,
+        whose single slot recorded no name at all: naming a dataset there adopts
+        that slot when the seed matches, which is what keeps an existing
+        single-dataset workspace on format 1 instead of growing a redundant
+        second slot beside it. Reusing a key for a *different* seed is refused —
+        a slot holds one dataset.
+
+        ``stage_plan`` is the pipeline this cell stages through
+        (:func:`~.stages.resolve_stage_plan` accepts a preset name, an inline
+        plan or ``None`` for the default). It is recorded only when it is not the
+        default preset, and re-opening with a *different* plan than the one
+        recorded is refused: half a cell's lineage staged through one pipeline
+        and half through another is not a state worth being able to reach.
         """
-        ws = cls(workspace_id, root=root)
-        if ws.exists():
+        ws = cls(workspace_id, root=root, slot=slot, stage_plan=stage_plan)
+        doc: dict[str, Any] = (
+            ws._document() if ws.exists() else {"format_version": CURRENT_FORMAT_VERSION, "slots": {}}
+        )
+        slots: dict[str, Any] = doc["slots"]
+
+        # `None` means "whatever this workspace already uses", NOT "the default
+        # plan": the MCP tool's own open_workspace() knows a workspace id but not
+        # the experiment's design, and it must be able to re-open a cell that
+        # ASAREE seeded with a declared plan without arguing about it.
+        wanted = ws.requested_stage_plan
+        recorded = doc.get("stage_plan")
+        plan_pending = False
+        if recorded and wanted is not None:
+            on_disk = resolve_stage_plan(recorded)
+            if on_disk.as_dict() != wanted.as_dict():
+                raise WorkspaceError(
+                    f"workspace {workspace_id} is already staged through the {on_disk.name!r} "
+                    f"stage plan, not {wanted.name!r} — a cell's pipeline is fixed once it has "
+                    "been opened, because half a lineage staged one way and half the other is "
+                    "not a state worth being able to reach"
+                )
+        elif not recorded and wanted is not None and wanted.as_dict() != DEFAULT_STAGE_PLAN.as_dict():
+            doc["stage_plan"] = wanted.as_dict()
+            plan_pending = True
+
+        key = slot or LEGACY_SLOT
+        if key not in slots and list(slots) == [LEGACY_SLOT] and _seed_train(slots[LEGACY_SLOT]) == seed_train_path:
+            ws.requested_slot = LEGACY_SLOT
+            if plan_pending:
+                ws._save_document(doc)
             return ws
-        ws.dir.mkdir(parents=True, exist_ok=True)
-        ws.manifests_dir.mkdir(parents=True, exist_ok=True)
-        state = {
+        if key in slots:
+            if _seed_train(slots[key]) != seed_train_path:
+                raise WorkspaceError(
+                    f"slot {key!r} of workspace {workspace_id} is already seeded from a "
+                    "different dataset — a slot holds one dataset, so use a distinct slot"
+                )
+            ws.requested_slot = key
+            if plan_pending:
+                ws._save_document(doc)
+            return ws
+        slots[key] = {
+            "name": key.split(":", 1)[-1],
             "target_column": target_column,
             "head": SEED_VERSION,
             "versions": [
@@ -198,7 +482,9 @@ class Workspace:
                 }
             ],
         }
-        ws._save_state(state)
+        ws.requested_slot = key
+        ws._save_document(doc)
+        ws.manifests_dir.mkdir(parents=True, exist_ok=True)
         return ws
 
     # --- version lookup ---
@@ -211,7 +497,7 @@ class Workspace:
 
     def accepted_output(self, stage: str) -> dict[str, Any] | None:
         """The accepted version a given stage produced, if any."""
-        want = STAGE_VERSION[stage]
+        want = self._stage(stage).version_id
         v = self._find_version(want)
         return v if (v and v.get("accepted")) else None
 
@@ -221,17 +507,16 @@ class Workspace:
 
     def _input_version_for(self, stage: str) -> dict[str, Any]:
         """The accepted version a stage reads as input (prior stage or v0 seed)."""
-        idx = STAGES.index(stage)
-        if idx == 0:
+        previous = self.stage_plan.previous(self._stage(stage).id)
+        if previous is None:
             seed = self._find_version(SEED_VERSION)
             if seed is None:
                 raise WorkspaceError("v0 seed missing from state")
             return seed
-        prev_stage = STAGES[idx - 1]
-        prev = self.accepted_output(prev_stage)
+        prev = self.accepted_output(previous.id)
         if prev is None:
             raise WorkspaceError(
-                f"stage {stage!r} needs the accepted output of {prev_stage!r}, "
+                f"stage {stage!r} needs the accepted output of {previous.id!r}, "
                 "which is not present — the prior stage did not commit/accept."
             )
         return prev
@@ -276,7 +561,7 @@ class Workspace:
         committed version yet and falls back to the stage input (prior accepted
         stage, or the ``v0_raw`` seed).
         """
-        own = self._find_version(STAGE_VERSION[stage])
+        own = self._find_version(self._stage(stage).version_id)
         if own is None:
             return self.read_stage_input(stage)
         target = self.target_column
@@ -329,15 +614,13 @@ class Workspace:
         stage is accepted (see accept_stage), so resume never continues from a
         rejected intermediate.
         """
-        if stage not in STAGE_VERSION:
-            raise WorkspaceError(f"unknown stage: {stage!r}")
+        version_id = self._stage(stage).version_id
         target = self.target_column
         train_df = X_train.copy()
         train_df[target] = y_train.to_numpy()
         test_df = X_test.copy()
         test_df[target] = y_test.to_numpy()
 
-        version_id = STAGE_VERSION[stage]
         vdir = self.version_dir(version_id)
         vdir.mkdir(parents=True, exist_ok=True)
         train_path = vdir / "train.parquet"
@@ -393,7 +676,7 @@ class Workspace:
         moves here, so a rejected/uncommitted stage never becomes a resume point
         or a scoring input.
         """
-        version_id = STAGE_VERSION[stage]
+        version_id = self._stage(stage).version_id
         state = self.load_state()
         found = False
         for v in state["versions"]:
@@ -423,9 +706,7 @@ class Workspace:
         rejected attempt, and must never be silently dropped. HEAD is untouched
         either way — it never points at an unaccepted version.
         """
-        if stage not in STAGE_VERSION:
-            raise WorkspaceError(f"unknown stage: {stage!r}")
-        version_id = STAGE_VERSION[stage]
+        version_id = self._stage(stage).version_id
         state = self.load_state()
         existing = next((v for v in state["versions"] if v["id"] == version_id), None)
         if existing is None:

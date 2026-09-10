@@ -1,0 +1,25 @@
+Engineer and encode features; commit v2_fte. After fit_preprocessor succeeds, call accept_stage(stage="fte") yourself to promote your work to workspace HEAD before finishing -- this run's Critic Gate reviews your report, not this promotion, so call it on every attempt (a later revision's call simply supersedes an earlier one).
+
+Random seed: 42
+
+task_brief: {"domain": "elective spinal fusion surgeries, Cedars-Sinai Medical Center, Los Angeles, 2013-2025", "prediction_task": "binary", "target_column": "discharge_Non_Home", "positive_class": 1, "expected_positive_rate": 0.273, "selection_metric": "average_precision", "num_classes": 2, "group_column": null, "notes": "Predict the adverse outcome of discharge to a non-home facility (SNF / rehab / another hospital) after elective spinal fusion surgery. Dataset: 7108 surgeries x 126 feature columns + the target. Each row is a unique surgery, so no group-aware splitting is required. Target `discharge_Non_Home` is derived from the raw discharge disposition (0 = Home; 1 = any SNF, rehab, or other-hospital transfer); every other discharge-related column has been dropped, so there is no residual outcome leakage. FEATURE FAMILIES: continuous AGE, BMI, SBP, PAIN_SCORE; comorbidities `pmh_*` (binary); medications `med_*` (binary); procedure characteristics `pn_*` (binary, e.g. cervical/thoracic/lumbar level, revision); lab values `lab_*` (continuous). Demographic and social-history categoricals are ALREADY one-hot encoded \u2014 `gender_*`, `age_*` bands, `race_*`, `insurance_*`, `ms_*` (marital status), `tobacco_use_*`, `alcohol_use_*`, `drug_use_*`, `pain_score_*` \u2014 so they do NOT need re-encoding; `_nan`/`_unknown` dummies already carry the missing categories. Impute detected missing values with thetrain-fit only (mode for binary/categorical, mean or median for continuous). A per-column data dictionary is available via get_data_dictionary."}
+
+[Critic (DC)]
+<<<UPSTREAM_OUTPUT>>>
+DC accepted v1_dc.
+<<</UPSTREAM_OUTPUT>>>
+
+Dataset context:
+A dataset is registered for this run. Call open_workspace() before doing any data work -- it takes no arguments here; which dataset and which workspace both arrive as ambient run context. Its response names what it opened.
+
+Your answer will be read for these specific values, so state each one explicitly:
+- engineering_recipe (object) -- Feature-engineering steps applied
+- encoding_map (object) -- Categorical encoding scheme per column
+- n_features_out (integer) -- Feature count after engineering/encoding
+- notes_for_fs (string) -- Handoff notes for the SF-FS stage
+
+Write your answer as you normally would. Then, as the very last thing in your reply, repeat those values in a fenced JSON block:
+```json
+{"engineering_recipe": null, "encoding_map": null, "n_features_out": null, "notes_for_fs": null}
+```
+Replace each null with the value your answer establishes, leaving it null where your answer establishes none. Write nothing after the block.

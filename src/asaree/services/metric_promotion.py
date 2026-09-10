@@ -38,6 +38,7 @@ from typing import Any
 from motoro.runner import get_run_steps
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from asaree.services.experiments import get_experiment
 from asaree.services.factorial_cells import upsert_replicate
 from asaree.services.protocol_runs import (
     get_protocol_run,
@@ -73,6 +74,60 @@ def extract_score_metrics(tool_result: dict[str, Any]) -> dict[str, Any] | None:
         if name in chosen:
             metrics[name] = chosen[name]
     return metrics or None
+
+
+def align_to_declared_metrics(metrics: dict[str, Any], design_spec: dict[str, Any] | None) -> dict[str, Any]:
+    """Re-spell promoted keys as the experiment's declared metric names.
+
+    ``run_model_script`` reports ``accuracy``; an experimenter declaring that
+    outcome writes ``Accuracy``, because a metric name is a label they read,
+    not a telemetry key. A declared non-runtime metric is looked up by its
+    exact name everywhere downstream
+    (``experiment_run_results._declared_metric_types`` and the frontend's
+    inferred key list both), so without this the Results table shows an empty
+    ``Accuracy`` column beside a populated ``accuracy`` one -- the same
+    number, twice, once blank.
+
+    Renaming here rather than at each reader is what keeps that from becoming
+    a rule every consumer has to remember: the stored ``metric_values`` end up
+    in the declared spelling, and Results, the CSV export and
+    ``factorial_analysis`` all keep reading a plain dict.
+
+    Two ways a declaration claims an extraction key, in order:
+
+    * ``catalogKey`` -- an exact, stated mapping, which is how a declaration
+      can carry a display name no casefold could reach ("ROC AUC" for
+      ``roc_auc``). Today only a hand-written SDK/notebook ``design_spec``
+      sets one of these to a score key: the GUI's metric picker offers
+      ``services.metrics.METRIC_CATALOG``, which is runtime telemetry only
+      (see that module's own note on why the ``run_model_script`` scores are
+      not in it yet). This is the hook those entries will use when they land.
+    * casefold of ``name`` -- the fallback, and what the GUI path actually
+      relies on. Only case is reconciled: a metric declared "AUC" does not
+      capture ``roc_auc``, because that is a mapping the experimenter has to
+      state, not one a casefold can infer.
+
+    An exact key already present wins, so a design declaring both spellings
+    loses nothing.
+    """
+    declared = (design_spec or {}).get("metrics")
+    if not isinstance(declared, list) or not metrics:
+        return metrics
+    by_folded: dict[str, str] = {}
+    by_catalog_key: dict[str, str] = {}
+    for metric in declared:
+        if not isinstance(metric, dict) or not isinstance(metric.get("name"), str) or not metric["name"].strip():
+            continue
+        name = metric["name"].strip()
+        by_folded.setdefault(name.casefold(), name)
+        catalog_key = metric.get("catalogKey")
+        if isinstance(catalog_key, str) and catalog_key:
+            by_catalog_key.setdefault(catalog_key, name)
+    aligned: dict[str, Any] = {}
+    for key, value in metrics.items():
+        name = by_catalog_key.get(key) or by_folded.get(key.casefold(), key)
+        aligned[key if name in metrics and name != key else name] = value
+    return aligned
 
 
 def find_score_tool_result(steps: Sequence[Any]) -> dict[str, Any] | None:
@@ -142,6 +197,8 @@ async def promote_replicate_score_metrics(
         return PromotionResult(
             replicate_label, False, "run_model_script never returned test_metrics (see its own error)"
         )
+    experiment = await get_experiment(db, experiment_id)
+    metrics = align_to_declared_metrics(metrics, experiment.design_spec if experiment is not None else None)
 
     # The attempt keeps its own immutable facts even if a newer attempt has
     # already replaced this replicate. Only the latest attempt may update the

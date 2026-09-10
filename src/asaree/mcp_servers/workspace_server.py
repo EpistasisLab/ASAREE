@@ -27,13 +27,16 @@ from typing import Any
 
 import pandas as pd
 from asaree_workspace_core import (
-    STAGE_VERSION,
+    SEED_VERSION,
+    Stage,
     Workspace,
     WorkspaceError,
+    dataset_slot,
     make_workspace_id,
     provenance,
     resolve_dataset_name_from_ctx,
     resolve_owner_id_from_ctx,
+    resolve_slot_from_ctx,
     resolve_workspace_id_from_ctx,
 )
 from mcp.server import FastMCP
@@ -56,29 +59,52 @@ mcp = FastMCP("asaree-workspace", instructions=INSTRUCTIONS)
 # stderr, never stdout: stdout is the MCP transport itself on a stdio server.
 logger = logging.getLogger(__name__)
 
-_STAGES = ("dc", "fte", "fs")
-
-# Stages migrated to the scratch-folder handoff (issue: BYO-MCP decoupling).
-# A domain server for a stage in this set never imports asaree_workspace_core
-# — it only reads/writes plain train.parquet/test.parquet/meta.json/learned.json
-# in its own disposable scratch directory (see _scratch_dir below), and this
-# server is the only thing that ever touches the permanent versioned tree.
+# Which stages exist, and how each one hands off, is the workspace's own stage
+# plan (asaree_workspace_core.stages) — not a constant here. It defaults to the
+# `tabular_ml` preset, which is the dc/fte/fs pipeline these tools used to
+# hardcode, so an unconfigured experiment behaves exactly as before.
 #
-# Two calling conventions share this same scratch directory:
-#   - "chain" stages (dc, fte): each tool reads whatever's currently in
+# Two per-stage flags on that plan drive the handoff:
+#
+# `scratch` — the stage hands off through a disposable scratch directory. A
+# domain server for a scratch stage never imports asaree_workspace_core; it only
+# reads/writes plain train.parquet/test.parquet/meta.json/learned.json in that
+# directory (see _scratch_dir below), and this server is the only thing that
+# ever touches the permanent versioned tree.
+#
+# `fixed_input` — which of two conventions the stage's tools share inside that
+# one directory:
+#   - chain (dc, fte): each tool reads whatever's currently in
 #     train.parquet/test.parquet and overwrites it — the working copy evolves
 #     tool call by tool call within one attempt.
-#   - "fixed-input" stages (fs): every tool independently re-reads the
-#     UNCHANGING input_train.parquet/input_test.parquet (seeded once, never
-#     touched again this attempt) and writes its candidate selection to
-#     train.parquet/test.parquet — nothing chains via the working copy, so
-#     the fixed pair lets a stage's tools be fully independent of each
-#     other's call order, exactly like the old resolve_stage_input flow.
-# Both files are always seeded (see _seed_scratch); a "chain" stage's tools
-# simply never read the fixed pair, and a "fixed-input" stage's tools never
-# read/write the working pair until they're ready to produce their result.
-SCRATCH_STAGES = {"dc", "fte", "fs"}
-FIXED_INPUT_STAGES = {"fs"}
+#   - fixed-input (fs): every tool independently re-reads the UNCHANGING
+#     input_train.parquet/input_test.parquet (seeded once, never touched again
+#     this attempt) and writes its candidate selection to
+#     train.parquet/test.parquet — nothing chains via the working copy, so the
+#     fixed pair lets a stage's tools be fully independent of each other's call
+#     order, exactly like the old resolve_stage_input flow.
+# Both files are always seeded (see _seed_scratch); a chain stage's tools simply
+# never read the fixed pair, and a fixed-input stage's tools never read/write
+# the working pair until they're ready to produce their result.
+
+
+def _resolve_stage(ws: Workspace, stage: str) -> Stage:
+    """This workspace's descriptor for *stage*, or a WorkspaceError naming the plan's.
+
+    Every stage-taking tool goes through here rather than through a module
+    constant, so the error message lists the stages *this* workspace actually
+    has instead of the three the pipeline used to be fixed at.
+    """
+    plan = ws.stage_plan
+    if not plan.has(stage):
+        raise WorkspaceError(
+            f"unknown stage {stage!r}; this workspace's stage plan ({plan.name}) has: {plan.ids}"
+        )
+    return plan.stage(stage)
+
+
+def _accepted_stages(ws: Workspace) -> list[str]:
+    return [s for s in ws.stage_plan.ids if ws.has_accepted(s)]
 
 
 def _scratch_dir(ws: Workspace, stage: str) -> Path:
@@ -90,15 +116,26 @@ def _scratch_dir(ws: Workspace, stage: str) -> Path:
     server or importing anything beyond stdlib os/pathlib. That formula is the
     ENTIRE contract a domain server needs: two conventional file names inside
     this directory, nothing about state.json or versioning.
+
+    Scoped to the slot's directory, which for a single-dataset workspace IS the
+    workspace root — so the formula above is unchanged for every workspace that
+    holds one dataset, which is the only shape a domain server can address.
+    **That is the current boundary of multi-slot support**: the staged
+    DC/FTE/FS pipeline runs against one slot per cell, because a domain server
+    computes this path from a workspace id and has no slot to compute it from.
+    A second dataset's slot is fully usable through this server and through the
+    path-taking tools (``data_slots`` in the run's ambient meta) — it just
+    can't have its own independent DC attempt in flight. Threading a slot into
+    the domain servers is the follow-on if that becomes the ask.
     """
-    return ws.dir / ".scratch" / stage
+    return ws.slot_dir / ".scratch" / stage
 
 
 def _seed_scratch(ws: Workspace, stage: str, target: str) -> None:
     """(Re)materialize a stage's input into its scratch dir, as BOTH the
     working pair (train.parquet/test.parquet — a "chain" stage's starting
     point) and the fixed pair (input_train.parquet/input_test.parquet — a
-    "fixed-input" stage's only input, see SCRATCH_STAGES/FIXED_INPUT_STAGES).
+    "fixed-input" stage's only input, see the stage-plan flags above).
     Writing both regardless of which convention this stage actually uses
     keeps this function, and the accept_stage/reset_stage call sites, the
     same for every scratch stage.
@@ -116,6 +153,7 @@ def _seed_scratch(ws: Workspace, stage: str, target: str) -> None:
     before a retry, open_workspace as the agent's first tool call in a fresh
     run) already guarantees this.
     """
+    fixed_input = _resolve_stage(ws, stage).fixed_input
     X_train, y_train, X_test, y_test = ws.read_stage_input(stage)
     scratch = _scratch_dir(ws, stage)
     scratch.mkdir(parents=True, exist_ok=True)
@@ -125,7 +163,7 @@ def _seed_scratch(ws: Workspace, stage: str, target: str) -> None:
     test_df[target] = y_test.to_numpy()
     train_df.to_parquet(scratch / "input_train.parquet", index=False)
     test_df.to_parquet(scratch / "input_test.parquet", index=False)
-    if stage not in FIXED_INPUT_STAGES:
+    if not fixed_input:
         # A "chain" stage's first tool call expects something already in the
         # working pair. A "fixed-input" stage must NOT get one here: its own
         # tools only ever write train.parquet/test.parquet once they've
@@ -143,7 +181,7 @@ def _seed_scratch(ws: Workspace, stage: str, target: str) -> None:
             f.unlink()
     # A fixed-input stage's PRIOR attempt may have left a candidate selection
     # behind; a fresh/reset attempt must not resume from it.
-    if stage in FIXED_INPUT_STAGES:
+    if fixed_input:
         for name in ("train.parquet", "test.parquet"):
             f = scratch / name
             if f.is_file():
@@ -183,15 +221,40 @@ def _scratch_run_id(scratch: Path) -> str:
         return ""
 
 
+def _input_version(ws: Workspace, stage: str, state: dict[str, Any]) -> dict[str, Any] | None:
+    """The state entry for the version *stage* reads — its predecessor's output,
+    or the ``v0_raw`` seed when it is the first stage.
+
+    Read out of ``state`` rather than through ``ws._input_version_for`` because a
+    gate must be able to *report* a missing input as a failed check instead of
+    raising out of the middle of a promote.
+    """
+    previous = ws.stage_plan.previous(stage)
+    want = previous.version_id if previous else SEED_VERSION
+    return next((v for v in state.get("versions", []) if v.get("id") == want), None)
+
+
 def _structural_checks(
-    stage: str, target: str, train: pd.DataFrame, test: pd.DataFrame, state: dict[str, Any]
+    ws: Workspace, stage: str, target: str, train: pd.DataFrame, test: pd.DataFrame, state: dict[str, Any]
 ) -> tuple[list[str], list[str]]:
     """Deterministic post-stage assertions (no agent) — shared by check_stage_gate
     (old-flow stages, reading a committed version from disk) and accept_stage's
     scratch-promote path (new-flow stages, checking in-memory scratch frames
-    before they're ever written to the permanent tree). Per stage: train/test
-    feature-column sets match; the target is present in both; DC leaves zero
-    missing values; FS columns are a subset of v2_fte."""
+    before they're ever written to the permanent tree).
+
+    Two checks are universal and unconditional, because nothing downstream works
+    without them: train/test feature-column sets match, and the target is
+    present in both partitions.
+
+    Everything else is the stage's own ``gate`` in the workspace's stage plan —
+    a closed set of declarative rules (``asaree_workspace_core.stages.GATE_RULES``),
+    so a custom pipeline gets real structural checks rather than none. Under the
+    default ``tabular_ml`` preset these resolve to exactly the two checks that
+    used to be hardcoded here: ``dc``'s ``missing: none`` (zero missing values)
+    and ``fs``'s ``columns: subset_of_input`` (columns a subset of v2_fte, which
+    is what the plan says fs's input is). A stage with an empty gate gets the two
+    universal checks and nothing more.
+    """
     checks: list[str] = []
     errors: list[str] = []
 
@@ -209,25 +272,59 @@ def _structural_checks(
     else:
         errors.append(f"target column {target!r} missing from a partition")
 
-    if stage == "dc":
+    gate = _resolve_stage(ws, stage).gate
+    if not gate:
+        return checks, errors
+
+    if gate.get("missing") == "none":
         n_missing_tr = int(train[train_cols].isna().sum().sum())
         n_missing_te = int(test[test_cols].isna().sum().sum())
         if n_missing_tr == 0 and n_missing_te == 0:
-            checks.append("zero missing values after DC")
+            checks.append(f"zero missing values after {stage}")
         else:
-            errors.append(f"DC left missing values: train={n_missing_tr}, test={n_missing_te}")
+            errors.append(f"{stage} left missing values: train={n_missing_tr}, test={n_missing_te}")
 
-    if stage == "fs":
-        fte_ver = next((v for v in state.get("versions", []) if v.get("id") == "v2_fte"), None)
-        if fte_ver is None:
-            errors.append("FS gate: no v2_fte version to check subset against")
+    # Every remaining rule compares the stage's output against its input, so it
+    # is read once and a missing input fails all of them together.
+    if not {"columns", "rows"} & set(gate):
+        return checks, errors
+    source = _input_version(ws, stage, state)
+    if source is None:
+        previous = ws.stage_plan.previous(stage)
+        errors.append(
+            f"{stage} gate: no {previous.version_id if previous else SEED_VERSION} version to check against"
+        )
+        return checks, errors
+    try:
+        input_train = pd.read_parquet(source["train"])
+        input_test = pd.read_parquet(source["test"])
+    except (OSError, FileNotFoundError, ValueError) as e:
+        errors.append(f"{stage} gate: could not read {source.get('id')}: {e}")
+        return checks, errors
+    input_cols = set(input_train.columns) - {target}
+
+    if gate.get("columns") == "subset_of_input":
+        extra = sorted(set(train_cols) - input_cols)
+        if extra:
+            errors.append(f"{stage} produced columns not in {source['id']}: {extra[:10]}")
         else:
-            fte_cols = set(pd.read_parquet(fte_ver["train"]).columns) - {target}
-            extra = sorted(set(train_cols) - fte_cols)
-            if extra:
-                errors.append(f"FS selected columns not in v2_fte: {extra[:10]}")
-            else:
-                checks.append(f"FS columns subset of v2_fte ({len(train_cols)}/{len(fte_cols)})")
+            checks.append(f"{stage} columns subset of {source['id']} ({len(train_cols)}/{len(input_cols)})")
+    elif gate.get("columns") == "non_increasing":
+        if len(train_cols) > len(input_cols):
+            errors.append(
+                f"{stage} widened the matrix: {len(input_cols)} columns in {source['id']} -> {len(train_cols)}"
+            )
+        else:
+            checks.append(f"{stage} column count non-increasing ({len(train_cols)}/{len(input_cols)})")
+
+    if gate.get("rows") == "preserved":
+        if len(train) == len(input_train) and len(test) == len(input_test):
+            checks.append(f"{stage} preserved row counts ({len(train)}/{len(test)})")
+        else:
+            errors.append(
+                f"{stage} changed row counts: train {len(input_train)} -> {len(train)}, "
+                f"test {len(input_test)} -> {len(test)}"
+            )
 
     return checks, errors
 
@@ -239,6 +336,7 @@ async def open_workspace(
     name: str = "",
     target_column: str = "",
     stage: str = "",
+    slot: str = "",
     ctx: Context[Any, Any, Any] | None = None,
 ) -> str:
     """Open (create if absent) the on-disk workspace for one pipeline cell.
@@ -273,11 +371,19 @@ async def open_workspace(
             _meta when the run has exactly one dataset wired; with several, this
             picks between them and the error lists the candidates.
         target_column: Override target column; defaults to the registry's.
-        stage: For a stage migrated to the scratch-folder handoff (see
-            SCRATCH_STAGES) — one of "dc"/"fte"/"fs" — (re)materializes that
-            stage's current working matrix into its scratch directory, so the
-            calling domain server's tools have a clean starting point. Omit for
-            stages still on the old shared-library flow.
+        stage: For a stage that hands off through a scratch directory (the
+            default for every stage — see the stage-plan flags at the top of this
+            module), (re)materializes that stage's current working matrix into
+            its scratch directory, so the calling domain server's tools have a
+            clean starting point. Omit for stages still on the old
+            shared-library flow. The response's ``stages`` lists this
+            workspace's stage ids, which are ``dc``/``fte``/``fs`` unless the
+            experiment declared its own pipeline.
+        slot: Which slot of the cell's workspace to open this dataset into.
+            Optional and rarely needed — it defaults to a slot named for the
+            dataset, so opening two datasets into one cell gives each its own
+            lineage, target column and HEAD without you naming anything. The
+            response echoes the slot to pass to later staging calls.
     """
     # Both halves of the workspace id, or neither: a half-specified pair would
     # have to be reconciled against the ambient id, and there is no sensible
@@ -324,6 +430,11 @@ async def open_workspace(
             dataset_name=resolved_name,
             owner_id=owner_id,
             target_column=target_column,
+            # Named for the dataset rather than left implicit: a cell holding a
+            # second dataset must not reseed the first one's slot, and
+            # Workspace.open absorbs this back into an existing single-slot
+            # workspace when the seed matches, so the common case is unchanged.
+            slot=slot or dataset_slot(resolved_name),
         )
     except WorkspaceSeedError as e:
         return json.dumps({"error": str(e), "workspace_id": workspace_id})
@@ -331,7 +442,7 @@ async def open_workspace(
     ws, resolved_target = seeded.workspace, seeded.target_column
     try:
         X_train, y_train, X_test, y_test = ws.read_head()  # noqa: N806 — matches sklearn convention throughout
-        if stage in SCRATCH_STAGES:
+        if stage and _resolve_stage(ws, stage).scratch:
             _seed_scratch(ws, stage, resolved_target)
     except (WorkspaceError, FileNotFoundError, OSError) as e:
         return json.dumps({"error": f"workspace: {e}"})
@@ -339,12 +450,13 @@ async def open_workspace(
     data_sha256 = provenance.data_sha256(X_train, X_test, y_train, y_test, resolved_target)
     train_dist = y_train.value_counts(normalize=True).round(4).to_dict()
     missing = X_train.isnull().sum()
-    accepted_stages = [s for s in _STAGES if ws.has_accepted(s)]
+    accepted_stages = _accepted_stages(ws)
     response: dict[str, object] = {
         "workspace_id": workspace_id,
         # Echoed because both may have been resolved from ambient _meta rather
         # than passed: the caller should be able to see what it actually opened.
         "dataset_name": resolved_name,
+        "slot": seeded.slot,
         "head": ws.load_state().get("head"),
         "target_column": resolved_target,
         "n_train": int(len(X_train)),
@@ -355,6 +467,10 @@ async def open_workspace(
         "missing_values": {c: int(n) for c, n in missing.items() if n > 0},
         "dtypes": {c: str(dt) for c, dt in X_train.dtypes.items()},
         "data_sha256": data_sha256,
+        # The pipeline itself, so an agent can read its stages off the workspace
+        # instead of assuming the dc/fte/fs triple that used to be the only one.
+        "stage_plan": ws.stage_plan.name,
+        "stages": ws.stage_plan.ids,
         "accepted_stages": accepted_stages,
         "note": "Workspace opened. The test split is held out and never returned. "
         "Downstream stages read/write this workspace_id on disk (ambient _meta).",
@@ -376,6 +492,12 @@ def workspace_status(workspace_id: str = "", ctx: Context[Any, Any, Any] | None 
     empty ``accepted_stages``. Otherwise returns HEAD, accepted stages (skipped on
     resume), and a per-version summary.
 
+    Reports every slot the workspace holds. With one dataset — the usual case —
+    that slot's HEAD/target/versions are also reported at the top level, so a
+    caller that has never heard of slots reads exactly what it always did. With
+    several, the top-level keys are omitted rather than filled in from one of
+    them: there is no single HEAD, and ``slots`` is the answer.
+
     Args:
         workspace_id: ``"{experiment_id}/{cell_label}"``. Optional — resolved from
             the ambient request ``_meta`` when omitted.
@@ -387,32 +509,54 @@ def workspace_status(workspace_id: str = "", ctx: Context[Any, Any, Any] | None 
         return json.dumps({"error": f"workspace: {e}"})
     if not ws.exists():
         return json.dumps({"workspace_id": wid, "exists": False, "head": None, "accepted_stages": [], "versions": []})
-    state = ws.load_state()
-    accepted = [s for s in _STAGES if ws.has_accepted(s)]
-    versions = [
-        {"id": v.get("id"), "stage": v.get("stage"), "accepted": bool(v.get("accepted")), "run_id": v.get("run_id", "")}
-        for v in state.get("versions", [])
-    ]
-    return json.dumps(
-        {
-            "workspace_id": wid,
-            "exists": True,
-            "head": state.get("head"),
-            "target_column": state.get("target_column"),
-            "accepted_stages": accepted,
-            "versions": versions,
+
+    def _summary(slot_state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "head": slot_state.get("head"),
+            "target_column": slot_state.get("target_column"),
+            "versions": [
+                {
+                    "id": v.get("id"),
+                    "stage": v.get("stage"),
+                    "accepted": bool(v.get("accepted")),
+                    "run_id": v.get("run_id", ""),
+                }
+                for v in slot_state.get("versions", [])
+            ],
         }
-    )
+
+    try:
+        slots = ws.slots()
+    except WorkspaceError as e:
+        return json.dumps({"error": f"workspace: {e}"})
+    response: dict[str, Any] = {"workspace_id": wid, "exists": True}
+    per_slot: dict[str, Any] = {}
+    for key, slot_state in slots.items():
+        scoped = Workspace(wid, slot=key)
+        per_slot[key] = {
+            "name": slot_state.get("name") or key.split(":", 1)[-1],
+            "accepted_stages": _accepted_stages(scoped),
+            **_summary(slot_state),
+        }
+    response["slots"] = per_slot
+    response["stage_plan"] = ws.stage_plan.name
+    response["stages"] = ws.stage_plan.ids
+    if len(per_slot) == 1:
+        response.update(next(iter(per_slot.values())))
+    return json.dumps(response)
 
 
 @mcp.tool()
-def accept_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
+def accept_stage(
+    stage: str, workspace_id: str = "", slot: str = "", ctx: Context[Any, Any, Any] | None = None
+) -> str:
     """Accept a stage's output and advance HEAD to it (critic-gated).
 
     The ONLY operation that advances HEAD, so a rejected or never-committed stage
     can never become a resume point or a scoring input.
 
-    For a SCRATCH_STAGES stage (see module docstring), this is also where the
+    For a scratch stage (see the stage-plan flags at the top of this module),
+    this is also where the
     domain server's scratch output first touches the permanent versioned tree at
     all: it's read, run through the same structural checks check_stage_gate
     exposes, and only promoted (written + accepted in one step) if they pass —
@@ -421,18 +565,22 @@ def accept_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any]
     advances HEAD to whatever was already committed (no structural judgment).
 
     Args:
-        stage: one of ``dc``, ``fte``, ``fs``.
+        stage: a stage id from this workspace's stage plan — ``dc``, ``fte`` or
+            ``fs`` unless the experiment declared its own pipeline, in which
+            case ``workspace_status()`` reports the ids.
         workspace_id: ``"{experiment_id}/{cell_label}"``. Optional — resolved from _meta.
+        slot: Which dataset slot of this cell's workspace the call is about.
+            Optional — omit it when the cell holds one dataset (the usual case)
+            and it resolves to that one. With several open, omitting it is an
+            error listing them, because picking one would be a guess; the slot
+            keys are in your prompt and in workspace_status().
     """
     try:
         wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
-        ws = Workspace(wid)
+        ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
-        if stage not in STAGE_VERSION:
-            return json.dumps({"error": f"unknown stage {stage!r}; expected one of {list(STAGE_VERSION)}."})
-
-        if stage in SCRATCH_STAGES:
+        if _resolve_stage(ws, stage).scratch:
             scratch = _scratch_dir(ws, stage)
             if not (scratch / "train.parquet").is_file() or not (scratch / "test.parquet").is_file():
                 return json.dumps(
@@ -443,7 +591,7 @@ def accept_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any]
             X_train, y_train, X_test, y_test = _read_scratch_output(scratch, target)
             state = ws.load_state()
             checks, errors = _structural_checks(
-                stage, target,
+                ws, stage, target,
                 pd.concat([X_train, y_train.rename(target)], axis=1),
                 pd.concat([X_test, y_test.rename(target)], axis=1),
                 state,
@@ -467,17 +615,19 @@ def accept_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any]
             "workspace_id": wid,
             "accepted_stage": stage,
             "head": state.get("head"),
-            "accepted_stages": [s for s in _STAGES if ws.has_accepted(s)],
+            "accepted_stages": _accepted_stages(ws),
         }
     )
 
 
 @mcp.tool()
-def reset_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
+def reset_stage(
+    stage: str, workspace_id: str = "", slot: str = "", ctx: Context[Any, Any, Any] | None = None
+) -> str:
     """Discard a stage's in-progress attempt so a re-run starts clean.
 
-    Called by the orchestrator before a critic revision. For a SCRATCH_STAGES
-    stage, this wipes the scratch directory and re-seeds it fresh from the
+    Called by the orchestrator before a critic revision. For a scratch stage,
+    this wipes the scratch directory and re-seeds it fresh from the
     stage's input (same as open_workspace's first-attempt seeding) — the
     domain server never committed anything to the permanent tree, so there is
     nothing to discard there. For an old-flow stage, this discards the
@@ -487,18 +637,22 @@ def reset_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] 
     is never moved.
 
     Args:
-        stage: one of ``dc``, ``fte``, ``fs``.
+        stage: a stage id from this workspace's stage plan — ``dc``, ``fte`` or
+            ``fs`` unless the experiment declared its own pipeline, in which
+            case ``workspace_status()`` reports the ids.
         workspace_id: ``"{experiment_id}/{cell_label}"``. Optional — resolved from _meta.
+        slot: Which dataset slot of this cell's workspace the call is about.
+            Optional — omit it when the cell holds one dataset (the usual case)
+            and it resolves to that one. With several open, omitting it is an
+            error listing them, because picking one would be a guess; the slot
+            keys are in your prompt and in workspace_status().
     """
     try:
         wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
-        ws = Workspace(wid)
+        ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
-        if stage not in STAGE_VERSION:
-            return json.dumps({"error": f"unknown stage {stage!r}; expected one of {list(STAGE_VERSION)}."})
-
-        if stage in SCRATCH_STAGES:
+        if _resolve_stage(ws, stage).scratch:
             scratch = _scratch_dir(ws, stage)
             discarded = scratch.is_dir() and any(scratch.iterdir())
             shutil.rmtree(scratch, ignore_errors=True)
@@ -514,33 +668,42 @@ def reset_stage(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] 
             "reset_stage": stage,
             "discarded": discarded,
             "head": state.get("head"),
-            "accepted_stages": [s for s in _STAGES if ws.has_accepted(s)],
+            "accepted_stages": _accepted_stages(ws),
         }
     )
 
 
 @mcp.tool()
-def check_stage_gate(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
+def check_stage_gate(
+    stage: str, workspace_id: str = "", slot: str = "", ctx: Context[Any, Any, Any] | None = None
+) -> str:
     """Run the structural post-stage assertions on a committed stage version.
 
-    Deterministic backstop (no agent). Per stage: the committed version exists with
-    both partitions; train/test feature-column sets match; the target is present in
-    both; DC leaves zero missing values; FS columns are a subset of v2_fte.
+    Deterministic backstop (no agent). Always: the committed version exists with
+    both partitions, train/test feature-column sets match, and the target is
+    present in both. Then whatever the stage's own gate declares — under the
+    default pipeline, DC leaves zero missing values and FS's columns are a
+    subset of v2_fte.
 
     Args:
-        stage: one of ``dc``, ``fte``, ``fs``.
+        stage: a stage id from this workspace's stage plan — ``dc``, ``fte`` or
+            ``fs`` unless the experiment declared its own pipeline, in which
+            case ``workspace_status()`` reports the ids.
         workspace_id: optional; resolved from _meta when omitted.
+        slot: Which dataset slot of this cell's workspace the call is about.
+            Optional — omit it when the cell holds one dataset (the usual case)
+            and it resolves to that one. With several open, omitting it is an
+            error listing them, because picking one would be a guess; the slot
+            keys are in your prompt and in workspace_status().
     """
     try:
         wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
-        ws = Workspace(wid)
+        ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"passed": False, "errors": [f"workspace {wid!r} not initialized."]})
-        if stage not in STAGE_VERSION:
-            return json.dumps({"passed": False, "errors": [f"unknown stage {stage!r}."]})
+        version_id = _resolve_stage(ws, stage).version_id
         state = ws.load_state()
         target = ws.target_column
-        version_id = STAGE_VERSION[stage]
         ver = next((v for v in state.get("versions", []) if v.get("id") == version_id), None)
         if ver is None:
             return json.dumps({"passed": False, "errors": [f"stage {stage!r} has no committed {version_id} version."]})
@@ -549,7 +712,7 @@ def check_stage_gate(stage: str, workspace_id: str = "", ctx: Context[Any, Any, 
     except (WorkspaceError, OSError, FileNotFoundError) as e:
         return json.dumps({"passed": False, "errors": [f"gate read failed: {e}"]})
 
-    checks, errors = _structural_checks(stage, target, train, test, state)
+    checks, errors = _structural_checks(ws, stage, target, train, test, state)
     n_features = len([c for c in train.columns if c != target])
     return json.dumps(
         {
@@ -566,20 +729,28 @@ def check_stage_gate(stage: str, workspace_id: str = "", ctx: Context[Any, Any, 
 
 
 @mcp.tool()
-def read_stage_manifest(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
+def read_stage_manifest(
+    stage: str, workspace_id: str = "", slot: str = "", ctx: Context[Any, Any, Any] | None = None
+) -> str:
     """Return a committed stage's provenance manifest (learned params + rationale).
 
     Args:
-        stage: one of ``dc``, ``fte``, ``fs``.
+        stage: a stage id from this workspace's stage plan — ``dc``, ``fte`` or
+            ``fs`` unless the experiment declared its own pipeline, in which
+            case ``workspace_status()`` reports the ids.
         workspace_id: optional; resolved from _meta when omitted.
+        slot: Which dataset slot of this cell's workspace the call is about.
+            Optional — omit it when the cell holds one dataset (the usual case)
+            and it resolves to that one. With several open, omitting it is an
+            error listing them, because picking one would be a guess; the slot
+            keys are in your prompt and in workspace_status().
     """
     try:
         wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
-        ws = Workspace(wid)
+        ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
-        if stage not in STAGE_VERSION:
-            return json.dumps({"error": f"unknown stage {stage!r}."})
+        _resolve_stage(ws, stage)
         path = ws.manifests_dir / f"{stage}.json"
         if not path.is_file():
             return json.dumps({"error": f"no committed manifest for stage {stage!r}."})
@@ -589,8 +760,10 @@ def read_stage_manifest(stage: str, workspace_id: str = "", ctx: Context[Any, An
 
 
 @mcp.tool()
-def read_scratch_learned(stage: str, workspace_id: str = "", ctx: Context[Any, Any, Any] | None = None) -> str:
-    """Return a SCRATCH_STAGES stage's current in-progress attempt's learned
+def read_scratch_learned(
+    stage: str, workspace_id: str = "", slot: str = "", ctx: Context[Any, Any, Any] | None = None
+) -> str:
+    """Return a scratch stage's current in-progress attempt's learned
     block — the provenance a domain server has written to its scratch dir so
     far this attempt, before accept_stage ever promotes it (or reset_stage
     discards it).
@@ -601,18 +774,25 @@ def read_scratch_learned(stage: str, workspace_id: str = "", ctx: Context[Any, A
     revision resets the scratch dir out from under them.
 
     Args:
-        stage: one of ``dc``, ``fte``, ``fs``.
+        stage: a stage id from this workspace's stage plan — ``dc``, ``fte`` or
+            ``fs`` unless the experiment declared its own pipeline, in which
+            case ``workspace_status()`` reports the ids.
         workspace_id: optional; resolved from _meta when omitted.
+        slot: Which dataset slot of this cell's workspace the call is about.
+            Optional — omit it when the cell holds one dataset (the usual case)
+            and it resolves to that one. With several open, omitting it is an
+            error listing them, because picking one would be a guess; the slot
+            keys are in your prompt and in workspace_status().
     """
     try:
         wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
-        ws = Workspace(wid)
+        ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
+        if not _resolve_stage(ws, stage).scratch:
+            return json.dumps({"error": f"stage {stage!r} is not a scratch stage."})
     except WorkspaceError as e:
         return json.dumps({"error": f"read_scratch_learned: {e}"})
-    if stage not in SCRATCH_STAGES:
-        return json.dumps({"error": f"stage {stage!r} is not a scratch stage."})
     scratch = _scratch_dir(ws, stage)
     return json.dumps({"learned": _scratch_learned(scratch)})
 

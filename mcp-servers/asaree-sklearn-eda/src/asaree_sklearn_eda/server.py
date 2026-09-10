@@ -91,13 +91,47 @@ def _dataset_name_from_ctx(explicit: str, ctx: Context | None) -> str:
     return names[0] if len(names) == 1 else ""
 
 
-def _read_head(workspace_id: str) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series, str]:
+def _slot_state(state: dict[str, Any], workspace_id: str, slot: str = "") -> dict[str, Any]:
+    """One slot's ``{target_column, head, versions}`` out of a state.json.
+
+    Two on-disk shapes: the original flat document (one implicit dataset per
+    cell) and the slotted one, ``{"format_version": 2, "slots": {...}}``, which
+    a cell holding several datasets grows into. Reading the flat one as a single
+    slot is the whole compatibility story — see asaree_workspace_core.workspace,
+    which owns the format; this stays a read of known keys, per the module
+    docstring, and deliberately does not import that package.
+
+    With several slots and no *slot* named, raises listing them: picking one out
+    of several datasets would be a guess, not a default.
+    """
+    slots = state.get("slots")
+    if not isinstance(slots, dict):
+        return state
+    if not slots:
+        raise HeadNotReadyError(f"workspace {workspace_id!r} has no slots")
+    wanted = (slot or "").strip()
+    if wanted:
+        if wanted in slots:
+            return dict(slots[wanted])
+        bare = wanted.split(":", 1)[-1]
+        named = [s for s in slots.values() if str(s.get("name") or "") == bare]
+        if len(named) == 1:
+            return dict(named[0])
+    if len(slots) == 1:
+        return dict(next(iter(slots.values())))
+    raise HeadNotReadyError(
+        f"workspace {workspace_id!r} holds several slots ({', '.join(sorted(slots))}) "
+        "-- name the one to use"
+    )
+
+
+def _read_head(workspace_id: str, slot: str = "") -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series, str]:
     """Load (X_train, y_train, X_test, y_test, target) for the workspace's current HEAD."""
     root = os.environ.get("ASAREE_DATASET_WORKSPACE_DIR", "./data/workspaces")
     state_path = Path(root).resolve() / workspace_id / "state.json"
     if not state_path.is_file():
         raise HeadNotReadyError(f"workspace {workspace_id!r} not initialized")
-    state = json.loads(state_path.read_text())
+    state = _slot_state(json.loads(state_path.read_text()), workspace_id, slot)
     target = state["target_column"]
     head_id = state["head"]
     ver = next((v for v in state.get("versions", []) if v.get("id") == head_id), None)
@@ -214,31 +248,39 @@ def get_data_dictionary(name: str = "", columns: str = "", ctx: Context | None =
 
 
 @mcp.tool()
-def get_feature_distributions(workspace_id: str = "", ctx: Context | None = None) -> str:
+def get_feature_distributions(workspace_id: str = "", slot: str = "", ctx: Context | None = None) -> str:
     """Distribution statistics (moments/cardinality/missingness) for every training
     feature at the workspace HEAD.
 
     Args:
         workspace_id: optional; resolved from the ambient request _meta when omitted.
+        slot: Which dataset slot of the cell's workspace to read. Optional --
+            omit it when the cell holds one dataset (the usual case). With
+            several open, omitting it is an error listing them, because reading
+            whichever came first would silently be the wrong dataset.
     """
     try:
         wid = _workspace_id_from_ctx(workspace_id, ctx)
-        X_train, _, _, _, _ = _read_head(wid)  # noqa: N806
+        X_train, _, _, _, _ = _read_head(wid, slot)  # noqa: N806
     except HeadNotReadyError as e:
         return json.dumps({"error": str(e)})
     return json.dumps({"features": eda.feature_distributions(X_train)})
 
 
 @mcp.tool()
-def get_dataset_info(workspace_id: str = "", ctx: Context | None = None) -> str:
+def get_dataset_info(workspace_id: str = "", slot: str = "", ctx: Context | None = None) -> str:
     """Descriptive statistics and metadata for the workspace HEAD (training fold only).
 
     Args:
         workspace_id: optional; resolved from the ambient request _meta when omitted.
+        slot: Which dataset slot of the cell's workspace to read. Optional --
+            omit it when the cell holds one dataset (the usual case). With
+            several open, omitting it is an error listing them, because reading
+            whichever came first would silently be the wrong dataset.
     """
     try:
         wid = _workspace_id_from_ctx(workspace_id, ctx)
-        X_train, y_train, X_test, _, _ = _read_head(wid)  # noqa: N806
+        X_train, y_train, X_test, _, _ = _read_head(wid, slot)  # noqa: N806
     except HeadNotReadyError as e:
         return json.dumps({"error": str(e)})
     info: dict[str, Any] = eda.dataset_info(

@@ -85,6 +85,65 @@ def test_extract_score_metrics_none_when_test_metrics_not_a_dict() -> None:
     assert mp.extract_score_metrics({"test_metrics": "not a dict"}) is None
 
 
+# --- align_to_declared_metrics -----------------------------------------------
+
+
+def _declaring(*names: str) -> dict:
+    return {"metrics": [{"name": name} for name in names]}
+
+
+def test_a_declared_metric_claims_the_promoted_key_it_only_differs_from_by_case() -> None:
+    aligned = mp.align_to_declared_metrics({"accuracy": 0.81, "roc_auc": 0.9}, _declaring("Accuracy"))
+    assert aligned == {"Accuracy": 0.81, "roc_auc": 0.9}
+
+
+def test_a_different_name_is_not_guessed_at() -> None:
+    # "AUC" is plainly the experimenter's word for roc_auc, and this function
+    # still leaves it alone: only case is reconciled, because anything wider
+    # would be inventing a mapping they never wrote down.
+    assert mp.align_to_declared_metrics({"roc_auc": 0.9}, _declaring("AUC")) == {"roc_auc": 0.9}
+
+
+def test_an_exactly_matching_key_is_never_displaced_by_a_cased_twin() -> None:
+    metrics = {"accuracy": 0.81, "Accuracy": 0.42}
+    assert mp.align_to_declared_metrics(metrics, _declaring("Accuracy")) == metrics
+
+
+def test_nothing_declared_leaves_the_promoted_keys_exactly_as_reported() -> None:
+    metrics = {"accuracy": 0.81}
+    assert mp.align_to_declared_metrics(metrics, None) == metrics
+    assert mp.align_to_declared_metrics(metrics, {}) == metrics
+    assert mp.align_to_declared_metrics(metrics, {"metrics": "not a list"}) == metrics
+
+
+def test_a_nameless_declaration_is_skipped_rather_than_crashing() -> None:
+    spec = {"metrics": [{"direction": "maximize"}, "not a dict", {"name": "  "}, {"name": " Accuracy "}]}
+    assert mp.align_to_declared_metrics({"accuracy": 0.81}, spec) == {"Accuracy": 0.81}
+
+
+def test_a_catalog_key_states_the_mapping_a_casefold_could_never_reach() -> None:
+    # Picking the "ROC AUC" catalog entry is the experimenter writing the
+    # mapping down, which is exactly what test_a_different_name_is_not_guessed_at
+    # says a bare name cannot do.
+    spec = {"metrics": [{"name": "ROC AUC", "catalogKey": "roc_auc"}]}
+    assert mp.align_to_declared_metrics({"roc_auc": 0.9}, spec) == {"ROC AUC": 0.9}
+
+
+def test_a_catalog_key_wins_over_another_metrics_cased_name() -> None:
+    spec = {
+        "metrics": [
+            {"name": "F1", "catalogKey": "average_precision"},  # deliberately crossed
+            {"name": "f1"},
+        ]
+    }
+    assert mp.align_to_declared_metrics({"average_precision": 0.4}, spec) == {"F1": 0.4}
+
+
+def test_an_unrecognized_catalog_key_falls_back_to_the_name() -> None:
+    spec = {"metrics": [{"name": "Accuracy", "catalogKey": "not_a_real_key"}]}
+    assert mp.align_to_declared_metrics({"accuracy": 0.81}, spec) == {"Accuracy": 0.81}
+
+
 # --- find_score_tool_result ---------------------------------------------------
 
 

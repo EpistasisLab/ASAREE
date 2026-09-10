@@ -26,6 +26,7 @@ export interface ProtocolNode {
     | CriticGateNodeData
     | LlmNodeData
     | MemoryNodeData
+    | OutputParserNodeData
     | DatasetNodeData
     | ScriptNodeData
     | SkillNodeData
@@ -50,6 +51,20 @@ export interface NodeRunState {
   run_id?: string | null
   output_text?: string | null
   error?: string | null
+  // Node ids this node's prompt referenced that resolved to nothing (the
+  // sender ran and produced no text). Absent, not empty, in the normal case.
+  // Worth surfacing because the assembled prompt just has a gap where the
+  // output should be, which reads as an agent that was never told anything
+  // rather than one whose sender said nothing.
+  unresolved_references?: string[]
+  // What this node's Output Parser extracted, and what it had to say about
+  // doing so. Both absent in the normal case -- no parser, or nothing to
+  // report -- so their presence is itself the answer to "did the extraction
+  // happen". Never a replacement for `output_text`: extraction is a second,
+  // post-hoc model call over an answer that already exists, and it is allowed
+  // to fail without taking the prose down with it.
+  payload?: Record<string, unknown> | null
+  caveats?: string[]
   // Critic Gate only -- absent on a plain agent's NodeRunState. `run_id`
   // above doubles as the CRITIC's own run (not the upstream worker's) for a
   // gate, so its own Sense/Reason/Plan/Act steps are inspectable the same
@@ -65,11 +80,40 @@ export interface NodeRunState {
   rejection_scope?: string | null
 }
 
+// One turn of an agent-to-agent conversation. Identity and ordering are
+// assigned by the backend, never by a model -- see services/agent_messenger.py.
+// `from_agent_id` is the literal string "user" for the opening question and for
+// the entry agent's final answer back to the user; everything else is a canvas
+// node id. `state` is present on replies only (a request carries no outcome),
+// and uses A2A's TaskState vocabulary.
+export interface ConversationMessage {
+  message_id: string
+  sequence: number
+  from_agent_id: string
+  to_agent_id: string
+  parts: { kind: string; text?: string }[]
+  created_at: string
+  state?: 'working' | 'completed' | 'failed' | 'canceled' | 'rejected' | 'input-required'
+}
+
+export interface Conversation {
+  state: string
+  entry_agent_id: string
+  messages: ConversationMessage[]
+}
+
 export interface ProtocolRun {
   id: string
   protocol_id: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  // `limit_reached` is conversation-mode only: the agents were still talking
+  // when a budget (consultation count, depth, or the conversation wall clock)
+  // ran out. Distinct from `failed` because the work up to that point is
+  // sound -- the transcript is worth reading.
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'limit_reached'
   node_runs: Record<string, NodeRunState>
+  // Null for every pipeline run; populated once a conversation-mode run's
+  // agents start talking.
+  conversation: Conversation | null
   error: string | null
   // Both null for a plain graph run. Set together only for a run created by
   // "run all cells" (POST /protocols/{id}/cell-runs) -- factor_values is the
@@ -92,6 +136,14 @@ export interface ProtocolRun {
   cancel_requested_at: string | null
   created_at: string
   updated_at: string
+}
+
+// POST /protocols/{id}/nodes/{nodeId}/prompt-preview -- the prompt an agent
+// would be given, assembled by the same code a real run uses, with a
+// `<output of "Name">` placeholder wherever upstream output would go. Nothing
+// is created; this is a rendering, not a resource.
+export interface PromptPreview {
+  text: string
 }
 
 export interface ProtocolRevision {
@@ -155,6 +207,28 @@ export interface AgentNodeConfig {
   goal: string
   description: string
   system_prompt: string
+  // "Require specific output format" -- this agent's answer has to take a
+  // declared shape rather than whatever prose the model felt like. Says only
+  // that a shape is required, never what it is: the shape lives on the Output
+  // Parser node this reveals the connector for, so there is exactly one place
+  // to read it and exactly one place to change it.
+  //
+  // Persisted rather than component state because required-but-not-yet-
+  // connected is a real, legitimate state that has to survive a reload, the
+  // same shape as a declared-but-unbound factor -- and it is the state the
+  // canvas warns about. Absent means off.
+  //
+  // A prose twin, `expected_output`, used to sit here: free text appended to
+  // the prompt asking for a shape in English. It is withdrawn -- two
+  // descriptions of one answer had to be kept in agreement by hand, and the
+  // prose one was the half nothing could read back out. A graph saved before
+  // the change may still carry the key; nothing reads it (see
+  // services.protocol_execution's _build_user_input).
+  //
+  // Still keyed `require_output_parser` rather than `..._format`: the label is
+  // about the outcome, the key is about the node that delivers it, and renaming
+  // a purely presentational flag would orphan it on every canvas already saved.
+  require_output_parser?: boolean
   // Model, tool assignment, and execution pattern are no longer fields
   // here -- resolved from the node's required LLM connector, optional Tool
   // connector(s), and optional Architectural Pattern connector instead (see
@@ -162,6 +236,16 @@ export interface AgentNodeConfig {
   // services.protocol_execution's _resolve_llm_config/_resolve_tool_config/
   // _resolve_pattern_config) -- deliberately kept out of a node's own
   // settings.
+  //
+  // **Legacy.** This is now the Output Parser connector's job
+  // (OutputParserNodeConfig above), and no new graph gets one from the canvas:
+  // there is no editor for it in this node's inspector any more, only a banner
+  // offering to convert it to a node. It is still READ forever, though, and is
+  // not a deprecation ramp -- every ProtocolRevision carrying one is an
+  // immutable snapshot that finished runs point at, and POST /agents still
+  // accepts the field, so the SDK can set it on a brand-new graph at any time.
+  // See services.protocol_execution's _resolve_output_contract. Having both
+  // this and a wired parser on one node is refused at publish.
   output_contract: OutputContract | null
   budget_limit_usd: number | null
   max_run_duration_seconds: number | null
@@ -185,6 +269,16 @@ export interface AgentNodeData {
   // _upstream_output_text). Toggled via the canvas's per-node hover
   // toolbar, not exposed in the inspector.
   active?: boolean
+  // Marks this agent as the one a Peer Collaboration conversation starts at --
+  // it receives the task, may consult its connected peers while working, and
+  // its answer is what gets recorded and scored. Absent/false means the lead is
+  // derived from the wiring instead (the peer-connected agent nothing feeds).
+  // The marker exists because that derivation assumes a DAG: agents wired in a
+  // loop -- the topology this strategy most invites -- have no unfed agent to
+  // derive from. See services/protocol_execution.py's
+  // resolve_conversation_entry_id, which owns both rules. Only meaningful under
+  // that strategy, so the inspector only offers it there.
+  conversation_lead?: boolean
   [key: string]: unknown
 }
 
@@ -366,6 +460,49 @@ export function defaultMemoryNodeData(label = 'Memory'): MemoryNodeData {
       enabled: true,
     },
   }
+}
+
+// An "Output Parser" node carries the field spec that turns an Agent's prose
+// answer into a typed payload -- the `output_contract` that used to be a field
+// in the agent's own Settings tab. It became a node for the same reason model,
+// tools and pattern did, plus one argument they didn't have: extraction is a
+// *second LLM call* per run (Motoro's extract_payload runs after the agent has
+// already finished writing), so its cost belongs somewhere visible rather than
+// buried in one node's settings.
+//
+// Being a node also fixes what the field couldn't: a wired parser contributes
+// its field list to the producer's prompt (services.protocol_execution's
+// _output_shape_block), so the extractor reads text that was actually asked to
+// contain the fields it wants. The field never did that -- the agent was never
+// told the contract existed.
+//
+// One node type, not several: Motoro has exactly one extraction mechanism. A
+// JSON-schema paste would be an editor mode inside this node; deterministic
+// (regex/JSONPath) extraction would be a genuinely different mechanism and a
+// second node type, but it doesn't exist in core yet.
+export interface OutputParserNodeConfig {
+  output_contract: OutputContract | null
+  // Absent means enabled, matching `active`'s own convention (AgentNodeData).
+  // Unlike Memory's, this has a real runtime effect: disabling is how you take
+  // the shape out of one run -- prose instead of named values -- without
+  // deleting the field spec.
+  // _resolve_output_contract deliberately does NOT fall back to the agent's
+  // legacy stored contract when a wired parser is disabled -- "off" means off.
+  enabled?: boolean
+}
+
+export interface OutputParserNodeData {
+  label: string
+  config: OutputParserNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultOutputParserNodeData(label = 'Output Parser'): OutputParserNodeData {
+  // One blank field rather than none: an empty contract appends nothing to the
+  // prompt and extracts nothing, so a parser with no fields is a node that
+  // silently does nothing. Starting with a row makes the next step obvious.
+  return { label, config: { output_contract: { name: '', fields: [{ name: '', type: 'string', description: '' }] }, enabled: true } }
 }
 
 // A "Dataset" node -- declares which registered dataset an Agent's

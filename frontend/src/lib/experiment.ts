@@ -37,7 +37,15 @@ export function factorValueKey(value: unknown): string {
 // actually recognizes ("claude-sonnet-5") instead of "[object Object]",
 // same reasoning, same key order, so a cell's label and its Cells-table
 // column read consistently.
-const FACTOR_VALUE_DISPLAY_PRIORITY_KEYS = ['model', 'provider', 'execution_pattern', 'server_name', 'enabled']
+const FACTOR_VALUE_DISPLAY_PRIORITY_KEYS = [
+  'model',
+  'provider',
+  'execution_pattern',
+  'server_name',
+  'dataset_name',
+  'name',
+  'enabled',
+]
 
 /** Human-readable rendering of a factor value for table/badge display --
  * scalars render as-is; a dict-valued "whole node" level (LLM/Tool config,

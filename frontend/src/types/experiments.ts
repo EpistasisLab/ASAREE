@@ -58,22 +58,18 @@ export interface MetricScoringConfig {
   }
 }
 
-// "sequential" (default when design_spec.coordination_strategy is absent --
-// today's exact existing DAG-handoff behavior) and "critic_gate" (promotes
-// the existing gated-pair mechanism to an explicit declaration) are real.
-// The rest are named placeholders for ARES's own coordination-category
-// patterns, pending a later ARES -> Motoro migration -- selectable and
-// saveable, but services.protocol_execution rejects a run attempted with one
-// of these active. See COORDINATION_STRATEGY_CATALOG for display metadata.
+// Every slug here is implemented -- there is deliberately no "coming soon"
+// entry. Six ARES coordination-category placeholders (supervisor, swarm, task
+// bidding, supervision tree, event-driven, multi-agent planning) used to be
+// listed and were removed: an option that always fails at run time is worse
+// than an option that isn't offered. The backend still recognizes the five that
+// remain unbuilt, so an experiment saved with one gets a real explanation, not
+// "unknown" -- supervisor came back off that list once it was actually built.
 export type CoordinationStrategySlug =
   | 'sequential'
   | 'critic_gate'
+  | 'peer_collaboration'
   | 'supervisor_architecture'
-  | 'swarm_architecture'
-  | 'task_bidding'
-  | 'supervision_tree_with_guarded_capabilities'
-  | 'event_driven_reactivity'
-  | 'multi_agent_planning'
 
 export interface CoordinationStrategyConfig {
   slug: CoordinationStrategySlug
@@ -84,57 +80,43 @@ export const COORDINATION_STRATEGY_CATALOG: {
   slug: CoordinationStrategySlug
   label: string
   description: string
-  implemented: boolean
 }[] = [
   {
     slug: 'sequential',
     label: 'Sequential (default)',
     description: "Each agent's output becomes the next agent's input, following the canvas's own edges in order.",
-    implemented: true,
   },
   {
     slug: 'critic_gate',
     label: 'Critic Gate',
     description: 'A reviewer agent approves or requests revisions at a fixed point in the sequential pipeline.',
-    implemented: true,
+  },
+  {
+    slug: 'peer_collaboration',
+    // "(beta)" rides on the label rather than a separate badge for the same
+    // reason "(default)" does above: the label is what the picker, the
+    // canvas-mismatch warning and the switch-confirm dialog all render, so
+    // one string keeps the qualifier from appearing in only one of the three.
+    label: 'Peer Collaboration (beta)',
+    // The cost ceiling belongs here rather than in RunConfirmDialog: this is
+    // where the choice is actually made, and every consultation is a full agent
+    // run of its own (Reason/Plan/Act cycle, own tokens). The caps are the
+    // messenger's -- services/agent_messenger.py.
+    description:
+      'Connected agents work the task together as a conversation -- the lead agent can consult its peers, and every reply is shared with everyone, instead of handing off once. Each consultation is a full agent run (up to 8, nested 2 deep), so a cell can cost several times a sequential one.',
   },
   {
     slug: 'supervisor_architecture',
-    label: 'Supervisor',
-    description: 'One coordinator delegates sub-tasks to worker agents and aggregates their results.',
-    implemented: false,
-  },
-  {
-    slug: 'swarm_architecture',
-    label: 'Swarm',
-    description: 'Agents self-organize around a shared task board -- no fixed coordinator.',
-    implemented: false,
-  },
-  {
-    slug: 'task_bidding',
-    label: 'Task Bidding',
-    description: 'Agents competitively bid for tasks; the best-scoring bid is awarded the work.',
-    implemented: false,
-  },
-  {
-    slug: 'supervision_tree_with_guarded_capabilities',
-    label: 'Supervision Tree',
-    description: 'A hierarchical tree of agents with capability-scoped subtrees and structured failure recovery.',
-    implemented: false,
-  },
-  {
-    slug: 'event_driven_reactivity',
-    label: 'Event-Driven',
-    description: 'Agents react to published events on shared topics instead of a fixed plan.',
-    implemented: false,
-  },
-  {
-    slug: 'multi_agent_planning',
-    label: 'Multi-Agent Planning',
-    description: 'Multiple planner agents propose in parallel; a coordinator merges them into one plan for workers.',
-    implemented: false,
+    label: 'Supervisor (beta)',
+    // The contrast with Peer Collaboration is the whole reason to pick one over
+    // the other, so it's stated rather than left to be discovered at run time:
+    // there, the lead *may* consult; here, ASAREE dispatches every worker
+    // itself. The turn count is the topology's, which is why no cap is quoted.
+    description:
+      'One supervisor agent briefs the workers wired to it, they all run (in parallel by default), an optional reviewer assesses their output advisorily, and the supervisor writes the final answer. Every one of those turns is dispatched by ASAREE, so no worker can be skipped -- a cell costs one agent run per agent, plus a second for the supervisor.',
   },
 ]
+
 
 export interface DesignSpec {
   factors?: DesignFactor[]
@@ -147,6 +129,13 @@ export interface DesignSpec {
   // -- lets the Design tab show "Metrics" before any cell has run.
   metrics?: DesignMetric[]
   coordination_strategy?: CoordinationStrategyConfig
+  // Which staged pipeline this experiment's dataset workspaces use. There is
+  // deliberately no UI for this: a canvas-built experiment leaves it absent and
+  // the backend derives the plan from which stage-writing MCP servers the
+  // canvas wires. It stays declared here (untyped -- the shape is
+  // asaree_workspace_core's, not the GUI's) purely so a spread that rebuilds
+  // design_spec carries an SDK-declared plan through instead of erasing it.
+  stage_plan?: unknown
   [key: string]: unknown
 }
 
@@ -265,6 +254,11 @@ export interface ResultNodeRun {
   status: string
   output_text: string | null
   error: string | null
+  // Senders this node's prompt referenced that produced nothing, by label
+  // (already resolved server-side -- see experiment_run_results). Empty in the
+  // normal case. The assembled prompt just has a gap where their output should
+  // be, so without this it reads as an agent that was never told anything.
+  unresolved_reference_labels?: string[]
   agent_run_id: string | null
   input_tokens: number | null
   output_tokens: number | null
@@ -431,4 +425,13 @@ export interface DesignImpact {
   added_replicate_count: number
   retained_replicate_count: number
   removed_replicate_count: number
+  // Why an update is needed, not just that it is. 'coordination_strategy_changed'
+  // is the reason the counts above can't express -- it adds and removes no
+  // cells, so on its own it reads as "no change" beside the banner.
+  regeneration_reasons: (
+    | 'no_design_generated'
+    | 'coordination_strategy_changed'
+    | 'design_matrix_changed'
+    | 'cells_drifted'
+  )[]
 }

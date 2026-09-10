@@ -19,11 +19,19 @@ import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 // is a matter of moving the mouse, not squinting.
 //
 // Solid vs. dashed splits the graph the way it actually reads: solid is the
-// main left-to-right pipeline between agents and critic gates (the flow of
-// work), dashed is everything hanging off a typed connector handle -- LLM,
-// Memory, Tool, Dataset, Script, Architectural Pattern -- which supplies
-// config to a node rather than passing work along. `isMainEdge` (no
-// source/target handle) is exactly that distinction already.
+// main edge between agents and critic gates, dashed is everything hanging off a
+// typed connector handle -- LLM, Memory, Tool, Dataset, Script, Architectural
+// Pattern -- which supplies config to a node rather than joining two peers.
+// `isMainEdge` (no source/target handle) is exactly that distinction already.
+//
+// A solid edge is deliberately not one relationship: between two Agent nodes it
+// is BOTH the left-to-right pipeline edge a normal run walks AND the "these two
+// may consult each other" edge a Peer Collaboration run reads (undirected). The
+// experiment's coordination strategy picks which, so the edge must not commit to
+// either -- it looks the same in both, and nothing is annotated onto it. An
+// earlier pass captioned peer edges "can consult"; it read as clutter on a
+// canvas where most solid edges qualify, and the Design tab already says which
+// strategy is in force.
 //
 // Note the dashes are NOT the same statement as MemoryNode's dashed ring,
 // which means "not yet functional"; here they only mean "connector, not

@@ -16,7 +16,7 @@ import type { DesignImpact, DesignRevision, DesignSpec, Experiment, ExperimentRe
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
-import type { CellRunBatch, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun } from '@/types/protocols'
+import type { CellRunBatch, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
 
@@ -284,6 +284,12 @@ export const protocolsApi = {
   // runnable Agent (see validate_single_node_runnable). Same polling shape
   // as a plain run (getRun), just with node_runs carrying only this one key.
   runNode: (id: string, nodeId: string) => request<ProtocolRun>(`/protocols/${id}/nodes/${nodeId}/run`, { method: 'POST' }),
+  // Read-only despite the POST: the graph goes in the body because the canvas
+  // being previewed is the one on screen, including edits autosave hasn't
+  // flushed yet. Creates no run of any kind. 422 for a node that isn't an
+  // agent, since only an agent is ever given a prompt.
+  promptPreview: (id: string, nodeId: string, graph: ProtocolGraph) =>
+    request<PromptPreview>(`/protocols/${id}/nodes/${nodeId}/prompt-preview`, { method: 'POST', body: { graph } }),
   getRevision: (id: string, revisionId: string) => request<ProtocolRevision>(`/protocols/${id}/revisions/${revisionId}`),
   getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
   // Only raises cancel_requested_at -- a no-op (200, unchanged row) once the
@@ -363,6 +369,10 @@ export const runsApi = {
   // No server-side experiment_id filter exists yet (runs.py only filters by
   // agent_id) -- callers filter client-side on run_metadata.experiment_id.
   list: () => request<Run[]>('/runs'),
+  // Owner-scoped, same as the list. Fetched per node run for `input` -- the
+  // exact assembled prompt that agent was given, which is the one piece of
+  // handoff evidence that isn't already on the polled node_runs blob.
+  get: (runId: string) => request<Run>(`/runs/${runId}`),
   getSteps: (runId: string) => request<RunStep[]>(`/runs/${runId}/steps`),
 }
 

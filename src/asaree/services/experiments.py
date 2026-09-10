@@ -68,12 +68,13 @@ async def create_experiment(
     design_spec: dict[str, Any] | None = None,
     dataset_ids: Sequence[uuid.UUID] | None = None,
 ) -> ResearchExperiment:
+    spec = dict(design_spec or {})
     experiment = ResearchExperiment(
         name=name,
         description=description,
         design_type=design_type,
         task_brief=task_brief,
-        design_spec=design_spec,
+        design_spec=spec,
         owner_id=owner_id,
     )
     db.add(experiment)

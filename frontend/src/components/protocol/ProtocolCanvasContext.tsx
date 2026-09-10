@@ -1,6 +1,14 @@
 import { createContext, useContext } from 'react'
 
-export type ConnectorSlot = 'ai' | 'tool' | 'memory' | 'architectural_pattern' | 'skill' | 'dataset' | 'knowledge'
+export type ConnectorSlot =
+  | 'ai'
+  | 'tool'
+  | 'memory'
+  | 'architectural_pattern'
+  | 'skill'
+  | 'dataset'
+  | 'knowledge'
+  | 'output_parser'
 
 // What each slot is CALLED in the UI, as opposed to the handle id it's
 // stored under -- the multi-word ones would otherwise surface raw,
@@ -15,6 +23,7 @@ export const CONNECTOR_SLOT_LABELS: Record<ConnectorSlot, string> = {
   skill: 'Skill',
   dataset: 'Dataset',
   knowledge: 'Knowledge',
+  output_parser: 'Output Parser',
 }
 
 export interface ConnectorAddRequest {
@@ -68,6 +77,19 @@ interface ProtocolCanvasActions {
   // to attach a factor to), same as FactorBindableField's own disabled
   // state for that case.
   requestMakeFactor: (nodeId: string) => void
+  // The Agent inspector's "Convert to an Output Parser node" button, for an
+  // agent still carrying the old `config.output_contract` field. One atomic
+  // canvas edit -- create the parser node under the agent's Output Parser
+  // connector, wire it, copy the contract over byte-for-byte, clear the field
+  // -- so an interrupted conversion can't leave a graph with the contract in
+  // two places at once (which the backend rejects outright).
+  //
+  // User-initiated and never automatic, unlike migrateLegacyHandles: that one
+  // rewrites an invisible handle string on an edge the user drew themselves,
+  // whereas this one MATERIALISES A NODE the user never placed, and autosave
+  // would then persist it. A graph is a document; nothing edits it on the
+  // user's behalf just because it was opened.
+  convertLegacyOutputContract: (nodeId: string) => void
 }
 
 // Node renderers (AgentNode, CriticGateNode, ...) are deeply nested,

@@ -73,6 +73,27 @@ WORKSPACE_AGENT_TOOLS: Final[tuple[str, ...]] = (
 # agent's tool list.
 SCRIPT_AGENT_TOOLS: Final[tuple[str, ...]] = ("run_wired_script",)
 
+# The third implicit grant, for the case the first one cannot serve: a Dataset
+# whose registration has no train/test split. There is no workspace for one, so
+# every tool in WORKSPACE_AGENT_TOOLS above is inapplicable and the prompt says
+# so outright ("Do NOT call open_workspace") -- then tells the agent to use
+# these three instead. Without the grant that instruction named tools the agent
+# did not have, and the run ended with the model reporting the gap rather than
+# doing the work. Same defect ``_resolve_dataset_tool_config`` and
+# ``_resolve_script_tool_config`` exist to fix, in the one dataset shape
+# neither covered.
+#
+# Deliberately only the three the prompt names, not the whole server: the
+# model-fitting tools alongside them are a real choice about the analysis, and
+# an agent that needs them should say so by wiring a Tool node. Granting them
+# implicitly would hand every dataset-wired agent a modelling harness it never
+# asked for.
+UNSPLIT_DATASET_AGENT_TOOLS: Final[tuple[str, ...]] = (
+    "describe_dataset",
+    "describe_split",
+    "train_test_split",
+)
+
 # (server name, module to run). Every module here is importable from this
 # repo's own venv -- asaree.* is ASAREE, motoro.* comes from the pinned Motoro
 # dependency, and the asaree_sklearn_* packages are the mcp-servers/ path
@@ -110,6 +131,27 @@ SYSTEM_MCP_SERVERS: Final[tuple[tuple[str, str], ...]] = (
     # currently offers, the six above being hidden from the picker.
     (SCIKIT_LEARN_SERVER_NAME, "scikit_learn_mcp"),
 )
+
+
+# Which workspace stage each bundled stage-writing server produces -- its own
+# module-level ``STAGE`` constant, mirrored here.
+#
+# This is what lets a canvas declare its own pipeline without anybody typing it
+# out: the stage names were never the user's to choose, because each of these
+# servers hardcodes the one stage it writes and refuses any other
+# (``open_workspace(..., stage='dc')``). So the honest reading of "which stages
+# does this experiment have" is "which of these servers does the canvas wire",
+# and ``protocol_execution.derive_stage_plan`` is what asks it.
+#
+# Mirrored rather than imported because the executor has to answer that question
+# before any server subprocess is spawned. Deliberately only the three that
+# stage: eda/model/stats read a workspace without producing a version, so they
+# are not steps in the lineage.
+STAGE_WRITING_SERVERS: Final[dict[str, str]] = {
+    "asaree-sklearn-dc": "dc",
+    "asaree-sklearn-fte": "fte",
+    "asaree-sklearn-fs": "fs",
+}
 
 
 def command_for(module: str) -> str:

@@ -16,10 +16,12 @@ import {
   type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Lock, Plus, Square, X } from 'lucide-react'
+import { Lock, Play, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
+import { CONNECTOR_HANDLES } from '@/lib/coordinationStrategy'
 import { newNodeId } from '@/lib/nodeId'
+import { handoffPeers, promptReferenceScope } from '@/lib/promptReferences'
 import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import {
@@ -33,6 +35,7 @@ import {
   defaultMemoryNodeData,
   defaultOpenAiLlmNodeData,
   defaultOpenRouterLlmNodeData,
+  defaultOutputParserNodeData,
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
   defaultSingleAgentBaselinePatternNodeData,
@@ -46,6 +49,8 @@ import type {
   MemoryNodeData,
   OkfBundleNodeData,
   OkfDocumentNodeData,
+  OutputParserNodeData,
+  ProtocolEdge,
   ProtocolGraph,
   ProtocolNode,
   ReasonActPatternNodeData,
@@ -82,6 +87,7 @@ import {
 } from './mcpServerCatalog'
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { MemoryNodeInspector } from './MemoryNodeInspector'
+import { OutputParserNodeInspector } from './OutputParserNodeInspector'
 import {
   ProtocolCanvasActionsProvider,
   type ConnectorAddRequest,
@@ -102,6 +108,7 @@ import { OkfDocumentNodeInspector } from './OkfDocumentNodeInspector'
 import { SkillBrowserPanel } from './SkillBrowserPanel'
 import { SKILL_BROWSE, nodeDataForSkill } from './skillCatalog'
 import { SkillNodeInspector } from './SkillNodeInspector'
+import { ConversationTranscript } from './ConversationTranscript'
 import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
@@ -110,6 +117,7 @@ import { LlmNode } from './nodes/LlmNode'
 import { McpClientToolNode } from './nodes/McpClientToolNode'
 import { McpToolNode } from './nodes/McpToolNode'
 import { MemoryNode } from './nodes/MemoryNode'
+import { OutputParserNode } from './nodes/OutputParserNode'
 import { ReasonActPatternNode } from './nodes/ReasonActPatternNode'
 import { ScriptNode } from './nodes/ScriptNode'
 import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatternNode'
@@ -128,22 +136,6 @@ const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline
 // services/protocol_execution.py: a server-side folder or an uploaded single
 // concept, both resolved identically into the agent's tool allow-list.
 const KNOWLEDGE_NODE_TYPES = ['okf_bundle', 'okf_document']
-// Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
-// whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
-// Includes the pre-rename "llm" and "resource" spellings for the same reason
-// the backend set does: a graph that hasn't been through migrateLegacyHandles
-// yet must not have its AI/Dataset edges misread as main pipeline edges.
-const CONNECTOR_HANDLES = new Set([
-  'ai',
-  'llm',
-  'tool',
-  'memory',
-  'architectural_pattern',
-  'skill',
-  'dataset',
-  'resource',
-  'knowledge',
-])
 // The four connector slots that live on an Agent's TOP edge (see
 // AgentNode.tsx) -- a node feeding one of these is placed ABOVE its agent,
 // every other slot's source below it.
@@ -170,6 +162,7 @@ const NODE_TYPES = {
   llm_openrouter: LlmNode,
   llm_local: LlmNode,
   memory: MemoryNode,
+  output_parser: OutputParserNode,
   dataset: DatasetNode,
   skill: SkillNode,
   okf_bundle: OkfBundleNode,
@@ -216,6 +209,7 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'llm_openrouter') return defaultOpenRouterLlmNodeData()
   if (nodeType === 'llm_local') return defaultLocalLlmNodeData()
   if (nodeType === 'memory') return defaultMemoryNodeData()
+  if (nodeType === 'output_parser') return defaultOutputParserNodeData()
   if (nodeType === 'dataset') return defaultDatasetNodeData()
   if (nodeType === 'script') return defaultScriptNodeData()
   if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData()
@@ -276,6 +270,7 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   ai: { allowedTypes: LLM_NODE_TYPES, title: 'Add AI' },
   tool: { allowedTypes: [MCP_SERVER_BROWSE, 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
+  output_parser: { allowedTypes: ['output_parser'], title: 'Add Output Parser' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
   dataset: { allowedTypes: [DATASET_BROWSE], title: 'Add Dataset' },
@@ -283,6 +278,20 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   // folder already on the server (bundle) or as a file the user uploads
   // (document), and which of those you have is the question the panel asks.
   knowledge: { allowedTypes: [OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE], title: 'Add Knowledge' },
+}
+
+// Where an Output Parser belongs relative to the agent it serves: under that
+// agent's own Parser connector, nudged clear of anything already sitting there.
+// Shared by the two paths that create a parser without going through the
+// connector's "+" -- converting a legacy stored contract, and adding one from
+// the unrestricted toolbar panel -- so a parser lands in the same place however
+// it came to exist.
+function parserPositionFor(agent: Node, otherNodes: Node[]) {
+  return findFreePosition(
+    otherNodes.map((n) => n.position),
+    { x: agent.position.x + connectorNodeOffsetX(agent.type, 'output_parser'), y: agent.position.y + 160 },
+    CONNECTOR_CHILD_CLEARANCE,
+  )
 }
 
 // Connector slots have been renamed since graphs started being saved, and a
@@ -472,6 +481,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // (billable) run never fires without the user seeing what will actually
   // execute first.
   const [pendingRunConfirm, setPendingRunConfirm] = useState<RunScope | null>(null)
+  // Conversation mode's own confirm state. Separate from pendingRunConfirm
+  // because the dialog needs two fields filled in (who to ask, and what) before
+  // the scope it confirms even exists.
   const [runId, setRunId] = useState<string | null>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, fitView } = useReactFlow()
@@ -512,11 +524,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     requestAnimationFrame(() => fitView({ maxZoom: DEFAULT_ZOOM, duration: 300 }))
   }, [edges, experimentLocked, fitView, setNodes])
 
-  // Read-only subscription to the linked experiment, purely so the dataset
-  // sync below sees 'dataset_config' factor levels (see its own comment).
+  // Read-only subscription to the linked experiment, for two things the canvas
+  // can't read off the graph: the 'dataset_config' factor levels the dataset
+  // sync below needs (see its own comment), and the coordination strategy,
+  // which decides whether an agent's "Lead" marker means anything yet.
   // Same query key the page and FactorBindableField already use, so this
   // shares their cache entry rather than adding a request of its own.
-  const experimentFactorsQuery = useQuery({
+  const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
     queryFn: () => experimentsApi.get(experimentId!),
     enabled: !!experimentId,
@@ -530,9 +544,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   })
 
   function confirmPendingRun() {
-    if (!pendingRunConfirm) return
-    if (pendingRunConfirm.type === 'node') {
+    if (pendingRunConfirm?.type === 'node') {
       runNodeMutation.mutate(pendingRunConfirm.nodeId)
+      setPendingRunConfirm(null)
+      return
+    }
+    if (pendingRunConfirm?.type === 'graph') {
+      runMutation.mutate()
+      setPendingRunConfirm(null)
+      return
     }
     setPendingRunConfirm(null)
   }
@@ -548,6 +568,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       }
       confirmPendingRun()
     },
+  })
+
+  // The whole canvas, once, with no factor values substituted in -- what
+  // `POST /protocols/{id}/runs` does with no `replicate_label`. Deliberately
+  // NOT a second way to run a cell: picking a replicate, and running the
+  // pending batch, both live in the Runs tab, and duplicating either here
+  // would give the same action two homes that can disagree. This button is
+  // the answer to "there are no cells, how do I run this at all" -- an
+  // experiment with a design still runs from the Runs tab.
+  const runMutation = useMutation({
+    mutationFn: () => protocolsApi.run(protocolId),
+    onSuccess: (run) => setRunId(run.id),
   })
 
   // The canvas's per-node Play icon stores its run in the shared runId/runQuery
@@ -572,7 +604,35 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
   })
 
-  const isRunning = runNodeMutation.isPending || (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
+  // What this protocol last did. `runId` above is React state set only by the
+  // mutation that launches a run, so before this the canvas could only ever
+  // show a run started in this very browser tab: a reload dropped the run it
+  // was watching, and a run started outside the GUI (the SDK, a notebook, a
+  // direct API call) could never be watched at all -- its node statuses,
+  // outputs and conversation transcript existed but had no way to be reached.
+  // list_protocol_runs is newest-first, so [0] is the latest.
+  const protocolRunsQuery = useQuery({
+    queryKey: ['protocols', protocolId, 'runs'],
+    queryFn: () => protocolsApi.listRuns(protocolId),
+  })
+
+  // Seeded once and only into an empty slot: a run launched here must win over
+  // whatever happened to be newest when the page loaded, and re-seeding on
+  // every refetch would yank the view off the run the user is watching the
+  // moment someone else's run lands.
+  const seededLatestRun = useRef(false)
+  useEffect(() => {
+    if (seededLatestRun.current || runId) return
+    const latest = protocolRunsQuery.data?.[0]
+    if (!latest) return
+    seededLatestRun.current = true
+    setRunId(latest.id)
+  }, [protocolRunsQuery.data, runId])
+
+  const isRunning =
+    runMutation.isPending ||
+    runNodeMutation.isPending ||
+    (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
 
   // Stop button -- only raises cancel_requested_at; run_protocol's own node
   // loop (polled between nodes, not mid-node) is what actually honors it.
@@ -607,6 +667,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // reach zero (see nonDeletablePatternNodeIds above) -- so this is the
   // only one actually reachable through normal use.
   const agentIdsWithLlm = useMemo(() => new Set(edges.filter((e) => e.targetHandle === 'ai').map((e) => e.target)), [edges])
+  const agentIdsWithParser = useMemo(
+    () => new Set(edges.filter((e) => e.targetHandle === 'output_parser').map((e) => e.target)),
+    [edges],
+  )
 
   // The canvas's per-node Play icon is only offered for a node with no
   // upstream *main* pipeline edge (mirrors services.protocol_execution's
@@ -655,6 +719,132 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     return map
   }, [edges])
 
+  // Who each agent may consult under the Peer Collaboration coordination
+  // strategy, mirroring services/protocol_execution.py's _connected_agent_ids:
+  // a plain (non-connector) edge joining two Agent nodes, read undirected. The
+  // same edge is still a directed pipeline edge for a sequential run -- it is
+  // both, and the experiment's strategy decides which. Nothing on the canvas is
+  // drawn differently for it; this only feeds AgentNode's tool-calling warning,
+  // which is about the agent, not the edge.
+  const peerIdsByAgent = useMemo(() => {
+    const nodeTypeById = new Map(nodes.map((n) => [n.id, n.type]))
+    const map = new Map<string, string[]>()
+    const link = (a: string, b: string) => map.set(a, [...(map.get(a) ?? []), b])
+    for (const e of edges) {
+      if (CONNECTOR_HANDLES.has(e.targetHandle ?? '')) continue
+      if (nodeTypeById.get(e.source) !== 'agent' || nodeTypeById.get(e.target) !== 'agent') continue
+      if (e.source === e.target) continue
+      link(e.source, e.target)
+      link(e.target, e.source)
+    }
+    return map
+  }, [nodes, edges])
+
+  // The agent currently marked as the conversation lead, if any. Read off the
+  // graph rather than tracked in state so it survives a canvas reload, and
+  // computed here rather than in the inspector because the inspector only ever
+  // sees the one node it's editing. Feeds the inspector's rule that the
+  // checkbox is offered on the marked agent and on nobody else once a lead
+  // exists -- the marker is single-valued (two is a validation error
+  // server-side), so the UI shouldn't let you create the second one.
+  const markedLeadAgentId = useMemo(
+    () => nodes.find((n) => n.type === 'agent' && (n.data as AgentNodeData).conversation_lead === true)?.id ?? null,
+    [nodes],
+  )
+
+  // Same reasoning as markedLeadAgentId: the inspector edits one node and can't
+  // see the wiring around it, so which upstream outputs that node's prompt may
+  // reference is resolved here. Recomputed on every rewire, which is the point
+  // -- the picker has to answer "what's available to me" while the canvas is
+  // being drawn, not at publish time.
+  const referenceScope = useMemo(
+    () => promptReferenceScope(nodes as unknown as ProtocolNode[], edges as unknown as ProtocolEdge[], selectedNodeId),
+    [nodes, edges, selectedNodeId],
+  )
+  // The same answer for an arbitrary node, which the factor-level editor needs
+  // -- the field a factor binds to is picked inside that dialog, so the node
+  // isn't known until then.
+  const promptScopeFor = useCallback(
+    (nodeId: string) =>
+      promptReferenceScope(nodes as unknown as ProtocolNode[], edges as unknown as ProtocolEdge[], nodeId),
+    [nodes, edges],
+  )
+  // Who is wired to the selected node, either way -- the inspector's
+  // Receives/Sends readout. Direct neighbours, unlike referenceScope's
+  // transitive ancestry: this one answers "what is wired to me", which is what
+  // a user checks against the canvas in front of them.
+  const selectedHandoffPeers = useMemo(
+    () => handoffPeers(nodes as unknown as ProtocolNode[], edges as unknown as ProtocolEdge[], selectedNodeId),
+    [nodes, edges, selectedNodeId],
+  )
+  // The Output Parser wired into the selected agent, if any -- its label, or
+  // null for "none". Same reasoning as markedLeadAgentId again: the inspector
+  // sees one node, and whether a parser hangs off it is wiring.
+  const selectedOutputParserLabel = useMemo(() => {
+    if (!selectedNodeId) return null
+    const edge = edges.find((e) => e.target === selectedNodeId && e.targetHandle === 'output_parser')
+    if (!edge) return null
+    return (nodes.find((n) => n.id === edge.source)?.data as OutputParserNodeData | undefined)?.label ?? ''
+  }, [nodes, edges, selectedNodeId])
+  // The prompt preview is assembled by the backend from the graph on screen,
+  // which includes edits autosave hasn't flushed. Sent rather than read back
+  // server-side for that reason; nothing is written.
+  const fetchPromptPreview = useCallback(
+    (nodeId: string) =>
+      protocolsApi.promptPreview(protocolId, nodeId, {
+        nodes: nodes as unknown as ProtocolNode[],
+        edges: edges as unknown as ProtocolEdge[],
+      }),
+    [protocolId, nodes, edges],
+  )
+
+  // The model each agent will actually run on, resolved through its AI
+  // connector. Injected into the node's data rather than read here, because
+  // whether that model can be sent function schemas needs the provider's model
+  // list -- a query, which the node card subscribes to itself (see AgentNode's
+  // peerNeedsToolCalling). Only the *wiring* half belongs in this file.
+  const llmConfigByAgent = useMemo(() => {
+    const nodeById = new Map(nodes.map((n) => [n.id, n]))
+    const map = new Map<string, { provider?: string; model?: string }>()
+    for (const e of edges) {
+      if (e.targetHandle !== 'ai') continue
+      const config = (nodeById.get(e.source)?.data as LlmNodeData | undefined)?.config
+      if (config) map.set(e.target, { provider: config.provider, model: config.model })
+    }
+    return map
+  }, [nodes, edges])
+
+  const agentNames = useMemo(
+    () => new Map(nodes.filter((n) => n.type === 'agent').map((n) => [n.id, (n.data as AgentNodeData).label || 'Agent'])),
+    [nodes],
+  )
+
+  // The experiment's declared coordination strategy, which decides what the
+  // main handles MEAN -- whether a lead marker is in force, and whether the
+  // main flow is capped at one edge per side. Read here rather than on the node
+  // card so the card stays a pure render of what it's handed. Absent (an
+  // experiment saved before the field existed) is 'sequential', matching
+  // `coordination_strategy_slug` on the backend.
+  const coordinationSlug = experimentQuery.data?.design_spec?.coordination_strategy?.slug ?? 'sequential'
+  const isPeerCollaboration = coordinationSlug === 'peer_collaboration'
+  const isSupervisor = coordinationSlug === 'supervisor_architecture'
+  const isSequential = coordinationSlug === 'sequential'
+
+  // Which main-flow sides are already taken. Only consulted under
+  // 'sequential', where the chain rule caps each side at one edge
+  // (validate_sequential_chain), so the "+" stub can hide instead of offering
+  // a connection the backend would reject at publish time.
+  const mainEdgeSlots = useMemo(() => {
+    const incoming = new Set<string>()
+    const outgoing = new Set<string>()
+    for (const e of edges) {
+      if (CONNECTOR_HANDLES.has(e.targetHandle ?? '')) continue
+      incoming.add(e.target)
+      outgoing.add(e.source)
+    }
+    return { incoming, outgoing }
+  }, [edges])
+
   const nodesWithRunStatus = useMemo((): Node[] => {
     return nodes.map((n) => {
       const patternHostId = patternHostIds.get(n.id)
@@ -665,10 +855,54 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           ...n.data,
           runStatus: runQuery.data?.node_runs[n.id]?.status,
           missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
+          // "Require specific output format" is on, but nothing says what the
+          // format is. Unlike missingLlm this doesn't stop the run -- the agent
+          // just answers in prose, which is the outcome the switch was flipped
+          // to prevent, so it has to be visible on the card and not only in the
+          // inspector the user has already closed. A legacy stored contract
+          // counts as the answer: the executor falls back to it.
+          missingOutputParser:
+            n.type === 'agent' &&
+            (n.data as AgentNodeData).config?.require_output_parser === true &&
+            !agentIdsWithParser.has(n.id) &&
+            !(n.data as AgentNodeData).config?.output_contract,
           canRunAlone: n.type === 'agent' && !agentIdsWithUpstream.has(n.id),
+          hasPeers: n.type === 'agent' && (peerIdsByAgent.get(n.id)?.length ?? 0) > 0,
+          llmConfig: n.type === 'agent' ? llmConfigByAgent.get(n.id) ?? null : null,
+          // Gated on the strategy, not just the flag: a "Lead" badge left over
+          // from a Peer Collaboration experiment that has since been switched
+          // to Sequential would claim a role nothing acts on. The flag itself
+          // is kept (see AgentNodeInspector) -- only the badge is conditional.
+          // One marker, two strategies, two words for it: `conversation_lead`
+          // says "starts the conversation" under Peer Collaboration and "is the
+          // supervisor" under Supervisor, so the badge names the role the
+          // running strategy will actually give it rather than a generic "Lead".
+          leadRole:
+            n.type === 'agent' && (n.data as AgentNodeData).conversation_lead === true
+              ? isPeerCollaboration
+                ? 'lead'
+                : isSupervisor
+                  ? 'supervisor'
+                  : null
+              : null,
+          // Under Sequential the chain rule caps each main side at one edge, so
+          // the "+" affordance has to match the rule rather than the rule
+          // ambushing the user after they've drawn the edge.
+          mainInFull: isSequential && mainEdgeSlots.incoming.has(n.id),
+          mainOutFull: isSequential && mainEdgeSlots.outgoing.has(n.id),
           // Only meaningful once the pattern is actually wired to an agent --
           // an orphaned pattern node has no loop to warn about.
-          hostHasNoTools: !!patternHostId && !agentIdsWithCallableTools.has(patternHostId),
+          // A peer is a callable capability too: both Motoro execution paths
+          // append `agents_to_openai_format(available_agents)` to the function
+          // payload independently of tools (engine/act.py, reason_act.py), so
+          // an agent whose only capability is a peer still gets a payload and
+          // the loop can run past one turn. Gated on the strategy because
+          // `available_agents` is only passed under Peer Collaboration -- under
+          // any other one the original warning is still exactly right.
+          hostHasNoTools:
+            !!patternHostId &&
+            !agentIdsWithCallableTools.has(patternHostId) &&
+            !(isPeerCollaboration && (peerIdsByAgent.get(patternHostId)?.length ?? 0) > 0),
         },
       }
     })
@@ -677,9 +911,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     runQuery.data,
     nonDeletablePatternNodeIds,
     agentIdsWithLlm,
+    agentIdsWithParser,
     agentIdsWithUpstream,
     agentIdsWithCallableTools,
     patternHostIds,
+    peerIdsByAgent,
+    llmConfigByAgent,
+    isPeerCollaboration,
+    isSupervisor,
+    isSequential,
+    mainEdgeSlots,
   ])
 
   // Same protection, one layer up -- the architectural_pattern EDGE itself
@@ -800,9 +1041,75 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
     [experimentId, experimentLocked],
   )
+  // Moves an agent's stored `config.output_contract` onto a real Output Parser
+  // node -- see ProtocolCanvasContext for why this is a button rather than
+  // something that happens on load. Everything lands in one pair of setNodes/
+  // setEdges calls: the intermediate state (contract on the node AND on the
+  // agent) is exactly the one topological_order refuses to publish.
+  const convertLegacyOutputContract = useCallback(
+    (nodeId: string) => {
+      if (experimentLocked) return
+      const agent = nodes.find((n) => n.id === nodeId)
+      const contract = (agent?.data as AgentNodeData | undefined)?.config?.output_contract
+      if (!agent || !contract) return
+      const position = parserPositionFor(agent, nodes)
+      const parserId = newNodeId()
+      // The contract is copied across as-is, field types included: normalising
+      // Motoro's aliases (integer -> int, and so on) here would silently
+      // diverge this draft from the published revisions production runs still
+      // execute. Converting changes WHERE the contract lives, nothing else.
+      const parserData = defaultOutputParserNodeData()
+      parserData.config.output_contract = contract
+      setNodes((nds) =>
+        nds
+          .map((n) =>
+            n.id === nodeId
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    config: {
+                      ...(n.data as AgentNodeData).config,
+                      output_contract: null,
+                      // Keeps the connector drawn once the field that was
+                      // revealing it is gone.
+                      require_output_parser: true,
+                    },
+                  },
+                }
+              : n,
+          )
+          .concat({ id: parserId, type: 'output_parser', position, data: parserData }),
+      )
+      setEdges((eds) =>
+        eds.concat({
+          id: newNodeId(),
+          source: parserId,
+          sourceHandle: 'output_parser',
+          target: nodeId,
+          targetHandle: 'output_parser',
+        }),
+      )
+    },
+    [experimentLocked, nodes, setNodes, setEdges],
+  )
   const canvasActions = useMemo(
-    () => ({ requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode, requestMakeFactor }),
-    [requestConnectorAdd, requestMainEdgeAdd, requestEdgeInsert, requestRunNode, requestMakeFactor],
+    () => ({
+      requestConnectorAdd,
+      requestMainEdgeAdd,
+      requestEdgeInsert,
+      requestRunNode,
+      requestMakeFactor,
+      convertLegacyOutputContract,
+    }),
+    [
+      requestConnectorAdd,
+      requestMainEdgeAdd,
+      requestEdgeInsert,
+      requestRunNode,
+      requestMakeFactor,
+      convertLegacyOutputContract,
+    ],
   )
 
   // Backing data for the per-node factor picker above -- fetched only while
@@ -1027,6 +1334,42 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       return
     }
 
+    // An Output Parser is the one catalog entry that is meaningless on its
+    // own: it has exactly one legal connection, it configures the agent it
+    // hangs off, and dropped loose it silently does nothing while looking like
+    // it is set up. Picking it from the connector's own "+" already wires it
+    // (the pendingConnectorAdd branch above); picking it from the unrestricted
+    // toolbar panel did not, which is the whole gap.
+    //
+    // Wired only when the host is unambiguous. An agent that has "Require
+    // specific output format" on and nothing answering it is asking for this
+    // node by name, so it wins outright; failing that, a canvas with a single
+    // parser-less agent has only one place the node could go. Two candidates
+    // and it stays loose rather than attaching to a guess -- the user drags the
+    // edge, which is the same work as correcting a wrong one.
+    if (nodeType === 'output_parser') {
+      const parserless = nodes.filter(
+        (n) => n.type === 'agent' && !edges.some((e) => e.target === n.id && e.targetHandle === 'output_parser'),
+      )
+      const asking = parserless.filter((n) => (n.data as AgentNodeData).config?.require_output_parser === true)
+      const host = (asking.length === 1 ? asking : parserless.length === 1 ? parserless : [])[0]
+      if (host) {
+        setNodes((nds) => nds.concat({ ...newNode, position: parserPositionFor(host, nds) }))
+        setEdges((eds) =>
+          eds.concat({
+            id: newNodeId(),
+            source: newId,
+            sourceHandle: 'output_parser',
+            target: host.id,
+            targetHandle: 'output_parser',
+          }),
+        )
+        setAddPanelOpen(false)
+        setSelectedNodeId(newId)
+        return
+      }
+    }
+
     setNodes((nds) => nds.concat(newNode))
     setAddPanelOpen(false)
   }
@@ -1166,7 +1509,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // use (TanStack dedupes by key, so it costs no extra request), which is
   // what makes a factor save here land immediately: FactorBindableField
   // invalidates that exact key on success.
-  const factors = experimentFactorsQuery.data?.design_spec?.factors ?? EMPTY_FACTORS
+  const factors = experimentQuery.data?.design_spec?.factors ?? EMPTY_FACTORS
   const lastSyncedDatasetIdsRef = useRef(JSON.stringify(datasetIdsInGraph(initialGraph.nodes as Node[])))
   useEffect(() => {
     if (!experimentId) return
@@ -1236,6 +1579,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | CriticGateNodeData
       | LlmNodeData
       | MemoryNodeData
+      | OutputParserNodeData
       | DatasetNodeData
       | SkillNodeData
       | OkfBundleNodeData
@@ -1278,48 +1622,59 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           )
         case 'memory':
           return sourceNode.type === 'memory' && targetNode.type === 'agent'
+        case 'output_parser':
+          // Agent only, deliberately not critic_gate: a gate's answer is a
+          // pass/fail decision the executor already reads structurally, so
+          // there is nothing for a contract to extract.
+          return sourceNode.type === 'output_parser' && targetNode.type === 'agent'
         case 'architectural_pattern':
           return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
         case 'skill':
           return sourceNode.type === 'skill' && targetNode.type === 'agent'
         case 'dataset':
-          // The one slot with a cardinality check here, not just a hidden
-          // "+" stub (see AgentNode.tsx's Dataset comment, and ai/memory
-          // above, which are capped the same way but rely on the stub
-          // alone). A second dataset on one agent isn't merely unsupported
-          // -- every cell resolves ONE workspace, so seed_cell_workspace
-          // rejects it at run time, after the run has already started.
-          // Comparing datasets is a 'dataset_config' factor instead.
-          return (
-            sourceNode.type === 'dataset' &&
-            targetNode.type === 'agent' &&
-            !edges.some(
-              (e) => e.target === connection.target && e.targetHandle === 'dataset' && e.source !== connection.source,
-            )
-          )
+          // Uncapped: a cell's workspace holds one dataset per named SLOT, so
+          // several datasets on one agent is a supported shape, not a run-time
+          // error (see AgentNode.tsx's Dataset comment). Wiring order is the
+          // order the agent's prompt lists the slots in. Note this is still
+          // distinct from COMPARING datasets across cells, which is a
+          // 'dataset_config' factor.
+          return sourceNode.type === 'dataset' && targetNode.type === 'agent'
         case 'knowledge':
           // The one connector with two source types -- bundles and uploaded
           // documents are interchangeable here, since both resolve to the same
           // per-directory OKF server.
           return KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
-        default:
+        default: {
           // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool/
           // dataset/skill/knowledge/script nodes have no main handle to drag from in
           // the first place, so this mostly guards against a stray
           // connection, not real interactive use.
-          return (
+          const sourceCanFeedMainFlow =
             !LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'memory' &&
+            sourceNode.type !== 'output_parser' &&
             !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'dataset' &&
             sourceNode.type !== 'skill' &&
             !KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'script' &&
             !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '')
+          if (!sourceCanFeedMainFlow) return false
+          // Under Sequential the main flow is a chain: one edge out of each
+          // node, one into each. Enforced here so the canvas refuses the fork
+          // as you draw it, rather than validate_sequential_chain rejecting the
+          // whole protocol at publish time. Other strategies leave the main
+          // flow unrestricted -- a fork is exactly the shape Peer Collaboration
+          // exists for, and a Critic Gate pipeline routes around agents.
+          if (!isSequential) return true
+          return (
+            !edges.some((e) => e.source === connection.source && !CONNECTOR_HANDLES.has(e.targetHandle ?? '')) &&
+            !edges.some((e) => e.target === connection.target && !CONNECTOR_HANDLES.has(e.targetHandle ?? ''))
           )
+        }
       }
     },
-    [nodes, edges],
+    [nodes, edges, isSequential],
   )
 
   function deleteNode(nodeId: string) {
@@ -1395,12 +1750,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           </ReactFlow>
           {!experimentLocked && <CanvasControls onTidy={tidyUp} />}
           {(() => {
-            // runNodeMutation.error is the real validation
+            // runMutation.error/runNodeMutation.error is the real validation
             // message (e.g. topological_order/validate_single_node_runnable
             // rejecting before any ProtocolRun row even exists) --
             // runQuery.data?.error only ever exists once a run row was
             // created and later failed asynchronously in the worker.
-            const failedMutation = runNodeMutation.isError ? runNodeMutation : null
+            const failedMutation = runMutation.isError ? runMutation : runNodeMutation.isError ? runNodeMutation : null
             const runErrorText =
               runQuery.data?.error ??
               (failedMutation
@@ -1443,6 +1798,36 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 {cancelRequested ? 'Stopping…' : 'Stop'}
               </Button>
             )}
+            {/* There is deliberately no separate "start a conversation"
+                button here. Whether connected agents collaborate is the
+                experiment's coordination strategy (Design tab), not a second
+                way to press Run -- so an agent conversation is started by
+                running the protocol, like everything else. */}
+            {/* Always opens RunConfirmDialog rather than firing a real,
+                billable run on one click. That dialog does its own pre-flight
+                scan for obviously misconfigured nodes (no model, no dataset
+                picked, no script code, an agent with nothing wired into its
+                required AI connector) and surfaces them inline, instead of
+                the user only finding out via a generic "one or more nodes
+                failed" AFTER paying for the attempt. It also owns the
+                publish-then-run choice when the draft differs from the
+                published revision. */}
+            <Button
+              size="sm"
+              // Not disabled by `experimentLocked`: locking freezes the
+              // design, which is precisely when you want to collect data, and
+              // the backend agrees -- the lock guards sit on update/publish/
+              // delete, never on creating a run.
+              disabled={isRunning}
+              onClick={() => {
+                setRunErrorDismissed(false)
+                setPendingRunConfirm({ type: 'graph' })
+              }}
+              title="Run this canvas once, with no factor values substituted in"
+            >
+              <Play className="size-4" />
+              {isRunning ? 'Running…' : 'Run'}
+            </Button>
             <Button
               size="icon"
               className="rounded-full"
@@ -1466,9 +1851,25 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               edges={edges}
             />
           </div>
-          {experimentLocked && (
-            <div className="absolute top-3 left-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-background/95 px-2.5 py-1.5 text-xs font-medium shadow-sm">
-              <Lock className="size-3.5" /> Canvas locked
+          {/* One top-left column rather than two independently-positioned
+              overlays: the lock badge and the transcript are both anchored
+              here, and stacking them is what keeps them from landing on top of
+              each other. `items-start` so each stays its own natural width.
+              Top-LEFT because bottom-right is the MiniMap's corner and
+              top-right is the Add/menu buttons'. The column itself is
+              `pointer-events-none` so the empty space it reserves stays part of
+              the canvas -- panning and node drags must still work under it --
+              and each child turns events back on for itself. */}
+          {(experimentLocked || runQuery.data?.conversation) && (
+            <div className="pointer-events-none absolute top-3 left-3 z-10 flex max-h-[55%] w-[min(28rem,calc(100%-1.5rem))] flex-col items-start gap-2">
+              {experimentLocked && (
+                <div className="pointer-events-auto inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary/30 bg-background/95 px-2.5 py-1.5 text-xs font-medium shadow-sm">
+                  <Lock className="size-3.5" /> Canvas locked
+                </div>
+              )}
+              {runQuery.data?.conversation && (
+                <ConversationTranscript conversation={runQuery.data.conversation} agentNames={agentNames} />
+              )}
             </div>
           )}
         </div>
@@ -1557,6 +1958,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
           />
+        ) : selectedNode?.type === 'output_parser' ? (
+          <OutputParserNodeInspector
+            node={{ id: selectedNode.id, type: 'output_parser', position: selectedNode.position, data: selectedNode.data as OutputParserNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
         ) : selectedNode?.type === 'dataset' ? (
           <DatasetNodeInspector
             node={{ id: selectedNode.id, type: 'dataset', position: selectedNode.position, data: selectedNode.data as DatasetNodeData }}
@@ -1633,6 +2043,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             <AgentNodeInspector
               node={{ id: selectedNode.id, type: selectedNode.type ?? 'agent', position: selectedNode.position, data: selectedNode.data as AgentNodeData }}
               experimentId={experimentId}
+              markedLeadAgentId={markedLeadAgentId}
+              referenceScope={referenceScope}
+              handoffPeers={selectedHandoffPeers}
+              wiredOutputParserLabel={selectedOutputParserLabel}
+              fetchPromptPreview={fetchPromptPreview}
               nodeRun={runQuery.data?.node_runs[selectedNode.id]}
               onChange={updateNodeData}
               onDelete={requestDeleteNode}
@@ -1697,6 +2112,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           existingNames={factorPickerExistingNames}
           emptyPickerMessage={`${(factorPickerNode?.data as { label?: string })?.label || 'This node'} has no fields that can be turned into a factor.`}
           revealHiddenServers={revealsHiddenMcpServers(nodes)}
+          promptScopeFor={promptScopeFor}
           onSave={(factor, field) => {
             if (field) createFactorMutation.mutate({ factor, field })
           }}

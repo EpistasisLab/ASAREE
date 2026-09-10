@@ -11,6 +11,16 @@ the same on-disk format, the same way ASAREE itself depends on Motoro.
 from __future__ import annotations
 
 from . import provenance, staging
+from .stages import (
+    DEFAULT_STAGE_PLAN,
+    GATE_RULES,
+    PRESETS,
+    TABULAR_ML,
+    Stage,
+    StagePlan,
+    StagePlanError,
+    resolve_stage_plan,
+)
 from .context import (
     META_KEY_DATASET_NAMES,
     META_KEY_OWNER_ID,
@@ -22,6 +32,8 @@ from .context import (
     resolve_dataset_name_from_ctx,
     resolve_matrix_from_head,
     resolve_owner_id_from_ctx,
+    resolve_slot,
+    resolve_slot_from_ctx,
     resolve_stage_input,
     resolve_stage_working,
     resolve_workspace_id,
@@ -29,18 +41,32 @@ from .context import (
     workspace_id_from_meta,
 )
 from .workspace import (
+    AGENT_SLOT_PREFIX,
+    CURRENT_FORMAT_VERSION,
+    DATASET_SLOT_PREFIX,
+    LEGACY_SLOT,
     SEED_VERSION,
     WORKSPACE_ROOT,
     STAGE_VERSION,
     STAGES,
     Workspace,
     WorkspaceError,
+    agent_slot,
+    dataset_slot,
     make_workspace_id,
 )
 
 __all__ = [
     "provenance",
     "staging",
+    "DEFAULT_STAGE_PLAN",
+    "GATE_RULES",
+    "PRESETS",
+    "TABULAR_ML",
+    "Stage",
+    "StagePlan",
+    "StagePlanError",
+    "resolve_stage_plan",
     "META_KEY_DATASET_NAMES",
     "META_KEY_OWNER_ID",
     "META_KEY_WORKSPACE_ID",
@@ -51,16 +77,24 @@ __all__ = [
     "resolve_dataset_name_from_ctx",
     "resolve_matrix_from_head",
     "resolve_owner_id_from_ctx",
+    "resolve_slot",
+    "resolve_slot_from_ctx",
     "resolve_stage_input",
     "resolve_stage_working",
     "resolve_workspace_id",
     "resolve_workspace_id_from_ctx",
     "workspace_id_from_meta",
+    "AGENT_SLOT_PREFIX",
+    "CURRENT_FORMAT_VERSION",
+    "DATASET_SLOT_PREFIX",
+    "LEGACY_SLOT",
     "SEED_VERSION",
     "WORKSPACE_ROOT",
     "STAGE_VERSION",
     "STAGES",
     "Workspace",
     "WorkspaceError",
+    "agent_slot",
+    "dataset_slot",
     "make_workspace_id",
 ]

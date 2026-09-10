@@ -62,7 +62,11 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions = [execute_run_task, execute_protocol_run_task, evaluate_protocol_run_metrics_task]
+    functions = [
+        execute_run_task,
+        execute_protocol_run_task,
+            evaluate_protocol_run_metrics_task,
+    ]
     cron_jobs = [cron(check_stale_runs, second={0, 30})]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     on_startup = on_startup

@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend:
+    name: Lint & Test (backend)
+    runs-on: ubuntu-latest
+
+    # The suite runs against a real Postgres, not sqlite or mocks: this
+    # codebase stores JSONB and never mocks the database (see the docstring
+    # on tests/test_protocols.py). pgvector's image rather than plain
+    # postgres because core's own schema declares a vector column.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: agentic
+          POSTGRES_PASSWORD: agentic
+          POSTGRES_DB: motoro
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    # Two databases on one server, matching the split in config.py:
+    # `ASAREE_DATABASE_URL` is core's schema, `ASAREE_PRODUCT_DATABASE_URL`
+    # is ASAREE's own tables. Bare `DATABASE_URL` is here for the sake of
+    # `python -m motoro.migrations`, which reads settings with no product
+    # prefix. Set as real env vars because CI has no .env to fall back on,
+    # and subprocess-spawned MCP servers inherit them.
+    env:
+      DATABASE_URL: postgresql+asyncpg://agentic:agentic@localhost:5432/motoro
+      ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@localhost:5432/motoro
+      ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@localhost:5432/asaree
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # No setup-python step on purpose: `requires-python = ">=3.12"` plus uv's
+      # own managed interpreters already decide the version, and pinning one
+      # here would only let CI drift from what `uv sync` gives a developer
+      # locally.
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # Cheap, and it guards the exact class of bug this workflow was added
+      # after: a `tool.uv.sources` pin edited without re-locking, so the
+      # lockfile still resolves the old commit.
+      - name: Check lockfile is up to date
+        run: uv lock --check
+
+      # The slow step by a wide margin -- motoro depends unconditionally on
+      # sentence-transformers, which pulls ~4.5 GB of torch + CUDA that
+      # nothing in ASAREE imports (EpistasisLab/motoro#6). The uv cache above
+      # absorbs it on warm runs; when that issue lands, this drops to well
+      # under a minute cold.
+      - name: Install dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Ruff check
+        run: uv run ruff check src/asaree tests
+
+      # Deliberately absent: `ruff format --check`. This repo is knowingly not
+      # ruff-format-clean and reformatting it is not wanted, so the step could
+      # only ever be permanently-yellow noise. `ruff check` above is the part
+      # that finds real defects.
+
+      # Non-blocking until the pre-existing strict-mode backlog is paid down
+      # (same reasoning as motoro's own CI). Flip to blocking once clean.
+      - name: Mypy (warn only)
+        continue-on-error: true
+        run: uv run mypy src/asaree
+
+      # The service container only creates POSTGRES_DB; the second database
+      # has to be made by hand. Done with asyncpg rather than psql so the job
+      # depends only on the locked dependencies, not on whatever client
+      # tooling the runner image happens to ship.
+      - name: Create ASAREE's product database
+        run: |
+          uv run python - <<'PY'
+          import asyncio, asyncpg
+
+          async def main() -> None:
+              conn = await asyncpg.connect("postgresql://agentic:agentic@localhost:5432/motoro")
+              try:
+                  await conn.execute("CREATE DATABASE asaree")
+              finally:
+                  await conn.close()
+
+          asyncio.run(main())
+          PY
+
+      # Core's chain first, then ASAREE's -- the order `asaree.migrations`
+      # documents. `deploy` rather than `upgrade` so the pattern registry is
+      # projected into architectural_patterns too; the schema alone is not
+      # enough for tests that resolve a coordination strategy.
+      - name: Migrate core schema
+        run: uv run python -m motoro.migrations deploy --url "$DATABASE_URL"
+
+      - name: Migrate ASAREE schema
+        run: uv run python -m asaree.migrations upgrade --url "$ASAREE_PRODUCT_DATABASE_URL"
+
+      # The whole suite, on purpose: 769 tests in ~13s locally, so there is no
+      # slow tier worth splitting out.
+      - name: Pytest
+        run: uv run pytest tests/ -q --tb=short
+
+  frontend:
+    name: Type Check & Lint (frontend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `tsc -b`, not `tsc --noEmit`: this is a project-references build
+      # (tsconfig.json -> tsconfig.app.json + tsconfig.node.json), and
+      # `--noEmit` against the solution file type-checks nothing at all.
+      - name: Type check
+        run: npx tsc -b
+
+      # oxlint exits 0 on warnings, so this reports rather than gates. The
+      # standing baseline is 9 warnings; it is here to make that number
+      # visible and stop it climbing unnoticed.
+      - name: Lint
+        run: npx oxlint src

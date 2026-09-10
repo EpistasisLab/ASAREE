@@ -324,7 +324,51 @@ def test_build_user_input_appends_upstream_context_after_prompt() -> None:
     graph = {"nodes": [upstream, downstream], "edges": _edges(("u", "d"))}
     node_runs = {"u": {"output_text": "draft text here"}}
     result = pe._build_user_input(downstream, graph, node_runs)
-    assert result == "Polish the draft\n\nUpstream context:\n[u]: draft text here"
+    expected = pe._upstream_context(graph, "d", node_runs)
+    assert "draft text here" in expected
+    assert result == f"Polish the draft\n\n{expected}"
+
+
+# --- deactivated pass-through ------------------------------------------------
+
+
+def test_a_deactivated_node_passes_its_input_through_with_no_label_of_its_own() -> None:
+    """The pass-through is the predecessor's text *verbatim*. If it stamped the
+    predecessor's name into the text, the reader downstream would see that name
+    nested inside a block attributed to the deactivated node."""
+    a = _node("a", "agent", {"prompt": "Draft it"}, label="Drafter")
+    b = _node("b", "agent", {"prompt": "Polish it"}, label="Editor")
+    b["data"]["active"] = False
+    graph = {"nodes": [a, b], "edges": _edges(("a", "b"))}
+    assert pe._upstream_output_text(graph, "b", {"a": {"output_text": "draft text here"}}) == "draft text here"
+
+
+def test_a_reader_downstream_of_a_deactivated_node_sees_that_nodes_name() -> None:
+    """Attribution follows the graph the run actually walked, not the graph the
+    user would have drawn with the node removed. Naming the deactivated node is
+    the honest answer -- it is the node whose slot that text arrived in, and
+    relabelling it as the original author would hide that a step was skipped.
+    Both contracts already behave this way; the envelope must not change it.
+
+    ``d`` is here so there is a fan-in to label: a single
+    hand-placed reference carries no name, and the point under test is whose
+    name appears, not how many senders there are.
+    """
+    a = _node("a", "agent", {"prompt": "Draft it"}, label="Drafter")
+    b = _node("b", "agent", {"prompt": "Polish it"}, label="Editor")
+    b["data"]["active"] = False
+    d = _node("d", "agent", {"prompt": "Fact-check it"}, label="Checker")
+    c = _node("c", "agent", {"prompt": "Publish: {{previous}}"}, label="Publisher")
+    graph = {"nodes": [a, b, d, c], "edges": _edges(("a", "b"), ("b", "c"), ("d", "c"))}
+    node_runs: dict = {
+        "a": {"status": "completed", "output_text": "draft text here"},
+        "d": {"status": "completed", "output_text": "checked"},
+    }
+    node_runs["b"] = {"status": "completed", "output_text": pe._upstream_output_text(graph, "b", node_runs)}
+    text = pe._build_user_input(c, graph, node_runs)
+    assert "[Editor]" in text
+    assert "draft text here" in text
+    assert "Drafter" not in text
 
 
 def test_build_user_input_cues_dataset_without_dictating_ids() -> None:
@@ -402,7 +446,7 @@ def test_build_user_input_states_the_dataset_is_already_open_when_preseeded() ->
         {},
         experiment_id=uuid.UUID(int=1),
         effective_cell_label="tier_a__rep_0",
-        seeded_dataset="spinal-fusion-v1",
+        seeded_datasets=(("spinal-fusion-v1", "dataset:default"),),
     )
     assert "already open" in result
     assert "spinal-fusion-v1" in result  # named, so the transcript shows what it worked on
@@ -457,13 +501,9 @@ async def test_sync_durable_agent_recovers_from_a_concurrent_create(monkeypatch:
     assert updates == [(existing.id, {"goal": "Do the work."})]
 
 
-async def test_preseed_skipped_without_a_workspace_or_with_several_datasets(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # An unlinked protocol run has no cell workspace to seed, and several wired
-    # datasets are a real choice with no defensible default (mirrors
-    # resolve_dataset_name's own len == 1 rule) -- those keep the agent-driven
-    # open_workspace(name=...).
+async def test_preseed_skipped_without_a_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An unlinked protocol run has no cell workspace to seed, so there is
+    # nowhere to put a slot -- it keeps the agent-driven open_workspace(name=...).
     async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
         return _registration()
 
@@ -475,6 +515,27 @@ async def test_preseed_skipped_without_a_workspace_or_with_several_datasets(
     }
     assert await pe._resolve_node_dataset(one, "a", None, uuid.UUID(int=7)) == pe.NodeDataset()
 
+
+async def test_several_wired_datasets_each_get_their_own_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Several datasets used to be refused outright (one workspace, one dataset)
+    # and fell back to the agent-driven open. A workspace now holds one dataset
+    # per named slot, so every wired dataset is seeded and the slot key travels
+    # with the name -- the prompt has to tell the agent which slot="..." its
+    # tool calls will accept.
+    seen: list[str | None] = []
+
+    async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
+        return _registration()
+
+    async def _seed(**kwargs: object) -> object:
+        slot = kwargs["slot"]
+        seen.append(slot)  # type: ignore[arg-type]
+        name = str(kwargs["dataset_name"])
+        return SimpleNamespace(dataset_name=name, slot=str(slot or "dataset:default"))
+
+    monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
+    monkeypatch.setattr(pe, "seed_cell_workspace", _seed)
+    agent, agent_llm_edge = _agent_with_llm("a")
     many = {
         "nodes": [
             agent,
@@ -483,8 +544,45 @@ async def test_preseed_skipped_without_a_workspace_or_with_several_datasets(
         ],
         "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
     }
-    # Still before any DB access at all: the len == 1 rule is checked first.
-    assert await pe._resolve_node_dataset(many, "a", "exp/cell", uuid.UUID(int=7)) == pe.NodeDataset()
+    resolved = await pe._resolve_node_dataset(many, "a", "exp/cell", uuid.UUID(int=7))
+    assert resolved.seeded == (("cohort-a", "dataset:cohort-a"), ("cohort-b", "dataset:cohort-b"))
+    assert seen == ["dataset:cohort-a", "dataset:cohort-b"]
+
+    # A lone dataset still seeds with slot=None, so its workspace keeps the
+    # pre-slot on-disk layout untouched.
+    seen.clear()
+    solo = {
+        "nodes": [agent, _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1")],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a")],
+    }
+    await pe._resolve_node_dataset(solo, "a", "exp/cell", uuid.UUID(int=7))
+    assert seen == [None]
+
+
+def test_build_user_input_names_the_slot_of_each_seeded_dataset() -> None:
+    # With several open there is no "the" workspace dataset, so the prompt
+    # lists them with the slot key each tool call needs; leaving the agent to
+    # guess would silently read whichever slot came first.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [
+            agent,
+            _dataset_node("ds1", dataset_name="cohort-a", dataset_id="d1"),
+            _dataset_node("ds2", dataset_name="cohort-b", dataset_id="d2"),
+        ],
+        "edges": [agent_llm_edge, _dataset_edge("ds1", "a"), _dataset_edge("ds2", "a")],
+    }
+    result = pe._build_user_input(
+        agent,
+        graph,
+        {},
+        experiment_id=uuid.UUID(int=1),
+        effective_cell_label="tier_a__rep_0",
+        seeded_datasets=(("cohort-a", "dataset:cohort-a"), ("cohort-b", "dataset:cohort-b")),
+    )
+    assert 'slot="dataset:cohort-a"' in result
+    assert 'slot="dataset:cohort-b"' in result
+    assert "Do NOT call open_workspace" in result
 
 
 async def test_preseed_failure_falls_back_to_the_agent_driven_open(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -508,7 +606,7 @@ async def test_preseed_failure_falls_back_to_the_agent_driven_open(monkeypatch: 
     assert await pe._resolve_node_dataset(graph, "a", "exp/cell", uuid.UUID(int=7)) == pe.NodeDataset()
 
     result = pe._build_user_input(
-        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0", seeded_dataset=""
+        agent, graph, {}, experiment_id=uuid.UUID(int=1), effective_cell_label="tier_a__rep_0", seeded_datasets=()
     )
     assert "Call open_workspace()" in result
 
@@ -540,7 +638,7 @@ async def test_an_unsplit_dataset_binds_its_raw_file_instead_of_a_workspace(
 
     ambient, dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
     assert dataset.unsplit_name == "spine-raw"
-    assert dataset.seeded_name == ""
+    assert dataset.seeded == ()
     assert ambient["data_path"] == "/data/spine/raw.csv"
     assert ambient["target_column"] == "outcome"
 
@@ -597,6 +695,35 @@ def test_dataset_connector_grants_the_workspace_tools() -> None:
     # No Dataset wired -> no implicit grant.
     bare = {"nodes": [agent], "edges": [agent_llm_edge]}
     assert pe._resolve_dataset_tool_config(bare, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_an_unsplit_dataset_grants_the_tools_its_prompt_names() -> None:
+    """The gap the first sequential demo run fell into: an unsplit registration
+    has no workspace, so the Dataset block tells the agent NOT to call
+    open_workspace and to use describe_dataset/describe_split/train_test_split
+    instead -- and none of those were in the allow-list, so the run ended with
+    the model reporting the missing tools rather than profiling the data."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="spinal-fusion")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+    resolved = pe._resolve_dataset_tool_config(graph, "a", unsplit_dataset="spinal-fusion")
+    assert resolved["server_names"] == ["asaree-workspace", "scikit-learn-mcp"]
+    # Exactly the three the prompt names, no more: fitting a model is a real
+    # choice about the analysis, so the rest of that server still takes a Tool
+    # node. Asserted as a set so a new sklearn tool cannot leak in silently.
+    sklearn = {name for name in resolved["tool_names"] if name.startswith("scikit-learn-mcp.")}
+    assert sklearn == {
+        "scikit-learn-mcp.describe_dataset",
+        "scikit-learn-mcp.describe_split",
+        "scikit-learn-mcp.train_test_split",
+    }
+    # The workspace tools stay: workspace_status answering "nothing here" beats
+    # a missing tool, and a split dataset gets no sklearn grant at all.
+    assert "asaree-workspace.workspace_status" in resolved["tool_names"]
+    split = pe._resolve_dataset_tool_config(graph, "a")
+    assert split["server_names"] == ["asaree-workspace"]
 
 
 def test_script_connector_grants_the_script_runner() -> None:
@@ -785,9 +912,17 @@ async def test_node_run_context_seeds_before_reading_head(monkeypatch: pytest.Mo
     # HEAD version, which doesn't exist until the pre-seed has created it.
     calls: list[str] = []
 
-    async def _seed(graph: dict, node_id: str, workspace_id: str | None, owner_id: uuid.UUID) -> pe.NodeDataset:
+    async def _seed(
+        graph: dict,
+        node_id: str,
+        workspace_id: str | None,
+        owner_id: uuid.UUID,
+        *,
+        slot_prefix: str | None = None,
+        stage_plan: object = None,
+    ) -> pe.NodeDataset:
         calls.append("seed")
-        return pe.NodeDataset(seeded_name="spinal-fusion-v1")
+        return pe.NodeDataset(seeded=(("spinal-fusion-v1", "dataset:default"),))
 
     def _locator(workspace_id: str) -> tuple[str, str]:
         calls.append("locator")
@@ -802,7 +937,7 @@ async def test_node_run_context_seeds_before_reading_head(monkeypatch: pytest.Mo
     }
     ambient, dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
     assert calls == ["seed", "locator"]
-    assert dataset.seeded_name == "spinal-fusion-v1"
+    assert dataset.seeded_names == ("spinal-fusion-v1",)
     assert ambient["data_path"] == "/ws/train.parquet"
 
 
@@ -841,7 +976,7 @@ async def test_gated_worker_approved_first_attempt(monkeypatch: pytest.MonkeyPat
     critic_calls = []
 
     async def fake_run_agent_node(node, **kwargs):
-        return "worker output v1", None, None
+        return "worker output v1", None, None, None
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(kwargs["worker_output"])
@@ -871,7 +1006,7 @@ async def test_gated_worker_rejected_then_approved_on_revision(monkeypatch: pyte
 
     async def fake_run_agent_node(node, *, user_input, **_kwargs):
         instructions.append(user_input)
-        return f"worker output v{len(instructions)}", None, None
+        return f"worker output v{len(instructions)}", None, None, None
 
     async def fake_run_critic(gate, *, worker_output, **_kwargs):
         critic_calls.append(worker_output)
@@ -914,7 +1049,7 @@ async def test_gated_worker_force_accepts_without_final_critic_call(monkeypatch:
 
     async def fake_run_agent_node(node, *, user_input, **_kwargs):
         attempts.append(user_input)
-        return f"worker output v{len(attempts)}", None, None
+        return f"worker output v{len(attempts)}", None, None, None
 
     async def fake_run_critic(gate, *, worker_output, **_kwargs):
         critic_calls.append(worker_output)
@@ -948,7 +1083,7 @@ async def test_gated_worker_disabled_skips_critic_entirely(monkeypatch: pytest.M
     critic_calls = []
 
     async def fake_run_agent_node(node, **kwargs):
-        return "worker output", None, None
+        return "worker output", None, None, None
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(1)
@@ -967,7 +1102,7 @@ async def test_gated_worker_worker_failure_stops_immediately(monkeypatch: pytest
     critic_calls = []
 
     async def fake_run_agent_node(node, **kwargs):
-        return None, "the LLM call failed", None
+        return None, "the LLM call failed", None, None
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(1)
@@ -990,7 +1125,7 @@ async def test_gated_worker_worker_failure_stops_immediately(monkeypatch: pytest
 
 async def test_gated_worker_critic_failure_fails_the_pair(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_agent_node(node, **kwargs):
-        return "worker output", None, None
+        return "worker output", None, None, None
 
     async def fake_run_critic(gate, **kwargs):
         return None, "critic run timed out", "critic-run-1"
@@ -1020,7 +1155,7 @@ async def test_gated_worker_cancelled_mid_worker_run(monkeypatch: pytest.MonkeyP
     critic_calls = []
 
     async def fake_run_agent_node(node, **kwargs):
-        return None, pe._AGENT_CANCELLED, "worker-run-1"
+        return None, pe._AGENT_CANCELLED, "worker-run-1", None
 
     async def fake_run_critic(gate, **kwargs):
         critic_calls.append(1)
@@ -1048,7 +1183,7 @@ async def test_gated_worker_cancelled_mid_critic_review(monkeypatch: pytest.Monk
     with that output -- only the gate's own node_run is "cancelled"."""
 
     async def fake_run_agent_node(node, **kwargs):
-        return "real worker output", None, "worker-run-1"
+        return "real worker output", None, "worker-run-1", None
 
     async def fake_run_critic(gate, **kwargs):
         return None, pe._AGENT_CANCELLED, "critic-run-1"
@@ -1526,7 +1661,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
     async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
         received_configs.append(pe._resolve_llm_config(graph, node["id"]))
         received_workspace_ids.append(workspace_id)
-        return f"output for {node['id']}", None, None
+        return f"output for {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -1554,7 +1689,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
             },
         )
         protocol_id = protocol.id
-        await upsert_replicate(
+        replicate = await upsert_replicate(
             db,
             experiment_id=experiment_id,
             replicate_label="only-cell",
@@ -1566,6 +1701,11 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
             owner_id=owner_id,
             replicate_label="only-cell",
             factor_values={"Temperature": 0.1},
+            # Claims the replicate slot, exactly as plan_cell_runs does. Without
+            # it run_protocol's write-back is correctly skipped:
+            # is_current_replicate_attempt reads run.replicate_result_id to decide
+            # whether this run still owns the slot's latest projection.
+            replicate_result_id=replicate.id,
         )
         run_id = run.id
 
@@ -1576,9 +1716,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
         assert received_workspace_ids[0] == f"{experiment_id}/only-cell"
 
         async with get_session() as db:
-            replicate = await get_replicate(
-                db, experiment_id=experiment_id, replicate_label="only-cell"
-            )
+            replicate = await get_replicate(db, experiment_id=experiment_id, replicate_label="only-cell")
             assert replicate is not None
             assert replicate.run_id == run_id
             assert replicate.factor_values == {"Temperature": 0.1}
@@ -1613,11 +1751,17 @@ async def _run_single_cell_protocol(owner_id: uuid.UUID) -> tuple[uuid.UUID, str
             },
         )
         protocol_id = protocol.id
-        await upsert_replicate(
+        replicate = await upsert_replicate(
             db, experiment_id=experiment_id, replicate_label="only-cell", fields={"factor_values": {}}
         )
         run = await create_protocol_run(
-            db, protocol_id=protocol_id, owner_id=owner_id, replicate_label="only-cell"
+            db,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            replicate_label="only-cell",
+            # Claims the replicate slot the way plan_cell_runs does -- see
+            # is_current_replicate_attempt, which gates run_protocol's write-back.
+            replicate_result_id=replicate.id,
         )
         run_id = run.id
     return experiment_id, "only-cell", protocol_id, run_id
@@ -1634,7 +1778,7 @@ async def test_run_protocol_calls_score_metric_promotion_on_cell_completion(
     proves run_protocol actually reaches for it."""
 
     async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
-        return "worker output", None, None
+        return "worker output", None, None, None
 
     calls = []
 
@@ -1663,7 +1807,7 @@ async def test_run_protocol_survives_score_metric_promotion_failure(
     cell's own artifacts write must still land."""
 
     async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
-        return "worker output", None, None
+        return "worker output", None, None, None
 
     async def fake_promote(db, *, experiment_id, replicate_label, protocol_run_id):
         raise RuntimeError("boom")
@@ -1679,9 +1823,7 @@ async def test_run_protocol_survives_score_metric_promotion_failure(
             run = await get_protocol_run(db, run_id)
             assert run is not None
             assert run.status == "completed"
-            replicate = await get_replicate(
-                db, experiment_id=experiment_id, replicate_label=cell_label
-            )
+            replicate = await get_replicate(db, experiment_id=experiment_id, replicate_label=cell_label)
             assert replicate is not None
             assert replicate.artifacts is not None
             assert replicate.artifacts["output_text"] == "worker output"
@@ -1798,7 +1940,7 @@ async def test_run_protocol_deactivated_node_passes_through(
     async def fake_run_agent_node(node, **kwargs):
         nonlocal call_count
         call_count += 1
-        return f"real output from {node['id']}", None, None
+        return f"real output from {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -1834,6 +1976,65 @@ async def test_run_protocol_deactivated_node_passes_through(
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
 
 
+def test_the_extraction_fragment_carries_only_what_there_is() -> None:
+    """A node run gains a key only when there is something in it, so the
+    presence of `payload`/`caveats` is itself the answer to "did the parser
+    produce anything" -- no parser at all and a parser that produced nothing
+    both read as absence, which they are."""
+    from motoro.schemas.output import OutputEnvelope
+
+    assert pe._extraction_fields(None) is None
+    assert pe._extraction_fields(OutputEnvelope(result="x")) is None
+    assert pe._extraction_fields(OutputEnvelope(result="x", payload={"n": 1})) == {"payload": {"n": 1}}
+    assert pe._extraction_fields(OutputEnvelope(result="x", caveats=["guessed"])) == {"caveats": ["guessed"]}
+    # Both together: the extractor can coerce a field and still say it guessed.
+    assert pe._extraction_fields(OutputEnvelope(result="x", payload={"n": 1}, caveats=["guessed"])) == {
+        "payload": {"n": 1},
+        "caveats": ["guessed"],
+    }
+
+
+async def test_run_protocol_stores_the_extraction_beside_the_output_text(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Alongside, never instead of: the prose handoff must not regress because
+    someone connected a parser. A deactivated node's pass-through carries none
+    of it -- the prose it forwards was read against a different node's
+    contract."""
+
+    async def fake_run_agent_node(node, **kwargs):
+        return f"output from {node['id']}", None, None, {"payload": {"n_rows": 4300}, "caveats": ["guessed"]}
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+
+    middle = _node("b", "agent")
+    middle["data"]["active"] = False
+    llm = _llm_node()
+    graph = {
+        "nodes": [llm, _node("a", "agent"), middle],
+        "edges": _edges(("a", "b")) + [_llm_edge(llm["id"], "a"), _llm_edge(llm["id"], "b")],
+    }
+
+    async with get_session() as db:
+        protocol = await create_protocol(db, name=f"payload-test-{uuid.uuid4().hex}", owner_id=owner_id, graph=graph)
+        protocol_id = protocol.id
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run_id = run.id
+
+    try:
+        await pe.run_protocol(run_id)
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+        assert fetched is not None
+        assert fetched.node_runs["a"]["output_text"] == "output from a"
+        assert fetched.node_runs["a"]["payload"] == {"n_rows": 4300}
+        assert fetched.node_runs["a"]["caveats"] == ["guessed"]
+        assert "payload" not in fetched.node_runs["b"]
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+
+
 async def test_run_protocol_honors_cancellation_between_nodes(
     owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1853,7 +2054,7 @@ async def test_run_protocol_honors_cancellation_between_nodes(
             # usage, modeled here as a second, independent session.
             async with get_session() as db:
                 await request_protocol_run_cancellation(db, run_id)
-        return f"output from {node['id']}", None, None
+        return f"output from {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -1902,8 +2103,8 @@ async def test_run_protocol_honors_mid_node_cancellation(owner_id: uuid.UUID, mo
         nonlocal call_count
         call_count += 1
         if node["id"] == "a":
-            return None, pe._AGENT_CANCELLED, uuid.uuid4()
-        return f"output from {node['id']}", None, None
+            return None, pe._AGENT_CANCELLED, uuid.uuid4(), None
+        return f"output from {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -2051,7 +2252,7 @@ def test_tool_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
     ):
         topological_order(graph)
 
@@ -2175,7 +2376,7 @@ def test_dataset_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
     ):
         topological_order(graph)
 
@@ -2235,7 +2436,7 @@ def test_script_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
     ):
         topological_order(graph)
 
@@ -2296,7 +2497,7 @@ def test_skill_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
     ):
         topological_order(graph)
 
@@ -2589,7 +2790,7 @@ def test_architectural_pattern_connection_on_critic_gate_raises() -> None:
     }
     with pytest.raises(
         ProtocolValidationError,
-        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, or",
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
     ):
         topological_order(graph)
 
@@ -2885,7 +3086,7 @@ async def test_run_protocol_tool_source_node_never_gets_its_own_turn(
     _run_agent_node."""
 
     async def fake_run_agent_node(node, *, graph, **kwargs):
-        return f"output for {node['id']}", None, None
+        return f"output for {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -2919,41 +3120,623 @@ async def test_run_protocol_tool_source_node_never_gets_its_own_turn(
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
 
 
+# --- Output Parser connector (pure) ------------------------------------------
+
+_CONTRACT = {"name": "DCReport", "fields": [{"name": "n_rows", "type": "integer", "description": "Row count"}]}
+
+
+def _parser_node(node_id: str = "p1", contract: dict | None = None, enabled: bool | None = None) -> dict:
+    config: dict = {"output_contract": contract if contract is not None else _CONTRACT}
+    if enabled is not None:
+        config["enabled"] = enabled
+    return {"id": node_id, "type": "output_parser", "data": {"label": "", "config": config}}
+
+
+def _parser_edge(source: str, target: str) -> dict:
+    return {
+        "id": f"{source}-{target}-output_parser",
+        "source": source,
+        "target": target,
+        "targetHandle": "output_parser",
+    }
+
+
+def _agent_with_parser(*, legacy: dict | None = None, enabled: bool | None = None) -> dict:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    if legacy is not None:
+        agent["data"]["config"]["output_contract"] = legacy
+    return {
+        "nodes": [_llm_node(), agent, _parser_node(enabled=enabled)],
+        "edges": [agent_llm_edge, _parser_edge("p1", "a")],
+    }
+
+
+def _agent_with_parser_contract(contract: dict) -> dict:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    return {
+        "nodes": [_llm_node(), agent, _parser_node(contract=contract)],
+        "edges": [agent_llm_edge, _parser_edge("p1", "a")],
+    }
+
+
+def test_wired_output_parser_resolves_its_contract() -> None:
+    assert pe._resolve_output_contract(_agent_with_parser(), "a") == _CONTRACT
+
+
+def test_no_parser_and_no_legacy_field_resolves_none() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [_llm_node(), agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_output_contract(graph, "a") is None
+
+
+def test_legacy_stored_contract_still_resolves_with_no_parser_wired() -> None:
+    """The permanent fallback: 8 published revisions carry this field, and
+    ``POST /agents`` can still set it, so it is never dead code."""
+    agent, agent_llm_edge = _agent_with_llm("a")
+    agent["data"]["config"]["output_contract"] = _CONTRACT
+    graph = {"nodes": [_llm_node(), agent], "edges": [agent_llm_edge]}
+    assert pe._resolve_output_contract(graph, "a") == _CONTRACT
+    # ...and such a graph is still a valid graph, not one that now needs fixing.
+    topological_order(graph)
+
+
+def test_legacy_contract_types_are_not_normalised() -> None:
+    """The stored spinal contracts use ``object``/``array``/``number``, which
+    Motoro's own _TYPE_MAP accepts as aliases. Nothing here may rewrite them."""
+    contract = {"name": "FTEReport", "fields": [{"name": "recipe", "type": "object"}, {"name": "k", "type": "number"}]}
+    agent, agent_llm_edge = _agent_with_llm("a")
+    agent["data"]["config"]["output_contract"] = contract
+    resolved = pe._resolve_output_contract({"nodes": [_llm_node(), agent], "edges": [agent_llm_edge]}, "a")
+    assert resolved is not None
+    assert [f["type"] for f in resolved["fields"]] == ["object", "number"]
+
+
+def test_a_parser_whose_fields_are_all_blank_resolves_none() -> None:
+    """The shape a brand-new parser node arrives in: one empty editor row. It
+    is present but names nothing, so passing it on would cost a model call
+    extracting a payload that cannot have a single key in it."""
+    blank = {"name": "", "fields": [{"name": "", "type": "string", "description": ""}]}
+    assert pe._resolve_output_contract(_agent_with_parser_contract(blank), "a") is None
+    # ...and the same field spec stored the legacy way is equally empty.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    agent["data"]["config"]["output_contract"] = blank
+    assert pe._resolve_output_contract({"nodes": [_llm_node(), agent], "edges": [agent_llm_edge]}, "a") is None
+
+
+def test_one_named_field_among_blanks_is_still_a_contract() -> None:
+    """Half-filled is not empty -- the named row is a real declaration, and the
+    prompt block and the payload model both simply skip the unnamed ones."""
+    half = {"name": "S", "fields": [{"name": "n_rows", "type": "integer"}, {"name": "", "type": "string"}]}
+    assert pe._resolve_output_contract(_agent_with_parser_contract(half), "a") == half
+
+
+def test_disabled_output_parser_contributes_nothing() -> None:
+    assert pe._resolve_output_contract(_agent_with_parser(enabled=False), "a") is None
+
+
+def test_disabled_parser_does_not_fall_back_to_a_legacy_field() -> None:
+    """Disabling the parser means "no extraction this run". Quietly reaching
+    past it to a stored field would be a different contract than either."""
+    graph = _agent_with_parser(legacy=_CONTRACT, enabled=False)
+    # The graph itself is refused (below), but were it ever reached, disabling
+    # must not resurrect the legacy field.
+    assert pe._resolve_output_contract(graph, "a") is None
+
+
+def test_multiple_output_parser_connections_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _parser_node("p1"), _parser_node("p2")],
+        "edges": [agent_llm_edge, _parser_edge("p1", "a"), _parser_edge("p2", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="at most one Output Parser connection"):
+        topological_order(graph)
+
+
+def test_parser_plus_legacy_contract_on_one_node_raises() -> None:
+    with pytest.raises(ProtocolValidationError, match="both an Output Parser connection and its own stored"):
+        topological_order(_agent_with_parser(legacy=_CONTRACT))
+
+
+def test_output_parser_connection_source_must_be_a_parser_node() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _memory_node("m1")],
+        "edges": [agent_llm_edge, _parser_edge("m1", "a")],
+    }
+    with pytest.raises(ProtocolValidationError, match="Output Parser connection must come from an Output Parser"):
+        topological_order(graph)
+
+
+def test_output_parser_connection_on_critic_gate_raises() -> None:
+    """A critic's verdict schema is CRITIC_OUTPUT_CONTRACT, fixed by the
+    executor -- the connector is deliberately agent-only."""
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    gate_llm_edge = _llm_edge("llm", "g1")
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate"), _parser_node("p1")],
+        "edges": [
+            worker_llm_edge,
+            gate_llm_edge,
+            {"id": "w1-g1", "source": "w1", "target": "g1"},
+            _parser_edge("p1", "g1"),
+        ],
+    }
+    with pytest.raises(
+        ProtocolValidationError,
+        match="Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, ",
+    ):
+        topological_order(graph)
+
+
+def test_output_parser_node_with_plain_outgoing_edge_raises() -> None:
+    """A pure config source may only emit into its own connector -- an
+    output_parser wired into the main pipeline is not a pipeline step."""
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _parser_node("p1")],
+        "edges": [agent_llm_edge, {"id": "p1-a", "source": "p1", "target": "a"}],
+    }
+    with pytest.raises(ProtocolValidationError):
+        topological_order(graph)
+
+
+def test_output_parser_is_never_a_sink() -> None:
+    """It's a pure config source, so it must not be mistaken for the
+    pipeline's final output."""
+    graph = _agent_with_parser()
+    assert pe.sink_node_ids(graph) == ["a"]
+
+
 # --- Coordination strategy validation (pure) ---------------------------------
 
 
+def _peer_graph(*agent_ids: str) -> dict:
+    """Agents chained left-to-right by plain (untyped) edges, each with its own
+    LLM. That chain is both a pipeline and a peer cluster -- which one it means
+    is the coordination strategy's call, which is exactly what's under test."""
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    for i, agent_id in enumerate(agent_ids):
+        llm_id = f"llm-{agent_id}"
+        agent, llm_edge = _agent_with_llm(agent_id, llm_id)
+        nodes += [_llm_node(llm_id), agent]
+        edges.append(llm_edge)
+        if i:
+            edges.append({"id": f"e{i}", "source": agent_ids[i - 1], "target": agent_id})
+    return {"nodes": nodes, "edges": edges}
+
+
+def _no_peers_graph() -> dict:
+    llm = _llm_node()
+    agent, llm_edge = _agent_with_llm("a")
+    return {"nodes": [llm, agent], "edges": [llm_edge]}
+
+
 def test_coordination_strategy_absent_is_a_noop() -> None:
-    validate_coordination_strategy(None, has_gated_pair=False)
-    validate_coordination_strategy({}, has_gated_pair=False)
+    validate_coordination_strategy(None, graph=_no_peers_graph())
+    validate_coordination_strategy({}, graph=_no_peers_graph())
 
 
-def test_coordination_strategy_sequential_is_a_noop() -> None:
-    validate_coordination_strategy({"coordination_strategy": {"slug": "sequential"}}, has_gated_pair=False)
-    validate_coordination_strategy({"coordination_strategy": {"slug": "sequential"}}, has_gated_pair=True)
+_SEQUENTIAL = {"coordination_strategy": {"slug": "sequential"}}
+
+
+def _chain_graph(*agent_ids: str) -> dict:
+    """A labelled version of ``_peer_graph`` -- the sequential errors name the
+    offending agents, so the labels are part of what's under test."""
+    graph = _peer_graph(*agent_ids)
+    for node in graph["nodes"]:
+        if node["type"] == "agent":
+            node["data"] = {**node["data"], "label": node["id"].upper()}
+    return graph
+
+
+def _add_agent(graph: dict, agent_id: str, *edges: tuple[str, str]) -> dict:
+    llm_id = f"llm-{agent_id}"
+    agent, llm_edge = _agent_with_llm(agent_id, llm_id)
+    agent["data"] = {**agent["data"], "label": agent_id.upper()}
+    graph["nodes"] += [_llm_node(llm_id), agent]
+    graph["edges"].append(llm_edge)
+    graph["edges"] += [{"id": f"e-{s}-{t}", "source": s, "target": t} for s, t in edges]
+    return graph
+
+
+def test_sequential_accepts_a_chain() -> None:
+    validate_coordination_strategy(_SEQUENTIAL, graph=_no_peers_graph())  # one agent, nothing wired
+    validate_coordination_strategy(_SEQUENTIAL, graph=_chain_graph("a", "b"))
+    validate_coordination_strategy(_SEQUENTIAL, graph=_chain_graph("a", "b", "c"))
+    assert pe.sequential_chain_order(_chain_graph("a", "b", "c")) == ["a", "b", "c"]
+
+
+def test_sequential_accepts_a_graph_with_no_agents_at_all() -> None:
+    # Not a runnable protocol, but "no agents" is not the chain rule's
+    # complaint to make -- the every-agent-needs-an-LLM check owns that.
+    validate_coordination_strategy(_SEQUENTIAL, graph={"nodes": [_llm_node()], "edges": []})
+
+
+def test_sequential_rejects_a_fork() -> None:
+    graph = _add_agent(_chain_graph("a", "b"), "c", ("a", "c"))
+    with pytest.raises(ProtocolValidationError, match=r"'A' hands off to more than one agent \(B, C\)"):
+        validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_rejects_a_fan_in() -> None:
+    graph = _add_agent(_chain_graph("a", "b"), "c", ("c", "b"))
+    with pytest.raises(ProtocolValidationError, match=r"More than one agent hands off to 'B' \(A, C\)"):
+        validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_rejects_two_disjoint_chains() -> None:
+    graph = _add_agent(_add_agent(_chain_graph("a", "b"), "c"), "d", ("c", "d"))
+    with pytest.raises(ProtocolValidationError, match=r"2 separate agent chains, starting at A, C"):
+        validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_rejects_a_chain_with_a_detached_cycle() -> None:
+    # a -> b, plus c <-> d off to one side: one head, but the pair is
+    # unreachable from it, so a run would never get to them.
+    graph = _add_agent(_add_agent(_chain_graph("a", "b"), "c", ("d", "c")), "d", ("c", "d"))
+    with pytest.raises(ProtocolValidationError, match="cannot be reached from the start of the chain"):
+        validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_rejects_a_loop() -> None:
+    graph = _cycle_peer_graph("a", "b", "c")
+    with pytest.raises(ProtocolValidationError, match="nowhere to start"):
+        validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_ignores_connector_fan_in() -> None:
+    """One LLM node feeding every agent in the chain is the normal shape. It is
+    a fan-in on the graph and must not read as one on the chain."""
+    graph = _chain_graph("a", "b", "c")
+    graph["nodes"] = [n for n in graph["nodes"] if n["type"] != "llm_anthropic"] + [_llm_node("shared")]
+    graph["edges"] = [e for e in graph["edges"] if e.get("targetHandle") != "ai"]
+    graph["edges"] += [_llm_edge("shared", a) for a in ("a", "b", "c")]
+    validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+
+
+def test_sequential_ignores_non_agent_nodes_between_two_agents() -> None:
+    """A critic gate sitting between two agents keeps the chain a chain: only
+    ``agent -> agent`` edges count, so the gate is not a third link."""
+    graph = _chain_graph("a", "b")
+    graph["edges"] = [e for e in graph["edges"] if not (e["source"] == "a" and e["target"] == "b")]
+    graph["nodes"].append(_node("gate", "critic_gate"))
+    graph["edges"] += _edges(("a", "gate"), ("gate", "b"))
+    validate_coordination_strategy(_SEQUENTIAL, graph=graph)
+    # The gate is not an agent, so it is not in the handoff order either.
+    assert pe.sequential_chain_order(graph) == ["a", "b"]
+
+
+def test_the_chain_rule_does_not_apply_to_the_other_strategies() -> None:
+    """A fork is exactly the shape ``peer_collaboration`` exists for, and the
+    spinal ``critic_gate`` family is 5 agents wired through gates. Neither may
+    pick up ``sequential``'s cardinality limits."""
+    fork = _add_agent(_chain_graph("a", "b"), "c", ("a", "c"))
+    validate_coordination_strategy({"coordination_strategy": {"slug": "peer_collaboration"}}, graph=fork)
+    gated = _chain_graph("a")
+    gated["nodes"].append(_node("gate", "critic_gate"))
+    gated["edges"] += _edges(("a", "gate"))
+    validate_coordination_strategy({"coordination_strategy": {"slug": "critic_gate"}}, graph=gated)
 
 
 def test_coordination_strategy_critic_gate_requires_a_gated_pair() -> None:
     with pytest.raises(ProtocolValidationError, match="no Critic Gate node wired in"):
-        validate_coordination_strategy({"coordination_strategy": {"slug": "critic_gate"}}, has_gated_pair=False)
+        validate_coordination_strategy({"coordination_strategy": {"slug": "critic_gate"}}, graph=_no_peers_graph())
 
 
-def test_coordination_strategy_critic_gate_passes_with_a_gated_pair() -> None:
-    validate_coordination_strategy({"coordination_strategy": {"slug": "critic_gate"}}, has_gated_pair=True)
-
-
-def test_coordination_strategy_placeholder_slug_raises() -> None:
-    with pytest.raises(ProtocolValidationError, match="isn't implemented yet"):
+def test_coordination_strategy_peer_collaboration_needs_connected_agents() -> None:
+    with pytest.raises(ProtocolValidationError, match="no two Agent nodes"):
         validate_coordination_strategy(
-            {"coordination_strategy": {"slug": "supervisor_architecture"}}, has_gated_pair=False
+            {"coordination_strategy": {"slug": "peer_collaboration"}}, graph=_no_peers_graph()
+        )
+
+
+def test_coordination_strategy_peer_collaboration_passes_with_a_peer_edge() -> None:
+    validate_coordination_strategy(
+        {"coordination_strategy": {"slug": "peer_collaboration"}}, graph=_peer_graph("a", "b")
+    )
+
+
+def test_the_conversation_starts_at_the_agent_nothing_feeds() -> None:
+    assert pe.resolve_conversation_entry_id(_peer_graph("a", "b", "c")) == "a"
+
+
+def test_two_equally_plausible_starting_agents_is_an_error() -> None:
+    # a -> c <- b: both a and b are unfed, so there is no honest way to pick.
+    graph = _peer_graph("a", "c")
+    llm_b = _llm_node("llm-b")
+    agent_b, llm_edge_b = _agent_with_llm("b", "llm-b")
+    graph["nodes"] += [llm_b, agent_b]
+    graph["edges"] += [llm_edge_b, {"id": "e-bc", "source": "b", "target": "c"}]
+    with pytest.raises(ProtocolValidationError, match="more than one agent that could start"):
+        pe.resolve_conversation_entry_id(graph)
+
+
+def _mark_lead(graph: dict, *agent_ids: str) -> dict:
+    """Set the canvas's explicit conversation-lead flag on some agent nodes."""
+    for node in graph["nodes"]:
+        if node["id"] in agent_ids:
+            node["data"] = {**(node.get("data") or {}), "conversation_lead": True}
+    return graph
+
+
+def _cycle_peer_graph(*agent_ids: str) -> dict:
+    """The topology the lead marker exists for: the chain's last agent wired
+    back to its first, so every agent is fed and the wiring rule has no
+    candidate at all to pick."""
+    graph = _peer_graph(*agent_ids)
+    graph["edges"].append({"id": "e-cycle", "source": agent_ids[-1], "target": agent_ids[0]})
+    return graph
+
+
+def test_a_marked_lead_wins_over_the_wiring() -> None:
+    # a -> b -> c would derive "a"; the marker is an override, not a tiebreak.
+    assert pe.resolve_conversation_entry_id(_mark_lead(_peer_graph("a", "b", "c"), "c")) == "c"
+
+
+def test_a_cycle_has_no_derivable_lead() -> None:
+    with pytest.raises(ProtocolValidationError, match="wired in a loop"):
+        pe.resolve_conversation_entry_id(_cycle_peer_graph("a", "b", "c"))
+
+
+def test_a_marked_lead_resolves_a_cycle() -> None:
+    """The whole point of the marker: everyone wired to everyone is the shape
+    this strategy invites, and it must not have to be broken to run."""
+    assert pe.resolve_conversation_entry_id(_mark_lead(_cycle_peer_graph("a", "b", "c"), "b")) == "b"
+
+
+def test_two_marked_leads_is_an_error() -> None:
+    with pytest.raises(ProtocolValidationError, match="More than one agent is marked"):
+        pe.resolve_conversation_entry_id(_mark_lead(_peer_graph("a", "b", "c"), "a", "c"))
+
+
+def test_a_marked_lead_with_no_peers_is_an_error() -> None:
+    """Marking an agent that has nobody to talk to must not win -- that would
+    run a "conversation" with a single participant."""
+    graph = _peer_graph("a", "b")
+    llm_c = _llm_node("llm-c")
+    agent_c, llm_edge_c = _agent_with_llm("c", "llm-c")
+    graph["nodes"] += [llm_c, agent_c]
+    graph["edges"].append(llm_edge_c)
+    with pytest.raises(ProtocolValidationError, match="isn't connected to another agent"):
+        pe.resolve_conversation_entry_id(_mark_lead(graph, "c"))
+
+
+_PEER_SPEC = {"coordination_strategy": {"slug": "peer_collaboration"}}
+
+
+def test_is_conversation_strategy() -> None:
+    assert pe.is_conversation_strategy(_PEER_SPEC) is True
+    assert pe.is_conversation_strategy({"coordination_strategy": {"slug": "critic_gate"}}) is False
+    assert pe.is_conversation_strategy(None) is False
+
+
+def test_a_cycle_is_still_rejected_for_a_pipeline() -> None:
+    with pytest.raises(ProtocolValidationError, match="has a cycle"):
+        pe.topological_order(_cycle_peer_graph("a", "b", "c"))
+
+
+def test_a_conversation_may_contain_a_cycle() -> None:
+    """The lead marker resolves the *entry agent* in a loop; this is what makes
+    the same loop publishable and runnable. Every node still comes back -- the
+    order is meaningless, and run_protocol's conversation branch discards it."""
+    graph = _cycle_peer_graph("a", "b", "c")
+    ordered = pe.topological_order(graph, require_acyclic=False)
+    assert {n["id"] for n in ordered} == {n["id"] for n in graph["nodes"]}
+
+
+def test_an_empty_graph_is_rejected_even_for_a_conversation() -> None:
+    """require_acyclic drops one check, not all of them."""
+    with pytest.raises(ProtocolValidationError, match="no nodes"):
+        pe.topological_order({"nodes": [], "edges": []}, require_acyclic=False)
+
+
+def test_coordination_strategy_accepts_a_marked_lead_in_a_cycle() -> None:
+    """End to end over the guard both the publish endpoint and run_protocol call."""
+    pe.validate_coordination_strategy(_PEER_SPEC, graph=_mark_lead(_cycle_peer_graph("a", "b", "c"), "b"))
+
+
+# ----------------------------------------------------------------------
+# Supervisor architecture -- roles read off the wiring
+# ----------------------------------------------------------------------
+
+_SUPERVISOR_SPEC = {"coordination_strategy": {"slug": "supervisor_architecture"}}
+
+
+def _labelled(graph: dict) -> dict:
+    """Uppercase labels on every agent -- the errors name agents, so the label
+    is part of what's asserted."""
+    for node in graph["nodes"]:
+        if node["type"] == "agent":
+            node["data"] = {**node["data"], "label": node["id"].upper()}
+    return graph
+
+
+def _supervisor_graph(*, reviewer: bool = True, workers: int = 3) -> dict:
+    """The target topology the user asked ASAREE to support: one supervisor, N
+    workers hanging off it, and a QC agent that sees every worker and reports
+    back to the supervisor.
+
+    Note the QC edges point INTO the reviewer from the workers and OUT of it to
+    the supervisor. That direction is what makes it a reviewer rather than a
+    fourth worker (see resolve_supervisor_roles).
+    """
+    graph = _labelled(_peer_graph("sup"))
+    worker_ids = [f"w{i}" for i in range(1, workers + 1)]
+    for worker_id in worker_ids:
+        _add_agent(graph, worker_id, ("sup", worker_id))
+    if reviewer:
+        _add_agent(graph, "qc", *[(worker_id, "qc") for worker_id in worker_ids], ("qc", "sup"))
+    return graph
+
+
+def test_supervisor_reads_the_target_topology() -> None:
+    roles = pe.resolve_supervisor_roles(_supervisor_graph())
+    assert roles.supervisor == "sup"
+    assert roles.workers == ("w1", "w2", "w3")
+    assert roles.reviewer == "qc"
+    # supervisor brief + 3 workers + review + synthesis
+    assert roles.execution_budget == 6
+
+
+def test_supervisor_without_a_reviewer_is_fine() -> None:
+    roles = pe.resolve_supervisor_roles(_supervisor_graph(reviewer=False))
+    assert roles.reviewer is None
+    assert roles.execution_budget == 5
+
+
+def test_supervisor_topology_passes_the_shared_guard() -> None:
+    """End to end over the same function the publish endpoint and run_protocol
+    call -- reading the roles *is* the validation."""
+    validate_coordination_strategy(_SUPERVISOR_SPEC, graph=_supervisor_graph())
+
+
+def test_supervisor_is_a_conversation_strategy() -> None:
+    """Which is what suspends the acyclic check: the reviewer's report back to
+    the supervisor closes a loop, and that loop is the topology, not a bug."""
+    assert pe.is_conversation_strategy(_SUPERVISOR_SPEC) is True
+    pe.topological_order(_supervisor_graph(), require_acyclic=False)
+    with pytest.raises(ProtocolValidationError, match="has a cycle"):
+        pe.topological_order(_supervisor_graph())
+
+
+def test_supervisor_rejects_a_worker_wired_to_another_worker() -> None:
+    graph = _supervisor_graph(reviewer=False, workers=2)
+    graph["edges"].append({"id": "e-w1-w2", "source": "w1", "target": "w2"})
+    with pytest.raises(ProtocolValidationError, match=r"'W1' is wired to another worker \(W2\)"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=graph)
+
+
+def test_supervisor_rejects_two_marked_supervisors() -> None:
+    graph = _mark_lead(_supervisor_graph(reviewer=False), "sup", "w1")
+    with pytest.raises(ProtocolValidationError, match=r"More than one agent is marked as the supervisor \(SUP, W1\)"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=graph)
+
+
+def test_supervisor_rejects_a_supervisor_with_no_workers() -> None:
+    """Two agents, neither wired to the other: one is marked, and marking
+    doesn't invent anybody to dispatch to."""
+    graph = _labelled(_peer_graph("sup"))
+    _add_agent(graph, "w1")
+    with pytest.raises(ProtocolValidationError, match="hands off to no other agent"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=_mark_lead(graph, "sup"))
+
+
+def test_supervisor_rejects_a_single_agent() -> None:
+    with pytest.raises(ProtocolValidationError, match="fewer than two Agent nodes"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=_no_peers_graph())
+
+
+def test_supervisor_rejects_an_ambiguous_head() -> None:
+    """Two agents fanning out to the same worker: either could be the
+    supervisor, so the canvas has to say which."""
+    graph = _labelled(_peer_graph("sup"))
+    _add_agent(graph, "w1", ("sup", "w1"))
+    _add_agent(graph, "other", ("other", "w1"))
+    with pytest.raises(ProtocolValidationError, match=r"more than one agent could be \(OTHER, SUP\)"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=graph)
+
+
+def test_supervisor_rejects_a_symmetric_ring() -> None:
+    """Three agents in a ring: every one dispatches to exactly one other, so
+    the wiring says nothing about which is in charge. The target topology
+    resolves in a loop only because the supervisor fans out wider than the
+    reviewer reports back (see _supervisor_candidates)."""
+    with pytest.raises(ProtocolValidationError, match=r"more than one agent could be \(A, B, C\)"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=_labelled(_cycle_peer_graph("a", "b", "c")))
+
+
+def test_supervisor_marker_resolves_an_ambiguous_head() -> None:
+    """Same graph, and the marker is how the user resolves it -- 'other' becomes
+    the one leftover agent, i.e. the reviewer."""
+    graph = _labelled(_peer_graph("sup"))
+    _add_agent(graph, "w1", ("sup", "w1"))
+    _add_agent(graph, "other", ("other", "w1"), ("other", "sup"))
+    roles = pe.resolve_supervisor_roles(_mark_lead(graph, "sup"))
+    assert (roles.supervisor, roles.workers, roles.reviewer) == ("sup", ("w1",), "other")
+
+
+def test_supervisor_rejects_more_than_one_leftover_agent() -> None:
+    """Two agents that the supervisor doesn't dispatch to can't both be the
+    reviewer, and ASAREE will not guess which one it dispatches."""
+    graph = _supervisor_graph(reviewer=False, workers=2)
+    _add_agent(graph, "qc1", ("w1", "qc1"), ("qc1", "sup"))
+    _add_agent(graph, "qc2", ("w2", "qc2"), ("qc2", "sup"))
+    with pytest.raises(ProtocolValidationError, match="QC1, QC2 are neither the supervisor nor"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=graph)
+
+
+def test_supervisor_rejects_a_reviewer_with_only_one_connection() -> None:
+    """A "reviewer" hanging off one worker reviews a third of the run. It's
+    almost always a mis-drawn edge, and the error says how to fix it either way."""
+    graph = _supervisor_graph(reviewer=False, workers=2)
+    _add_agent(graph, "qc", ("w1", "qc"))
+    with pytest.raises(ProtocolValidationError, match="'QC' reviews this run but is connected to only one"):
+        validate_coordination_strategy(_SUPERVISOR_SPEC, graph=graph)
+
+
+def test_supervisor_roles_ignore_plumbing_between_agents() -> None:
+    """A Script node between the supervisor and a worker is plumbing, not a
+    role -- the handoff is a path, the same way sequential_chain_order reads it."""
+    graph = _labelled(_peer_graph("sup"))
+    _add_agent(graph, "w1", ("sup", "w1"))
+    _add_agent(graph, "w2")
+    graph["nodes"].append({"id": "script", "type": "script", "data": {"label": "Prep"}})
+    graph["edges"] += [
+        {"id": "e-sup-script", "source": "sup", "target": "script"},
+        {"id": "e-script-w2", "source": "script", "target": "w2"},
+    ]
+    roles = pe.resolve_supervisor_roles(graph)
+    assert roles.workers == ("w1", "w2")
+
+
+def test_supervisor_workers_are_parallel_unless_opted_out() -> None:
+    assert pe._supervisor_workers_run_in_parallel(None) is True
+    assert pe._supervisor_workers_run_in_parallel(_SUPERVISOR_SPEC) is True
+    assert pe._supervisor_workers_run_in_parallel({"coordination_strategy": {"slug": "x", "params": {}}}) is True
+    # Only an explicit false opts out -- an unrelated key must not halve a run.
+    assert (
+        pe._supervisor_workers_run_in_parallel(
+            {"coordination_strategy": {"slug": "x", "params": {"something_else": 1}}}
+        )
+        is True
+    )
+    assert (
+        pe._supervisor_workers_run_in_parallel(
+            {"coordination_strategy": {"slug": "x", "params": {"parallel_workers": False}}}
+        )
+        is False
+    )
+
+
+def test_peer_collaboration_is_unaffected_by_the_supervisor_rules() -> None:
+    """The supervisor topology is a legal peer cluster too, and a peer mesh the
+    supervisor rules reject stays legal under Peer Collaboration -- the strategy
+    decides what the wiring means, which is the whole point of the dropdown."""
+    validate_coordination_strategy(_PEER_SPEC, graph=_mark_lead(_supervisor_graph(), "sup"))
+    mesh = _supervisor_graph(reviewer=False, workers=2)
+    mesh["edges"].append({"id": "e-w1-w2", "source": "w1", "target": "w2"})
+    validate_coordination_strategy(_PEER_SPEC, graph=mesh)
+
+
+def test_coordination_strategy_retired_slug_raises() -> None:
+    with pytest.raises(ProtocolValidationError, match="no longer offered"):
+        validate_coordination_strategy(
+            {"coordination_strategy": {"slug": "swarm_architecture"}}, graph=_no_peers_graph()
         )
 
 
 def test_coordination_strategy_unknown_slug_raises() -> None:
     with pytest.raises(ProtocolValidationError, match="Unknown coordination strategy"):
-        validate_coordination_strategy({"coordination_strategy": {"slug": "not-a-real-slug"}}, has_gated_pair=False)
+        validate_coordination_strategy({"coordination_strategy": {"slug": "not-a-real-slug"}}, graph=_no_peers_graph())
 
 
-async def test_run_protocol_rejects_placeholder_coordination_strategy(owner_id: uuid.UUID) -> None:
+async def test_run_protocol_rejects_retired_coordination_strategy(owner_id: uuid.UUID) -> None:
     llm = _llm_node()
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
@@ -2984,7 +3767,123 @@ async def test_run_protocol_rejects_placeholder_coordination_strategy(owner_id: 
             assert fetched is not None
             assert fetched.status == "failed"
             assert fetched.error is not None
-            assert "isn't implemented yet" in fetched.error
+            assert "no longer offered" in fetched.error
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+            await delete_experiment(db, experiment_id)
+
+
+async def test_peer_collaboration_runs_the_graph_as_one_conversation(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same a->b canvas a sequential run would walk node-by-node instead
+    starts one conversation at `a`, and `a`'s answer is the run's result. `b`
+    doesn't run here because nothing asked it to -- consultation is the lead
+    agent's choice, made inside its own run."""
+    import asaree.services.agent_messenger as am
+
+    ran: list[str] = []
+
+    async def fake_run_agent_node(node, **_kwargs):
+        ran.append(node["id"])
+        return f"{node['id']} answered", None, None, None
+
+    monkeypatch.setattr(am, "_run_agent_node", fake_run_agent_node)
+
+    graph = _peer_graph("a", "b")
+    async with get_session() as db:
+        experiment = await create_experiment(
+            db,
+            name=f"peer-collab-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            design_spec={"coordination_strategy": {"slug": "peer_collaboration"}},
+        )
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db,
+            name=f"peer-collab-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment_id,
+            graph=graph,
+        )
+        protocol_id = protocol.id
+        run_id = (await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)).id
+
+    try:
+        await pe.run_protocol(run_id)
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+            assert fetched is not None
+            assert fetched.status == "completed"
+            assert ran == ["a"]
+            assert fetched.node_runs["a"]["output_text"] == "a answered"
+            assert fetched.conversation["entry_agent_id"] == "a"
+            assert [(m["from_agent_id"], m["to_agent_id"]) for m in fetched.conversation["messages"]] == [
+                ("user", "a"),
+                ("a", "user"),
+            ]
+    finally:
+        async with get_session() as db:
+            await delete_protocol(db, protocol_id)
+            await delete_experiment(db, experiment_id)
+
+
+async def test_supervisor_architecture_runs_every_agent_end_to_end(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The contrast with the peer test above is the point: the same fan-out
+    canvas leaves `b` unrun under Peer Collaboration (nothing asked it to) and
+    runs every agent under Supervisor, because ASAREE dispatches the turns
+    rather than offering them. `run_protocol`'s own branch is what's under test
+    here -- the orchestration itself is covered in test_supervisor_architecture.
+    """
+    import asaree.services.agent_messenger as am
+
+    ran: list[str] = []
+
+    async def fake_run_agent_node(node, **_kwargs):
+        ran.append(node["id"])
+        return f"{node['id']} answered", None, None, None
+
+    monkeypatch.setattr(am, "_run_agent_node", fake_run_agent_node)
+
+    graph = _supervisor_graph(reviewer=False, workers=2)
+    async with get_session() as db:
+        experiment = await create_experiment(
+            db,
+            name=f"supervisor-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            design_spec=_SUPERVISOR_SPEC,
+        )
+        experiment_id = experiment.id
+        protocol = await create_protocol(
+            db,
+            name=f"supervisor-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment_id,
+            graph=graph,
+        )
+        protocol_id = protocol.id
+        run_id = (await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)).id
+
+    try:
+        await pe.run_protocol(run_id)
+        async with get_session() as db:
+            fetched = await pe.get_protocol_run(db, run_id)
+            assert fetched is not None
+            assert fetched.status == "completed"
+            assert sorted(ran) == ["sup", "sup", "w1", "w2"]
+            # The supervisor's synthesis is the cell's result -- its node run is
+            # what the write-back path scores, not whichever node a topological
+            # sort happened to end on.
+            assert fetched.node_runs["sup"]["output_text"] == "sup answered"
+            assert {nid: r["status"] for nid, r in fetched.node_runs.items()} == {
+                "sup": "completed",
+                "w1": "completed",
+                "w2": "completed",
+            }
+            assert fetched.conversation["entry_agent_id"] == "sup"
     finally:
         async with get_session() as db:
             await delete_protocol(db, protocol_id)
@@ -3036,6 +3935,63 @@ def test_validate_single_node_runnable_accepts_a_valid_standalone_agent() -> Non
     assert pe.validate_single_node_runnable(graph, "a") is agent
 
 
+# --- validate_conversation_entry ---------------------------------------------
+
+
+def _conversation_graph(*agent_ids: str) -> dict:
+    """Agents in a chain, each with its own LLM, joined by plain main edges."""
+    nodes: list[dict] = [_llm_node()]
+    edges: list[dict] = []
+    for agent_id in agent_ids:
+        agent, llm_edge = _agent_with_llm(agent_id)
+        nodes.append(agent)
+        edges.append(llm_edge)
+    for source, target in zip(agent_ids, agent_ids[1:], strict=False):
+        edges += _edges((source, target))
+    return {"nodes": nodes, "edges": edges}
+
+
+def test_validate_conversation_entry_rejects_a_missing_node() -> None:
+    with pytest.raises(ProtocolValidationError, match="No such node"):
+        pe.validate_conversation_entry(_conversation_graph("a", "b"), "nope")
+
+
+def test_validate_conversation_entry_rejects_a_non_agent_node() -> None:
+    graph = _conversation_graph("a", "b")
+    graph["nodes"].append(_node("g1", "critic_gate"))
+    with pytest.raises(ProtocolValidationError, match="Only Agent nodes"):
+        pe.validate_conversation_entry(graph, "g1")
+
+
+def test_validate_conversation_entry_rejects_an_agent_with_nobody_to_talk_to() -> None:
+    with pytest.raises(ProtocolValidationError, match="nobody to talk to"):
+        pe.validate_conversation_entry(_conversation_graph("a"), "a")
+
+
+def test_validate_conversation_entry_rejects_a_peer_with_no_model() -> None:
+    """A peer's own wiring is checked too: it will really run, and finding out
+    mid-conversation costs the user a run they already paid for."""
+    graph = _conversation_graph("a", "b")
+    graph["edges"] = [e for e in graph["edges"] if e.get("target") != "b" or e.get("targetHandle") != "ai"]
+    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
+        pe.validate_conversation_entry(graph, "a")
+
+
+def test_validate_conversation_entry_accepts_a_third_agent_on_the_canvas() -> None:
+    """Three connected agents are three participants, not an error -- the
+    validator asks nothing about how many peer edges the graph has."""
+    graph = _conversation_graph("a", "b", "c")
+    assert pe.validate_conversation_entry(graph, "b")["id"] == "b"
+
+
+def test_validate_conversation_entry_ignores_an_unrelated_broken_node() -> None:
+    """Scoped to the entry agent and its peers: a half-wired node in another
+    corner of the same canvas has nothing to do with this conversation."""
+    graph = _conversation_graph("a", "b")
+    graph["nodes"].append(_node("stranded", "agent"))
+    assert pe.validate_conversation_entry(graph, "a")["id"] == "a"
+
+
 async def test_run_single_node_ignores_an_unrelated_broken_sibling_node(
     owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3045,7 +4001,7 @@ async def test_run_single_node_ignores_an_unrelated_broken_sibling_node(
     topological_order's full-graph walk cares about that."""
 
     async def fake_run_agent_node(node, *, user_input, **_kwargs):
-        return f"solo output for {node['id']} given {user_input!r}", None, None
+        return f"solo output for {node['id']} given {user_input!r}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 
@@ -3086,7 +4042,7 @@ async def test_run_single_node_computes_adhoc_workspace_id_when_experiment_linke
 
     async def fake_run_agent_node(node, *, workspace_id=None, **_kwargs):
         received_workspace_ids.append(workspace_id)
-        return f"solo output for {node['id']}", None, None
+        return f"solo output for {node['id']}", None, None, None
 
     monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
 

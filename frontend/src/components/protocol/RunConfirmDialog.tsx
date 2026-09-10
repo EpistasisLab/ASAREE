@@ -72,7 +72,10 @@ export function RunConfirmDialog({
   // A node-scoped run only ever touches that node plus its own directly
   // wired dependencies -- an issue on some unrelated node elsewhere on the
   // canvas isn't relevant to THIS run, so don't show it here.
-  const relevantNodeIds = scope.type === 'node' ? new Set([scope.nodeId, ...edges.filter((e) => e.target === scope.nodeId).map((e) => e.source)]) : null
+  const scopedNodeIds = scope.type === 'node' ? [scope.nodeId] : null
+  const relevantNodeIds = scopedNodeIds
+    ? new Set([...scopedNodeIds, ...edges.filter((e) => scopedNodeIds.includes(e.target)).map((e) => e.source)])
+    : null
   const issues = relevantNodeIds ? allIssues.filter((issue) => relevantNodeIds.has(issue.nodeId)) : allIssues
 
   return (

@@ -4,6 +4,16 @@ The catalog deliberately contains only execution telemetry the application
 already records.  Scoring metrics promoted from controlled tools remain
 possible as custom declarations; this module never makes a subject Agent a
 metric evaluator.
+
+The scores ``services.metric_promotion.extract_score_metrics`` lifts out of a
+``run_model_script`` result are NOT catalog entries, though they are just as
+real.  They were briefly added and pulled back out: they only exist for a
+binary target (``extract_score_metrics`` reads ``metrics_at_chosen_threshold``,
+which only ``binary_bundle`` produces -- a multiclass run reports
+``macro_f1``/``macro_roc_auc_ovr``/``macro_average_precision`` instead and
+promotes nothing), so offering them in the picker advertises five columns that
+silently stay empty on a multiclass experiment.  Teaching extraction the
+multiclass bundle comes first; the catalog entries follow it.
 """
 
 from __future__ import annotations

@@ -136,6 +136,19 @@
     --node-6: oklch(0.7 0.2 307);
     --node-7: oklch(0.74 0.2 333);
     --node-8: oklch(0.68 0.2 359);
+    /* Output Parser (node kind fourteen). Hue space is genuinely full at this
+       point: sorted, the occupied hues are 25, 60, 105, 128, 150, 175, 200,
+       227, 253, 280, 307, 333, 359 -- every gap is ~25deg except 25->60, and
+       the wide-looking 60->105 gap is NOT free, because --node-label's yellow
+       sits at 92. So this takes the one real gap (42, between Critic's 25 and
+       the LLM family's 60) and leans on the lightness/chroma axis the block's
+       comment above already establishes for exactly this case: at 0.88/0.1
+       it's the lightest and least chromatic hue on the canvas, a washed
+       salmon, where both neighbours are saturated (0.18-0.17 chroma) and
+       darker. Kind fifteen will need a different axis again -- if it comes,
+       that's the point to ask whether thirteen-plus kinds should still be
+       distinguished by color alone. */
+    --node-9: oklch(0.88 0.1 42);
     /* Connector captions (Pattern/Skill/Dataset/Knowledge/AI/Memory/Tool on
        AgentNode and CriticGateNode). One fixed yellow rather than the host
        node's own accent: these sit outside the card on the canvas backdrop,

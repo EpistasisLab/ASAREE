@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -103,6 +103,19 @@ async def execute_protocol_run_task(ctx: dict[str, Any], protocol_run_id_str: st
     timeout/exception rather than letting arq retry a partially-executed
     graph (real agent runs, real tool calls -- not safe to assume idempotent).
     """
+    await _guarded_protocol_run(protocol_run_id_str, run_protocol)
+
+
+async def _guarded_protocol_run(
+    protocol_run_id_str: str, work: Callable[[uuid.UUID], Coroutine[Any, Any, None]]
+) -> None:
+    """The durability guards both protocol-run tasks need, around either body.
+
+    Shared rather than duplicated because every branch below is about the run
+    *row* -- skip a non-actionable status, force-fail on timeout, record a
+    cancellation before re-raising -- and none of it knows or cares whether the
+    run walks a graph or hosts a conversation.
+    """
     protocol_run_id = uuid.UUID(protocol_run_id_str)
     async with get_session() as db:
         run = await get_protocol_run(db, protocol_run_id)
@@ -118,7 +131,7 @@ async def execute_protocol_run_task(ctx: dict[str, Any], protocol_run_id_str: st
 
     timeout = get_settings().worker_job_timeout_seconds
     try:
-        await asyncio.wait_for(run_protocol(protocol_run_id), timeout=timeout)
+        await asyncio.wait_for(work(protocol_run_id), timeout=timeout)
     except TimeoutError:
         async with get_session() as db:
             await fail_protocol_run(db, protocol_run_id, error=f"protocol run exceeded its {timeout}s execution budget")

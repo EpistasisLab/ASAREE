@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { runsApi } from '@/api/client'
 import { nodeRunBadge } from '@/lib/protocolRun'
+import { referenceLabel } from '@/lib/promptReferences'
 import { hashToChartHue } from '@/lib/utils'
 import type { NodeRunState } from '@/types/protocols'
 import type { RunStep } from '@/types/runs'
@@ -117,6 +118,122 @@ export function RunStepTrace({ runId }: { runId: string }) {
   )
 }
 
+// What this agent was actually given, on a run that already happened.
+//
+// This is the answer to "did the handoff occur?" -- the question the whole
+// design-time preview cannot settle, because a placeholder proves nothing about
+// a real run. The stored prompt has the sender's actual output inside it or it
+// does not, and that is the end of the argument; nobody needs to echo a token
+// through a prompt to find out.
+//
+// Nothing new is persisted: `_run_agent_node` already passes the assembled
+// prompt as the run's `user_input`, so this is a read. Lazy for the same reason
+// as the step trace -- most opens only want the output.
+//
+// Shared by the live node inspector and the immutable result inspector, so the
+// two can't drift on what "received" means.
+export function ReceivedPromptPanel({ runId }: { runId: string }) {
+  const [open, setOpen] = useState(false)
+  const runQuery = useQuery({
+    queryKey: ['runs', runId],
+    queryFn: () => runsApi.get(runId),
+    enabled: open,
+  })
+
+  return (
+    <div className="space-y-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex cursor-pointer items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+        aria-expanded={open}
+      >
+        {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+        Prompt this agent received
+      </button>
+      {open &&
+        (runQuery.isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading prompt…</p>
+        ) : runQuery.isError ? (
+          <p className="text-xs text-muted-foreground">Could not load the prompt for this run.</p>
+        ) : runQuery.data?.input ? (
+          // Text, never markdown or HTML: this string
+          // contains whatever the upstream model emitted, so it is untrusted
+          // input being read verbatim by a human.
+          <pre className="max-h-64 overflow-auto rounded border bg-background/70 p-2 font-mono text-[11px] whitespace-pre-wrap break-words">
+            {runQuery.data.input}
+          </pre>
+        ) : (
+          <p className="text-xs text-muted-foreground">No prompt was recorded for this run.</p>
+        ))}
+    </div>
+  )
+}
+
+// A reference that resolved to nothing, named.
+//
+// Not an error: an agent that correctly produced nothing is a legitimate
+// result. But the prompt above it just has a gap where that output should be,
+// which reads as an agent that was never told anything, and only this says
+// otherwise. Shared so the live inspector and the immutable result timeline
+// word it identically; both pass names, having resolved ids their own way.
+export function UnresolvedReferencesNote({ names }: { names: string[] }) {
+  const unique = [...new Set(names)]
+  if (unique.length === 0) return null
+  return (
+    <p className="rounded-lg border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/5 p-3 text-xs text-[color:var(--chart-4)]">
+      This prompt referenced {unique.join(', ')}, which produced no output — so the reference resolved to nothing and
+      left a gap in the prompt.
+    </p>
+  )
+}
+
+// What the Output Parser pulled out of the answer above, if one was wired.
+//
+// Below the output, never in place of it: the free text is what the agent
+// wrote, and this is a second, post-hoc reading of it. `font-mono` key=value
+// because these are typed values a consumer binds to, not prose.
+//
+// The caveats are the visible half of "best effort". Motoro's extractor returns
+// `(None, caveats)` rather than raising, so a failed extraction is otherwise
+// indistinguishable from never having wired a parser -- and the user has no
+// other way to find out that the field their next agent references came back
+// empty on purpose.
+function ExtractedFieldsPanel({
+  payload,
+  caveats,
+}: {
+  payload?: Record<string, unknown> | null
+  caveats?: string[]
+}) {
+  const entries = Object.entries(payload ?? {})
+  if (entries.length === 0 && !caveats?.length) return null
+  return (
+    <div className="space-y-1.5">
+      <p className="text-sm font-medium">Extracted fields</p>
+      {entries.length > 0 && (
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg border bg-muted/30 p-3 font-mono text-xs">
+          {entries.map(([key, value]) => (
+            <Fragment key={key}>
+              <dt className="text-[color:var(--primary)]">{key}</dt>
+              <dd className="min-w-0 break-all whitespace-pre-wrap text-muted-foreground">
+                {typeof value === 'string' ? value : JSON.stringify(value)}
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      {caveats?.length ? (
+        <ul className="space-y-1 rounded-lg border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/5 p-3 text-xs text-[color:var(--chart-4)]">
+          {caveats.map((caveat) => (
+            <li key={caveat}>{caveat}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
+
 // The one piece of ARES's Run Detail page worth reusing here: real
 // observability into what an agent actually did (its Sense/Reason/Plan/Act
 // loop), not a wholesale port of that page. Zero new backend work --
@@ -126,8 +243,24 @@ export function RunStepTrace({ runId }: { runId: string }) {
 // expanded), since most inspector opens just want the final output/error,
 // already available from the same polled node_runs blob the canvas badge
 // uses -- no separate request needed for that part.
-export function NodeRunOutputPanel({ nodeRun }: { nodeRun: NodeRunState | undefined }) {
+export function NodeRunOutputPanel({
+  nodeRun,
+  referenceNames = {},
+  showReceivedPrompt = true,
+}: {
+  nodeRun: NodeRunState | undefined
+  // Node id -> display name, for naming a reference that resolved empty. The
+  // live node run records ids; the caller already has the same name table the
+  // reference picker uses, so the two surfaces call the same node the same
+  // thing. An id with no entry falls back to itself rather than disappearing.
+  referenceNames?: Record<string, string>
+  // False where the surrounding layout already has a dedicated Input pane (the
+  // Agent inspector) -- what an agent was handed is input, and showing it in
+  // both columns would say the split means less than it does.
+  showReceivedPrompt?: boolean
+}) {
   const badge = nodeRunBadge(nodeRun?.status)
+  const unresolved = nodeRun?.unresolved_references ?? []
 
   if (!nodeRun) {
     return (
@@ -172,6 +305,12 @@ export function NodeRunOutputPanel({ nodeRun }: { nodeRun: NodeRunState | undefi
         </div>
       )}
 
+      {/* Received before produced, so the panel reads as the handoff it was. */}
+      {showReceivedPrompt && nodeRun.run_id && <ReceivedPromptPanel runId={nodeRun.run_id} />}
+      {showReceivedPrompt && (
+        <UnresolvedReferencesNote names={unresolved.map((ref) => referenceLabel(ref, referenceNames))} />
+      )}
+
       {nodeRun.error ? (
         <div className="space-y-1.5">
           <p className="text-sm font-medium">Error</p>
@@ -190,6 +329,8 @@ export function NodeRunOutputPanel({ nodeRun }: { nodeRun: NodeRunState | undefi
       ) : (
         <p className="text-sm text-muted-foreground">No output yet.</p>
       )}
+
+      <ExtractedFieldsPanel payload={nodeRun.payload} caveats={nodeRun.caveats} />
 
       {nodeRun.run_id && <RunStepTrace runId={nodeRun.run_id} />}
     </div>

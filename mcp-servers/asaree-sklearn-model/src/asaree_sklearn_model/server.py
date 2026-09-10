@@ -90,15 +90,50 @@ def _workspace_id_from_ctx(explicit: str, ctx: Context | None) -> str:
     raise HeadNotReadyError("workspace_id missing: pass it explicitly or via ambient _meta")
 
 
+def _slot_state(state: dict[str, Any], workspace_id: str, slot: str = "") -> dict[str, Any]:
+    """One slot's ``{target_column, head, versions}`` out of a state.json.
+
+    Two on-disk shapes: the original flat document (one implicit dataset per
+    cell) and the slotted one, ``{"format_version": 2, "slots": {...}}``, which
+    a cell holding several datasets grows into. Reading the flat one as a single
+    slot is the whole compatibility story — see asaree_workspace_core.workspace,
+    which owns the format; this stays a read of known keys, per the module
+    docstring, and deliberately does not import that package.
+
+    With several slots and no *slot* named, raises listing them: picking one out
+    of several datasets would be a guess, not a default.
+    """
+    slots = state.get("slots")
+    if not isinstance(slots, dict):
+        return state
+    if not slots:
+        raise HeadNotReadyError(f"workspace {workspace_id!r} has no slots")
+    wanted = (slot or "").strip()
+    if wanted:
+        if wanted in slots:
+            return dict(slots[wanted])
+        bare = wanted.split(":", 1)[-1]
+        named = [s for s in slots.values() if str(s.get("name") or "") == bare]
+        if len(named) == 1:
+            return dict(named[0])
+    if len(slots) == 1:
+        return dict(next(iter(slots.values())))
+    raise HeadNotReadyError(
+        f"workspace {workspace_id!r} holds several slots ({', '.join(sorted(slots))}) "
+        "-- name the one to use"
+    )
+
+
 def _read_head(
     workspace_id: str,
+    slot: str = "",
 ) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series, str, str, str | None]:
     """Load (X_train, y_train, X_test, y_test, target, head_version, sha256_train)."""
     root = os.environ.get("ASAREE_DATASET_WORKSPACE_DIR", "./data/workspaces")
     state_path = Path(root).resolve() / workspace_id / "state.json"
     if not state_path.is_file():
         raise HeadNotReadyError(f"workspace {workspace_id!r} not initialized")
-    state = json.loads(state_path.read_text())
+    state = _slot_state(json.loads(state_path.read_text()), workspace_id, slot)
     target = state["target_column"]
     head_id = state["head"]
     ver = next((v for v in state.get("versions", []) if v.get("id") == head_id), None)
@@ -122,6 +157,7 @@ def run_model_script(
     selection_metric: str = "roc_auc",
     payload_json: str = "",
     workspace_id: str = "",
+    slot: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Execute an approved modeling script that NEVER sees the test split.
@@ -156,6 +192,10 @@ def run_model_script(
             SHA-256 is returned as payload_sha256).
         workspace_id: Cell workspace id; when omitted, resolved from ambient _meta.
             The matrices are read from the accepted HEAD version on disk.
+        slot: Which dataset slot of the cell's workspace to read. Optional --
+            omit it when the cell holds one dataset (the usual case). With
+            several open, omitting it is an error listing them, because reading
+            whichever came first would silently be the wrong dataset.
     """
     # Explicit argument wins (an agent may have a genuine one-off), but the
     # wired script is the normal source -- see _script_from_ctx.
@@ -185,7 +225,7 @@ def run_model_script(
 
     try:
         wid = _workspace_id_from_ctx(workspace_id, ctx)
-        X_train, y_train, X_test, y_test, target, _head_id, data_sha256_value = _read_head(wid)  # noqa: N806
+        X_train, y_train, X_test, y_test, target, _head_id, data_sha256_value = _read_head(wid, slot)  # noqa: N806
     except HeadNotReadyError as e:
         return json.dumps({"error": f"workspace: {e}", "code_sha256": code_sha256})
 

@@ -1,13 +1,15 @@
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useNodeConnections, useReactFlow, useStore, type NodeProps } from '@xyflow/react'
 import { Bot } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { cardAccent } from '@/lib/utils'
 import { nodeAccent } from '@/lib/nodeAccent'
+import { toDisplayPromptWith } from '@/lib/promptReferences'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { AgentNodeData, NodeRunStatus } from '@/types/protocols'
 import { boundFactorCount, hasBoundFactor } from '../bindableFields'
 import { connectorLefts } from '../layout'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
+import { useProviderModels } from '../useProviderModels'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
 import { MainEdgeAddStub } from './MainEdgeAddStub'
@@ -33,12 +35,81 @@ export function AgentNode({
   data,
   selected,
 }: NodeProps & {
-  data: AgentNodeData & { runStatus?: NodeRunStatus; missingLlm?: boolean; canRunAlone?: boolean }
+  data: AgentNodeData & {
+    runStatus?: NodeRunStatus
+    missingLlm?: boolean
+    missingOutputParser?: boolean
+    canRunAlone?: boolean
+    // Both injected by ProtocolCanvas: whether a plain Agent-to-Agent edge
+    // reaches this node, and the model its AI connector resolves to. The
+    // canvas supplies the wiring; the capability lookup below is this card's.
+    hasPeers?: boolean
+    llmConfig?: { provider?: string; model?: string } | null
+    // Also the canvas's: which role `data.conversation_lead` amounts to under
+    // the experiment's coordination strategy -- 'lead' under Peer
+    // Collaboration, 'supervisor' under Supervisor, and null under a strategy
+    // that ignores the marker. Not the raw flag: the strategy lives on the
+    // experiment, which this card doesn't query.
+    leadRole?: 'lead' | 'supervisor' | null
+    // The canvas's too: whether this node's main-flow sides can still take an
+    // edge. Only ever true under Sequential, where the chain rule caps each at
+    // one -- see ProtocolCanvas's `mainEdgeSlots`.
+    mainInFull?: boolean
+    mainOutFull?: boolean
+  }
 }) {
   const badge = nodeRunBadge(data.runStatus)
+  // Peers are offered to the model as function schemas -- that is the only
+  // channel a consultation can be *chosen* through -- so an agent on a model
+  // that can't accept them would know its peers exist and never be able to
+  // ask one. Not a misconfiguration (the run succeeds, the agent just works
+  // alone), so it's a card warning rather than a findNodeConfigIssues entry
+  // that interrupts a Run -- the same call the ReAct "this loop won't loop"
+  // warning makes. `supports_tool_calling` is null for a model litellm
+  // doesn't know, which is "can't tell", so only an explicit false warns.
+  const { models } = useProviderModels(data.hasPeers ? data.llmConfig?.provider : undefined)
+  const peerNeedsToolCalling =
+    !!data.hasPeers && models.find((m) => m.id === data.llmConfig?.model)?.supports_tool_calling === false
+  const warnings = [
+    ...(data.missingLlm ? ["No AI connected -- this agent can't run"] : []),
+    ...(data.missingOutputParser
+      ? ['A specific output format is required, but no Output Parser says what it is']
+      : []),
+    ...(peerNeedsToolCalling ? ["This model can't call tools, so this agent can't consult its connected peers"] : []),
+  ]
   const { updateNodeData } = useReactFlow()
   const { requestRunNode } = useProtocolCanvasActions()
   const isActive = data.active ?? true
+
+  // Ids are stored, labels are only ever displayed -- the same invariant the
+  // inspector's editor upholds via `toDisplayPrompt`. Without this the summary
+  // line is the one place on the canvas a raw `{{node:demob-profiler}}` leaks
+  // out, which reads as a broken substitution rather than as a reference.
+  // Selected through the store rather than off a prebuilt map so a rename
+  // upstream updates this line; the selector returns a string, so plain
+  // equality already keeps the extra renders out.
+  const summary = useStore((state) =>
+    toDisplayPromptWith(data.config?.prompt || data.config?.goal || '', (id) => {
+      const label = state.nodeLookup.get(id)?.data?.label
+      return typeof label === 'string' && label ? label : undefined
+    }),
+  )
+
+  // The Output Parser slot is the one connector that is normally NOT drawn:
+  // most agents answer in prose and shouldn't pay for a seventh caption on a
+  // card that already has six. It appears when the user asks for it in the
+  // inspector (`require_output_parser`), when something is already wired to
+  // it, or when this agent still carries a legacy stored contract (the
+  // inspector's Convert button is right there, and the slot is where the
+  // converted node lands).
+  //
+  // The already-wired clause is load-bearing, not defensive: React Flow drops
+  // an edge whose target handle isn't rendered, so a graph loaded with a
+  // parser edge but the toggle off would silently lose the edge -- and, since
+  // the canvas autosaves, lose it for good.
+  const parserConnections = useNodeConnections({ id, handleType: 'target', handleId: 'output_parser' })
+  const showOutputParser =
+    !!data.config?.require_output_parser || parserConnections.length > 0 || !!data.config?.output_contract
 
   return (
     <div
@@ -77,16 +148,17 @@ export function AgentNode({
           Left/right no longer mean strict sequential handoff -- they mean
           "this agent can interact with that one" (which coordination
           strategy is active decides what "interact" actually does at
-          runtime, see design_spec.coordination_strategy). Fan-out/fan-in
-          are both unrestricted, so the "+" stub never hides (unlike a
-          capped connector slot). */}
+          runtime, see design_spec.coordination_strategy). That same strategy
+          decides the cardinality: unrestricted under Peer Collaboration and
+          Critic Gate, but exactly one per side under Sequential, where the
+          chain rule applies and the "+" stub hides once a side is taken. */}
       <Handle
         type="target"
         position={Position.Left}
         title="Connect to another agent (or a Critic Gate)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <MainEdgeAddStub nodeId={id} direction="incoming" />
+      <MainEdgeAddStub nodeId={id} direction="incoming" full={data.mainInFull} />
       <div className="flex items-center gap-1.5">
         <Bot className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
         {/* Renaming happens in the Inspector's own title now (click it,
@@ -94,10 +166,29 @@ export function AgentNode({
         <span className="truncate text-xs font-medium" title={data.label}>
           {data.label || 'Agent'}
         </span>
+        {/* Inline on the title row rather than hung off a corner: all three
+            corners are spoken for (run status and the factor badge share the
+            top-right, the Pattern/Skill captions sit above the top-left), and
+            "this is the agent that leads" reads as part of the node's identity
+            anyway. `outline` so it states a role without competing with the
+            run-status badge, which is the thing that actually changes. */}
+        {data.leadRole && (
+          <Badge
+            variant="outline"
+            title={
+              data.leadRole === 'supervisor'
+                ? 'This agent briefs the workers wired to it and writes the final answer, which is the recorded result'
+                : 'The conversation starts here -- this agent gets the task and its answer is the recorded result'
+            }
+            className="h-4 shrink-0 border-[color:var(--card-accent)]/60 px-1.5 text-[10px] text-[color:var(--card-accent)]"
+          >
+            {data.leadRole === 'supervisor' ? 'Supervisor' : 'Lead'}
+          </Badge>
+        )}
       </div>
       <NodeSummaryLine
-        text={data.config?.prompt || data.config?.goal || null}
-        warning={data.missingLlm ? "No AI connected -- this agent can't run" : null}
+        text={summary || null}
+        warning={warnings.length > 0 ? warnings : null}
       />
       {/* FOUR connectors live on the TOP edge -- Pattern, Skill, Dataset,
           Knowledge, in that reading order -- all of them "what this agent IS
@@ -173,17 +264,18 @@ export function AgentNode({
       <ConnectorHandleLabel left={CONNECTOR_LEFT.skill} side="top">Skill</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="skill" left={CONNECTOR_LEFT.skill} side="top" alwaysVisible />
       {/* Dataset -- the data an agent works ON, as opposed to the Tool
-          connector's "capabilities it works WITH". CAPPED at one, unlike
-          Skill/Knowledge/Tool: a cell's workspace is keyed by
-          experiment_id/cell_label alone, so it holds exactly one dataset --
-          seed_cell_workspace refuses a second, and wiring several only ever
-          pushed that collision onto the agent to resolve from the prompt.
-          Running one experiment across several datasets is a FACTOR
+          connector's "capabilities it works WITH". UNCAPPED, like
+          Skill/Knowledge/Tool: a cell's workspace holds one dataset per named
+          SLOT (dataset:<name>), so several wired datasets each get their own
+          independently staged lineage and the agent picks between them by
+          passing slot="..." to the workspace tools. Wiring order is the order
+          _build_user_input lists them in. It was capped at one for a while
+          (one workspace, one dataset, seed_cell_workspace refusing a second),
+          which is why the cap came and went before slots existed.
+          Still distinct from COMPARING datasets, which is a FACTOR
           (levelType 'dataset_config' -- the inspector title row's "Make
-          factor" button), which varies the dataset per cell and so keeps one
-          dataset per workspace. It was briefly uncapped between those two
-          designs; graphs saved then can still carry several, which
-          _resolve_dataset_configs and _build_user_input still handle.
+          factor" button): that varies WHICH dataset a cell gets, rather than
+          giving one cell several at once.
           The slot is named after the node type because that node is its only
           member; it was briefly called "Resource", and before that it shared
           the Tool slot outright, so older graphs carry dataset edges on
@@ -200,11 +292,11 @@ export function AgentNode({
         id="dataset"
         position={Position.Top}
         style={{ left: CONNECTOR_LEFT.dataset }}
-        title="Dataset -- the registered dataset this agent operates on (one; make it a factor to compare several)"
+        title="Dataset -- the registered datasets this agent operates on (each gets its own workspace slot)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.dataset} side="top">Dataset</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="dataset" left={CONNECTOR_LEFT.dataset} side="top" />
+      <ConnectorAddStub nodeId={id} slot="dataset" left={CONNECTOR_LEFT.dataset} side="top" alwaysVisible />
       {/* Knowledge -- registered OKF bundles, each a directory of Markdown
           concepts on the SERVER's disk that the agent reads AND writes as it
           works (see OkfBundleNodeData). Its own slot rather than sharing
@@ -270,13 +362,34 @@ export function AgentNode({
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.tool}>Tool</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="tool" left={CONNECTOR_LEFT.tool} alwaysVisible />
+      {/* Output Parser -- the field spec the agent's answer is written to and
+          read back out of. Last on the bottom edge, at 95%: it's the only
+          connector here whose work outlives the agent's own turn, so it sits
+          at the end of the row the run reads left-to-right (AI -> Memory ->
+          Tool -> Parser).
+          Capped at one (no `alwaysVisible`) -- two contracts would be two
+          answers to "what shape is this agent's output". */}
+      {showOutputParser && (
+        <>
+          <Handle
+            type="target"
+            id="output_parser"
+            position={Position.Bottom}
+            style={{ left: CONNECTOR_LEFT.output_parser }}
+            title="Output Parser -- defines the format of this agent's answer and reads its typed fields back out"
+            className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+          />
+          <ConnectorHandleLabel left={CONNECTOR_LEFT.output_parser}>Parser</ConnectorHandleLabel>
+          <ConnectorAddStub nodeId={id} slot="output_parser" left={CONNECTOR_LEFT.output_parser} />
+        </>
+      )}
       <Handle
         type="source"
         position={Position.Right}
         title="Connect to another agent (or a Critic Gate)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <MainEdgeAddStub nodeId={id} direction="outgoing" />
+      <MainEdgeAddStub nodeId={id} direction="outgoing" full={data.mainOutFull} />
     </div>
   )
 }

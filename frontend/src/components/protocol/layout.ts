@@ -24,6 +24,12 @@ const CONNECTOR_X: { agent: Record<ConnectorSlot, number>; critic_gate: Partial<
     ai: 0.2,
     memory: 0.5,
     tool: 0.8,
+    // Added after the other seven, and placed after Tool rather than among
+    // them: every existing slot keeps the x it already had, because a canvas
+    // someone already knows should not have its connectors shuffle when a new
+    // one arrives. Unlike the rest, this one is usually not rendered at all --
+    // see AgentNode's own showOutputParser.
+    output_parser: 0.95,
   },
   critic_gate: { ai: 0.5 },
 }

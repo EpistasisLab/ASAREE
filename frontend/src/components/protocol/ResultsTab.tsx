@@ -11,7 +11,7 @@ import { displayFactorValue, formatMetricLabel, formatMetricValue } from '@/lib/
 import { sanitizeFilename } from '@/lib/utils'
 import type { Experiment, HistoricalRun, ObsoleteRun, ResultCell, ResultNodeRun, ResultReplicate, SupersededRun } from '@/types/experiments'
 import { InfoTooltip } from './InfoTooltip'
-import { RunStepTrace } from './NodeRunOutputPanel'
+import { ReceivedPromptPanel, RunStepTrace, UnresolvedReferencesNote } from './NodeRunOutputPanel'
 
 function formatNumber(value: number | null, maximumFractionDigits = 0): string {
   if (value === null || !Number.isFinite(value)) return 'Not reported'
@@ -196,6 +196,10 @@ function ReplicateTimelineNode({ node, defaultOpen = false }: { node: ResultNode
       {open && (
         <div className="space-y-4 border-t bg-muted/15 px-3 py-3">
           {node.error && <section className="space-y-1.5"><h4 className="text-xs font-medium">Error</h4><p className="rounded border border-destructive/30 bg-destructive/5 p-2 text-xs whitespace-pre-wrap break-words text-destructive">{node.error}</p></section>}
+          {/* Received before produced, so one node reads as the handoff it
+              was: what it was given, then what it made of it. */}
+          {node.agent_run_id && <ReceivedPromptPanel runId={node.agent_run_id} />}
+          <UnresolvedReferencesNote names={node.unresolved_reference_labels ?? []} />
           {node.output_text ? (
             <section className="space-y-1.5">
               <h4 className="text-xs font-medium">Output</h4>

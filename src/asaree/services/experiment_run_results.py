@@ -183,6 +183,7 @@ _NODE_TYPE_FALLBACK_LABELS = {
     "skill": "Skill",
     "okf_bundle": "OKF Bundle",
     "okf_document": "OKF Document",
+    "output_parser": "Output Parser",
     "reason_act_pattern": "Reason + Act",
     "single_agent_baseline_pattern": "Single-Agent Baseline",
 }
@@ -210,6 +211,18 @@ def _node_labels(graph: dict[str, Any] | None) -> dict[str, str]:
         if isinstance(label, str) and label.strip():
             labels[node["id"]] = label.strip()
     return labels
+
+
+def _reference_label(ref: Any, node_labels: dict[str, str]) -> str:
+    """One recorded unresolved reference, as a name the user reads.
+
+    A field reference is recorded whole (``a.n_rows``) because the gap is the
+    field, not the node -- so only the id half is labelled and the field is kept
+    verbatim. Node ids cannot contain a dot, which is what makes the split safe.
+    """
+    node_id, dot, field = str(ref).partition(".")
+    label = node_labels.get(node_id, node_id)
+    return f"{label}.{field}" if dot else label
 
 
 async def _node_labels_by_protocol_run(
@@ -340,6 +353,15 @@ async def summarize_experiment_run_results(
                     "status": node_run.get("status", "unknown"),
                     "output_text": node_run.get("output_text"),
                     "error": node_run.get("error"),
+                    # Labels, not ids -- the walk records ids (see
+                    # ``_build_user_input``'s ``unresolved_out``) but the only
+                    # consumer is a sentence saying which sender produced
+                    # nothing, and this surface already resolves ids to labels
+                    # for exactly that reason. Hence the distinct field name:
+                    # the ids are gone by the time it leaves here.
+                    "unresolved_reference_labels": [
+                        _reference_label(ref, node_labels) for ref in node_run.get("unresolved_references") or []
+                    ],
                     "agent_run_id": str(agent_run_id) if agent_run_id else None,
                     **usage,
                 }

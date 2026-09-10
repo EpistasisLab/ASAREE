@@ -16,7 +16,7 @@ import {
   type Viewport,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Lock, Plus, Square, X } from 'lucide-react'
+import { Lock, Play, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { CONNECTOR_HANDLES } from '@/lib/coordinationStrategy'
@@ -549,6 +549,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       setPendingRunConfirm(null)
       return
     }
+    if (pendingRunConfirm?.type === 'graph') {
+      runMutation.mutate()
+      setPendingRunConfirm(null)
+      return
+    }
     setPendingRunConfirm(null)
   }
 
@@ -563,6 +568,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       }
       confirmPendingRun()
     },
+  })
+
+  // The whole canvas, once, with no factor values substituted in -- what
+  // `POST /protocols/{id}/runs` does with no `replicate_label`. Deliberately
+  // NOT a second way to run a cell: picking a replicate, and running the
+  // pending batch, both live in the Runs tab, and duplicating either here
+  // would give the same action two homes that can disagree. This button is
+  // the answer to "there are no cells, how do I run this at all" -- an
+  // experiment with a design still runs from the Runs tab.
+  const runMutation = useMutation({
+    mutationFn: () => protocolsApi.run(protocolId),
+    onSuccess: (run) => setRunId(run.id),
   })
 
   // The canvas's per-node Play icon stores its run in the shared runId/runQuery
@@ -613,6 +630,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   }, [protocolRunsQuery.data, runId])
 
   const isRunning =
+    runMutation.isPending ||
     runNodeMutation.isPending ||
     (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
 
@@ -1732,12 +1750,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           </ReactFlow>
           {!experimentLocked && <CanvasControls onTidy={tidyUp} />}
           {(() => {
-            // runNodeMutation.error is the real validation
+            // runMutation.error/runNodeMutation.error is the real validation
             // message (e.g. topological_order/validate_single_node_runnable
             // rejecting before any ProtocolRun row even exists) --
             // runQuery.data?.error only ever exists once a run row was
             // created and later failed asynchronously in the worker.
-            const failedMutation = runNodeMutation.isError ? runNodeMutation : null
+            const failedMutation = runMutation.isError ? runMutation : runNodeMutation.isError ? runNodeMutation : null
             const runErrorText =
               runQuery.data?.error ??
               (failedMutation
@@ -1785,6 +1803,31 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 experiment's coordination strategy (Design tab), not a second
                 way to press Run -- so an agent conversation is started by
                 running the protocol, like everything else. */}
+            {/* Always opens RunConfirmDialog rather than firing a real,
+                billable run on one click. That dialog does its own pre-flight
+                scan for obviously misconfigured nodes (no model, no dataset
+                picked, no script code, an agent with nothing wired into its
+                required AI connector) and surfaces them inline, instead of
+                the user only finding out via a generic "one or more nodes
+                failed" AFTER paying for the attempt. It also owns the
+                publish-then-run choice when the draft differs from the
+                published revision. */}
+            <Button
+              size="sm"
+              // Not disabled by `experimentLocked`: locking freezes the
+              // design, which is precisely when you want to collect data, and
+              // the backend agrees -- the lock guards sit on update/publish/
+              // delete, never on creating a run.
+              disabled={isRunning}
+              onClick={() => {
+                setRunErrorDismissed(false)
+                setPendingRunConfirm({ type: 'graph' })
+              }}
+              title="Run this canvas once, with no factor values substituted in"
+            >
+              <Play className="size-4" />
+              {isRunning ? 'Running…' : 'Run'}
+            </Button>
             <Button
               size="icon"
               className="rounded-full"

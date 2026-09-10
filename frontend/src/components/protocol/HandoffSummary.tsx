@@ -7,11 +7,10 @@ import { PREVIOUS_TOKEN, referencedSenderIds, usesPreviousToken, type HandoffPee
 // the data it describes rather than both floating above the prompt.
 //
 // This is the readout that makes the model legible: it says that step 5 does
-// NOT see step 1, which is the single most surprising thing about a chain, and
-// -- since an edge only grants availability -- it says which of the senders
-// this prompt actually pulls in. A wired-but-unreferenced sender looks
-// identical on the canvas to a referenced one, so without this the only way to
-// find out is to read a finished run's transcript.
+// NOT see step 1, which is the single most surprising thing about a chain.
+// Everything it lists under Receives arrives -- drawing the edge is the
+// request -- so this is the answer to "what is actually in my prompt", which
+// otherwise takes reading a finished run's transcript.
 //
 // Direct neighbours only, mirroring `_upstream_ids`: connector nodes (LLM,
 // Dataset, Memory, Tool) are never on a main edge and so never appear here,
@@ -21,7 +20,9 @@ import { PREVIOUS_TOKEN, referencedSenderIds, usesPreviousToken, type HandoffPee
 const ROW_CLASSNAME = 'space-y-1.5 rounded-md border bg-muted/20 p-3 font-mono text-xs'
 
 export function ReceivesSummary({ peers, prompt }: { peers: HandoffPeers; prompt: string }) {
-  const referenced = referencedSenderIds(prompt, peers.receives)
+  // Where each sender lands, not whether it lands: one named in the prompt is
+  // rendered at that spot, one that is not is appended after it.
+  const placed = referencedSenderIds(prompt, peers.receives)
   const usesPrevious = peers.receives.length > 0 && usesPreviousToken(prompt)
 
   return (
@@ -36,15 +37,15 @@ export function ReceivesSummary({ peers, prompt }: { peers: HandoffPeers; prompt
               {peers.receives.map((target) => (
                 <span key={target.id} className="flex items-baseline gap-1.5">
                   <span className="break-all">{target.name}</span>
-                  {!referenced.has(target.id) && (
-                    // Not an error -- a step whose prompt stands alone is a
-                    // legitimate design, and it may be exactly the treatment
-                    // being tested. It just must not be a surprise.
+                  {placed.has(target.id) && (
+                    // Purely positional, and dim on purpose: it answers "why is
+                    // this one not at the bottom with the others", which is
+                    // only a question once a prompt mixes the two.
                     <span
-                      className="rounded-sm bg-[color:var(--chart-4)]/10 px-1 py-px text-[0.65rem] text-[color:var(--chart-4)]"
-                      title={`Wired to this agent, but this prompt never references ${target.name}, so its output is not passed along. Insert a reference to pass it.`}
+                      className="rounded-sm bg-muted px-1 py-px text-[0.65rem] text-muted-foreground"
+                      title={`This prompt references ${target.name}, so its output is placed where you wrote it instead of being appended at the end.`}
                     >
-                      not referenced
+                      inline
                     </span>
                   )}
                 </span>
@@ -60,15 +61,13 @@ export function ReceivesSummary({ peers, prompt }: { peers: HandoffPeers; prompt
           {PREVIOUS_TOKEN} = {peers.receives.map((t) => t.name).join(' + ')}
         </p>
       )}
-      {/* Only the senders this prompt actually pulls in: a shape promised by a
-          node whose output never arrives is not something to reconcile against.
-          Shown to the user, not to the agent -- see `HandoffPeer` for why the
+      {/* Shown to the user, not to the agent -- see `HandoffPeer` for why the
           consuming model is deliberately not told. Field names rather than the
           prose promise this used to print: the shape a sender declares is now
           its Output Parser's field list, which is also exactly what can be
           referenced individually, so this doubles as the menu for doing so. */}
       {peers.receives
-        .filter((target) => target.fields?.length && referenced.has(target.id))
+        .filter((target) => target.fields?.length)
         .map((target) => (
           <p key={target.id} className="pt-0.5 text-muted-foreground">
             <span className="text-[color:var(--node-label)]">{target.name}</span> promises:{' '}

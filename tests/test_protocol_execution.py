@@ -348,10 +348,9 @@ def test_a_reader_downstream_of_a_deactivated_node_sees_that_nodes_name() -> Non
     relabelling it as the original author would hide that a step was skipped.
     Both contracts already behave this way; the envelope must not change it.
 
-    On the current contract the text has to be asked for, and it labels its
-    blocks only on a fan-in, so ``d`` is here to make the attribution visible at
-    all -- the point under test is whose name appears, not how many senders
-    there are.
+    ``d`` is here so the current contract has a fan-in to label: a single
+    hand-placed reference carries no name, and the point under test is whose
+    name appears, not how many senders there are.
     """
     a = _node("a", "agent", {"prompt": "Draft it"}, label="Drafter")
     b = _node("b", "agent", {"prompt": "Polish it"}, label="Editor")
@@ -367,59 +366,9 @@ def test_a_reader_downstream_of_a_deactivated_node_sees_that_nodes_name() -> Non
     legacy = pe._build_user_input(c, graph, node_runs, prompt_contract_version=1)
     current = pe._build_user_input(c, graph, node_runs, prompt_contract_version=2)
     assert "[b]: draft text here" in legacy
-    assert "[Editor] said:" in current
+    assert "[Editor]" in current
     assert "draft text here" in current
     assert "Drafter" not in current
-
-
-# --- _chain_steps ------------------------------------------------------------
-
-
-def _spec(slug: str) -> dict:
-    return {"coordination_strategy": {"slug": slug}}
-
-
-def test_a_sequential_chain_is_numbered_end_to_end() -> None:
-    graph = {
-        "nodes": [_node(nid, "agent", {}, label=nid.upper()) for nid in ("a", "b", "c")],
-        "edges": _edges(("a", "b"), ("b", "c")),
-    }
-    assert pe._chain_steps(graph, _spec("sequential")) == {
-        "a": (1, 3),
-        "b": (2, 3),
-        "c": (3, 3),
-    }
-
-
-def test_plumbing_does_not_take_up_a_step_number() -> None:
-    """"Step 2 of 3" must count the agents the user drew, not the critic gates
-    between them -- the same reason the audience line looks past them."""
-    graph = {
-        "nodes": [
-            _node("a", "agent", {}, label="SF-DC"),
-            _node("g", "critic_gate", {}, label="Critic (DC)"),
-            _node("b", "agent", {}, label="SF-FTE"),
-        ],
-        "edges": _edges(("a", "g"), ("g", "b")),
-    }
-    assert pe._chain_steps(graph, _spec("sequential")) == {"a": (1, 2), "b": (2, 2)}
-
-
-def test_a_non_sequential_strategy_is_not_numbered() -> None:
-    """A supervisor fan-out has no step 2 of 3, so it gets no number rather than
-    a confidently wrong one."""
-    graph = {
-        "nodes": [_node(nid, "agent", {}, label=nid.upper()) for nid in ("s", "w1", "w2")],
-        "edges": _edges(("s", "w1"), ("s", "w2")),
-    }
-    for slug in ("supervisor_architecture", "peer_collaboration", "hierarchical_delegation"):
-        assert pe._chain_steps(graph, _spec(slug)) == {}
-
-
-def test_a_lone_agent_is_not_numbered() -> None:
-    """"Step 1 of 1" adds nothing to "you are the final step"."""
-    graph = {"nodes": [_node("a", "agent", {}, label="Solo")], "edges": []}
-    assert pe._chain_steps(graph, _spec("sequential")) == {}
 
 
 def test_build_user_input_cues_dataset_without_dictating_ids() -> None:

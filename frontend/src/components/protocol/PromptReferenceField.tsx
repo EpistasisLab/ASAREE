@@ -35,43 +35,42 @@ interface Suggestion {
   detail: string
 }
 
-function suggestionsFor(scope: PromptReferenceScope): { data: Suggestion[]; prose: Suggestion[] } {
+// Every entry resolves to data. Two used to resolve to a platform-composed
+// sentence -- who receives this agent's output, and how to treat a
+// predecessor's -- and both are withdrawn: that is the experimenter's wording
+// to write, not a fact about the wiring for the platform to assert.
+//
+// A direct predecessor's output arrives with no token at all, so the whole-node
+// entries here are about POSITION: inserting one moves that output to where the
+// caret is instead of the end. The reach-back entries (a node further upstream)
+// are the ones that add something that would not otherwise arrive.
+function suggestionsFor(scope: PromptReferenceScope): Suggestion[] {
   const first = scope.targets.length === 1 ? scope.targets[0].name : null
-  return {
-    data: [
+  return [
+    {
+      token: '{{previous}}',
+      title: 'previous',
+      // Resolved inline so the common linear case can be inserted without
+      // first working out which node "previous" means.
+      detail: first ? `Place the step before this one here — ${first}` : 'Place the step before this one here',
+    },
+    // Each node, then the fields its Output Parser declares. The whole-node
+    // entry always comes first: prose is what every node has, and the fields
+    // are the extra a parser buys. A node with no parser has no field rows at
+    // all, which is the picker saying so without a word of explanation.
+    ...scope.targets.flatMap((target) => [
       {
-        token: '{{previous}}',
-        title: 'previous',
-        // Resolved inline so the common linear case can be inserted without
-        // first working out which node "previous" means.
-        detail: first ? `Output of the step before this one — ${first}` : 'Output of the step before this one',
+        token: `{{${target.name}}}`,
+        title: target.name,
+        detail: target.fields?.length ? 'Full answer, plus its extracted fields' : "This node's output",
       },
-      // Each node, then the fields its Output Parser declares. The whole-node
-      // entry always comes first: prose is what every node has, and the fields
-      // are the extra a parser buys. A node with no parser has no field rows at
-      // all, which is the picker saying so without a word of explanation.
-      ...scope.targets.flatMap((target) => [
-        {
-          token: `{{${target.name}}}`,
-          title: target.name,
-          detail: target.fields?.length ? 'Full answer, plus its extracted fields' : 'Output of this node',
-        },
-        ...(target.fields ?? []).map((field) => ({
-          token: `{{${target.name}.${field}}}`,
-          title: `${target.name}.${field}`,
-          detail: 'One extracted value, on its own',
-        })),
-      ]),
-    ],
-    prose: [
-      { token: '{{audience}}', title: 'audience', detail: 'Who receives this agent’s output, in a sentence' },
-      {
-        token: '{{upstream_instructions}}',
-        title: 'upstream_instructions',
-        detail: 'Tells the agent that referenced output is material, not orders',
-      },
-    ],
-  }
+      ...(target.fields ?? []).map((field) => ({
+        token: `{{${target.name}.${field}}}`,
+        title: `${target.name}.${field}`,
+        detail: 'One extracted value, on its own',
+      })),
+    ]),
+  ]
 }
 
 export function PromptReferenceField({
@@ -135,13 +134,12 @@ export function PromptReferenceField({
     textareaRef.current?.setSelectionRange(caret, caret)
   }, [draft])
 
-  const { data, prose } = useMemo(() => suggestionsFor(scope), [scope])
+  const suggestions = useMemo(() => suggestionsFor(scope), [scope])
   const matches = useMemo(() => {
-    const all = [...data, ...prose]
-    if (!query) return all
+    if (!query) return suggestions
     const lowered = query.toLowerCase()
-    return all.filter((s) => s.title.toLowerCase().includes(lowered))
-  }, [data, prose, query])
+    return suggestions.filter((s) => s.title.toLowerCase().includes(lowered))
+  }, [suggestions, query])
 
   const unresolved = useMemo(() => unresolvedReferences(draft, scope.names), [draft, scope.names])
   const outOfScope = useMemo(() => outOfScopeReferences(draft, scope), [draft, scope])

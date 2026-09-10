@@ -46,8 +46,17 @@ def _edge(source: str, target: str, handle: str | None = None) -> dict[str, Any]
 
 
 def test_each_documented_form_parses_to_its_kind() -> None:
-    kinds = [ref.kind for ref in pr.iter_references("{{previous}} {{audience}} {{upstream_instructions}} {{node:x}}")]
-    assert kinds == ["previous", "audience", "upstream_instructions", "node"]
+    kinds = [ref.kind for ref in pr.iter_references("{{previous}} {{node:x}}")]
+    assert kinds == ["previous", "node"]
+
+
+def test_the_withdrawn_prose_tokens_are_no_longer_references() -> None:
+    """``{{audience}}`` and ``{{upstream_instructions}}`` resolved to
+    platform-composed sentences rather than to data. Every surviving form
+    resolves to data, so these parse as nothing and survive substitution as the
+    literal text they are -- a prompt saved while they existed still renders."""
+    assert list(pr.iter_references("{{audience}} {{upstream_instructions}}")) == []
+    assert not pr.has_references("{{audience}} {{upstream_instructions}}")
 
 
 def test_whitespace_inside_the_braces_is_tolerated() -> None:

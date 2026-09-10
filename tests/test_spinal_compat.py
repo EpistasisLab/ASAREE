@@ -302,31 +302,29 @@ def test_the_spinal_experiment_resolves_to_the_legacy_contract(graph: dict[str, 
 
 def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, Any]) -> None:
     """The counterfactual, asserted against the real graph: what the current
-    contract does is not cosmetic on this pipeline -- it removes every handoff
-    in it. Had it shipped as an edit to the frozen format rather than as a
-    second one, every published number would have come from a different prompt.
+    contract does is not cosmetic on this pipeline. Had it shipped as an edit to
+    the frozen format rather than as a second contract, every published number
+    would have come from a different prompt.
 
-    The direction of the change is worth being blunt about. These prompts were
-    written when the upstream block was automatic, so none of them contains a
-    reference; under the current contract, where an edge grants availability and
-    only a reference grants use, SF-FTE is handed nothing at all. Reproducing
-    this pipeline on the current contract is therefore a prompt-rewriting job,
-    not a version bump -- which is exactly why the legacy contract is frozen
-    rather than migrated.
+    Both contracts hand SF-FTE the DC gate's output unasked -- drawing the edge
+    is the request under either one. They disagree on everything about how: the
+    legacy block is one heading and a raw ``[node-id]:`` prefix, the current one
+    labels the sender by its canvas name and fences the text so the agent's own
+    instructions cannot be confused with its predecessor's words. The current
+    contract also states the shape SF-FTE's ``output_contract`` declares, which
+    is the half of that feature the legacy format never had.
 
     Stated as a claim about *scope* rather than as a literal transformation of
     one into the other. It began life as
     ``legacy.replace(f"[{node_id}]", f"[{label}]") == current``, which was true
     while the current contract was the legacy one with the labels swapped and
-    stopped being true the moment it grew a fence and a framing sentence.
+    stopped being true the moment it grew a fence.
 
-    Two blocks now differ, and both are subtracted below: the upstream block
-    (present only on legacy) and the output-shape block (present only on
-    current -- SF-FTE declares an ``output_contract``, and stating its fields to
-    the agent is the half of that feature which never existed). Everything else,
-    including the Dataset and Script cues, is tool-usage instruction the two
+    So three blocks are subtracted: each contract's own upstream block, and the
+    output-shape block that only the current one emits. Everything left --
+    including the Dataset and Script cues -- is tool-usage instruction the two
     contracts share. Subtracting from *both* sides is the honest form of the
-    claim: the current contract does not only remove things.
+    claim: the current contract does not only add things.
     """
 
     def _without(text: str, block: str) -> str:
@@ -347,11 +345,14 @@ def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, An
     legacy = _prompt(graph, fte_id, node_runs=node_runs)
     current = _prompt(graph, fte_id, node_runs=node_runs, prompt_contract_version=CURRENT_PROMPT_CONTRACT)
     assert legacy != current
+    # Both deliver it; neither delivers it the same way.
     assert "DC accepted v1_dc." in legacy
-    assert "DC accepted v1_dc." not in current
+    assert "DC accepted v1_dc." in current
     legacy_block = pe._upstream_context_legacy(graph, fte_id, node_runs)
+    current_block = pe._upstream_context(graph, fte_id, node_runs)
+    assert legacy_block != current_block
     shape_block = pe._output_shape_block(pe._resolve_output_contract(graph, fte_id))
-    assert _without(legacy, legacy_block) == _without(current, shape_block)
+    assert _without(legacy, legacy_block) == _without(_without(current, current_block), shape_block)
 
 
 # The node the goldens below are captured on, and the run state they see.
@@ -370,26 +371,12 @@ _GOLDEN_NAMES = {LEGACY_PROMPT_CONTRACT: "legacy", CURRENT_PROMPT_CONTRACT: "cur
 
 def _assert_golden(graph: dict[str, Any], contract: int) -> None:
     golden = _GOLDEN_PROMPTS / f"spinal_fte_{_GOLDEN_NAMES[contract]}.txt"
-    actual = _prompt(
-        graph,
-        _GOLDEN_NODE_ID,
-        node_runs=_GOLDEN_NODE_RUNS,
-        prompt_contract_version=contract,
-        # What ``run_protocol``'s walk passes, so the goldens are what a real
-        # run gives SF-FTE rather than what a bare builder call produces. The
-        # step comes from the experiment's own declaration rather than a literal
-        # ``None``, so that if this experiment's strategy were ever read
-        # differently the golden would move with it: ``critic_gate`` yields no
-        # numbering today, since only ``sequential`` gets "step N of M".
-        # Passed for *both* contracts on purpose, and dropped by both goldens:
-        # the legacy format refuses it outright, and the current one only emits
-        # it where a prompt spells `{{audience}}`, which none of these do. A
-        # call site cannot know which contract it is running under, so passing
-        # it unconditionally is the correct thing for the walk to do.
-        audience=pe._node_audience(
-            graph, _GOLDEN_NODE_ID, step=pe._chain_steps(graph, _SPINAL_DESIGN_SPEC).get(_GOLDEN_NODE_ID)
-        ),
-    )
+    # Exactly what ``run_protocol``'s walk passes, so the goldens are what a
+    # real run gives SF-FTE rather than what a bare builder call produces. The
+    # walk used to also pass an audience sentence and an ``upstream_kind``,
+    # both derived from the topology; both are withdrawn, so there is nothing
+    # left here for the walk to add.
+    actual = _prompt(graph, _GOLDEN_NODE_ID, node_runs=_GOLDEN_NODE_RUNS, prompt_contract_version=contract)
     assert actual == golden.read_text()
 
 

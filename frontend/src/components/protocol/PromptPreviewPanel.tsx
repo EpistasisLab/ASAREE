@@ -106,7 +106,7 @@ export function PromptPreviewPanel({
       {!open ? (
         <p className="text-xs text-muted-foreground">
           The exact user message, assembled the way a run assembles it — your prompt with every reference resolved,
-          plus the envelope, dataset and script cues, and the audience line.
+          plus whatever the incoming edges deliver, and the dataset and script cues.
         </p>
       ) : loading && !preview ? (
         <p className="text-xs text-muted-foreground">Assembling…</p>

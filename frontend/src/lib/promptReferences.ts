@@ -16,8 +16,14 @@ import { isMainEdge } from '@/lib/coordinationStrategy'
  */
 
 /** Mirrors `prompt_references._BARE_TOKENS`. Not translated in either
- *  direction: they are already words rather than ids. */
-const BARE_TOKENS = new Set(['previous', 'audience', 'upstream_instructions'])
+ *  direction: it is already a word rather than an id.
+ *
+ *  A set of one, kept as a set because the checks below read as "is this a
+ *  bare token" and because that is the right shape for the concept even at
+ *  n=1. It used to hold `audience` and `upstream_instructions` as well; both
+ *  resolved to platform-composed sentences rather than to data, and are
+ *  withdrawn. */
+const BARE_TOKENS = new Set(['previous'])
 
 export const PREVIOUS_TOKEN = '{{previous}}'
 
@@ -286,16 +292,22 @@ export function usesPreviousToken(stored: string): boolean {
   return PREVIOUS_RE.test(stored ?? '')
 }
 
-/** Which of a node's senders its *stored* prompt actually pulls in.
+/** Which of a node's senders its *stored* prompt places itself.
  *
- * After Phase 2 an edge grants availability and a reference grants use, so a
- * sender missing from this set is wired up and still sends nothing. Naming them
- * is the only way that stops being invisible -- the edge on the canvas looks
- * identical either way.
+ * Every sender's output arrives either way -- the edge is the request. What
+ * this decides is *where*: a sender named in the prompt is rendered inline at
+ * the spot the author chose, and its automatic block is dropped so it is not
+ * delivered twice. Mirrors `_hand_placed_sender_ids`.
  *
  * `{{previous}}` counts for every sender at once, because that is what it
- * expands to. A field reference counts as a reference to its node: `{{node:a.x}}`
- * pulls something in from `a`, so the sender is not un-referenced.
+ * expands to.
+ *
+ * A field reference counts too, unlike on the backend. That is not a drift:
+ * the backend question is "may I suppress the whole block", and `{{node:a.x}}`
+ * must not, because one extracted number is not the answer it came from. The
+ * question here is "does this prompt mention this sender at all", asked so the
+ * readout can offer the sender's declared field names -- and a prompt that
+ * already uses one of them plainly does.
  */
 export function referencedSenderIds(stored: string, receives: ReferenceTarget[]): Set<string> {
   const text = stored ?? ''

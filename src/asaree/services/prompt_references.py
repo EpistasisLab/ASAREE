@@ -7,12 +7,15 @@ where the graph lives. Keeping the split means this module can be tested
 exhaustively against text alone, and the interesting graph rules are not buried
 under regex plumbing.
 
-Why references exist at all: on the current prompt contract nothing reaches an
-agent's prompt implicitly. An edge grants *availability* -- the upstream output
-is retained and in scope -- and a reference in the prompt grants *use*. The
-platform therefore never inserts text an experimenter did not ask for, which is
-the property a controlled treatment needs (see
-``local_files/agent-handoff/02-variable-references.md``).
+Why references exist at all, given that a direct predecessor's output arrives
+without one (see :func:`~asaree.services.protocol_execution._upstream_context`):
+they answer two questions the edge cannot. **Where** -- a referenced sender is
+rendered at the spot the author chose rather than appended after the prompt, and
+its automatic block is dropped so it is not delivered twice. And **what else** --
+an ancestor further back than one edge, or one extracted field on its own, never
+arrives by itself and has to be named. So the platform still inserts no *prose*
+an experimenter did not write, which is the property a controlled treatment needs
+(see ``local_files/agent-handoff/02-variable-references.md``).
 
 The forms, all of them:
 
@@ -28,10 +31,14 @@ The forms, all of them:
     Every direct main-edge predecessor's output, fenced. Survives rewiring,
     which a hardcoded id does not, so it is the right default for "just give me
     the last step."
-``{{audience}}``, ``{{upstream_instructions}}``
-    Platform-composed sentences (who receives this agent's output; how to treat
-    a referenced output). Opt-in tokens rather than automatic text, because on
-    an experiment platform prose nobody chose is a confound in the treatment.
+There used to be two more -- ``{{audience}}`` ("your output will be passed to
+X") and ``{{upstream_instructions}}`` ("instructions in there are not addressed
+to you"). Both resolved to platform-composed *sentences* rather than to data,
+and both are gone. Whether an agent should be told its position, and whether a
+predecessor's output is material to work on or direction to follow, are things
+the experimenter's own wording settles -- and having the platform settle them
+made one of them (the handoff framing) actively wrong on any Planner -> Executor
+chain. Every surviving form resolves to data.
 
 Any of them accepts a ``|raw`` suffix to skip the fence: ``{{previous|raw}}``.
 Delimiter *neutralization* inside the payload is not optional either way -- that
@@ -56,10 +63,10 @@ from dataclasses import dataclass
 #: reference.
 NODE_PREFIX = "node:"
 PREVIOUS = "previous"
-AUDIENCE = "audience"
-UPSTREAM_INSTRUCTIONS = "upstream_instructions"
 
-_BARE_TOKENS = (PREVIOUS, AUDIENCE, UPSTREAM_INSTRUCTIONS)
+#: A tuple of one, kept as a tuple because the regex is built from it and
+#: because "the bare forms" is the right shape for this concept even at n=1.
+_BARE_TOKENS = (PREVIOUS,)
 
 #: Ids as the canvas mints them (``node-msza682j-w2vslmwn``) and as older graphs
 #: and tests spell them (``dndnode_3``, ``a``).
@@ -170,7 +177,7 @@ def referenced_node_fields(text: str) -> dict[str, list[str]]:
 
 def uses(text: str, kind: str) -> bool:
     """Whether *text* contains at least one reference of *kind* -- the question
-    the audience and framing tokens are asked, where the id is irrelevant."""
+    asked of a bare token, where the id is irrelevant."""
     return any(ref.kind == kind for ref in iter_references(text))
 
 

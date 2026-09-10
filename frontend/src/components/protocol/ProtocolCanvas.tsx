@@ -19,10 +19,9 @@ import '@xyflow/react/dist/style.css'
 import { Lock, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
-import { CONNECTOR_HANDLES, isMainEdge } from '@/lib/coordinationStrategy'
+import { CONNECTOR_HANDLES } from '@/lib/coordinationStrategy'
 import { newNodeId } from '@/lib/nodeId'
-import { LEGACY_PROMPT_CONTRACT, promptContractVersion } from '@/lib/promptContract'
-import { handoffPeers, promptReferenceScope, referencedSenderIds, seedPromptText } from '@/lib/promptReferences'
+import { handoffPeers, promptReferenceScope } from '@/lib/promptReferences'
 import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import {
@@ -906,41 +905,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     mainEdgeSlots,
   ])
 
-  // Which main edges carry nothing.
-  //
-  // Since an edge grants availability and a reference grants use, a wired
-  // handoff that no reference asks for looks exactly like one that works. This
-  // is the only place a user sees the difference without opening the receiving
-  // agent, so it belongs on the canvas rather than only in the inspector.
-  //
-  // Skipped entirely on the legacy contract: there, every predecessor's output
-  // is handed over whether the prompt asks for it or not, so no edge carries
-  // nothing and the marker would be a lie.
-  // Resolved outside the memo so it depends on the version number rather than
-  // on design_spec's object identity, which changes on every refetch.
-  const promptContract = promptContractVersion(experimentQuery.data?.design_spec)
-  const edgesWithFlow = useMemo((): Edge[] => {
-    if (promptContract === LEGACY_PROMPT_CONTRACT) return edges
-    const protocolNodes = nodes as unknown as ProtocolNode[]
-    const protocolEdges = edges as unknown as ProtocolEdge[]
-    const carriesNothing = new Set<string>()
-    for (const node of nodes) {
-      // Only an agent has a prompt to reference anything from; an edge into a
-      // Critic Gate or a Script is plumbing that passes output along on its
-      // own terms.
-      if (node.type !== 'agent') continue
-      const peers = handoffPeers(protocolNodes, protocolEdges, node.id)
-      if (peers.receives.length === 0) continue
-      const used = referencedSenderIds(seedPromptText(node as unknown as ProtocolNode), peers.receives)
-      for (const edge of edges) {
-        if (edge.target !== node.id || !isMainEdge(edge as unknown as ProtocolEdge)) continue
-        if (!used.has(edge.source)) carriesNothing.add(edge.id)
-      }
-    }
-    if (carriesNothing.size === 0) return edges
-    return edges.map((e) => (carriesNothing.has(e.id) ? { ...e, data: { ...e.data, carriesNoReference: true } } : e))
-  }, [nodes, edges, promptContract])
-
   // Same protection, one layer up -- the architectural_pattern EDGE itself
   // must not be removable on its own (InteractEdge never renders a hover
   // toolbar for one, so the only way a user can attempt this is selecting
@@ -1724,7 +1688,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         <div ref={paneRef} className="relative flex-1">
           <ReactFlow
             nodes={nodesWithRunStatus}
-            edges={edgesWithFlow}
+            edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}

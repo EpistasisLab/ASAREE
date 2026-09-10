@@ -219,9 +219,9 @@ export function AgentNodeInspector({
         <div className="min-w-0 shrink-0 space-y-3 overflow-y-auto pr-4" style={{ width: inputPane.width }}>
           <p className="text-sm font-semibold">Input</p>
           {/* First, because it is the context everything below is read
-              against: an edge grants availability and a reference grants use,
-              so "what am I even given?" has to be answerable before the
-              assembled prompt underneath means anything. */}
+              against: every incoming edge delivers, so "what am I even given?"
+              has to be answerable before the assembled prompt underneath means
+              anything. */}
           <ReceivesSummary peers={handoffPeers} prompt={seedPromptText(node)} />
           <PromptPreviewPanel
             // The panel holds the last text it assembled; on a node switch

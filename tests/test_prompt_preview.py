@@ -149,37 +149,42 @@ async def test_the_placeholder_is_fenced_the_way_a_real_output_would_be() -> Non
 async def test_a_reach_back_reference_previews_rather_than_leaving_a_gap() -> None:
     """Every ancestor gets a placeholder, not just the direct predecessor --
     the preview offers what the picker offers, so a reference the picker
-    accepted never previews as though it resolved to nothing."""
+    accepted never previews as though it resolved to nothing.
+
+    B's block is here too, and unreferenced: it is what the edge into C will
+    deliver on its own, and a preview that omitted it would understate the
+    prompt.
+    """
     graph = _chain("First.", "Second.", "Third, recalling {{node:a|raw}}.")
     preview = await preview_node_prompt(graph, "c", owner_id=OWNER_ID, design_spec=CURRENT)
-    assert preview == 'Third, recalling <output of "Agent A">.'
+    assert preview.startswith('Third, recalling <output of "Agent A">.')
+    assert '[Agent B]' in preview
 
 
-async def test_an_unreferenced_upstream_previews_as_absent_because_it_is() -> None:
-    """The whole point of Phase 2, seen at design time: B is wired to A and
-    still gets nothing, and the preview is where that stops being a surprise."""
+async def test_an_unwired_predecessor_previews_as_the_block_it_will_deliver() -> None:
+    """The design-time half of the automatic block: B references nothing, and
+    the preview still shows A's output arriving, because the edge is the
+    request. This is where "I wired it, does anything actually flow?" gets
+    answered before a cell is spent on it."""
     graph = _chain("Draft it.", "Write a poem.")
     preview = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec=CURRENT)
-    assert preview == "Write a poem."
-    assert "Agent A" not in preview
+    assert preview == _build_user_input(
+        graph["nodes"][1], graph, _placeholders(graph, "a"), prompt_contract_version=2
+    )
+    assert '[Agent A]' in preview
+    assert '<output of "Agent A">' in preview
 
 
 async def test_the_legacy_contract_previews_its_own_format() -> None:
     """A pinned experiment must preview the prompt it will actually run, not
-    the one the current contract would produce."""
+    the one the current contract would produce. Both contracts deliver A's
+    output unasked; they disagree on how it is labelled and fenced."""
     graph = _chain("Draft it.", "Polish it.")
     legacy = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec={"prompt_contract_version": 1})
     current = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec=CURRENT)
-    # Legacy hands every predecessor's output over whether or not it was asked
-    # for; the current contract hands over only what the prompt references.
-    assert '<output of "Agent A">' in legacy
-    assert current == "Polish it."
-
-
-async def test_the_audience_token_previews_the_real_successor() -> None:
-    graph = _chain("Draft this, then {{audience}}", "Polish it.")
-    preview = await preview_node_prompt(graph, "a", owner_id=OWNER_ID, design_spec=CURRENT)
-    assert "Agent B" in preview
+    assert legacy == 'Polish it.\n\nUpstream context:\n[a]: <output of "Agent A">'
+    assert legacy != current
+    assert '[Agent A]' in current
 
 
 # ----------------------------------------------------------------------

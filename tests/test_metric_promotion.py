@@ -121,6 +121,29 @@ def test_a_nameless_declaration_is_skipped_rather_than_crashing() -> None:
     assert mp.align_to_declared_metrics({"accuracy": 0.81}, spec) == {"Accuracy": 0.81}
 
 
+def test_a_catalog_key_states_the_mapping_a_casefold_could_never_reach() -> None:
+    # Picking the "ROC AUC" catalog entry is the experimenter writing the
+    # mapping down, which is exactly what test_a_different_name_is_not_guessed_at
+    # says a bare name cannot do.
+    spec = {"metrics": [{"name": "ROC AUC", "catalogKey": "roc_auc"}]}
+    assert mp.align_to_declared_metrics({"roc_auc": 0.9}, spec) == {"ROC AUC": 0.9}
+
+
+def test_a_catalog_key_wins_over_another_metrics_cased_name() -> None:
+    spec = {
+        "metrics": [
+            {"name": "F1", "catalogKey": "average_precision"},  # deliberately crossed
+            {"name": "f1"},
+        ]
+    }
+    assert mp.align_to_declared_metrics({"average_precision": 0.4}, spec) == {"F1": 0.4}
+
+
+def test_an_unrecognized_catalog_key_falls_back_to_the_name() -> None:
+    spec = {"metrics": [{"name": "Accuracy", "catalogKey": "not_a_real_key"}]}
+    assert mp.align_to_declared_metrics({"accuracy": 0.81}, spec) == {"Accuracy": 0.81}
+
+
 # --- find_score_tool_result ---------------------------------------------------
 
 

@@ -24,6 +24,12 @@ export interface MetricCatalogEntry {
   contextEligible: boolean
 }
 
+// Mirrors `services/metrics.py`'s METRIC_CATALOG -- keep the two in step,
+// including the reason recorded there for why the `run_model_script` scores
+// (accuracy, roc_auc, ...) are NOT here despite being just as real: they only
+// exist for a binary target, so listing them would advertise columns that stay
+// empty on a multiclass experiment.
+//
 // These are telemetry fields that the run-results service really records.
 // There are intentionally no aspirational scoring metrics here: score
 // promotion is a separate, controlled post-run operation.

@@ -77,37 +77,55 @@ def extract_score_metrics(tool_result: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def align_to_declared_metrics(metrics: dict[str, Any], design_spec: dict[str, Any] | None) -> dict[str, Any]:
-    """Re-spell promoted keys as the experiment's declared metric names, when
-    the two differ only by case.
+    """Re-spell promoted keys as the experiment's declared metric names.
 
     ``run_model_script`` reports ``accuracy``; an experimenter declaring that
     outcome writes ``Accuracy``, because a metric name is a label they read,
-    not a telemetry key. A declared *custom* metric is looked up by its exact
-    name everywhere downstream (``experiment_run_results._declared_metric_types``
-    and the frontend's inferred key list both), so without this the Results
-    table shows an empty ``Accuracy`` column beside a populated ``accuracy``
-    one -- the same number, twice, once blank.
+    not a telemetry key. A declared non-runtime metric is looked up by its
+    exact name everywhere downstream
+    (``experiment_run_results._declared_metric_types`` and the frontend's
+    inferred key list both), so without this the Results table shows an empty
+    ``Accuracy`` column beside a populated ``accuracy`` one -- the same
+    number, twice, once blank.
 
     Renaming here rather than at each reader is what keeps that from becoming
     a rule every consumer has to remember: the stored ``metric_values`` end up
     in the declared spelling, and Results, the CSV export and
-    ``factorial_analysis`` all keep reading a plain dict. Only case is
-    reconciled -- ``roc_auc`` does not become a metric declared as "AUC",
-    because that is a mapping the experimenter has to state, not one a
-    casefold can infer. An exact key already present wins, so a design
-    declaring both spellings loses nothing.
+    ``factorial_analysis`` all keep reading a plain dict.
+
+    Two ways a declaration claims an extraction key, in order:
+
+    * ``catalogKey`` -- an exact, stated mapping, which is how a declaration
+      can carry a display name no casefold could reach ("ROC AUC" for
+      ``roc_auc``). Today only a hand-written SDK/notebook ``design_spec``
+      sets one of these to a score key: the GUI's metric picker offers
+      ``services.metrics.METRIC_CATALOG``, which is runtime telemetry only
+      (see that module's own note on why the ``run_model_script`` scores are
+      not in it yet). This is the hook those entries will use when they land.
+    * casefold of ``name`` -- the fallback, and what the GUI path actually
+      relies on. Only case is reconciled: a metric declared "AUC" does not
+      capture ``roc_auc``, because that is a mapping the experimenter has to
+      state, not one a casefold can infer.
+
+    An exact key already present wins, so a design declaring both spellings
+    loses nothing.
     """
     declared = (design_spec or {}).get("metrics")
     if not isinstance(declared, list) or not metrics:
         return metrics
-    by_folded = {
-        metric["name"].strip().casefold(): metric["name"].strip()
-        for metric in declared
-        if isinstance(metric, dict) and isinstance(metric.get("name"), str) and metric["name"].strip()
-    }
+    by_folded: dict[str, str] = {}
+    by_catalog_key: dict[str, str] = {}
+    for metric in declared:
+        if not isinstance(metric, dict) or not isinstance(metric.get("name"), str) or not metric["name"].strip():
+            continue
+        name = metric["name"].strip()
+        by_folded.setdefault(name.casefold(), name)
+        catalog_key = metric.get("catalogKey")
+        if isinstance(catalog_key, str) and catalog_key:
+            by_catalog_key.setdefault(catalog_key, name)
     aligned: dict[str, Any] = {}
     for key, value in metrics.items():
-        name = by_folded.get(key.casefold(), key)
+        name = by_catalog_key.get(key) or by_folded.get(key.casefold(), key)
         aligned[key if name in metrics and name != key else name] = value
     return aligned
 

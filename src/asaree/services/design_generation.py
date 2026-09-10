@@ -76,7 +76,21 @@ def generate_design(factors: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # every level of a dataset factor would slug to "true" and the whole design
 # would collapse onto one cell label. ``dataset_id`` is deliberately absent --
 # it's a uuid, unreadable in a label, and the name already identifies the row.
-_DICT_SLUG_PRIORITY_KEYS = ("model", "provider", "execution_pattern", "server_name", "dataset_name", "enabled")
+#
+# Plain ``name`` is last of the identifying keys because it's the most generic:
+# it exists to name a Script node's config (``{name, language, code}``), whose
+# levels would otherwise all fall through to ``cfg-<hash>`` and give a cell
+# label that says nothing about the treatment. Listing it after the specific
+# keys means a config carrying both keeps the more precise one.
+_DICT_SLUG_PRIORITY_KEYS = (
+    "model",
+    "provider",
+    "execution_pattern",
+    "server_name",
+    "dataset_name",
+    "name",
+    "enabled",
+)
 
 # How many items of a list-valued level (an MCP node's ``tool_names``
 # allow-list, bound as a "Tools allowed" factor) name the slug before it's

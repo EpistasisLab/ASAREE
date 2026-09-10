@@ -8,25 +8,21 @@ for publication, so its behavior is a **published result**, not an
 implementation detail: a reviewer re-running it must get what the paper says.
 
 Every assertion here therefore pins something a *later* change would otherwise
-alter silently. In particular ``test_the_legacy_prompt_is_pinned_byte_for_byte``
+alter silently. In particular ``test_the_assembled_prompt_matches_its_snapshot``
 pins the assembled prompt text, because the prompt is the one input to a run
 that no revision pins (``ProtocolRun`` already pins ``design_revision_id`` and
-``protocol_revision_id``) -- so an obviously-good improvement to
-``_build_user_input`` would change published numbers with nothing failing to
-stop it.
+``protocol_revision_id``).
 
-**Rule for changing a golden value here:** don't -- with one stated exception.
-The legacy golden is a **contract**: it is the text that produced the paper's
-numbers, and editing it to make a test pass silently retracts the
-reproducibility claim. A change that needs the assembled prompt to move belongs
-in the *current* contract, which is a separate format the spinal experiment
-never selects.
+**The prompt golden is a snapshot, not a contract.** The published numbers came
+from the prompt format as it stood at submission; that text survives in the
+stored results and in git history, not at runtime, and a rerun today assembles
+the current format. So the golden is expected to move as the handoff design is
+built out -- it exists so those changes arrive as a reviewable diff instead of
+silently. Updating it is legitimate. Updating it without reading it is not.
 
-The current golden is the exception, and it is a **snapshot**, not a contract.
-Nothing published runs under it, so it is expected to change while the handoff
-design is built out; it exists so those changes arrive as a reviewable diff
-instead of silently. Updating it is legitimate. Updating it without reading it
-is not.
+Everything else here -- the graph shape, the gate pairings, the dataset
+resolution, the ``goal`` fallback, the seeded-dataset block -- is still a
+contract, and a failure there is a regression, not a golden to refresh.
 """
 
 from __future__ import annotations
@@ -39,11 +35,6 @@ from typing import Any
 import pytest
 
 from asaree.services import protocol_execution as pe
-from asaree.services.prompt_contract import (
-    CURRENT_PROMPT_CONTRACT,
-    LEGACY_PROMPT_CONTRACT,
-    prompt_contract_version,
-)
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
     find_gated_pairs,
@@ -275,149 +266,53 @@ def test_the_seeded_dataset_block_is_unchanged(graph: dict[str, Any]) -> None:
     ) in text
 
 
-def test_the_upstream_context_block_is_unchanged(graph: dict[str, Any]) -> None:
-    """**The single most important assertion in this file.**
+def test_an_upstream_agents_output_reaches_the_one_it_feeds(graph: dict[str, Any]) -> None:
+    """The handoff itself, on the real graph.
 
-    ``[{node_id}]: {output}`` under a bare "Upstream context:" header is how
-    every handoff in the published pipeline was framed. The node id is opaque
-    and naming the sending agent instead is plainly better -- which is exactly
-    why this is pinned: that improvement had to arrive as the *current*
-    contract with the spinal experiment left on the legacy one, not as an edit
-    to this format.
+    SF-FTE's prompt has to carry the DC gate's output without SF-FTE asking for
+    it: the edge is the request. How that block is *framed* has moved (the raw
+    ``[node-id]:`` prefix under an "Upstream context:" heading became a canvas
+    label and a fence) and the golden below pins the current framing -- but the
+    output arriving at all is not a formatting choice, and this pipeline does
+    nothing if it stops.
     """
     dc_gate_id = _AGENTS[0][2]  # Critic (DC) -- FTE's actual upstream, not SF-DC
     fte_id = _AGENTS[1][0]
     node_runs = {dc_gate_id: {"status": "completed", "output_text": "DC accepted v1_dc."}}
     text = _prompt(graph, fte_id, node_runs=node_runs)
-    assert f"Upstream context:\n[{dc_gate_id}]: DC accepted v1_dc." in text
+    assert "DC accepted v1_dc." in text
+    assert pe._upstream_context(graph, fte_id, node_runs) in text
 
 
-def test_the_spinal_experiment_resolves_to_the_legacy_contract(graph: dict[str, Any]) -> None:
-    """The pin itself. The spinal experiment's ``design_spec`` predates
-    ``prompt_contract_version``, so what actually keeps it on the frozen format
-    is the absent key resolving to it -- not a value anybody wrote."""
-    assert prompt_contract_version(None) == LEGACY_PROMPT_CONTRACT
-    assert prompt_contract_version({"factors": [], "replicates": 3}) == LEGACY_PROMPT_CONTRACT
-
-
-def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, Any]) -> None:
-    """The counterfactual, asserted against the real graph: what the current
-    contract does is not cosmetic on this pipeline. Had it shipped as an edit to
-    the frozen format rather than as a second contract, every published number
-    would have come from a different prompt.
-
-    Both contracts hand SF-FTE the DC gate's output unasked -- drawing the edge
-    is the request under either one. They disagree on everything about how: the
-    legacy block is one heading and a raw ``[node-id]:`` prefix, the current one
-    labels the sender by its canvas name and fences the text so the agent's own
-    instructions cannot be confused with its predecessor's words. The current
-    contract also states the shape SF-FTE's ``output_contract`` declares, which
-    is the half of that feature the legacy format never had.
-
-    Stated as a claim about *scope* rather than as a literal transformation of
-    one into the other. It began life as
-    ``legacy.replace(f"[{node_id}]", f"[{label}]") == current``, which was true
-    while the current contract was the legacy one with the labels swapped and
-    stopped being true the moment it grew a fence.
-
-    So three blocks are subtracted: each contract's own upstream block, and the
-    output-shape block that only the current one emits. Everything left --
-    including the Dataset and Script cues -- is tool-usage instruction the two
-    contracts share. Subtracting from *both* sides is the honest form of the
-    claim: the current contract does not only add things.
-    """
-
-    def _without(text: str, block: str) -> str:
-        # Removed as a contiguous substring, with the "\n\n" that joins it to
-        # what came before. This used to drop whole "\n\n"-delimited parts,
-        # which quietly stopped working once the shape block grew its own blank
-        # line (the field list, then the JSON appendix): a multi-paragraph block
-        # is no longer one part, so nothing matched and the subtraction became a
-        # no-op that failed as a mismatch rather than as the missing-block
-        # assertion above.
-        assert block and block in text
-        joined = f"\n\n{block}"
-        return text.replace(joined, "", 1) if joined in text else text.replace(block, "", 1)
-
-    dc_gate_id = _AGENTS[0][2]
-    fte_id = _AGENTS[1][0]
-    node_runs = {dc_gate_id: {"status": "completed", "output_text": "DC accepted v1_dc."}}
-    legacy = _prompt(graph, fte_id, node_runs=node_runs)
-    current = _prompt(graph, fte_id, node_runs=node_runs, prompt_contract_version=CURRENT_PROMPT_CONTRACT)
-    assert legacy != current
-    # Both deliver it; neither delivers it the same way.
-    assert "DC accepted v1_dc." in legacy
-    assert "DC accepted v1_dc." in current
-    legacy_block = pe._upstream_context_legacy(graph, fte_id, node_runs)
-    current_block = pe._upstream_context(graph, fte_id, node_runs)
-    assert legacy_block != current_block
-    shape_block = pe._output_shape_block(pe._resolve_output_contract(graph, fte_id))
-    assert _without(legacy, legacy_block) == _without(_without(current, current_block), shape_block)
-
-
-# The node the goldens below are captured on, and the run state they see.
-# SF-FTE exercises every contract-sensitive part of the assembly at once: a
-# ``goal`` fallback seed, a real upstream block (its upstream is the DC gate,
-# which is precisely where the two contracts disagree), and a wired Dataset
-# connector.
+# The node the golden below is captured on, and the run state it sees. SF-FTE
+# exercises every part of the assembly at once: a ``goal`` fallback seed, a real
+# upstream block (its upstream is the DC gate), and a wired Dataset connector.
 _GOLDEN_NODE_ID = _AGENTS[1][0]
 _GOLDEN_NODE_RUNS = {_AGENTS[0][2]: {"status": "completed", "output_text": "DC accepted v1_dc."}}
 
-#: Stored contract -> the golden file holding its assembled prompt. Kept beside
-#: the builder registry rather than derived from it so that adding a contract
-#: without deciding what its golden is called fails loudly.
-_GOLDEN_NAMES = {LEGACY_PROMPT_CONTRACT: "legacy", CURRENT_PROMPT_CONTRACT: "current"}
-
-
-def _assert_golden(graph: dict[str, Any], contract: int) -> None:
-    golden = _GOLDEN_PROMPTS / f"spinal_fte_{_GOLDEN_NAMES[contract]}.txt"
-    # Exactly what ``run_protocol``'s walk passes, so the goldens are what a
-    # real run gives SF-FTE rather than what a bare builder call produces. The
-    # walk used to also pass an audience sentence and an ``upstream_kind``,
-    # both derived from the topology; both are withdrawn, so there is nothing
-    # left here for the walk to add.
-    actual = _prompt(graph, _GOLDEN_NODE_ID, node_runs=_GOLDEN_NODE_RUNS, prompt_contract_version=contract)
+def _assert_golden(graph: dict[str, Any]) -> None:
+    golden = _GOLDEN_PROMPTS / "spinal_fte.txt"
+    # Exactly what ``run_protocol``'s walk passes, so the golden is what a real
+    # run gives SF-FTE rather than what a bare builder call produces. The walk
+    # used to also pass an audience sentence and an ``upstream_kind``, both
+    # derived from the topology; both are withdrawn, so there is nothing left
+    # here for the walk to add.
+    actual = _prompt(graph, _GOLDEN_NODE_ID, node_runs=_GOLDEN_NODE_RUNS)
     assert actual == golden.read_text()
 
 
-def test_the_legacy_prompt_is_pinned_byte_for_byte(graph: dict[str, Any]) -> None:
-    """The reproducibility guarantee, and the reason this file exists.
+def test_the_assembled_prompt_matches_its_snapshot(graph: dict[str, Any]) -> None:
+    """A change-detector on the whole assembled prompt for a real node.
 
-    This is a **contract**: the exact text the published pipeline's agents were
-    given. If it fails, either the assembly changed under the frozen format --
-    which is the bug this whole module exists to catch -- or somebody edited the
-    golden, which retracts the paper's reproducibility claim. Neither is fixed
-    by updating this file.
-    """
-    _assert_golden(graph, LEGACY_PROMPT_CONTRACT)
-
-
-def test_the_current_prompt_matches_its_recorded_snapshot(graph: dict[str, Any]) -> None:
-    """A change-detector, **not** a contract -- the one place in this file where
-    updating the golden is a legitimate move.
-
-    Nothing published runs under the current contract, so it is free to evolve
-    while the handoff design is built out. What it is not free to do is evolve
-    *unnoticed*: this pins it so an intended prompt change arrives as a visible
-    diff in review rather than as a silent behavior shift nobody looked at.
+    The prompt is the one input to a run that no revision pins, so an
+    obviously-good improvement to ``_build_user_input`` would otherwise move
+    every future run's text with nothing failing to stop it. This pins it so an
+    intended change arrives as a visible diff in review rather than as a silent
+    behavior shift nobody looked at.
 
     Updating it is fine. Updating it without reading it is not.
     """
-    _assert_golden(graph, CURRENT_PROMPT_CONTRACT)
-
-
-def test_every_registered_contract_has_a_golden() -> None:
-    """What stops a third contract from arriving unpinned.
-
-    Restoring a real version ladder at release means adding entries to
-    ``_UPSTREAM_CONTEXT_BUILDERS``; each one needs a golden and a test that says
-    which kind it is. Asserting both directions also catches a golden left
-    behind for a contract that was removed, which reads like coverage that is
-    not there.
-    """
-    assert set(_GOLDEN_NAMES) == set(pe._UPSTREAM_CONTEXT_BUILDERS)
-    on_disk = {p.stem.rsplit("_", 1)[1] for p in _GOLDEN_PROMPTS.glob("spinal_fte_*.txt")}
-    assert on_disk == set(_GOLDEN_NAMES.values())
+    _assert_golden(graph)
 
 
 def test_an_upstream_node_with_no_output_contributes_nothing(graph: dict[str, Any]) -> None:
@@ -426,7 +321,8 @@ def test_an_upstream_node_with_no_output_contributes_nothing(graph: dict[str, An
     dc_gate_id = _AGENTS[0][2]
     fte_id = _AGENTS[1][0]
     text = _prompt(graph, fte_id, node_runs={dc_gate_id: {"status": "completed", "output_text": None}})
-    assert "Upstream context:" not in text
+    assert dc_gate_id not in text
+    assert pe._upstream_context(graph, fte_id, {dc_gate_id: {"status": "completed", "output_text": None}}) == ""
 
 
 def test_a_deactivated_node_passes_its_input_through_verbatim(graph: dict[str, Any]) -> None:

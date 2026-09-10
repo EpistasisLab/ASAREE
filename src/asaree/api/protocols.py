@@ -19,7 +19,6 @@ from pydantic import BaseModel
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
-from asaree.services.prompt_contract import prompt_contract_version
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
     is_conversation_strategy,
@@ -166,11 +165,6 @@ class PromptPreviewRequest(BaseModel):
 
 class PromptPreviewResponse(BaseModel):
     text: str
-    # Which prompt contract assembled it. Stated because the two contracts
-    # produce visibly different prompts and an experiment is pinned to one at
-    # creation -- without this, "why does my prompt look different" has no
-    # answer on screen.
-    contract_version: int
 
 
 async def _get_owned_protocol(db: DbSession, protocol_id: uuid.UUID, user: CurrentUser) -> Any:
@@ -284,7 +278,7 @@ async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, d
         design_spec = experiment.design_spec if experiment is not None else None
         validate_coordination_strategy(design_spec, graph=protocol.graph)
         validate_stage_plan(design_spec)
-        validate_prompt_references(design_spec, graph=protocol.graph)
+        validate_prompt_references(graph=protocol.graph)
         topological_order(protocol.graph, require_acyclic=not is_conversation_strategy(design_spec))
         validate_factor_bindings(design_spec, protocol.graph)
     except (ProtocolValidationError, ValueError) as exc:
@@ -337,7 +331,7 @@ async def create_protocol_run_endpoint(
             design_spec = experiment.design_spec if experiment is not None else None
             validate_coordination_strategy(design_spec, graph=revision.graph)
             validate_stage_plan(design_spec)
-            validate_prompt_references(design_spec, graph=revision.graph)
+            validate_prompt_references(graph=revision.graph)
             topological_order(revision.graph, require_acyclic=not is_conversation_strategy(design_spec))
             run = await create_protocol_run(
                 db, protocol_id=protocol_id, owner_id=user.id, protocol_revision_id=revision.id
@@ -383,19 +377,16 @@ async def preview_node_prompt_endpoint(
     resource.
     """
     protocol = await _get_owned_protocol(db, protocol_id, user)
-    experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
-    design_spec = experiment.design_spec if experiment is not None else None
     try:
         text = await preview_node_prompt(
             body.graph if body.graph is not None else protocol.graph,
             node_id,
             owner_id=user.id,
             experiment_id=protocol.experiment_id,
-            design_spec=design_spec,
         )
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return PromptPreviewResponse(text=text, contract_version=prompt_contract_version(design_spec))
+    return PromptPreviewResponse(text=text)
 
 
 @router.post("/{protocol_id}/cell-runs", response_model=CellRunBatchResponse, status_code=201)

@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.experiment_dataset import ExperimentDataset
-from asaree.services.prompt_contract import CURRENT_PROMPT_CONTRACT
 
 # No "dataset_id" here any more -- an experiment's datasets are rows in
 # experiment_datasets, not a column, so they're written by
@@ -69,14 +68,7 @@ async def create_experiment(
     design_spec: dict[str, Any] | None = None,
     dataset_ids: Sequence[uuid.UUID] | None = None,
 ) -> ResearchExperiment:
-    # Stamped at creation, and only at creation: a new experiment gets the
-    # current prompt format, and an existing one keeps whatever it was run
-    # under (absent == v1) forever. See services/prompt_contract.py -- this is
-    # the whole mechanism by which improving the prompt cannot change an
-    # already-published experiment's numbers. A caller that passes its own
-    # version wins, so a test or an import can pin one deliberately.
     spec = dict(design_spec or {})
-    spec.setdefault("prompt_contract_version", CURRENT_PROMPT_CONTRACT)
     experiment = ResearchExperiment(
         name=name,
         description=description,

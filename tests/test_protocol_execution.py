@@ -324,7 +324,9 @@ def test_build_user_input_appends_upstream_context_after_prompt() -> None:
     graph = {"nodes": [upstream, downstream], "edges": _edges(("u", "d"))}
     node_runs = {"u": {"output_text": "draft text here"}}
     result = pe._build_user_input(downstream, graph, node_runs)
-    assert result == "Polish the draft\n\nUpstream context:\n[u]: draft text here"
+    expected = pe._upstream_context(graph, "d", node_runs)
+    assert "draft text here" in expected
+    assert result == f"Polish the draft\n\n{expected}"
 
 
 # --- deactivated pass-through ------------------------------------------------
@@ -348,7 +350,7 @@ def test_a_reader_downstream_of_a_deactivated_node_sees_that_nodes_name() -> Non
     relabelling it as the original author would hide that a step was skipped.
     Both contracts already behave this way; the envelope must not change it.
 
-    ``d`` is here so the current contract has a fan-in to label: a single
+    ``d`` is here so there is a fan-in to label: a single
     hand-placed reference carries no name, and the point under test is whose
     name appears, not how many senders there are.
     """
@@ -363,12 +365,10 @@ def test_a_reader_downstream_of_a_deactivated_node_sees_that_nodes_name() -> Non
         "d": {"status": "completed", "output_text": "checked"},
     }
     node_runs["b"] = {"status": "completed", "output_text": pe._upstream_output_text(graph, "b", node_runs)}
-    legacy = pe._build_user_input(c, graph, node_runs, prompt_contract_version=1)
-    current = pe._build_user_input(c, graph, node_runs, prompt_contract_version=2)
-    assert "[b]: draft text here" in legacy
-    assert "[Editor]" in current
-    assert "draft text here" in current
-    assert "Drafter" not in current
+    text = pe._build_user_input(c, graph, node_runs)
+    assert "[Editor]" in text
+    assert "draft text here" in text
+    assert "Drafter" not in text
 
 
 def test_build_user_input_cues_dataset_without_dictating_ids() -> None:

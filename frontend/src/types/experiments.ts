@@ -132,12 +132,6 @@ export interface DesignSpec {
   // asaree_workspace_core's, not the GUI's) purely so a spread that rebuilds
   // design_spec carries an SDK-declared plan through instead of erasing it.
   stage_plan?: unknown
-  // Which version of the prompt format this experiment's agents are given
-  // (absent == v1). Deliberately not editable anywhere in the UI: it's stamped
-  // at creation so that improving the prompt can't change an already-published
-  // experiment's numbers. Declared here only so a spread that rebuilds
-  // design_spec keeps it -- see services/prompt_contract.py.
-  prompt_contract_version?: number
   [key: string]: unknown
 }
 

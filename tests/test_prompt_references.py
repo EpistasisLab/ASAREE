@@ -26,8 +26,6 @@ from asaree.services.protocol_execution import (
     validate_prompt_references,
 )
 
-CURRENT = {"prompt_contract_version": 2}
-
 
 def _agent(node_id: str, label: str = "", prompt: str = "Do the thing.") -> dict[str, Any]:
     return {"id": node_id, "type": "agent", "data": {"label": label, "config": {"prompt": prompt}}}
@@ -246,12 +244,12 @@ def test_a_cycle_does_not_hang_the_walk() -> None:
 # ----------------------------------------------------------------------
 
 
-def _validate(prompt: str, *, spec: dict[str, Any] | None = CURRENT) -> None:
+def _validate(prompt: str) -> None:
     graph = {
         "nodes": [_agent("a", "Analyst"), _agent("side", "Sidebar"), _agent("b", "Reviewer", prompt)],
         "edges": [_edge("a", "b")],
     }
-    validate_prompt_references(spec, graph=graph)
+    validate_prompt_references(graph=graph)
 
 
 def test_a_valid_reference_passes() -> None:
@@ -281,7 +279,7 @@ def test_a_reference_to_a_node_that_does_not_run_first_is_refused() -> None:
 def test_previous_with_nothing_connected_is_refused() -> None:
     graph = {"nodes": [_agent("only", "Solo", "Review {{previous}}.")], "edges": []}
     with pytest.raises(ProtocolValidationError, match="nothing is connected"):
-        validate_prompt_references(CURRENT, graph=graph)
+        validate_prompt_references(graph=graph)
 
 
 def test_the_error_names_the_nodes_by_label_because_that_is_what_the_user_sees() -> None:
@@ -324,7 +322,7 @@ def _validate_with_parser(prompt: str, *fields: str) -> None:
         "nodes": [_agent("a", "Analyst"), parser["node"], _agent("b", "Reviewer", prompt)],
         "edges": [_edge("a", "b"), parser["edge"]],
     }
-    validate_prompt_references(CURRENT, graph=graph)
+    validate_prompt_references(graph=graph)
 
 
 def test_a_field_the_producers_parser_declares_passes() -> None:
@@ -358,7 +356,7 @@ def test_a_disabled_parser_declares_nothing() -> None:
         "edges": [_edge("a", "b"), parser["edge"]],
     }
     with pytest.raises(ProtocolValidationError, match="no Output Parser"):
-        validate_prompt_references(CURRENT, graph=graph)
+        validate_prompt_references(graph=graph)
 
 
 def test_an_out_of_scope_field_reference_reports_the_scope_problem_first() -> None:
@@ -368,11 +366,6 @@ def test_an_out_of_scope_field_reference_reports_the_scope_problem_first() -> No
         _validate("{{node:side.n_rows}}")
 
 
-def test_the_legacy_contract_is_not_policed_at_all() -> None:
-    """There ``{{node:side}}`` is literal prompt text that has always run fine,
-    so validating it would refuse an experiment retroactively."""
-    _validate("Review {{node:side}}.", spec=None)
-    _validate("Review {{previous}}.", spec={"prompt_contract_version": 1})
 
 
 # ----------------------------------------------------------------------
@@ -385,14 +378,14 @@ def test_the_legacy_contract_is_not_policed_at_all() -> None:
 # offering the picker in both boxes.
 
 
-def _validate_system(system_prompt: str, *, spec: dict[str, Any] | None = CURRENT) -> None:
+def _validate_system(system_prompt: str) -> None:
     reviewer = _agent("b", "Reviewer")
     reviewer["data"]["config"]["system_prompt"] = system_prompt
     graph = {
         "nodes": [_agent("a", "Analyst"), _agent("side", "Sidebar"), reviewer],
         "edges": [_edge("a", "b")],
     }
-    validate_prompt_references(spec, graph=graph)
+    validate_prompt_references(graph=graph)
 
 
 def test_a_system_prompt_reference_is_policed_like_a_prompt_reference() -> None:
@@ -409,27 +402,18 @@ def test_a_refused_system_prompt_says_which_box_to_open() -> None:
     assert "system prompt" in str(exc.value)
 
 
-def test_a_system_prompt_resolves_its_references_on_the_current_contract() -> None:
+def test_a_system_prompt_resolves_its_references() -> None:
     reviewer = _agent("b", "Reviewer")
     reviewer["data"]["config"]["system_prompt"] = "You review the analyst's work: {{node:a}}"
     graph = {"nodes": [_agent("a", "Analyst"), reviewer], "edges": [_edge("a", "b")]}
     node_runs = {"a": {"status": "completed", "output_text": "42 rows, no nulls."}}
 
-    rendered = _build_system_prompt(reviewer, graph, node_runs, prompt_contract_version=2)
+    rendered = _build_system_prompt(reviewer, graph, node_runs)
     assert rendered is not None
     assert "42 rows, no nulls." in rendered
     assert "{{node:a}}" not in rendered
 
 
-def test_a_system_prompt_stays_literal_on_the_legacy_contract() -> None:
-    """Its bytes are frozen: substituting now would change a prompt a published
-    experiment already ran on."""
-    reviewer = _agent("b", "Reviewer")
-    reviewer["data"]["config"]["system_prompt"] = "You review {{node:a}}"
-    graph = {"nodes": [_agent("a", "Analyst"), reviewer], "edges": [_edge("a", "b")]}
-    node_runs = {"a": {"status": "completed", "output_text": "42 rows."}}
-
-    assert _build_system_prompt(reviewer, graph, node_runs) == "You review {{node:a}}"
 
 
 def test_no_system_prompt_returns_none_so_the_caller_keeps_its_own_default() -> None:
@@ -451,7 +435,6 @@ def test_an_empty_system_prompt_reference_is_reported_not_raised() -> None:
         reviewer,
         graph,
         {"a": {"status": "completed", "output_text": ""}},
-        prompt_contract_version=2,
         unresolved_out=unresolved,
     )
     assert unresolved == ["a"]

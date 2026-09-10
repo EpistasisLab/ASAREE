@@ -157,7 +157,7 @@ export function ReceivedPromptPanel({ runId }: { runId: string }) {
         ) : runQuery.isError ? (
           <p className="text-xs text-muted-foreground">Could not load the prompt for this run.</p>
         ) : runQuery.data?.input ? (
-          // Text, never markdown or HTML: on the current contract this string
+          // Text, never markdown or HTML: this string
           // contains whatever the upstream model emitted, so it is untrusted
           // input being read verbatim by a human.
           <pre className="max-h-64 overflow-auto rounded border bg-background/70 p-2 font-mono text-[11px] whitespace-pre-wrap break-words">

@@ -75,11 +75,6 @@ from asaree.services.factorial_cells import get_replicate, list_replicates, upse
 from asaree.services.metric_evaluation import JUDGE_OUTPUT_CONTRACT, build_metric_judge_prompt, validate_metric_scores
 from asaree.services.metric_promotion import promote_replicate_score_metrics
 from asaree.services.metrics import compose_system_prompt, model_judge_metrics
-from asaree.services.prompt_contract import (
-    CURRENT_PROMPT_CONTRACT,
-    LEGACY_PROMPT_CONTRACT,
-    prompt_contract_version,
-)
 from asaree.services.protocol_revisions import get_published_revision, get_revision
 from asaree.services.protocol_runs import (
     create_protocol_run,
@@ -2563,38 +2558,6 @@ def _node_seed_prompt(node: dict[str, Any]) -> str:
 #: of its own block. What was dropped is a soft instruction, not a boundary.
 
 
-def _upstream_context_legacy(
-    graph: dict[str, Any],
-    node_id: str,
-    node_runs: dict[str, Any],
-    *,
-    upstream_ids: list[str] | None = None,
-    exclude_ids: Collection[str] = (),
-) -> str:
-    """The frozen upstream block. **Do not edit this function.**
-
-    ``[dndnode_3]: ...`` -- the raw canvas node id, which is what every
-    published experiment's agents were shown, the spinal pipeline's included.
-    It is a poor label and :func:`_upstream_context` replaces it; changing it
-    here instead would have changed those experiments' results.
-
-    This exists to keep one submitted paper reproducible and has no other job.
-    Improvements go in :func:`_upstream_context`, never here -- however obvious
-    they look. See :mod:`asaree.services.prompt_contract`.
-
-    *upstream_ids* is honoured, because it selects *which* senders contribute
-    rather than how they are formatted, and a contract freezes the format.
-
-    *exclude_ids* is accepted and ignored so the registry keeps one signature.
-    Suppressing a hand-placed sender presupposes ``{{...}}`` substitution, which
-    this contract does not do -- here a reference is literal prompt text, so no
-    sender is ever placed by hand and the set is always empty anyway.
-    """
-    ids = _upstream_ids(graph, node_id) if upstream_ids is None else upstream_ids
-    blocks = [f"[{uid}]: {node_runs[uid]['output_text']}" for uid in ids if node_runs.get(uid, {}).get("output_text")]
-    return "Upstream context:\n" + "\n\n".join(blocks) if blocks else ""
-
-
 def _upstream_context(
     graph: dict[str, Any],
     node_id: str,
@@ -2603,7 +2566,7 @@ def _upstream_context(
     upstream_ids: list[str] | None = None,
     exclude_ids: Collection[str] = (),
 ) -> str:
-    """The current upstream block, and the one that evolves.
+    """A node's predecessors' output, as it appears in its prompt.
 
     **Automatic.** A direct predecessor's output arrives in this agent's prompt
     because the edge is there, not because a ``{{...}}`` asked for it. That
@@ -2622,8 +2585,8 @@ def _upstream_context(
 
     **Structure, no prose.** A ``[Sender]`` label and a fence, and nothing else
     -- no heading, and no sentence telling the agent what the block is or how to
-    treat it (see the note above :func:`_upstream_context_legacy` for why that
-    sentence was removed rather than reworded). Names come from the canvas
+    treat it (see the note above this function for why that sentence was removed
+    rather than reworded). Names come from the canvas
     label, since a model reads ``[Feature Engineer]`` as an author and
     ``[dndnode_3]`` as noise, and the label is what the user sees on the canvas
     and in the transcript, so one upstream step is called one thing everywhere.
@@ -2646,10 +2609,9 @@ def _upstream_context(
     built here is byte-identical to what :func:`_render_reference` builds, the
     two can be swapped without the prompt changing shape.
 
-    Unlike :func:`_upstream_context_legacy` this is **not** frozen. Nothing
-    published depends on it, so the handoff design happens here in place; its
-    golden in ``tests/test_spinal_compat.py`` is a change-detector that puts the
-    diff in front of a reviewer, not a promise the text will not move.
+    This block is **not** frozen: the golden in ``tests/test_spinal_compat.py``
+    is a change-detector that puts the diff in front of a reviewer, not a
+    promise the text will not move.
     """
     ids = _upstream_ids(graph, node_id) if upstream_ids is None else upstream_ids
     excluded = set(exclude_ids)
@@ -2837,7 +2799,7 @@ def _hand_placed_sender_ids(text: str, graph: dict[str, Any], node_id: str) -> s
     return placed
 
 
-def validate_prompt_references(design_spec: dict[str, Any] | None, *, graph: dict[str, Any]) -> None:
+def validate_prompt_references(*, graph: dict[str, Any]) -> None:
     """Refuse a graph whose prompts point at something that can never resolve.
 
     Design time, not run time: a reference that cannot resolve is a wiring
@@ -2849,18 +2811,12 @@ def validate_prompt_references(design_spec: dict[str, Any] | None, *, graph: dic
     Checked against :func:`referenceable_node_ids`, the same set the picker
     offers, so the two cannot disagree about what is legal.
 
-    Skipped entirely on the legacy contract, which does not substitute at all:
-    there, ``{{node:x}}`` is literal prompt text, and rejecting it would refuse
-    an experiment that has always run fine.
-
     A node with predecessors and *no* reference is not an error, and is no
     longer even unusual: its predecessors' output arrives on the edge, so the
     prompt has nothing left to say. Writing a reference is how an author asks
     for something the edge does not already give them -- a different position, a
     node further back, one extracted field.
     """
-    if prompt_contract_version(design_spec) == LEGACY_PROMPT_CONTRACT:
-        return
     for node in graph.get("nodes") or []:
         node_id = node.get("id")
         if not node_id:
@@ -2932,25 +2888,6 @@ def validate_prompt_references(design_spec: dict[str, Any] | None, *, graph: dic
                 )
 
 
-#: Stored contract -> the upstream-context builder it selects. Two entries, not
-#: a version ladder: one frozen format for the published experiment and one
-#: current format that is still being designed (see
-#: :mod:`asaree.services.prompt_contract`).
-#:
-#: Only this block differs between them so far; the Dataset and Script cues
-#: below are tool-usage instructions that have to track the tools that actually
-#: exist, so freezing those per contract would hand a rerun stale instructions.
-#: What keeps the legacy contract's *whole* prompt honest is the byte-for-byte
-#: golden in ``tests/test_spinal_compat.py``, not a duplicated function body.
-#:
-#: Kept as a dispatch table even with two entries so that restoring a real
-#: version ladder at release is an entry, not a rewrite.
-_UPSTREAM_CONTEXT_BUILDERS = {
-    LEGACY_PROMPT_CONTRACT: _upstream_context_legacy,
-    CURRENT_PROMPT_CONTRACT: _upstream_context,
-}
-
-
 def _build_user_input(
     node: dict[str, Any],
     graph: dict[str, Any],
@@ -2961,7 +2898,6 @@ def _build_user_input(
     script_bound: bool = False,
     seeded_datasets: tuple[tuple[str, str], ...] = (),
     unsplit_dataset: str = "",
-    prompt_contract_version: int = LEGACY_PROMPT_CONTRACT,
     upstream_ids: list[str] | None = None,
     unresolved_out: list[str] | None = None,
 ) -> str:
@@ -3004,11 +2940,6 @@ def _build_user_input(
     no train/test split, bound as a plain file. Mutually exclusive with
     *seeded_datasets* -- a dataset has a split or it doesn't.
 
-    *prompt_contract_version* selects the upstream-context format (see
-    :mod:`asaree.services.prompt_contract`). An unrecognized value falls back to
-    the legacy contract, the format every experiment has always been able to
-    run under.
-
     *upstream_ids* overrides which senders the block draws from. Defaults to
     this node's main-edge predecessors, which is right for a pipeline; a
     caller that already knows who spoke to this agent (the messenger, whose
@@ -3021,41 +2952,29 @@ def _build_user_input(
     expression -- and because the string this returns is the whole point of
     calling it. Empty is the normal case.
 
-    On the current contract the prompt's own ``{{...}}`` references are resolved
+    The prompt's own ``{{...}}`` references are resolved
     (:mod:`asaree.services.prompt_references`), the direct predecessors it did
     *not* place by hand are appended as an upstream block, and the shape the
-    node's Output Parser declares is appended last. The legacy contract does
-    none of that: its format is frozen, so a legacy prompt containing
-    ``{{node:x}}`` keeps that text literally, exactly as the published
-    experiments would have."""
-    # Resolved once, and used for every contract-dependent decision below, so
-    # an unrecognized version cannot get the legacy upstream block but a
-    # current-contract extra appended after it.
-    contract = prompt_contract_version if prompt_contract_version in _UPSTREAM_CONTEXT_BUILDERS else (
-        LEGACY_PROMPT_CONTRACT
-    )
-
+    node's Output Parser declares is appended last."""
     seed = _node_seed_prompt(node)
     # Computed from the *authored* text, before substitution replaces the
     # tokens with the payloads they name and there is nothing left to detect.
-    hand_placed: set[str] = set()
-    if contract != LEGACY_PROMPT_CONTRACT:
-        hand_placed = _hand_placed_sender_ids(seed, graph, node["id"])
-        seed, unresolved = _resolve_prompt_references(seed, graph, node["id"], node_runs)
-        if unresolved:
-            # Recorded, not raised -- see _render_reference. The out-parameter
-            # is what the Runs tab reads; the log line is for a call site that
-            # did not pass one.
-            if unresolved_out is not None:
-                unresolved_out.extend(unresolved)
-            logger.warning(
-                "prompt references resolved empty: node=%s referenced=%s",
-                node["id"],
-                ",".join(unresolved),
-            )
+    hand_placed = _hand_placed_sender_ids(seed, graph, node["id"])
+    seed, unresolved = _resolve_prompt_references(seed, graph, node["id"], node_runs)
+    if unresolved:
+        # Recorded, not raised -- see _render_reference. The out-parameter
+        # is what the Runs tab reads; the log line is for a call site that
+        # did not pass one.
+        if unresolved_out is not None:
+            unresolved_out.extend(unresolved)
+        logger.warning(
+            "prompt references resolved empty: node=%s referenced=%s",
+            node["id"],
+            ",".join(unresolved),
+        )
     parts = [seed]
 
-    upstream_context = _UPSTREAM_CONTEXT_BUILDERS[contract](
+    upstream_context = _upstream_context(
         graph, node["id"], node_runs, upstream_ids=upstream_ids, exclude_ids=hand_placed
     )
     if upstream_context:
@@ -3178,12 +3097,9 @@ def _build_user_input(
     # second said which fields to state, so a user had to keep two descriptions
     # of one answer in agreement by hand, and the free-text one was the half
     # nothing could read back. Asking for the shape and extracting it are now
-    # the same declaration -- see `_output_shape_block`. Current contract only,
-    # like everything else appended here: the legacy format is frozen, and the
-    # spinal experiments resolve to it, so the agents that carry a contract
-    # today keep the prompts they have always had.
+    # the same declaration -- see `_output_shape_block`.
     shape_block = _output_shape_block(_resolve_output_contract(graph, node["id"]))
-    if shape_block and contract != LEGACY_PROMPT_CONTRACT:
+    if shape_block:
         parts.append(shape_block)
 
     return "\n\n".join(parts)
@@ -3194,7 +3110,6 @@ def _build_system_prompt(
     graph: dict[str, Any],
     node_runs: dict[str, Any],
     *,
-    prompt_contract_version: int = LEGACY_PROMPT_CONTRACT,
     unresolved_out: list[str] | None = None,
 ) -> str | None:
     """The user-authored System prompt with its references resolved, or
@@ -3214,19 +3129,10 @@ def _build_system_prompt(
     :func:`_render_reference`), which is what keeps it quotable material rather
     than instructions -- but a user who writes ``{{previous}}`` into a system
     prompt is choosing that placement, so it is theirs to choose deliberately.
-
-    Legacy stays literal, for the same reason :func:`_build_user_input` does:
-    that contract's prompts are frozen, and substituting into one now would
-    change bytes a published experiment already ran on.
     """
     authored = (node.get("data", {}).get("config", {}) or {}).get("system_prompt")
     if not authored:
         return None
-    contract = (
-        prompt_contract_version if prompt_contract_version in _UPSTREAM_CONTEXT_BUILDERS else LEGACY_PROMPT_CONTRACT
-    )
-    if contract == LEGACY_PROMPT_CONTRACT:
-        return str(authored)
     rendered, unresolved = _resolve_prompt_references(str(authored), graph, node["id"], node_runs)
     if unresolved:
         if unresolved_out is not None:
@@ -3311,7 +3217,6 @@ async def preview_node_prompt(
     *,
     owner_id: uuid.UUID,
     experiment_id: uuid.UUID | None = None,
-    design_spec: dict[str, Any] | None = None,
 ) -> str:
     """The exact prompt this agent would be given, assembled from the draft canvas.
 
@@ -3357,7 +3262,6 @@ async def preview_node_prompt(
         script_bound=experiment_id is not None,
         seeded_datasets=dataset.seeded,
         unsplit_dataset=dataset.unsplit_name,
-        prompt_contract_version=prompt_contract_version(design_spec),
     )
 
 
@@ -4058,7 +3962,6 @@ async def _run_gated_worker(
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
     evaluation_metrics: Any = None,
-    contract_version: int = LEGACY_PROMPT_CONTRACT,
     stage_plan: Any = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Generalizes the notebook's ``run_stage`` revision loop (cell 19):
@@ -4089,12 +3992,9 @@ async def _run_gated_worker(
         script_bound="script_path" in worker_ambient,
         seeded_datasets=worker_dataset.seeded,
         unsplit_dataset=worker_dataset.unsplit_name,
-        prompt_contract_version=contract_version,
     )
     # Also computed once: like the instruction, it does not vary by attempt.
-    worker_system_prompt = _build_system_prompt(
-        worker, graph, node_runs, prompt_contract_version=contract_version
-    )
+    worker_system_prompt = _build_system_prompt(worker, graph, node_runs)
     instruction = base_instruction
     # Tracks the most recent critic verdict/run across attempts so the
     # forced-accept branch (which never calls the critic for its own final
@@ -4258,7 +4158,7 @@ async def plan_cell_runs(
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, graph=graph)
     validate_stage_plan(design_spec)
-    validate_prompt_references(design_spec, graph=graph)
+    validate_prompt_references(graph=graph)
     conversation = is_conversation_strategy(design_spec)
     topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
     if not conversation:
@@ -4374,7 +4274,7 @@ async def plan_single_replicate_run(
     design_spec = experiment.design_spec if experiment is not None else None
     validate_coordination_strategy(design_spec, graph=graph)
     validate_stage_plan(design_spec)
-    validate_prompt_references(design_spec, graph=graph)
+    validate_prompt_references(graph=graph)
     conversation = is_conversation_strategy(design_spec)
     topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
     if not conversation:
@@ -4628,7 +4528,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         validate_stage_plan(design_spec)
         # After apply_factor_bindings above, so a reference that arrived as a
         # factor level is checked as the text the agent will actually get.
-        validate_prompt_references(design_spec, graph=graph)
+        validate_prompt_references(graph=graph)
         order = topological_order(graph, require_acyclic=not is_conversation_strategy(design_spec))
         gated_by = find_gated_pairs(graph)
     except ProtocolValidationError as e:
@@ -4638,13 +4538,9 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
     effective_cell_label = _effective_cell_label(replicate_label, protocol_run_id)
     workspace_id = _compute_workspace_id(experiment_id, replicate_label, protocol_run_id)
-    # Resolved once for the whole run, then passed down. Re-reading design_spec
-    # at each prompt-building site would let an edit made mid-run produce a run
-    # whose earlier nodes used one format and its later nodes another.
-    contract_version = prompt_contract_version(design_spec)
-    # Derived from the *pinned* graph, not the live canvas, for the same reason
-    # the prompt contract is resolved once here: a canvas edit mid-run must not
-    # change which stages this run's later nodes are staging through.
+    # Derived from the *pinned* graph, not the live canvas: a canvas edit
+    # mid-run must not change which stages this run's later nodes are staging
+    # through.
     stage_plan = stage_plan_spec(pinned_spec, graph=graph)
 
     async with get_session() as db:
@@ -4702,7 +4598,6 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 script_bound="script_path" in ambient_meta,
                 seeded_datasets=entry_dataset.seeded,
                 unsplit_dataset=entry_dataset.unsplit_name,
-                prompt_contract_version=contract_version,
             ),
             workspace_id=workspace_id,
             ambient_meta=ambient_meta,
@@ -4748,14 +4643,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 script_bound="script_path" in ambient_meta,
                 seeded_datasets=supervisor_dataset.seeded,
                 unsplit_dataset=supervisor_dataset.unsplit_name,
-                prompt_contract_version=contract_version,
             ),
             workspace_id=workspace_id,
             evaluation_metrics=(design_spec or {}).get("metrics"),
             parallel_workers=_supervisor_workers_run_in_parallel(design_spec),
             experiment_id=experiment_id,
             effective_cell_label=effective_cell_label,
-            contract_version=contract_version,
             stage_plan=stage_plan,
         )
         node_runs[roles.supervisor] = node_run
@@ -4824,7 +4717,6 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 experiment_id=experiment_id,
                 effective_cell_label=effective_cell_label,
                 evaluation_metrics=(design_spec or {}).get("metrics"),
-                contract_version=contract_version,
                 stage_plan=stage_plan,
             )
             node_runs[node_id] = worker_run
@@ -4879,7 +4771,6 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 script_bound="script_path" in ambient_meta,
                 seeded_datasets=node_dataset.seeded,
                 unsplit_dataset=node_dataset.unsplit_name,
-                prompt_contract_version=contract_version,
                 unresolved_out=unresolved,
             )
             # Same `unresolved` list as the user prompt: a reference that
@@ -4889,7 +4780,6 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 node,
                 graph,
                 node_runs,
-                prompt_contract_version=contract_version,
                 unresolved_out=unresolved,
             )
             output_text, error, run_id, extraction = await _run_agent_node(
@@ -4934,12 +4824,11 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, node_runs[node_id])
 
-    if coordination_strategy_slug(design_spec) == "sequential" and contract_version >= 2:
+    if coordination_strategy_slug(design_spec) == "sequential":
         # A chain's handoffs are agent-to-agent messages, so they get the same
-        # transcript a conversation does -- v2 only, because writing one on a v1
-        # experiment would add a panel to a published run's UI without any
-        # change to what executed. Best-effort: a transcript is a view of a run
-        # that already happened, and failing to render it must not fail the run.
+        # transcript a conversation does. Best-effort: a transcript is a view of
+        # a run that already happened, and failing to render it must not fail
+        # the run.
         chain = sequential_chain_order(graph)
         if len(chain) >= 2:
             from asaree.services.agent_messenger import record_sequential_transcript

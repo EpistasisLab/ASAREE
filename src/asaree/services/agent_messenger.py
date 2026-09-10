@@ -49,7 +49,6 @@ from motoro.engine.ports import AgentReply
 from asaree.models.database import get_session
 from asaree.services.dataset_workspaces import head_data_locator
 from asaree.services.deadline import deadlines_paused
-from asaree.services.prompt_contract import LEGACY_PROMPT_CONTRACT
 from asaree.services.protocol_execution import (
     _AGENT_CANCELLED,
     SupervisorRoles,
@@ -765,7 +764,6 @@ async def execute_supervisor_architecture(
     parallel_workers: bool = True,
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
-    contract_version: int = LEGACY_PROMPT_CONTRACT,
     stage_plan: Any = None,
 ) -> tuple[dict[str, Any], str]:
     """Run one cell as a supervisor dispatching to workers.
@@ -839,7 +837,7 @@ async def execute_supervisor_architecture(
         The prompt is built by ``_build_user_input`` exactly as a pipeline node's
         is -- same seed prompt, same Dataset/Script cues, same upstream-context
         format -- with the role block appended. Reusing it is what keeps a
-        supervisor run's agents reading the same prompt contract as every other
+        supervisor run's agents reading the same prompt format as every other
         run's, rather than inventing a second one that drifts.
 
         *upstream*'s keys are passed on as the authoritative sender list. They
@@ -874,7 +872,6 @@ async def execute_supervisor_architecture(
             script_bound="script_path" in ambient_meta,
             seeded_datasets=dataset.seeded,
             unsplit_dataset=dataset.unsplit_name,
-            prompt_contract_version=contract_version,
             upstream_ids=list(upstream),
         )
         sections = [prompt, block]

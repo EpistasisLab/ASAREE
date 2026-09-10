@@ -22,7 +22,6 @@ from asaree.services.protocol_execution import (
 
 OWNER_ID = uuid.uuid4()
 EXPERIMENT_ID = uuid.uuid4()
-CURRENT = {"prompt_contract_version": 2}
 
 
 def _agent(node_id: str, label: str, prompt: str) -> dict[str, Any]:
@@ -93,7 +92,7 @@ async def test_a_field_reference_previews_as_that_field_not_as_a_hole() -> None:
     graph = _chain("Profile it.", "It has {{node:a.n_rows}} rows.")
     _wire_parser(graph, "a", "n_rows", "n_cols")
 
-    preview = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec=CURRENT)
+    preview = await preview_node_prompt(graph, "b", owner_id=OWNER_ID)
 
     assert 'It has <n_rows of "Agent A"> rows.' in preview
 
@@ -104,7 +103,7 @@ async def test_a_field_the_parser_does_not_declare_still_previews_as_the_gap_it_
     graph = _chain("Profile it.", "It has {{node:a.n_columns}} columns.")
     _wire_parser(graph, "a", "n_rows")
 
-    preview = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec=CURRENT)
+    preview = await preview_node_prompt(graph, "b", owner_id=OWNER_ID)
 
     assert "It has  columns." in preview
 
@@ -118,18 +117,18 @@ async def test_a_first_step_previews_exactly_what_it_would_really_get() -> None:
     """No upstream means nothing is standing in for anything, so this one is a
     straight equality with no 'modulo the placeholder' escape hatch."""
     graph = _chain("Start here.")
-    preview = await preview_node_prompt(graph, "a", owner_id=OWNER_ID, design_spec=CURRENT)
-    real = _build_user_input(graph["nodes"][0], graph, {}, prompt_contract_version=2)
+    preview = await preview_node_prompt(graph, "a", owner_id=OWNER_ID)
+    real = _build_user_input(graph["nodes"][0], graph, {})
     assert preview == real
     assert preview == "Start here."
 
 
 async def test_a_referenced_upstream_output_previews_as_a_named_placeholder() -> None:
     graph = _chain("Draft it.", "Polish this: {{previous}}")
-    preview = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec=CURRENT)
+    preview = await preview_node_prompt(graph, "b", owner_id=OWNER_ID)
     assert '<output of "Agent A">' in preview
     assert preview == _build_user_input(
-        graph["nodes"][1], graph, _placeholders(graph, "a"), prompt_contract_version=2
+        graph["nodes"][1], graph, _placeholders(graph, "a")
     )
 
 
@@ -138,9 +137,9 @@ async def test_the_placeholder_is_fenced_the_way_a_real_output_would_be() -> Non
     preview -- how much of the prompt is scaffolding, and where their own
     sentence ends."""
     graph = _chain("Draft it.", "Polish this: {{previous}}")
-    fenced = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec=CURRENT)
+    fenced = await preview_node_prompt(graph, "b", owner_id=OWNER_ID)
     graph["nodes"][1]["data"]["config"]["prompt"] = "Polish this: {{previous|raw}}"
-    raw = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec=CURRENT)
+    raw = await preview_node_prompt(graph, "b", owner_id=OWNER_ID)
     assert raw == 'Polish this: <output of "Agent A">'
     assert fenced != raw
     assert '<output of "Agent A">' in fenced
@@ -156,7 +155,7 @@ async def test_a_reach_back_reference_previews_rather_than_leaving_a_gap() -> No
     prompt.
     """
     graph = _chain("First.", "Second.", "Third, recalling {{node:a|raw}}.")
-    preview = await preview_node_prompt(graph, "c", owner_id=OWNER_ID, design_spec=CURRENT)
+    preview = await preview_node_prompt(graph, "c", owner_id=OWNER_ID)
     assert preview.startswith('Third, recalling <output of "Agent A">.')
     assert '[Agent B]' in preview
 
@@ -167,24 +166,14 @@ async def test_an_unwired_predecessor_previews_as_the_block_it_will_deliver() ->
     request. This is where "I wired it, does anything actually flow?" gets
     answered before a cell is spent on it."""
     graph = _chain("Draft it.", "Write a poem.")
-    preview = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec=CURRENT)
+    preview = await preview_node_prompt(graph, "b", owner_id=OWNER_ID)
     assert preview == _build_user_input(
-        graph["nodes"][1], graph, _placeholders(graph, "a"), prompt_contract_version=2
+        graph["nodes"][1], graph, _placeholders(graph, "a")
     )
     assert '[Agent A]' in preview
     assert '<output of "Agent A">' in preview
 
 
-async def test_the_legacy_contract_previews_its_own_format() -> None:
-    """A pinned experiment must preview the prompt it will actually run, not
-    the one the current contract would produce. Both contracts deliver A's
-    output unasked; they disagree on how it is labelled and fenced."""
-    graph = _chain("Draft it.", "Polish it.")
-    legacy = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec={"prompt_contract_version": 1})
-    current = await preview_node_prompt(graph, "b", owner_id=OWNER_ID, design_spec=CURRENT)
-    assert legacy == 'Polish it.\n\nUpstream context:\n[a]: <output of "Agent A">'
-    assert legacy != current
-    assert '[Agent A]' in current
 
 
 # ----------------------------------------------------------------------
@@ -196,12 +185,12 @@ async def test_a_node_that_is_not_an_agent_has_no_prompt_to_preview() -> None:
     graph = _chain("Draft it.")
     graph["nodes"].append({"id": "llm", "type": "llm_anthropic", "data": {"label": "Claude", "config": {}}})
     with pytest.raises(ProtocolValidationError, match="not an agent"):
-        await preview_node_prompt(graph, "llm", owner_id=OWNER_ID, design_spec=CURRENT)
+        await preview_node_prompt(graph, "llm", owner_id=OWNER_ID)
 
 
 async def test_a_node_that_is_not_on_the_canvas_is_refused() -> None:
     with pytest.raises(ProtocolValidationError, match="No node"):
-        await preview_node_prompt(_chain("Draft it."), "ghost", owner_id=OWNER_ID, design_spec=CURRENT)
+        await preview_node_prompt(_chain("Draft it."), "ghost", owner_id=OWNER_ID)
 
 
 # ----------------------------------------------------------------------
@@ -229,7 +218,7 @@ async def test_previewing_a_wired_dataset_reads_the_registration_but_seeds_no_wo
     monkeypatch.setattr(pe, "seed_cell_workspace", _refuse)
 
     preview = await preview_node_prompt(
-        graph, "a", owner_id=OWNER_ID, experiment_id=EXPERIMENT_ID, design_spec=CURRENT
+        graph, "a", owner_id=OWNER_ID, experiment_id=EXPERIMENT_ID
     )
     assert "Dataset context:" in preview
     assert "already open" in preview
@@ -248,6 +237,6 @@ async def test_an_unsplit_dataset_previews_the_cue_it_would_really_get(
 
     monkeypatch.setattr(pe, "fetch_owned_registration", _registration)
     preview = await preview_node_prompt(
-        graph, "a", owner_id=OWNER_ID, experiment_id=EXPERIMENT_ID, design_spec=CURRENT
+        graph, "a", owner_id=OWNER_ID, experiment_id=EXPERIMENT_ID
     )
     assert "has NOT been split" in preview

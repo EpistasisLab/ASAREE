@@ -144,10 +144,6 @@ export interface ProtocolRun {
 // is created; this is a rendering, not a resource.
 export interface PromptPreview {
   text: string
-  // Which prompt contract assembled it. The two produce visibly different
-  // prompts and an experiment is pinned to one at creation, so the preview has
-  // to say which one it is speaking for.
-  contract_version: number
 }
 
 export interface ProtocolRevision {

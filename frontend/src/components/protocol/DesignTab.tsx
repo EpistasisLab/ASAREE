@@ -12,7 +12,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { experimentsApi, llmSettingsApi, protocolsApi } from '@/api/client'
 import { coordinationStrategyIssues } from '@/lib/coordinationStrategy'
-import { CURRENT_PROMPT_CONTRACT, promptContractSummary, promptContractVersion } from '@/lib/promptContract'
 import { unboundFactorNames } from '@/lib/factorBindings'
 import { promptReferenceScope } from '@/lib/promptReferences'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
@@ -681,7 +680,6 @@ export function DesignTab({
   const totalTrials = validFactors.length > 0 ? combinations * Math.max(replicates ?? 1, 1) : 0
 
   const selectedStrategy = COORDINATION_STRATEGY_CATALOG.find((s) => s.slug === coordinationSlug)
-  const contractVersion = promptContractVersion(experiment.design_spec)
   const draftGraph = graphQuery.data
     ? ({ nodes: graphQuery.data.nodes, edges: graphQuery.data.edges } as unknown as ProtocolGraph)
     : undefined
@@ -840,31 +838,6 @@ export function DesignTab({
           </div>
         )}
       </div>
-
-      {/* Only when this experiment ISN'T on the current contract. The version
-          number is an internal fact -- read-only, unchangeable, and identical
-          for every experiment anyone creates from now on, so stating it there
-          is noise dressed up as a setting.
-
-          It earns its place on a legacy experiment, where it is the only
-          signal anywhere in the app that this one behaves differently:
-          upstream output arrives whether the prompt asked for it or not, so a
-          `{{reference}}` typed here does not do what the same reference does
-          on a newer experiment. Without this, that difference has no
-          explanation on screen at all. Shown as a notice rather than a field,
-          because there is nothing to set. */}
-      {contractVersion !== CURRENT_PROMPT_CONTRACT && (
-        <div className="space-y-1.5">
-          <Label className="flex items-center gap-1.5">
-            Older prompt format
-            <InfoTooltip>
-              Fixed when the experiment was created and not editable -- a published result has to keep the exact
-              prompt that produced it. Create a new experiment to run under the current format.
-            </InfoTooltip>
-          </Label>
-          <p className="text-xs text-muted-foreground">{promptContractSummary(contractVersion)}</p>
-        </div>
-      )}
 
       <Dialog open={!!pendingStrategy} onOpenChange={(open) => !open && setPendingStrategy(null)}>
         <DialogContent>

@@ -88,9 +88,6 @@ export function PromptPreviewPanel({
         </button>
         {open && preview && (
           <>
-            <span className="rounded-sm bg-primary/10 px-1.5 py-px font-mono text-[0.65rem] text-primary" title="Which prompt contract assembled this. Stamped on the experiment at creation and never moved.">
-              contract v{preview.contract_version}
-            </span>
             <button
               type="button"
               onClick={() => setNonce((n) => n + 1)}
@@ -114,7 +111,7 @@ export function PromptPreviewPanel({
         <p className="rounded border border-destructive/30 bg-destructive/5 px-2 py-1.5 text-xs text-destructive">{error}</p>
       ) : preview ? (
         <>
-          {/* Rendered as text, never markdown: on the current contract a
+          {/* Rendered as text, never markdown: a
               reference resolves to whatever an upstream model emitted, and at
               design time to a placeholder that looks like an HTML tag. */}
           <pre className="max-h-64 overflow-auto rounded border bg-background/70 p-2 font-mono text-[11px] whitespace-pre-wrap break-words @md:max-h-96">

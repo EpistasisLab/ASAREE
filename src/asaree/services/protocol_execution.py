@@ -2283,6 +2283,17 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
     return {"server_names": server_names, "tool_names": tool_names}
 
 
+def _declares_a_field(contract: Any) -> bool:
+    """Whether *contract* names at least one field. The name is the whole test
+    -- a row with a type but no name is a half-filled editor row, and every
+    consumer here keys off the name."""
+    if not isinstance(contract, dict):
+        return False
+    return any(
+        isinstance(field, dict) and str(field.get("name") or "").strip() for field in contract.get("fields") or []
+    )
+
+
 def _resolve_output_contract(graph: dict[str, Any], node_id: str) -> dict[str, Any] | None:
     """The Motoro ``output_contract`` field spec for this agent -- from its
     wired Output Parser node, or, failing that, from the agent's own legacy
@@ -2318,7 +2329,15 @@ def _resolve_output_contract(graph: dict[str, Any], node_id: str) -> dict[str, A
     not whenever the parser yields nothing. A wired-but-disabled or
     wired-but-empty parser resolves to ``None``, because "off for this run" has
     to mean off -- reaching past it to a stored field would run a contract the
-    user had just switched away from."""
+    user had just switched away from.
+
+    "Empty" means *no field anyone could name*, not just a missing ``fields``
+    list: a new parser node arrives with one blank row (see
+    ``defaultOutputParserNodeData``), so a contract can be present and still
+    declare nothing. Such a contract is treated as absent rather than passed on,
+    because every consumer would otherwise do work for a shape with no keys in
+    it -- most expensively the runtime, which would spend a model call
+    extracting a payload that cannot have any fields."""
     nodes, _downstream, _upstream = _adjacency(graph)
     wired = False
     for edge in _edges_with_handle(graph, node_id, "output_parser", direction="incoming"):
@@ -2330,13 +2349,13 @@ def _resolve_output_contract(graph: dict[str, Any], node_id: str) -> dict[str, A
         if not parser_config.get("enabled", True):
             continue
         contract = parser_config.get("output_contract")
-        if contract:
+        if _declares_a_field(contract):
             return dict(contract)
     if wired:
         return None
     node = nodes.get(node_id) or {}
     legacy = ((node.get("data") or {}).get("config") or {}).get("output_contract")
-    return dict(legacy) if legacy else None
+    return dict(legacy) if _declares_a_field(legacy) else None
 
 
 def _output_shape_block(contract: dict[str, Any] | None) -> str:

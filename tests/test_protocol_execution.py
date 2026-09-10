@@ -3202,6 +3202,14 @@ def _agent_with_parser(*, legacy: dict | None = None, enabled: bool | None = Non
     }
 
 
+def _agent_with_parser_contract(contract: dict) -> dict:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    return {
+        "nodes": [_llm_node(), agent, _parser_node(contract=contract)],
+        "edges": [agent_llm_edge, _parser_edge("p1", "a")],
+    }
+
+
 def test_wired_output_parser_resolves_its_contract() -> None:
     assert pe._resolve_output_contract(_agent_with_parser(), "a") == _CONTRACT
 
@@ -3232,6 +3240,25 @@ def test_legacy_contract_types_are_not_normalised() -> None:
     resolved = pe._resolve_output_contract({"nodes": [_llm_node(), agent], "edges": [agent_llm_edge]}, "a")
     assert resolved is not None
     assert [f["type"] for f in resolved["fields"]] == ["object", "number"]
+
+
+def test_a_parser_whose_fields_are_all_blank_resolves_none() -> None:
+    """The shape a brand-new parser node arrives in: one empty editor row. It
+    is present but names nothing, so passing it on would cost a model call
+    extracting a payload that cannot have a single key in it."""
+    blank = {"name": "", "fields": [{"name": "", "type": "string", "description": ""}]}
+    assert pe._resolve_output_contract(_agent_with_parser_contract(blank), "a") is None
+    # ...and the same field spec stored the legacy way is equally empty.
+    agent, agent_llm_edge = _agent_with_llm("a")
+    agent["data"]["config"]["output_contract"] = blank
+    assert pe._resolve_output_contract({"nodes": [_llm_node(), agent], "edges": [agent_llm_edge]}, "a") is None
+
+
+def test_one_named_field_among_blanks_is_still_a_contract() -> None:
+    """Half-filled is not empty -- the named row is a real declaration, and the
+    prompt block and the payload model both simply skip the unnamed ones."""
+    half = {"name": "S", "fields": [{"name": "n_rows", "type": "integer"}, {"name": "", "type": "string"}]}
+    assert pe._resolve_output_contract(_agent_with_parser_contract(half), "a") == half
 
 
 def test_disabled_output_parser_contributes_nothing() -> None:

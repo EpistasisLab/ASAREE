@@ -85,6 +85,42 @@ def test_extract_score_metrics_none_when_test_metrics_not_a_dict() -> None:
     assert mp.extract_score_metrics({"test_metrics": "not a dict"}) is None
 
 
+# --- align_to_declared_metrics -----------------------------------------------
+
+
+def _declaring(*names: str) -> dict:
+    return {"metrics": [{"name": name} for name in names]}
+
+
+def test_a_declared_metric_claims_the_promoted_key_it_only_differs_from_by_case() -> None:
+    aligned = mp.align_to_declared_metrics({"accuracy": 0.81, "roc_auc": 0.9}, _declaring("Accuracy"))
+    assert aligned == {"Accuracy": 0.81, "roc_auc": 0.9}
+
+
+def test_a_different_name_is_not_guessed_at() -> None:
+    # "AUC" is plainly the experimenter's word for roc_auc, and this function
+    # still leaves it alone: only case is reconciled, because anything wider
+    # would be inventing a mapping they never wrote down.
+    assert mp.align_to_declared_metrics({"roc_auc": 0.9}, _declaring("AUC")) == {"roc_auc": 0.9}
+
+
+def test_an_exactly_matching_key_is_never_displaced_by_a_cased_twin() -> None:
+    metrics = {"accuracy": 0.81, "Accuracy": 0.42}
+    assert mp.align_to_declared_metrics(metrics, _declaring("Accuracy")) == metrics
+
+
+def test_nothing_declared_leaves_the_promoted_keys_exactly_as_reported() -> None:
+    metrics = {"accuracy": 0.81}
+    assert mp.align_to_declared_metrics(metrics, None) == metrics
+    assert mp.align_to_declared_metrics(metrics, {}) == metrics
+    assert mp.align_to_declared_metrics(metrics, {"metrics": "not a list"}) == metrics
+
+
+def test_a_nameless_declaration_is_skipped_rather_than_crashing() -> None:
+    spec = {"metrics": [{"direction": "maximize"}, "not a dict", {"name": "  "}, {"name": " Accuracy "}]}
+    assert mp.align_to_declared_metrics({"accuracy": 0.81}, spec) == {"Accuracy": 0.81}
+
+
 # --- find_score_tool_result ---------------------------------------------------
 
 

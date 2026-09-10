@@ -38,6 +38,7 @@ from typing import Any
 from motoro.runner import get_run_steps
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from asaree.services.experiments import get_experiment
 from asaree.services.factorial_cells import upsert_replicate
 from asaree.services.protocol_runs import (
     get_protocol_run,
@@ -73,6 +74,42 @@ def extract_score_metrics(tool_result: dict[str, Any]) -> dict[str, Any] | None:
         if name in chosen:
             metrics[name] = chosen[name]
     return metrics or None
+
+
+def align_to_declared_metrics(metrics: dict[str, Any], design_spec: dict[str, Any] | None) -> dict[str, Any]:
+    """Re-spell promoted keys as the experiment's declared metric names, when
+    the two differ only by case.
+
+    ``run_model_script`` reports ``accuracy``; an experimenter declaring that
+    outcome writes ``Accuracy``, because a metric name is a label they read,
+    not a telemetry key. A declared *custom* metric is looked up by its exact
+    name everywhere downstream (``experiment_run_results._declared_metric_types``
+    and the frontend's inferred key list both), so without this the Results
+    table shows an empty ``Accuracy`` column beside a populated ``accuracy``
+    one -- the same number, twice, once blank.
+
+    Renaming here rather than at each reader is what keeps that from becoming
+    a rule every consumer has to remember: the stored ``metric_values`` end up
+    in the declared spelling, and Results, the CSV export and
+    ``factorial_analysis`` all keep reading a plain dict. Only case is
+    reconciled -- ``roc_auc`` does not become a metric declared as "AUC",
+    because that is a mapping the experimenter has to state, not one a
+    casefold can infer. An exact key already present wins, so a design
+    declaring both spellings loses nothing.
+    """
+    declared = (design_spec or {}).get("metrics")
+    if not isinstance(declared, list) or not metrics:
+        return metrics
+    by_folded = {
+        metric["name"].strip().casefold(): metric["name"].strip()
+        for metric in declared
+        if isinstance(metric, dict) and isinstance(metric.get("name"), str) and metric["name"].strip()
+    }
+    aligned: dict[str, Any] = {}
+    for key, value in metrics.items():
+        name = by_folded.get(key.casefold(), key)
+        aligned[key if name in metrics and name != key else name] = value
+    return aligned
 
 
 def find_score_tool_result(steps: Sequence[Any]) -> dict[str, Any] | None:
@@ -142,6 +179,8 @@ async def promote_replicate_score_metrics(
         return PromotionResult(
             replicate_label, False, "run_model_script never returned test_metrics (see its own error)"
         )
+    experiment = await get_experiment(db, experiment_id)
+    metrics = align_to_declared_metrics(metrics, experiment.design_spec if experiment is not None else None)
 
     # The attempt keeps its own immutable facts even if a newer attempt has
     # already replaced this replicate. Only the latest attempt may update the

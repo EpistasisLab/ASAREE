@@ -37,6 +37,7 @@ export function AgentNode({
   data: AgentNodeData & {
     runStatus?: NodeRunStatus
     missingLlm?: boolean
+    missingOutputParser?: boolean
     canRunAlone?: boolean
     // Both injected by ProtocolCanvas: whether a plain Agent-to-Agent edge
     // reaches this node, and the model its AI connector resolves to. The
@@ -70,6 +71,9 @@ export function AgentNode({
     !!data.hasPeers && models.find((m) => m.id === data.llmConfig?.model)?.supports_tool_calling === false
   const warnings = [
     ...(data.missingLlm ? ["No AI connected -- this agent can't run"] : []),
+    ...(data.missingOutputParser
+      ? ['A specific output format is required, but no Output Parser says what it is']
+      : []),
     ...(peerNeedsToolCalling ? ["This model can't call tools, so this agent can't consult its connected peers"] : []),
   ]
   const { updateNodeData } = useReactFlow()

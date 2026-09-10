@@ -281,6 +281,20 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   knowledge: { allowedTypes: [OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE], title: 'Add Knowledge' },
 }
 
+// Where an Output Parser belongs relative to the agent it serves: under that
+// agent's own Parser connector, nudged clear of anything already sitting there.
+// Shared by the two paths that create a parser without going through the
+// connector's "+" -- converting a legacy stored contract, and adding one from
+// the unrestricted toolbar panel -- so a parser lands in the same place however
+// it came to exist.
+function parserPositionFor(agent: Node, otherNodes: Node[]) {
+  return findFreePosition(
+    otherNodes.map((n) => n.position),
+    { x: agent.position.x + connectorNodeOffsetX(agent.type, 'output_parser'), y: agent.position.y + 160 },
+    CONNECTOR_CHILD_CLEARANCE,
+  )
+}
+
 // Connector slots have been renamed since graphs started being saved, and a
 // slot id lives in persisted data (it's the edge's source/targetHandle):
 //
@@ -636,6 +650,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // reach zero (see nonDeletablePatternNodeIds above) -- so this is the
   // only one actually reachable through normal use.
   const agentIdsWithLlm = useMemo(() => new Set(edges.filter((e) => e.targetHandle === 'ai').map((e) => e.target)), [edges])
+  const agentIdsWithParser = useMemo(
+    () => new Set(edges.filter((e) => e.targetHandle === 'output_parser').map((e) => e.target)),
+    [edges],
+  )
 
   // The canvas's per-node Play icon is only offered for a node with no
   // upstream *main* pipeline edge (mirrors services.protocol_execution's
@@ -820,6 +838,17 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           ...n.data,
           runStatus: runQuery.data?.node_runs[n.id]?.status,
           missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
+          // "Require specific output format" is on, but nothing says what the
+          // format is. Unlike missingLlm this doesn't stop the run -- the agent
+          // just answers in prose, which is the outcome the switch was flipped
+          // to prevent, so it has to be visible on the card and not only in the
+          // inspector the user has already closed. A legacy stored contract
+          // counts as the answer: the executor falls back to it.
+          missingOutputParser:
+            n.type === 'agent' &&
+            (n.data as AgentNodeData).config?.require_output_parser === true &&
+            !agentIdsWithParser.has(n.id) &&
+            !(n.data as AgentNodeData).config?.output_contract,
           canRunAlone: n.type === 'agent' && !agentIdsWithUpstream.has(n.id),
           hasPeers: n.type === 'agent' && (peerIdsByAgent.get(n.id)?.length ?? 0) > 0,
           llmConfig: n.type === 'agent' ? llmConfigByAgent.get(n.id) ?? null : null,
@@ -865,6 +894,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     runQuery.data,
     nonDeletablePatternNodeIds,
     agentIdsWithLlm,
+    agentIdsWithParser,
     agentIdsWithUpstream,
     agentIdsWithCallableTools,
     patternHostIds,
@@ -1040,11 +1070,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       const agent = nodes.find((n) => n.id === nodeId)
       const contract = (agent?.data as AgentNodeData | undefined)?.config?.output_contract
       if (!agent || !contract) return
-      const desired = {
-        x: agent.position.x + connectorNodeOffsetX(agent.type, 'output_parser'),
-        y: agent.position.y + 160,
-      }
-      const position = findFreePosition(nodes.map((n) => n.position), desired, CONNECTOR_CHILD_CLEARANCE)
+      const position = parserPositionFor(agent, nodes)
       const parserId = newNodeId()
       // The contract is copied across as-is, field types included: normalising
       // Motoro's aliases (integer -> int, and so on) here would silently
@@ -1324,6 +1350,42 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       setEdges((eds) => eds.concat(patternEdge))
       setAddPanelOpen(false)
       return
+    }
+
+    // An Output Parser is the one catalog entry that is meaningless on its
+    // own: it has exactly one legal connection, it configures the agent it
+    // hangs off, and dropped loose it silently does nothing while looking like
+    // it is set up. Picking it from the connector's own "+" already wires it
+    // (the pendingConnectorAdd branch above); picking it from the unrestricted
+    // toolbar panel did not, which is the whole gap.
+    //
+    // Wired only when the host is unambiguous. An agent that has "Require
+    // specific output format" on and nothing answering it is asking for this
+    // node by name, so it wins outright; failing that, a canvas with a single
+    // parser-less agent has only one place the node could go. Two candidates
+    // and it stays loose rather than attaching to a guess -- the user drags the
+    // edge, which is the same work as correcting a wrong one.
+    if (nodeType === 'output_parser') {
+      const parserless = nodes.filter(
+        (n) => n.type === 'agent' && !edges.some((e) => e.target === n.id && e.targetHandle === 'output_parser'),
+      )
+      const asking = parserless.filter((n) => (n.data as AgentNodeData).config?.require_output_parser === true)
+      const host = (asking.length === 1 ? asking : parserless.length === 1 ? parserless : [])[0]
+      if (host) {
+        setNodes((nds) => nds.concat({ ...newNode, position: parserPositionFor(host, nds) }))
+        setEdges((eds) =>
+          eds.concat({
+            id: newNodeId(),
+            source: newId,
+            sourceHandle: 'output_parser',
+            target: host.id,
+            targetHandle: 'output_parser',
+          }),
+        )
+        setAddPanelOpen(false)
+        setSelectedNodeId(newId)
+        return
+      }
     }
 
     setNodes((nds) => nds.concat(newNode))

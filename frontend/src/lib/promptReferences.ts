@@ -206,17 +206,16 @@ export function promptReferenceScope(
   }
 }
 
-export interface HandoffPeer extends ReferenceTarget {
-  /** The peer's own declared Expected output, verbatim.
-   *
-   *  Carried here because the shape a sender promises is only useful to whoever
-   *  reads that sender -- and the consuming *agent* is never told it: the
-   *  current contract has no envelope to put it in, and inventing one would
-   *  reintroduce exactly the unasked-for platform prose that design removed.
-   *  So it is surfaced to the user instead, in the Receives readout, where a
-   *  mismatch is something they can actually act on while wiring. */
-  expectedOutput?: string
-}
+/** A direct main-edge neighbour.
+ *
+ *  Inherits `fields` from `ReferenceTarget` -- the shape the peer's own Output
+ *  Parser declares. It is carried here because the shape a sender promises is
+ *  only useful to whoever reads that sender, and the consuming *agent* is never
+ *  told it: the current contract has no envelope to put it in, and inventing
+ *  one would reintroduce exactly the unasked-for platform prose that design
+ *  removed. So it is surfaced to the user instead, in the Receives readout,
+ *  where a mismatch is something they can act on while wiring. */
+export type HandoffPeer = ReferenceTarget
 
 export interface HandoffPeers {
   /** Direct main-edge predecessors -- the nodes whose output is handed to this
@@ -255,10 +254,8 @@ export function handoffPeers(nodes: ProtocolNode[], edges: ProtocolEdge[], nodeI
     return nodes
       .filter((n) => ids.includes(n.id))
       .map((n) => {
-        const expectedOutput = (
-          (n.data as { config?: { expected_output?: string | null } } | undefined)?.config?.expected_output ?? ''
-        ).trim()
-        return { id: n.id, name: names[n.id], ...(expectedOutput ? { expectedOutput } : {}) }
+        const fields = parserFields(nodes, edges, n.id)
+        return { id: n.id, name: names[n.id], ...(fields.length ? { fields } : {}) }
       })
   }
   return {

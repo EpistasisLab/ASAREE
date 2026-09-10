@@ -171,6 +171,11 @@ export function AgentNodeInspector({
   // Its presence swaps the section below into the convert-it banner: an agent
   // is never allowed to have both at once.
   const legacyContract = config.output_contract
+  // A wired parser is itself the requirement, whether or not the flag was ever
+  // set: the flag only ever existed to keep the connector drawn while the node
+  // it is waiting for does not exist yet.
+  const parserWired = wiredOutputParserLabel !== null
+  const formatRequired = parserWired || config.require_output_parser === true
 
   function patchConfig(patch: Partial<AgentNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
@@ -337,48 +342,16 @@ export function AgentNodeInspector({
                 )}
               </FactorBindableField>
 
-              <FactorBindableField
-                experimentId={experimentId}
-                fieldPath="config.expected_output"
-                defaultLabel="Expected output"
-                nodeLabel={data.label || 'Agent'}
-                levelType="text"
-                currentValue={config.expected_output ?? ''}
-                boundFactorName={bindings['config.expected_output']}
-                onBind={(name) => bindFactor('config.expected_output', name)}
-                onUnbind={() => unbindFactor('config.expected_output')}
-              >
-                {(trigger) => (
-                  <div className="space-y-1.5">
-                    <Label htmlFor="node-expected-output" className="flex items-center gap-1.5">
-                      Expected output — Optional
-                      {trigger}
-                    </Label>
-                    <Textarea
-                      id="node-expected-output"
-                      rows={2}
-                      placeholder="A bulleted list of risks, one per line, each naming the column it concerns."
-                      value={config.expected_output ?? ''}
-                      onChange={(e) => patchConfig({ expected_output: e.target.value })}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      What shape the answer should take, in plain English — appended to the prompt above. It is a
-                      hint to the model, not a rule: nothing parses or validates it, and a run does not fail for
-                      ignoring it. Downstream agents see it in their Input panel, so it is also how you tell the
-                      next step what to expect. To also read named, typed values back out of the answer, connect
-                      an Output Parser below.
-                    </p>
-                  </div>
-                )}
-              </FactorBindableField>
-
-              {/* Directly under Expected output, because the two are one
-                  decision at two prices: the field alone is a free prompt
-                  hint, and adding the parser buys typed extraction for one
-                  extra model call. Splitting them across tabs is what made
-                  the old Settings-tab contract invisible. */}
+              {/* Directly under the prompt, because "what to write" and "what
+                  shape to write it in" are one decision. There used to be two
+                  controls here -- a free-text Expected output field and this
+                  box -- which made the user keep two descriptions of one answer
+                  in agreement by hand. Now there is one switch: off means
+                  answer in prose, on means take the shape the wired Output
+                  Parser declares. Not a tab away: splitting the shape off into
+                  Settings is what made the old stored contract invisible. */}
               <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                <Label className="text-sm">Output parser</Label>
+                <Label className="text-sm">Output format</Label>
                 {legacyContract ? (
                   // Read-only on purpose: this contract is still live (the
                   // executor falls back to it whenever no parser node is
@@ -404,40 +377,55 @@ export function AgentNodeInspector({
                       Convert to an Output Parser node
                     </Button>
                   </>
-                ) : wiredOutputParserLabel !== null ? (
-                  <p className="text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground">{wiredOutputParserLabel || 'Output Parser'}</span> is
-                    connected. Open it on the canvas to edit the fields it extracts.
-                  </p>
                 ) : (
                   <>
-                    <p className="text-xs text-muted-foreground">
-                      Reads named, typed values back out of this agent's answer, and tells the agent to state them.
-                      Costs one extra model call per run, made after the answer is written.
-                    </p>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => requestConnectorAdd({ nodeId: node.id, slot: 'output_parser' })}
-                    >
-                      Connect an Output Parser
-                    </Button>
-                    {/* The connector is hidden on an agent that has no parser
-                        and hasn't asked for one (see AgentNode's
-                        showOutputParser) -- this is how you get it drawn
-                        without going through the button above, e.g. to drag
-                        an existing parser node onto it. */}
+                    {/* Checked-and-disabled whenever a parser is already wired:
+                        a graph can arrive with the edge but not the flag (the
+                        SDK sets no flag, and the connector is drawn from the
+                        edge regardless -- see AgentNode's showOutputParser), and
+                        an unchecked box above a connected parser would be a
+                        lie. Turning the requirement off then means removing the
+                        node, which is where the shape actually lives. */}
                     <label
                       htmlFor={`require-output-parser-${node.id}`}
-                      className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted/50"
+                      className={`flex items-center gap-2 rounded px-1 py-1 text-xs ${
+                        parserWired ? 'cursor-default' : 'cursor-pointer hover:bg-muted/50'
+                      }`}
                     >
                       <Checkbox
                         id={`require-output-parser-${node.id}`}
-                        checked={config.require_output_parser === true}
+                        checked={formatRequired}
+                        disabled={parserWired}
                         onCheckedChange={(checked) => patchConfig({ require_output_parser: checked === true })}
                       />
-                      Show the Output Parser connector on this agent
+                      Require specific output format
                     </label>
+                    {!formatRequired ? (
+                      <p className="text-xs text-muted-foreground">
+                        This agent answers in whatever prose the model produces. Nothing states a shape to it, and
+                        nothing reads named values back out.
+                      </p>
+                    ) : parserWired ? (
+                      <p className="text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground">{wiredOutputParserLabel || 'Output Parser'}</span>{' '}
+                        defines the format — it tells this agent which fields to state, and reads them back out of the
+                        answer. Open it on the canvas to edit them. Remove it to stop requiring a format.
+                      </p>
+                    ) : (
+                      <>
+                        <p className="text-xs text-[color:var(--chart-4)]">
+                          Connect an Output Parser node to say what the format is. Until you do, this agent is asked
+                          for nothing in particular and answers in prose like any other.
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => requestConnectorAdd({ nodeId: node.id, slot: 'output_parser' })}
+                        >
+                          Connect an Output Parser
+                        </Button>
+                      </>
+                    )}
                   </>
                 )}
               </div>

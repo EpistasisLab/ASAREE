@@ -211,18 +211,27 @@ export interface AgentNodeConfig {
   goal: string
   description: string
   system_prompt: string
-  // A plain-English description of the shape the answer should take, appended
-  // to the assembled prompt on the current contract. Deliberately prose and
-  // deliberately unvalidated -- the reader is another language model, which
-  // reads prose fine, so this buys predictable shape without the malformed-
-  // output and refusal failures a schema between two LLMs adds. `output_contract`
-  // below is the typed one, and it exists for a different consumer: tools and
-  // metrics, which cannot read prose.
-  expected_output?: string
-  // "I want typed output" -- turns on the Output Parser connector so one can be
-  // wired. Persisted rather than component state because declared-but-not-yet-
+  // "Require specific output format" -- this agent's answer has to take a
+  // declared shape rather than whatever prose the model felt like. Says only
+  // that a shape is required, never what it is: the shape lives on the Output
+  // Parser node this reveals the connector for, so there is exactly one place
+  // to read it and exactly one place to change it.
+  //
+  // Persisted rather than component state because required-but-not-yet-
   // connected is a real, legitimate state that has to survive a reload, the
-  // same shape as a declared-but-unbound factor. Absent means off.
+  // same shape as a declared-but-unbound factor -- and it is the state the
+  // canvas warns about. Absent means off.
+  //
+  // A prose twin, `expected_output`, used to sit here: free text appended to
+  // the prompt asking for a shape in English. It is withdrawn -- two
+  // descriptions of one answer had to be kept in agreement by hand, and the
+  // prose one was the half nothing could read back out. A graph saved before
+  // the change may still carry the key; nothing reads it (see
+  // services.protocol_execution's _build_user_input).
+  //
+  // Still keyed `require_output_parser` rather than `..._format`: the label is
+  // about the outcome, the key is about the node that delivers it, and renaming
+  // a purely presentational flag would orphan it on every canvas already saved.
   require_output_parser?: boolean
   // Model, tool assignment, and execution pattern are no longer fields
   // here -- resolved from the node's required LLM connector, optional Tool

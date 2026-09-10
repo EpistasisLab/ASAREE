@@ -3030,11 +3030,9 @@ def _build_user_input(
 
     On the current contract the prompt's own ``{{...}}`` references are resolved
     (:mod:`asaree.services.prompt_references`) and no upstream block is appended,
-    and the node's ``expected_output`` -- a plain-English description of the
-    shape the answer should take, not a schema and not validated -- is appended
-    last. The legacy contract does none of that: its format is frozen, so a
-    legacy prompt containing ``{{node:x}}`` keeps that text literally and a
-    legacy node's ``expected_output`` is inert, exactly as the published
+    and the shape the node's Output Parser declares is appended last. The legacy
+    contract does none of that: its format is frozen, so a legacy prompt
+    containing ``{{node:x}}`` keeps that text literally, exactly as the published
     experiments would have."""
     # Resolved once, and used for every contract-dependent decision below, so
     # an unrecognized version cannot get the legacy upstream block but a
@@ -3171,23 +3169,21 @@ def _build_user_input(
     # `{{audience}}` reference resolves to, above. Nothing platform-authored
     # goes into a prompt that did not ask for it.
     #
-    # Expected output is the exception to that rule, and deliberately so. The
+    # The output shape is the exception to that rule, and deliberately so. The
     # rule exists to stop *platform-derived* text -- another node's output, a
     # generated audience sentence -- from arriving unasked. This is the user's
-    # own prose about their own node, typed into that node's own inspector;
-    # making them insert a second token to make the first textarea do anything
-    # would be ceremony, not consent. Last, because it is the instruction the
-    # model should be holding when it starts writing.
-    expected_output = str((node.get("data", {}).get("config", {}) or {}).get("expected_output") or "").strip()
-    if expected_output and contract != LEGACY_PROMPT_CONTRACT:
-        parts.append(f"Produce your output in this shape:\n{expected_output}")
-
-    # After Expected output, because it is more specific: that one describes the
-    # answer's form, this names the facts an Output Parser is about to extract
-    # from it (see _output_shape_block). Current contract only, like everything
-    # else appended here -- the legacy format is frozen, and the spinal
-    # experiments resolve to it, so the agents that carry a contract today keep
-    # the prompts they have always had.
+    # own declaration about their own node, made by wiring an Output Parser to
+    # it; making them insert a token as well would be ceremony, not consent.
+    #
+    # It also used to have a prose twin, `config.expected_output`, appended just
+    # above this. That field is gone: one node said what shape to produce and a
+    # second said which fields to state, so a user had to keep two descriptions
+    # of one answer in agreement by hand, and the free-text one was the half
+    # nothing could read back. Asking for the shape and extracting it are now
+    # the same declaration -- see `_output_shape_block`. Current contract only,
+    # like everything else appended here: the legacy format is frozen, and the
+    # spinal experiments resolve to it, so the agents that carry a contract
+    # today keep the prompts they have always had.
     shape_block = _output_shape_block(_resolve_output_contract(graph, node["id"]))
     if shape_block and contract != LEGACY_PROMPT_CONTRACT:
         parts.append(shape_block)

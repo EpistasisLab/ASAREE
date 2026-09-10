@@ -617,57 +617,23 @@ def test_clearing_the_design_spec_entirely_is_left_alone() -> None:
 
 
 # ----------------------------------------------------------------------
-# Expected output
+# Expected output, withdrawn
 # ----------------------------------------------------------------------
 #
-# The one thing the current contract appends that the prompt did not ask for --
-# and the exception is deliberate: it is the user's own prose about their own
-# node, not platform-derived text about someone else's.
+# `config.expected_output` was a second, prose way of asking for a shape,
+# appended just before the parser's field list. Two descriptions of one answer
+# meant keeping them in agreement by hand, and only one of them could be read
+# back out. Declaring the shape is now the Output Parser's job alone.
 
 
-def _with_expected(shape: str, prompt: str = "Do the thing.") -> dict[str, Any]:
-    graph = {"nodes": [_agent("a", "Analyst", prompt)], "edges": []}
-    graph["nodes"][0]["data"]["config"]["expected_output"] = shape
-    return graph
-
-
-def test_expected_output_is_appended_to_the_current_contracts_prompt() -> None:
-    text = _prompt(_with_expected("A bulleted list of risks."), "a", {}, CURRENT_PROMPT_CONTRACT)
-    assert "Produce your output in this shape:\nA bulleted list of risks." in text
-
-
-def test_expected_output_comes_last_so_it_is_the_final_instruction() -> None:
-    text = _prompt(_with_expected("A bulleted list."), "a", {}, CURRENT_PROMPT_CONTRACT)
-    assert text.endswith("Produce your output in this shape:\nA bulleted list.")
-
-
-def test_an_absent_expected_output_changes_nothing() -> None:
+def test_expected_output_is_no_longer_appended_to_any_prompt() -> None:
+    """A graph still carrying the field is not an error -- every canvas saved
+    before it was withdrawn has one -- it simply does nothing now."""
     graph = {"nodes": [_agent("a", "Analyst")], "edges": []}
-    blank = _prompt(_with_expected(""), "a", {}, CURRENT_PROMPT_CONTRACT)
-    assert _prompt(graph, "a", {}, CURRENT_PROMPT_CONTRACT) == blank
-    assert "Produce your output" not in _prompt(_with_expected("   "), "a", {}, CURRENT_PROMPT_CONTRACT)
-
-
-def test_the_legacy_contract_ignores_expected_output_entirely() -> None:
-    """Its format is frozen: a field added after those experiments ran must not
-    change a byte of what they get."""
-    graph = {"nodes": [_agent("a", "Analyst")], "edges": []}
-    assert _prompt(_with_expected("A bulleted list."), "a", {}, LEGACY_PROMPT_CONTRACT) == _prompt(
-        graph, "a", {}, LEGACY_PROMPT_CONTRACT
-    )
-
-
-def test_a_senders_expected_output_does_not_reach_the_consumers_prompt() -> None:
-    """It is surfaced to the *user*, in the Receives readout, not to the
-    consuming model: the current contract has no envelope to carry it, and
-    inventing one would put platform prose into a prompt that asked for a
-    payload."""
-    graph = _two_step()
-    graph["nodes"][0]["data"]["config"]["expected_output"] = "A bulleted list of risks."
-    graph["nodes"][1]["data"]["config"]["prompt"] = "Review {{previous}}."
-    text = _prompt(graph, "b", {"a": {"status": "completed", "output_text": "- risk one"}}, CURRENT_PROMPT_CONTRACT)
-    assert "- risk one" in text
-    assert "A bulleted list of risks." not in text
+    stale = {"nodes": [_agent("a", "Analyst")], "edges": []}
+    stale["nodes"][0]["data"]["config"]["expected_output"] = "A bulleted list of risks."
+    for contract in (CURRENT_PROMPT_CONTRACT, LEGACY_PROMPT_CONTRACT):
+        assert _prompt(stale, "a", {}, contract) == _prompt(graph, "a", {}, contract)
 
 
 # ----------------------------------------------------------------------
@@ -762,18 +728,17 @@ def test_the_legacy_contract_ignores_the_parser_entirely() -> None:
     ) == _prompt(graph, "a", {}, LEGACY_PROMPT_CONTRACT)
 
 
-def test_the_shape_block_comes_after_expected_output() -> None:
-    """Expected output describes the answer's form; the parser names the facts
-    it must contain. More specific goes last."""
-    graph = _with_parser([{"name": "n_rows", "type": "integer"}])
-    graph["nodes"][0]["data"]["config"]["expected_output"] = "A short paragraph."
-    text = _prompt(graph, "a", {}, CURRENT_PROMPT_CONTRACT)
-    assert text.index("A short paragraph.") < text.index("state each one explicitly:")
+def test_the_shape_block_comes_last_so_it_is_the_final_instruction() -> None:
+    """It is the thing the model should be holding when it starts writing."""
+    text = _prompt(_with_parser([{"name": "n_rows", "type": "integer"}]), "a", {}, CURRENT_PROMPT_CONTRACT)
+    assert text.rstrip().endswith("- n_rows (integer)")
 
 
 def test_a_senders_parser_fields_do_not_reach_the_consumers_prompt() -> None:
-    """Same rule as Expected output: the shape a producer promises is shown to
-    the user, not narrated to the consuming model."""
+    """The shape a producer promises is shown to the user, in the Receives
+    readout, not narrated to the consuming model: the current contract has no
+    envelope to carry it, and inventing one would put platform prose into a
+    prompt that asked for a payload."""
     graph = _two_step()
     graph["nodes"][1]["data"]["config"]["prompt"] = "Review {{previous}}."
     graph["nodes"].append(

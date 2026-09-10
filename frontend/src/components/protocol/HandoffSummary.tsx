@@ -62,14 +62,17 @@ export function ReceivesSummary({ peers, prompt }: { peers: HandoffPeers; prompt
       )}
       {/* Only the senders this prompt actually pulls in: a shape promised by a
           node whose output never arrives is not something to reconcile against.
-          Shown to the user, not to the agent -- see `HandoffPeer.expectedOutput`
-          for why the consuming model is deliberately not told. */}
+          Shown to the user, not to the agent -- see `HandoffPeer` for why the
+          consuming model is deliberately not told. Field names rather than the
+          prose promise this used to print: the shape a sender declares is now
+          its Output Parser's field list, which is also exactly what can be
+          referenced individually, so this doubles as the menu for doing so. */}
       {peers.receives
-        .filter((target) => target.expectedOutput && referenced.has(target.id))
+        .filter((target) => target.fields?.length && referenced.has(target.id))
         .map((target) => (
           <p key={target.id} className="pt-0.5 text-muted-foreground">
             <span className="text-[color:var(--node-label)]">{target.name}</span> promises:{' '}
-            <span className="italic">{target.expectedOutput}</span>
+            <span className="text-foreground">{target.fields!.join(', ')}</span>
           </p>
         ))}
     </div>

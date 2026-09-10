@@ -93,7 +93,11 @@ export const COORDINATION_STRATEGY_CATALOG: {
   },
   {
     slug: 'peer_collaboration',
-    label: 'Peer Collaboration',
+    // "(beta)" rides on the label rather than a separate badge for the same
+    // reason "(default)" does above: the label is what the picker, the
+    // canvas-mismatch warning and the switch-confirm dialog all render, so
+    // one string keeps the qualifier from appearing in only one of the three.
+    label: 'Peer Collaboration (beta)',
     // The cost ceiling belongs here rather than in RunConfirmDialog: this is
     // where the choice is actually made, and every consultation is a full agent
     // run of its own (Reason/Plan/Act cycle, own tokens). The caps are the
@@ -103,7 +107,7 @@ export const COORDINATION_STRATEGY_CATALOG: {
   },
   {
     slug: 'supervisor_architecture',
-    label: 'Supervisor',
+    label: 'Supervisor (beta)',
     // The contrast with Peer Collaboration is the whole reason to pick one over
     // the other, so it's stated rather than left to be discovered at run time:
     // there, the lead *may* consult; here, ASAREE dispatches every worker

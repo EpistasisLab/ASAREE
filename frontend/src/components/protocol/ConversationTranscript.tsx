@@ -90,7 +90,7 @@ export function ConversationTranscript({
         className="flex w-full items-center justify-between gap-2 rounded text-left hover:opacity-80"
         aria-expanded={!collapsed}
       >
-        <p className="text-sm font-medium text-[color:var(--node-label)]">Agent conversation</p>
+        <p className="text-sm font-medium text-[color:var(--node-label)]">Agent conversation flow</p>
         <span className="flex items-center gap-1.5">
           <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{stateLabel}</span>
           <span className="text-xs text-muted-foreground">{conversation.messages.length}</span>

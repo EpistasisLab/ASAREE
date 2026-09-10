@@ -347,10 +347,11 @@ export function AgentNode({
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.tool}>Tool</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="tool" left={CONNECTOR_LEFT.tool} alwaysVisible />
-      {/* Output Parser -- the field spec the agent's finished answer is read
-          back into. Last on the bottom edge, at 95%: it's the only connector
-          here that acts AFTER the agent has run, so it sits at the end of the
-          row the run reads left-to-right (AI -> Memory -> Tool -> Parser).
+      {/* Output Parser -- the field spec the agent's answer is written to and
+          read back out of. Last on the bottom edge, at 95%: it's the only
+          connector here whose work outlives the agent's own turn, so it sits
+          at the end of the row the run reads left-to-right (AI -> Memory ->
+          Tool -> Parser).
           Capped at one (no `alwaysVisible`) -- two contracts would be two
           answers to "what shape is this agent's output". */}
       {showOutputParser && (
@@ -360,7 +361,7 @@ export function AgentNode({
             id="output_parser"
             position={Position.Bottom}
             style={{ left: CONNECTOR_LEFT.output_parser }}
-            title="Output Parser -- extracts typed fields from this agent's answer (one extra model call per run)"
+            title="Output Parser -- defines the format of this agent's answer and reads its typed fields back out"
             className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
           />
           <ConnectorHandleLabel left={CONNECTOR_LEFT.output_parser}>Parser</ConnectorHandleLabel>

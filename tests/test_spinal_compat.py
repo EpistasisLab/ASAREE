@@ -330,8 +330,16 @@ def test_the_current_contract_would_have_changed_this_prompt(graph: dict[str, An
     """
 
     def _without(text: str, block: str) -> str:
+        # Removed as a contiguous substring, with the "\n\n" that joins it to
+        # what came before. This used to drop whole "\n\n"-delimited parts,
+        # which quietly stopped working once the shape block grew its own blank
+        # line (the field list, then the JSON appendix): a multi-paragraph block
+        # is no longer one part, so nothing matched and the subtraction became a
+        # no-op that failed as a mismatch rather than as the missing-block
+        # assertion above.
         assert block and block in text
-        return "\n\n".join(part for part in text.split("\n\n") if part != block)
+        joined = f"\n\n{block}"
+        return text.replace(joined, "", 1) if joined in text else text.replace(block, "", 1)
 
     dc_gate_id = _AGENTS[0][2]
     fte_id = _AGENTS[1][0]

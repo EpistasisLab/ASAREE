@@ -487,8 +487,9 @@ export function defaultMemoryNodeData(label = 'Memory'): MemoryNodeData {
 export interface OutputParserNodeConfig {
   output_contract: OutputContract | null
   // Absent means enabled, matching `active`'s own convention (AgentNodeData).
-  // Unlike Memory's, this has a real runtime effect: disabling is how you stop
-  // paying for the extra LLM call for a run without deleting the field spec.
+  // Unlike Memory's, this has a real runtime effect: disabling is how you take
+  // the shape out of one run -- prose instead of named values -- without
+  // deleting the field spec.
   // _resolve_output_contract deliberately does NOT fall back to the agent's
   // legacy stored contract when a wired parser is disabled -- "off" means off.
   enabled?: boolean

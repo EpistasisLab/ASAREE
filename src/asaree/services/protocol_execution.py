@@ -2311,8 +2311,8 @@ def _resolve_output_contract(graph: dict[str, Any], node_id: str) -> dict[str, A
 
     A disabled parser node (``config.enabled is False``) contributes nothing,
     the same way a disabled Tool or Knowledge node does: that is the canvas's
-    way of costing out the extra LLM call for one run without deleting the
-    field spec.
+    way of taking the shape out of one run -- prose instead of named values --
+    without deleting the field spec.
 
     Note the fallback is reached only when **no parser node is wired at all**,
     not whenever the parser yields nothing. A wired-but-disabled or
@@ -2340,38 +2340,59 @@ def _resolve_output_contract(graph: dict[str, Any], node_id: str) -> dict[str, A
 
 
 def _output_shape_block(contract: dict[str, Any] | None) -> str:
-    """The producer-side prompt block naming the fields its Output Parser will
-    extract, or ``""`` when there is no contract.
+    """The producer-side prompt block naming the fields its Output Parser
+    declares, and asking for them back as JSON. ``""`` when there is no
+    contract.
 
     This is the half of ``output_contract`` that never existed. Motoro's
-    ``extract_payload`` is a *post-hoc* extractor: it makes a second LLM call
-    to coerce text the agent has already finished, and the agent is never told
-    the contract exists. So the extractor was being asked to pull ``n_rows``
-    out of prose that had no reason to contain ``n_rows``. Stating the fields
-    up front costs nothing and is the one thing that makes the extraction
-    likely to succeed.
+    ``extract_payload`` is a *post-hoc* extractor: a second LLM call that
+    coerces text the agent has already finished, and the agent was never told
+    the contract exists -- so the extractor was being asked to pull ``n_rows``
+    out of prose that had no reason to contain ``n_rows``.
 
-    Deliberately a readable field list, not a JSON schema or an instruction to
-    emit JSON. The agent's job is unchanged -- write the answer -- and the
-    parser's job is unchanged. What changes is only that the answer now knows
-    which facts it is expected to contain. Composes with Expected output rather
-    than replacing it: that one is prose about form ("a bulleted list, one risk
-    per line"), this is a list of facts."""
+    Naming the fields fixed the accuracy half of that. The JSON block fixes the
+    cost half: with the values restated in a machine-readable form, reading
+    them is a ``json.loads`` in ``parse_payload_inline`` rather than a second
+    pass over the whole answer. The model call is still there as a fallback for
+    a reply that ignores the instruction, so a parser never *stops* working --
+    it just stops being the normal case, which is what makes declaring a shape
+    cheap enough to be the default way to ask for one.
+
+    Two things this deliberately does not do. It does not send a JSON Schema:
+    the fields already read as a list, and a schema is longer, harder for a
+    model to follow, and no more precise for a flat object. And it does not ask
+    for JSON *instead* of the answer -- the prose is what the next agent reads,
+    so the block is an appendix to it. ``parse_payload_inline`` strips the block
+    back off before anything downstream sees it."""
     fields = (contract or {}).get("fields") or []
     lines = []
+    keys = []
     for field in fields:
         if not isinstance(field, dict):
             continue
         name = str(field.get("name") or "").strip()
         if not name:
             continue
+        keys.append(name)
         type_ = str(field.get("type") or "").strip()
         description = str(field.get("description") or "").strip()
         suffix = f" -- {description}" if description else ""
         lines.append(f"- {name} ({type_}){suffix}" if type_ else f"- {name}{suffix}")
     if not lines:
         return ""
-    return "Your answer will be read for these specific values, so state each one explicitly:\n" + "\n".join(lines)
+    # `null` for every key, so the template is itself valid JSON and "I could
+    # not establish this" needs no separate notation -- it is what the model
+    # gets by leaving the line alone.
+    template = "{" + ", ".join(f'"{key}": null' for key in keys) + "}"
+    return (
+        "Your answer will be read for these specific values, so state each one explicitly:\n"
+        + "\n".join(lines)
+        + "\n\nWrite your answer as you normally would. Then, as the very last thing in your reply, "
+        "repeat those values in a fenced JSON block:\n"
+        f"```json\n{template}\n```\n"
+        "Replace each null with the value your answer establishes, leaving it null where your answer "
+        "establishes none. Write nothing after the block."
+    )
 
 
 def _resolve_dataset_tool_config(

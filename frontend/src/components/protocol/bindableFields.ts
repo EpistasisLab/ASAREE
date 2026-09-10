@@ -216,9 +216,9 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     case 'output_parser':
       // Only `enabled`, not the field spec itself: "structured output vs.
-      // prose" is a real treatment to compare (and the only way to A/B the
-      // extra model call the parser costs), whereas varying the SHAPE across
-      // cells would give each cell a different set of extracted values, which
+      // prose" is a real treatment to compare (does asking for named values
+      // change what the agent writes?), whereas varying the SHAPE across cells
+      // would give each cell a different set of extracted values, which
       // nothing downstream could compare.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     // Each pattern node type's OWN config fields -- distinct from the

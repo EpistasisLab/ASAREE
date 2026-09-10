@@ -10,6 +10,7 @@ graph; this file asserts the mechanism.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -731,7 +732,35 @@ def test_the_legacy_contract_ignores_the_parser_entirely() -> None:
 def test_the_shape_block_comes_last_so_it_is_the_final_instruction() -> None:
     """It is the thing the model should be holding when it starts writing."""
     text = _prompt(_with_parser([{"name": "n_rows", "type": "integer"}]), "a", {}, CURRENT_PROMPT_CONTRACT)
-    assert text.rstrip().endswith("- n_rows (integer)")
+    assert text.rstrip().endswith("Write nothing after the block.")
+
+
+def test_the_block_asks_for_the_values_back_as_json() -> None:
+    """The whole point of the JSON appendix: `parse_payload_inline` reads it
+    with `json.loads`, so the contract costs nothing instead of a second model
+    call over the finished answer."""
+    text = _prompt(
+        _with_parser([{"name": "n_rows", "type": "integer"}, {"name": "n_cols", "type": "integer"}]),
+        "a",
+        {},
+        CURRENT_PROMPT_CONTRACT,
+    )
+    assert '```json\n{"n_rows": null, "n_cols": null}\n```' in text
+
+
+def test_the_json_template_is_itself_valid_json() -> None:
+    """`null` per key rather than a placeholder like `<value>`: the model can
+    copy the template verbatim and still emit something parseable, and "my
+    answer does not establish this" needs no notation of its own."""
+    text = _prompt(_with_parser([{"name": "n_rows", "type": "integer"}]), "a", {}, CURRENT_PROMPT_CONTRACT)
+    template = text.split("```json\n")[1].split("\n```")[0]
+    assert json.loads(template) == {"n_rows": None}
+
+
+def test_a_contract_with_no_usable_fields_asks_for_no_block_either() -> None:
+    """The template would be `{}`, which reads as an instruction to emit an
+    empty object rather than as the absence of one."""
+    assert "```json" not in _prompt(_with_parser([]), "a", {}, CURRENT_PROMPT_CONTRACT)
 
 
 def test_a_senders_parser_fields_do_not_reach_the_consumers_prompt() -> None:

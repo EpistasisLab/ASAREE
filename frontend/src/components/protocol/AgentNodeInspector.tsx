@@ -361,8 +361,9 @@ export function AgentNodeInspector({
                   <>
                     <p className="text-xs text-muted-foreground">
                       This agent carries an output contract stored on the node itself, from before parsers were
-                      canvas nodes. It still runs, and still costs an extra model call — but it is invisible on the
-                      canvas, and it tells the agent nothing about what to write. Convert it to see and edit it.
+                      canvas nodes. It still runs, and it shapes the agent's answer the same way a wired parser
+                      would — but it is invisible on the canvas, and nothing on the canvas says it is there.
+                      Convert it to see and edit it.
                     </p>
                     <div className="rounded border bg-background/60 p-2 font-mono text-[11px]">
                       <div className="text-muted-foreground">{legacyContract.name || '(unnamed)'}</div>

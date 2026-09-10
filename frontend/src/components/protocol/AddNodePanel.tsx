@@ -126,7 +126,7 @@ const NODE_CATALOG = [
   {
     type: 'output_parser',
     label: 'Output Parser',
-    description: "Reads named, typed fields back out of an Agent's answer -- costs one extra model call per run",
+    description: "Defines the format an Agent's answer must take, and reads its named, typed fields back out",
     icon: Braces,
   },
   {

@@ -11,9 +11,9 @@ import type { OutputParserNodeConfig, OutputParserNodeData, ProtocolNode } from 
 const ACCENT = nodeAccent('output_parser')
 
 // Home of the field-spec editor that used to sit in the Agent inspector's
-// Settings tab. Moving it here is the point of the node: the extra LLM call it
-// costs is now a thing on the canvas with an edge, not a switch buried two
-// tabs deep in whichever agent happens to own it.
+// Settings tab. Moving it here is the point of the node: the shape an agent's
+// answer must take is now a thing on the canvas with an edge, not a switch
+// buried two tabs deep in whichever agent happens to own it.
 export function OutputParserNodeInspector({
   node,
   experimentId,
@@ -71,12 +71,15 @@ export function OutputParserNodeInspector({
       onDelete={() => onDelete(node.id)}
       onClose={onClose}
     >
-      {/* Says the cost out loud. It's the one thing about this node a user
-          can't see from the canvas, and the whole reason it stopped being a
-          field. */}
+      {/* Says the cost out loud -- it's the one thing about this node a user
+          can't see from the canvas. It used to read "a second model call per
+          run"; that is now the exception rather than the rule, and the
+          fallback is worth naming because it's what a caveat on a finished run
+          is telling you about. */}
       <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-        Extraction is a second model call per run, made after the agent has finished writing. The connected agent is
-        also told which values to state, so there is something for this to read.
+        The connected agent is told to state these values and to repeat them as JSON at the end of its answer, which
+        is read back with no extra model call. A run whose answer arrives without that block falls back to a second
+        model call to extract them, and says so in its caveats.
       </div>
       {/* Bindable as a plain boolean, like Memory's and a Tool node's:
           "structured output vs. prose" is a legitimate treatment to compare

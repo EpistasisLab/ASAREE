@@ -12,3 +12,9 @@ Your answer will be read for these specific values, so state each one explicitly
 - encoding_map (object) -- Categorical encoding scheme per column
 - n_features_out (integer) -- Feature count after engineering/encoding
 - notes_for_fs (string) -- Handoff notes for the SF-FS stage
+
+Write your answer as you normally would. Then, as the very last thing in your reply, repeat those values in a fenced JSON block:
+```json
+{"engineering_recipe": null, "encoding_map": null, "n_features_out": null, "notes_for_fs": null}
+```
+Replace each null with the value your answer establishes, leaving it null where your answer establishes none. Write nothing after the block.

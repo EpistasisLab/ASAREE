@@ -338,9 +338,23 @@ export function referenceLabel(ref: string, names: Record<string, string>): stri
  *  (shown raw, because there is no name left to show and hiding it would hide
  *  the problem). */
 export function toDisplayPrompt(stored: string, names: Record<string, string>): string {
-  return (stored ?? '').replace(STORED_RE, (whole, id: string, field: string | undefined, raw?: string) =>
-    names[id] ? `{{${names[id]}${field ? `.${field}` : ''}${raw ? '|raw' : ''}}}` : whole,
-  )
+  return toDisplayPromptWith(stored, (id) => names[id])
+}
+
+/** `toDisplayPrompt` against a lookup instead of a prebuilt map.
+ *
+ * For call sites that hold a lookup rather than a names object -- a canvas
+ * node card resolves its own prompt on every React Flow store tick, including
+ * every pointer move of a drag, and building a whole-graph names object there
+ * would be O(nodes) work per node per tick. Resolving only the ids the prompt
+ * actually names is O(refs), and the common case (no references at all) costs
+ * one `replace` that matches nothing.
+ */
+export function toDisplayPromptWith(stored: string, labelOf: (id: string) => string | undefined): string {
+  return (stored ?? '').replace(STORED_RE, (whole, id: string, field: string | undefined, raw?: string) => {
+    const label = labelOf(id)
+    return label ? `{{${label}${field ? `.${field}` : ''}${raw ? '|raw' : ''}}}` : whole
+  })
 }
 
 /** Display form -> storage form. The inverse, and the one that runs on save.

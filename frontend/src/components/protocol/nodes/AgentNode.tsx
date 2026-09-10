@@ -1,8 +1,9 @@
-import { Handle, Position, useNodeConnections, useReactFlow, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useNodeConnections, useReactFlow, useStore, type NodeProps } from '@xyflow/react'
 import { Bot } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { cardAccent } from '@/lib/utils'
 import { nodeAccent } from '@/lib/nodeAccent'
+import { toDisplayPromptWith } from '@/lib/promptReferences'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { AgentNodeData, NodeRunStatus } from '@/types/protocols'
 import { boundFactorCount, hasBoundFactor } from '../bindableFields'
@@ -79,6 +80,20 @@ export function AgentNode({
   const { updateNodeData } = useReactFlow()
   const { requestRunNode } = useProtocolCanvasActions()
   const isActive = data.active ?? true
+
+  // Ids are stored, labels are only ever displayed -- the same invariant the
+  // inspector's editor upholds via `toDisplayPrompt`. Without this the summary
+  // line is the one place on the canvas a raw `{{node:demob-profiler}}` leaks
+  // out, which reads as a broken substitution rather than as a reference.
+  // Selected through the store rather than off a prebuilt map so a rename
+  // upstream updates this line; the selector returns a string, so plain
+  // equality already keeps the extra renders out.
+  const summary = useStore((state) =>
+    toDisplayPromptWith(data.config?.prompt || data.config?.goal || '', (id) => {
+      const label = state.nodeLookup.get(id)?.data?.label
+      return typeof label === 'string' && label ? label : undefined
+    }),
+  )
 
   // The Output Parser slot is the one connector that is normally NOT drawn:
   // most agents answer in prose and shouldn't pay for a seventh caption on a
@@ -172,7 +187,7 @@ export function AgentNode({
         )}
       </div>
       <NodeSummaryLine
-        text={data.config?.prompt || data.config?.goal || null}
+        text={summary || null}
         warning={warnings.length > 0 ? warnings : null}
       />
       {/* FOUR connectors live on the TOP edge -- Pattern, Skill, Dataset,

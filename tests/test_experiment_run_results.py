@@ -296,7 +296,6 @@ def test_results_csv_orders_identity_factors_metrics_then_operational_metadata()
         "status",
         "observation_statuses",
         "evaluation_artifacts",
-        "legacy_values",
         "obsolete",
         "run_id",
         "protocol_revision_id",
@@ -304,6 +303,16 @@ def test_results_csv_orders_identity_factors_metrics_then_operational_metadata()
         "error",
     ]
     assert "replicate_label" not in header
+
+
+def test_results_csv_omits_legacy_values_when_no_row_has_legacy_data() -> None:
+    rows = [{"cell_label": "cell", "replicate_number": 1, "factor_values": {}, "metric_values": {}}]
+
+    exported = next(csv.DictReader(io.StringIO(result_rows_to_csv(rows))))
+    schema = result_rows_schema(rows)
+
+    assert "legacy_values" not in exported
+    assert "legacy_values" not in {column["name"] for column in schema["columns"]}
 
 
 def test_results_csv_sorts_long_form_factor_values_in_natural_level_order() -> None:

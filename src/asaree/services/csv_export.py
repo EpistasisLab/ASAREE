@@ -253,7 +253,6 @@ _RESULT_METADATA_FIELDS = [
     "status",
     "observation_statuses",
     "evaluation_artifacts",
-    "legacy_values",
     "obsolete",
     "run_id",
     "protocol_revision_id",
@@ -262,6 +261,22 @@ _RESULT_METADATA_FIELDS = [
 ]
 
 _RESULT_FIXED_FIELDS = [*_RESULT_ID_FIELDS, *_RESULT_RUNTIME_METRIC_FIELDS, *_RESULT_METADATA_FIELDS]
+_LEGACY_VALUES_FIELD = "legacy_values"
+_RESULT_RESERVED_FIELDS = [*_RESULT_FIXED_FIELDS, _LEGACY_VALUES_FIELD]
+
+
+def _result_metadata_fields(rows: Sequence[dict[str, Any]]) -> list[str]:
+    """Return operational columns, including legacy data only when present.
+
+    New experiments have no legacy values, so an all-empty JSON column would
+    obscure the analysis-ready result columns. Historical non-scalar values
+    remain exported whenever at least one row carries them.
+    """
+    return [
+        *_RESULT_METADATA_FIELDS[:3],
+        *([_LEGACY_VALUES_FIELD] if any(row.get(_LEGACY_VALUES_FIELD) for row in rows) else []),
+        *_RESULT_METADATA_FIELDS[3:],
+    ]
 
 
 def _result_csv_layout(
@@ -280,10 +295,10 @@ def _result_csv_layout(
             key
             for row in rows
             for key in (row.get("metric_values") or {})
-            if key not in _RESULT_FIXED_FIELDS and key not in _legacy_value_names(row)
+            if key not in _RESULT_RESERVED_FIELDS and key not in _legacy_value_names(row)
         }
     )
-    factor_columns = _factor_columns(rows, reserved=[*_RESULT_FIXED_FIELDS, *metric_keys], design_spec=design_spec)
+    factor_columns = _factor_columns(rows, reserved=[*_RESULT_RESERVED_FIELDS, *metric_keys], design_spec=design_spec)
     return factor_columns, metric_keys
 
 
@@ -303,6 +318,7 @@ def result_rows_schema(
 ) -> dict[str, Any]:
     """Machine-readable companion metadata for a Results analysis CSV."""
     factor_columns, metric_keys = _result_csv_layout(rows, design_spec)
+    metadata_fields = _result_metadata_fields(rows)
     reported_keys = {
         metric["name"]
         for metric in (design_spec or {}).get("metrics", [])
@@ -356,7 +372,7 @@ def result_rows_schema(
                         else {}
                     ),
                 }
-                for field in _RESULT_METADATA_FIELDS
+                for field in metadata_fields
             ),
         ],
     }
@@ -373,12 +389,13 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
     configuration payloads.
     """
     factor_columns, metric_keys = _result_csv_layout(rows, design_spec)
+    metadata_fields = _result_metadata_fields(rows)
     fields = [
         *_RESULT_ID_FIELDS,
         *(column[0] for column in factor_columns),
         *_RESULT_RUNTIME_METRIC_FIELDS,
         *metric_keys,
-        *_RESULT_METADATA_FIELDS,
+        *metadata_fields,
     ]
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
@@ -424,7 +441,10 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
         row["evaluation_artifacts"] = json.dumps(
             source.get("evaluation_artifacts") or [], sort_keys=True, separators=(",", ":")
         )
-        row["legacy_values"] = json.dumps(source.get("legacy_values") or [], sort_keys=True, separators=(",", ":"))
+        if _LEGACY_VALUES_FIELD in metadata_fields:
+            row[_LEGACY_VALUES_FIELD] = json.dumps(
+                source.get(_LEGACY_VALUES_FIELD) or [], sort_keys=True, separators=(",", ":")
+            )
         for column_name, factor_key, kind, labels in factor_columns:
             if factor_key not in factors:
                 continue

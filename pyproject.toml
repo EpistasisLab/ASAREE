@@ -167,4 +167,8 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# The application owns process-wide async engines (ASAREE and Motoro).  A
+# session loop keeps every pooled asyncpg connection on the loop that created
+# it; function-scoped loops can otherwise close before pool disposal finishes.
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { mcpServersApi } from '@/api/client'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,6 +15,31 @@ import type { ProtocolGraph } from '@/types/protocols'
 import { useDialogAutosave, type DialogAutosaveStatus } from './useDialogAutosave'
 
 type Binding = MeasurementPlan['producers'][number] | undefined
+export type MetricNodeDisplay = { label: string; type: 'Agent' | 'Script' | 'MCP Tool' }
+
+export function MetricNodeLabel({ display, reason }: { display: MetricNodeDisplay; reason?: string }) {
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-2">
+      <span className="truncate text-sm font-medium">{display.label}</span>
+      <Badge variant="outline" className="h-5 px-1.5 text-[10px] text-muted-foreground">
+        {display.type}
+      </Badge>
+      {reason && <span className="truncate text-xs text-muted-foreground">— {reason}</span>}
+    </span>
+  )
+}
+
+function MetricNodeOption({ value, display, reason }: { value: string; display: MetricNodeDisplay; reason?: string }) {
+  return (
+    <SelectItem
+      value={value}
+      disabled={!!reason}
+      aria-label={`${display.label}, ${display.type}${reason ? `, ${reason}` : ''}`}
+    >
+      <MetricNodeLabel display={display} reason={reason} />
+    </SelectItem>
+  )
+}
 
 function duplicateName(metric: DesignMetric, name: string, metrics: DesignMetric[]) {
   const normalized = name.trim().toLocaleLowerCase()
@@ -107,19 +133,27 @@ export function CustomMetricFlow({ metric, binding, graph, existingMetrics, sour
         : '__none__'
   const sourceNodeLabel = (nodeId: string) => graph?.nodes.find((node) => node.id === nodeId)?.data.label || nodeId
   const sourceAgentLabel = (agentNodeId: string) => graph?.nodes.find((node) => node.id === agentNodeId)?.data.label || agentNodeId
-  // Keep this picker in the same agent:node:field form as the factor picker.
-  // The connection itself is the selectable field here, so its source type
-  // is the final segment.
-  const pythonNodeLabel = (source: (typeof pythonSources)[number]) => `${sourceAgentLabel(source.agentNodeId)}:${sourceNodeLabel(source.scriptNodeId)}:Python Script`
-  const mcpNodeLabel = (source: McpToolSourceOption) => `${sourceAgentLabel(source.agentNodeId)}:${sourceNodeLabel(source.mcpNodeId)}:MCP Tool`
-  const agentNodeLabel = (source: (typeof agentSources)[number]) => `${source.label}:Agent output`
-  const selectedNodeLabel = selectedAgentSource
-    ? agentNodeLabel(selectedAgentSource)
+  // Keep the connection path recognizable without making the node type look
+  // like another colon-delimited part of the user-defined name.
+  const pythonNodeDisplay = (source: (typeof pythonSources)[number]): MetricNodeDisplay => ({
+    label: `${sourceAgentLabel(source.agentNodeId)}:${sourceNodeLabel(source.scriptNodeId)}`,
+    type: 'Script',
+  })
+  const mcpNodeDisplay = (source: McpToolSourceOption): MetricNodeDisplay => ({
+    label: `${sourceAgentLabel(source.agentNodeId)}:${sourceNodeLabel(source.mcpNodeId)}`,
+    type: 'MCP Tool',
+  })
+  const agentNodeDisplay = (source: (typeof agentSources)[number]): MetricNodeDisplay => ({
+    label: source.label,
+    type: 'Agent',
+  })
+  const selectedNodeDisplay = selectedAgentSource
+    ? agentNodeDisplay(selectedAgentSource)
     : selectedPythonSource
-      ? pythonNodeLabel(selectedPythonSource)
+      ? pythonNodeDisplay(selectedPythonSource)
       : selectedMcpSource
-        ? mcpNodeLabel(selectedMcpSource)
-        : 'Select a node…'
+        ? mcpNodeDisplay(selectedMcpSource)
+        : null
   const sourceSelected = producer === 'agent' ? Boolean(selectedAgentSource)
     : producer === 'python' ? Boolean(selectedPythonSource)
       : producer === 'mcp' ? Boolean(selectedMcpSource) : false
@@ -222,12 +256,12 @@ export function CustomMetricFlow({ metric, binding, graph, existingMetrics, sour
       {!sourceContext ? <div className="space-y-1.5">
         <Label>Node</Label>
         <Select value={selectedMetricNode} onValueChange={selectMetricNode}>
-          <SelectTrigger className="w-full" aria-label="Metric node"><SelectValue>{() => selectedNodeLabel}</SelectValue></SelectTrigger>
+          <SelectTrigger className="w-full" aria-label="Metric node"><SelectValue>{() => selectedNodeDisplay ? <MetricNodeLabel display={selectedNodeDisplay} /> : 'Select a node…'}</SelectValue></SelectTrigger>
           <SelectContent>
             <SelectItem value="__none__" disabled>Select a node…</SelectItem>
-            {agentSources.map((source) => { const reason = agentSourceDisabledReason(source); return <SelectItem key={`agent:${source.agentNodeId}`} value={`agent:${source.agentNodeId}`} disabled={!!reason}>{agentNodeLabel(source)}{reason ? ` — ${reason}` : ''}</SelectItem> })}
-            {pythonSources.map((source) => { const reason = pythonSourceDisabledReason(source); return <SelectItem key={`python:${source.key}`} value={`python:${source.key}`} disabled={!!reason}>{pythonNodeLabel(source)}{reason ? ` — ${reason}` : ''}</SelectItem> })}
-            {mcpSources.map((source) => { const reason = mcpSourceDisabledReason(source); return <SelectItem key={`mcp:${source.key}`} value={`mcp:${source.key}`} disabled={!!reason}>{mcpNodeLabel(source)}{reason ? ` — ${reason}` : ''}</SelectItem> })}
+            {agentSources.map((source) => <MetricNodeOption key={`agent:${source.agentNodeId}`} value={`agent:${source.agentNodeId}`} display={agentNodeDisplay(source)} reason={agentSourceDisabledReason(source)} />)}
+            {pythonSources.map((source) => <MetricNodeOption key={`python:${source.key}`} value={`python:${source.key}`} display={pythonNodeDisplay(source)} reason={pythonSourceDisabledReason(source)} />)}
+            {mcpSources.map((source) => <MetricNodeOption key={`mcp:${source.key}`} value={`mcp:${source.key}`} display={mcpNodeDisplay(source)} reason={mcpSourceDisabledReason(source)} />)}
           </SelectContent>
         </Select>
       </div> : <>

@@ -25,14 +25,14 @@ def test_locked_design_rejects_other_design_changes() -> None:
     assert not _locked_design_change_is_replicates_only(current, proposed)
 
 
-def test_locked_design_allows_level_label_changes() -> None:
+def test_locked_design_rejects_level_label_changes_because_they_rename_cells() -> None:
     current = {"factors": [{"name": "model", "levels": ["a", "b"]}], "replicates": 1}
     proposed = {
         "factors": [{"name": "model", "levels": ["a", "b"], "level_labels": ["baseline", "candidate"]}],
         "replicates": 1,
     }
 
-    assert _locked_design_change_is_replicates_only(current, proposed)
+    assert not _locked_design_change_is_replicates_only(current, proposed)
 
 
 def test_locked_experiment_rejects_non_replicate_mutations() -> None:

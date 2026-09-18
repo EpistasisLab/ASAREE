@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { DesignMetric } from '@/types/experiments'
@@ -45,7 +45,11 @@ describe('CustomMetricFlow', () => {
     const onSave = renderFlow(graph)
 
     await user.click(screen.getByRole('combobox', { name: 'Metric node' }))
-    await user.click(screen.getByRole('option', { name: 'Judge:Agent output' }))
+    const option = screen.getByRole('option', { name: 'Judge, Agent' })
+    expect(option).toHaveTextContent('Judge')
+    expect(within(option).getByText('Agent')).toHaveAttribute('data-slot', 'badge')
+    expect(option).not.toHaveTextContent('Judge:Agent')
+    await user.click(option)
     await user.type(screen.getByRole('textbox', { name: 'Metric name' }), 'Quality')
     await user.click(screen.getByRole('button', { name: 'Add custom metric' }))
 
@@ -105,7 +109,9 @@ describe('CustomMetricFlow', () => {
     /></QueryClientProvider>)
 
     await user.click(screen.getByRole('combobox', { name: 'Metric node' }))
-    await user.click(screen.getByRole('option', { name: 'Writer:Quality tools:MCP Tool' }))
+    const option = screen.getByRole('option', { name: 'Writer:Quality tools, MCP Tool' })
+    expect(within(option).getByText('MCP Tool')).toHaveAttribute('data-slot', 'badge')
+    await user.click(option)
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'MCP tool' })).toHaveTextContent('score'))
     await user.click(screen.getByRole('combobox', { name: 'MCP tool' }))
     expect(screen.getByRole('option', { name: 'score' })).not.toHaveAttribute('aria-disabled', 'true')
@@ -131,6 +137,8 @@ describe('CustomMetricFlow', () => {
     /></QueryClientProvider>)
 
     await user.click(screen.getByRole('combobox', { name: 'Metric node' }))
-    expect(screen.getByRole('option', { name: 'Writer:Scorer:Python Script' })).not.toHaveAttribute('aria-disabled', 'true')
+    const option = screen.getByRole('option', { name: 'Writer:Scorer, Script' })
+    expect(within(option).getByText('Script')).toHaveAttribute('data-slot', 'badge')
+    expect(option).not.toHaveAttribute('aria-disabled', 'true')
   })
 })

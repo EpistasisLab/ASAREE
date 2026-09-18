@@ -1366,8 +1366,8 @@ def referenceable_node_ids(graph: dict[str, Any], node_id: str) -> list[str]:
 
 
 # design_spec factor names (e.g. "Azure Foundry:Model", "Critic enabled") are
-# free text, joined into a real cell_label like "Azure Foundry:Effort_medium__
-# Azure Foundry:Model_claude-sonnet-5__Critic enabled_false" -- a string
+# free text, joined into a real cell_label like "Azure Foundry:Effort:medium__
+# Azure Foundry:Model:sonnet__Critic enabled:off" -- a string
 # asaree_workspace_core's own _SAFE_COMPONENT regex rejects outright (spaces,
 # colons). Sanitized here, once, rather than left for each agent to guess a
 # safe cell_label on its own before calling open_workspace: an LLM asked to

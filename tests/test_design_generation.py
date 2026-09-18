@@ -131,6 +131,22 @@ def test_cell_label_for_dict_valued_level_falls_back_to_stable_hash() -> None:
     assert label == cell_label_for(combo)  # deterministic across calls
 
 
+def test_cell_label_for_uses_factor_name_and_short_level_label() -> None:
+    """Raw prompts execute and remain in factor_values; persisted identities
+    use the factor's user-facing treatment label."""
+    prompt = "Explain why fixed random seeds help make an experiment reproducible. " * 5
+    factors = [
+        {
+            "name": "Answer style",
+            "levels": [prompt, f"Structure this response. {prompt}"],
+            "level_labels": ["concise", "structured"],
+        }
+    ]
+
+    assert cell_label_for({"Answer style": prompt}, factors=factors) == "Answer style:concise"
+    assert cell_label_for({"Answer style": factors[0]["levels"][1]}, factors=factors) == "Answer style:structured"
+
+
 async def test_generate_design_cells_default_replicate_matches_today(owner_id: uuid.UUID) -> None:
     async with get_session() as db:
         experiment = await create_experiment(db, name=f"design-gen-{uuid.uuid4().hex}", owner_id=owner_id)
@@ -140,6 +156,44 @@ async def test_generate_design_cells_default_replicate_matches_today(owner_id: u
         cells = await generate_design_cells(db, experiment_id=experiment_id, factors=_FACTORS)
         assert len(cells) == 4
         assert all("rep" not in replicate.replicate_label for replicate in cells)
+
+    async with get_session() as db:
+        await db.delete(await db.get(type(experiment), experiment_id))
+
+
+async def test_generate_design_cells_migrates_raw_labels_and_preserves_results(owner_id: uuid.UUID) -> None:
+    prompt = "Call the wired script, then explain reproducibility in no more than 90 words."
+    legacy_factors = [{"name": "Answer style", "levels": [prompt]}]
+    labeled_factors = [
+        {"name": "Answer style", "levels": [prompt], "level_labels": ["concise"]}
+    ]
+    async with get_session() as db:
+        experiment = await create_experiment(
+            db, name=f"design-gen-label-migration-{uuid.uuid4().hex}", owner_id=owner_id
+        )
+        experiment_id = experiment.id
+
+    async with get_session() as db:
+        legacy = await generate_design_cells(
+            db,
+            experiment_id=experiment_id,
+            factors=legacy_factors,
+            design_spec={"factors": legacy_factors},
+        )
+        legacy[0].metric_values = {"score": 1}
+        await db.flush()
+
+    async with get_session() as db:
+        migrated = await generate_design_cells(
+            db,
+            experiment_id=experiment_id,
+            factors=labeled_factors,
+            design_spec={"factors": labeled_factors},
+        )
+        assert len(migrated) == 1
+        assert migrated[0].replicate_label == "Answer style:concise"
+        assert migrated[0].factor_values == {"Answer style": prompt}
+        assert migrated[0].metric_values == {"score": 1}
 
     async with get_session() as db:
         await db.delete(await db.get(type(experiment), experiment_id))

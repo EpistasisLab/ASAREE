@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { experimentsApi, protocolsApi } from '@/api/client'
+import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { coordinationStrategyIssues } from '@/lib/coordinationStrategy'
 import { unboundFactorNames } from '@/lib/factorBindings'
 import { promptReferenceScope } from '@/lib/promptReferences'
@@ -523,6 +523,13 @@ export function DesignTab({
     coordinationSlug !== (experiment.design_spec?.coordination_strategy?.slug ?? 'sequential')
   const canGenerate = validFactors.length > 0 || impact?.regeneration_required === true
   const needsDesignUpdate = matrixDraftChanged || impact?.regeneration_required === true
+  const generateError = !generateMutation.isError
+    ? null
+    : generateMutation.error instanceof ApiError && typeof generateMutation.error.detail === 'string'
+      ? generateMutation.error.detail
+      : generateMutation.error instanceof Error
+        ? generateMutation.error.message
+        : 'Could not generate cells. Please try again.'
   const metadataSaveKey = `${metadataDraftKey}:${matrixDraftKey}`
   const isLocked = !!experiment.locked_at
   async function applyMetrics(
@@ -842,6 +849,11 @@ export function DesignTab({
           <p className="text-xs text-muted-foreground">
             {combinations} {combinations === 1 ? 'cell' : 'cells'} · {generateMutation.data.length}{' '}
             {generateMutation.data.length === 1 ? 'replicate' : 'replicates'} total
+          </p>
+        )}
+        {generateError && (
+          <p role="alert" className="text-xs text-destructive">
+            Could not generate cells: {generateError}
           </p>
         )}
       </div>

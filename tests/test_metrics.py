@@ -224,7 +224,7 @@ def test_design_spec_adds_short_default_labels_for_legacy_factor_levels() -> Non
     }
 
 
-def test_level_labels_do_not_change_the_material_design() -> None:
+def test_level_labels_change_the_material_design_because_they_name_cells() -> None:
     without_labels = {"factors": [{"name": "Agent:System prompt", "levels": ["a", "b"]}], "replicates": 2}
     with_labels = {
         "factors": [
@@ -236,4 +236,4 @@ def test_level_labels_do_not_change_the_material_design() -> None:
         ],
         "replicates": 2,
     }
-    assert material_design_spec(without_labels) == material_design_spec(with_labels)
+    assert material_design_spec(without_labels) != material_design_spec(with_labels)

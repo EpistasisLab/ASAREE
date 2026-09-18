@@ -255,17 +255,11 @@ def _experiment_response(e: Any, dataset_ids: list[uuid.UUID]) -> ExperimentResp
 
 
 def _locked_design_change_is_replicates_only(current: dict[str, Any] | None, proposed: dict[str, Any] | None) -> bool:
-    """Whether a locked design patch changes only run count or CSV metadata."""
+    """Whether a locked design patch changes only the replicate count."""
     before = deepcopy(current or {})
     after = deepcopy(proposed or {})
     before.pop("replicates", None)
     after.pop("replicates", None)
-    for spec in (before, after):
-        factors = spec.get("factors")
-        if isinstance(factors, list):
-            for factor in factors:
-                if isinstance(factor, dict):
-                    factor.pop("level_labels", None)
     return before == after
 
 

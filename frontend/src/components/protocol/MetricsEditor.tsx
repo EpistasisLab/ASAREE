@@ -14,7 +14,7 @@ import { localMetricReadinessPreview, removeMetricFromMeasurementPlan, upsertRun
 import { METRIC_CATALOG, makeCatalogMetric, makeCustomMetric, normalizeDesignMetrics, type MetricCatalogEntry } from '@/lib/metricCatalog'
 import type { ProtocolGraph } from '@/types/protocols'
 import type { DesignMetric, MeasurementPlan } from '@/types/experiments'
-import { CustomMetricFlow } from './CustomMetricDialogs'
+import { CustomMetricFlow, MetricNodeLabel, type MetricNodeDisplay } from './CustomMetricDialogs'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { useDialogAutosave } from './useDialogAutosave'
 
@@ -46,21 +46,27 @@ type CustomMetricChange = {
   config: CustomMetricProducerConfig
 }
 
-function customMetricProducerLabel(binding: MeasurementPlan['producers'][number] | undefined, graph: ProtocolGraph | undefined) {
-  if (!binding) return 'Custom metric'
+function customMetricProducerDisplay(
+  binding: MeasurementPlan['producers'][number] | undefined,
+  graph: ProtocolGraph | undefined,
+): MetricNodeDisplay | null {
+  if (!binding) return null
   const nodeLabel = (nodeId: unknown) => typeof nodeId === 'string'
     ? graph?.nodes.find((node) => node.id === nodeId)?.data.label || nodeId
     : 'Unknown node'
   const agent = nodeLabel(binding.config.agent_node_id)
-  if (binding.producer_id === AGENT_OUTPUT_PRODUCER_ID) return `${agent}:Agent output`
+  if (binding.producer_id === AGENT_OUTPUT_PRODUCER_ID) return { label: agent, type: 'Agent' }
   if (binding.producer_id === 'asaree.python_script') {
-    return `${agent}:${nodeLabel(binding.config.script_node_id)}:Python Script`
+    return { label: `${agent}:${nodeLabel(binding.config.script_node_id)}`, type: 'Script' }
   }
   if (binding.producer_id === 'asaree.mcp_tool') {
-    const toolName = typeof binding.config.tool_name === 'string' ? binding.config.tool_name : 'MCP Tool'
-    return `${agent}:${nodeLabel(binding.config.mcp_node_id)}:${toolName}`
+    const toolName = typeof binding.config.tool_name === 'string' ? binding.config.tool_name : null
+    return {
+      label: `${agent}:${nodeLabel(binding.config.mcp_node_id)}${toolName ? ` · ${toolName}` : ''}`,
+      type: 'MCP Tool',
+    }
   }
-  return 'Custom metric'
+  return null
 }
 
 function MetricsDialog({
@@ -331,9 +337,12 @@ function MetricsDialog({
                   const binding = stagedBindingForMetric(metric.id)
                   const readiness = stagedReadinessFor(metric)
                   const selectedPosition = metric.id ? customMetricIds.indexOf(metric.id) : -1
+                  const producerDisplay = customMetricProducerDisplay(binding, graph)
                   return <div key={metric.id} role="listitem" aria-label={`${metric.name}, position ${selectedPosition + 1} of ${customMetricIds.length}`} className="flex flex-wrap items-start gap-2 rounded-md border p-2.5">
                     <span className="min-w-0 flex-1">
-                      <span className="truncate text-sm font-medium">{customMetricProducerLabel(binding, graph)}</span>
+                      {producerDisplay
+                        ? <MetricNodeLabel display={producerDisplay} />
+                        : <span className="truncate text-sm font-medium">Custom metric</span>}
                       <span className="mt-0.5 block text-xs text-muted-foreground">{metric.name}</span>
                       {!readiness.ready && <span className="mt-1 block text-xs text-[color:var(--chart-4)]">{readiness.detail}</span>}
                     </span>

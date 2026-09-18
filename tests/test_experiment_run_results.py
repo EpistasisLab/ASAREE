@@ -382,6 +382,23 @@ def test_results_csv_uses_persisted_level_labels_instead_of_long_treatment_value
     assert set(factor["levels"]) == {"classifier", "full_description", "concise_summary"}
 
 
+def test_results_csv_uses_the_declared_factor_name_with_its_short_label() -> None:
+    prompt = "Call run_wired_script(), then explain why fixed seeds help reproducibility."
+    csv_text = result_rows_to_csv(
+        [{"cell_label": "Answer style:concise", "replicate_number": 1, "factor_values": {"Answer style": prompt}}],
+        {
+            "factors": [
+                {"name": "Answer style", "levels": [prompt], "level_labels": ["concise"]}
+            ]
+        },
+    )
+
+    row = next(csv.DictReader(io.StringIO(csv_text)))
+    assert row["cell_label"] == "Answer style:concise"
+    assert row["answer_style"] == "concise"
+    assert "answer_approach" not in row
+
+
 def test_results_csv_distinguishes_measured_null_from_an_unavailable_custom_metric() -> None:
     rows = [
         {"replicate_label": "called", "metric_values": {"Judge result": None}},

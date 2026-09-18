@@ -252,6 +252,7 @@ export function ExperimentSidePanel({
               ) : activeTab === 'runs' ? (
                 <RunsTab
                   experimentId={experiment.id}
+                  designSpec={experiment.design_spec}
                   protocol={protocol}
                   regenerationRequired={regenerationRequired}
                   unboundFactors={unboundFactors}

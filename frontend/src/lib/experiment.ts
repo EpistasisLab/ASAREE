@@ -62,12 +62,36 @@ export function displayFactorValue(value: unknown): string {
   return String(value)
 }
 
+/** Return a factor level's user-authored label when it has one. Factor values
+ * remain the durable execution identity; labels are presentation-only, so a
+ * missing, blank, or legacy label deliberately falls back to that raw value. */
+export function displayFactorLevel(
+  designSpec: Experiment['design_spec'] | undefined,
+  factorName: string,
+  value: unknown,
+  cellLabel?: string | null,
+): string {
+  const factor = getFactors(designSpec ?? null)?.find((candidate) => candidate.name === factorName)
+  const index = factor?.levels.findIndex((level) => factorValueKey(level) === factorValueKey(value)) ?? -1
+  const label = index >= 0 ? factor?.level_labels?.[index]?.trim() : undefined
+  // A cell stores the raw level it was generated with. Editing that content
+  // makes it intentionally differ from the current declaration until the
+  // design is regenerated, but its durable cell label still records the
+  // treatment label. Prefer that identity over exposing stale long content.
+  const cellParts = cellLabel?.replace(/__rep\d+$/, '').split('__') ?? []
+  const storedLabel = factor?.level_labels
+    ?.map((candidate) => candidate.trim())
+    .find((candidate) => candidate && cellParts.includes(`${factorName}:${candidate}`))
+  return label || storedLabel || displayFactorValue(value)
+}
+
 export interface FactorSpec {
   name: string
   levels: unknown[]
+  level_labels?: string[]
 }
 
-function getFactors(designSpec: Experiment['design_spec']): FactorSpec[] | null {
+function getFactors(designSpec: Experiment['design_spec'] | undefined): FactorSpec[] | null {
   const factors = (designSpec as { factors?: unknown } | null)?.factors
   return Array.isArray(factors) ? (factors as FactorSpec[]) : null
 }

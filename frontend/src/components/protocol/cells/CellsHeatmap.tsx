@@ -4,7 +4,7 @@ import {
   availableMetricKeys,
   replicatesMatching,
   deriveFactors,
-  displayFactorValue,
+  displayFactorLevel,
   formatMetricLabel,
   groupReplicatesIntoCells,
   heatColor,
@@ -133,7 +133,7 @@ export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; ce
           <div key={fi} className="space-y-1.5">
             {facetFactor && (
               <p className="font-mono text-xs text-muted-foreground">
-                {facetFactor.name} = {displayFactorValue(facetLevel)}
+                {facetFactor.name} = {displayFactorLevel(experiment.design_spec, facetFactor.name, facetLevel)}
               </p>
             )}
             {/* The grid scrolls sideways rather than being squeezed. It used
@@ -179,9 +179,9 @@ export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; ce
                       <div
                         key={ci}
                         className="truncate text-center font-mono text-xs text-muted-foreground"
-                        title={displayFactorValue(colLevel)}
+                        title={displayFactorLevel(experiment.design_spec, colFactor.name, colLevel)}
                       >
-                        {displayFactorValue(colLevel)}
+                        {displayFactorLevel(experiment.design_spec, colFactor.name, colLevel)}
                       </div>
                     ))
                   : <div />}
@@ -194,8 +194,8 @@ export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; ce
                         JSON-ish dict value) sizes the whole track and shoves the
                         squares off the edge of the panel. */}
                     <div className="flex items-center overflow-hidden pr-2 font-mono text-xs text-muted-foreground">
-                      <span className="truncate" title={displayFactorValue(rowLevel)}>
-                        {displayFactorValue(rowLevel)}
+                      <span className="truncate" title={displayFactorLevel(experiment.design_spec, rowFactor.name, rowLevel)}>
+                        {displayFactorLevel(experiment.design_spec, rowFactor.name, rowLevel)}
                       </span>
                     </div>
                     {colFactor.levels.map((_, ci) => {

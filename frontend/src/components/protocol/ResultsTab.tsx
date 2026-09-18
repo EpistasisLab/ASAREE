@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { displayFactorValue, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
+import { displayFactorLevel, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
 import { OBSERVATION_LABELS } from '@/lib/measurementPlan'
 import { sanitizeFilename } from '@/lib/utils'
 import type { DesignMetric, EvaluationArtifact, Experiment, HistoricalRun, MetricObservation, ObsoleteRun, ResultCell, ResultNodeRun, ResultReplicate, SupersededRun } from '@/types/experiments'
@@ -32,10 +32,14 @@ function formatDuration(value: number | null): string {
   return `${(value / 3600).toFixed(1)} hr`
 }
 
-function factorSummary(values: Record<string, unknown>): string {
+function factorSummary(
+  values: Record<string, unknown>,
+  designSpec: Experiment['design_spec'],
+  cellLabel?: string | null,
+): string {
   const entries = Object.entries(values)
   if (entries.length === 0) return 'No varying factors'
-  return entries.map(([name, value]) => `${name.split(':').join(' · ')}: ${displayFactorValue(value)}`).join(' · ')
+  return entries.map(([name, value]) => `${name.split(':').join(' · ')}: ${displayFactorLevel(designSpec, name, value, cellLabel)}`).join(' · ')
 }
 
 function numericMetricValue(replicate: ResultReplicate, metricKey: string | null): number | null {
@@ -436,9 +440,9 @@ export function ResultsInspectorPanel({
     : null
   const title = replicate ? `Replicate ${replicate.replicate_number}` : 'Cell results'
   const description = replicate
-    ? factorSummary(replicate.factor_values)
+    ? factorSummary(replicate.factor_values, experiment.design_spec, replicate.cell_label)
     : cell
-      ? factorSummary(cell.factor_values)
+      ? factorSummary(cell.factor_values, experiment.design_spec, cell.cell_label)
       : undefined
   // During a rolling frontend/backend restart, accept the prior response name
   // too. The earlier API omitted the latest stale run from its history, so add
@@ -655,7 +659,7 @@ export function ResultsTab({
               <div className="flex items-center gap-1.5 text-xs font-medium text-primary"><Trophy className="size-3.5" /> Best current result</div>
               <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{formatResultMetricValue(metricKey, bestCell.metric_means[metricKey], metricTypes)}</p>
               {binaryMetricNote(metricKey, bestCell.metric_means[metricKey], bestCell.metric_counts[metricKey], metricTypes) && <p className="mt-0.5 text-xs text-muted-foreground">{binaryMetricNote(metricKey, bestCell.metric_means[metricKey], bestCell.metric_counts[metricKey], metricTypes)}</p>}
-              <p className="mt-1 truncate text-xs text-muted-foreground" title={factorSummary(bestCell.factor_values)}>{directionLabel} {metricDisplayLabel(metricKey, metricTypes, metricAggregations)} · {factorSummary(bestCell.factor_values)}</p>
+              <p className="mt-1 truncate text-xs text-muted-foreground" title={factorSummary(bestCell.factor_values, experiment.design_spec)}>{directionLabel} {metricDisplayLabel(metricKey, metricTypes, metricAggregations)} · {factorSummary(bestCell.factor_values, experiment.design_spec)}</p>
             </div>
           ) : metricKey ? (
             <div className="min-w-0"><div className="text-xs font-medium text-primary">Comparison only</div><p className="mt-1 text-sm font-medium">{formatMetricLabel(metricKey)}</p><p className="mt-1 text-xs text-muted-foreground">{primaryMetric === null ? 'No primary metric is declared, so Results compares values without ranking cells or declaring a winner.' : metricKey !== primaryMetric ? `${formatMetricLabel(metricKey)} is not the declared primary metric, so Results compares its values without ranking cells or declaring a winner.` : `${formatMetricLabel(metricKey)} has no maximize/minimize direction, so Results compares values without declaring a winner.`}</p></div>
@@ -676,7 +680,7 @@ export function ResultsTab({
       </section>
       <section className="space-y-2">
         <div><h2 className="flex items-center gap-1 text-sm font-medium">{rankable ? 'Cell ranking' : 'Cell comparison'}<InfoTooltip>{rankable ? 'Cells are ranked by the selected metric using current, non-obsolete replicates only.' : 'Metrics are shown for comparison without ordering cells or naming a winner.'}</InfoTooltip></h2><p className="text-xs text-muted-foreground">Current replicates only{rankable && isBinaryMetric(metricKey, metricTypes) ? ' · ranked by pass rate' : rankable && metricKey === primaryMetric ? ` · ${primaryMetricDirection === 'minimize' ? 'lower is better' : 'higher is better'}` : ''}</p></div>
-        {metricKeys.length === 0 ? <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">No scalar metrics are declared or reported yet. Run details and provider usage are still available below.</p> : <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[34rem] text-left text-xs"><thead className="border-b bg-muted/40 text-muted-foreground"><tr><th className="w-10 px-2.5 py-2 font-medium"><span className="flex items-center gap-1">{rankable ? 'Rank' : '—'}{rankable && <InfoTooltip>Rank among conditions with a measured value for the selected metric.</InfoTooltip>}</span></th><th className="px-2.5 py-2 font-medium"><span className="flex items-center gap-1">Condition<InfoTooltip>The factor levels used for this group of replicates.</InfoTooltip></span></th><th className="px-2.5 py-2 text-right font-medium">{metricKey ? metricDisplayLabel(metricKey, metricTypes, metricAggregations) : ''}</th><th className="px-2.5 py-2 text-right font-medium">Cost</th><th className="px-2.5 py-2 text-right font-medium">Duration</th><th className="px-2.5 py-2 text-right font-medium"><span className="inline-flex items-center gap-1">Runs<InfoTooltip>Completed current replicates out of all generated replicates for this condition.</InfoTooltip></span></th></tr></thead><tbody>{sortedCells.map((cell, index) => { const value = metricKey ? cell.metric_means[metricKey] : undefined; const measured = typeof value === 'number'; const ranked = rankable && measured; const note = measured && metricKey ? binaryMetricNote(metricKey, value, cell.metric_counts[metricKey], metricTypes) : null; const missingSummary = missingObservationSummary(replicatesByCell.get(cell.cell_label) ?? [], selectedMetricId, metricKey); return <tr key={cell.cell_label} className={`border-b last:border-b-0 ${index === 0 && ranked ? 'bg-primary/5' : 'hover:bg-muted/30'}`}><td className="px-2.5 py-2.5 font-medium text-muted-foreground">{ranked ? index + 1 : '—'}</td><td className="max-w-0 px-2.5 py-2.5"><p className="truncate font-medium text-foreground" title={factorSummary(cell.factor_values)}>{factorSummary(cell.factor_values)}</p>{cell.obsolete_count > 0 && <span className="text-[11px] text-[color:var(--chart-4)]">{cell.obsolete_count} obsolete</span>}</td><td className={`px-2.5 py-2.5 text-right font-medium tabular-nums ${index === 0 && ranked ? 'text-primary' : ''}`}>{measured ? <><span>{formatResultMetricValue(metricKey!, value, metricTypes)}</span>{note && <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">{note}</span>}{missingSummary && <span className="mt-0.5 block text-[10px] font-normal text-[color:var(--chart-4)]">{missingSummary}</span>}</> : <span className="font-normal text-muted-foreground">{missingSummary ?? 'No measured observations'}</span>}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{formatCurrency(cell.cost_usd)}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{formatDuration(cell.duration_seconds)}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{cell.current_completed_count}/{cell.replicate_count}</td></tr> })}</tbody></table></div>}
+        {metricKeys.length === 0 ? <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">No scalar metrics are declared or reported yet. Run details and provider usage are still available below.</p> : <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[34rem] text-left text-xs"><thead className="border-b bg-muted/40 text-muted-foreground"><tr><th className="w-10 px-2.5 py-2 font-medium"><span className="flex items-center gap-1">{rankable ? 'Rank' : '—'}{rankable && <InfoTooltip>Rank among conditions with a measured value for the selected metric.</InfoTooltip>}</span></th><th className="px-2.5 py-2 font-medium"><span className="flex items-center gap-1">Condition<InfoTooltip>The factor levels used for this group of replicates.</InfoTooltip></span></th><th className="px-2.5 py-2 text-right font-medium">{metricKey ? metricDisplayLabel(metricKey, metricTypes, metricAggregations) : ''}</th><th className="px-2.5 py-2 text-right font-medium">Cost</th><th className="px-2.5 py-2 text-right font-medium">Duration</th><th className="px-2.5 py-2 text-right font-medium"><span className="inline-flex items-center gap-1">Runs<InfoTooltip>Completed current replicates out of all generated replicates for this condition.</InfoTooltip></span></th></tr></thead><tbody>{sortedCells.map((cell, index) => { const value = metricKey ? cell.metric_means[metricKey] : undefined; const measured = typeof value === 'number'; const ranked = rankable && measured; const note = measured && metricKey ? binaryMetricNote(metricKey, value, cell.metric_counts[metricKey], metricTypes) : null; const missingSummary = missingObservationSummary(replicatesByCell.get(cell.cell_label) ?? [], selectedMetricId, metricKey); return <tr key={cell.cell_label} className={`border-b last:border-b-0 ${index === 0 && ranked ? 'bg-primary/5' : 'hover:bg-muted/30'}`}><td className="px-2.5 py-2.5 font-medium text-muted-foreground">{ranked ? index + 1 : '—'}</td><td className="max-w-0 px-2.5 py-2.5"><p className="truncate font-medium text-foreground" title={factorSummary(cell.factor_values, experiment.design_spec)}>{factorSummary(cell.factor_values, experiment.design_spec)}</p>{cell.obsolete_count > 0 && <span className="text-[11px] text-[color:var(--chart-4)]">{cell.obsolete_count} obsolete</span>}</td><td className={`px-2.5 py-2.5 text-right font-medium tabular-nums ${index === 0 && ranked ? 'text-primary' : ''}`}>{measured ? <><span>{formatResultMetricValue(metricKey!, value, metricTypes)}</span>{note && <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">{note}</span>}{missingSummary && <span className="mt-0.5 block text-[10px] font-normal text-[color:var(--chart-4)]">{missingSummary}</span>}</> : <span className="font-normal text-muted-foreground">{missingSummary ?? 'No measured observations'}</span>}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{formatCurrency(cell.cost_usd)}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{formatDuration(cell.duration_seconds)}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{cell.current_completed_count}/{cell.replicate_count}</td></tr> })}</tbody></table></div>}
       </section>
       <section className="space-y-2">
         <div><h2 className="flex items-center gap-1 text-sm font-medium">Cell results<InfoTooltip>Each card groups replicates that share the same experimental factor levels. Expand one to compare individual runs.</InfoTooltip></h2><p className="text-xs text-muted-foreground">Expand a condition to inspect its replicates, metrics, usage, outputs, and node activity.</p></div>
@@ -723,7 +727,7 @@ export function ResultsTab({
                     <ChevronDown className={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <p className="min-w-0 flex-1 truncate text-sm font-medium" title={factorSummary(cell.factor_values)}>{factorSummary(cell.factor_values)}</p>
+                        <p className="min-w-0 flex-1 truncate text-sm font-medium" title={factorSummary(cell.factor_values, experiment.design_spec)}>{factorSummary(cell.factor_values, experiment.design_spec)}</p>
                         <Badge variant="outline" className="shrink-0 border-[color:var(--chart-2)] text-[color:var(--chart-2)]" title="Total generated replicates for this condition">{cell.replicate_count} {cell.replicate_count === 1 ? 'replicate' : 'replicates'}</Badge>
                         {cell.obsolete_count > 0 && <Badge variant="outline" className="shrink-0 border-[color:var(--chart-4)]/60 text-[color:var(--chart-4)]">{cell.obsolete_count} obsolete {cell.obsolete_count === 1 ? 'run' : 'runs'}</Badge>}
                       </div>
@@ -747,7 +751,7 @@ export function ResultsTab({
                           </div>
                         )}
                         <div className="mb-2 flex items-center justify-between"><p className="text-xs font-medium">Individual replicates</p><p className="text-[11px] text-muted-foreground">Select one for full output</p></div>
-                        <ul className="space-y-1.5" aria-label={`Replicate results for ${factorSummary(cell.factor_values)}`}>
+                        <ul className="space-y-1.5" aria-label={`Replicate results for ${factorSummary(cell.factor_values, experiment.design_spec)}`}>
                         {orderedReplicates.map((replicate) => {
                           const observation = observationForMetric(replicate, selectedMetricId, metricKey)
                           const value = numericMetricValue(replicate, metricKey)

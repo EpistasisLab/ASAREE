@@ -7,9 +7,9 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
-import { displayFactorValue, factorValueKey, groupReplicatesIntoCells, type ExperimentalCell } from '@/lib/experiment'
+import { displayFactorLevel, factorValueKey, groupReplicatesIntoCells, type ExperimentalCell } from '@/lib/experiment'
 import { protocolForExperimentQueryKey } from '@/lib/protocolGraph'
-import type { ResultCell, ResultReplicate, Trial } from '@/types/experiments'
+import type { Experiment, ResultCell, ResultReplicate, Trial } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
 import { RunConfirmDialog } from './RunConfirmDialog'
 import { WarningBadge } from './nodes/WarningBadge'
@@ -33,16 +33,25 @@ function cellSortKey(cell: ExperimentalCell): string {
 // label. Keep the path as context and turn its final field/value pair into a
 // sentence: "Agent · Search: Disabled" rather than "Agent:Search:Enabled:
 // false".
-function displayFactorCondition(name: string, value: unknown): string {
+function displayFactorCondition(
+  name: string,
+  value: unknown,
+  designSpec: Experiment['design_spec'] | undefined,
+  cellLabel?: string,
+): string {
   const parts = name.split(':').map((part) => part.trim()).filter(Boolean)
   const field = parts.pop() ?? name
+  const displayedLevel = displayFactorLevel(designSpec, name, value, cellLabel)
 
   if (typeof value === 'boolean' && /enabled$/i.test(field)) {
+    if (displayedLevel !== String(value)) {
+      return [...parts, field].filter(Boolean).join(' · ') + `: ${displayedLevel}`
+    }
     const subject = field.replace(/\s*enabled$/i, '').trim()
     return [...parts, subject].filter(Boolean).join(' · ') + `: ${value ? 'Enabled' : 'Disabled'}`
   }
 
-  return [...parts, field].filter(Boolean).join(' · ') + `: ${displayFactorValue(value)}`
+  return [...parts, field].filter(Boolean).join(' · ') + `: ${displayedLevel}`
 }
 
 function trialStatusBadge(status: Trial['status']) {
@@ -467,7 +476,7 @@ export function RunAllCellsButton({
                     const labels = cell.replicates.map((replicate) => replicate.replicate_label)
                     const selectedCount = labels.filter((label) => selectedReruns.has(label)).length
                     const expanded = expandedCells.has(cell.label)
-                    const summary = factorEntries(cell).map(([name, value]) => displayFactorCondition(name, value)).join(' · ') || 'Cell'
+                    const summary = factorEntries(cell).map(([name, value]) => displayFactorCondition(name, value, experimentQuery.data?.design_spec, cell.label)).join(' · ') || 'Cell'
                     const listId = `rerun-cell-${cell.label}`
                     return (
                       <div key={cell.label} className="overflow-hidden rounded-md border">
@@ -674,12 +683,14 @@ function RunReplicateButton({
 // preserving the high-level overview instead of replacing it with a dialog.
 export function RunsTab({
   experimentId,
+  designSpec,
   protocol,
   regenerationRequired,
   unboundFactors,
   onViewResult,
 }: {
   experimentId: string
+  designSpec: Experiment['design_spec']
   protocol: Protocol | undefined
   regenerationRequired: boolean
   unboundFactors: string[]
@@ -832,9 +843,9 @@ export function RunsTab({
                   <ChevronDown className={`mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <p className="min-w-0 flex-1 truncate text-sm font-medium" title={summary.map(([name, value]) => displayFactorCondition(name, value)).join(' · ')}>
+                        <p className="min-w-0 flex-1 truncate text-sm font-medium" title={summary.map(([name, value]) => displayFactorCondition(name, value, designSpec, cell.label)).join(' · ')}>
                         {summary.length > 0
-                          ? summary.map(([name, value]) => displayFactorCondition(name, value)).join(' · ')
+                          ? summary.map(([name, value]) => displayFactorCondition(name, value, designSpec, cell.label)).join(' · ')
                           : 'Cell'}
                       </p>
                       <Badge variant="outline" className="shrink-0 border-[color:var(--chart-2)] text-[color:var(--chart-2)]">
@@ -851,7 +862,7 @@ export function RunsTab({
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {remaining.map(([name, value]) => (
                           <Badge key={name} variant="outline" className="max-w-full font-mono text-[0.65rem] font-normal">
-                            <span className="truncate">{displayFactorCondition(name, value)}</span>
+                            <span className="truncate">{displayFactorCondition(name, value, designSpec, cell.label)}</span>
                           </Badge>
                         ))}
                       </div>

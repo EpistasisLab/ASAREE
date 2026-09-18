@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { deriveFactors, displayFactorValue, factorValueKey } from '@/lib/experiment'
+import { deriveFactors, displayFactorLevel, factorValueKey } from '@/lib/experiment'
 import type { Experiment, Replicate } from '@/types/experiments'
 
 // The API already supplies explicit cell labels and replicate numbers; sort
@@ -73,7 +73,7 @@ export function SelectReplicateDialog({
     }
     if (!needle) return true
     const summary = Object.entries(replicate.factor_values ?? {})
-      .map(([k, v]) => `${k}=${displayFactorValue(v)}`)
+      .map(([k, v]) => `${k}=${displayFactorLevel(designSpec, k, v, replicate.cell_label)}`)
       .join(' ')
     return replicate.replicate_label.toLowerCase().includes(needle) || summary.toLowerCase().includes(needle)
   })
@@ -119,7 +119,7 @@ export function SelectReplicateDialog({
                     return (
                       <label key={levelKey} className="flex cursor-pointer items-center gap-1.5 text-xs">
                         <Checkbox checked={checked} onCheckedChange={() => toggleLevel(factor.name, levelKey)} />
-                        {displayFactorValue(level)}
+                        {displayFactorLevel(designSpec, factor.name, level)}
                       </label>
                     )
                   })}
@@ -148,7 +148,7 @@ export function SelectReplicateDialog({
             const hasFactors = replicateResult.factor_values && Object.keys(replicateResult.factor_values).length > 0
             const summary = hasFactors
               ? Object.entries(replicateResult.factor_values!)
-                  .map(([k, v]) => `${k}: ${displayFactorValue(v)}`)
+                  .map(([k, v]) => `${k}: ${displayFactorLevel(designSpec, k, v, replicateResult.cell_label)}`)
                   .join(' · ')
               : null
             const replicateNumber = replicateResult.replicate_number

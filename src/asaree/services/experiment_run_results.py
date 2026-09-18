@@ -84,6 +84,37 @@ def _normalize_metric_values(values: dict[str, Any] | None) -> dict[str, Any]:
     return {key: int(value) if isinstance(value, bool) else value for key, value in (values or {}).items()}
 
 
+def _merge_legacy_facets(
+    metric_values: dict[str, Any],
+    raw_artifacts: Any,
+    observations: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
+    *,
+    metrics: Any,
+    attempt_id: str,
+) -> LegacyResultFacets:
+    """Add compatibility facts without duplicating current measurements.
+
+    Opaque reported metrics are JSON values, which legacy migration also
+    recognizes as non-scalar historical data. A matching current observation
+    is authoritative, so it must not leave a duplicate ``legacy_values``
+    entry that would hide the declared Results column.
+    """
+    legacy = legacy_measurement_facets(
+        metric_values=metric_values,
+        artifacts=raw_artifacts,
+        metrics=metrics,
+        attempt_id=attempt_id,
+    )
+    observed_ids = {item.get("metric_id") for item in observations}
+    artifact_keys = {item.get("artifact_key") for item in artifacts}
+    return LegacyResultFacets(
+        [*observations, *(item for item in legacy.observations if item["metric_id"] not in observed_ids)],
+        [*artifacts, *(item for item in legacy.artifacts if item["artifact_key"] not in artifact_keys)],
+        [item for item in legacy.legacy_values if item["metric_id"] not in observed_ids],
+    )
+
+
 def _sum(values: list[float]) -> float | None:
     return sum(values) if values else None
 
@@ -441,37 +472,16 @@ async def summarize_experiment_run_results(
             artifacts,
         )
 
-    def merge_legacy_facets(
-        metric_values: dict[str, Any],
-        raw_artifacts: Any,
-        observations: list[dict[str, Any]],
-        artifacts: list[dict[str, Any]],
-        *,
-        attempt_id: str,
-    ) -> LegacyResultFacets:
-        legacy = legacy_measurement_facets(
-            metric_values=metric_values,
-            artifacts=raw_artifacts,
-            metrics=(design_spec or {}).get("metrics"),
-            attempt_id=attempt_id,
-        )
-        observed_ids = {item.get("metric_id") for item in observations}
-        artifact_keys = {item.get("artifact_key") for item in artifacts}
-        return LegacyResultFacets(
-            [*observations, *(item for item in legacy.observations if item["metric_id"] not in observed_ids)],
-            [*artifacts, *(item for item in legacy.artifacts if item["artifact_key"] not in artifact_keys)],
-            legacy.legacy_values,
-        )
-
     def historical_run_payload(protocol_run: ProtocolRun, *, obsolete: bool) -> dict[str, Any]:
         execution = execution_detail(protocol_run)
         metric_values, evaluation, observations, artifacts = attempt_result(protocol_run)
         stored = protocol_run.attempt_result if isinstance(protocol_run.attempt_result, dict) else {}
-        facets = merge_legacy_facets(
+        facets = _merge_legacy_facets(
             metric_values,
             stored.get("artifacts"),
             observations,
             artifacts,
+            metrics=(design_spec or {}).get("metrics"),
             attempt_id=str(protocol_run.id),
         )
         metric_values.update(_declared_runtime_metrics(design_spec, execution))
@@ -530,11 +540,12 @@ async def summarize_experiment_run_results(
                 metric_observations, evaluation_artifacts = measurement_facets(
                     (replicate.artifacts or {}).get("measurement")
                 )
-            facets = merge_legacy_facets(
+            facets = _merge_legacy_facets(
                 metric_values,
                 replicate.artifacts,
                 metric_observations,
                 evaluation_artifacts,
+                metrics=(design_spec or {}).get("metrics"),
                 attempt_id=str(protocol_run.id),
             )
             metric_observations = facets.observations
@@ -546,11 +557,12 @@ async def summarize_experiment_run_results(
             legacy_values = []
             if latest_run is None and (replicate.metric_values or replicate.artifacts):
                 metric_values = _normalize_metric_values(replicate.metric_values)
-                facets = merge_legacy_facets(
+                facets = _merge_legacy_facets(
                     metric_values,
                     replicate.artifacts,
                     metric_observations,
                     evaluation_artifacts,
+                    metrics=(design_spec or {}).get("metrics"),
                     attempt_id=f"legacy-replicate:{replicate.id}",
                 )
                 metric_observations = facets.observations

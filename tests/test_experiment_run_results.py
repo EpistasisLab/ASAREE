@@ -13,6 +13,7 @@ from asaree.services.experiment_run_results import (
     _declared_metric_directions,
     _declared_runtime_metrics,
     _has_execution_evidence,
+    _merge_legacy_facets,
     _node_labels,
     _numeric_metrics,
     _primary_metric,
@@ -430,6 +431,53 @@ def test_results_csv_distinguishes_measured_null_from_an_unavailable_custom_metr
 
     assert exported[0]["Judge result"] == "null"
     assert exported[1]["Judge result"] == ""
+
+
+def test_results_csv_keeps_a_declared_opaque_metric_when_legacy_facets_also_name_it() -> None:
+    rows = [
+        {
+            "replicate_label": "judge-completed",
+            "metric_values": {"LLM judge evaluation": {"score": 4, "passed": True}},
+            "legacy_values": [{"metric_name": "LLM judge evaluation", "value": {"score": 4, "passed": True}}],
+        }
+    ]
+    design_spec = {
+        "metrics": [
+            {
+                "name": "LLM judge evaluation",
+                "kind": "custom",
+                "valueType": "opaque",
+                "direction": "neutral",
+                "aggregation": "none",
+                "primary": False,
+            }
+        ]
+    }
+
+    exported = next(csv.DictReader(io.StringIO(result_rows_to_csv(rows, design_spec))))
+
+    assert exported["LLM judge evaluation"] == '{"passed":true,"score":4}'
+
+
+def test_current_opaque_observation_is_not_projected_as_a_legacy_value() -> None:
+    metrics = [
+        {
+            "id": "judge-evaluation",
+            "name": "LLM judge evaluation",
+            "kind": "custom",
+            "valueType": "opaque",
+        }
+    ]
+    facets = _merge_legacy_facets(
+        {"LLM judge evaluation": {"score": 4, "passed": True}},
+        None,
+        [{"metric_id": "judge-evaluation", "metric_name": "LLM judge evaluation", "status": "measured"}],
+        [],
+        metrics=metrics,
+        attempt_id="attempt-1",
+    )
+
+    assert facets.legacy_values == []
 
 
 def test_node_labels_prefers_the_canvas_name_over_its_durable_id() -> None:

@@ -35,7 +35,7 @@ def replicates_that_ran(replicates: Sequence[Any]) -> list[Any]:
     return [replicate for replicate in replicates if replicate.run_id is not None or replicate.metric_values]
 
 
-def replicates_to_csv(replicates: Sequence[Any]) -> str:
+def replicates_to_csv(replicates: Sequence[Any], *, design_spec: dict[str, Any] | None = None) -> str:
     """*replicates* -- anything with ``replicate_label``/``run_id``/``workspace_id``/
     ``factor_values``/``metric_values`` attributes (a ``FactorialReplicateResult``
     in practice). Column order: the three scalar fields, then every
@@ -48,7 +48,7 @@ def replicates_to_csv(replicates: Sequence[Any]) -> str:
             legacy_measurement_facets(
                 metric_values=replicate.metric_values,
                 artifacts=None,
-                metrics=None,
+                metrics=(design_spec or {}).get("metrics"),
                 attempt_id=str(replicate.run_id or f"legacy-replicate:{replicate.replicate_label}"),
             ),
         )
@@ -389,6 +389,11 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
     configuration payloads.
     """
     factor_columns, metric_keys = _result_csv_layout(rows, design_spec)
+    declared_custom_metric_names = {
+        metric["name"]
+        for metric in (design_spec or {}).get("metrics", [])
+        if isinstance(metric, dict) and metric.get("kind") == "custom" and isinstance(metric.get("name"), str)
+    }
     metadata_fields = _result_metadata_fields(rows)
     fields = [
         *_RESULT_ID_FIELDS,
@@ -421,7 +426,11 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
         metrics = {
             key: _csv_value(value)
             for key, value in (source.get("metric_values") or {}).items()
-            if key not in legacy_value_names
+            # A current opaque custom observation can share a name with a
+            # compatibility legacy facet. The declared Results column is the
+            # authoritative current value; suppressing it leaves an empty
+            # column despite the completed Agent output being available.
+            if key not in legacy_value_names or key in declared_custom_metric_names
         }
         factors = source.get("factor_values") or {}
         row = {key: source.get(key, metrics.get(key, "")) for key in _RESULT_FIXED_FIELDS}

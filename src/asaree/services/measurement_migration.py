@@ -85,6 +85,13 @@ def _legacy_metric_id(key: str, metrics: Any) -> tuple[str, str]:
     return f"legacy-value-{stable}", key
 
 
+def _is_declared_custom_metric(key: str, metrics: Any) -> bool:
+    """Whether *key* belongs to a current opaque custom-metric declaration."""
+    return any(
+        metric["kind"] == "custom" and metric["name"] == key for metric in normalize_metrics(metrics)
+    )
+
+
 def legacy_measurement_facets(
     *, metric_values: Any, artifacts: Any, metrics: Any, attempt_id: str
 ) -> LegacyResultFacets:
@@ -96,6 +103,12 @@ def legacy_measurement_facets(
             if not isinstance(key, str):
                 continue
             if not isinstance(value, bool | int | float) or (isinstance(value, float) and not isfinite(value)):
+                # A declared custom metric intentionally accepts opaque output
+                # (JSON, text, lists, or null). It belongs in its named
+                # metric column, not ``legacy_values``. Only an unmapped raw
+                # value lacks enough contract/provenance to classify normally.
+                if _is_declared_custom_metric(key, metrics):
+                    continue
                 metric_id, metric_name = _legacy_metric_id(key, metrics)
                 legacy_values.append(
                     {

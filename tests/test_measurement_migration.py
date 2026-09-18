@@ -66,7 +66,7 @@ def test_historical_values_and_artifacts_gain_legacy_unknown_provenance() -> Non
     assert facets.legacy_values == []
 
 
-def test_non_scalar_legacy_values_remain_visible_but_non_rankable() -> None:
+def test_unmapped_non_scalar_values_remain_visible_but_non_rankable() -> None:
     metrics = [{"name": "Reviewer note", "kind": "custom", "valueType": "string", "primary": True}]
 
     plan = normalize_experiment_measurement_plan(None, metrics)
@@ -86,26 +86,37 @@ def test_non_scalar_legacy_values_remain_visible_but_non_rankable() -> None:
     assert facets.observations == []
     assert facets.artifacts == []
     assert [item["metric_name"] for item in facets.legacy_values] == [
-        "Reviewer note",
         "Reviewer payload",
         "Reviewer list",
         "Reviewer null",
     ]
     assert [item["value"] for item in facets.legacy_values] == [
-        "needs follow-up",
         {"flags": ["manual-review"]},
         ["first", "second"],
         None,
     ]
-    assert facets.legacy_values[0] == {
-        "metric_id": normalize_metrics(metrics)[0]["id"],
-        "metric_name": "Reviewer note",
-        "value": "needs follow-up",
-        "attempt_id": "attempt-1",
-        "producer": {
-            "binding_id": "legacy-unknown",
-            "producer_id": "legacy.unknown",
-            "kind": "legacy",
-            "version": "unknown",
-        },
+    assert facets.legacy_values[0]["metric_name"] == "Reviewer payload"
+    assert facets.legacy_values[0]["producer"] == {
+        "binding_id": "legacy-unknown",
+        "producer_id": "legacy.unknown",
+        "kind": "legacy",
+        "version": "unknown",
     }
+
+
+def test_declared_opaque_custom_values_are_not_classified_as_legacy() -> None:
+    facets = legacy_measurement_facets(
+        metric_values={"LLM judge evaluation": {"score": 4, "passed": True}},
+        artifacts=None,
+        metrics=[
+            {
+                "id": "judge-evaluation",
+                "name": "LLM judge evaluation",
+                "kind": "custom",
+                "valueType": "opaque",
+            }
+        ],
+        attempt_id="attempt-1",
+    )
+
+    assert facets.legacy_values == []

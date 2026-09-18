@@ -122,6 +122,28 @@ def test_replicates_to_csv_separates_non_rankable_legacy_values_with_provenance(
     assert {item["producer"]["producer_id"] for item in legacy_values} == {"legacy.unknown"}
 
 
+def test_replicates_to_csv_exports_declared_opaque_custom_metrics_in_their_own_columns() -> None:
+    replicates = [_replicate("cell-a", metric_values={"LLM judge evaluation": {"score": 4, "passed": True}})]
+
+    rows = _parse(
+        replicates_to_csv(
+            replicates,
+            design_spec={
+                "metrics": [
+                    {
+                        "name": "LLM judge evaluation",
+                        "kind": "custom",
+                        "valueType": "opaque",
+                    }
+                ]
+            },
+        )
+    )
+
+    assert rows[0]["LLM judge evaluation"] == '{"passed":true,"score":4}'
+    assert "legacy_values" not in rows[0]
+
+
 # --- replicates_that_ran ------------------------------------------------
 
 

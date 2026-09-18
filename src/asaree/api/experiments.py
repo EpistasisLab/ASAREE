@@ -1085,7 +1085,7 @@ async def export_replicates_csv_endpoint(experiment_id: uuid.UUID, user: Current
     (replicates_that_ran / replicates_to_csv)."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
     replicates = await list_replicates(db, experiment_id=experiment_id)
-    csv_text = replicates_to_csv(replicates_that_ran(replicates))
+    csv_text = replicates_to_csv(replicates_that_ran(replicates), design_spec=experiment.design_spec)
     filename = _UNSAFE_FILENAME_CHAR.sub("_", experiment.name.strip()) or "experiment"
     return Response(
         content=csv_text,

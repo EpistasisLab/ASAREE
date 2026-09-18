@@ -118,6 +118,10 @@ export function RunConfirmDialog({
           </p>
           <dl className="space-y-1 text-xs text-muted-foreground">
             <div>
+              <dt className="inline font-medium text-foreground">Canvas version: </dt>
+              <dd className="inline">{publishedRevision === null ? 'not published' : `Published v${publishedRevision}`}</dd>
+            </div>
+            <div>
               <dt className="inline font-medium text-foreground">Dataset: </dt>
               <dd className="inline">{summary.datasets.length > 0 ? summary.datasets.join(', ') : 'none selected'}</dd>
             </div>

@@ -22,7 +22,7 @@ import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { CONNECTOR_HANDLES } from '@/lib/coordinationStrategy'
 import { newNodeId } from '@/lib/nodeId'
 import { handoffPeers, promptReferenceScope } from '@/lib/promptReferences'
-import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
+import { mergeProtocolSaveIntoCache, protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import {
   defaultAgentNodeData,
@@ -50,6 +50,7 @@ import type {
   OkfBundleNodeData,
   OkfDocumentNodeData,
   OutputParserNodeData,
+  Protocol,
   ProtocolEdge,
   ProtocolGraph,
   ProtocolNode,
@@ -1563,7 +1564,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           // rather than the pre-edit graph. Ignores an out-of-order
           // response so a slow earlier save can't overwrite a later one.
           if (seq !== saveSeqRef.current || !updated.experiment_id) return
-          queryClient.setQueryData(protocolForExperimentQueryKey(updated.experiment_id), updated)
+          queryClient.setQueryData<Protocol>(protocolForExperimentQueryKey(updated.experiment_id), (previous) =>
+            mergeProtocolSaveIntoCache(previous, updated),
+          )
           queryClient.invalidateQueries({ queryKey: ['experiments', updated.experiment_id, 'design-impact'] })
         })
         .catch(() => {

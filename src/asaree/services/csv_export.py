@@ -12,7 +12,8 @@ import csv
 import io
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from asaree.services.measurement_migration import legacy_measurement_facets
@@ -263,6 +264,18 @@ _RESULT_METADATA_FIELDS = [
 _RESULT_FIXED_FIELDS = [*_RESULT_ID_FIELDS, *_RESULT_RUNTIME_METRIC_FIELDS, *_RESULT_METADATA_FIELDS]
 _LEGACY_VALUES_FIELD = "legacy_values"
 _RESULT_RESERVED_FIELDS = [*_RESULT_FIXED_FIELDS, _LEGACY_VALUES_FIELD]
+_PYTHON_SCRIPT_PRODUCER_ID = "asaree.python_script"
+_SCRIPT_RESULT_METADATA_FIELDS = ("code_sha256", "script", "exit_code", "stderr", "timed_out", "error")
+
+
+@dataclass(frozen=True)
+class _ScriptMetricColumns:
+    raw_result: str
+    metadata: dict[str, str]
+
+    @property
+    def all(self) -> list[str]:
+        return [self.raw_result, *self.metadata.values()]
 
 
 def _result_metadata_fields(rows: Sequence[dict[str, Any]]) -> list[str]:
@@ -281,7 +294,11 @@ def _result_metadata_fields(rows: Sequence[dict[str, Any]]) -> list[str]:
 
 def _result_csv_layout(
     rows: Sequence[dict[str, Any]], design_spec: dict[str, Any] | None = None
-) -> tuple[list[tuple[str, str, str, dict[str, str] | None]], list[str]]:
+) -> tuple[
+    list[tuple[str, str, str, dict[str, str] | None]],
+    list[str],
+    dict[str, _ScriptMetricColumns],
+]:
     # Runtime metrics are already present in the fixed execution columns.
     # Avoid duplicate CSV headers while retaining every non-telemetry score.
     declared_custom_metrics = {
@@ -298,8 +315,38 @@ def _result_csv_layout(
             if key not in _RESULT_RESERVED_FIELDS and key not in _legacy_value_names(row)
         }
     )
-    factor_columns = _factor_columns(rows, reserved=[*_RESULT_RESERVED_FIELDS, *metric_keys], design_spec=design_spec)
-    return factor_columns, metric_keys
+    script_metric_names = {
+        observation["metric_name"]
+        for row in rows
+        for observation in row.get("metric_observations") or []
+        if isinstance(observation, dict)
+        and isinstance(observation.get("metric_name"), str)
+        and isinstance(observation.get("producer"), dict)
+        and observation["producer"].get("producer_id") == _PYTHON_SCRIPT_PRODUCER_ID
+    }
+    used = {*_RESULT_RESERVED_FIELDS, *metric_keys}
+    script_columns: dict[str, _ScriptMetricColumns] = {}
+    for metric_name in metric_keys:
+        if metric_name not in script_metric_names:
+            continue
+        observed_fields = {
+            field
+            for row in rows
+            if isinstance((value := (row.get("metric_values") or {}).get(metric_name)), Mapping)
+            for field in value
+            if isinstance(field, str) and field != "stdout"
+        }
+        ordered_fields = [
+            *_SCRIPT_RESULT_METADATA_FIELDS,
+            *sorted(observed_fields - set(_SCRIPT_RESULT_METADATA_FIELDS)),
+        ]
+        raw_result = _unique_column_name(f"{metric_name}__raw_result", used)
+        metadata = {
+            field: _unique_column_name(f"{metric_name}__{field}", used) for field in ordered_fields
+        }
+        script_columns[metric_name] = _ScriptMetricColumns(raw_result=raw_result, metadata=metadata)
+    factor_columns = _factor_columns(rows, reserved=list(used), design_spec=design_spec)
+    return factor_columns, metric_keys, script_columns
 
 
 def _legacy_value_names(row: dict[str, Any]) -> set[str]:
@@ -317,7 +364,7 @@ def result_rows_schema(
     design_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Machine-readable companion metadata for a Results analysis CSV."""
-    factor_columns, metric_keys = _result_csv_layout(rows, design_spec)
+    factor_columns, metric_keys, script_columns = _result_csv_layout(rows, design_spec)
     metadata_fields = _result_metadata_fields(rows)
     reported_keys = {
         metric["name"]
@@ -337,24 +384,61 @@ def result_rows_schema(
             column["levels"] = list((labels or {}).values())
         factor_metadata.append(column)
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "row_unit": "replicate",
         "columns": [
             *({"name": field, "role": "metadata"} for field in _RESULT_ID_FIELDS),
             *factor_metadata,
             *({"name": field, "role": "metric"} for field in _RESULT_RUNTIME_METRIC_FIELDS),
             *(
-                {
-                    "name": key,
-                    "role": "reported" if key in reported_keys else "outcome",
-                    "value_type": "opaque" if key in reported_keys else (metric_types or {}).get(key, "number"),
-                    **(
-                        {}
-                        if key in reported_keys
-                        else {"cell_aggregation": (metric_aggregations or {}).get(key, "mean")}
-                    ),
-                }
+                column
                 for key in metric_keys
+                for column in [
+                    {
+                        "name": key,
+                        "role": "reported" if key in reported_keys else "outcome",
+                        "value_type": (
+                            "string"
+                            if key in script_columns
+                            else "opaque"
+                            if key in reported_keys
+                            else (metric_types or {}).get(key, "number")
+                        ),
+                        **(
+                            {}
+                            if key in reported_keys
+                            else {"cell_aggregation": (metric_aggregations or {}).get(key, "mean")}
+                        ),
+                    },
+                    *(
+                        [
+                            {
+                                "name": script_columns[key].raw_result,
+                                "role": "reported_raw",
+                                "value_type": "json",
+                                "source_metric": key,
+                            },
+                            *(
+                                {
+                                    "name": column_name,
+                                    "role": "producer_metadata",
+                                    "value_type": (
+                                        "integer"
+                                        if field == "exit_code"
+                                        else "boolean"
+                                        if field == "timed_out"
+                                        else "string"
+                                    ),
+                                    "source_metric": key,
+                                    "source_field": field,
+                                }
+                                for field, column_name in script_columns[key].metadata.items()
+                            ),
+                        ]
+                        if key in script_columns
+                        else []
+                    ),
+                ]
             ),
             *(
                 {
@@ -388,18 +472,23 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
     become their short persisted level labels rather than raw prompt or
     configuration payloads.
     """
-    factor_columns, metric_keys = _result_csv_layout(rows, design_spec)
+    factor_columns, metric_keys, script_columns = _result_csv_layout(rows, design_spec)
     declared_custom_metric_names = {
         metric["name"]
         for metric in (design_spec or {}).get("metrics", [])
         if isinstance(metric, dict) and metric.get("kind") == "custom" and isinstance(metric.get("name"), str)
     }
     metadata_fields = _result_metadata_fields(rows)
+    metric_fields = [
+        column
+        for key in metric_keys
+        for column in [key, *(script_columns[key].all if key in script_columns else [])]
+    ]
     fields = [
         *_RESULT_ID_FIELDS,
         *(column[0] for column in factor_columns),
         *_RESULT_RUNTIME_METRIC_FIELDS,
-        *metric_keys,
+        *metric_fields,
         *metadata_fields,
     ]
     buf = io.StringIO()
@@ -423,9 +512,16 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
 
     for source in sorted(rows, key=row_sort_key):
         legacy_value_names = _legacy_value_names(source)
+        raw_metrics = source.get("metric_values") or {}
         metrics = {
-            key: _csv_value(value)
-            for key, value in (source.get("metric_values") or {}).items()
+            key: (
+                _csv_value(value.get("stdout"))
+                if key in script_columns and isinstance(value, Mapping) and "stdout" in value
+                else ""
+                if key in script_columns and isinstance(value, Mapping)
+                else _csv_value(value)
+            )
+            for key, value in raw_metrics.items()
             # A current opaque custom observation can share a name with a
             # compatibility legacy facet. The declared Results column is the
             # authoritative current value; suppressing it leaves an empty
@@ -465,6 +561,16 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
             else:
                 row[column_name] = (labels or {}).get(_factor_level_key(value), "")
         row.update({key: metrics.get(key, "") for key in metric_keys})
+        for metric_name, columns in script_columns.items():
+            if metric_name not in raw_metrics:
+                continue
+            result = raw_metrics[metric_name]
+            row[columns.raw_result] = _csv_value(result)
+            if not isinstance(result, Mapping):
+                continue
+            for field, column_name in columns.metadata.items():
+                if field in result:
+                    row[column_name] = _csv_value(result[field])
         writer.writerow(row)
     return buf.getvalue()
 

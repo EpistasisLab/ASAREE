@@ -170,5 +170,8 @@ asyncio_mode = "auto"
 # The application owns process-wide async engines (ASAREE and Motoro).  A
 # session loop keeps every pooled asyncpg connection on the loop that created
 # it; function-scoped loops can otherwise close before pool disposal finishes.
+# Both async tests and async fixtures must use that loop: pytest-asyncio
+# configures their loop scopes independently.
+asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]

@@ -34,6 +34,7 @@ class Experiments:
         design_type: str = "factorial",
         task_brief: dict[str, Any] | None = None,
         factors: builtins.list[dict[str, Any]] | None = None,
+        measurement_plan: dict[str, Any] | None = None,
         dataset_ids: builtins.list[ResourceId] | None = None,
     ) -> Experiment:
         payload: dict[str, Any] = {"name": name, "design_type": design_type}
@@ -43,6 +44,8 @@ class Experiments:
             payload["task_brief"] = task_brief
         if factors is not None:
             payload["factors"] = factors
+        if measurement_plan is not None:
+            payload["measurement_plan"] = measurement_plan
         if dataset_ids is not None:
             payload["dataset_ids"] = [str(d) for d in dataset_ids]
         data = self._client._post("/experiments", json=payload)
@@ -69,6 +72,7 @@ class Experiments:
         dataset_ids: builtins.list[ResourceId] | None = _UNSET,
         dataset_id: ResourceId | None = _UNSET,
         design_spec: dict[str, Any] | None = _UNSET,
+        measurement_plan: dict[str, Any] | None = _UNSET,
         archived_at: datetime | None = _UNSET,
     ) -> Experiment:
         """Only the fields actually passed are sent (omit one to leave it
@@ -101,6 +105,8 @@ class Experiments:
             payload["dataset_id"] = str(dataset_id) if dataset_id else None
         if design_spec is not _UNSET:
             payload["design_spec"] = design_spec
+        if measurement_plan is not _UNSET:
+            payload["measurement_plan"] = measurement_plan
         if archived_at is not _UNSET:
             payload["archived_at"] = archived_at.isoformat() if archived_at else None
         data = self._client._patch(f"/experiments/{experiment_id}", json=payload)

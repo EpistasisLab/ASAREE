@@ -16,11 +16,13 @@ matching how far the user model itself has gotten.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from motoro.mcp.registry import get_registry
 from motoro.services import mcp_service
 from pydantic import BaseModel
 
@@ -77,7 +79,48 @@ class ServerResponse(BaseModel):
     created_at: datetime
 
 
-def _to_response(config: Any) -> ServerResponse:
+async def _capabilities_with_tool_annotations(config: Any, *, refresh: bool = False) -> dict[str, Any] | None:
+    """Add standard MCP tool annotations that Motoro 0.6's cache omits.
+
+    Motoro currently retains names, descriptions, and schemas in ``ToolInfo``
+    but not the protocol's annotations. ASAREE needs ``readOnlyHint`` for a
+    risk-aware evaluator UI, so read the already-open session once and cache
+    the small annotation map on the client. Unknown/failing servers remain
+    unannotated and are therefore treated conservatively by the frontend.
+    """
+    capabilities = dict(config.capabilities) if isinstance(config.capabilities, dict) else None
+    tools = capabilities.get("tools") if capabilities else None
+    if not isinstance(tools, list):
+        return capabilities
+    entry = get_registry().servers.get(config.name)
+    client = entry.client if entry is not None else None
+    session = getattr(client, "_session", None)
+    if session is None:
+        return capabilities
+    tool_names = frozenset(item.get("name") for item in tools if isinstance(item, dict))
+    cached = getattr(client, "_asaree_tool_annotations", None)
+    if refresh or not isinstance(cached, tuple) or cached[0] != tool_names:
+        try:
+            discovered = await session.list_tools()
+            annotation_map = {
+                tool.name: tool.annotations.model_dump(by_alias=True, exclude_none=True)
+                for tool in discovered.tools
+                if tool.annotations is not None
+            }
+            cached = (frozenset(tool.name for tool in discovered.tools), annotation_map)
+            client._asaree_tool_annotations = cached
+        except Exception:
+            return capabilities
+    annotation_map = cached[1]
+    capabilities["tools"] = [
+        {**item, **({"annotations": annotation_map[item.get("name")]} if item.get("name") in annotation_map else {})}
+        if isinstance(item, dict) else item
+        for item in tools
+    ]
+    return capabilities
+
+
+async def _to_response(config: Any, *, refresh_annotations: bool = False) -> ServerResponse:
     return ServerResponse(
         id=config.id,
         name=config.name,
@@ -86,7 +129,7 @@ def _to_response(config: Any) -> ServerResponse:
         url=config.url,
         status=config.status.value,
         error_message=config.error_message,
-        capabilities=config.capabilities,
+        capabilities=await _capabilities_with_tool_annotations(config, refresh=refresh_annotations),
         created_at=config.created_at,
     )
 
@@ -106,13 +149,13 @@ async def register_server_endpoint(body: RegisterServerRequest, user: CurrentUse
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return _to_response(config)
+    return await _to_response(config, refresh_annotations=True)
 
 
 @router.get("", response_model=list[ServerResponse])
 async def list_servers_endpoint(user: CurrentUser) -> list[ServerResponse]:
     servers = await mcp_service.list_servers(owner_id=user.id)
-    return [_to_response(s) for s in servers]
+    return list(await asyncio.gather(*(_to_response(s) for s in servers)))
 
 
 @router.get("/{server_id}", response_model=ServerResponse)
@@ -120,7 +163,7 @@ async def get_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> Server
     config = await mcp_service.get_server(server_id)
     if config is None or not _readable(config, user):
         raise HTTPException(status_code=404, detail="No such server")
-    return _to_response(config)
+    return await _to_response(config)
 
 
 @router.patch("/{server_id}", response_model=ServerResponse)
@@ -140,7 +183,7 @@ async def update_server_endpoint(server_id: uuid.UUID, body: UpdateServerRequest
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     assert config is not None  # existence already checked above
-    return _to_response(config)
+    return await _to_response(config, refresh_annotations=True)
 
 
 @router.delete("/{server_id}", status_code=204)
@@ -158,7 +201,7 @@ async def refresh_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> Se
         raise HTTPException(status_code=404, detail="No such server")
     config = await mcp_service.refresh_server(server_id)
     assert config is not None
-    return _to_response(config)
+    return await _to_response(config, refresh_annotations=True)
 
 
 @router.post("/{server_id}/reconnect", response_model=ServerResponse)
@@ -168,7 +211,7 @@ async def reconnect_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> 
         raise HTTPException(status_code=404, detail="No such server")
     config = await mcp_service.reconnect_server(server_id)
     assert config is not None
-    return _to_response(config)
+    return await _to_response(config, refresh_annotations=True)
 
 
 @router.post("/{server_id}/tools/{tool_name}/call", response_model=CallToolResponse)

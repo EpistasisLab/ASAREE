@@ -1,5 +1,10 @@
 # ASAREE
 
+[![Latest release](https://img.shields.io/github/v/release/EpistasisLab/ASAREE?display_name=tag&sort=semver)](https://github.com/EpistasisLab/ASAREE/releases/latest)
+[![CI](https://github.com/EpistasisLab/ASAREE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/EpistasisLab/ASAREE/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/Python-%E2%89%A53.12-3776AB?logo=python&logoColor=white)](https://github.com/EpistasisLab/ASAREE/blob/main/pyproject.toml)
+[![License](https://img.shields.io/github/license/EpistasisLab/ASAREE)](https://github.com/EpistasisLab/ASAREE/blob/main/LICENSE)
+
 **A**nalytical **S**andbox for **A**gentic **R**esearch, **E**ngineering, and
 **E**xperimentation — a workbench for running LLM agents as designed
 experiments rather than one-off prompts.
@@ -86,6 +91,31 @@ docker compose up -d    # picks up the changed .env
 — five agents in series building a classifier on a public dataset. It picks up
 exactly where this step leaves off.
 
+## Measurements and Results
+
+The Design panel offers built-in runtime and supervised-ML metrics with their
+producer, required inputs, units, aggregation, direction, and current readiness.
+Custom metrics can read a typed numeric/Boolean structured-output field or use a
+model judge with an explicit model, rubric, bounds, and selected run inputs. A
+judge is an extra model call on every replicate, so its recurring call and cost
+estimate is shown before save. The optional wizard creates the same typed draft
+as the manual editor and cannot bypass the normal validator.
+
+Every completed attempt records one state for every declared metric:
+`measured`, `unavailable` (the required value was absent), `failed` (the producer
+could not evaluate it), or `not_applicable` (the metric does not apply to that
+task). Results keeps those states distinct. Confusion matrices, calibration
+data, and per-class reports are evaluation artifacts: they appear in attempt
+detail but are never ranked or averaged as scalar metrics.
+
+The Results CSV exports scalar values as ordinary analysis columns. Its
+`observation_statuses` JSON column retains each metric's state and error, and
+`evaluation_artifacts` retains structured diagnostics without flattening them
+into misleading scalar columns. The `legacy_values` JSON column keeps old text
+or other non-rankable values with `legacy.unknown` provenance when their
+original producer was never recorded; choose an explicit producer before
+running that legacy declaration again.
+
 ## Everyday commands
 
 ```bash
@@ -94,6 +124,19 @@ docker compose up -d --build          # rebuild after pulling new code
 docker compose restart asaree-app     # apply an edited .env
 docker compose down                   # stop, keep all data
 ```
+
+Run the backend test suite in Compose when you do not already have the dev
+database exposed to the host. The one-shot runner waits for both migration
+chains and connects to Postgres over the internal Compose network, so it does
+not depend on `localhost`, `POSTGRES_PORT`, or a host PostgreSQL installation:
+
+```bash
+docker compose run --rm --build asaree-tests
+```
+
+The tests themselves still run under pytest; only pytest and its real Postgres
+dependency are placed on the same network. The `test` profile keeps this
+service out of a normal `docker compose up`.
 
 The frontend hot-reloads from your checkout; backend changes need a rebuild.
 

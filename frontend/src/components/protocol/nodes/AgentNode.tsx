@@ -95,18 +95,17 @@ export function AgentNode({
     }),
   )
 
-  // The Output Parser slot is the one connector that is normally NOT drawn:
-  // most agents answer in prose and shouldn't pay for a seventh caption on a
-  // card that already has six. It appears when the user asks for it in the
-  // inspector (`require_output_parser`), when something is already wired to
-  // it, or when this agent still carries a legacy stored contract (the
-  // inspector's Convert button is right there, and the slot is where the
-  // converted node lands).
+  // The Output Parser slot is the one connector whose AFFORDANCES are normally
+  // not drawn: most agents answer in prose and shouldn't pay for a seventh
+  // caption on a card that already has six. Its handle stays mounted but
+  // invisible (see the render below), while its caption and add stub appear
+  // when the user asks for it in the inspector (`require_output_parser`), when
+  // something is already wired to it, or when this agent still carries a
+  // legacy stored contract (the inspector's Convert button is right there,
+  // and the slot is where the converted node lands).
   //
-  // The already-wired clause is load-bearing, not defensive: React Flow drops
-  // an edge whose target handle isn't rendered, so a graph loaded with a
-  // parser edge but the toggle off would silently lose the edge -- and, since
-  // the canvas autosaves, lose it for good.
+  // The already-wired clause keeps the visible caption in sync with graphs
+  // created outside this UI, where the edge may exist without the flag.
   const parserConnections = useNodeConnections({ id, handleType: 'target', handleId: 'output_parser' })
   const showOutputParser =
     !!data.config?.require_output_parser || parserConnections.length > 0 || !!data.config?.output_contract
@@ -219,8 +218,8 @@ export function AgentNode({
 
           The 3 bottom sub-connectors: required AI (exactly one), optional
           max-1 Memory (visual scaffolding only -- see MemoryNodeData), and
-          optional repeatable Tool. Script is a pure config source too, but
-          deliberately does NOT get its own slot -- it wires into that same
+          optional repeatable Tool. Script is a repeatable pure config source
+          too, but deliberately does NOT get its own slot -- it wires into that same
           Tool connector (one connector accepting a FAMILY of node types,
           matching Motoro's own
           _NODE_TYPE_TO_HANDLE): the Tool "+" panel's search just lists
@@ -369,16 +368,24 @@ export function AgentNode({
           Tool -> Parser).
           Capped at one (no `alwaysVisible`) -- two contracts would be two
           answers to "what shape is this agent's output". */}
+      {/* Keep the handle mounted even while its affordances are hidden.
+          A parser node and its edge are created in the same React update;
+          conditionally mounting the target handle from that new connection
+          leaves React Flow one measurement behind and the edge can stay
+          visually detached until another canvas update. Opacity hides an
+          unused handle without removing the endpoint React Flow registers. */}
+      <Handle
+        type="target"
+        id="output_parser"
+        position={Position.Bottom}
+        style={{ left: CONNECTOR_LEFT.output_parser }}
+        title="Output Parser -- defines the format of this agent's answer and reads its typed fields back out"
+        className={`!size-2 !border-2 !bg-background !border-[color:var(--card-accent)] ${
+          showOutputParser ? '' : '!pointer-events-none !opacity-0'
+        }`}
+      />
       {showOutputParser && (
         <>
-          <Handle
-            type="target"
-            id="output_parser"
-            position={Position.Bottom}
-            style={{ left: CONNECTOR_LEFT.output_parser }}
-            title="Output Parser -- defines the format of this agent's answer and reads its typed fields back out"
-            className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
-          />
           <ConnectorHandleLabel left={CONNECTOR_LEFT.output_parser}>Parser</ConnectorHandleLabel>
           <ConnectorAddStub nodeId={id} slot="output_parser" left={CONNECTOR_LEFT.output_parser} />
         </>

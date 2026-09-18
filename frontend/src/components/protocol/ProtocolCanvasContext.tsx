@@ -77,6 +77,11 @@ interface ProtocolCanvasActions {
   // to attach a factor to), same as FactorBindableField's own disabled
   // state for that case.
   requestMakeFactor: (nodeId: string) => void
+  requestEditFactor: (factorName: string) => void
+  // Custom metric declarations live on the experiment rather than in canvas
+  // node data. Nodes read these derived summaries for their badge and
+  // inspector without polluting or autosaving the protocol graph.
+  metricsForNode: (nodeId: string) => Array<{ id: string; name: string }>
   // The Agent inspector's "Convert to an Output Parser node" button, for an
   // agent still carrying the old `config.output_contract` field. One atomic
   // canvas edit -- create the parser node under the agent's Output Parser

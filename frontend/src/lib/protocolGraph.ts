@@ -58,6 +58,28 @@ export function protocolForExperimentQueryKey(experimentId: string) {
   return ['protocols', 'for-experiment', experimentId] as const
 }
 
+// An autosave PATCH and a publish POST can overlap. The PATCH response is
+// built from the Protocol row it loaded before the publish; if it arrives
+// second, replacing the cache wholesale would move the UI back to the older
+// published revision even though the server and the run are already on the
+// new one. Keep graph/save fields from the PATCH while publication metadata
+// remains monotonic.
+export function mergeProtocolSaveIntoCache(previous: Protocol | undefined, saved: Protocol): Protocol {
+  if (
+    previous?.published_revision != null &&
+    (saved.published_revision == null || previous.published_revision > saved.published_revision)
+  ) {
+    const sameGraph = JSON.stringify(previous.graph) === JSON.stringify(saved.graph)
+    return {
+      ...saved,
+      published_revision_id: previous.published_revision_id,
+      published_revision: previous.published_revision,
+      has_unpublished_changes: sameGraph ? previous.has_unpublished_changes : true,
+    }
+  }
+  return saved
+}
+
 // Only durable fields are persisted -- xyflow annotates nodes/edges with
 // ephemeral UI state (selected, dragging, measured dimensions) that has no
 // meaning once reloaded from the backend. Shared by ProtocolCanvas.tsx's own

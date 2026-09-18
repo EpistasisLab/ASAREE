@@ -324,7 +324,7 @@ export function ProtocolCanvasPage() {
                   experimentLocked={!!experimentQuery.data?.locked_at}
                 />
               </ReactFlowProvider>
-              {experimentId && <ResultsInspectorPanel experimentId={experimentId} selection={resultSelection} onClose={() => setResultSelection(null)} />}
+              {experimentId && experimentQuery.data && <ResultsInspectorPanel experimentId={experimentId} experiment={experimentQuery.data} selection={resultSelection} onClose={() => setResultSelection(null)} />}
             </Card>
           )}
         </div>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from types import SimpleNamespace
 
 from asaree.services.csv_export import replicates_that_ran, replicates_to_csv
@@ -86,6 +87,61 @@ def test_replicates_to_csv_column_order_is_scalars_then_sorted_factors_then_sort
     text = replicates_to_csv(replicates)
     header = text.splitlines()[0].split(",")
     assert header == ["replicate_label", "run_id", "workspace_id", "alpha", "zeta", "alpha_metric", "zeta_metric"]
+
+
+def test_replicates_to_csv_separates_non_rankable_legacy_values_with_provenance() -> None:
+    replicates = [
+        _replicate(
+            "cell-a",
+            run_id="11111111-1111-1111-1111-111111111111",
+            metric_values={
+                "accuracy": 0.9,
+                "Reviewer note": "needs follow-up",
+                "Reviewer payload": {"flags": ["manual-review"]},
+                "Reviewer null": None,
+            },
+        )
+    ]
+
+    rows = _parse(replicates_to_csv(replicates))
+
+    assert set(rows[0]) == {
+        "replicate_label",
+        "run_id",
+        "workspace_id",
+        "accuracy",
+        "legacy_values",
+    }
+    legacy_values = json.loads(rows[0]["legacy_values"])
+    assert [item["metric_name"] for item in legacy_values] == [
+        "Reviewer note",
+        "Reviewer payload",
+        "Reviewer null",
+    ]
+    assert legacy_values[1]["value"] == {"flags": ["manual-review"]}
+    assert {item["producer"]["producer_id"] for item in legacy_values} == {"legacy.unknown"}
+
+
+def test_replicates_to_csv_exports_declared_opaque_custom_metrics_in_their_own_columns() -> None:
+    replicates = [_replicate("cell-a", metric_values={"LLM judge evaluation": {"score": 4, "passed": True}})]
+
+    rows = _parse(
+        replicates_to_csv(
+            replicates,
+            design_spec={
+                "metrics": [
+                    {
+                        "name": "LLM judge evaluation",
+                        "kind": "custom",
+                        "valueType": "opaque",
+                    }
+                ]
+            },
+        )
+    )
+
+    assert rows[0]["LLM judge evaluation"] == '{"passed":true,"score":4}'
+    assert "legacy_values" not in rows[0]
 
 
 # --- replicates_that_ran ------------------------------------------------

@@ -131,7 +131,6 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
       .map((config) => config.server_name)
       .filter((name): name is string => !!name),
   )
-
   return {
     agentCount: relevantNodes.filter((n) => n.type === 'agent').length,
     // A per-node run never includes a critic gate (only "agent" nodes ever
@@ -143,6 +142,12 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
     skills,
     knowledgeSources,
   }
+}
+
+export function runAttemptCount(scope: RunScope): number {
+  if (scope.type === 'all-cells') return scope.pendingReplicateCount
+  if (scope.type === 'selected-cells') return scope.pendingReplicateCount + scope.rerunReplicateCount
+  return 1
 }
 
 function nodesWiredTo(nodes: Node[], edges: Edge[], targetId: string): Node[] {

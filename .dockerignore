@@ -19,6 +19,5 @@ data/
 # committed and later removed from it, into an image layer.
 .git/
 sdk/
-tests/
 *.log
 *_out.ipynb

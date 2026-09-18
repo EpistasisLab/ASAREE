@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   deriveFactors,
-  displayFactorValue,
+  displayFactorLevel,
   formatMetricLabel,
   formatMetricValue,
   groupReplicatesIntoCells,
@@ -19,11 +19,14 @@ type CellSort = { key: string; dir: 'asc' | 'desc' }
 
 const CELLS_PAGE_SIZE = 20
 
-function cellSortValue(cell: ExperimentalCell, key: string): string | number {
+function cellSortValue(cell: ExperimentalCell, key: string, designSpec: Experiment['design_spec']): string | number {
   if (key === 'cell_label') return cell.label.toLowerCase()
   if (key === 'updated_at') return new Date(cell.updatedAt).getTime()
   if (key === 'status') return cell.scoredReplicateCount / cell.replicates.length
-  if (key.startsWith('factor:')) return displayFactorValue(cell.factorValues[key.slice(7)] ?? '').toLowerCase()
+  if (key.startsWith('factor:')) {
+    const factorName = key.slice(7)
+    return displayFactorLevel(designSpec, factorName, cell.factorValues[factorName] ?? '', cell.label).toLowerCase()
+  }
   if (key.startsWith('metric:')) {
     return meanMetric(cell.replicates, key.slice(7)) ?? Number.NEGATIVE_INFINITY
   }
@@ -88,13 +91,13 @@ export function CellsTable({ experiment, cells }: { experiment: Experiment; cell
   const sorted = useMemo(() => {
     const rows = [...groupedCells]
     rows.sort((a, b) => {
-      const av = cellSortValue(a, sort.key)
-      const bv = cellSortValue(b, sort.key)
+      const av = cellSortValue(a, sort.key, experiment.design_spec)
+      const bv = cellSortValue(b, sort.key, experiment.design_spec)
       const cmp = av < bv ? -1 : av > bv ? 1 : 0
       return sort.dir === 'asc' ? cmp : -cmp
     })
     return rows
-  }, [groupedCells, sort])
+  }, [experiment.design_spec, groupedCells, sort])
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / CELLS_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages)
@@ -125,7 +128,7 @@ export function CellsTable({ experiment, cells }: { experiment: Experiment; cell
                 </td>
                 {factors.map((f) => (
                   <td key={f.name} className="max-w-32 truncate px-2 py-1.5 font-mono text-muted-foreground">
-                    {f.name in cell.factorValues ? displayFactorValue(cell.factorValues[f.name]) : '—'}
+                    {f.name in cell.factorValues ? displayFactorLevel(experiment.design_spec, f.name, cell.factorValues[f.name], cell.label) : '—'}
                   </td>
                 ))}
                 {metricColumns.map((m) => (

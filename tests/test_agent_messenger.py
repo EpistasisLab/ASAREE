@@ -521,7 +521,7 @@ async def test_peer_time_does_not_burn_the_callers_own_budget(monkeypatch: pytes
             await asyncio.sleep(0.3)
         await asyncio.sleep(0.05)
 
-    monkeypatch.setattr(pe, "_poll_cancel_flag", _never_cancels)
+    monkeypatch.setattr(pe, "_monitor_protocol_run", _never_cancels)
     monkeypatch.setattr(pe, "execute_run", _execute_run)
     monkeypatch.setattr(pe, "get_registry", lambda: None)
 
@@ -538,7 +538,7 @@ async def test_an_agent_that_overruns_on_its_own_still_times_out(monkeypatch: py
     async def _execute_run(**_kwargs: Any) -> None:
         await asyncio.sleep(5)
 
-    monkeypatch.setattr(pe, "_poll_cancel_flag", _never_cancels)
+    monkeypatch.setattr(pe, "_monitor_protocol_run", _never_cancels)
     monkeypatch.setattr(pe, "execute_run", _execute_run)
     monkeypatch.setattr(pe, "get_registry", lambda: None)
 

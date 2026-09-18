@@ -50,6 +50,19 @@ def _validate_factors(factors: list[dict[str, Any]]) -> None:
         seen.add(name)
         if not isinstance(levels, list) or not levels:
             raise DesignValidationError(f"factor {name!r} must have a non-empty list of levels")
+        level_labels = f.get("level_labels")
+        if level_labels is not None:
+            if (
+                not isinstance(level_labels, list)
+                or len(level_labels) != len(levels)
+                or any(not isinstance(label, str) or not label.strip() for label in level_labels)
+            ):
+                raise DesignValidationError(
+                    f"factor {name!r} level_labels must contain one non-empty string per level"
+                )
+            normalized_labels = [label.strip() for label in level_labels]
+            if len(set(normalized_labels)) != len(normalized_labels):
+                raise DesignValidationError(f"factor {name!r} level_labels must be unique")
 
 
 def generate_design(factors: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -103,6 +116,12 @@ _DICT_SLUG_PRIORITY_KEYS = (
 # meaningless) case of two levels holding the same set.
 _MAX_LIST_SLUG_ITEMS = 3
 _NON_FACTOR_KEYS = {"replicate", "seed", "rep", "trial", "iteration"}
+# ``cell_label`` and ``replicate_label`` are VARCHAR(255). Keep enough room
+# for the largest practical ``__repN`` suffix (replicate numbers are stored as
+# a signed 32-bit integer), while retaining a digest so two long treatments
+# with the same prefix never collapse onto one persisted cell.
+_MAX_CELL_LABEL_LENGTH = 240
+_TRUNCATED_LABEL_DIGEST_LENGTH = 10
 
 
 def _slugify(value: Any) -> str:
@@ -126,19 +145,59 @@ def _slugify(value: Any) -> str:
     return slug or "x"
 
 
-def cell_label_for(combination: dict[str, Any]) -> str:
-    """Return the deterministic label for one unique factor combination."""
-    return "__".join(f"{name}_{_slugify(value)}" for name, value in sorted(combination.items()))
+def _factor_level_label(factor: dict[str, Any], value: Any) -> str | None:
+    levels = factor.get("levels")
+    labels = factor.get("level_labels")
+    if not isinstance(levels, list) or not isinstance(labels, list) or len(labels) != len(levels):
+        return None
+    value_key = json.dumps(value, sort_keys=True, default=str)
+    return next(
+        (
+            label.strip()
+            for level, label in zip(levels, labels, strict=True)
+            if isinstance(label, str)
+            and label.strip()
+            and json.dumps(level, sort_keys=True, default=str) == value_key
+        ),
+        None,
+    )
 
 
-def replicate_label_for(combination: dict[str, Any], *, replicate: int = 1) -> str:
+def cell_label_for(combination: dict[str, Any], *, factors: list[dict[str, Any]] | None = None) -> str:
+    """Return the deterministic label for one unique factor combination.
+
+    A normalized design supplies one short ``level_label`` per raw treatment.
+    Those human-facing labels name persisted cells while ``factor_values``
+    retains the complete treatment payload used during execution. Callers
+    without declarations keep the legacy raw-value slug behavior.
+    """
+    factors_by_name = {
+        factor["name"]: factor
+        for factor in (factors or [])
+        if isinstance(factor, dict) and isinstance(factor.get("name"), str)
+    }
+    parts = []
+    for name, value in sorted(combination.items()):
+        declared_label = _factor_level_label(factors_by_name[name], value) if name in factors_by_name else None
+        parts.append(f"{name}:{declared_label}" if declared_label is not None else f"{name}_{_slugify(value)}")
+    label = "__".join(parts)
+    if len(label) <= _MAX_CELL_LABEL_LENGTH:
+        return label
+    digest = hashlib.sha1(label.encode()).hexdigest()[:_TRUNCATED_LABEL_DIGEST_LENGTH]
+    prefix_length = _MAX_CELL_LABEL_LENGTH - len(digest) - 2
+    return f"{label[:prefix_length].rstrip('-_')}--{digest}"
+
+
+def replicate_label_for(
+    combination: dict[str, Any], *, replicate: int = 1, factors: list[dict[str, Any]] | None = None
+) -> str:
     """Return the label for one replicate within a factor-combination cell.
 
     Replicate 1 retains the unsuffixed historical label; later replicates use
     ``__repN``. This keeps existing data stable while making the cell/replicate
     distinction explicit at every call site.
     """
-    cell_label = cell_label_for(combination)
+    cell_label = cell_label_for(combination, factors=factors)
     return cell_label if replicate <= 1 else f"{cell_label}__rep{replicate}"
 
 
@@ -178,15 +237,10 @@ def material_design_spec(design_spec: dict[str, Any] | None) -> dict[str, Any]:
     """Return only the declaration fields that determine which cells exist."""
     spec = design_spec or {}
     factors = spec.get("factors") or []
-    # A level label controls how a treatment is named in a downloaded design
-    # matrix, not which treatment executes. Keep it out of revision/impact
-    # comparisons so renaming a long system prompt never churns cell rows.
-    material_factors = [
-        {key: value for key, value in factor.items() if key != "level_labels"} if isinstance(factor, dict) else factor
-        for factor in factors
-    ]
     return {
-        "factors": material_factors,
+        # Level labels are material because they form the persisted cell and
+        # replicate identities (``Factor name:level label``).
+        "factors": factors,
         "replicates": spec.get("replicates") or 1,
         # Not a factor, and it changes no cell's *label* -- but it changes what
         # every cell MEANS, since the strategy decides how a cell run executes
@@ -210,11 +264,11 @@ def material_design_spec(design_spec: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def _planned_replicates(factors: list[dict[str, Any]], replicates: int) -> list[tuple[str, dict[str, Any]]]:
+def _planned_replicates(factors: list[dict[str, Any]], replicates: int) -> list[tuple[str, dict[str, Any], int]]:
     if replicates < 1:
         raise DesignValidationError(f"replicates must be at least 1, got {replicates}")
     return [
-        (replicate_label_for(combo, replicate=replicate), combo)
+        (replicate_label_for(combo, replicate=replicate, factors=factors), combo, replicate)
         for combo in generate_design(factors)
         for replicate in range(1, replicates + 1)
     ]
@@ -226,8 +280,8 @@ async def get_design_impact(
     """Compare the declared factorial matrix to its materialized revision."""
     material = material_design_spec(design_spec)
     planned = _planned_replicates(material["factors"], material["replicates"]) if material["factors"] else []
-    planned_labels = {label for label, _ in planned}
-    planned_cell_keys = {_cell_key(combo, label) for label, combo in planned}
+    planned_labels = {label for label, _, _ in planned}
+    planned_cell_keys = {_cell_key(combo, label) for label, combo, _ in planned}
     current = await get_current_revision(db, experiment_id)
     if current is None:
         return DesignImpact(
@@ -337,7 +391,7 @@ async def generate_design_cells(
     # ``generate_design`` in that case -- its non-empty validation remains
     # correct for callers trying to construct a factorial cross-product.
     planned = _planned_replicates(factors, replicates) if factors else []
-    planned_labels = {label for label, _ in planned}
+    planned_labels = {label for label, _, _ in planned}
 
     current = await get_current_revision(db, experiment_id)
     existing = (
@@ -378,23 +432,31 @@ async def generate_design_cells(
         # re-merged because a level's *value* can change without changing its
         # slugified label.
         revision_id = current.id
-        carry_over: dict[str, FactorialReplicateResult] = {}
+        carry_over: dict[tuple[str, int], FactorialReplicateResult] = {}
         if current.design_spec != design_spec:
             current.design_spec = design_spec
             await db.flush()
     else:
         revision = await supersede_and_create(db, experiment_id=experiment_id, design_spec=design_spec)
         revision_id = revision.id
-        carry_over = {} if strategy_changed else existing
+        carry_over = (
+            {}
+            if strategy_changed
+            else {
+                (_cell_key(previous.factor_values, previous.replicate_label), previous.replicate_number): previous
+                for previous in existing.values()
+            }
+        )
 
     replicate_results = []
-    for label, combo in planned:
+    for label, combo, replicate_number in planned:
         fields: dict[str, Any] = {"factor_values": combo}
-        previous = carry_over.get(label)
+        previous = carry_over.get((_cell_key(combo, label), replicate_number))
         if previous is not None:
-            # Same combination, same label -- the observation is as valid
-            # under the new design as it was under the old one, so it moves
-            # across rather than being re-run and re-billed.
+            # Same combination and replicate number -- the observation is as
+            # valid under the new design as it was under the old one, even if
+            # adopting/renaming a level label changed its display identity.
+            # Move it across rather than re-running and re-billing.
             for field in _CARRIED_FORWARD_FIELDS:
                 value = getattr(previous, field)
                 if value:

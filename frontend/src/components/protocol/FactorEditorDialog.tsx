@@ -32,20 +32,9 @@ import { NODE_INSPECTOR_CONTENT_CLASSNAME } from './NodeInspectorDialog'
 import { PROVIDER_META } from './nodes/LlmNode'
 import { PromptReferenceField } from './PromptReferenceField'
 import { PythonCodeEditor } from './PythonCodeEditor'
+import { useDialogAutosave } from './useDialogAutosave'
 import type { DesignFactor } from '@/types/experiments'
 
-const LEVEL_TYPES: LevelType[] = [
-  'string',
-  'text',
-  'number',
-  'boolean',
-  'llm_config',
-  'tool_config',
-  'pattern',
-  'script_config',
-  'dataset_config',
-  'tool_names',
-]
 const EFFORT_LEVELS_FALLBACK = ['low', 'medium', 'high', 'xhigh', 'max']
 const PATTERN_OPTIONS = [
   { slug: 'reason_act', label: 'Reason + Act' },
@@ -291,7 +280,7 @@ function PatternLevelRow({ value, onChange }: { value: StructuredLevel; onChange
 
 // One row of a "script_config" factor's levels -- mirrors ScriptNodeInspector's
 // own Name/Language/Code fields exactly, since a level here IS a whole
-// Script node's config (protocol_execution.py's _resolve_script_config
+// Script node's config (protocol_execution.py's _resolve_script_configs
 // reads it verbatim, never the node's xyflow type). Python-only for v1,
 // same as ScriptNodeInspector's own fixed "Language: Python" label.
 function ScriptConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
@@ -571,9 +560,10 @@ export function FactorEditorDialog({
   // `field` is only present when this save came from picking one of
   // pickableFields -- the caller uses it to write the binding onto the
   // actual canvas node (this dialog has no way to do that itself).
-  onSave: (factor: DesignFactor, field?: UnboundField) => void
+  onSave: (factor: DesignFactor, field?: UnboundField) => void | Promise<unknown>
 }) {
   const [selectedField, setSelectedField] = useState<UnboundField | null>(null)
+  const [selectedName, setSelectedName] = useState('')
   const [search, setSearch] = useState('')
   const [levelType, setLevelType] = useState<LevelType>(levelTypeOf(factor))
   const [levels, setLevels] = useState<unknown[]>(() => (isStructuredLevelType(levelTypeOf(factor)) ? factor.levels : factor.levels.map((l) => String(l))))
@@ -586,6 +576,7 @@ export function FactorEditorDialog({
   useEffect(() => {
     if (open) {
       setSelectedField(null)
+      setSelectedName('')
       setSearch('')
       if (!pickableFields) {
         const t = levelTypeOf(factor)
@@ -595,30 +586,18 @@ export function FactorEditorDialog({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, factor, pickableFields])
+  }, [open])
 
   function pickField(field: UnboundField) {
     setSelectedField(field)
+    const nextName = computeFactorName(field.nodeLabel, field.fieldLabel, existingNames ?? [])
+    setSelectedName(nextName)
     setLevelType(field.levelType)
     const nextLevels = isStructuredLevelType(field.levelType)
       ? seedStructuredLevels(field.currentValue, field.levelType)
       : seedLevels(field.currentValue)
     setLevels(nextLevels)
-    setLevelLabels(defaultFactorLevelLabels(computeFactorName(field.nodeLabel, field.fieldLabel, existingNames ?? []), nextLevels.length))
-  }
-
-  function changeLevelType(next: LevelType) {
-    setLevelType(next)
-    // Boolean levels are fixed ([true, false], nothing to type); the 3
-    // structured kinds carry objects, never strings -- any of these
-    // transitions (into/out of boolean, into/out of a structured kind)
-    // can't carry the old levels forward, so both directions just reset to
-    // that type's own default starting levels.
-    if (next === 'boolean' || levelType === 'boolean' || isStructuredLevelType(next) || isStructuredLevelType(levelType)) {
-      const nextLevels = next === 'boolean' ? [true, false] : isStructuredLevelType(next) ? [emptyStructuredLevel(next), emptyStructuredLevel(next)] : ['', '']
-      setLevels(nextLevels)
-      setLevelLabels(defaultFactorLevelLabels(name, nextLevels.length))
-    }
+    setLevelLabels(defaultFactorLevelLabels(nextName, nextLevels.length))
   }
 
   // Computed, not user-typed (see factorLevels.ts's computeFactorName) --
@@ -626,24 +605,52 @@ export function FactorEditorDialog({
   // Agents' own "System prompt") can never collide into one shared factor
   // by accident. Outside field-picker mode this is just whatever was
   // already computed when the factor was first bound to its field.
-  const name = pickableFields ? (selectedField ? computeFactorName(selectedField.nodeLabel, selectedField.fieldLabel, existingNames ?? []) : '') : factor.name
+  // Freeze the computed name when the field is picked. After the first
+  // autosave the experiment query includes this new factor; recomputing from
+  // existingNames would mistake it for a collision and rename the same draft.
+  const name = pickableFields ? selectedName : factor.name
   const needsFieldPick = !!pickableFields && !selectedField
 
-  function save() {
+  function makeDraft(
+    draftName: string,
+    draftLevelType: LevelType,
+    draftLevels: unknown[],
+    draftLevelLabels: string[],
+    field?: UnboundField,
+  ) {
     const selectedIndexes =
-      isStructuredLevelType(levelType) || levelType === 'boolean'
-        ? levels.map((_, index) => index)
-        : (levels as string[]).flatMap((level, index) => (level.trim() ? [index] : []))
+      isStructuredLevelType(draftLevelType) || draftLevelType === 'boolean'
+        ? draftLevels.map((_, index) => index)
+        : (draftLevels as string[]).flatMap((level, index) => (level.trim() ? [index] : []))
     const parsedLevels =
-      isStructuredLevelType(levelType)
-        ? levels
-        : levelType === 'boolean'
+      isStructuredLevelType(draftLevelType)
+        ? draftLevels
+        : draftLevelType === 'boolean'
           ? [true, false]
-          : selectedIndexes.map((index) => parseLevelValue((levels as string[])[index], levelType))
-    const defaults = defaultFactorLevelLabels(name, parsedLevels.length)
-    const labels = selectedIndexes.map((index, outputIndex) => levelLabels[index]?.trim() || defaults[outputIndex])
-    onSave({ name, levels: parsedLevels, level_labels: labels, level_type: levelType }, selectedField ?? undefined)
-    onOpenChange(false)
+          : selectedIndexes.map((index) => parseLevelValue((draftLevels as string[])[index], draftLevelType))
+    const defaults = defaultFactorLevelLabels(draftName, parsedLevels.length)
+    const labels = selectedIndexes.map((index, outputIndex) => draftLevelLabels[index]?.trim() || defaults[outputIndex])
+    return { factor: { name: draftName, levels: parsedLevels, level_labels: labels, level_type: draftLevelType } satisfies DesignFactor, field }
+  }
+
+  const draft = makeDraft(name, levelType, levels, levelLabels, selectedField ?? undefined)
+  const draftSignature = JSON.stringify(draft)
+  const initialLevelType = levelTypeOf(factor)
+  const initialSignature = JSON.stringify(makeDraft(
+    factor.name,
+    initialLevelType,
+    isStructuredLevelType(initialLevelType) ? factor.levels : factor.levels.map((level) => String(level)),
+    factorLevelLabels(factor),
+  ))
+  const factorAutosave = useDialogAutosave({
+    draft: open && !needsFieldPick && draftSignature !== initialSignature ? draft : null,
+    signature: draftSignature,
+    onSave: ({ factor: next, field }) => onSave(next, field),
+  })
+
+  function changeOpen(next: boolean) {
+    if (!next) factorAutosave.flush()
+    onOpenChange(next)
   }
 
   // A factor bound to the prompt replaces it whole, per cell -- so a level
@@ -668,7 +675,7 @@ export function FactorEditorDialog({
   )
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={changeOpen}>
       <DialogContent
         showCloseButton={false}
         style={cardAccent(accent)}
@@ -679,7 +686,7 @@ export function FactorEditorDialog({
             <Split className="size-5" style={{ color: accent }} />
             <h2 className="text-lg font-semibold">{name || 'New factor'}</h2>
           </div>
-          <Button variant="outline" size="icon" aria-label="Close" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" size="icon" aria-label="Close" onClick={() => changeOpen(false)}>
             <X className="size-4" />
           </Button>
         </div>
@@ -716,7 +723,7 @@ export function FactorEditorDialog({
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
                 <div className="space-y-1.5">
                   <Label>Factor name</Label>
                   <p className="rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground">{name}</p>
@@ -729,21 +736,6 @@ export function FactorEditorDialog({
                       Change field
                     </button>
                   )}
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Level type</Label>
-                  <Select value={levelType} onValueChange={(value) => value && changeLevelType(value as LevelType)}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue>{() => LEVEL_TYPE_LABELS[levelType]}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {LEVEL_TYPES.map((t) => (
-                        <SelectItem key={t} value={t}>
-                          {LEVEL_TYPE_LABELS[t]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                 </div>
               </div>
 
@@ -933,13 +925,20 @@ export function FactorEditorDialog({
           )}
         </div>
 
-        <div className="flex shrink-0 items-center justify-end gap-2 border-t bg-muted/50 px-4 py-3">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button disabled={needsFieldPick} onClick={save}>
-            Save
-          </Button>
+        <div className="flex shrink-0 items-center justify-end border-t bg-muted/50 px-4 py-3">
+          <p role="status" aria-live="polite" className={factorAutosave.status === 'error' ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>
+            {needsFieldPick
+              ? 'Choose a field to start autosaving.'
+              : factorAutosave.status === 'waiting'
+                ? 'Waiting to save…'
+                : factorAutosave.status === 'saving'
+                  ? 'Saving…'
+                  : factorAutosave.status === 'saved'
+                    ? 'Saved'
+                    : factorAutosave.status === 'error'
+                      ? 'Could not autosave. Edit a field or close to retry.'
+                      : 'Changes save automatically.'}
+          </p>
         </div>
       </DialogContent>
     </Dialog>

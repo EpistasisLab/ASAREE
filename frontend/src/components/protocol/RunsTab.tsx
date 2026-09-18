@@ -1,15 +1,16 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
-import { ChevronDown, Download, Lock, Square } from 'lucide-react'
+import { AlertTriangle, ChevronDown, Download, Lock, Square } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
-import { displayFactorValue, factorValueKey, groupReplicatesIntoCells, type ExperimentalCell } from '@/lib/experiment'
+import { displayFactorLevel, factorValueKey, groupReplicatesIntoCells, type ExperimentalCell } from '@/lib/experiment'
+import { factorBindingDiscrepancies, type FactorBindingDiscrepancy } from '@/lib/factorBindings'
 import { protocolForExperimentQueryKey } from '@/lib/protocolGraph'
-import type { ResultCell, ResultReplicate, Trial } from '@/types/experiments'
+import type { Experiment, ResultCell, ResultReplicate, Trial } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
 import { RunConfirmDialog } from './RunConfirmDialog'
 import { WarningBadge } from './nodes/WarningBadge'
@@ -33,16 +34,25 @@ function cellSortKey(cell: ExperimentalCell): string {
 // label. Keep the path as context and turn its final field/value pair into a
 // sentence: "Agent · Search: Disabled" rather than "Agent:Search:Enabled:
 // false".
-function displayFactorCondition(name: string, value: unknown): string {
+function displayFactorCondition(
+  name: string,
+  value: unknown,
+  designSpec: Experiment['design_spec'] | undefined,
+  cellLabel?: string,
+): string {
   const parts = name.split(':').map((part) => part.trim()).filter(Boolean)
   const field = parts.pop() ?? name
+  const displayedLevel = displayFactorLevel(designSpec, name, value, cellLabel)
 
   if (typeof value === 'boolean' && /enabled$/i.test(field)) {
+    if (displayedLevel !== String(value)) {
+      return [...parts, field].filter(Boolean).join(' · ') + `: ${displayedLevel}`
+    }
     const subject = field.replace(/\s*enabled$/i, '').trim()
     return [...parts, subject].filter(Boolean).join(' · ') + `: ${value ? 'Enabled' : 'Disabled'}`
   }
 
-  return [...parts, field].filter(Boolean).join(' · ') + `: ${displayFactorValue(value)}`
+  return [...parts, field].filter(Boolean).join(' · ') + `: ${displayedLevel}`
 }
 
 function trialStatusBadge(status: Trial['status']) {
@@ -53,6 +63,8 @@ function trialStatusBadge(status: Trial['status']) {
       return { label: 'Queued', className: 'border-transparent bg-[color:var(--primary)]/10 text-[color:var(--primary)]' }
     case 'running':
       return { label: 'Running', className: 'border-transparent bg-[color:var(--primary)]/10 text-[color:var(--primary)]' }
+    case 'finalizing':
+      return { label: 'Finalizing', className: 'border-transparent bg-[color:var(--primary)]/10 text-[color:var(--primary)]' }
     case 'completed':
       return { label: 'Completed', className: 'border-transparent bg-[color:var(--chart-3)]/10 text-[color:var(--chart-3)]' }
     case 'failed':
@@ -60,6 +72,10 @@ function trialStatusBadge(status: Trial['status']) {
     case 'cancelled':
       return { label: 'Cancelled', className: 'border-transparent bg-muted text-muted-foreground' }
   }
+}
+
+function isActiveTrialStatus(status: Trial['status']): boolean {
+  return status === 'queued' || status === 'running' || status === 'finalizing'
 }
 
 const OBSOLETE_TRIAL_BADGE = {
@@ -103,6 +119,7 @@ export function RunAllCellsButton({
   experimentId,
   regenerationRequired,
   unboundFactors,
+  bindingDiscrepancies,
   replicateLabels,
   label = 'Run all cells',
   dialogTitle,
@@ -113,6 +130,7 @@ export function RunAllCellsButton({
   experimentId: string
   regenerationRequired: boolean
   unboundFactors: string[]
+  bindingDiscrepancies: FactorBindingDiscrepancy[]
   replicateLabels?: string[]
   label?: string
   dialogTitle?: string
@@ -146,7 +164,7 @@ export function RunAllCellsButton({
     : allReplicates
   const activeReplicateLabels = new Set(
     (trialsQuery.data ?? [])
-      .filter((trial) => trial.status === 'queued' || trial.status === 'running')
+      .filter((trial) => isActiveTrialStatus(trial.status))
       .map((trial) => trial.replicate_label),
   )
   const completedReplicateLabels = new Set(
@@ -281,6 +299,7 @@ export function RunAllCellsButton({
         description: canvas.description,
         graph: canvas.graph,
         design_spec: experiment.design_spec,
+        measurement_plan: experiment.measurement_plan,
         experiment: {
           source_id: experiment.id,
           name: experiment.name,
@@ -289,6 +308,7 @@ export function RunAllCellsButton({
           design_type: experiment.design_type,
           task_brief: experiment.task_brief,
           design_spec: experiment.design_spec,
+          measurement_plan: experiment.measurement_plan,
           dataset_ids: experiment.dataset_ids,
           archived_at: experiment.archived_at,
           created_at: experiment.created_at,
@@ -297,6 +317,7 @@ export function RunAllCellsButton({
             locked_at: experiment.locked_at,
             source_protocol_revision_id: experiment.locked_protocol_revision_id,
             design_spec: experiment.locked_design_spec,
+            measurement_plan: experiment.locked_measurement_plan,
             canvas_revision: lockedCanvas ? {
               source_id: lockedCanvas.id,
               revision: lockedCanvas.revision,
@@ -355,11 +376,14 @@ export function RunAllCellsButton({
     (pendingReplicateCount === 0 && previouslyRunCells.length === 0) ||
     regenerationRequired ||
     unboundFactors.length > 0 ||
+    bindingDiscrepancies.length > 0 ||
     !protocol.published_revision_id
   const blockedTitle = regenerationRequired
     ? 'Design changed — review and regenerate before running the experiment.'
     : unboundFactors.length > 0
       ? `Rebind or remove: ${unboundFactors.join(', ')}.`
+      : bindingDiscrepancies.length > 0
+        ? 'Canvas values and generated factor levels disagree. Resolve the warning in Runs before starting.'
       : !protocol?.published_revision_id
         ? 'Publish a valid canvas before running cells.'
         : replicates.length === 0
@@ -458,7 +482,7 @@ export function RunAllCellsButton({
                     const labels = cell.replicates.map((replicate) => replicate.replicate_label)
                     const selectedCount = labels.filter((label) => selectedReruns.has(label)).length
                     const expanded = expandedCells.has(cell.label)
-                    const summary = factorEntries(cell).map(([name, value]) => displayFactorCondition(name, value)).join(' · ') || 'Cell'
+                    const summary = factorEntries(cell).map(([name, value]) => displayFactorCondition(name, value, experimentQuery.data?.design_spec, cell.label)).join(' · ') || 'Cell'
                     const listId = `rerun-cell-${cell.label}`
                     return (
                       <div key={cell.label} className="overflow-hidden rounded-md border">
@@ -522,8 +546,8 @@ export function RunAllCellsButton({
 
 // A protocol run is the actual cancellable unit. A cell/experiment stop is
 // simply this same operation applied to each of its active replicate runs.
-// The API only raises a durable cancellation flag; polling below keeps the
-// visible status in sync until the worker reaches a safe interruption point.
+// Queued runs are cancelled by the API immediately; active runs are flagged
+// for a safe interruption point. Polling keeps the visible status in sync.
 function StopRunsButton({
   protocol,
   experimentId,
@@ -573,6 +597,7 @@ function RunReplicateButton({
   activeRunId,
   regenerationRequired,
   unboundFactors,
+  bindingDiscrepancies,
 }: {
   protocol: Protocol | undefined
   experimentId: string
@@ -582,6 +607,7 @@ function RunReplicateButton({
   activeRunId: string | null
   regenerationRequired: boolean
   unboundFactors: string[]
+  bindingDiscrepancies: FactorBindingDiscrepancy[]
 }) {
   const queryClient = useQueryClient()
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -601,11 +627,13 @@ function RunReplicateButton({
       runMutation.mutate()
     },
   })
-  const runBlocked = !protocol || regenerationRequired || unboundFactors.length > 0 || !protocol.published_revision_id
+  const runBlocked = !protocol || regenerationRequired || unboundFactors.length > 0 || bindingDiscrepancies.length > 0 || !protocol.published_revision_id
   const blockedTitle = regenerationRequired
     ? 'Design changed — review and regenerate before running this replicate.'
     : unboundFactors.length > 0
       ? `Rebind or remove: ${unboundFactors.join(', ')}.`
+      : bindingDiscrepancies.length > 0
+        ? 'Canvas values and generated factor levels disagree. Resolve the warning in Runs before starting.'
       : !protocol?.published_revision_id
         ? 'Publish a valid canvas before running replicates.'
         : undefined
@@ -665,12 +693,14 @@ function RunReplicateButton({
 // preserving the high-level overview instead of replacing it with a dialog.
 export function RunsTab({
   experimentId,
+  designSpec,
   protocol,
   regenerationRequired,
   unboundFactors,
   onViewResult,
 }: {
   experimentId: string
+  designSpec: Experiment['design_spec']
   protocol: Protocol | undefined
   regenerationRequired: boolean
   unboundFactors: string[]
@@ -710,6 +740,7 @@ export function RunsTab({
   }
 
   const cells = groupReplicatesIntoCells(replicatesQuery.data).sort((a, b) => cellSortKey(a).localeCompare(cellSortKey(b)))
+  const bindingDiscrepancies = factorBindingDiscrepancies(designSpec, protocol?.graph)
   const trialsByLabel = new Map((trialsQuery.data ?? []).map((trial) => [trial.replicate_label, trial]))
   const cellResultsByLabel = new Map((resultsQuery.data?.cells ?? []).map((cell) => [cell.cell_label, cell]))
   const replicateResultsByLabel = new Map((resultsQuery.data?.replicates ?? []).map((replicate) => [replicate.replicate_label, replicate]))
@@ -724,7 +755,7 @@ export function RunsTab({
   const trials = [...trialsByLabel.values()]
   const currentTrialCount = trials.filter((trial) => !trial.obsolete).length
   const completedCount = trials.filter((trial) => trial.status === 'completed' && !trial.obsolete).length
-  const runningCount = trials.filter((trial) => trial.status === 'running').length
+  const runningCount = trials.filter((trial) => trial.status === 'running' || trial.status === 'finalizing').length
   const queuedCount = trials.filter((trial) => trial.status === 'queued').length
   const failedCount = trials.filter((trial) => trial.status === 'failed' || trial.status === 'cancelled').length
   const overviewUsage = resultsQuery.data ? usageSummary({
@@ -733,7 +764,7 @@ export function RunsTab({
     duration_seconds: resultsQuery.data.overview.total_duration_seconds,
   }) : []
   const isActiveTrial = (trial: Trial | undefined): trial is Trial =>
-    !!trial?.run_id && (trial.status === 'queued' || trial.status === 'running')
+    !!trial?.run_id && isActiveTrialStatus(trial.status)
   const activeExperimentRunIds = trials.filter(isActiveTrial).map((trial) => trial.run_id)
   // Completion is the user-visible truth here. A result can be completed
   // from persisted metrics even when it has no ProtocolRun provenance (for
@@ -760,6 +791,24 @@ export function RunsTab({
 
   return (
     <section className="space-y-1.5 p-3" aria-labelledby="run-cells-heading">
+      {bindingDiscrepancies.length > 0 && (
+        <div role="alert" className="mb-3 flex gap-2 rounded-md border border-[color:var(--chart-4)]/50 bg-[color:var(--chart-4)]/10 px-3 py-2.5 text-sm">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--chart-4)]" />
+          <div className="min-w-0 space-y-1">
+            <p className="font-medium">Canvas and generated runs disagree</p>
+            <p className="text-xs text-muted-foreground">
+              Cell runs would replace these canvas values with saved factor levels. Update the factor levels and regenerate the design, or remove the bindings before running.
+            </p>
+            <ul className="space-y-0.5 text-xs">
+              {bindingDiscrepancies.map((issue) => (
+                <li key={`${issue.nodeId}:${issue.fieldPath}`}>
+                  <span className="font-medium">{issue.nodeLabel}</span> · {issue.factorName}: {issue.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
       <div className="space-y-0.5">
         <div className="flex items-center gap-2">
           <h2 id="run-cells-heading" className="text-sm font-medium">Cells</h2>
@@ -774,6 +823,7 @@ export function RunsTab({
             experimentId={experimentId}
             regenerationRequired={regenerationRequired}
             unboundFactors={unboundFactors}
+            bindingDiscrepancies={bindingDiscrepancies}
             hasCompletedRun={experimentHasCompletedRun}
             dialogTitle={experimentHasCompletedRun ? 'Re-run all cells?' : 'Run all cells?'}
           />
@@ -823,9 +873,9 @@ export function RunsTab({
                   <ChevronDown className={`mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <p className="min-w-0 flex-1 truncate text-sm font-medium" title={summary.map(([name, value]) => displayFactorCondition(name, value)).join(' · ')}>
+                        <p className="min-w-0 flex-1 truncate text-sm font-medium" title={summary.map(([name, value]) => displayFactorCondition(name, value, designSpec, cell.label)).join(' · ')}>
                         {summary.length > 0
-                          ? summary.map(([name, value]) => displayFactorCondition(name, value)).join(' · ')
+                          ? summary.map(([name, value]) => displayFactorCondition(name, value, designSpec, cell.label)).join(' · ')
                           : 'Cell'}
                       </p>
                       <Badge variant="outline" className="shrink-0 border-[color:var(--chart-2)] text-[color:var(--chart-2)]">
@@ -842,7 +892,7 @@ export function RunsTab({
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {remaining.map(([name, value]) => (
                           <Badge key={name} variant="outline" className="max-w-full font-mono text-[0.65rem] font-normal">
-                            <span className="truncate">{displayFactorCondition(name, value)}</span>
+                            <span className="truncate">{displayFactorCondition(name, value, designSpec, cell.label)}</span>
                           </Badge>
                         ))}
                       </div>
@@ -862,6 +912,7 @@ export function RunsTab({
                     experimentId={experimentId}
                     regenerationRequired={regenerationRequired}
                     unboundFactors={unboundFactors}
+                    bindingDiscrepancies={bindingDiscrepancies}
                     replicateLabels={cell.replicates.map((replicate) => replicate.replicate_label)}
                     label={cellHasCompletedRun ? 'Re-run all replicates' : 'Run all replicates'}
                     dialogTitle={cellHasCompletedRun ? 'Re-run all replicates?' : 'Run all replicates?'}
@@ -921,6 +972,7 @@ export function RunsTab({
                                   activeRunId={isActiveTrial(trial) ? trial.run_id : null}
                                   regenerationRequired={regenerationRequired}
                                   unboundFactors={unboundFactors}
+                                  bindingDiscrepancies={bindingDiscrepancies}
                                 />
                               </div>
                             </div>

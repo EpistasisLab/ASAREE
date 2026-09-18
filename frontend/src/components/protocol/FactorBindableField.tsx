@@ -14,6 +14,7 @@ import { promptReferenceScope } from '@/lib/promptReferences'
 import type { ProtocolEdge, ProtocolNode } from '@/types/protocols'
 import { revealsHiddenMcpServers } from './bindableFields'
 import { FactorEditorDialog } from './FactorEditorDialog'
+import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import {
   computeFactorName,
   defaultFactorLevelLabels,
@@ -130,6 +131,7 @@ export function FactorBindableField({
   // `(trigger) => (<Label className="flex items-center gap-1.5">Model{trigger}</Label>)`.
   children: (trigger: ReactNode) => ReactNode
 }) {
+  const { requestEditFactor } = useProtocolCanvasActions()
   const [open, setOpen] = useState(false)
   const [levels, setLevels] = useState<string[]>(() => seedLevels(currentValue))
   const [levelLabels, setLevelLabels] = useState<string[]>(() => defaultFactorLevelLabels(`${nodeLabel}:${defaultLabel}`, 2))
@@ -161,7 +163,7 @@ export function FactorBindableField({
 
   const saveMutation = useMutation({
     mutationFn: async (next: DesignFactor) => {
-      const experiment = experimentQuery.data ?? (await experimentsApi.get(experimentId!))
+      const experiment = await experimentsApi.get(experimentId!)
       const existingFactors = experiment.design_spec?.factors ?? []
       const nextFactors: DesignFactor[] = [...existingFactors.filter((f) => f.name !== next.name), next]
       await experimentsApi.update(experimentId!, { design_spec: { ...experiment.design_spec, factors: nextFactors } })
@@ -171,14 +173,15 @@ export function FactorBindableField({
       onBind(next.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
-      setOpen(false)
     },
   })
 
   if (boundFactorName) {
     return children(
       <Badge variant="outline" className="gap-1">
-        Factor: {boundFactorName}
+        <button type="button" onClick={() => requestEditFactor(boundFactorName)} className="cursor-pointer underline-offset-2 hover:underline">
+          Factor: {boundFactorName}
+        </button>
         <button type="button" onClick={onUnbind} aria-label="Remove factor binding" className="cursor-pointer hover:text-destructive">
           <X className="size-3" />
         </button>
@@ -240,7 +243,7 @@ export function FactorBindableField({
             level_labels: defaultFactorLevelLabels(factorName, 2),
             level_type: levelType,
           }}
-          onSave={(next) => saveMutation.mutate(next)}
+          onSave={(next) => saveMutation.mutateAsync(next)}
         />
       </>
     )

@@ -61,7 +61,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
             await session.commit()
-        except Exception:
+        except BaseException:
+            # CancelledError is a BaseException.  Roll back before releasing
+            # the connection so asyncpg can finish its cancellation cleanup.
             await session.rollback()
             raise
 
@@ -76,6 +78,7 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         try:
             yield session
             await session.commit()
-        except Exception:
+        except BaseException:
+            # See get_db: cancellation must cleanly return the connection.
             await session.rollback()
             raise

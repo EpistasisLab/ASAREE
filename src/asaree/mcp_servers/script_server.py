@@ -10,10 +10,11 @@ wired without one of those servers was inert: the agent was told a script was
 waiting and had no tool that could run it.
 
 One tool, ``run_wired_script``, with no code-shaped argument in the normal case:
-the script arrives ambiently, so what runs is byte-for-byte what the user wrote
-on the canvas. It is ordinary Python — no contract about what the script must
-define, no dataset required — which is what makes it the executor for the
-scripts the sklearn harnesses reject.
+the scripts arrive ambiently, so what runs is byte-for-byte what the user wrote
+on the canvas. With one script it remains argument-free; with several, the
+caller selects one by its configured name or node id. It is ordinary Python —
+no contract about what the script must define, no dataset required — which is
+what makes it the executor for the scripts the sklearn harnesses reject.
 
 Bundled and auto-registered as a global system server
 (``services/system_mcp_servers.py``), and granted implicitly to any agent with a
@@ -45,13 +46,13 @@ from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
 
 INSTRUCTIONS = """\
-Run the Python script wired into this step and report what it printed.
+Run a Python script wired into this step and report what it printed.
 
-Call run_wired_script() with no arguments: the script arrives as ambient run \
-context, so there is nothing to paste and nothing to retype. It is plain \
-Python -- no required entry point, no dataset needed. Use it for anything the \
-sklearn servers' script tools would reject, and read its stdout for the \
-result."""
+With one wired script, call run_wired_script() with no arguments. With several, \
+call run_wired_script(script=...) using the name or id listed in the run prompt. \
+Scripts arrive as ambient run context, so there is nothing to paste or retype. \
+They are plain Python -- no required entry point, no dataset needed. Read stdout \
+for the result."""
 
 mcp = FastMCP("asaree-script", instructions=INSTRUCTIONS)
 
@@ -62,6 +63,7 @@ logger = logging.getLogger(__name__)
 # caller-ambient prefix, and the cell workspace the run is working in. Both are
 # out of the model's reach by design (``_ambient_meta_for``).
 _META_KEY_SCRIPT_PATH = "motoro.ambient.script_path"
+_META_KEY_SCRIPT_PATHS = "motoro.ambient.script_paths"
 _META_KEY_WORKSPACE_ID = "motoro.workspace_id"
 
 # Truncation budgets, matching the sklearn servers': a tool result is read by a
@@ -84,20 +86,50 @@ _MAX_TIMEOUT = 900
 _ENV_PASSTHROUGH = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "ASAREE_DATASET_WORKSPACE_DIR")
 
 
-def _ambient(ctx: Context[Any, Any, Any] | None, key: str) -> str:
-    """The caller's ambient ``_meta`` value for *key*, or ``""``.
+def _ambient_value(ctx: Context[Any, Any, Any] | None, key: str) -> Any:
+    """The caller's ambient ``_meta`` value for *key*, or ``None``.
 
     Deliberately total: no request context at all (a direct call, a client that
     doesn't use the convention) is a normal case outside an agent run.
     """
     if ctx is None:
-        return ""
+        return None
     try:
         extra = getattr(ctx.request_context.meta, "model_extra", None) or {}
     except Exception:  # noqa: BLE001 -- no request context outside a live call
-        return ""
-    value = extra.get(key)
+        return None
+    return extra.get(key)
+
+
+def _ambient(ctx: Context[Any, Any, Any] | None, key: str) -> str:
+    value = _ambient_value(ctx, key)
     return value if isinstance(value, str) else ""
+
+
+def _wired_scripts(ctx: Context[Any, Any, Any] | None) -> list[dict[str, str]]:
+    """Validated wired-script references, including the legacy singular key."""
+    raw = _ambient_value(ctx, _META_KEY_SCRIPT_PATHS)
+    scripts: list[dict[str, str]] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            if not isinstance(path, str) or not path:
+                continue
+            node_id = item.get("id")
+            name = item.get("name")
+            scripts.append(
+                {
+                    "id": node_id if isinstance(node_id, str) else "",
+                    "name": name if isinstance(name, str) else "",
+                    "path": path,
+                }
+            )
+    if scripts:
+        return scripts
+    legacy_path = _ambient(ctx, _META_KEY_SCRIPT_PATH)
+    return [{"id": "", "name": "", "path": legacy_path}] if legacy_path else []
 
 
 def _as_text(value: Any) -> str:
@@ -145,14 +177,16 @@ def _working_dir(workspace_id: str, script: Path) -> Path:
 @mcp.tool()
 def run_wired_script(
     code: str = "",
+    script: str = "",
     timeout_seconds: int = _DEFAULT_TIMEOUT,
     ctx: Context[Any, Any, Any] | None = None,
 ) -> str:
     """Execute the Python script wired into this step; return its output.
 
-    Call this with NO arguments. The script is bound as ambient run context, so
-    it never passes through you: what executes is byte-for-byte what the user
-    wrote, and retyping it could only mangle it.
+    With one wired script, call this with no arguments. With several, pass the
+    configured script name or node id. Source is bound as ambient run context,
+    so it never passes through you: what executes is byte-for-byte what the
+    user wrote, and retyping it could only mangle it.
 
     Plain Python, run as a subprocess: nothing has to be defined, nothing is
     pre-bound, and any installed package can be imported. It runs in this cell's
@@ -165,10 +199,40 @@ def run_wired_script(
     Args:
         code: Python source to run INSTEAD of the wired script. Only for a
             genuine one-off; when a script is wired, omit this.
+        script: Configured name or node id of the wired script to run. Omit
+            when exactly one script is wired.
         timeout_seconds: Kill the script after this long (default 300, max 900).
             A timeout returns whatever it printed before it was killed.
     """
-    script_path = "" if code.strip() else _ambient(ctx, _META_KEY_SCRIPT_PATH)
+    wired_scripts = [] if code.strip() else _wired_scripts(ctx)
+    available_scripts = [{"id": item["id"], "name": item["name"]} for item in wired_scripts]
+    selected: dict[str, str] | None = None
+    if not code.strip() and script:
+        id_matches = [item for item in wired_scripts if item["id"] == script]
+        name_matches = [item for item in wired_scripts if item["name"] == script]
+        matches = id_matches or name_matches
+        if len(matches) > 1:
+            return json.dumps(
+                {
+                    "error": f"script name {script!r} is ambiguous; select by node id.",
+                    "available_scripts": available_scripts,
+                }
+            )
+        if not matches:
+            return json.dumps(
+                {"error": f"no wired script named or identified by {script!r}.", "available_scripts": available_scripts}
+            )
+        selected = matches[0]
+    elif not code.strip() and len(wired_scripts) == 1:
+        selected = wired_scripts[0]
+    elif not code.strip() and len(wired_scripts) > 1:
+        return json.dumps(
+            {
+                "error": "multiple scripts are wired; pass `script` as a name or node id.",
+                "available_scripts": available_scripts,
+            }
+        )
+    script_path = selected["path"] if selected else ""
     if code.strip():
         source = code
     elif script_path:
@@ -189,26 +253,31 @@ def run_wired_script(
     # tracebacks pointing at real line numbers.
     workspace_id = _ambient(ctx, _META_KEY_WORKSPACE_ID)
     if script_path:
-        script = Path(script_path)
+        script_file = Path(script_path)
     else:
-        cwd = _working_dir(workspace_id, Path.cwd())
-        script = cwd / f"inline-{code_sha256[:12]}.py"
+        # _working_dir falls back to a script file's parent, so give it a
+        # file-shaped candidate rather than the cwd directory itself.
+        cwd = _working_dir(workspace_id, Path.cwd() / "inline.py")
+        script_file = cwd / f"inline-{code_sha256[:12]}.py"
         try:
-            script.write_text(source)
+            script_file.write_text(source)
         except OSError as e:
             return json.dumps(
-                {"error": f"could not write the inline script to {script}: {e}", "code_sha256": code_sha256}
+                {
+                    "error": f"could not write the inline script to {script_file}: {e}",
+                    "code_sha256": code_sha256,
+                }
             )
 
     env = {k: os.environ[k] for k in _ENV_PASSTHROUGH if k in os.environ}
     # Unbuffered so a script killed by the timeout has still flushed what it
     # printed -- the whole value of a partial result is that it survives.
     env["PYTHONUNBUFFERED"] = "1"
-    result: dict[str, Any] = {"code_sha256": code_sha256, "script": script.name}
+    result: dict[str, Any] = {"code_sha256": code_sha256, "script": script_file.name}
     try:
         completed = subprocess.run(  # noqa: S603 -- user-authored script, by design; see module docstring
-            [sys.executable, str(script)],
-            cwd=str(_working_dir(workspace_id, script)),
+            [sys.executable, str(script_file)],
+            cwd=str(_working_dir(workspace_id, script_file)),
             env=env,
             capture_output=True,
             text=True,
@@ -216,7 +285,7 @@ def run_wired_script(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as e:
-        logger.warning("wired_script_timeout", extra={"script": str(script), "timeout": timeout})
+        logger.warning("wired_script_timeout", extra={"script": str(script_file), "timeout": timeout})
         return json.dumps(
             {
                 **result,

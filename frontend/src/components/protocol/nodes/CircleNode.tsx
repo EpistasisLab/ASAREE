@@ -2,8 +2,10 @@ import type { ComponentType } from 'react'
 import { Handle, Position } from '@xyflow/react'
 import { cardAccent } from '@/lib/utils'
 import { NodeFactorBadge } from './NodeFactorBadge'
+import { NodeMetricBadge } from './NodeMetricBadge'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 import { WarningBadge } from './WarningBadge'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 
 // The rendering for a sub-connector's source node: a small circle with just
 // the icon inside, no label -- the
@@ -74,6 +76,8 @@ export function CircleNode({
   // own top connector rather than looping around.
   handlePosition?: 'top' | 'bottom'
 }) {
+  const { metricsForNode } = useProtocolCanvasActions()
+  const metricCount = metricsForNode(id).length
   return (
     <div className={`group relative flex flex-col items-center ${dimmed ? 'opacity-50' : ''}`}>
       <NodeHoverToolbar nodeId={id} isActive={isActive} onToggleActive={onToggleActive} swap={swap} />
@@ -100,6 +104,7 @@ export function CircleNode({
             covering the node's own icon matters more at that size. Still clear
             of the top-CENTER source handle. */}
         {factorCount > 0 && <NodeFactorBadge count={factorCount} className="-top-2 -right-2" />}
+        {metricCount > 0 && <NodeMetricBadge count={metricCount} className="-top-2 -left-2" />}
         <Handle
           type="source"
           id={handleId}

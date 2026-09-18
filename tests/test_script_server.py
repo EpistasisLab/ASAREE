@@ -17,7 +17,7 @@ from asaree.mcp_servers import script_server as ss
 class _FakeCtx:
     """Stands in for FastMCP's Context -- only the ambient _meta is read."""
 
-    def __init__(self, extra: dict[str, str]) -> None:
+    def __init__(self, extra: dict[str, Any]) -> None:
         self.request_context = type("_R", (), {"meta": type("_M", (), {"model_extra": extra})()})()
 
 
@@ -25,6 +25,15 @@ def _wire(tmp_path: Path, code: str) -> _FakeCtx:
     script = tmp_path / "wired.py"
     script.write_text(code)
     return _FakeCtx({"motoro.ambient.script_path": str(script)})
+
+
+def _wire_many(tmp_path: Path, scripts: list[tuple[str, str, str]]) -> _FakeCtx:
+    entries = []
+    for node_id, name, code in scripts:
+        path = tmp_path / f"{node_id}.py"
+        path.write_text(code)
+        entries.append({"id": node_id, "name": name, "path": str(path)})
+    return _FakeCtx({"motoro.ambient.script_paths": entries})
 
 
 def _run(**kwargs: Any) -> dict[str, Any]:
@@ -45,6 +54,31 @@ def test_plain_python_needs_no_dataset_or_entry_point(tmp_path: Path) -> None:
     out = _run(ctx=_wire(tmp_path, "total = sum(range(5))\nprint(f'total={total}')"))
     assert out["stdout"].strip() == "total=10"
     assert "error" not in out
+
+
+def test_selects_one_of_multiple_wired_scripts_by_name_or_id(tmp_path: Path) -> None:
+    ctx = _wire_many(
+        tmp_path,
+        [("script-1", "first", "print('one')"), ("script-2", "second", "print('two')")],
+    )
+    assert _run(script="first", ctx=ctx)["stdout"] == "one\n"
+    assert _run(script="script-2", ctx=ctx)["stdout"] == "two\n"
+
+    missing_selector = _run(ctx=ctx)
+    assert "multiple scripts are wired" in missing_selector["error"]
+    assert missing_selector["available_scripts"] == [
+        {"id": "script-1", "name": "first"},
+        {"id": "script-2", "name": "second"},
+    ]
+
+
+def test_duplicate_script_names_can_be_disambiguated_by_id(tmp_path: Path) -> None:
+    ctx = _wire_many(
+        tmp_path,
+        [("script-1", "report", "print('one')"), ("script-2", "report", "print('two')")],
+    )
+    assert "ambiguous" in _run(script="report", ctx=ctx)["error"]
+    assert _run(script="script-2", ctx=ctx)["stdout"] == "two\n"
 
 
 def test_a_raising_script_reports_the_traceback(tmp_path: Path) -> None:
@@ -140,7 +174,7 @@ def test_tools_registered() -> None:
     tools = {t.name: t for t in asyncio.run(ss.mcp.list_tools())}
     assert set(tools) == {"run_wired_script", "ping"}
     # ctx is FastMCP's own injection, never a model-visible argument.
-    assert set(tools["run_wired_script"].inputSchema["properties"]) == {"code", "timeout_seconds"}
+    assert set(tools["run_wired_script"].inputSchema["properties"]) == {"code", "script", "timeout_seconds"}
     assert not tools["run_wired_script"].inputSchema.get("required")
 
 

@@ -2,6 +2,7 @@
 
 import csv
 import io
+import json
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -9,8 +10,10 @@ from asaree.services.csv_export import result_rows_schema, result_rows_to_csv
 from asaree.services.experiment_run_results import (
     _aggregate_metric_values,
     _declared_metric_aggregations,
+    _declared_metric_directions,
     _declared_runtime_metrics,
     _has_execution_evidence,
+    _merge_legacy_facets,
     _node_labels,
     _numeric_metrics,
     _primary_metric,
@@ -51,7 +54,13 @@ def test_boolean_metric_is_a_binary_numeric_outcome() -> None:
 
 
 def test_primary_metric_uses_the_design_direction() -> None:
-    assert _primary_metric({"metrics": [{"name": "loss", "primary": True, "direction": "minimize"}]}) == (
+    assert _primary_metric(
+        {
+            "metrics": [
+                {"name": "Loss", "catalogKey": "loss", "kind": "runtime", "primary": True, "direction": "minimize"}
+            ]
+        }
+    ) == (
         "loss",
         "minimize",
     )
@@ -69,16 +78,38 @@ def test_declared_runtime_metrics_are_projected_from_execution_telemetry() -> No
     assert _primary_metric(spec) == ("cost_usd", "maximize")
 
 
-def test_declared_metric_aggregation_defaults_to_average_and_keeps_explicit_totals() -> None:
+def test_only_builtin_metrics_declare_aggregations() -> None:
     assert _declared_metric_aggregations(
         {
             "metrics": [
                 {"name": "Quality", "kind": "custom", "valueType": "number", "aggregation": "mean"},
-                {"name": "Features", "kind": "custom", "valueType": "number", "aggregation": "sum"},
-                {"name": "Passed", "kind": "custom", "valueType": "boolean", "aggregation": "sum"},
+                {
+                    "name": "Cost",
+                    "catalogKey": "cost_usd",
+                    "kind": "runtime",
+                    "valueType": "number",
+                    "aggregation": "sum",
+                },
             ]
         }
-    ) == {"Quality": "mean", "Features": "sum", "Passed": "mean"}
+    ) == {"cost_usd": "sum"}
+
+
+def test_only_builtin_metrics_declare_ranking_directions() -> None:
+    assert _declared_metric_directions(
+        {
+            "metrics": [
+                {"name": "Quality", "kind": "custom", "valueType": "number", "direction": "maximize"},
+                {
+                    "name": "Cost",
+                    "catalogKey": "cost_usd",
+                    "kind": "runtime",
+                    "valueType": "number",
+                    "direction": "minimize",
+                },
+            ]
+        }
+    ) == {"cost_usd": "minimize"}
 
 
 def test_cell_metric_aggregations_apply_the_declared_operation() -> None:
@@ -108,6 +139,199 @@ def test_results_csv_includes_projected_runtime_metrics() -> None:
     header, row = csv_text.strip().splitlines()
     assert "duration_seconds" in header and "total_tokens" in header
     assert "2.5" in row and "150" in row
+
+
+def test_results_csv_keeps_an_empty_column_for_an_unreported_custom_metric() -> None:
+    design_spec = {"metrics": [{"name": "Reviewer report", "kind": "custom"}]}
+    csv_text = result_rows_to_csv(
+        [
+            {
+                "replicate_label": "cell__rep1",
+                "replicate_number": 1,
+                "cell_label": "cell",
+                "status": "completed",
+                "factor_values": {},
+                "metric_values": {},
+            }
+        ],
+        design_spec=design_spec,
+    )
+
+    reader = csv.DictReader(io.StringIO(csv_text))
+    row = next(reader)
+    assert "Reviewer report" in (reader.fieldnames or [])
+    assert row["Reviewer report"] == ""
+    schema = result_rows_schema(
+        [{"cell_label": "cell", "replicate_number": 1, "factor_values": {}, "metric_values": {}}],
+        design_spec=design_spec,
+    )
+    reported = next(column for column in schema["columns"] if column["name"] == "Reviewer report")
+    assert reported == {"name": "Reviewer report", "role": "reported", "value_type": "opaque"}
+
+
+def test_results_csv_projects_script_stdout_and_execution_metadata() -> None:
+    envelope = {
+        "code_sha256": "abc123",
+        "script": "score.py",
+        "exit_code": 0,
+        "stdout": "arbitrary output\n",
+        "stderr": "",
+    }
+    result = json.dumps(envelope)
+    rows = [
+        {
+            "cell_label": "cell",
+            "replicate_number": 1,
+            "factor_values": {},
+            "metric_values": {"Script custom metric": result},
+            "metric_observations": [
+                {
+                    "metric_id": "script-metric",
+                    "metric_name": "Script custom metric",
+                    "status": "measured",
+                    "value": result,
+                    "producer": {"producer_id": "asaree.python_script"},
+                }
+            ],
+        }
+    ]
+    design_spec = {
+        "metrics": [
+            {
+                "id": "script-metric",
+                "name": "Script custom metric",
+                "kind": "custom",
+                "valueType": "opaque",
+            }
+        ]
+    }
+
+    exported = next(csv.DictReader(io.StringIO(result_rows_to_csv(rows, design_spec))))
+
+    assert exported["Script custom metric"] == "arbitrary output\n"
+    assert json.loads(exported["Script custom metric__raw_result"]) == envelope
+    assert exported["Script custom metric__code_sha256"] == "abc123"
+    assert exported["Script custom metric__script"] == "score.py"
+    assert exported["Script custom metric__exit_code"] == "0"
+    assert exported["Script custom metric__stderr"] == ""
+    assert "Script custom metric__stdout" not in exported
+
+    schema = result_rows_schema(rows, design_spec=design_spec)
+    columns = {column["name"]: column for column in schema["columns"]}
+    assert columns["Script custom metric"] == {
+        "name": "Script custom metric",
+        "role": "reported",
+        "value_type": "string",
+    }
+    assert columns["Script custom metric__raw_result"]["value_type"] == "json"
+    assert columns["Script custom metric__exit_code"]["value_type"] == "integer"
+
+
+def test_results_csv_unions_optional_script_result_metadata_across_rows() -> None:
+    success = {
+        "code_sha256": "abc123",
+        "script": "score.py",
+        "exit_code": 0,
+        "stdout": "ok",
+        "stderr": "",
+    }
+    timeout = {
+        "code_sha256": "abc123",
+        "script": "score.py",
+        "timed_out": True,
+        "error": "the script timed out",
+        "stdout": "partial",
+        "stderr": "trace",
+    }
+
+    def row(number: int, value: dict[str, object]) -> dict[str, object]:
+        result = json.dumps(value)
+        return {
+            "cell_label": "cell",
+            "replicate_number": number,
+            "factor_values": {},
+            "metric_values": {"Score": result},
+            "metric_observations": [
+                {
+                    "metric_id": "score",
+                    "metric_name": "Score",
+                    "status": "measured",
+                    "value": result,
+                    "producer": {"producer_id": "asaree.python_script"},
+                }
+            ],
+        }
+
+    exported = list(csv.DictReader(io.StringIO(result_rows_to_csv([row(1, success), row(2, timeout)]))))
+
+    assert exported[0]["Score"] == "ok"
+    assert exported[0]["Score__timed_out"] == ""
+    assert exported[0]["Score__error"] == ""
+    assert exported[1]["Score"] == "partial"
+    assert exported[1]["Score__exit_code"] == ""
+    assert exported[1]["Score__timed_out"] == "1"
+    assert exported[1]["Score__error"] == "the script timed out"
+
+
+def test_results_csv_preserves_observation_statuses_and_artifacts_as_json() -> None:
+    csv_text = result_rows_to_csv(
+        [
+            {
+                "cell_label": "cell",
+                "replicate_number": 1,
+                "factor_values": {},
+                "metric_values": {
+                    "Reviewer note": "needs follow-up",
+                    "Reviewer payload": {"flags": ["manual-review"]},
+                },
+                "metric_observations": [
+                    {
+                        "metric_id": "roc-auc",
+                        "metric_name": "ROC-AUC",
+                        "status": "unavailable",
+                        "value": None,
+                        "error": "Probability output is missing.",
+                    }
+                ],
+                "evaluation_artifacts": [
+                    {"artifact_key": "confusion_matrix", "kind": "confusion_matrix", "payload": [[4, 1], [2, 5]]}
+                ],
+                "legacy_values": [
+                    {
+                        "metric_id": "legacy-note",
+                        "metric_name": "Reviewer note",
+                        "value": "needs follow-up",
+                        "producer": {"producer_id": "legacy.unknown"},
+                    },
+                    {
+                        "metric_id": "legacy-payload",
+                        "metric_name": "Reviewer payload",
+                        "value": {"flags": ["manual-review"]},
+                        "producer": {"producer_id": "legacy.unknown"},
+                    },
+                ],
+            }
+        ]
+    )
+
+    reader = csv.DictReader(io.StringIO(csv_text))
+    row = next(reader)
+    assert "Reviewer note" not in (reader.fieldnames or [])
+    assert "Reviewer payload" not in (reader.fieldnames or [])
+    statuses = json.loads(row["observation_statuses"])
+    artifacts = json.loads(row["evaluation_artifacts"])
+    legacy_values = json.loads(row["legacy_values"])
+    assert statuses == {
+        "roc-auc": {
+            "name": "ROC-AUC",
+            "status": "unavailable",
+            "error": "Probability output is missing.",
+        }
+    }
+    assert artifacts == [{"artifact_key": "confusion_matrix", "kind": "confusion_matrix", "payload": [[4, 1], [2, 5]]}]
+    assert legacy_values[0]["value"] == "needs follow-up"
+    assert legacy_values[0]["producer"]["producer_id"] == "legacy.unknown"
+    assert legacy_values[1]["value"] == {"flags": ["manual-review"]}
 
 
 def test_results_csv_projects_categorical_factors_to_short_level_labels() -> None:
@@ -175,6 +399,8 @@ def test_results_csv_orders_identity_factors_metrics_then_operational_metadata()
         "cost_usd",
         "Quality",
         "status",
+        "observation_statuses",
+        "evaluation_artifacts",
         "obsolete",
         "run_id",
         "protocol_revision_id",
@@ -182,6 +408,16 @@ def test_results_csv_orders_identity_factors_metrics_then_operational_metadata()
         "error",
     ]
     assert "replicate_label" not in header
+
+
+def test_results_csv_omits_legacy_values_when_no_row_has_legacy_data() -> None:
+    rows = [{"cell_label": "cell", "replicate_number": 1, "factor_values": {}, "metric_values": {}}]
+
+    exported = next(csv.DictReader(io.StringIO(result_rows_to_csv(rows))))
+    schema = result_rows_schema(rows)
+
+    assert "legacy_values" not in exported
+    assert "legacy_values" not in {column["name"] for column in schema["columns"]}
 
 
 def test_results_csv_sorts_long_form_factor_values_in_natural_level_order() -> None:
@@ -258,6 +494,94 @@ def test_results_csv_uses_persisted_level_labels_instead_of_long_treatment_value
     ]
     factor = next(column for column in schema["columns"] if column["name"] == "agent_system_prompt")
     assert set(factor["levels"]) == {"classifier", "full_description", "concise_summary"}
+
+
+def test_results_csv_uses_the_declared_factor_name_with_its_short_label() -> None:
+    prompt = "Call run_wired_script(), then explain why fixed seeds help reproducibility."
+    csv_text = result_rows_to_csv(
+        [{"cell_label": "Answer style:concise", "replicate_number": 1, "factor_values": {"Answer style": prompt}}],
+        {
+            "factors": [
+                {"name": "Answer style", "levels": [prompt], "level_labels": ["concise"]}
+            ]
+        },
+    )
+
+    row = next(csv.DictReader(io.StringIO(csv_text)))
+    assert row["cell_label"] == "Answer style:concise"
+    assert row["answer_style"] == "concise"
+    assert "answer_approach" not in row
+
+
+def test_results_csv_distinguishes_measured_null_from_an_unavailable_custom_metric() -> None:
+    rows = [
+        {"replicate_label": "called", "metric_values": {"Judge result": None}},
+        {"replicate_label": "not-called", "metric_values": {}},
+    ]
+    design_spec = {
+        "metrics": [
+            {
+                "name": "Judge result",
+                "kind": "custom",
+                "valueType": "opaque",
+                "direction": "neutral",
+                "aggregation": "none",
+                "primary": False,
+            }
+        ]
+    }
+
+    exported = list(csv.DictReader(io.StringIO(result_rows_to_csv(rows, design_spec))))
+
+    assert exported[0]["Judge result"] == "null"
+    assert exported[1]["Judge result"] == ""
+
+
+def test_results_csv_keeps_a_declared_opaque_metric_when_legacy_facets_also_name_it() -> None:
+    rows = [
+        {
+            "replicate_label": "judge-completed",
+            "metric_values": {"LLM judge evaluation": {"score": 4, "passed": True}},
+            "legacy_values": [{"metric_name": "LLM judge evaluation", "value": {"score": 4, "passed": True}}],
+        }
+    ]
+    design_spec = {
+        "metrics": [
+            {
+                "name": "LLM judge evaluation",
+                "kind": "custom",
+                "valueType": "opaque",
+                "direction": "neutral",
+                "aggregation": "none",
+                "primary": False,
+            }
+        ]
+    }
+
+    exported = next(csv.DictReader(io.StringIO(result_rows_to_csv(rows, design_spec))))
+
+    assert exported["LLM judge evaluation"] == '{"passed":true,"score":4}'
+
+
+def test_current_opaque_observation_is_not_projected_as_a_legacy_value() -> None:
+    metrics = [
+        {
+            "id": "judge-evaluation",
+            "name": "LLM judge evaluation",
+            "kind": "custom",
+            "valueType": "opaque",
+        }
+    ]
+    facets = _merge_legacy_facets(
+        {"LLM judge evaluation": {"score": 4, "passed": True}},
+        None,
+        [{"metric_id": "judge-evaluation", "metric_name": "LLM judge evaluation", "status": "measured"}],
+        [],
+        metrics=metrics,
+        attempt_id="attempt-1",
+    )
+
+    assert facets.legacy_values == []
 
 
 def test_node_labels_prefers_the_canvas_name_over_its_durable_id() -> None:

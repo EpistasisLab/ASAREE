@@ -14,7 +14,7 @@
 # python -m ...`, the same subprocess convention used in every dev environment
 # so far. Removing uv here would just move the same "no uv at runtime" problem
 # one level down.
-FROM python:3.13-slim
+FROM python:3.13-slim AS application
 
 WORKDIR /app
 
@@ -111,3 +111,25 @@ ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
 
 CMD ["uvicorn", "asaree.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Opt-in test image used by the asaree-tests Compose service. Keep pytest and
+# the test tree out of the production image while reusing every application
+# dependency layer above. The git context is required for the same hatch-vcs
+# reason as the application install.
+FROM application AS test
+
+COPY tests/ ./tests/
+# One backend contract test compares the mirrored TypeScript catalog with the
+# Python source of truth. Keep the test image narrow while making that source
+# available at the same repository-relative path used outside containers.
+COPY frontend/src/lib/metricCatalog.ts ./frontend/src/lib/metricCatalog.ts
+RUN --mount=type=bind,from=gitdir,target=/app/.git \
+    --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv sync --frozen --group dev
+
+CMD ["pytest", "tests/", "-q", "--tb=short"]
+
+# Keep the default build target as the production application. Merely adding
+# the test stage must not put test-only dependencies or source in deployed
+# images built without an explicit target.
+FROM application AS runtime

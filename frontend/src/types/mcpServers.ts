@@ -2,6 +2,14 @@ export interface McpToolCapability {
   name: string
   description?: string | null
   input_schema?: unknown
+  // Standard MCP tool annotations are hints supplied by the server. Treat a
+  // missing hint as unknown, never as read-only.
+  annotations?: {
+    readOnlyHint?: boolean
+    destructiveHint?: boolean
+    idempotentHint?: boolean
+    openWorldHint?: boolean
+  } | null
 }
 
 export interface McpServer {

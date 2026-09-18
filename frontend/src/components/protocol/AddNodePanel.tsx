@@ -11,7 +11,7 @@ import { SKILL_BROWSE } from './skillCatalog'
 // tool picker, GET /datasets already backs the dataset picker,
 // services.protocol_execution._run_gated_worker already implements the
 // critic gate's revision loop, and _resolve_llm_config/_resolve_tool_config/
-// _resolve_dataset_configs/_resolve_script_config already resolve an agent's
+// _resolve_dataset_configs/_resolve_script_configs already resolve an agent's
 // respective connectors. "memory" and the two pattern entries are the
 // exceptions -- each is real in the graph/validation sense (wiring one up is
 // accepted and does something visually) but has NO runtime effect yet,

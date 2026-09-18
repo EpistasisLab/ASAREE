@@ -574,7 +574,6 @@ async def execute_conversation(
     user_input: str,
     workspace_id: str | None,
     ambient_meta: dict[str, Any] | None = None,
-    evaluation_metrics: Any = None,
     stage_plan: Any = None,
     unsplit_dataset: str = "",
 ) -> tuple[dict[str, Any], str]:
@@ -637,7 +636,6 @@ async def execute_conversation(
             graph=graph,
             workspace_id=workspace_id,
             ambient_meta=ambient_meta,
-            evaluation_metrics=evaluation_metrics,
             available_agents=await resolve_available_agents(graph, entry_agent_id, owner_id=owner_id),
             agent_messenger=messenger,
             unsplit_dataset=unsplit_dataset,
@@ -760,7 +758,6 @@ async def execute_supervisor_architecture(
     roles: SupervisorRoles,
     user_input: str,
     workspace_id: str | None,
-    evaluation_metrics: Any = None,
     parallel_workers: bool = True,
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
@@ -830,7 +827,6 @@ async def execute_supervisor_architecture(
         block: str,
         extra: str = "",
         slot_prefix: str | None = None,
-        metrics: Any = None,
     ) -> dict[str, Any]:
         """Give one agent its whole turn and return its node-run dict.
 
@@ -869,7 +865,7 @@ async def execute_supervisor_architecture(
             upstream,
             experiment_id=experiment_id,
             effective_cell_label=effective_cell_label,
-            script_bound="script_path" in ambient_meta,
+            script_bound="script_paths" in ambient_meta,
             seeded_datasets=dataset.seeded,
             unsplit_dataset=dataset.unsplit_name,
             upstream_ids=list(upstream),
@@ -887,7 +883,6 @@ async def execute_supervisor_architecture(
                 graph=graph,
                 workspace_id=workspace_id,
                 ambient_meta=ambient_meta,
-                evaluation_metrics=metrics,
                 unsplit_dataset=dataset.unsplit_name,
             )
         run: dict[str, Any] = {
@@ -1019,7 +1014,6 @@ async def execute_supervisor_architecture(
         upstream={},
         extra=f"Your workers' reports:\n\n{gathered}",
         block=_SUPERVISOR_SYNTHESIS_BLOCK.format(review_clause=review_clause if review is not None else ""),
-        metrics=evaluation_metrics,
     )
     await messenger.record(
         from_agent_id=roles.supervisor,

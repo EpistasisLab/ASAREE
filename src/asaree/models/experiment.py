@@ -64,6 +64,19 @@ class ResearchExperiment(Base, TimestampMixin):
     #     these active until the ARES->Motoro pattern migration lands
     #     (see COORDINATION_STRATEGIES).
     design_spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # The normalized measurement declaration is independent of the factorial
+    # design: metric definitions, producer bindings, and input bindings have
+    # distinct collections interpreted by services.measurement_engine.
+    measurement_plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Durable, experiment-scoped lifecycle for opt-in metric recommendation
+    # sets. Null identifies experiments created before recommendations were
+    # versioned; creation writes the current applied version for new designs.
+    metric_recommendations: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # The one durable, shared canvas validation attempt. Test runs are not
+    # factorial evidence, so they deliberately live outside replicate history.
+    latest_test_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("protocol_runs.id", ondelete="SET NULL"), nullable=True
+    )
     # RESTRICT, not CASCADE: deleting a user shouldn't silently discard the
     # experiments they ran. Matches RegisteredDataset.owner_id.
     owner_id: Mapped[uuid.UUID] = mapped_column(
@@ -94,6 +107,7 @@ class ResearchExperiment(Base, TimestampMixin):
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     locked_protocol_revision_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     locked_design_spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    locked_measurement_plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 __all__ = ["ResearchExperiment"]

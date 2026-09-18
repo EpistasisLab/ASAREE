@@ -16,6 +16,7 @@ cross-database join.
 from __future__ import annotations
 
 from motoro import CoreSettings
+from pydantic import Field
 from pydantic_settings import SettingsConfigDict
 
 
@@ -125,6 +126,12 @@ class AsareeSettings(CoreSettings):
     # its turn in the queue costs nothing while a rate-limited one burns
     # retries. Raise it if runs sit queued while the provider has headroom.
     worker_max_concurrent_jobs: int = 4
+
+    # Post-run metric producers are independent work. Bound their fan-out per
+    # attempt and enforce one administrative deadline uniformly; measurement
+    # plans cannot weaken or extend either limit.
+    metric_producer_max_concurrency: int = Field(default=4, ge=1)
+    metric_producer_timeout_seconds: float = Field(default=30, gt=0)
 
 
 _instance: AsareeSettings | None = None

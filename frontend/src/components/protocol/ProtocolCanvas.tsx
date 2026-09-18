@@ -22,7 +22,7 @@ import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { CONNECTOR_HANDLES } from '@/lib/coordinationStrategy'
 import { newNodeId } from '@/lib/nodeId'
 import { handoffPeers, promptReferenceScope } from '@/lib/promptReferences'
-import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
+import { mergeProtocolSaveIntoCache, protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import {
   defaultAgentNodeData,
@@ -50,6 +50,7 @@ import type {
   OkfBundleNodeData,
   OkfDocumentNodeData,
   OutputParserNodeData,
+  Protocol,
   ProtocolEdge,
   ProtocolGraph,
   ProtocolNode,
@@ -57,6 +58,7 @@ import type {
   ScriptNodeData,
   SingleAgentBaselinePatternNodeData,
   SkillNodeData,
+  TestRun,
 } from '@/types/protocols'
 import type { Dataset } from '@/types/datasets'
 import type { DesignFactor } from '@/types/experiments'
@@ -65,7 +67,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { Skill } from '@/types/skills'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
-import { agentTracedLabel, revealsHiddenMcpServers, unboundBindableFields, type UnboundField } from './bindableFields'
+import { agentTracedLabel, factorBoundField, revealsHiddenMcpServers, toolFactorServerId, unboundBindableFields, type UnboundField } from './bindableFields'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { DatasetNodeInspector } from './DatasetNodeInspector'
@@ -97,6 +99,7 @@ import {
 } from './ProtocolCanvasContext'
 import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
 import { RunConfirmDialog } from './RunConfirmDialog'
+import { ReopenTestRunResultsButton, TestRunResults } from './TestRunResults'
 import type { RunScope } from './runSummary'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
@@ -422,7 +425,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   useImperativeHandle(
     canvasHandleRef,
-    () => ({ bindFactor: bindFactorOnNode, removeFactorBindings, renameFactorBindings }),
+    () => ({
+      bindFactor: bindFactorOnNode,
+      removeFactorBindings,
+      renameFactorBindings,
+    }),
     [bindFactorOnNode, removeFactorBindings, renameFactorBindings],
   )
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -438,6 +445,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // clicked -- opens FactorEditorDialog's field picker pre-filtered to just
   // that node's own unbound fields (see requestMakeFactor below).
   const [factorPickerNodeId, setFactorPickerNodeId] = useState<string | null>(null)
+  const [editingFactorName, setEditingFactorName] = useState<string | null>(null)
   const [addPanelOpen, setAddPanelOpen] = useState(false)
   // The second level of the add-node panel: AddNodePanel's "MCP Servers"
   // entry swaps the browser in over it, and its Back button returns. Only
@@ -485,6 +493,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // because the dialog needs two fields filled in (who to ask, and what) before
   // the scope it confirms even exists.
   const [runId, setRunId] = useState<string | null>(null)
+  const [testResultsOpen, setTestResultsOpen] = useState(false)
+  const [playResultsOpen, setPlayResultsOpen] = useState(false)
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, fitView } = useReactFlow()
 
@@ -550,7 +560,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       return
     }
     if (pendingRunConfirm?.type === 'graph') {
-      runMutation.mutate()
+      testRunMutation.mutate()
       setPendingRunConfirm(null)
       return
     }
@@ -570,16 +580,22 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
   })
 
-  // The whole canvas, once, with no factor values substituted in -- what
-  // `POST /protocols/{id}/runs` does with no `replicate_label`. Deliberately
+  // The whole canvas, once, with no factor values substituted in. Deliberately
   // NOT a second way to run a cell: picking a replicate, and running the
   // pending batch, both live in the Runs tab, and duplicating either here
   // would give the same action two homes that can disagree. This button is
   // the answer to "there are no cells, how do I run this at all" -- an
   // experiment with a design still runs from the Runs tab.
-  const runMutation = useMutation({
-    mutationFn: () => protocolsApi.run(protocolId),
-    onSuccess: (run) => setRunId(run.id),
+  const testRunMutation = useMutation({
+    mutationFn: () => protocolsApi.testRun(protocolId),
+    onSuccess: (run) => {
+      setRunId(run.id)
+      setPlayResultsOpen(false)
+      setTestResultsOpen(true)
+      queryClient.setQueryData(['protocols', protocolId, 'test-run'], run)
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+      queryClient.invalidateQueries({ queryKey: ['protocols', protocolId, 'test-run'] })
+    },
   })
 
   // The canvas's per-node Play icon stores its run in the shared runId/runQuery
@@ -588,7 +604,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // with no changes needed.
   const runNodeMutation = useMutation({
     mutationFn: (nodeId: string) => protocolsApi.runNode(protocolId, nodeId),
-    onSuccess: (run) => setRunId(run.id),
+    onSuccess: (run) => {
+      setRunId(run.id)
+      setTestResultsOpen(false)
+      setPlayResultsOpen(true)
+    },
   })
 
   // First refetchInterval-based poll in this codebase -- no existing
@@ -603,6 +623,43 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       return status && TERMINAL_RUN_STATUSES.has(status) ? false : RUN_POLL_MS
     },
   })
+
+  const testRunQuery = useQuery({
+    queryKey: ['protocols', protocolId, 'test-run'],
+    queryFn: () => protocolsApi.getLatestTestRun(protocolId),
+    enabled: !!experimentId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      if (testResultsOpen) return RUN_POLL_MS
+      return status && TERMINAL_RUN_STATUSES.has(status) ? false : RUN_POLL_MS
+    },
+  })
+
+  const playResult: TestRun | null = runQuery.data?.target_node_id ? {
+    id: runQuery.data.id,
+    protocol_id: runQuery.data.protocol_id,
+    status: runQuery.data.status,
+    error: runQuery.data.error,
+    protocol_revision_id: runQuery.data.protocol_revision_id,
+    created_at: runQuery.data.created_at,
+    updated_at: runQuery.data.updated_at,
+    observations: runQuery.data.observations,
+    artifacts: runQuery.data.artifacts,
+    conversation: runQuery.data.conversation,
+    tested_published_revision: null,
+    freshness: { out_of_date: false, reasons: [] },
+    resources: {
+      task: { duration_seconds: null, cost_usd: null },
+      evaluation: { duration_seconds: null, cost_usd: null },
+      total: { duration_seconds: null, cost_usd: null },
+    },
+    execution_summary: {
+      node_runs: runQuery.data.node_runs,
+      started_at: null,
+      completed_at: null,
+      cancel_requested_at: runQuery.data.cancel_requested_at,
+    },
+  } : null
 
   // What this protocol last did. `runId` above is React state set only by the
   // mutation that launches a run, so before this the canvas could only ever
@@ -630,8 +687,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   }, [protocolRunsQuery.data, runId])
 
   const isRunning =
-    runMutation.isPending ||
+    testRunMutation.isPending ||
     runNodeMutation.isPending ||
+    (!!testRunQuery.data && !TERMINAL_RUN_STATUSES.has(testRunQuery.data.status)) ||
     (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
 
   // Stop button -- only raises cancel_requested_at; run_protocol's own node
@@ -640,10 +698,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // tick, so cancel_requested_at (and the "Stopping…" label below) appears
   // right away instead of up to RUN_POLL_MS late.
   const cancelMutation = useMutation({
-    mutationFn: () => protocolsApi.cancelRun(protocolId, runId!),
-    onSuccess: () => runQuery.refetch(),
+    mutationFn: () => protocolsApi.cancelRun(protocolId, testRunQuery.data?.id ?? runId!),
+    onSuccess: () => {
+      runQuery.refetch()
+      testRunQuery.refetch()
+    },
   })
-  const cancelRequested = !!runQuery.data?.cancel_requested_at
+  const cancelRequested = !!testRunQuery.data?.execution_summary.cancel_requested_at || !!runQuery.data?.cancel_requested_at
+  const showStandaloneConversation = !!runQuery.data?.conversation && runQuery.data.id !== testRunQuery.data?.id
 
   // A connected execution-pattern node must never be deletable directly
   // (Backspace/Delete key, NodeHoverToolbar's trash icon -- both go through
@@ -695,9 +757,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // documents on Knowledge (_resolve_knowledge_config -- a knowledge source is
   // served by a real MCP server, so at run time it's just more tools), and
   // Skill nodes, which the ReAct loop turns into a bound `load_skill` tool.
-  // Script nodes share the Tool connector but are NOT callable --
-  // _resolve_script_config folds their code into the prompt text -- so the
-  // source's own type is checked, not just the handle it lands on.
+  // Script nodes share the Tool connector and implicitly grant the script
+  // runner, so they count as callable just like explicit MCP Tool nodes.
   const agentIdsWithCallableTools = useMemo(() => {
     const nodeTypeById = new Map(nodes.map((n) => [n.id, n.type]))
     return new Set(
@@ -706,7 +767,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           if (e.targetHandle === 'knowledge' || e.targetHandle === 'skill') return true
           if (e.targetHandle !== 'tool') return false
           const sourceType = nodeTypeById.get(e.source)
-          return sourceType === 'mcp_tool' || sourceType === 'mcp_scikit_learn' || sourceType === 'mcp_client_tool'
+          return sourceType === 'mcp_tool' || sourceType === 'mcp_scikit_learn' || sourceType === 'mcp_client_tool' || sourceType === 'script'
         })
         .map((e) => e.target),
     )
@@ -1041,6 +1102,33 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
     [experimentId, experimentLocked],
   )
+  const requestEditFactor = useCallback(
+    (factorName: string) => {
+      if (!experimentId || experimentLocked) return
+      setEditingFactorName(factorName)
+    },
+    [experimentId, experimentLocked],
+  )
+  const metricsByNode = useMemo(() => {
+    const definitions = new Map((experimentQuery.data?.measurement_plan?.metrics ?? []).map((metric) => [metric.id, metric]))
+    const bindings = new Map<string, Map<string, { id: string; name: string }>>()
+    for (const producer of experimentQuery.data?.measurement_plan?.producers ?? []) {
+      const nodeId = producer.producer_id === 'asaree.python_script'
+        ? producer.config.script_node_id
+        : producer.producer_id === 'asaree.mcp_tool'
+          ? producer.config.mcp_node_id
+          : undefined
+      if (typeof nodeId !== 'string' || !nodeId) continue
+      const metrics = bindings.get(nodeId) ?? new Map<string, { id: string; name: string }>()
+      for (const metricId of Object.values(producer.outputs)) {
+        const definition = definitions.get(metricId)
+        metrics.set(metricId, { id: metricId, name: definition?.name ?? metricId })
+      }
+      bindings.set(nodeId, metrics)
+    }
+    return new Map([...bindings].map(([nodeId, metrics]) => [nodeId, [...metrics.values()]]))
+  }, [experimentQuery.data?.measurement_plan])
+  const metricsForNode = useCallback((nodeId: string) => metricsByNode.get(nodeId) ?? [], [metricsByNode])
   // Moves an agent's stored `config.output_contract` onto a real Output Parser
   // node -- see ProtocolCanvasContext for why this is a button rather than
   // something that happens on load. Everything lands in one pair of setNodes/
@@ -1100,6 +1188,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestEdgeInsert,
       requestRunNode,
       requestMakeFactor,
+      requestEditFactor,
+      metricsForNode,
       convertLegacyOutputContract,
     }),
     [
@@ -1108,6 +1198,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestEdgeInsert,
       requestRunNode,
       requestMakeFactor,
+      requestEditFactor,
+      metricsForNode,
       convertLegacyOutputContract,
     ],
   )
@@ -1128,8 +1220,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   const createFactorMutation = useMutation({
     mutationFn: async ({ factor, field }: { factor: DesignFactor; field: UnboundField }) => {
-      const fresh = factorPickerExperimentQuery.data ?? (await experimentsApi.get(experimentId!))
-      const nextFactors = [...(fresh.design_spec?.factors ?? []), factor]
+      const fresh = await experimentsApi.get(experimentId!)
+      const nextFactors = [...(fresh.design_spec?.factors ?? []).filter((candidate) => candidate.name !== factor.name), factor]
       await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
       return { factor, field }
     },
@@ -1137,7 +1229,20 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       bindFactorOnNode(field.nodeId, field.fieldPath, factor.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
-      setFactorPickerNodeId(null)
+    },
+  })
+  const editingFactor = experimentQuery.data?.design_spec?.factors?.find((factor) => factor.name === editingFactorName)
+  const editFactorMutation = useMutation({
+    mutationFn: async ({ oldName, next }: { oldName: string; next: DesignFactor }) => {
+      const fresh = await experimentsApi.get(experimentId!)
+      const nextFactors = (fresh.design_spec?.factors ?? []).map((factor) => factor.name === oldName ? next : factor)
+      await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
+      return { oldName, next }
+    },
+    onSuccess: ({ oldName, next }) => {
+      if (next.name !== oldName) renameFactorBindings(oldName, next.name)
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
     },
   })
 
@@ -1459,7 +1564,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           // rather than the pre-edit graph. Ignores an out-of-order
           // response so a slow earlier save can't overwrite a later one.
           if (seq !== saveSeqRef.current || !updated.experiment_id) return
-          queryClient.setQueryData(protocolForExperimentQueryKey(updated.experiment_id), updated)
+          queryClient.setQueryData<Protocol>(protocolForExperimentQueryKey(updated.experiment_id), (previous) =>
+            mergeProtocolSaveIntoCache(previous, updated),
+          )
           queryClient.invalidateQueries({ queryKey: ['experiments', updated.experiment_id, 'design-impact'] })
         })
         .catch(() => {
@@ -1542,7 +1649,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // data.label for that purpose specifically; the header title itself still
   // shows the node's own plain label, unaffected.
   const factorNodeLabel = selectedNode ? agentTracedLabel(selectedNode, edges, nodes) : ''
-
   // A factor only has meaning while it controls at least one canvas field.
   // Whether the final binding was explicitly unbound in an inspector or was
   // removed with a deleted node, remove that factor declaration too so the
@@ -1750,12 +1856,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           </ReactFlow>
           {!experimentLocked && <CanvasControls onTidy={tidyUp} />}
           {(() => {
-            // runMutation.error/runNodeMutation.error is the real validation
+            // testRunMutation.error/runNodeMutation.error is the real validation
             // message (e.g. topological_order/validate_single_node_runnable
             // rejecting before any ProtocolRun row even exists) --
             // runQuery.data?.error only ever exists once a run row was
             // created and later failed asynchronously in the worker.
-            const failedMutation = runMutation.isError ? runMutation : runNodeMutation.isError ? runNodeMutation : null
+            const failedMutation = testRunMutation.isError ? testRunMutation : runNodeMutation.isError ? runNodeMutation : null
             const runErrorText =
               runQuery.data?.error ??
               (failedMutation
@@ -1823,11 +1929,17 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 setRunErrorDismissed(false)
                 setPendingRunConfirm({ type: 'graph' })
               }}
-              title="Run this canvas once, with no factor values substituted in"
+              title="Start a Test Run for this canvas, with no factor values substituted in"
             >
               <Play className="size-4" />
-              {isRunning ? 'Running…' : 'Run'}
+              {isRunning ? 'Test Run running…' : 'Test Run'}
             </Button>
+            {testRunQuery.data && !testResultsOpen && (
+              <ReopenTestRunResultsButton onOpen={() => setTestResultsOpen(true)} refresh={() => { testRunQuery.refetch() }} />
+            )}
+            {playResult && !playResultsOpen && (
+              <ReopenTestRunResultsButton label="Play Results" onOpen={() => setPlayResultsOpen(true)} refresh={() => { runQuery.refetch() }} />
+            )}
             <Button
               size="icon"
               className="rounded-full"
@@ -1851,6 +1963,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               edges={edges}
             />
           </div>
+          {testResultsOpen && testRunQuery.data && (
+            <TestRunResults run={testRunQuery.data} agentNames={agentNames} onClose={() => setTestResultsOpen(false)} />
+          )}
+          {playResultsOpen && playResult && (
+            <TestRunResults title="Play Results" run={playResult} agentNames={agentNames} onClose={() => setPlayResultsOpen(false)} />
+          )}
           {/* One top-left column rather than two independently-positioned
               overlays: the lock badge and the transcript are both anchored
               here, and stacking them is what keeps them from landing on top of
@@ -1860,14 +1978,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               `pointer-events-none` so the empty space it reserves stays part of
               the canvas -- panning and node drags must still work under it --
               and each child turns events back on for itself. */}
-          {(experimentLocked || runQuery.data?.conversation) && (
+          {(experimentLocked || showStandaloneConversation) && (
             <div className="pointer-events-none absolute top-3 left-3 z-10 flex max-h-[55%] w-[min(28rem,calc(100%-1.5rem))] flex-col items-start gap-2">
               {experimentLocked && (
                 <div className="pointer-events-auto inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary/30 bg-background/95 px-2.5 py-1.5 text-xs font-medium shadow-sm">
                   <Lock className="size-3.5" /> Canvas locked
                 </div>
               )}
-              {runQuery.data?.conversation && (
+              {showStandaloneConversation && runQuery.data?.conversation && (
                 <ConversationTranscript conversation={runQuery.data.conversation} agentNames={agentNames} />
               )}
             </div>
@@ -2099,6 +2217,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 : null
           }
           onPublishAndRun={() => publishAndRunMutation.mutate()}
+          confirmLabel={pendingRunConfirm.type === 'graph' ? 'Start Test Run' : undefined}
         />
       )}
       {factorPickerNodeId && (
@@ -2114,8 +2233,22 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           revealHiddenServers={revealsHiddenMcpServers(nodes)}
           promptScopeFor={promptScopeFor}
           onSave={(factor, field) => {
-            if (field) createFactorMutation.mutate({ factor, field })
+            if (field) return createFactorMutation.mutateAsync({ factor, field })
           }}
+        />
+      )}
+      {editingFactor && (
+        <FactorEditorDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setEditingFactorName(null)
+          }}
+          factor={editingFactor}
+          toolServerId={toolFactorServerId(nodes, editingFactor.name)}
+          revealHiddenServers={revealsHiddenMcpServers(nodes)}
+          boundField={factorBoundField(nodes, editingFactor.name)}
+          promptScopeFor={promptScopeFor}
+          onSave={(next) => editFactorMutation.mutateAsync({ oldName: editingFactor.name, next })}
         />
       )}
     </ProtocolCanvasActionsProvider>

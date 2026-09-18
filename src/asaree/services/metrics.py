@@ -1,30 +1,17 @@
-"""Experiment-owned metric declarations and safe Agent evaluation context.
-
-The catalog deliberately contains only execution telemetry the application
-already records.  Scoring metrics promoted from controlled tools remain
-possible as custom declarations; this module never makes a subject Agent a
-metric evaluator.
-
-The scores ``services.metric_promotion.extract_score_metrics`` lifts out of a
-``run_model_script`` result are NOT catalog entries, though they are just as
-real.  They were briefly added and pulled back out: they only exist for a
-binary target (``extract_score_metrics`` reads ``metrics_at_chosen_threshold``,
-which only ``binary_bundle`` produces -- a multiclass run reports
-``macro_f1``/``macro_roc_auc_ovr``/``macro_average_precision`` instead and
-promotes nothing), so offering them in the picker advertises five columns that
-silently stay empty on a multiclass experiment.  Teaching extraction the
-multiclass bundle comes first; the catalog entries follow it.
-"""
+"""Experiment-owned metric declarations."""
 
 from __future__ import annotations
 
-import re
 import uuid
 from copy import deepcopy
 from math import isfinite
 from typing import Any
 
+from asaree.services.measurement_engine import ensure_at_most_one_primary, parse_measurement_plan
+
 MetricCatalogEntry = dict[str, str | bool]
+
+CURRENT_RECOMMENDATION_SET_VERSION = 1
 
 METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
     {
@@ -36,7 +23,6 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
         "defaultDirection": "minimize",
         "aggregation": "sum",
         "unit": "USD",
-        "contextEligible": True,
     },
     {
         "key": "duration_seconds",
@@ -47,7 +33,6 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
         "defaultDirection": "minimize",
         "aggregation": "sum",
         "unit": "seconds",
-        "contextEligible": True,
     },
     {
         "key": "input_tokens",
@@ -58,7 +43,6 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
         "defaultDirection": "minimize",
         "aggregation": "sum",
         "unit": "tokens",
-        "contextEligible": True,
     },
     {
         "key": "output_tokens",
@@ -69,7 +53,6 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
         "defaultDirection": "minimize",
         "aggregation": "sum",
         "unit": "tokens",
-        "contextEligible": True,
     },
     {
         "key": "total_tokens",
@@ -80,30 +63,166 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
         "defaultDirection": "minimize",
         "aggregation": "sum",
         "unit": "tokens",
-        "contextEligible": True,
+    },
+    {
+        "key": "tool_calls",
+        "name": "Tool calls",
+        "shortDescription": "Recorded tool-call attempts across attributed Agent runs.",
+        "kind": "runtime",
+        "valueType": "number",
+        "defaultDirection": "minimize",
+        "aggregation": "sum",
+        "unit": "calls",
+    },
+    {
+        "key": "tool_error_rate",
+        "name": "Tool error rate",
+        "shortDescription": "Failed tool calls divided by all tool-call attempts.",
+        "kind": "runtime",
+        "valueType": "number",
+        "defaultDirection": "minimize",
+        "aggregation": "mean",
+        "unit": "rate",
+    },
+    {
+        "key": "agent_loop_iterations",
+        "name": "Agent-loop iterations",
+        "shortDescription": "Distinct Agent reasoning-loop iterations in the run.",
+        "kind": "runtime",
+        "valueType": "number",
+        "defaultDirection": "minimize",
+        "aggregation": "sum",
+        "unit": "iterations",
+    },
+    {
+        "key": "critic_rejections",
+        "name": "Critic rejections",
+        "shortDescription": "Rejected critic-gate reviews during the run.",
+        "kind": "runtime",
+        "valueType": "number",
+        "defaultDirection": "minimize",
+        "aggregation": "sum",
+        "unit": "reviews",
+    },
+    {
+        "key": "critic_approvals",
+        "name": "Critic approvals",
+        "shortDescription": "Critic gates ending in an actual approval.",
+        "kind": "runtime",
+        "valueType": "number",
+        "defaultDirection": "neutral",
+        "aggregation": "sum",
+        "unit": "reviews",
     },
 )
 _CATALOG_BY_KEY = {str(entry["key"]): entry for entry in METRIC_CATALOG}
-_KINDS = {"runtime", "deterministic_evaluator", "model_judge", "agent_reported", "custom"}
-_VALUE_TYPES = {"number", "boolean", "string"}
-_DIRECTIONS = {"maximize", "minimize"}
-_AGGREGATIONS = {"mean", "sum"}
-_JUDGE_PROVIDERS = {"anthropic", "openai", "azure_foundry", "openrouter", "local"}
-_DELIMITER = re.compile(r"</?experiment_evaluation_context>", re.IGNORECASE)
+RECOMMENDED_RUNTIME_METRIC_KEYS = ("cost_usd", "duration_seconds", "total_tokens", "tool_calls")
+_RECOMMENDED_RUNTIME_METRIC_IDS = {
+    "cost_usd": "runtime-cost",
+    "duration_seconds": "runtime-duration",
+    "total_tokens": "runtime-total-tokens",
+    "tool_calls": "runtime-tool-calls",
+}
+_KINDS = {"runtime", "custom"}
+_VALUE_TYPES = {"number", "boolean", "opaque"}
+_DIRECTIONS = {"maximize", "minimize", "neutral"}
+_AGGREGATIONS = {"mean", "sum", "none"}
 
 
-def model_judge_metrics(metrics: Any) -> list[dict[str, Any]]:
-    """Configured numeric metrics safe for the controlled post-run judge."""
-    return [
-        metric
-        for metric in normalize_metrics(metrics)
-        if metric.get("kind") == "model_judge"
-        and metric.get("valueType") == "number"
-        and isinstance(metric.get("scoring"), dict)
-        and metric["scoring"].get("method") == "model_judge"
-        and isinstance(metric["scoring"].get("rubric"), str)
-        and metric["scoring"]["rubric"].strip()
-    ]
+def recommended_runtime_measurements() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Return the matching design declarations and executable baseline plan."""
+    declarations: list[dict[str, Any]] = []
+    definitions: list[dict[str, Any]] = []
+    outputs: dict[str, str] = {}
+    for key in RECOMMENDED_RUNTIME_METRIC_KEYS:
+        catalog = _CATALOG_BY_KEY[key]
+        metric_id = _RECOMMENDED_RUNTIME_METRIC_IDS[key]
+        declaration = {
+            "id": metric_id,
+            "catalogKey": key,
+            "name": catalog["name"],
+            "description": catalog["shortDescription"],
+            "kind": "runtime",
+            "valueType": catalog["valueType"],
+            "direction": catalog["defaultDirection"],
+            "aggregation": catalog["aggregation"],
+            "primary": False,
+            "unit": catalog["unit"],
+        }
+        declarations.append(declaration)
+        definitions.append(
+            {
+                "id": metric_id,
+                "name": catalog["name"],
+                "value_type": catalog["valueType"],
+                "direction": catalog["defaultDirection"],
+                "aggregation": catalog["aggregation"],
+                "primary": False,
+                "description": catalog["shortDescription"],
+                "unit": catalog["unit"],
+            }
+        )
+        outputs[key] = metric_id
+    return declarations, {
+        "metrics": definitions,
+        "producers": [
+            {
+                "id": "runtime",
+                "producer_id": "asaree.runtime",
+                "kind": "runtime",
+                "outputs": outputs,
+                "artifacts": [],
+                "config": {},
+            }
+        ],
+        "inputs": [
+            {
+                "producer_binding_id": "runtime",
+                "input_key": "facts",
+                "source_key": "attempt.runtime",
+            }
+        ],
+    }
+
+
+def design_metrics_from_measurement_plan(document: Any) -> list[dict[str, Any]]:
+    """Build the design declarations required by a caller-supplied plan."""
+    plan = parse_measurement_plan(document)
+    runtime_outputs = {
+        metric_id: output_key
+        for binding in plan.producers
+        if binding.producer_id == "asaree.runtime"
+        for output_key, metric_id in binding.outputs.items()
+    }
+    declarations: list[dict[str, Any]] = []
+    for metric in plan.metrics:
+        catalog_key = runtime_outputs.get(metric.id)
+        declaration: dict[str, Any] = {
+            "id": metric.id,
+            "name": metric.name,
+            "kind": "runtime" if catalog_key is not None else "custom",
+            "valueType": metric.value_type,
+            "direction": metric.direction,
+            "aggregation": metric.aggregation,
+            "primary": metric.primary,
+        }
+        if catalog_key is not None:
+            declaration["catalogKey"] = catalog_key
+        if metric.description is not None:
+            declaration["description"] = metric.description
+        if metric.unit is not None:
+            declaration["unit"] = metric.unit
+        declarations.append(declaration)
+    return normalize_metrics(declarations, validate_custom_names=True)
+
+
+def applied_metric_recommendations() -> dict[str, Any]:
+    """Recommendation lifecycle for an experiment created with today's baseline."""
+    return {
+        "applied_version": CURRENT_RECOMMENDATION_SET_VERSION,
+        "dismissed_version": None,
+        "intentionally_removed_keys": [],
+    }
 
 
 def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> list[dict[str, Any]]:
@@ -117,8 +236,7 @@ def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> l
     if not isinstance(metrics, list):
         return []
     normalized: list[dict[str, Any]] = []
-    custom_names: set[str] = set()
-    for index, raw in enumerate(metrics):
+    for raw in metrics:
         if not isinstance(raw, dict):
             continue
         metric = deepcopy(raw)
@@ -131,7 +249,16 @@ def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> l
         if isinstance(metric.get("id"), str) and metric["id"]:
             metric["id"] = metric["id"]
         else:
-            legacy_key = f"{name}:{metric.get('direction')}:{index}"
+            legacy_key = ":".join(
+                str(value)
+                for value in (
+                    metric.get("catalogKey") or "",
+                    name.casefold(),
+                    metric.get("kind") or "custom",
+                    metric.get("valueType") or "number",
+                    metric.get("direction") or "maximize",
+                )
+            )
             metric["id"] = f"legacy-metric-{uuid.uuid5(uuid.NAMESPACE_URL, legacy_key)}"
         metric["name"] = name
         if catalog:
@@ -171,55 +298,20 @@ def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> l
             if catalog
             else "mean"
         )
+        if metric["kind"] == "custom":
+            metric["valueType"] = "opaque"
+            metric["direction"] = "neutral"
+            metric["aggregation"] = "none"
+            metric["primary"] = False
         if metric.get("unit") is None and catalog and catalog.get("unit"):
             metric["unit"] = catalog["unit"]
-        scoring = metric.get("scoring")
-        if isinstance(scoring, dict) and scoring.get("method") == "model_judge":
-            rubric = scoring.get("rubric")
-            if not isinstance(rubric, str) or not rubric.strip():
-                if validate_custom_names:
-                    raise ValueError(f"Model-judge metric {name} needs a scoring rubric")
-                metric.pop("scoring", None)
-            else:
-                normalized_scoring: dict[str, Any] = {"method": "model_judge", "rubric": rubric.strip()}
-                reference = scoring.get("reference")
-                if isinstance(reference, str) and reference.strip():
-                    normalized_scoring["reference"] = reference.strip()
-                minimum, maximum = scoring.get("min"), scoring.get("max")
-                if minimum is not None and (isinstance(minimum, bool) or not isinstance(minimum, int | float)):
-                    raise ValueError(f"Model-judge metric {name} has an invalid minimum")
-                if maximum is not None and (isinstance(maximum, bool) or not isinstance(maximum, int | float)):
-                    raise ValueError(f"Model-judge metric {name} has an invalid maximum")
-                if minimum is not None:
-                    normalized_scoring["min"] = float(minimum)
-                if maximum is not None:
-                    normalized_scoring["max"] = float(maximum)
-                if minimum is not None and maximum is not None and minimum > maximum:
-                    raise ValueError(f"Model-judge metric {name} must have a minimum no greater than its maximum")
-                judge = scoring.get("judge")
-                if judge is not None:
-                    provider = judge.get("provider") if isinstance(judge, dict) else None
-                    model = judge.get("model") if isinstance(judge, dict) else None
-                    if provider not in _JUDGE_PROVIDERS or not isinstance(model, str) or not model.strip():
-                        if validate_custom_names:
-                            raise ValueError(f"Model-judge metric {name} needs a valid judge provider and model")
-                    else:
-                        normalized_scoring["judge"] = {"provider": provider, "model": model.strip()}
-                metric["scoring"] = normalized_scoring
-                metric["kind"] = "model_judge"
-                metric["valueType"] = "number"
-        elif metric.get("kind") == "model_judge" and validate_custom_names:
-            raise ValueError(f"Model-judge metric {name} needs a scoring configuration")
-        if validate_custom_names and metric["kind"] in {"custom", "model_judge"}:
-            folded = name.casefold()
-            if folded in custom_names:
-                raise ValueError(f"Duplicate custom metric name: {name}")
-            custom_names.add(folded)
+        metric.pop("scoring", None)
+        # Duplicate labels are a readiness problem, not a persistence error.
+        # Custom-metric drafts autosave immediately (and several initially use
+        # "Untitled custom metric"), so the measurement-plan validator blocks
+        # production while still preserving every draft for repair.
         normalized.append(metric)
-    if normalized:
-        primary_index = next((index for index, metric in enumerate(normalized) if metric["primary"]), 0)
-        for index, metric in enumerate(normalized):
-            metric["primary"] = index == primary_index
+    ensure_at_most_one_primary(tuple(bool(metric["primary"]) for metric in normalized))
     return normalized
 
 
@@ -254,6 +346,11 @@ def normalize_design_spec(
     return result
 
 
+def declared_primary_metric(metrics: Any) -> dict[str, Any] | None:
+    """Return the one explicitly primary design metric, if one is declared."""
+    return next((metric for metric in normalize_metrics(metrics) if metric["primary"]), None)
+
+
 def validate_metric_values(metrics: Any, values: dict[str, Any] | None) -> dict[str, Any]:
     """Validate declared outcome values at the API boundary.
 
@@ -262,11 +359,7 @@ def validate_metric_values(metrics: Any, values: dict[str, Any] | None) -> dict[
     Unknown keys stay allowed for backwards-compatible externally reported
     metrics; declared custom metrics must honor their selected value type.
     """
-    declared = {
-        metric["name"]: metric
-        for metric in normalize_metrics(metrics)
-        if metric["kind"] != "runtime"
-    }
+    declared = {metric["name"]: metric for metric in normalize_metrics(metrics) if metric["kind"] != "runtime"}
     normalized: dict[str, Any] = {}
     for key, value in (values or {}).items():
         metric = declared.get(key)
@@ -284,39 +377,3 @@ def validate_metric_values(metrics: Any, values: dict[str, Any] | None) -> dict[
             raise ValueError(f"Metric {key!r} must be text.")
         normalized[key] = value
     return normalized
-
-
-def _safe_context_text(value: Any) -> str:
-    text = _DELIMITER.sub("[evaluation context delimiter]", str(value))
-    return " ".join(text.splitlines()).strip()
-
-
-def build_evaluation_context(metrics: Any, context_metric_ids: Any) -> str:
-    """Build the one generated system-context block, with no result values."""
-    selected = (
-        {item for item in context_metric_ids if isinstance(item, str)}
-        if isinstance(context_metric_ids, list)
-        else set()
-    )
-    included = [metric for metric in normalize_metrics(metrics) if metric["id"] in selected]
-    if not included:
-        return ""
-    lines = [
-        "<experiment_evaluation_context>",
-        "The following criteria describe how this experiment will assess the run.",
-        "Use them as guidance, but do not invent or report metric results unless the task explicitly asks for an "
-        "agent-reported value.",
-        "",
-    ]
-    for metric in included:
-        lines.append(f"- {_safe_context_text(metric['name'])} — {metric['direction']}")
-        lines.append(f"  {_safe_context_text(metric['description'])}")
-        if metric["kind"] == "runtime":
-            lines.append("  Recorded by the runtime after execution; its final value is not available during this run.")
-    lines.append("</experiment_evaluation_context>")
-    return "\n".join(lines)
-
-
-def compose_system_prompt(base_prompt: str, metrics: Any, context_metric_ids: Any) -> str:
-    context = build_evaluation_context(metrics, context_metric_ids)
-    return f"{base_prompt}\n\n{context}" if context else base_prompt

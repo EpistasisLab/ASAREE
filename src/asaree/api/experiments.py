@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
 from asaree.deps import CurrentUser, DbSession
@@ -29,6 +29,11 @@ from asaree.services.design_revisions import (
     list_revision_summaries,
 )
 from asaree.services.experiment_artifacts import create_artifact, delete_artifact, get_artifact, list_artifacts
+from asaree.services.experiment_measurements import (
+    blocking_measurement_plan_issues,
+    measurement_plan_issue_is_blocking,
+    validate_experiment_measurement_plan,
+)
 from asaree.services.experiment_run_results import summarize_experiment_run_results
 from asaree.services.experiments import (
     create_experiment,
@@ -49,11 +54,16 @@ from asaree.services.factorial_analysis import (
     analyze_factorial,
 )
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
+from asaree.services.measurement_engine import (
+    ExperimentSnapshot,
+    MeasurementEngine,
+    MeasurementInput,
+)
+from asaree.services.measurement_migration import normalize_experiment_measurement_plan
 from asaree.services.metrics import (
-    build_evaluation_context,
-    model_judge_metrics,
+    CURRENT_RECOMMENDATION_SET_VERSION,
+    declared_primary_metric,
     normalize_design_spec,
-    normalize_metrics,
     validate_metric_values,
 )
 from asaree.services.protocol_revisions import get_published_revision, is_draft_published, publish_protocol
@@ -64,7 +74,7 @@ from asaree.services.protocols import (
     list_protocols,
     sync_protocol_names_to_experiment,
 )
-from asaree.worker.enqueue import enqueue_metric_evaluation
+from asaree.services.runtime_metrics import RuntimeMetricProducer
 
 # For a Content-Disposition filename only -- never touches the experiment's
 # own stored name, just what the browser offers to save the download as.
@@ -91,6 +101,7 @@ class CreateExperimentRequest(BaseModel):
     design_type: str = "factorial"
     task_brief: dict[str, Any] | None = None
     factors: list[FactorSpec] | None = None
+    measurement_plan: dict[str, Any] | None = None
     # Usable when the dataset is already registered before the experiment is
     # created; the notebook's own flow registers it AFTER (Step 2 follows
     # Step 1), so it attaches this later via PATCH instead — see
@@ -99,6 +110,13 @@ class CreateExperimentRequest(BaseModel):
     # (see _resolved_dataset_ids).
     dataset_ids: list[uuid.UUID] | None = None
     dataset_id: uuid.UUID | None = None
+
+
+class MetricRecommendationMetadata(BaseModel):
+    applied_version: int | None = Field(default=None, ge=1)
+    dismissed_version: int | None = Field(default=None, ge=1)
+    intentionally_removed_keys: list[str] = Field(default_factory=list)
+    contextual_suggestion_dismissals: dict[str, str] | None = None
 
 
 class UpdateExperimentRequest(BaseModel):
@@ -124,6 +142,9 @@ class UpdateExperimentRequest(BaseModel):
     dataset_ids: list[uuid.UUID] | None = None
     dataset_id: uuid.UUID | None = None
     design_spec: dict[str, Any] | None = None
+    measurement_plan: dict[str, Any] | None = None
+    measurement_validation_protocol_id: uuid.UUID | None = None
+    metric_recommendations: MetricRecommendationMetadata | None = None
     archived_at: datetime | None = None
 
 
@@ -143,6 +164,7 @@ class ImportExperimentDefinitionRequest(BaseModel):
     design_type: str = "factorial"
     task_brief: dict[str, Any] | None = None
     design_spec: dict[str, Any] | None = None
+    measurement_plan: dict[str, Any] | None = None
     graph: dict[str, Any]
     # When supplied by the portable export, this becomes revision 1 on the
     # new protocol. `graph` remains the editable draft, so the source's
@@ -162,6 +184,8 @@ class GenerateDesignRequest(BaseModel):
 
     hypothesis: str | None = None
     design_spec: dict[str, Any] | None = None
+    measurement_plan: dict[str, Any] | None = None
+    measurement_validation_protocol_id: uuid.UUID | None = None
 
 
 class ExperimentResponse(BaseModel):
@@ -172,6 +196,10 @@ class ExperimentResponse(BaseModel):
     design_type: str
     task_brief: dict[str, Any] | None
     design_spec: dict[str, Any] | None
+    measurement_plan: dict[str, Any] | None
+    metric_recommendations: dict[str, Any] | None
+    metric_recommendation_set_version: int
+    latest_test_run_id: uuid.UUID | None
     # Every dataset wired into this experiment's canvas, in wiring order (see
     # models/experiment_dataset.py). ``dataset_id`` is a read-only view of the
     # first one, kept so existing SDK/notebook callers that predate multiple
@@ -184,11 +212,16 @@ class ExperimentResponse(BaseModel):
     # Kept alongside the lock timestamp so a portable definition can carry
     # the exact design declaration that was approved for execution.
     locked_design_spec: dict[str, Any] | None
+    locked_measurement_plan: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime
 
 
 def _experiment_response(e: Any, dataset_ids: list[uuid.UUID]) -> ExperimentResponse:
+    design_spec = normalize_design_spec(e.design_spec)
+    locked_design_spec = normalize_design_spec(e.locked_design_spec)
+    metrics = (design_spec or {}).get("metrics")
+    locked_metrics = (locked_design_spec or {}).get("metrics")
     return ExperimentResponse(
         id=e.id,
         name=e.name,
@@ -196,13 +229,26 @@ def _experiment_response(e: Any, dataset_ids: list[uuid.UUID]) -> ExperimentResp
         hypothesis=e.hypothesis,
         design_type=e.design_type,
         task_brief=e.task_brief,
-        design_spec=normalize_design_spec(e.design_spec),
+        design_spec=design_spec,
+        measurement_plan=(
+            normalize_experiment_measurement_plan(e.measurement_plan, metrics)
+            if e.measurement_plan is not None or metrics
+            else None
+        ),
+        metric_recommendations=e.metric_recommendations,
+        metric_recommendation_set_version=CURRENT_RECOMMENDATION_SET_VERSION,
+        latest_test_run_id=e.latest_test_run_id,
         dataset_ids=dataset_ids,
         dataset_id=dataset_ids[0] if dataset_ids else None,
         archived_at=e.archived_at,
         locked_at=e.locked_at,
         locked_protocol_revision_id=e.locked_protocol_revision_id,
-        locked_design_spec=normalize_design_spec(e.locked_design_spec),
+        locked_design_spec=locked_design_spec,
+        locked_measurement_plan=(
+            normalize_experiment_measurement_plan(e.locked_measurement_plan, locked_metrics)
+            if e.locked_measurement_plan is not None or locked_metrics
+            else None
+        ),
         created_at=e.created_at,
         updated_at=e.updated_at,
     )
@@ -312,6 +358,49 @@ async def _get_owned_experiment(db: DbSession, experiment_id: uuid.UUID, user: C
     return experiment
 
 
+async def _measurement_validation_graph(
+    db: DbSession,
+    *,
+    experiment_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    protocol_id: uuid.UUID | None,
+) -> dict[str, Any]:
+    if protocol_id is None:
+        return {"nodes": [], "edges": []}
+    protocols = await list_protocols(db, owner_id=owner_id, experiment_id=experiment_id)
+    protocol = next((candidate for candidate in protocols if candidate.id == protocol_id), None)
+    if protocol is None:
+        raise HTTPException(status_code=422, detail="Select a protocol linked to this experiment.")
+    return protocol.graph or {"nodes": [], "edges": []}
+
+
+async def _require_valid_measurement_plan(
+    db: DbSession,
+    *,
+    document: dict[str, Any] | None,
+    metrics: Any,
+    graph: dict[str, Any] | None,
+    experiment_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    allow_preserved_bindings: bool = True,
+) -> None:
+    """Apply production plan validation consistently at every write boundary."""
+    try:
+        report = await validate_experiment_measurement_plan(
+            db,
+            document=document,
+            metrics=metrics,
+            graph=graph,
+            experiment_id=experiment_id,
+            owner_id=owner_id,
+            allow_preserved_bindings=allow_preserved_bindings,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if issues := blocking_measurement_plan_issues(report):
+        raise HTTPException(status_code=422, detail="; ".join(issue.message for issue in issues))
+
+
 @router.post("", response_model=ExperimentResponse, status_code=201)
 async def create_experiment_endpoint(
     body: CreateExperimentRequest, user: CurrentUser, db: DbSession
@@ -329,16 +418,30 @@ async def create_experiment_endpoint(
         "design_spec": (
             normalize_design_spec({"factors": [f.model_dump() for f in body.factors]}) if body.factors else None
         ),
+        "measurement_plan": body.measurement_plan,
         "dataset_ids": dataset_ids,
     }
     # No name given -> the server names it, and the 409 above is unreachable:
     # allocation and insert share this request's transaction, so there is no
     # window for another session to take the name in between.
-    experiment = (
-        await create_untitled_experiment(db, owner_id=user.id, **fields)
-        if not name
-        else await create_experiment(db, name=name, owner_id=user.id, **fields)
-    )
+    try:
+        experiment = (
+            await create_untitled_experiment(db, owner_id=user.id, **fields)
+            if not name
+            else await create_experiment(db, name=name, owner_id=user.id, **fields)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if body.measurement_plan is not None:
+        await _require_valid_measurement_plan(
+            db,
+            document=experiment.measurement_plan,
+            metrics=(experiment.design_spec or {}).get("metrics"),
+            graph={"nodes": [], "edges": []},
+            experiment_id=experiment.id,
+            owner_id=experiment.owner_id,
+            allow_preserved_bindings=False,
+        )
     return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment.id))
 
 
@@ -387,6 +490,7 @@ async def import_experiment_definition_endpoint(
                 design_type=body.design_type,
                 task_brief=body.task_brief,
                 design_spec=design_spec,
+                measurement_plan=body.measurement_plan,
             )
             # `publish_protocol` can only freeze the protocol's current draft.
             # Start from the source published snapshot when one exists, freeze
@@ -400,6 +504,16 @@ async def import_experiment_definition_endpoint(
                 experiment_id=experiment.id,
                 graph=body.published_graph or body.graph,
             )
+            if body.measurement_plan is not None:
+                await _require_valid_measurement_plan(
+                    db,
+                    document=experiment.measurement_plan,
+                    metrics=(experiment.design_spec or {}).get("metrics"),
+                    graph=body.published_graph or body.graph,
+                    experiment_id=experiment.id,
+                    owner_id=experiment.owner_id,
+                    allow_preserved_bindings=False,
+                )
             if body.published_graph is not None:
                 await publish_protocol(db, protocol)
                 if body.graph != body.published_graph:
@@ -409,6 +523,8 @@ async def import_experiment_definition_endpoint(
         if "uq_research_experiments_owner_name" in str(exc.orig):
             raise HTTPException(status_code=409, detail="An experiment with this name already exists") from exc
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _experiment_response(experiment, [])
 
 
@@ -428,22 +544,82 @@ async def get_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, d
     return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment_id))
 
 
-class EvaluationContextRequest(BaseModel):
-    context_metric_ids: list[str]
+class MeasurementPlanValidationRequest(BaseModel):
+    measurement_plan: dict[str, Any] | None
+    metrics: list[dict[str, Any]]
+    graph: dict[str, Any]
 
 
-class EvaluationContextResponse(BaseModel):
-    context: str
+class MeasurementPlanValidationIssueResponse(BaseModel):
+    code: str
+    message: str
+    path: str
+    blocking: bool = True
 
 
-@router.post("/{experiment_id}/evaluation-context", response_model=EvaluationContextResponse)
-async def experiment_evaluation_context_endpoint(
-    experiment_id: uuid.UUID, body: EvaluationContextRequest, user: CurrentUser, db: DbSession
-) -> EvaluationContextResponse:
-    """Render the exact context helper used by execution for the inspector preview."""
+class MeasurementPlanValidationResponse(BaseModel):
+    valid: bool
+    issues: list[MeasurementPlanValidationIssueResponse]
+
+
+class MeasurementCapabilitiesResponse(BaseModel):
+    outputs: dict[str, list[str]]
+
+
+def _measurement_capability_outputs(experiment_id: uuid.UUID) -> dict[str, list[str]]:
+    snapshot = ExperimentSnapshot(
+        experiment_id=str(experiment_id),
+        inputs={"attempt.runtime": MeasurementInput(value_type="runtime_facts", value={})},
+    )
+    capabilities = MeasurementEngine([RuntimeMetricProducer()]).list_capabilities(snapshot)
+    return {capability.producer_id: sorted(capability.scalar_outputs) for capability in capabilities}
+
+
+@router.get(
+    "/{experiment_id}/measurement-capabilities",
+    response_model=MeasurementCapabilitiesResponse,
+)
+async def get_measurement_capabilities_endpoint(
+    experiment_id: uuid.UUID,
+    user: CurrentUser,
+    db: DbSession,
+) -> MeasurementCapabilitiesResponse:
+    """Discover built-in scalar outputs through the measurement engine."""
+    await _get_owned_experiment(db, experiment_id, user)
+    return MeasurementCapabilitiesResponse(outputs=_measurement_capability_outputs(experiment_id))
+
+
+@router.post(
+    "/{experiment_id}/measurement-plan/validate",
+    response_model=MeasurementPlanValidationResponse,
+)
+async def validate_measurement_plan_endpoint(
+    experiment_id: uuid.UUID,
+    body: MeasurementPlanValidationRequest,
+    user: CurrentUser,
+    db: DbSession,
+) -> MeasurementPlanValidationResponse:
+    """Validate the Design tab's unsaved draft through the production validator."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
-    return EvaluationContextResponse(
-        context=build_evaluation_context((experiment.design_spec or {}).get("metrics"), body.context_metric_ids)
+    report = await validate_experiment_measurement_plan(
+        db,
+        document=body.measurement_plan,
+        metrics=body.metrics,
+        graph=body.graph,
+        experiment_id=experiment.id,
+        owner_id=experiment.owner_id,
+    )
+    return MeasurementPlanValidationResponse(
+        valid=report.valid,
+        issues=[
+            MeasurementPlanValidationIssueResponse(
+                code=issue.code,
+                message=issue.message,
+                path=issue.path,
+                blocking=measurement_plan_issue_is_blocking(issue),
+            )
+            for issue in report.issues
+        ],
     )
 
 
@@ -453,12 +629,29 @@ async def update_experiment_endpoint(
 ) -> ExperimentResponse:
     experiment = await _get_owned_experiment(db, experiment_id, user)
     fields = body.model_dump(exclude_unset=True)
+    validation_protocol_id = fields.pop("measurement_validation_protocol_id", None)
     if "design_spec" in fields:
         try:
             fields["design_spec"] = normalize_design_spec(fields["design_spec"], validate_metrics=True)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     _reject_locked_mutation(experiment, fields)
+    if "measurement_plan" in fields:
+        validation_design = fields.get("design_spec", experiment.design_spec) or {}
+        validation_graph = await _measurement_validation_graph(
+            db,
+            experiment_id=experiment.id,
+            owner_id=experiment.owner_id,
+            protocol_id=validation_protocol_id,
+        )
+        await _require_valid_measurement_plan(
+            db,
+            document=fields["measurement_plan"],
+            metrics=validation_design.get("metrics"),
+            graph=validation_graph,
+            experiment_id=experiment.id,
+            owner_id=experiment.owner_id,
+        )
     if "name" in fields and fields["name"] is not None:
         existing = await get_experiment_by_name(db, fields["name"], owner_id=user.id)
         if existing is not None and existing.id != experiment_id:
@@ -473,7 +666,10 @@ async def update_experiment_endpoint(
         await _validated_dataset_ids(requested_dataset_ids, db, user)
         await set_experiment_datasets(db, experiment_id, requested_dataset_ids)
     if fields:
-        experiment = await update_experiment(db, experiment_id, fields=fields)
+        try:
+            experiment = await update_experiment(db, experiment_id, fields=fields)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         assert experiment is not None  # existence already checked above
     if fields.get("name"):
         # A protocol's name is a snapshot of the experiment's name at the
@@ -491,13 +687,23 @@ async def lock_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, 
     experiment = await _get_owned_experiment(db, experiment_id, user)
     protocols = await list_protocols(db, owner_id=user.id, experiment_id=experiment_id)
     published_revision_id: uuid.UUID | None = None
+    published_graph: dict[str, Any] | None = None
     for candidate in protocols:
         published = await get_published_revision(db, candidate)
         if published is not None and is_draft_published(candidate, published):
             published_revision_id = published.id
+            published_graph = published.graph
             break
     if published_revision_id is None:
         raise HTTPException(status_code=409, detail="Publish the latest canvas before locking this experiment.")
+    await _require_valid_measurement_plan(
+        db,
+        document=experiment.measurement_plan,
+        metrics=(experiment.design_spec or {}).get("metrics"),
+        graph=published_graph,
+        experiment_id=experiment.id,
+        owner_id=experiment.owner_id,
+    )
     experiment = await update_experiment(
         db,
         experiment_id,
@@ -505,6 +711,7 @@ async def lock_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser, 
             "locked_at": datetime.now(UTC),
             "locked_protocol_revision_id": published_revision_id,
             "locked_design_spec": deepcopy(experiment.design_spec),
+            "locked_measurement_plan": deepcopy(experiment.measurement_plan),
         },
     )
     assert experiment is not None
@@ -517,7 +724,12 @@ async def unlock_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser
     experiment = await update_experiment(
         db,
         experiment_id,
-        fields={"locked_at": None, "locked_protocol_revision_id": None, "locked_design_spec": None},
+        fields={
+            "locked_at": None,
+            "locked_protocol_revision_id": None,
+            "locked_design_spec": None,
+            "locked_measurement_plan": None,
+        },
     )
     assert experiment is not None
     return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment_id))
@@ -544,6 +756,7 @@ async def generate_design_endpoint(
     experiment = await _get_owned_experiment(db, experiment_id, user)
     if body is not None:
         fields = body.model_dump(exclude_unset=True)
+        validation_protocol_id = fields.pop("measurement_validation_protocol_id", None)
         if "design_spec" in fields:
             try:
                 fields["design_spec"] = normalize_design_spec(fields["design_spec"], validate_metrics=True)
@@ -551,6 +764,22 @@ async def generate_design_endpoint(
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
         if fields:
             _reject_locked_mutation(experiment, fields)
+            if "measurement_plan" in fields:
+                validation_design = fields.get("design_spec", experiment.design_spec) or {}
+                validation_graph = await _measurement_validation_graph(
+                    db,
+                    experiment_id=experiment.id,
+                    owner_id=experiment.owner_id,
+                    protocol_id=validation_protocol_id,
+                )
+                await _require_valid_measurement_plan(
+                    db,
+                    document=fields["measurement_plan"],
+                    metrics=validation_design.get("metrics"),
+                    graph=validation_graph,
+                    experiment_id=experiment.id,
+                    owner_id=experiment.owner_id,
+                )
             experiment = await update_experiment(db, experiment_id, fields=fields)
             assert experiment is not None  # existence already checked above
     design_spec = experiment.design_spec or {}
@@ -687,15 +916,15 @@ async def analyze_factorial_endpoint(
     (BCa bootstrap + Holm), and heteroscedasticity diagnostics — computed
     fresh from this experiment's current replicate results, not persisted."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
+    declared_primary = declared_primary_metric((experiment.design_spec or {}).get("metrics"))
+    if declared_primary is None:
+        raise HTTPException(status_code=422, detail="This experiment has no declared primary metric.")
+    if declared_primary["name"] != body.primary_metric:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{body.primary_metric!r} is not the experiment's declared primary metric.",
+        )
     replicates = await list_replicates(db, experiment_id=experiment_id)
-    declared_primary = next(
-        (
-            metric
-            for metric in normalize_metrics((experiment.design_spec or {}).get("metrics"))
-            if metric["name"] == body.primary_metric
-        ),
-        None,
-    )
     try:
         analysis = (
             analyze_binary_factorial
@@ -740,8 +969,9 @@ class RunResultsResponse(BaseModel):
     metric_keys: list[str]
     metric_types: dict[str, str]
     metric_aggregations: dict[str, str]
+    metric_directions: dict[str, str]
     primary_metric: str | None
-    primary_metric_direction: str
+    primary_metric_direction: str | None
     cells: list[dict[str, Any]]
     replicates: list[dict[str, Any]]
 
@@ -800,53 +1030,6 @@ async def get_run_results_schema_endpoint(experiment_id: uuid.UUID, user: Curren
     return result_rows_schema(
         results["replicates"], results["metric_types"], results["metric_aggregations"], experiment.design_spec
     )
-
-
-class ScoreCompletedRunsResponse(BaseModel):
-    queued: int
-
-
-@router.post("/{experiment_id}/score-completed-runs", response_model=ScoreCompletedRunsResponse)
-async def score_completed_runs_endpoint(
-    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
-) -> ScoreCompletedRunsResponse:
-    """Queue post-run judges for completed current-design replicates.
-
-    This is a backfill/retry operation only: it never re-executes the task
-    graph.  Each evaluator reads the run's persisted final output instead.
-    """
-    experiment = await _get_owned_experiment(db, experiment_id, user)
-    configured = model_judge_metrics((experiment.design_spec or {}).get("metrics"))
-    if not configured:
-        raise HTTPException(status_code=409, detail="Configure at least one LLM judge metric before scoring results.")
-    trials = {trial.replicate_label: trial for trial in await list_experiment_trials(db, experiment_id=experiment_id)}
-    queued = 0
-    for replicate in await list_replicates(db, experiment_id=experiment_id):
-        trial = trials.get(replicate.replicate_label)
-        # A completed run can still be obsolete when the canvas was published
-        # again after it started. It is excluded from Results, so never spend
-        # a judge call scoring it during this backfill/retry operation either.
-        if trial is None or trial.obsolete or trial.status != "completed" or replicate.run_id is None:
-            continue
-        await upsert_replicate(
-            db,
-            experiment_id=experiment_id,
-            replicate_label=replicate.replicate_label,
-            revision_id=replicate.design_revision_id,
-            fields={
-                "artifacts": {
-                    "metric_evaluation": {
-                        "status": "queued",
-                        "metric_ids": [metric["id"] for metric in configured],
-                        "error": None,
-                        "evaluator_run_id": None,
-                    }
-                }
-            },
-        )
-        await enqueue_metric_evaluation(replicate.run_id)
-        queued += 1
-    return ScoreCompletedRunsResponse(queued=queued)
 
 
 @router.put("/{experiment_id}/replicates/{replicate_label}", response_model=ReplicateResponse)

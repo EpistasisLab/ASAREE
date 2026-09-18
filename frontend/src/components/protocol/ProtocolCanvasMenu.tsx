@@ -232,6 +232,7 @@ export function ProtocolCanvasMenu({
       description: protocol.description,
       graph: toPersistedGraph(nodes, edges),
       design_spec: experiment?.design_spec ?? null,
+      measurement_plan: experiment?.measurement_plan ?? null,
     }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)

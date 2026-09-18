@@ -2,7 +2,7 @@
 
 Mirrors Motoro's AgentRun/RunStatus pattern (the only lifecycle/
 state-machine precedent in this codebase) rather than inventing a new one:
-a plain string status ("pending"/"running"/"completed"/"failed" -- not a DB
+a plain string status ("pending"/"running"/"finalizing"/"completed"/"failed" -- not a DB
 enum, same reasoning as ResearchExperiment.design_type) plus a heartbeat
 column for the same staleness-detection convention AgentRun uses.
 """
@@ -33,6 +33,9 @@ class ProtocolRun(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    # A canvas Test Run is retained only through its experiment's
+    # latest_test_run_id. Production attempts and node previews stay false.
+    is_test_run: Mapped[bool] = mapped_column(default=False, nullable=False)
     # {node_id: {"status": "pending"|"running"|"completed"|"failed"|"skipped",
     #            "run_id": "<AgentRun uuid, agent nodes only>",
     #            "output_text": str|None, "error": str|None,
@@ -46,7 +49,12 @@ class ProtocolRun(Base, TimestampMixin):
     # the mutable latest-attempt projection on FactorialReplicateResult. This
     # makes a re-run safe: its replacement result can become current without
     # erasing the scores/evaluation state a user may inspect on an older run.
-    # Shape: {"metric_values": {...}, "metric_evaluation": {...}}.
+    # Shape: {"metric_values": {...}, "metric_evaluation": {...},
+    #         "measurement": {"observations": [...], "artifacts": [...]},
+    #         "evaluation_state": "running"|"completed",
+    #         "evaluation_claimed_at": iso,
+    #         "task_completed_at": iso, "evaluation_started_at": iso,
+    #         "evaluation_completed_at": iso}.
     attempt_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # The agent-to-agent transcript, present only once a run's agents actually
     # consult each other -- null for every single-agent and pipeline run.
@@ -64,6 +72,12 @@ class ProtocolRun(Base, TimestampMixin):
     # already recorded inside node_runs.
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Attempt lifecycle boundaries. Unlike created_at/updated_at these exclude
+    # time spent pending in the worker queue and are never repurposed as a
+    # heartbeat. The task/evaluation split is recorded in attempt_result;
+    # completed_at is the terminal lifecycle transition for compatibility.
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Both null for a plain graph run. Set together only when this run was
     # created by "run all cells" (services.protocol_execution.plan_cell_runs)
     # for one FactorialReplicateResult under the protocol's experiment --

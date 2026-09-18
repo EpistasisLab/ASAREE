@@ -102,6 +102,7 @@ export function ScriptNodeInspector({
           </div>
         )}
       </FactorBindableField>
+
     </NodeInspectorDialog>
   )
 }

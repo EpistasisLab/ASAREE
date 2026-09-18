@@ -13,6 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.experiment_dataset import ExperimentDataset
+from asaree.services.measurement_engine import normalize_measurement_plan
+from asaree.services.metrics import (
+    applied_metric_recommendations,
+    design_metrics_from_measurement_plan,
+    recommended_runtime_measurements,
+)
 
 # No "dataset_id" here any more -- an experiment's datasets are rows in
 # experiment_datasets, not a column, so they're written by
@@ -23,10 +29,13 @@ _SETTABLE_FIELDS = frozenset(
         "description",
         "hypothesis",
         "design_spec",
+        "measurement_plan",
+        "metric_recommendations",
         "archived_at",
         "locked_at",
         "locked_protocol_revision_id",
         "locked_design_spec",
+        "locked_measurement_plan",
     }
 )
 
@@ -66,15 +75,38 @@ async def create_experiment(
     design_type: str = "factorial",
     task_brief: dict[str, Any] | None = None,
     design_spec: dict[str, Any] | None = None,
+    measurement_plan: dict[str, Any] | None = None,
+    metric_recommendations: dict[str, Any] | None = None,
     dataset_ids: Sequence[uuid.UUID] | None = None,
 ) -> ResearchExperiment:
     spec = dict(design_spec or {})
+    normalized_measurement_plan = normalize_measurement_plan(measurement_plan) if measurement_plan is not None else None
+    plan_is_empty = normalized_measurement_plan is None or not any(normalized_measurement_plan.values())
+    if plan_is_empty:
+        default_metrics, default_plan = recommended_runtime_measurements()
+        declared_metrics = spec.get("metrics")
+        existing_metrics = declared_metrics if isinstance(declared_metrics, list) else []
+        default_keys = {metric["catalogKey"] for metric in default_metrics}
+        spec["metrics"] = [
+            *default_metrics,
+            *[
+                metric
+                for metric in existing_metrics
+                if not isinstance(metric, dict) or metric.get("catalogKey") not in default_keys
+            ],
+        ]
+        normalized_measurement_plan = normalize_measurement_plan(default_plan)
+        metric_recommendations = applied_metric_recommendations()
+    elif design_spec is None:
+        spec["metrics"] = design_metrics_from_measurement_plan(normalized_measurement_plan)
     experiment = ResearchExperiment(
         name=name,
         description=description,
         design_type=design_type,
         task_brief=task_brief,
         design_spec=spec,
+        measurement_plan=normalized_measurement_plan,
+        metric_recommendations=metric_recommendations,
         owner_id=owner_id,
     )
     db.add(experiment)
@@ -162,6 +194,8 @@ async def update_experiment(
     if experiment is None:
         return None
     for key, value in fields.items():
+        if key == "measurement_plan" and value is not None:
+            value = normalize_measurement_plan(value)
         setattr(experiment, key, value)
     await db.flush()
     await db.refresh(experiment)

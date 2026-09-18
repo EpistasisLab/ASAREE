@@ -68,6 +68,7 @@ export function NodeInspectorDialog({
   title,
   onDelete,
   onClose,
+  bodyClassName,
   children,
 }: {
   open: boolean
@@ -76,6 +77,7 @@ export function NodeInspectorDialog({
   title: ReactNode
   onDelete?: () => void
   onClose: () => void
+  bodyClassName?: string
   children: ReactNode
 }) {
   // Persisted across every inspector (all node types share one
@@ -133,7 +135,7 @@ export function NodeInspectorDialog({
             </div>
           </div>
         </div>
-        <div className="flex-1 space-y-4 overflow-y-auto p-4">{children}</div>
+        <div className={cn('flex-1 space-y-4 overflow-y-auto p-4', bodyClassName)}>{children}</div>
       </DialogContent>
     </Dialog>
   )

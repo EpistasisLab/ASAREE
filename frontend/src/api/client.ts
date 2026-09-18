@@ -12,11 +12,24 @@ import type {
 } from '@/types/auth'
 import type { Agent } from '@/types/agents'
 import type { Dataset } from '@/types/datasets'
-import type { DesignImpact, DesignRevision, DesignSpec, Experiment, ExperimentResults, ExperimentRunResults, Replicate, Trial } from '@/types/experiments'
+import type {
+  DesignImpact,
+  DesignRevision,
+  DesignSpec,
+  Experiment,
+  ExperimentResults,
+  ExperimentRunResults,
+  MeasurementCapabilities,
+  MeasurementPlan,
+  MetricRecommendationMetadata,
+  MeasurementPlanValidationReport,
+  Replicate,
+  Trial,
+} from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
-import type { CellRunBatch, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun } from '@/types/protocols'
+import type { CellRunBatch, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
 
@@ -172,18 +185,15 @@ export const experimentsApi = {
   list: (opts?: { includeArchived?: boolean }) =>
     request<Experiment[]>(opts?.includeArchived ? '/experiments?include_archived=true' : '/experiments'),
   get: (id: string) => request<Experiment>(`/experiments/${id}`),
-  evaluationContext: (id: string, contextMetricIds: string[]) =>
-    request<{ context: string }>(`/experiments/${id}/evaluation-context`, {
-      method: 'POST',
-      body: { context_metric_ids: contextMetricIds },
-    }),
-  scoreCompletedRuns: (id: string) =>
-    request<{ queued: number }>(`/experiments/${id}/score-completed-runs`, { method: 'POST' }),
+  validateMeasurementPlan: (id: string, data: { measurement_plan: MeasurementPlan | null; metrics: DesignSpec['metrics']; graph: ProtocolGraph }) =>
+    request<MeasurementPlanValidationReport>(`/experiments/${id}/measurement-plan/validate`, { method: 'POST', body: data }),
+  getMeasurementCapabilities: (id: string) =>
+    request<MeasurementCapabilities>(`/experiments/${id}/measurement-capabilities`),
   // Omit `name` and the server allocates the next free "Untitled Experiment N"
   // atomically -- the one-click create in AppHeader relies on that, since a
   // name this client picks from a GET is a guess that another session (or an
   // archived experiment it can't see) can invalidate before the POST lands.
-  create: (data: { name?: string; description?: string | null }) =>
+  create: (data: { name?: string; description?: string | null; measurement_plan?: MeasurementPlan | null }) =>
     request<Experiment>('/experiments', { method: 'POST', body: data }),
   // Creates both a fresh experiment and its linked canvas in one server-side
   // transaction.  Unlike the old canvas import, this never merges into the
@@ -195,6 +205,7 @@ export const experimentsApi = {
     design_type?: string
     task_brief?: Record<string, unknown> | null
     design_spec?: DesignSpec | null
+    measurement_plan?: MeasurementPlan | null
     graph: ProtocolGraph
     published_graph?: ProtocolGraph | null
     protocol_description?: string | null
@@ -206,6 +217,9 @@ export const experimentsApi = {
       description?: string | null
       hypothesis?: string | null
       design_spec?: DesignSpec | null
+      measurement_plan?: MeasurementPlan | null
+      measurement_validation_protocol_id?: string | null
+      metric_recommendations?: MetricRecommendationMetadata | null
       // A timestamp to archive, null to unarchive -- canvas menu's Archive/Unarchive action.
       archived_at?: string | null
       // The experiment's whole attached-dataset list, in canvas wiring order
@@ -248,7 +262,7 @@ export const experimentsApi = {
   // revision is superseded and a new one opened -- results for surviving cell
   // labels carry forward, the rest stay in history (see
   // services.design_generation). Nothing is ever deleted here.
-  generateDesign: (id: string, declaration?: { hypothesis?: string | null; design_spec?: DesignSpec | null }) =>
+  generateDesign: (id: string, declaration?: { hypothesis?: string | null; design_spec?: DesignSpec | null; measurement_plan?: MeasurementPlan | null; measurement_validation_protocol_id?: string | null }) =>
     request<Replicate[]>(`/experiments/${id}/generate-design`, { method: 'POST', body: declaration }),
   // One row per replicate (a "trial"), not per ProtocolRun -- a replicate that's never
   // been run is still listed, with status "not_started" (see TrialResponse /
@@ -280,6 +294,8 @@ export const protocolsApi = {
   // instead of today's ad-hoc, un-substituted whole-graph run.
   run: (id: string, cellLabel?: string | null) =>
     request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST', body: { replicate_label: cellLabel ?? null } }),
+  testRun: (id: string) => request<TestRun>(`/protocols/${id}/test-runs`, { method: 'POST' }),
+  getLatestTestRun: (id: string) => request<TestRun>(`/protocols/${id}/test-runs/latest`),
   // The per-node Play icon -- 422 if the node has upstream input or isn't a
   // runnable Agent (see validate_single_node_runnable). Same polling shape
   // as a plain run (getRun), just with node_runs carrying only this one key.
@@ -294,7 +310,8 @@ export const protocolsApi = {
   getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
   // Only raises cancel_requested_at -- a no-op (200, unchanged row) once the
   // run is already terminal. run_protocol's own node loop is what actually
-  // honors it (between nodes, not mid-node) and flips status to "cancelled".
+  // honors it during task execution or metric evaluation and flips status to
+  // "cancelled" after retaining work that already completed.
   cancelRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}/cancel`, { method: 'POST' }),
   listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
   // "Run all cells" -- 422 if there's no linked experiment or the graph

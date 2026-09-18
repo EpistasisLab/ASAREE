@@ -33,7 +33,6 @@ from asaree.services.credential_resolver import resolve as resolve_credentials
 from asaree.services.system_mcp_servers import ensure_system_servers, refresh_system_server_capabilities
 from asaree.worker.tasks import (
     check_stale_runs,
-    evaluate_protocol_run_metrics_task,
     execute_protocol_run_task,
     execute_run_task,
 )
@@ -65,7 +64,6 @@ class WorkerSettings:
     functions = [
         execute_run_task,
         execute_protocol_run_task,
-            evaluate_protocol_run_metrics_task,
     ]
     cron_jobs = [cron(check_stale_runs, second={0, 30})]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

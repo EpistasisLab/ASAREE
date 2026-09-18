@@ -287,6 +287,7 @@ export function McpToolNodeInspector({
           </div>
         )}
       </div>
+
     </NodeInspectorDialog>
   )
 }

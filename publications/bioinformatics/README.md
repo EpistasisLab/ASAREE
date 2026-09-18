@@ -74,13 +74,12 @@ what the `asaree-sklearn-*` servers read. The run context the agent receives
 says "do not call open_workspace" — true for the data, not for the scratch
 staging — so each prompt says so explicitly.
 
-Nothing else about how a cell runs or scores changed. The workspace tools the
-deleted nodes allow-listed (`open_workspace`, `accept_stage`) are still
-reachable — implicitly, along with the rest of `WORKSPACE_AGENT_TOOLS` — and
-metric promotion is topology-independent: `services.metric_promotion` scans
-every agent run for a successful `run_model_script` call and lifts
-`test_metrics` out of the tool result itself, so it neither knows nor cares
-whether `code` was passed as an argument or read from the wired script's path.
+Nothing else about how a cell runs changed. The workspace tools the deleted
+nodes allow-listed (`open_workspace`, `accept_stage`) are still reachable —
+implicitly, along with the rest of `WORKSPACE_AGENT_TOOLS`. Current experiments
+record scores through explicit measurement-plan producer bindings; arbitrary
+successful `run_model_script` calls are not treated as authoritative metric
+producers.
 
 ## The dataset
 

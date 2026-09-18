@@ -14,7 +14,9 @@ import pytest_asyncio
 
 import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for the FK
 import asaree.services.experiments as experiments_service
+from asaree.api import experiments as experiments_api
 from asaree.models.database import dispose_engine, get_session
+from asaree.models.experiment import ResearchExperiment
 from asaree.models.user import User
 from asaree.services.datasets import create_dataset, delete_dataset
 from asaree.services.experiments import (
@@ -90,6 +92,450 @@ async def test_set_design_spec(owner_id: uuid.UUID) -> None:
         assert fetched is not None
         assert fetched.design_spec == spec
         await db.delete(fetched)
+
+
+async def test_create_experiment_returns_a_persisted_recommended_measurement_plan(owner_id: uuid.UUID) -> None:
+    expected_metrics = [
+        {
+            "id": "runtime-cost",
+            "catalogKey": "cost_usd",
+            "name": "Cost",
+            "description": "Estimated provider cost for the run.",
+            "kind": "runtime",
+            "valueType": "number",
+            "direction": "minimize",
+            "aggregation": "sum",
+            "primary": False,
+            "unit": "USD",
+        },
+        {
+            "id": "runtime-duration",
+            "catalogKey": "duration_seconds",
+            "name": "Duration",
+            "description": "Wall-clock duration of the run.",
+            "kind": "runtime",
+            "valueType": "number",
+            "direction": "minimize",
+            "aggregation": "sum",
+            "primary": False,
+            "unit": "seconds",
+        },
+        {
+            "id": "runtime-total-tokens",
+            "catalogKey": "total_tokens",
+            "name": "Total tokens",
+            "description": "Combined input and output tokens for the run.",
+            "kind": "runtime",
+            "valueType": "number",
+            "direction": "minimize",
+            "aggregation": "sum",
+            "primary": False,
+            "unit": "tokens",
+        },
+        {
+            "id": "runtime-tool-calls",
+            "catalogKey": "tool_calls",
+            "name": "Tool calls",
+            "description": "Recorded tool-call attempts across attributed Agent runs.",
+            "kind": "runtime",
+            "valueType": "number",
+            "direction": "minimize",
+            "aggregation": "sum",
+            "primary": False,
+            "unit": "calls",
+        },
+    ]
+    expected_plan = {
+        "metrics": [
+            {
+                "id": "runtime-cost",
+                "name": "Cost",
+                "value_type": "number",
+                "direction": "minimize",
+                "aggregation": "sum",
+                "primary": False,
+                "description": "Estimated provider cost for the run.",
+                "unit": "USD",
+            },
+            {
+                "id": "runtime-duration",
+                "name": "Duration",
+                "value_type": "number",
+                "direction": "minimize",
+                "aggregation": "sum",
+                "primary": False,
+                "description": "Wall-clock duration of the run.",
+                "unit": "seconds",
+            },
+            {
+                "id": "runtime-total-tokens",
+                "name": "Total tokens",
+                "value_type": "number",
+                "direction": "minimize",
+                "aggregation": "sum",
+                "primary": False,
+                "description": "Combined input and output tokens for the run.",
+                "unit": "tokens",
+            },
+            {
+                "id": "runtime-tool-calls",
+                "name": "Tool calls",
+                "value_type": "number",
+                "direction": "minimize",
+                "aggregation": "sum",
+                "primary": False,
+                "description": "Recorded tool-call attempts across attributed Agent runs.",
+                "unit": "calls",
+            },
+        ],
+        "producers": [
+            {
+                "id": "runtime",
+                "producer_id": "asaree.runtime",
+                "kind": "runtime",
+                "outputs": {
+                    "cost_usd": "runtime-cost",
+                    "duration_seconds": "runtime-duration",
+                    "total_tokens": "runtime-total-tokens",
+                    "tool_calls": "runtime-tool-calls",
+                },
+                "artifacts": [],
+                "config": {},
+            }
+        ],
+        "inputs": [
+            {
+                "producer_binding_id": "runtime",
+                "input_key": "facts",
+                "source_key": "attempt.runtime",
+            }
+        ],
+    }
+
+    async with get_session() as db:
+        owner = await db.get(User, owner_id)
+        assert owner is not None
+        response = await experiments_api.create_experiment_endpoint(
+            experiments_api.CreateExperimentRequest(name=f"baseline-{uuid.uuid4().hex}"), owner, db
+        )
+        experiment_id = response.id
+
+    try:
+        assert response.design_spec == {"metrics": expected_metrics}
+        assert response.measurement_plan == expected_plan
+        assert response.metric_recommendations == {
+            "applied_version": 1,
+            "dismissed_version": None,
+            "intentionally_removed_keys": [],
+        }
+        assert response.metric_recommendation_set_version == 1
+        async with get_session() as db:
+            persisted = await get_experiment(db, experiment_id)
+            assert persisted is not None
+            assert persisted.design_spec == {"metrics": expected_metrics}
+            assert persisted.measurement_plan == expected_plan
+            assert persisted.metric_recommendations == {
+                "applied_version": 1,
+                "dismissed_version": None,
+                "intentionally_removed_keys": [],
+            }
+    finally:
+        async with get_session() as db:
+            persisted = await get_experiment(db, experiment_id)
+            if persisted is not None:
+                await db.delete(persisted)
+
+
+async def test_create_experiment_preserves_a_caller_supplied_measurement_plan(owner_id: uuid.UUID) -> None:
+    supplied_plan = {
+        "metrics": [
+            {
+                "id": "duration",
+                "name": "Elapsed time",
+                "value_type": "number",
+                "direction": "minimize",
+                "aggregation": "sum",
+                "primary": False,
+                "unit": "seconds",
+            }
+        ],
+        "producers": [
+            {
+                "id": "runtime",
+                "producer_id": "asaree.runtime",
+                "kind": "runtime",
+                "outputs": {"duration_seconds": "duration"},
+                "artifacts": [],
+                "config": {},
+            }
+        ],
+        "inputs": [
+            {
+                "producer_binding_id": "runtime",
+                "input_key": "facts",
+                "source_key": "attempt.runtime",
+            }
+        ],
+    }
+    async with get_session() as db:
+        owner = await db.get(User, owner_id)
+        assert owner is not None
+        response = await experiments_api.create_experiment_endpoint(
+            experiments_api.CreateExperimentRequest(
+                name=f"caller-plan-{uuid.uuid4().hex}", measurement_plan=supplied_plan
+            ),
+            owner,
+            db,
+        )
+        experiment_id = response.id
+
+    try:
+        assert response.measurement_plan == supplied_plan
+        assert response.design_spec == {
+            "metrics": [
+                {
+                    "id": "duration",
+                    "catalogKey": "duration_seconds",
+                    "name": "Elapsed time",
+                    "description": "Wall-clock duration of the run.",
+                    "kind": "runtime",
+                    "valueType": "number",
+                    "direction": "minimize",
+                    "aggregation": "sum",
+                    "primary": False,
+                    "unit": "seconds",
+                }
+            ]
+        }
+    finally:
+        async with get_session() as db:
+            persisted = await get_experiment(db, experiment_id)
+            if persisted is not None:
+                await db.delete(persisted)
+
+
+async def test_explicit_analysis_requires_the_stored_primary_metric(owner_id: uuid.UUID) -> None:
+    plan = {
+        "metrics": [
+            {
+                "id": "duration",
+                "name": "Duration",
+                "value_type": "number",
+                "direction": "minimize",
+                "aggregation": "sum",
+                "primary": False,
+            }
+        ],
+        "producers": [],
+        "inputs": [],
+    }
+    async with get_session() as db:
+        owner = await db.get(User, owner_id)
+        assert owner is not None
+        experiment = await create_experiment(
+            db,
+            name=f"no-primary-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            design_spec={"metrics": [{"id": "duration", "name": "Duration", "primary": False}]},
+            measurement_plan=plan,
+        )
+        request = experiments_api.AnalyzeFactorialRequest(
+            condition_factors=[],
+            positive_levels={},
+            reference_condition={},
+            primary_metric="Duration",
+        )
+        with pytest.raises(experiments_api.HTTPException, match="no declared primary metric") as exc_info:
+            await experiments_api.analyze_factorial_endpoint(experiment.id, request, owner, db)
+        assert exc_info.value.status_code == 422
+
+        experiment.design_spec = {
+            "metrics": [
+                {"id": "duration", "name": "Duration", "primary": True},
+                {"id": "cost", "name": "Cost", "primary": False},
+            ]
+        }
+        await db.flush()
+        mismatched_request = request.model_copy(update={"primary_metric": "Cost"})
+        with pytest.raises(experiments_api.HTTPException, match="not the experiment's declared primary metric"):
+            await experiments_api.analyze_factorial_endpoint(experiment.id, mismatched_request, owner, db)
+
+        await db.delete(experiment)
+
+
+async def test_creating_an_experiment_does_not_backfill_preexisting_experiments(owner_id: uuid.UUID) -> None:
+    empty_plan = {"metrics": [], "producers": [], "inputs": []}
+    configured_plan = {
+        "metrics": [
+            {
+                "id": "quality",
+                "name": "Quality",
+                "value_type": "number",
+                "direction": "maximize",
+                "aggregation": "mean",
+                "primary": False,
+            }
+        ],
+        "producers": [],
+        "inputs": [],
+    }
+    async with get_session() as db:
+        null_plan = ResearchExperiment(
+            name=f"preexisting-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            design_spec={},
+            measurement_plan=None,
+        )
+        explicit_empty = ResearchExperiment(
+            name=f"preexisting-empty-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            design_spec={"metrics": []},
+            measurement_plan=empty_plan,
+        )
+        configured = ResearchExperiment(
+            name=f"preexisting-configured-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            design_spec={"metrics": [{"id": "quality", "name": "Quality"}]},
+            measurement_plan=configured_plan,
+        )
+        db.add_all([null_plan, explicit_empty, configured])
+        await db.flush()
+        existing_ids = [null_plan.id, explicit_empty.id, configured.id]
+        created = await create_experiment(db, name=f"new-{uuid.uuid4().hex}", owner_id=owner_id)
+        created_id = created.id
+
+    try:
+        async with get_session() as db:
+            unchanged = [await get_experiment(db, experiment_id) for experiment_id in existing_ids]
+            assert unchanged[0] is not None and unchanged[0].measurement_plan is None
+            assert unchanged[1] is not None and unchanged[1].measurement_plan == empty_plan
+            assert unchanged[2] is not None and unchanged[2].measurement_plan == configured_plan
+            assert all(experiment is not None and experiment.metric_recommendations is None for experiment in unchanged)
+            owner = await db.get(User, owner_id)
+            assert owner is not None
+            responses = [
+                await experiments_api.get_experiment_endpoint(experiment_id, owner, db)
+                for experiment_id in existing_ids
+            ]
+            assert [response.measurement_plan for response in responses] == [None, empty_plan, configured_plan]
+    finally:
+        async with get_session() as db:
+            for experiment_id in (*existing_ids, created_id):
+                experiment = await get_experiment(db, experiment_id)
+                if experiment is not None:
+                    await db.delete(experiment)
+
+
+async def test_metric_recommendation_metadata_round_trips_without_changing_the_plan(owner_id: uuid.UUID) -> None:
+    async with get_session() as db:
+        experiment = ResearchExperiment(
+            name=f"recommendation-metadata-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            design_spec={"metrics": []},
+            measurement_plan={"metrics": [], "producers": [], "inputs": []},
+        )
+        db.add(experiment)
+        await db.flush()
+        experiment_id = experiment.id
+        original_plan = experiment.measurement_plan
+
+    try:
+        async with get_session() as db:
+            owner = await db.get(User, owner_id)
+            assert owner is not None
+            response = await experiments_api.update_experiment_endpoint(
+                experiment_id,
+                experiments_api.UpdateExperimentRequest(
+                    metric_recommendations={
+                        "applied_version": None,
+                        "dismissed_version": 1,
+                        "intentionally_removed_keys": [],
+                        "contextual_suggestion_dismissals": {
+                            "tool_error_rate": '[{"source":"tools","target":"writer"}]'
+                        },
+                    }
+                ),
+                owner,
+                db,
+            )
+
+        assert response.metric_recommendations == {
+            "applied_version": None,
+            "dismissed_version": 1,
+            "intentionally_removed_keys": [],
+            "contextual_suggestion_dismissals": {
+                "tool_error_rate": '[{"source":"tools","target":"writer"}]'
+            },
+        }
+        assert response.measurement_plan == original_plan
+
+        async with get_session() as db:
+            persisted = await get_experiment(db, experiment_id)
+            assert persisted is not None
+            assert persisted.metric_recommendations == response.metric_recommendations
+            assert persisted.measurement_plan == original_plan
+    finally:
+        async with get_session() as db:
+            persisted = await get_experiment(db, experiment_id)
+            if persisted is not None:
+                await db.delete(persisted)
+
+
+async def test_experiment_owns_a_measurement_plan_separate_from_its_design(owner_id: uuid.UUID) -> None:
+    first_plan = {
+        "metrics": [
+            {
+                "id": "quality",
+                "name": "Quality",
+                "value_type": "number",
+                "direction": "maximize",
+                "aggregation": "mean",
+                "primary": False,
+            }
+        ],
+        "producers": [
+            {
+                "id": "runtime",
+                "producer_id": "asaree.runtime",
+                "kind": "runtime",
+                "outputs": {"elapsed_seconds": "quality"},
+                "artifacts": [],
+                "config": {},
+            }
+        ],
+        "inputs": [{"producer_binding_id": "runtime", "input_key": "facts", "source_key": "attempt.runtime"}],
+    }
+    replacement_plan = {
+        **first_plan,
+        "metrics": [
+            {
+                **first_plan["metrics"][0],
+                "name": "Answer quality",
+            }
+        ],
+    }
+    async with get_session() as db:
+        experiment = await create_experiment(
+            db,
+            name=f"measurement-plan-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            design_spec={"factors": []},
+            measurement_plan=first_plan,
+        )
+        experiment_id = experiment.id
+        assert experiment.measurement_plan == first_plan
+        assert experiment.design_spec == {"factors": []}
+
+    try:
+        async with get_session() as db:
+            updated = await update_experiment(db, experiment_id, fields={"measurement_plan": replacement_plan})
+            assert updated is not None
+            assert updated.measurement_plan == replacement_plan
+    finally:
+        async with get_session() as db:
+            updated = await get_experiment(db, experiment_id)
+            if updated is not None:
+                await db.delete(updated)
 
 
 _CSV = b"age,label,group\n10,0,a\n20,1,a\n30,0,b\n40,1,b\n"

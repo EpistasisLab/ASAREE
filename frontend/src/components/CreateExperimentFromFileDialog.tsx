@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import type { DesignSpec } from '@/types/experiments'
+import type { DesignSpec, MeasurementPlan } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 
 type JsonRecord = Record<string, unknown>
@@ -18,6 +18,7 @@ interface ImportedDefinition {
   designType: string
   taskBrief: Record<string, unknown> | null
   designSpec: DesignSpec | null
+  measurementPlan: MeasurementPlan | null
   graph: ProtocolGraph
   publishedGraph: ProtocolGraph | null
   protocolDescription: string | null
@@ -55,6 +56,11 @@ function parseDefinition(text: string): ImportedDefinition {
     designType: optionalString(experiment.design_type) ?? 'factorial',
     taskBrief: isRecord(experiment.task_brief) ? experiment.task_brief : null,
     designSpec: (isRecord(experiment.design_spec) ? experiment.design_spec : isRecord(parsed.design_spec) ? parsed.design_spec : null) as DesignSpec | null,
+    measurementPlan: (isRecord(experiment.measurement_plan)
+      ? experiment.measurement_plan
+      : isRecord(parsed.measurement_plan)
+        ? parsed.measurement_plan
+        : null) as unknown as MeasurementPlan | null,
     graph: parsed.graph as unknown as ProtocolGraph,
     publishedGraph,
     protocolDescription: optionalString(canvas.description) ?? optionalString(parsed.description),
@@ -113,6 +119,7 @@ export function CreateExperimentFromFileDialog({
         design_type: definition.designType,
         task_brief: definition.taskBrief,
         design_spec: definition.designSpec,
+        measurement_plan: definition.measurementPlan,
         graph: definition.graph,
         published_graph: definition.publishedGraph,
         protocol_description: definition.protocolDescription,

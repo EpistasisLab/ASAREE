@@ -9,7 +9,7 @@ import { summarizeRun, type RunScope } from './runSummary'
 function scopeTitle(scope: RunScope): string {
   switch (scope.type) {
     case 'graph':
-      return 'Run the full experiment?'
+      return 'Start a Test Run?'
     case 'replicate':
       return scope.title ?? `Run replicate "${scope.label}"?`
     case 'all-cells':
@@ -185,10 +185,10 @@ export function RunConfirmDialog({
           {hasUnpublishedChanges ? (
             <>
               <Button variant="outline" disabled={isPublishing || isConfirming || confirmDisabled} onClick={onConfirm}>
-                Run published v{publishedRevision}
+                Test Run published v{publishedRevision}
               </Button>
               <Button disabled={isPublishing || isConfirming || confirmDisabled} onClick={onPublishAndRun}>
-                {isPublishing ? 'Publishing…' : 'Publish & run'}
+                {isPublishing ? 'Publishing…' : 'Publish & Test Run'}
               </Button>
             </>
           ) : (

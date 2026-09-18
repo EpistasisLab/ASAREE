@@ -19,7 +19,6 @@ import { PromptReferenceField } from './PromptReferenceField'
 import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import { RESIZE_HANDLE_CLASSNAME, useResizablePane } from './useResizablePane'
 import { experimentsApi } from '@/api/client'
-import { normalizeDesignMetrics } from '@/lib/metricCatalog'
 import { referenceLabel, seedPromptText } from '@/lib/promptReferences'
 import type { HandoffPeers, PromptReferenceScope } from '@/lib/promptReferences'
 import type { AgentNodeConfig, AgentNodeData, NodeRunState, PromptPreview, ProtocolNode } from '@/types/protocols'
@@ -133,18 +132,6 @@ export function AgentNodeInspector({
     enabled: !!experimentId,
   })
 
-  // Derived above the `!node` bail-out because the query below is a hook: it has
-  // to run on every render, including the no-selection one, where it's disabled.
-  const metrics = normalizeDesignMetrics(experimentQuery.data?.design_spec?.metrics)
-  const validMetricIds = new Set(metrics.map((metric) => metric.id!))
-  const contextMetricIds = (node?.data.contextMetricIds ?? []).filter((id) => validMetricIds.has(id))
-  const evaluationContextQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'evaluation-context', contextMetricIds],
-    queryFn: () => experimentsApi.evaluationContext(experimentId!, contextMetricIds),
-    enabled: !!experimentId && contextMetricIds.length > 0,
-  })
-  const evaluationContext = evaluationContextQuery.data?.context ?? ''
-
   if (!node) return null
   const data = node.data
   const config = data.config
@@ -189,13 +176,6 @@ export function AgentNodeInspector({
     const next = { ...bindings }
     delete next[fieldPath]
     onChange(node!.id, { ...data, factor_bindings: next })
-  }
-
-  function patchContextMetricIds(next: string[]) {
-    // Stale references disappear as soon as the node is next saved; the
-    // executor also filters them defensively, so a removed Design metric can
-    // never crash a run or leak old context.
-    onChange(node!.id, { ...data, contextMetricIds: next.filter((id) => validMetricIds.has(id)) })
   }
 
   return (
@@ -486,29 +466,6 @@ export function AgentNodeInspector({
                 )}
               </FactorBindableField>
 
-              <div className="space-y-2 rounded-md border bg-muted/20 p-3">
-                <div>
-                  <Label className="text-sm">Evaluation context</Label>
-                  <p className="mt-1 text-xs text-muted-foreground">The Agent receives the selected metric definitions and optimization direction. Metric results are calculated or recorded after the run.</p>
-                </div>
-                {metrics.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No experiment metrics are available. Add metrics in Design.</p>
-                ) : (
-                  <>
-                    <div className="flex gap-2"><Button variant="ghost" size="sm" onClick={() => patchContextMetricIds(metrics.map((metric) => metric.id!))}>Select all</Button><Button variant="ghost" size="sm" onClick={() => patchContextMetricIds([])}>Clear</Button></div>
-                    <div className="space-y-2">
-                      {metrics.map((metric) => {
-                        const checkboxId = `context-metric-${node.id}-${metric.id}`
-                        return <label key={metric.id} htmlFor={checkboxId} className="flex cursor-pointer items-start gap-2 rounded px-1 py-1 hover:bg-muted/50">
-                          <Checkbox id={checkboxId} checked={contextMetricIds.includes(metric.id!)} onCheckedChange={(checked) => patchContextMetricIds(checked ? [...contextMetricIds, metric.id!] : contextMetricIds.filter((id) => id !== metric.id))} />
-                          <span className="min-w-0"><span className="text-sm font-medium">{metric.name} · {metric.direction}</span><span className="mt-0.5 block text-xs text-muted-foreground">{metric.description}{metric.kind === 'runtime' ? ' Final value is available only after execution.' : ''}</span><span className="sr-only">Include {metric.name} in this Agent's context</span></span>
-                        </label>
-                      })}
-                    </div>
-                    {evaluationContext && <details className="text-xs"><summary className="cursor-pointer text-muted-foreground hover:text-foreground">Preview generated context</summary><pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap rounded bg-background p-2 font-mono text-[11px]">{evaluationContext}</pre></details>}
-                  </>
-                )}
-              </div>
             </TabsContent>
 
             <TabsContent value="settings" className="space-y-4 pt-2">

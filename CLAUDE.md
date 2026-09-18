@@ -43,6 +43,20 @@ or introduce a different aesthetic without being asked.
   leaving the canvas ≥420px) and remembers its width in `localStorage` — so a new tab in it
   should be width-responsive via container queries, not built for one fixed column width.
 
+## Agent skills
+
+### Issue tracker
+
+Implementation issues and specs live in the separate `EpistasisLab/ASAREE_Issues` GitHub repository. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five canonical Matt Pocock triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with `CONTEXT.md` at the root and private local ADRs under `docs/adr/`. See `docs/agents/domain.md`.
+
 # Git commit conventions
 
 Do not add `Co-Authored-By` or `Generated-with` lines to commits or PRs.

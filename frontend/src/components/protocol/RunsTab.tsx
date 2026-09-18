@@ -53,6 +53,8 @@ function trialStatusBadge(status: Trial['status']) {
       return { label: 'Queued', className: 'border-transparent bg-[color:var(--primary)]/10 text-[color:var(--primary)]' }
     case 'running':
       return { label: 'Running', className: 'border-transparent bg-[color:var(--primary)]/10 text-[color:var(--primary)]' }
+    case 'finalizing':
+      return { label: 'Finalizing', className: 'border-transparent bg-[color:var(--primary)]/10 text-[color:var(--primary)]' }
     case 'completed':
       return { label: 'Completed', className: 'border-transparent bg-[color:var(--chart-3)]/10 text-[color:var(--chart-3)]' }
     case 'failed':
@@ -60,6 +62,10 @@ function trialStatusBadge(status: Trial['status']) {
     case 'cancelled':
       return { label: 'Cancelled', className: 'border-transparent bg-muted text-muted-foreground' }
   }
+}
+
+function isActiveTrialStatus(status: Trial['status']): boolean {
+  return status === 'queued' || status === 'running' || status === 'finalizing'
 }
 
 const OBSOLETE_TRIAL_BADGE = {
@@ -146,7 +152,7 @@ export function RunAllCellsButton({
     : allReplicates
   const activeReplicateLabels = new Set(
     (trialsQuery.data ?? [])
-      .filter((trial) => trial.status === 'queued' || trial.status === 'running')
+      .filter((trial) => isActiveTrialStatus(trial.status))
       .map((trial) => trial.replicate_label),
   )
   const completedReplicateLabels = new Set(
@@ -281,6 +287,7 @@ export function RunAllCellsButton({
         description: canvas.description,
         graph: canvas.graph,
         design_spec: experiment.design_spec,
+        measurement_plan: experiment.measurement_plan,
         experiment: {
           source_id: experiment.id,
           name: experiment.name,
@@ -289,6 +296,7 @@ export function RunAllCellsButton({
           design_type: experiment.design_type,
           task_brief: experiment.task_brief,
           design_spec: experiment.design_spec,
+          measurement_plan: experiment.measurement_plan,
           dataset_ids: experiment.dataset_ids,
           archived_at: experiment.archived_at,
           created_at: experiment.created_at,
@@ -297,6 +305,7 @@ export function RunAllCellsButton({
             locked_at: experiment.locked_at,
             source_protocol_revision_id: experiment.locked_protocol_revision_id,
             design_spec: experiment.locked_design_spec,
+            measurement_plan: experiment.locked_measurement_plan,
             canvas_revision: lockedCanvas ? {
               source_id: lockedCanvas.id,
               revision: lockedCanvas.revision,
@@ -724,7 +733,7 @@ export function RunsTab({
   const trials = [...trialsByLabel.values()]
   const currentTrialCount = trials.filter((trial) => !trial.obsolete).length
   const completedCount = trials.filter((trial) => trial.status === 'completed' && !trial.obsolete).length
-  const runningCount = trials.filter((trial) => trial.status === 'running').length
+  const runningCount = trials.filter((trial) => trial.status === 'running' || trial.status === 'finalizing').length
   const queuedCount = trials.filter((trial) => trial.status === 'queued').length
   const failedCount = trials.filter((trial) => trial.status === 'failed' || trial.status === 'cancelled').length
   const overviewUsage = resultsQuery.data ? usageSummary({
@@ -733,7 +742,7 @@ export function RunsTab({
     duration_seconds: resultsQuery.data.overview.total_duration_seconds,
   }) : []
   const isActiveTrial = (trial: Trial | undefined): trial is Trial =>
-    !!trial?.run_id && (trial.status === 'queued' || trial.status === 'running')
+    !!trial?.run_id && isActiveTrialStatus(trial.status)
   const activeExperimentRunIds = trials.filter(isActiveTrial).map((trial) => trial.run_id)
   // Completion is the user-visible truth here. A result can be completed
   // from persisted metrics even when it has no ProtocolRun provenance (for

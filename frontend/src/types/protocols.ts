@@ -1,3 +1,5 @@
+import type { EvaluationArtifact, MetricObservation } from './experiments'
+
 export interface Protocol {
   id: string
   name: string
@@ -109,7 +111,7 @@ export interface ProtocolRun {
   // when a budget (consultation count, depth, or the conversation wall clock)
   // ran out. Distinct from `failed` because the work up to that point is
   // sound -- the transcript is worth reading.
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'limit_reached'
+  status: 'pending' | 'running' | 'finalizing' | 'completed' | 'failed' | 'cancelled' | 'limit_reached'
   node_runs: Record<string, NodeRunState>
   // Null for every pipeline run; populated once a conversation-mode run's
   // agents start talking.
@@ -130,12 +132,45 @@ export interface ProtocolRun {
   target_node_id: string | null
   // Set by the Stop button (POST /protocols/{id}/runs/{runId}/cancel) --
   // present but status still "running" means the request has been raised
-  // but not yet honored (services.protocol_execution.run_protocol only
-  // polls this between nodes, so whatever's currently in flight finishes
-  // first). Once honored, status flips straight to "cancelled".
+  // but not yet honored. Task execution checks between safe boundaries;
+  // built-in measurement finalization retains completed observations when
+  // cancellation is honored. Once honored, status flips to "cancelled".
   cancel_requested_at: string | null
   created_at: string
   updated_at: string
+  observations: MetricObservation[]
+  artifacts: EvaluationArtifact[]
+}
+
+export interface TestRunResourceUsage {
+  duration_seconds: number | null
+  cost_usd: number | null
+}
+
+export interface TestRun {
+  id: string
+  protocol_id: string
+  status: ProtocolRun['status']
+  error: string | null
+  protocol_revision_id: string | null
+  created_at: string
+  updated_at: string
+  observations: MetricObservation[]
+  artifacts: EvaluationArtifact[]
+  conversation: Conversation | null
+  tested_published_revision: { id: string; number: number; published_at: string } | null
+  freshness: { out_of_date: boolean; reasons: Array<'canvas' | 'measurement_plan'> }
+  resources: {
+    task: TestRunResourceUsage
+    evaluation: TestRunResourceUsage
+    total: TestRunResourceUsage
+  }
+  execution_summary: {
+    node_runs: Record<string, NodeRunState>
+    started_at: string | null
+    completed_at: string | null
+    cancel_requested_at: string | null
+  }
 }
 
 // POST /protocols/{id}/nodes/{nodeId}/prompt-preview -- the prompt an agent
@@ -259,9 +294,6 @@ export interface AgentNodeData {
   // factor". The factor itself lives on the linked experiment's own
   // design_spec.factors -- this is only the node-side half of the binding.
   factor_bindings?: Record<string, string>
-  // IDs of experiment-owned metric declarations to expose as guidance to
-  // this one Agent.  Empty/absent is deliberately no context injection.
-  contextMetricIds?: string[]
   // Absent/undefined means active -- every graph saved before this field
   // existed is unaffected. A deactivated node's own logic is skipped
   // entirely by the executor; its upstream input passes straight through

@@ -30,7 +30,7 @@ from asaree.services.protocol_execution import (
     validate_coordination_strategy,
 )
 from asaree.services.protocol_revisions import publish_protocol
-from asaree.services.protocol_runs import create_protocol_run, get_protocol_run, request_protocol_run_cancellation
+from asaree.services.protocol_runs import create_protocol_run, request_protocol_run_cancellation
 from asaree.services.protocols import create_protocol, delete_protocol
 
 
@@ -849,6 +849,25 @@ def test_build_user_input_cues_bound_script_without_inlining_it() -> None:
     assert "run_wired_script()" in result
 
 
+def test_build_user_input_lists_multiple_bound_scripts() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    first = _script_node("script1", code="print('first')")
+    second = _script_node("script2", code="print('second')")
+    first["data"]["config"]["name"] = "first-report"
+    second["data"]["config"]["name"] = "second-report"
+    graph = {
+        "nodes": [agent, first, second],
+        "edges": [agent_llm_edge, _script_edge("script1", "a"), _script_edge("script2", "a")],
+    }
+    result = pe._build_user_input(agent, graph, {}, script_bound=True)
+    assert "2 scripts are wired" in result
+    assert "first-report" in result
+    assert "second-report" in result
+    assert 'run_wired_script(script=...)' in result
+    assert "print('first')" not in result
+    assert "print('second')" not in result
+
+
 def test_build_user_input_inlines_script_when_it_could_not_be_bound() -> None:
     # No workspace to write it to (an unlinked protocol run): a prompt the
     # model can copy from beats no script at all.
@@ -880,6 +899,30 @@ def test_ambient_meta_writes_the_wired_script_and_carries_its_path(tmp_path: Pat
     # a rerun to execute -- the graph is the source of truth, not the file.
     script["data"]["config"]["code"] = "print('edited')"
     assert Path(pe._ambient_meta_for(graph, "a", "exp1/cellA")["script_path"]).read_text() == "print('edited')"
+
+
+def test_ambient_meta_materializes_all_wired_scripts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(pe, "WORKSPACE_ROOT", str(tmp_path))
+    agent, agent_llm_edge = _agent_with_llm("a")
+    first = _script_node("script1", code="print('first')")
+    second = _script_node("script2", code="print('second')")
+    first["data"]["config"]["name"] = "first-report"
+    second["data"]["config"]["name"] = "second-report"
+    graph = {
+        "nodes": [agent, first, second],
+        "edges": [agent_llm_edge, _script_edge("script1", "a"), _script_edge("script2", "a")],
+    }
+
+    meta = pe._ambient_meta_for(graph, "a", "exp1/cellA")
+    assert "script_path" not in meta
+    assert [(item["id"], item["name"]) for item in meta["script_paths"]] == [
+        ("script1", "first-report"),
+        ("script2", "second-report"),
+    ]
+    assert [Path(item["path"]).read_text() for item in meta["script_paths"]] == [
+        "print('first')",
+        "print('second')",
+    ]
 
 
 def test_ambient_meta_carries_the_workspace_head_as_a_data_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1730,109 +1773,6 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
             await delete_experiment(db, experiment_id)
 
 
-async def _run_single_cell_protocol(owner_id: uuid.UUID) -> tuple[uuid.UUID, str, uuid.UUID, uuid.UUID]:
-    """Shared setup for the two promote_cell_score_metrics wiring tests below
-    -- a minimal one-agent, one-cell protocol run, ready for pe.run_protocol.
-    Returns (experiment_id, cell_label, protocol_id, run_id)."""
-    async with get_session() as db:
-        experiment = await create_experiment(db, name=f"score-promote-wiring-{uuid.uuid4().hex}", owner_id=owner_id)
-        experiment_id = experiment.id
-        protocol = await create_protocol(
-            db,
-            name=f"score-promote-wiring-protocol-{uuid.uuid4().hex}",
-            owner_id=owner_id,
-            experiment_id=experiment_id,
-            graph={
-                "nodes": [
-                    {"id": "llm1", "type": "llm_anthropic", "data": {"config": {}}},
-                    {"id": "worker", "type": "agent", "data": {"config": {}}},
-                ],
-                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "ai"}],
-            },
-        )
-        protocol_id = protocol.id
-        replicate = await upsert_replicate(
-            db, experiment_id=experiment_id, replicate_label="only-cell", fields={"factor_values": {}}
-        )
-        run = await create_protocol_run(
-            db,
-            protocol_id=protocol_id,
-            owner_id=owner_id,
-            replicate_label="only-cell",
-            # Claims the replicate slot the way plan_cell_runs does -- see
-            # is_current_replicate_attempt, which gates run_protocol's write-back.
-            replicate_result_id=replicate.id,
-        )
-        run_id = run.id
-    return experiment_id, "only-cell", protocol_id, run_id
-
-
-async def test_run_protocol_calls_score_metric_promotion_on_cell_completion(
-    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Wiring test for the auto-promotion added to run_protocol's post-write
-    block: a completed cell run calls promote_cell_score_metrics with this
-    run's own experiment_id/cell_label/protocol_run_id. The extraction logic
-    itself (flattening a run_model_script result into metric_values) is
-    covered separately, purely, in test_metric_promotion.py -- this only
-    proves run_protocol actually reaches for it."""
-
-    async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
-        return "worker output", None, None, None
-
-    calls = []
-
-    async def fake_promote(db, *, experiment_id, replicate_label, protocol_run_id):
-        calls.append((experiment_id, replicate_label, protocol_run_id))
-
-    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
-    monkeypatch.setattr(pe, "promote_replicate_score_metrics", fake_promote)
-
-    experiment_id, cell_label, protocol_id, run_id = await _run_single_cell_protocol(owner_id)
-    try:
-        await pe.run_protocol(run_id)
-        assert calls == [(experiment_id, cell_label, run_id)]
-    finally:
-        async with get_session() as db:
-            await delete_protocol(db, protocol_id)
-            await delete_experiment(db, experiment_id)
-
-
-async def test_run_protocol_survives_score_metric_promotion_failure(
-    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Best-effort means best-effort: a real exception out of
-    promote_cell_score_metrics (e.g. Motoro's run_steps table is
-    unreachable) must not fail an otherwise-successful cell run, and the
-    cell's own artifacts write must still land."""
-
-    async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
-        return "worker output", None, None, None
-
-    async def fake_promote(db, *, experiment_id, replicate_label, protocol_run_id):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
-    monkeypatch.setattr(pe, "promote_replicate_score_metrics", fake_promote)
-
-    experiment_id, cell_label, protocol_id, run_id = await _run_single_cell_protocol(owner_id)
-    try:
-        await pe.run_protocol(run_id)  # must not raise
-
-        async with get_session() as db:
-            run = await get_protocol_run(db, run_id)
-            assert run is not None
-            assert run.status == "completed"
-            replicate = await get_replicate(db, experiment_id=experiment_id, replicate_label=cell_label)
-            assert replicate is not None
-            assert replicate.artifacts is not None
-            assert replicate.artifacts["output_text"] == "worker output"
-    finally:
-        async with get_session() as db:
-            await delete_protocol(db, protocol_id)
-            await delete_experiment(db, experiment_id)
-
-
 # --- node deactivate passthrough (pure helpers + wired-in run_protocol) -----
 
 
@@ -2141,7 +2081,7 @@ async def test_run_protocol_honors_mid_node_cancellation(owner_id: uuid.UUID, mo
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
 
 
-async def test_poll_cancel_flag_sets_event_once_cancellation_requested(owner_id: uuid.UUID) -> None:
+async def test_monitor_protocol_run_sets_event_once_cancellation_requested(owner_id: uuid.UUID) -> None:
     """Isolated test of the poller itself, not the whole run_protocol path
     -- confirms it actually notices a cancellation raised on the row (by a
     separate request, modeled here as a separate session) and sets the
@@ -2155,7 +2095,7 @@ async def test_poll_cancel_flag_sets_event_once_cancellation_requested(owner_id:
 
     try:
         cancel_event = asyncio.Event()
-        poller = asyncio.create_task(pe._poll_cancel_flag(run_id, cancel_event, interval=0.05))
+        poller = asyncio.create_task(pe._monitor_protocol_run(run_id, cancel_event, interval=0.05))
         await asyncio.sleep(0.15)
         assert not cancel_event.is_set()  # nothing requested yet -- poller shouldn't fire spuriously
 
@@ -2397,7 +2337,7 @@ def test_dataset_node_with_plain_outgoing_edge_raises() -> None:
         topological_order(graph)
 
 
-def test_multiple_script_connections_raises() -> None:
+def test_multiple_script_connections_are_allowed() -> None:
     llm = _llm_node()
     agent, agent_llm_edge = _agent_with_llm("a")
     s1, s2 = _script_node("s1"), _script_node("s2")
@@ -2405,8 +2345,7 @@ def test_multiple_script_connections_raises() -> None:
         "nodes": [llm, agent, s1, s2],
         "edges": [agent_llm_edge, _script_edge("s1", "a"), _script_edge("s2", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="at most one Script connection"):
-        topological_order(graph)
+    assert topological_order(graph)
 
 
 def test_script_connection_from_non_script_source_raises() -> None:
@@ -2458,8 +2397,8 @@ def test_script_node_with_plain_outgoing_edge_raises() -> None:
 
 
 def test_skill_connector_is_repeatable_and_uncapped() -> None:
-    # Unlike Memory/Dataset/Script (max 1) and the execution pattern (max 1),
-    # the Skill connector is uncapped -- several skills on one agent is the
+    # Unlike Memory and the execution pattern (max 1), the Skill connector is
+    # uncapped -- several skills on one agent is the
     # normal case, since each costs ~100 tokens of level-1 metadata until the
     # model actually opens it.
     llm = _llm_node()
@@ -2915,20 +2854,23 @@ def test_resolve_dataset_configs_skips_disabled_nodes() -> None:
     assert [c["dataset_name"] for c in pe._resolve_dataset_configs(graph, "a")] == ["cohort-a"]
 
 
-def test_resolve_script_config_returns_connected_node_config() -> None:
+def test_resolve_script_configs_returns_connected_node_configs_in_wiring_order() -> None:
     agent, agent_llm_edge = _agent_with_llm("a")
-    script = _script_node(code="print('hi')")
-    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
-    assert pe._resolve_script_config(graph, "a") == {
-        "name": "scoring-script",
-        "language": "python",
-        "code": "print('hi')",
+    first = _script_node("script1", code="print('first')")
+    second = _script_node("script2", code="print('second')")
+    graph = {
+        "nodes": [agent, first, second],
+        "edges": [agent_llm_edge, _script_edge("script2", "a"), _script_edge("script1", "a")],
     }
+    assert pe._resolve_script_configs(graph, "a") == [
+        {"name": "scoring-script", "language": "python", "code": "print('second')", "node_id": "script2"},
+        {"name": "scoring-script", "language": "python", "code": "print('first')", "node_id": "script1"},
+    ]
 
 
-def test_resolve_script_config_empty_when_unconnected() -> None:
+def test_resolve_script_configs_empty_when_unconnected() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    assert pe._resolve_script_config(graph, "a") == {}
+    assert pe._resolve_script_configs(graph, "a") == []
 
 
 def test_resolve_tool_config_collects_all_connected_tool_nodes() -> None:

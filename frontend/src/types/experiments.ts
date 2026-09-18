@@ -30,33 +30,61 @@ export interface DesignMetric {
   catalogKey?: string
   name: string
   description?: string
-  kind?: 'runtime' | 'deterministic_evaluator' | 'model_judge' | 'agent_reported' | 'custom'
-  valueType?: 'number' | 'boolean' | 'string'
+  kind?: 'runtime' | 'custom'
+  valueType?: 'number' | 'boolean' | 'string' | 'opaque'
   unit?: string
-  // Present only when this metric is evaluated by the controlled post-run
-  // judge. Keeping the rubric with the experiment declaration makes the
-  // resulting score reproducible and lets old/manual metrics remain valid.
-  scoring?: MetricScoringConfig
   primary: boolean
-  direction: 'maximize' | 'minimize'
-  aggregation?: 'mean' | 'sum'
+  direction: 'maximize' | 'minimize' | 'neutral'
+  aggregation?: 'mean' | 'sum' | 'none'
   [key: string]: unknown
 }
 
-export interface MetricScoringConfig {
-  method: 'model_judge'
-  rubric: string
-  reference?: string
-  min?: number
-  max?: number
-  // An explicit evaluator model keeps scores comparable when an experiment
-  // varies the task agents' own models. The credential itself is never
-  // persisted: only its provider and chosen model are recorded.
-  judge?: {
-    provider: import('./llmSettings').LLMProvider
-    model: string
-  }
+export type MeasurementProducerKind = 'runtime' | 'reported'
+export type MeasurementDirection = 'maximize' | 'minimize' | 'neutral'
+export type MeasurementAggregation = 'mean' | 'sum' | 'rate' | 'pooled' | 'none'
+
+export interface MeasurementPlan {
+  metrics: Array<{
+    id: string
+    name: string
+    value_type: 'number' | 'boolean' | 'opaque'
+    direction: MeasurementDirection
+    aggregation: MeasurementAggregation
+    primary: boolean
+    description?: string
+    unit?: string
+  }>
+  producers: Array<{
+    id: string
+    producer_id: string
+    kind: MeasurementProducerKind
+    outputs: Record<string, string>
+    artifacts: string[]
+    config: Record<string, unknown>
+  }>
+  inputs: Array<{
+    producer_binding_id: string
+    input_key: string
+    source_key: string
+  }>
 }
+
+export interface MeasurementPlanValidationReport {
+  valid: boolean
+  issues: Array<{ code: string; message: string; path: string; blocking?: boolean }>
+}
+
+export interface MeasurementCapabilities {
+  outputs: Record<string, string[]>
+}
+
+export type ObservationStatus =
+  | 'measured'
+  | 'unavailable'
+  | 'failed'
+  | 'timed_out'
+  | 'cancelled'
+  | 'not_applicable'
 
 // Every slug here is implemented -- there is deliberately no "coming soon"
 // entry. Six ARES coordination-category placeholders (supervisor, swarm, task
@@ -147,6 +175,10 @@ export interface Experiment {
   design_type: string
   task_brief: Record<string, unknown> | null
   design_spec: DesignSpec | null
+  measurement_plan: MeasurementPlan | null
+  metric_recommendations?: MetricRecommendationMetadata | null
+  metric_recommendation_set_version?: number
+  latest_test_run_id?: string | null
   // Every dataset attached to this experiment, in canvas wiring order -- an
   // experiment can run against several since the Dataset connector was
   // uncapped. `dataset_id` is a read-only view of the first one, kept for
@@ -156,9 +188,17 @@ export interface Experiment {
   locked_at: string | null
   locked_protocol_revision_id: string | null
   locked_design_spec: DesignSpec | null
+  locked_measurement_plan: MeasurementPlan | null
   created_at: string
   updated_at: string
   archived_at: string | null
+}
+
+export interface MetricRecommendationMetadata {
+  applied_version: number | null
+  dismissed_version: number | null
+  intentionally_removed_keys: string[]
+  contextual_suggestion_dismissals?: Record<string, string>
 }
 
 // One row of the Runs tab's trial list -- one replicate, not ProtocolRun; a replicate that's
@@ -168,7 +208,7 @@ export interface Trial {
   replicate_label: string
   factor_values: Record<string, unknown>
   metric_values: Record<string, unknown>
-  status: 'not_started' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'not_started' | 'queued' | 'running' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
   run_id: string | null
   // True when this run used an older published canvas version than the
   // protocol's current published version.
@@ -266,6 +306,46 @@ export interface ResultNodeRun {
   cost_usd: number | null
 }
 
+export interface MetricObservation {
+  metric_id: string
+  metric_name: string
+  value_type: 'number' | 'boolean' | 'opaque'
+  status: ObservationStatus
+  value: unknown
+  error: string | null
+  attempt_id: string
+  producer: {
+    binding_id: string
+    producer_id: string
+    kind: MeasurementProducerKind | 'unbound'
+    version: string
+    binding_config?: Record<string, unknown>
+  }
+  input_provenance: Record<string, { source_key: string; value_type: string; provenance: Record<string, unknown> }>
+}
+
+export interface EvaluationArtifact {
+  artifact_key: string
+  kind: string
+  payload: unknown
+  attempt_id: string
+  producer: MetricObservation['producer']
+  input_provenance: MetricObservation['input_provenance']
+}
+
+export interface LegacyMetricValue {
+  metric_id: string
+  metric_name: string
+  value: unknown
+  attempt_id: string
+  producer: {
+    binding_id: 'legacy-unknown'
+    producer_id: 'legacy.unknown'
+    kind: 'legacy'
+    version: 'unknown'
+  }
+}
+
 export interface ResultReplicate {
   replicate_label: string
   replicate_number: number
@@ -296,6 +376,9 @@ export interface ResultReplicate {
     evaluator_run_id?: string | null
     metric_ids?: string[]
   } | null
+  metric_observations: MetricObservation[]
+  evaluation_artifacts: EvaluationArtifact[]
+  legacy_values?: LegacyMetricValue[]
   obsolete_runs: ObsoleteRun[]
   superseded_runs: SupersededRun[]
 }
@@ -312,6 +395,9 @@ export interface HistoricalRun {
   updated_at: string
   metric_values: Record<string, unknown>
   metric_evaluation?: ResultReplicate['metric_evaluation']
+  metric_observations: MetricObservation[]
+  evaluation_artifacts: EvaluationArtifact[]
+  legacy_values?: LegacyMetricValue[]
   duration_seconds: number | null
   node_runs: ResultNodeRun[]
   input_tokens: number | null
@@ -371,8 +457,9 @@ export interface ExperimentRunResults {
   metric_keys: string[]
   metric_types: Record<string, 'number' | 'boolean'>
   metric_aggregations: Record<string, 'mean' | 'sum'>
+  metric_directions: Record<string, MeasurementDirection>
   primary_metric: string | null
-  primary_metric_direction: 'maximize' | 'minimize'
+  primary_metric_direction: 'maximize' | 'minimize' | null
   cells: ResultCell[]
   replicates: ResultReplicate[]
 }

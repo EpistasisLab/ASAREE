@@ -277,7 +277,7 @@ export function pickMetricColumns(experiment: Experiment | undefined, replicates
  * must never choose the canvas top-bar result. */
 export function primaryMetric(experiment: Experiment | undefined): { key: string; direction: 'maximize' | 'minimize'; valueType?: 'number' | 'boolean' | 'string' } | null {
   const metric = experiment?.design_spec?.metrics?.find((candidate) => candidate.primary && candidate.name)
-  if (!metric) return null
+  if (!metric || metric.kind !== 'runtime' || metric.direction === 'neutral' || metric.valueType === 'string' || metric.valueType === 'opaque') return null
   const key = metric.kind === 'runtime' && typeof metric.catalogKey === 'string' ? metric.catalogKey : metric.name
   return { key, direction: metric.direction, valueType: metric.valueType }
 }

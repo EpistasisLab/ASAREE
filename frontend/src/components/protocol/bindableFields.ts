@@ -282,7 +282,7 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     case 'script':
       // The whole node as a factor -- levels are entirely different scripts.
-      // _resolve_script_config reads the wired script node's whole config
+      // _resolve_script_configs reads each wired script node's whole config
       // verbatim, so comparing two scoring scripts already works with zero
       // backend changes, same reasoning as llm_config/tool_config.
       return [{ fieldPath: 'config', label: 'Script', levelType: 'script_config' }]

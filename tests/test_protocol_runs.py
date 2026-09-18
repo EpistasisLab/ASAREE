@@ -7,26 +7,40 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
+import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 
+import asaree.api.protocols as protocol_api
 import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for experiments' FK
 import asaree.models.experiment  # noqa: F401 -- registers research_experiments for protocols' FK
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.user import User
+from asaree.services.experiment_run_results import summarize_experiment_run_results
 from asaree.services.experiments import create_experiment, delete_experiment
-from asaree.services.factorial_cells import upsert_replicate
+from asaree.services.factorial_cells import get_replicate, upsert_replicate
+from asaree.services.measurement_engine import (
+    MeasurementEvaluation,
+    MetricObservation,
+    ProducerProvenance,
+)
 from asaree.services.protocol_revisions import publish_protocol
 from asaree.services.protocol_runs import (
     create_protocol_run,
+    create_test_run,
     fail_protocol_run,
     get_protocol_run,
     list_experiment_trials,
     list_protocol_runs,
     list_stale_protocol_runs,
+    record_measurement_evaluation,
     request_protocol_run_cancellation,
+    set_status,
     update_node_run,
 )
-from asaree.services.protocols import create_protocol, delete_protocol
+from asaree.services.protocols import create_protocol, delete_protocol, update_protocol
+from asaree.services.runtime_metrics import finalize_attempt_measurement
+from asaree.services.test_run_results import ResourceUsage
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -93,6 +107,260 @@ async def test_create_get_and_node_run_progress(owner_id: uuid.UUID, protocol_id
         fetched = await get_protocol_run(db, run_id)
         assert fetched is not None
         assert fetched.status == "pending"
+
+
+def test_test_run_response_accepts_projected_resource_usage() -> None:
+    """The API boundary accepts the resource value objects returned by its projector."""
+    now = datetime.now(UTC)
+    usage = ResourceUsage(duration_seconds=None, cost_usd=None)
+
+    response = protocol_api.TestRunResponse(
+        id=uuid.uuid4(),
+        protocol_id=uuid.uuid4(),
+        status="pending",
+        error=None,
+        protocol_revision_id=None,
+        created_at=now,
+        updated_at=now,
+        observations=[],
+        artifacts=[],
+        conversation=None,
+        tested_published_revision=None,
+        freshness={"out_of_date": False, "reasons": []},
+        resources={"task": usage, "evaluation": usage, "total": usage},
+        execution_summary={
+            "node_runs": {},
+            "started_at": None,
+            "completed_at": None,
+            "cancel_requested_at": None,
+        },
+    )
+
+    assert response.resources.task.duration_seconds is None
+
+
+async def test_test_run_replaces_only_the_experiment_current_attempt(owner_id: uuid.UUID) -> None:
+    """A canvas validation attempt has no factorial projection or history."""
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"test-run-{uuid.uuid4().hex}", owner_id=owner_id)
+        protocol = await create_protocol(db, name="test-run-protocol", owner_id=owner_id, experiment_id=experiment.id)
+        revision = await publish_protocol(db, protocol)
+        first = await create_test_run(db, protocol_id=protocol.id, owner_id=owner_id, protocol_revision_id=revision.id)
+        assert first.is_test_run
+        assert first.replicate_result_id is None
+        first_id = first.id
+
+    async with get_session() as db:
+        protocol = await db.get(type(protocol), protocol.id)
+        assert protocol is not None
+        revision = await publish_protocol(db, protocol)
+        second = await create_test_run(db, protocol_id=protocol.id, owner_id=owner_id, protocol_revision_id=revision.id)
+        experiment = await db.get(type(experiment), experiment.id)
+        assert experiment is not None
+        assert experiment.latest_test_run_id == second.id
+        assert await get_protocol_run(db, first_id) is None
+
+        await delete_protocol(db, protocol.id)
+        await delete_experiment(db, experiment.id)
+
+
+async def test_test_run_records_separate_task_and_evaluation_boundaries(owner_id: uuid.UUID) -> None:
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"test-run-timing-{uuid.uuid4().hex}", owner_id=owner_id)
+        protocol = await create_protocol(
+            db, name="test-run-timing-protocol", owner_id=owner_id, experiment_id=experiment.id
+        )
+        revision = await publish_protocol(db, protocol)
+        run = await create_test_run(db, protocol_id=protocol.id, owner_id=owner_id, protocol_revision_id=revision.id)
+        await set_status(db, run.id, status="running")
+        await set_status(db, run.id, status="finalizing")
+        await set_status(db, run.id, status="completed")
+        before_evaluation = await get_protocol_run(db, run.id)
+        assert before_evaluation is not None
+        assert before_evaluation.attempt_result is not None
+        assert before_evaluation.attempt_result["task_completed_at"]
+        assert before_evaluation.attempt_result["evaluation_started_at"]
+
+        await record_measurement_evaluation(
+            db,
+            run.id,
+            MeasurementEvaluation(
+                replicate_id=str(run.id),
+                attempt_id=str(run.id),
+                observations=(),
+                artifacts=(),
+            ),
+        )
+        completed = await get_protocol_run(db, run.id)
+        assert completed is not None
+        assert completed.attempt_result is not None
+        assert completed.attempt_result["evaluation_completed_at"]
+
+        await delete_protocol(db, protocol.id)
+        await delete_experiment(db, experiment.id)
+
+
+async def test_test_run_public_api_replaces_and_hides_it_from_other_users(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The public Test Run API follows the canvas's existing owner access rule."""
+
+    async def _enqueue(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(protocol_api, "validate_coordination_strategy", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(protocol_api, "validate_stage_plan", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(protocol_api, "validate_prompt_references", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(protocol_api, "topological_order", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(protocol_api, "enqueue_protocol_run", _enqueue)
+
+    async with get_session() as db:
+        owner = await db.get(User, owner_id)
+        assert owner is not None
+        experiment = await create_experiment(db, name=f"test-run-api-{uuid.uuid4().hex}", owner_id=owner_id)
+        protocol = await create_protocol(
+            db, name="test-run-api-protocol", owner_id=owner_id, experiment_id=experiment.id
+        )
+        await publish_protocol(db, protocol)
+        first = await protocol_api.create_test_run_endpoint(protocol.id, owner, db)
+        assert first.status == "pending"
+        assert (await protocol_api.get_latest_test_run_endpoint(protocol.id, owner, db)).id == first.id
+
+        second = await protocol_api.create_test_run_endpoint(protocol.id, owner, db)
+        assert second.id != first.id
+        assert await get_protocol_run(db, first.id) is None
+
+        # Any terminal outcome remains the current, reopenable Test Run rather
+        # than reviving an older successful validation attempt.
+        for status in ("completed", "failed", "cancelled"):
+            attempt = await protocol_api.create_test_run_endpoint(protocol.id, owner, db)
+            await set_status(db, attempt.id, status=status, error="boom" if status == "failed" else None)
+            latest = await protocol_api.get_latest_test_run_endpoint(protocol.id, owner, db)
+            assert latest.id == attempt.id
+            assert latest.status == status
+
+        other = User(
+            email=f"other-test-run-{uuid.uuid4().hex}@example.com",
+            hashed_password="not-a-real-hash",
+            display_name="Other Test Run User",
+        )
+        db.add(other)
+        await db.flush()
+        with pytest.raises(HTTPException, match="No such protocol"):
+            await protocol_api.get_latest_test_run_endpoint(protocol.id, other, db)
+
+        await delete_protocol(db, protocol.id)
+        await delete_experiment(db, experiment.id)
+        await db.delete(other)
+        await db.flush()
+
+
+async def test_test_run_public_api_exposes_live_evidence_resources_and_freshness(
+    owner_id: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The workspace reads everything through the public latest-result seam."""
+
+    async def _enqueue(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(protocol_api, "validate_coordination_strategy", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(protocol_api, "validate_stage_plan", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(protocol_api, "validate_prompt_references", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(protocol_api, "topological_order", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(protocol_api, "enqueue_protocol_run", _enqueue)
+
+    plan = {
+        "metrics": [
+            {
+                "id": "cost",
+                "name": "Cost",
+                "value_type": "number",
+                "direction": "minimize",
+                "aggregation": "sum",
+                "primary": True,
+            }
+        ],
+        "producers": [
+            {"id": "runtime", "producer_id": "asaree.runtime", "kind": "runtime", "outputs": {"cost_usd": "cost"}}
+        ],
+        "inputs": [{"producer_binding_id": "runtime", "input_key": "facts", "source_key": "attempt.runtime"}],
+    }
+    async with get_session() as db:
+        owner = await db.get(User, owner_id)
+        assert owner is not None
+        experiment = await create_experiment(
+            db, name=f"test-run-evidence-{uuid.uuid4().hex}", owner_id=owner_id, measurement_plan=plan
+        )
+        protocol = await create_protocol(
+            db,
+            name="test-run-evidence-protocol",
+            owner_id=owner_id,
+            experiment_id=experiment.id,
+            graph={"nodes": [{"id": "agent-1", "type": "agent", "data": {"label": "Analyst"}}], "edges": []},
+        )
+        revision = await publish_protocol(db, protocol)
+        response = await protocol_api.create_test_run_endpoint(protocol.id, owner, db)
+        run = await get_protocol_run(db, response.id)
+        assert run is not None
+        run.status = "completed"
+        run.started_at = datetime(2026, 1, 1, tzinfo=UTC)
+        run.completed_at = datetime(2026, 1, 1, 0, 0, 8, tzinfo=UTC)
+        run.node_runs = {"agent-1": {"status": "completed", "output_text": "done"}}
+        run.conversation = {"state": "completed", "entry_agent_id": "agent-1", "messages": []}
+        run.attempt_result = {
+            **(run.attempt_result or {}),
+            "measurement": {
+                "observations": [
+                    {
+                        "metric_id": "cost",
+                        "metric_name": "Cost",
+                        "value_type": "number",
+                        "status": "measured",
+                        "value": 1.25,
+                        "error": None,
+                        "attempt_id": str(run.id),
+                        "producer": {
+                            "binding_id": "runtime",
+                            "producer_id": "asaree.runtime",
+                            "kind": "runtime",
+                            "version": "1",
+                        },
+                        "input_provenance": {},
+                    }
+                ],
+                "artifacts": [],
+            },
+            "task_completed_at": "2026-01-01T00:00:08+00:00",
+            "evaluation_started_at": "2026-01-01T00:00:08+00:00",
+            "evaluation_completed_at": "2026-01-01T00:00:10+00:00",
+            "evaluation_summary": {"cost_usd": None},
+        }
+        await db.flush()
+
+        latest = await protocol_api.get_latest_test_run_endpoint(protocol.id, owner, db)
+        assert latest.conversation == run.conversation
+        assert latest.tested_published_revision is not None
+        assert latest.tested_published_revision.model_dump() == {
+            "id": revision.id,
+            "number": 1,
+            "published_at": revision.published_at,
+        }
+        assert latest.freshness.model_dump() == {"out_of_date": False, "reasons": []}
+        assert latest.resources.model_dump() == {
+            "task": {"duration_seconds": 8.0, "cost_usd": 1.25},
+            "evaluation": {"duration_seconds": 2.0, "cost_usd": None},
+            "total": {"duration_seconds": 10.0, "cost_usd": None},
+        }
+
+        await update_protocol(db, protocol.id, fields={"graph": {"nodes": [], "edges": []}})
+        experiment.measurement_plan = None
+        await db.flush()
+        stale = await protocol_api.get_latest_test_run_endpoint(protocol.id, owner, db)
+        assert stale.freshness.out_of_date is True
+        assert stale.freshness.reasons == ["canvas", "measurement_plan"]
+
+        await delete_protocol(db, protocol.id)
+        await delete_experiment(db, experiment.id)
 
 
 async def test_fail_protocol_run_is_race_safe_against_terminal(owner_id: uuid.UUID, protocol_id: uuid.UUID) -> None:
@@ -183,6 +451,12 @@ async def test_list_stale_protocol_runs_applies_a_separate_cutoff_per_status(
         live_running.status = "running"
         live_running.last_heartbeat_at = now - timedelta(seconds=5)
 
+        # finalizing uses the running cutoff too: graph execution is over, but
+        # built-in measurement finalization can still strand when its worker dies.
+        dead_finalizing = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        dead_finalizing.status = "finalizing"
+        dead_finalizing.last_heartbeat_at = now - timedelta(minutes=10)
+
         # pending for 10 minutes: past the *running* cutoff but nowhere near
         # the pending one, so it must survive -- this is the queued-and-waiting
         # case, and it shares "no heartbeat" with the dead one below.
@@ -202,6 +476,7 @@ async def test_list_stale_protocol_runs_applies_a_separate_cutoff_per_status(
         ids = {
             "dead_running": dead_running.id,
             "live_running": live_running.id,
+            "dead_finalizing": dead_finalizing.id,
             "queued": queued.id,
             "stranded": stranded.id,
             "done": done.id,
@@ -218,6 +493,7 @@ async def test_list_stale_protocol_runs_applies_a_separate_cutoff_per_status(
         stale_ids = {r.id for r in stale}
 
     assert ids["dead_running"] in stale_ids
+    assert ids["dead_finalizing"] in stale_ids
     assert ids["stranded"] in stale_ids
     assert ids["live_running"] not in stale_ids
     assert ids["queued"] not in stale_ids
@@ -352,6 +628,240 @@ async def test_list_experiment_trials_marks_runs_obsolete_after_a_new_canvas_pub
         by_label = {trial.replicate_label: trial for trial in trials}
         assert by_label["legacy-cell"].obsolete is True
         assert by_label["current-cell"].obsolete is False
+
+    async with get_session() as db:
+        await delete_protocol(db, protocol_id)
+        await delete_experiment(db, experiment_id)
+
+
+async def test_measurement_evaluations_are_immutable_per_attempt_with_one_current_projection(
+    owner_id: uuid.UUID,
+) -> None:
+    async with get_session() as db:
+        experiment = await create_experiment(
+            db,
+            name=f"measurement-history-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+        )
+        protocol = await create_protocol(
+            db,
+            name=f"measurement-history-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment.id,
+        )
+        replicate = await upsert_replicate(
+            db,
+            experiment_id=experiment.id,
+            replicate_label="cell-1",
+            fields={"factor_values": {"tier": "small"}},
+        )
+        first_run = await create_protocol_run(
+            db,
+            protocol_id=protocol.id,
+            owner_id=owner_id,
+            replicate_label=replicate.replicate_label,
+            factor_values=replicate.factor_values,
+            replicate_result_id=replicate.id,
+            design_revision_id=replicate.design_revision_id,
+        )
+        provenance = ProducerProvenance(
+            binding_id="runtime",
+            producer_id="asaree.runtime",
+            kind="runtime",
+            version="1",
+        )
+        first = MeasurementEvaluation(
+            replicate_id=str(replicate.id),
+            attempt_id=str(first_run.id),
+            observations=(
+                MetricObservation(
+                    metric_id="cost",
+                    metric_name="Cost",
+                    value_type="number",
+                    status="measured",
+                    value=1.25,
+                    error=None,
+                    attempt_id=str(first_run.id),
+                    producer=provenance,
+                    input_provenance={"facts": {"protocol_run_id": str(first_run.id)}},
+                ),
+            ),
+            artifacts=(),
+        )
+        await record_measurement_evaluation(db, first_run.id, first)
+
+        second_run = await create_protocol_run(
+            db,
+            protocol_id=protocol.id,
+            owner_id=owner_id,
+            replicate_label=replicate.replicate_label,
+            factor_values=replicate.factor_values,
+            replicate_result_id=replicate.id,
+            design_revision_id=replicate.design_revision_id,
+        )
+        second = MeasurementEvaluation(
+            replicate_id=str(replicate.id),
+            attempt_id=str(second_run.id),
+            observations=(
+                MetricObservation(
+                    metric_id="cost",
+                    metric_name="Cost",
+                    value_type="number",
+                    status="unavailable",
+                    value=None,
+                    error="provider did not report cost",
+                    attempt_id=str(second_run.id),
+                    producer=provenance,
+                    input_provenance={"facts": {"protocol_run_id": str(second_run.id)}},
+                ),
+            ),
+            artifacts=(),
+        )
+        await record_measurement_evaluation(db, second_run.id, second)
+        experiment_id = experiment.id
+        protocol_id = protocol.id
+        first_run_id = first_run.id
+        second_run_id = second_run.id
+
+    async with get_session() as db:
+        stored_first = await get_protocol_run(db, first_run_id)
+        stored_replicate = await get_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="cell-1",
+            revision_id=replicate.design_revision_id,
+        )
+        assert stored_first is not None
+        assert stored_first.attempt_result is not None
+        assert stored_first.attempt_result["measurement"]["observations"][0]["value"] == 1.25
+        assert stored_replicate is not None
+        assert stored_replicate.artifacts is not None
+        assert stored_replicate.artifacts["measurement"]["attempt_id"] == str(second_run_id)
+        results = await summarize_experiment_run_results(db, experiment_id=experiment_id)
+        result = results["replicates"][0]
+        assert result["metric_observations"][0]["status"] == "unavailable"
+        assert result["evaluation_artifacts"] == []
+        assert result["superseded_runs"][0]["metric_observations"][0]["value"] == 1.25
+
+    async with get_session() as db:
+        await delete_protocol(db, protocol_id)
+        await delete_experiment(db, experiment_id)
+
+
+async def test_runtime_measurement_is_snapshotted_on_attempt_and_current_replicate(
+    owner_id: uuid.UUID, monkeypatch
+) -> None:
+    plan = {
+        "metrics": [
+            {
+                "id": "cost",
+                "name": "Provider cost",
+                "value_type": "number",
+                "direction": "minimize",
+                "aggregation": "sum",
+                "primary": True,
+            }
+        ],
+        "producers": [
+            {
+                "id": "runtime",
+                "producer_id": "asaree.runtime",
+                "kind": "runtime",
+                "outputs": {"cost_usd": "cost"},
+            }
+        ],
+        "inputs": [
+            {
+                "producer_binding_id": "runtime",
+                "input_key": "facts",
+                "source_key": "attempt.runtime",
+            }
+        ],
+    }
+    live_cost = 1.25
+
+    async def fake_collect(run):
+        return {
+            "protocol_run_id": str(run.id),
+            "started_at": run.started_at.isoformat(),
+            "completed_at": run.completed_at.isoformat(),
+            "runs": [{"run_id": "worker", "cost_usd": live_cost, "usage": {}, "steps": []}],
+            "critic_gates": [],
+        }
+
+    monkeypatch.setattr("asaree.services.runtime_metrics.collect_runtime_facts", fake_collect)
+    async with get_session() as db:
+        experiment = await create_experiment(
+            db,
+            name=f"runtime-snapshot-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            measurement_plan=plan,
+        )
+        protocol = await create_protocol(
+            db,
+            name=f"runtime-snapshot-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment.id,
+        )
+        replicate = await upsert_replicate(
+            db,
+            experiment_id=experiment.id,
+            replicate_label="cell-1",
+            fields={"factor_values": {"tier": "small"}},
+        )
+        run = await create_protocol_run(
+            db,
+            protocol_id=protocol.id,
+            owner_id=owner_id,
+            replicate_label=replicate.replicate_label,
+            factor_values=replicate.factor_values,
+            replicate_result_id=replicate.id,
+            design_revision_id=replicate.design_revision_id,
+        )
+        await set_status(db, run.id, status="running")
+        await set_status(db, run.id, status="completed")
+        assert await finalize_attempt_measurement(db, run.id) is True
+        failed_replicate = await upsert_replicate(
+            db,
+            experiment_id=experiment.id,
+            replicate_label="cell-2",
+            fields={"factor_values": {"tier": "large"}},
+        )
+        failed_run = await create_protocol_run(
+            db,
+            protocol_id=protocol.id,
+            owner_id=owner_id,
+            replicate_label=failed_replicate.replicate_label,
+            factor_values=failed_replicate.factor_values,
+            replicate_result_id=failed_replicate.id,
+            design_revision_id=failed_replicate.design_revision_id,
+        )
+        await set_status(db, failed_run.id, status="running")
+        await set_status(db, failed_run.id, status="failed", error="worker failed")
+        # Unsuccessful terminal transitions already have their immutable
+        # runtime facts, so a repeated finalization request is a no-op.
+        assert await finalize_attempt_measurement(db, failed_run.id) is False
+        run_id = run.id
+        failed_run_id = failed_run.id
+        experiment_id = experiment.id
+        protocol_id = protocol.id
+
+    live_cost = 99.0
+    async with get_session() as db:
+        # Finalization is idempotent and never rereads mutable provider pricing.
+        assert await finalize_attempt_measurement(db, run_id) is False
+        stored_run = await get_protocol_run(db, run_id)
+        stored_replicate = await get_replicate(db, experiment_id=experiment_id, replicate_label="cell-1")
+        assert stored_run is not None
+        assert stored_run.attempt_result["measurement"]["observations"][0]["value"] == 1.25
+        assert stored_replicate is not None
+        assert stored_replicate.artifacts["measurement"]["observations"][0]["value"] == 1.25
+        stored_failed = await get_protocol_run(db, failed_run_id)
+        failed_replicate = await get_replicate(db, experiment_id=experiment_id, replicate_label="cell-2")
+        assert stored_failed is not None
+        assert stored_failed.attempt_result["measurement"]["observations"][0]["value"] == 1.25
+        assert failed_replicate is not None
+        assert failed_replicate.artifacts["measurement"]["observations"][0]["value"] == 1.25
 
     async with get_session() as db:
         await delete_protocol(db, protocol_id)

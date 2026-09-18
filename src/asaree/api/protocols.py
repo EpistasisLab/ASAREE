@@ -14,9 +14,13 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from asaree.deps import CurrentUser, DbSession
+from asaree.services.experiment_measurements import (
+    blocking_measurement_plan_issues,
+    validate_experiment_measurement_plan,
+)
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.protocol_execution import (
@@ -39,6 +43,7 @@ from asaree.services.protocol_revisions import (
 )
 from asaree.services.protocol_runs import (
     create_protocol_run,
+    create_test_run,
     get_protocol_run,
     list_protocol_runs,
     request_protocol_run_cancellation,
@@ -51,6 +56,7 @@ from asaree.services.protocols import (
     list_protocols,
     update_protocol,
 )
+from asaree.services.test_run_results import FreshnessReason, project_test_run_result
 from asaree.worker.enqueue import enqueue_protocol_run
 
 router = APIRouter(prefix="/protocols", tags=["protocols"])
@@ -106,9 +112,110 @@ class ProtocolRunResponse(BaseModel):
     cancel_requested_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    observations: list[dict[str, Any]] = Field(default_factory=list)
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
+
+
+def _protocol_run_response(run: Any) -> ProtocolRunResponse:
+    response = ProtocolRunResponse.model_validate(run)
+    measurement = (run.attempt_result or {}).get("measurement") if isinstance(run.attempt_result, dict) else None
+    return response.model_copy(
+        update={
+            "observations": list(measurement.get("observations") or []) if isinstance(measurement, dict) else [],
+            "artifacts": list(measurement.get("artifacts") or []) if isinstance(measurement, dict) else [],
+        }
+    )
+
+
+class TestedPublishedRevisionResponse(BaseModel):
+    id: uuid.UUID
+    number: int
+    published_at: datetime
+
+
+class ResourceUsageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    duration_seconds: float | None
+    cost_usd: float | None
+
+
+class TestRunResourcesResponse(BaseModel):
+    task: ResourceUsageResponse
+    evaluation: ResourceUsageResponse
+    total: ResourceUsageResponse
+
+
+class TestRunFreshnessResponse(BaseModel):
+    out_of_date: bool
+    reasons: list[FreshnessReason]
+
+
+class TestRunExecutionSummaryResponse(BaseModel):
+    node_runs: dict[str, Any]
+    started_at: datetime | None
+    completed_at: datetime | None
+    cancel_requested_at: datetime | None
+
+
+class TestRunResponse(BaseModel):
+    """The non-factorial result of validating a canvas once."""
+
+    id: uuid.UUID
+    protocol_id: uuid.UUID
+    status: str
+    error: str | None
+    protocol_revision_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+    observations: list[dict[str, Any]]
+    artifacts: list[dict[str, Any]]
+    conversation: dict[str, Any] | None
+    tested_published_revision: TestedPublishedRevisionResponse | None
+    freshness: TestRunFreshnessResponse
+    resources: TestRunResourcesResponse
+    execution_summary: TestRunExecutionSummaryResponse
+
+
+async def _test_run_response(db: DbSession, run: Any, protocol: Any, experiment: Any) -> TestRunResponse:
+    result = await project_test_run_result(db, run=run, protocol=protocol, experiment=experiment)
+    tested_revision = result.tested_published_revision
+    return TestRunResponse(
+        id=run.id,
+        protocol_id=run.protocol_id,
+        status=run.status,
+        error=run.error,
+        protocol_revision_id=run.protocol_revision_id,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+        observations=result.observations,
+        artifacts=result.artifacts,
+        conversation=run.conversation,
+        tested_published_revision=(
+            {
+                "id": tested_revision.id,
+                "number": tested_revision.revision,
+                "published_at": tested_revision.published_at,
+            }
+            if tested_revision is not None
+            else None
+        ),
+        freshness={"out_of_date": bool(result.freshness_reasons), "reasons": result.freshness_reasons},
+        resources={
+            "task": result.resources.task,
+            "evaluation": result.resources.evaluation,
+            "total": result.resources.total,
+        },
+        execution_summary={
+            "node_runs": run.node_runs or {},
+            "started_at": run.started_at,
+            "completed_at": run.completed_at,
+            "cancel_requested_at": run.cancel_requested_at,
+        },
+    )
 
 
 class ProtocolRevisionResponse(BaseModel):
@@ -281,6 +388,17 @@ async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, d
         validate_prompt_references(graph=protocol.graph)
         topological_order(protocol.graph, require_acyclic=not is_conversation_strategy(design_spec))
         validate_factor_bindings(design_spec, protocol.graph)
+        if experiment is not None:
+            report = await validate_experiment_measurement_plan(
+                db,
+                document=experiment.measurement_plan,
+                metrics=(experiment.design_spec or {}).get("metrics"),
+                graph=protocol.graph,
+                experiment_id=experiment.id,
+                owner_id=experiment.owner_id,
+            )
+            if blocking_issues := blocking_measurement_plan_issues(report):
+                raise ProtocolValidationError("; ".join(issue.message for issue in blocking_issues))
     except (ProtocolValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await publish_protocol(db, protocol)
@@ -339,7 +457,46 @@ async def create_protocol_run_endpoint(
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await enqueue_protocol_run(run.id)
-    return ProtocolRunResponse.model_validate(run)
+    return _protocol_run_response(run)
+
+
+@router.post("/{protocol_id}/test-runs", response_model=TestRunResponse, status_code=201)
+async def create_test_run_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> TestRunResponse:
+    """Start the experiment's single current canvas Test Run."""
+    protocol = await _get_owned_protocol(db, protocol_id, user)
+    revision = await _require_published_revision(db, protocol)
+    try:
+        experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
+        validate_coordination_strategy(experiment.design_spec if experiment is not None else None, graph=revision.graph)
+        validate_stage_plan(experiment.design_spec if experiment is not None else None)
+        validate_prompt_references(graph=revision.graph)
+        topological_order(
+            revision.graph,
+            require_acyclic=not is_conversation_strategy(experiment.design_spec if experiment else None),
+        )
+        run = await create_test_run(db, protocol_id=protocol.id, owner_id=user.id, protocol_revision_id=revision.id)
+    except (ProtocolValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await enqueue_protocol_run(run.id)
+    return await _test_run_response(db, run, protocol, experiment)
+
+
+@router.get("/{protocol_id}/test-runs/latest", response_model=TestRunResponse)
+async def get_latest_test_run_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> TestRunResponse:
+    protocol = await _get_owned_protocol(db, protocol_id, user)
+    experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
+    run = (
+        await get_protocol_run(db, experiment.latest_test_run_id)
+        if experiment and experiment.latest_test_run_id
+        else None
+    )
+    if run is None or not run.is_test_run or run.protocol_id != protocol_id:
+        raise HTTPException(status_code=404, detail="No Test Run for this canvas")
+    # Source-ready metric producers persist checkpoints in their own session.
+    # Reload before projecting so a long-lived caller does not serve the
+    # identity map's pre-checkpoint attempt_result.
+    await db.refresh(run)
+    return await _test_run_response(db, run, protocol, experiment)
 
 
 @router.post("/{protocol_id}/nodes/{node_id}/run", response_model=ProtocolRunResponse, status_code=201)
@@ -361,7 +518,7 @@ async def run_single_node_endpoint(
         db, protocol_id=protocol_id, owner_id=user.id, target_node_id=node_id, protocol_revision_id=revision.id
     )
     await enqueue_protocol_run(run.id)
-    return ProtocolRunResponse.model_validate(run)
+    return _protocol_run_response(run)
 
 
 @router.post("/{protocol_id}/nodes/{node_id}/prompt-preview", response_model=PromptPreviewResponse)
@@ -426,7 +583,7 @@ async def list_protocol_runs_endpoint(
 ) -> list[ProtocolRunResponse]:
     await _get_owned_protocol(db, protocol_id, user)
     runs = await list_protocol_runs(db, protocol_id=protocol_id)
-    return [ProtocolRunResponse.model_validate(r) for r in runs]
+    return [_protocol_run_response(r) for r in runs]
 
 
 @router.get("/{protocol_id}/runs/{run_id}", response_model=ProtocolRunResponse)
@@ -437,7 +594,7 @@ async def get_protocol_run_endpoint(
     run = await get_protocol_run(db, run_id)
     if run is None or run.protocol_id != protocol_id:
         raise HTTPException(status_code=404, detail="No such protocol run")
-    return ProtocolRunResponse.model_validate(run)
+    return _protocol_run_response(run)
 
 
 @router.post("/{protocol_id}/runs/{run_id}/cancel", response_model=ProtocolRunResponse)
@@ -445,12 +602,11 @@ async def cancel_protocol_run_endpoint(
     protocol_id: uuid.UUID, run_id: uuid.UUID, user: CurrentUser, db: DbSession
 ) -> ProtocolRunResponse:
     """Requests cancellation of a non-terminal run -- a no-op (200, unchanged
-    row) if it's already completed/failed/cancelled. Only raises the flag;
-    services.protocol_execution.run_protocol's node loop is what actually
-    honors it, between nodes, and transitions status to "cancelled" itself."""
+    row) if it's already completed/failed/cancelled. The executor honors the
+    flag during task execution and built-in measurement finalization."""
     await _get_owned_protocol(db, protocol_id, user)
     run = await get_protocol_run(db, run_id)
     if run is None or run.protocol_id != protocol_id:
         raise HTTPException(status_code=404, detail="No such protocol run")
     run = await request_protocol_run_cancellation(db, run_id)
-    return ProtocolRunResponse.model_validate(run)
+    return _protocol_run_response(run)

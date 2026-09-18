@@ -15,6 +15,15 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+from asaree.services.measurement_migration import legacy_measurement_facets
+
+
+def _csv_value(value: Any) -> Any:
+    """Keep opaque JSON values unambiguous in a scalar CSV cell."""
+    if value is None or isinstance(value, dict | list):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return int(value) if isinstance(value, bool) else value
+
 
 def replicates_that_ran(replicates: Sequence[Any]) -> list[Any]:
     """Replicates nothing has touched yet -- no run_id, no metric_values -- are
@@ -30,36 +39,70 @@ def replicates_to_csv(replicates: Sequence[Any]) -> str:
     """*replicates* -- anything with ``replicate_label``/``run_id``/``workspace_id``/
     ``factor_values``/``metric_values`` attributes (a ``FactorialReplicateResult``
     in practice). Column order: the three scalar fields, then every
-    factor_values key (alphabetical), then every metric_values key
-    (alphabetical) -- stable regardless of which cell happened to be first."""
+    factor_values key (alphabetical), then every rankable metric_values key
+    (alphabetical). Non-rankable historical values remain readable in a JSON
+    ``legacy_values`` column with explicit unknown provenance."""
+    projected = [
+        (
+            replicate,
+            legacy_measurement_facets(
+                metric_values=replicate.metric_values,
+                artifacts=None,
+                metrics=None,
+                attempt_id=str(replicate.run_id or f"legacy-replicate:{replicate.replicate_label}"),
+            ),
+        )
+        for replicate in replicates
+    ]
     factor_keys: list[str] = []
     metric_keys: list[str] = []
     seen_factor: set[str] = set()
     seen_metric: set[str] = set()
-    for replicate in replicates:
+    has_legacy_values = False
+    for replicate, facets in projected:
         for key in replicate.factor_values or {}:
             if key not in seen_factor:
                 seen_factor.add(key)
                 factor_keys.append(key)
+        has_legacy_values = has_legacy_values or bool(facets.legacy_values)
+        legacy_names = {item["metric_name"] for item in facets.legacy_values}
         for key in replicate.metric_values or {}:
+            if key in legacy_names:
+                continue
             if key not in seen_metric:
                 seen_metric.add(key)
                 metric_keys.append(key)
     factor_keys.sort()
     metric_keys.sort()
 
-    fieldnames = ["replicate_label", "run_id", "workspace_id", *factor_keys, *metric_keys]
+    fieldnames = [
+        "replicate_label",
+        "run_id",
+        "workspace_id",
+        *factor_keys,
+        *metric_keys,
+        *(["legacy_values"] if has_legacy_values else []),
+    ]
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
-    for replicate in replicates:
+    for replicate, facets in projected:
         row: dict[str, Any] = {
             "replicate_label": replicate.replicate_label,
             "run_id": str(replicate.run_id) if replicate.run_id else "",
             "workspace_id": replicate.workspace_id or "",
         }
         row.update(replicate.factor_values or {})
-        row.update(replicate.metric_values or {})
+        legacy_names = {item["metric_name"] for item in facets.legacy_values}
+        row.update(
+            {
+                key: _csv_value(value)
+                for key, value in (replicate.metric_values or {}).items()
+                if key not in legacy_names
+            }
+        )
+        if has_legacy_values:
+            row["legacy_values"] = json.dumps(facets.legacy_values, sort_keys=True, separators=(",", ":"))
         writer.writerow(row)
     return buf.getvalue()
 
@@ -208,6 +251,9 @@ _RESULT_RUNTIME_METRIC_FIELDS = [
 
 _RESULT_METADATA_FIELDS = [
     "status",
+    "observation_statuses",
+    "evaluation_artifacts",
+    "legacy_values",
     "obsolete",
     "run_id",
     "protocol_revision_id",
@@ -223,13 +269,30 @@ def _result_csv_layout(
 ) -> tuple[list[tuple[str, str, str, dict[str, str] | None]], list[str]]:
     # Runtime metrics are already present in the fixed execution columns.
     # Avoid duplicate CSV headers while retaining every non-telemetry score.
+    declared_custom_metrics = {
+        metric["name"]
+        for metric in (design_spec or {}).get("metrics", [])
+        if isinstance(metric, dict) and metric.get("kind") == "custom" and isinstance(metric.get("name"), str)
+    }
     metric_keys = sorted(
-        {key for row in rows for key in (row.get("metric_values") or {}) if key not in _RESULT_FIXED_FIELDS}
+        declared_custom_metrics
+        | {
+            key
+            for row in rows
+            for key in (row.get("metric_values") or {})
+            if key not in _RESULT_FIXED_FIELDS and key not in _legacy_value_names(row)
+        }
     )
-    factor_columns = _factor_columns(
-        rows, reserved=[*_RESULT_FIXED_FIELDS, *metric_keys], design_spec=design_spec
-    )
+    factor_columns = _factor_columns(rows, reserved=[*_RESULT_FIXED_FIELDS, *metric_keys], design_spec=design_spec)
     return factor_columns, metric_keys
+
+
+def _legacy_value_names(row: dict[str, Any]) -> set[str]:
+    return {
+        item["metric_name"]
+        for item in row.get("legacy_values") or []
+        if isinstance(item, dict) and isinstance(item.get("metric_name"), str)
+    }
 
 
 def result_rows_schema(
@@ -240,6 +303,11 @@ def result_rows_schema(
 ) -> dict[str, Any]:
     """Machine-readable companion metadata for a Results analysis CSV."""
     factor_columns, metric_keys = _result_csv_layout(rows, design_spec)
+    reported_keys = {
+        metric["name"]
+        for metric in (design_spec or {}).get("metrics", [])
+        if isinstance(metric, dict) and metric.get("kind") == "custom" and isinstance(metric.get("name"), str)
+    }
     factor_metadata = []
     for column_name, factor_key, kind, labels in factor_columns:
         column: dict[str, Any] = {
@@ -253,7 +321,7 @@ def result_rows_schema(
             column["levels"] = list((labels or {}).values())
         factor_metadata.append(column)
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "row_unit": "replicate",
         "columns": [
             *({"name": field, "role": "metadata"} for field in _RESULT_ID_FIELDS),
@@ -262,13 +330,34 @@ def result_rows_schema(
             *(
                 {
                     "name": key,
-                    "role": "outcome",
-                    "value_type": (metric_types or {}).get(key, "number"),
-                    "cell_aggregation": (metric_aggregations or {}).get(key, "mean"),
+                    "role": "reported" if key in reported_keys else "outcome",
+                    "value_type": "opaque" if key in reported_keys else (metric_types or {}).get(key, "number"),
+                    **(
+                        {}
+                        if key in reported_keys
+                        else {"cell_aggregation": (metric_aggregations or {}).get(key, "mean")}
+                    ),
                 }
                 for key in metric_keys
             ),
-            *({"name": field, "role": "metadata"} for field in _RESULT_METADATA_FIELDS),
+            *(
+                {
+                    "name": field,
+                    "role": "observation_status"
+                    if field == "observation_statuses"
+                    else "evaluation_artifacts"
+                    if field == "evaluation_artifacts"
+                    else "legacy_values"
+                    if field == "legacy_values"
+                    else "metadata",
+                    **(
+                        {"value_type": "json"}
+                        if field in {"observation_statuses", "evaluation_artifacts", "legacy_values"}
+                        else {}
+                    ),
+                }
+                for field in _RESULT_METADATA_FIELDS
+            ),
         ],
     }
 
@@ -311,12 +400,31 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
         return (*factor_keys, replicate_number if isinstance(replicate_number, int) else 0)
 
     for source in sorted(rows, key=row_sort_key):
+        legacy_value_names = _legacy_value_names(source)
         metrics = {
-            key: int(value) if isinstance(value, bool) else value
+            key: _csv_value(value)
             for key, value in (source.get("metric_values") or {}).items()
+            if key not in legacy_value_names
         }
         factors = source.get("factor_values") or {}
         row = {key: source.get(key, metrics.get(key, "")) for key in _RESULT_FIXED_FIELDS}
+        row["observation_statuses"] = json.dumps(
+            {
+                observation["metric_id"]: {
+                    "name": observation.get("metric_name"),
+                    "status": observation.get("status"),
+                    "error": observation.get("error"),
+                }
+                for observation in source.get("metric_observations") or []
+                if isinstance(observation, dict) and isinstance(observation.get("metric_id"), str)
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        row["evaluation_artifacts"] = json.dumps(
+            source.get("evaluation_artifacts") or [], sort_keys=True, separators=(",", ":")
+        )
+        row["legacy_values"] = json.dumps(source.get("legacy_values") or [], sort_keys=True, separators=(",", ":"))
         for column_name, factor_key, kind, labels in factor_columns:
             if factor_key not in factors:
                 continue

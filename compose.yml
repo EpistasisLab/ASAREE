@@ -218,6 +218,32 @@ services:
       - ./data:/app/data
     restart: unless-stopped
 
+  # Integration-test runner on the Compose network. The tests intentionally
+  # use real Postgres (JSONB and core's vector schema rule out SQLite), so run
+  # them beside the database instead of relying on a host-side localhost port.
+  # The profile keeps this one-shot service out of ordinary `docker compose
+  # up`; targeting it explicitly activates it:
+  #
+  #   docker compose run --rm --build asaree-tests
+  asaree-tests:
+    profiles: ["test"]
+    build:
+      context: .
+      target: test
+      secrets:
+        - gh_token
+      additional_contexts:
+        gitdir: ./.git
+    depends_on:
+      asaree-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/motoro
+      ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/motoro
+      ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/asaree
+      ASAREE_REDIS_URL: redis://motoro-redis:6379/0
+    restart: "no"
+
   asaree-frontend:
     build:
       context: ./frontend

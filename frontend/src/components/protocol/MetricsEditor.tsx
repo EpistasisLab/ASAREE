@@ -120,6 +120,8 @@ function MetricsDialog({
   const [customMetricDirty, setCustomMetricDirty] = useState(false)
   const [customMetricPendingDelete, setCustomMetricPendingDelete] = useState<DesignMetric>()
   const wasOpenRef = useRef(false)
+  const previousUnavailableBuiltInKeysRef = useRef<Set<string> | null>(null)
+  const newlyUnavailableBuiltInKeysRef = useRef(new Set<string>())
   const draftSignature = [...draftKeys].sort().join('\u0000')
   const savedSignature = [...selectedKeySet].sort().join('\u0000')
   const dirty = draftSignature !== savedSignature || customChanges.length > 0 || customMetricDirty || customMetricIds.join('\u0000') !== initialCustomMetricSignature
@@ -136,6 +138,15 @@ function MetricsDialog({
   const canvasMetricKeys = new Set(contextualMetricSuggestions(graph).map((suggestion) => suggestion.key))
   const hasValidTool = canvasMetricKeys.has('tool_error_rate')
   const hasCriticGate = graph?.nodes.some((node) => node.type === 'critic_gate') ?? false
+  const unavailableBuiltInKeys = capabilitiesLoading || capabilitiesUnavailable
+    ? []
+    : builtInEntries.flatMap((entry) => {
+      const unavailable = !supportedBuiltInKeys.has(entry.key)
+        || ((entry.key === 'tool_calls' || entry.key === 'tool_error_rate') && !hasValidTool)
+        || ((entry.key === 'critic_approvals' || entry.key === 'critic_rejections') && !hasCriticGate)
+      return unavailable ? [entry.key] : []
+    })
+  const unavailableBuiltInKeySignature = unavailableBuiltInKeys.join('\u0000')
   const canCreateCustomMetric = hasAgentMetricCandidate || hasPythonMetricCandidate || hasMcpMetricCandidate
   const changedMetrics = metrics.map((metric) => customChanges.find((change) => change.metric.id === metric.id)?.metric ?? metric)
     .concat(customChanges.filter((change) => !metrics.some((metric) => metric.id === change.metric.id)).map((change) => change.metric))
@@ -199,6 +210,28 @@ function MetricsDialog({
     setCustomMetricPendingDelete(undefined)
     setCustomMetricDraft(undefined)
   }, [open, initialDraftKeySet, metrics, initialCustomMetricIds, initialCustomMetricSignature])
+
+  useEffect(() => {
+    if (capabilitiesLoading || capabilitiesUnavailable) return
+    const unavailable = new Set(unavailableBuiltInKeySignature ? unavailableBuiltInKeySignature.split('\u0000') : [])
+    const previous = previousUnavailableBuiltInKeysRef.current
+    if (previous) {
+      for (const key of unavailable) {
+        if (!previous.has(key)) newlyUnavailableBuiltInKeysRef.current.add(key)
+      }
+      for (const key of previous) {
+        if (!unavailable.has(key)) newlyUnavailableBuiltInKeysRef.current.delete(key)
+      }
+    }
+    previousUnavailableBuiltInKeysRef.current = unavailable
+    if (!open || newlyUnavailableBuiltInKeysRef.current.size === 0) return
+    const newlyUnavailable = new Set(newlyUnavailableBuiltInKeysRef.current)
+    newlyUnavailableBuiltInKeysRef.current.clear()
+    setDraftKeys((current) => {
+      const next = new Set([...current].filter((key) => !newlyUnavailable.has(key)))
+      return next.size === current.size ? current : next
+    })
+  }, [open, capabilitiesLoading, capabilitiesUnavailable, unavailableBuiltInKeySignature])
 
   function toggle(key: string, checked: boolean) {
     const next = new Set(draftKeys)

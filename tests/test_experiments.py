@@ -351,8 +351,20 @@ async def test_explicit_analysis_requires_the_stored_primary_metric(owner_id: uu
 
         experiment.design_spec = {
             "metrics": [
-                {"id": "duration", "name": "Duration", "primary": True},
-                {"id": "cost", "name": "Cost", "primary": False},
+                {
+                    "id": "duration",
+                    "catalogKey": "duration_seconds",
+                    "kind": "runtime",
+                    "name": "Duration",
+                    "primary": True,
+                },
+                {
+                    "id": "cost",
+                    "catalogKey": "cost_usd",
+                    "kind": "runtime",
+                    "name": "Cost",
+                    "primary": False,
+                },
             ]
         }
         await db.flush()

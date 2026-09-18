@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
-import { ChevronDown, Download, Lock, Square } from 'lucide-react'
+import { AlertTriangle, ChevronDown, Download, Lock, Square } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { displayFactorLevel, factorValueKey, groupReplicatesIntoCells, type ExperimentalCell } from '@/lib/experiment'
+import { factorBindingDiscrepancies, type FactorBindingDiscrepancy } from '@/lib/factorBindings'
 import { protocolForExperimentQueryKey } from '@/lib/protocolGraph'
 import type { Experiment, ResultCell, ResultReplicate, Trial } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
@@ -118,6 +119,7 @@ export function RunAllCellsButton({
   experimentId,
   regenerationRequired,
   unboundFactors,
+  bindingDiscrepancies,
   replicateLabels,
   label = 'Run all cells',
   dialogTitle,
@@ -128,6 +130,7 @@ export function RunAllCellsButton({
   experimentId: string
   regenerationRequired: boolean
   unboundFactors: string[]
+  bindingDiscrepancies: FactorBindingDiscrepancy[]
   replicateLabels?: string[]
   label?: string
   dialogTitle?: string
@@ -373,11 +376,14 @@ export function RunAllCellsButton({
     (pendingReplicateCount === 0 && previouslyRunCells.length === 0) ||
     regenerationRequired ||
     unboundFactors.length > 0 ||
+    bindingDiscrepancies.length > 0 ||
     !protocol.published_revision_id
   const blockedTitle = regenerationRequired
     ? 'Design changed — review and regenerate before running the experiment.'
     : unboundFactors.length > 0
       ? `Rebind or remove: ${unboundFactors.join(', ')}.`
+      : bindingDiscrepancies.length > 0
+        ? 'Canvas values and generated factor levels disagree. Resolve the warning in Runs before starting.'
       : !protocol?.published_revision_id
         ? 'Publish a valid canvas before running cells.'
         : replicates.length === 0
@@ -591,6 +597,7 @@ function RunReplicateButton({
   activeRunId,
   regenerationRequired,
   unboundFactors,
+  bindingDiscrepancies,
 }: {
   protocol: Protocol | undefined
   experimentId: string
@@ -600,6 +607,7 @@ function RunReplicateButton({
   activeRunId: string | null
   regenerationRequired: boolean
   unboundFactors: string[]
+  bindingDiscrepancies: FactorBindingDiscrepancy[]
 }) {
   const queryClient = useQueryClient()
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -619,11 +627,13 @@ function RunReplicateButton({
       runMutation.mutate()
     },
   })
-  const runBlocked = !protocol || regenerationRequired || unboundFactors.length > 0 || !protocol.published_revision_id
+  const runBlocked = !protocol || regenerationRequired || unboundFactors.length > 0 || bindingDiscrepancies.length > 0 || !protocol.published_revision_id
   const blockedTitle = regenerationRequired
     ? 'Design changed — review and regenerate before running this replicate.'
     : unboundFactors.length > 0
       ? `Rebind or remove: ${unboundFactors.join(', ')}.`
+      : bindingDiscrepancies.length > 0
+        ? 'Canvas values and generated factor levels disagree. Resolve the warning in Runs before starting.'
       : !protocol?.published_revision_id
         ? 'Publish a valid canvas before running replicates.'
         : undefined
@@ -730,6 +740,7 @@ export function RunsTab({
   }
 
   const cells = groupReplicatesIntoCells(replicatesQuery.data).sort((a, b) => cellSortKey(a).localeCompare(cellSortKey(b)))
+  const bindingDiscrepancies = factorBindingDiscrepancies(designSpec, protocol?.graph)
   const trialsByLabel = new Map((trialsQuery.data ?? []).map((trial) => [trial.replicate_label, trial]))
   const cellResultsByLabel = new Map((resultsQuery.data?.cells ?? []).map((cell) => [cell.cell_label, cell]))
   const replicateResultsByLabel = new Map((resultsQuery.data?.replicates ?? []).map((replicate) => [replicate.replicate_label, replicate]))
@@ -780,6 +791,24 @@ export function RunsTab({
 
   return (
     <section className="space-y-1.5 p-3" aria-labelledby="run-cells-heading">
+      {bindingDiscrepancies.length > 0 && (
+        <div role="alert" className="mb-3 flex gap-2 rounded-md border border-[color:var(--chart-4)]/50 bg-[color:var(--chart-4)]/10 px-3 py-2.5 text-sm">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--chart-4)]" />
+          <div className="min-w-0 space-y-1">
+            <p className="font-medium">Canvas and generated runs disagree</p>
+            <p className="text-xs text-muted-foreground">
+              Cell runs would replace these canvas values with saved factor levels. Update the factor levels and regenerate the design, or remove the bindings before running.
+            </p>
+            <ul className="space-y-0.5 text-xs">
+              {bindingDiscrepancies.map((issue) => (
+                <li key={`${issue.nodeId}:${issue.fieldPath}`}>
+                  <span className="font-medium">{issue.nodeLabel}</span> · {issue.factorName}: {issue.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
       <div className="space-y-0.5">
         <div className="flex items-center gap-2">
           <h2 id="run-cells-heading" className="text-sm font-medium">Cells</h2>
@@ -794,6 +823,7 @@ export function RunsTab({
             experimentId={experimentId}
             regenerationRequired={regenerationRequired}
             unboundFactors={unboundFactors}
+            bindingDiscrepancies={bindingDiscrepancies}
             hasCompletedRun={experimentHasCompletedRun}
             dialogTitle={experimentHasCompletedRun ? 'Re-run all cells?' : 'Run all cells?'}
           />
@@ -882,6 +912,7 @@ export function RunsTab({
                     experimentId={experimentId}
                     regenerationRequired={regenerationRequired}
                     unboundFactors={unboundFactors}
+                    bindingDiscrepancies={bindingDiscrepancies}
                     replicateLabels={cell.replicates.map((replicate) => replicate.replicate_label)}
                     label={cellHasCompletedRun ? 'Re-run all replicates' : 'Run all replicates'}
                     dialogTitle={cellHasCompletedRun ? 'Re-run all replicates?' : 'Run all replicates?'}
@@ -941,6 +972,7 @@ export function RunsTab({
                                   activeRunId={isActiveTrial(trial) ? trial.run_id : null}
                                   regenerationRequired={regenerationRequired}
                                   unboundFactors={unboundFactors}
+                                  bindingDiscrepancies={bindingDiscrepancies}
                                 />
                               </div>
                             </div>

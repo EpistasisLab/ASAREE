@@ -124,10 +124,9 @@ class ProtocolRun(Base, TimestampMixin):
     target_node_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Set by services.protocol_runs.request_protocol_run_cancellation (the
     # cancel endpoint), from a request outside the executor's own task/
-    # process -- run_protocol's node loop polls this between nodes (not
-    # mid-node) and, once seen, marks every remaining node "skipped" and
-    # sets status to "cancelled" itself. A raised flag alone never changes
-    # status -- only the executor can safely stop mid-walk.
+    # process. Pending runs become cancelled immediately because no executor
+    # exists to observe a flag while they wait in the queue. Running work polls
+    # this flag and safely stops itself, retaining completed work.
     cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

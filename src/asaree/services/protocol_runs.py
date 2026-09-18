@@ -439,15 +439,21 @@ async def is_current_replicate_attempt(db: AsyncSession, protocol_run_id: uuid.U
 
 
 async def request_protocol_run_cancellation(db: AsyncSession, protocol_run_id: uuid.UUID) -> ProtocolRun | None:
-    """Flags a non-terminal run for cancellation from outside the executor
-    -- a no-op if it's already terminal (mirrors fail_protocol_run's own
-    race-safety). Does NOT change status itself: the run's task executor and
-    built-in measurement finalizer poll cancel_requested_at and safely retain
-    any work that completed before cancellation."""
+    """Cancel a queued run now, or flag an executing run for safe interruption.
+
+    A pending run has no executor to observe ``cancel_requested_at``; leaving
+    it pending makes Stop appear inert while it waits behind the worker queue.
+    A running/finalizing run instead keeps the flag-only behavior so its
+    executor can retain work already completed before it reaches a safe stop.
+    """
     run = await get_protocol_run(db, protocol_run_id)
     if run is None or run.status in TERMINAL_PROTOCOL_RUN_STATUSES:
         return run
     run.cancel_requested_at = datetime.now(UTC)
+    if run.status == "pending":
+        # The enqueued ARQ message may still be delivered later. Its task
+        # guard treats this terminal status as non-actionable and skips it.
+        return await set_status(db, protocol_run_id, status="cancelled")
     await db.flush()
     await db.refresh(run)
     return run

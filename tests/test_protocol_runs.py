@@ -401,6 +401,22 @@ async def test_request_protocol_run_cancellation_flags_a_running_run(
         assert flagged.status == "running"
 
 
+async def test_request_protocol_run_cancellation_immediately_cancels_a_pending_run(
+    owner_id: uuid.UUID, protocol_id: uuid.UUID
+) -> None:
+    """A queued run has no executor available to observe a cancel flag."""
+    async with get_session() as db:
+        run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
+        run_id = run.id
+
+    async with get_session() as db:
+        cancelled = await request_protocol_run_cancellation(db, run_id)
+        assert cancelled is not None
+        assert cancelled.cancel_requested_at is not None
+        assert cancelled.status == "cancelled"
+        assert cancelled.completed_at is not None
+
+
 async def test_request_protocol_run_cancellation_is_a_noop_once_terminal(
     owner_id: uuid.UUID, protocol_id: uuid.UUID
 ) -> None:

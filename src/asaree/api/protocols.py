@@ -601,9 +601,7 @@ async def get_protocol_run_endpoint(
 async def cancel_protocol_run_endpoint(
     protocol_id: uuid.UUID, run_id: uuid.UUID, user: CurrentUser, db: DbSession
 ) -> ProtocolRunResponse:
-    """Requests cancellation of a non-terminal run -- a no-op (200, unchanged
-    row) if it's already completed/failed/cancelled. The executor honors the
-    flag during task execution and built-in measurement finalization."""
+    """Cancel a non-terminal run -- immediately if queued, cooperatively if active."""
     await _get_owned_protocol(db, protocol_id, user)
     run = await get_protocol_run(db, run_id)
     if run is None or run.protocol_id != protocol_id:

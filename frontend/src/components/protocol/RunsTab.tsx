@@ -531,8 +531,8 @@ export function RunAllCellsButton({
 
 // A protocol run is the actual cancellable unit. A cell/experiment stop is
 // simply this same operation applied to each of its active replicate runs.
-// The API only raises a durable cancellation flag; polling below keeps the
-// visible status in sync until the worker reaches a safe interruption point.
+// Queued runs are cancelled by the API immediately; active runs are flagged
+// for a safe interruption point. Polling keeps the visible status in sync.
 function StopRunsButton({
   protocol,
   experimentId,

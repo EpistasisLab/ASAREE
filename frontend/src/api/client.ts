@@ -308,10 +308,9 @@ export const protocolsApi = {
     request<PromptPreview>(`/protocols/${id}/nodes/${nodeId}/prompt-preview`, { method: 'POST', body: { graph } }),
   getRevision: (id: string, revisionId: string) => request<ProtocolRevision>(`/protocols/${id}/revisions/${revisionId}`),
   getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
-  // Only raises cancel_requested_at -- a no-op (200, unchanged row) once the
-  // run is already terminal. run_protocol's own node loop is what actually
-  // honors it during task execution or metric evaluation and flips status to
-  // "cancelled" after retaining work that already completed.
+  // Queued work is cancelled immediately. Active work raises
+  // cancel_requested_at, which its executor honors at a safe interruption
+  // point after retaining work that already completed.
   cancelRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}/cancel`, { method: 'POST' }),
   listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
   // "Run all cells" -- 422 if there's no linked experiment or the graph

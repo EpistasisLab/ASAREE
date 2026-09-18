@@ -170,13 +170,14 @@ def test_results_csv_keeps_an_empty_column_for_an_unreported_custom_metric() -> 
 
 
 def test_results_csv_projects_script_stdout_and_execution_metadata() -> None:
-    result = {
+    envelope = {
         "code_sha256": "abc123",
         "script": "score.py",
         "exit_code": 0,
         "stdout": "arbitrary output\n",
         "stderr": "",
     }
+    result = json.dumps(envelope)
     rows = [
         {
             "cell_label": "cell",
@@ -208,7 +209,7 @@ def test_results_csv_projects_script_stdout_and_execution_metadata() -> None:
     exported = next(csv.DictReader(io.StringIO(result_rows_to_csv(rows, design_spec))))
 
     assert exported["Script custom metric"] == "arbitrary output\n"
-    assert json.loads(exported["Script custom metric__raw_result"]) == result
+    assert json.loads(exported["Script custom metric__raw_result"]) == envelope
     assert exported["Script custom metric__code_sha256"] == "abc123"
     assert exported["Script custom metric__script"] == "score.py"
     assert exported["Script custom metric__exit_code"] == "0"
@@ -244,17 +245,18 @@ def test_results_csv_unions_optional_script_result_metadata_across_rows() -> Non
     }
 
     def row(number: int, value: dict[str, object]) -> dict[str, object]:
+        result = json.dumps(value)
         return {
             "cell_label": "cell",
             "replicate_number": number,
             "factor_values": {},
-            "metric_values": {"Score": value},
+            "metric_values": {"Score": result},
             "metric_observations": [
                 {
                     "metric_id": "score",
                     "metric_name": "Score",
                     "status": "measured",
-                    "value": value,
+                    "value": result,
                     "producer": {"producer_id": "asaree.python_script"},
                 }
             ],

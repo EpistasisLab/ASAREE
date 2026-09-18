@@ -278,6 +278,31 @@ class _ScriptMetricColumns:
         return [self.raw_result, *self.metadata.values()]
 
 
+def _script_result_envelope(value: Any) -> Mapping[str, Any] | None:
+    """Decode the Script runner's one JSON-encoded result envelope.
+
+    The MCP transport records ``run_wired_script``'s string return value
+    verbatim. Only this known outer object is structural; ``stdout`` remains
+    arbitrary user output and is never parsed.
+    """
+    if isinstance(value, Mapping):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return decoded if isinstance(decoded, Mapping) else None
+
+
+def _script_stdout_csv_value(value: Any) -> Any:
+    envelope = _script_result_envelope(value)
+    if envelope is None:
+        return _csv_value(value)
+    return _csv_value(envelope["stdout"]) if "stdout" in envelope else ""
+
+
 def _result_metadata_fields(rows: Sequence[dict[str, Any]]) -> list[str]:
     """Return operational columns, including legacy data only when present.
 
@@ -329,13 +354,11 @@ def _result_csv_layout(
     for metric_name in metric_keys:
         if metric_name not in script_metric_names:
             continue
-        observed_fields = {
-            field
-            for row in rows
-            if isinstance((value := (row.get("metric_values") or {}).get(metric_name)), Mapping)
-            for field in value
-            if isinstance(field, str) and field != "stdout"
-        }
+        observed_fields: set[str] = set()
+        for row in rows:
+            envelope = _script_result_envelope((row.get("metric_values") or {}).get(metric_name))
+            if envelope is not None:
+                observed_fields.update(field for field in envelope if isinstance(field, str) and field != "stdout")
         ordered_fields = [
             *_SCRIPT_RESULT_METADATA_FIELDS,
             *sorted(observed_fields - set(_SCRIPT_RESULT_METADATA_FIELDS)),
@@ -514,13 +537,7 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
         legacy_value_names = _legacy_value_names(source)
         raw_metrics = source.get("metric_values") or {}
         metrics = {
-            key: (
-                _csv_value(value.get("stdout"))
-                if key in script_columns and isinstance(value, Mapping) and "stdout" in value
-                else ""
-                if key in script_columns and isinstance(value, Mapping)
-                else _csv_value(value)
-            )
+            key: _script_stdout_csv_value(value) if key in script_columns else _csv_value(value)
             for key, value in raw_metrics.items()
             # A current opaque custom observation can share a name with a
             # compatibility legacy facet. The declared Results column is the
@@ -565,12 +582,13 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
             if metric_name not in raw_metrics:
                 continue
             result = raw_metrics[metric_name]
-            row[columns.raw_result] = _csv_value(result)
-            if not isinstance(result, Mapping):
+            envelope = _script_result_envelope(result)
+            row[columns.raw_result] = _csv_value(envelope if envelope is not None else result)
+            if envelope is None:
                 continue
             for field, column_name in columns.metadata.items():
-                if field in result:
-                    row[column_name] = _csv_value(result[field])
+                if field in envelope:
+                    row[column_name] = _csv_value(envelope[field])
         writer.writerow(row)
     return buf.getvalue()
 

@@ -95,6 +95,8 @@ class ProtocolResponse(BaseModel):
 
 
 class ProtocolRunResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     protocol_id: uuid.UUID
     status: str
@@ -114,10 +116,6 @@ class ProtocolRunResponse(BaseModel):
     updated_at: datetime
     observations: list[dict[str, Any]] = Field(default_factory=list)
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
-
-    class Config:
-        from_attributes = True
-
 
 def _protocol_run_response(run: Any) -> ProtocolRunResponse:
     response = ProtocolRunResponse.model_validate(run)
@@ -219,15 +217,13 @@ async def _test_run_response(db: DbSession, run: Any, protocol: Any, experiment:
 
 
 class ProtocolRevisionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: uuid.UUID
     protocol_id: uuid.UUID
     revision: int
     graph: dict[str, Any]
     published_at: datetime
-
-    class Config:
-        from_attributes = True
-
 
 class CreateProtocolRunRequest(BaseModel):
     # Omitted/null -- today's ad-hoc, un-substituted whole-graph run. Set --

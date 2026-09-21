@@ -31,6 +31,7 @@ export function ReasonActPatternNodeInspector({
   node,
   experimentId,
   factorNodeLabel,
+  suggestedIterations,
   onChange,
   onClose,
 }: {
@@ -40,6 +41,9 @@ export function ReasonActPatternNodeInspector({
   // -- distinct from data.label, which is this node's own plain label shown
   // in the header title.
   factorNodeLabel: string
+  // What the driven agent's wiring implies (lib/reasonActIterations.ts), or
+  // null when this pattern drives no agent yet.
+  suggestedIterations: number | null
   onChange: (nodeId: string, data: ReasonActPatternNodeData) => void
   onClose: () => void
 }) {
@@ -54,6 +58,13 @@ export function ReasonActPatternNodeInspector({
   const data = node.data
   const config = data.config
   const bindings = data.factor_bindings ?? {}
+
+  // Only ever offered as a raise. Going below what the wiring needs truncates
+  // the run into a payload of nulls that still reports as completed, while
+  // going above it costs nothing -- the loop stops when the agent answers --
+  // so there is no symmetric "you set this too high" to warn about.
+  const underIterated =
+    suggestedIterations != null && (config.max_iterations == null || config.max_iterations < suggestedIterations)
 
   const missingFields: string[] = []
   if (config.max_iterations == null) missingFields.push('Max iterations')
@@ -122,6 +133,19 @@ export function ReasonActPatternNodeInspector({
                 value={config.max_iterations ?? ''}
                 onChange={(e) => patchConfig({ max_iterations: e.target.value === '' ? null : Number(e.target.value) })}
               />
+              {underIterated && (
+                <p className="text-xs text-[color:var(--chart-4)]">
+                  This agent&apos;s wiring suggests at least {suggestedIterations} — each tool call costs an iteration,
+                  and a run that hits the cap stops mid-work with its answer unwritten.{' '}
+                  <button
+                    type="button"
+                    className="underline underline-offset-2 hover:no-underline"
+                    onClick={() => patchConfig({ max_iterations: suggestedIterations })}
+                  >
+                    Use {suggestedIterations}
+                  </button>
+                </p>
+              )}
             </div>
           )}
         </FactorBindableField>

@@ -24,6 +24,7 @@ import { newNodeId } from '@/lib/nodeId'
 import { handoffPeers, promptReferenceScope } from '@/lib/promptReferences'
 import { mergeProtocolSaveIntoCache, protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
+import { suggestedMaxIterations } from '@/lib/reasonActIterations'
 import {
   defaultAgentNodeData,
   defaultAnthropicLlmNodeData,
@@ -2140,6 +2141,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
+            suggestedIterations={suggestedMaxIterations(toPersistedGraph(nodes, edges), selectedNode.id)}
             onChange={updateNodeData}
             onClose={() => setSelectedNodeId(null)}
           />

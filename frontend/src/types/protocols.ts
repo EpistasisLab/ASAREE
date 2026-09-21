@@ -764,10 +764,19 @@ export interface ReasonActPatternNodeData {
   [key: string]: unknown
 }
 
+// `max_iterations: 30` departs from the catalog schema's own default of 15 on
+// purpose. The cap is a safety stop, not a budget -- the loop exits as soon as
+// the agent answers, so a generous cap costs a simple agent nothing, while a
+// tight one truncates a tool-using agent mid-work: Motoro keeps the last tool
+// result as the run output and still reports `completed`, so the run looks
+// finished and its Output Parser silently yields a payload of nulls. 15 was
+// measured as too low for even a modest ASAREE canvas (4 Script nodes spent 13
+// iterations before the report was started) -- see lib/reasonActIterations.ts,
+// which sizes the same estimate against the actual wiring once there is any.
 export function defaultReasonActPatternNodeData(label = 'Reason + Act'): ReasonActPatternNodeData {
   return {
     label,
-    config: { max_iterations: 15, include_scratchpad: true, scratchpad_window: 10, observation_format: 'raw' },
+    config: { max_iterations: 30, include_scratchpad: true, scratchpad_window: 10, observation_format: 'raw' },
   }
 }
 

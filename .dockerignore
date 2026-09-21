@@ -18,6 +18,13 @@ data/
 # stray `COPY . .` can never bake the full history, and whatever was ever
 # committed and later removed from it, into an image layer.
 .git/
+# hatch-vcs writes this at build time and it's gitignored, so a host-side `uv
+# sync` leaves one behind in the working tree -- stamped with whatever commit
+# that checkout last built. Copying it in would freeze the image's reported
+# version at that commit forever: _app_version() reads _version.py first and
+# only falls back to the distribution metadata, so the file the build itself
+# generates never gets a chance to win.
+src/asaree/_version.py
 sdk/
 *.log
 *_out.ipynb

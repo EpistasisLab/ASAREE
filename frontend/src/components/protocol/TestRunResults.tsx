@@ -104,7 +104,7 @@ export function TestRunResults({ run, onClose, agentNames = new Map(), title = '
         {nodeRuns.length > 0 && (
           <section className="space-y-2"><h3 className="text-sm font-medium">Node progress</h3>
             {nodeRuns.map(([nodeId, nodeRun]) => {
-              const badge = nodeRunBadge(nodeRun.status)
+              const badge = nodeRunBadge(nodeRun.status, Boolean(nodeRun.truncation))
               return <details key={nodeId} className="rounded-lg border bg-background/45">
                 <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2"><ChevronRight className="size-3.5 text-muted-foreground [[open]>&]:rotate-90" /><span className="font-medium">{agentNames.get(nodeId) ?? nodeId}</span>{badge && <Badge className={`ml-auto ${badge.className}`}>{badge.label}</Badge>}</summary>
                 <div className="border-t px-3 py-2 text-xs">{nodeRun.output_text ? <pre className="font-mono whitespace-pre-wrap">{nodeRun.output_text}</pre> : <p className="text-muted-foreground">No output recorded yet.</p>}{nodeRun.error && <p className="mt-2 text-destructive">{nodeRun.error}</p>}</div>

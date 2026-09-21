@@ -16,11 +16,15 @@ import { NodeHoverToolbar } from './NodeHoverToolbar'
 // job is to stop a run (see lib/nodeAccent.ts).
 const ACCENT = nodeAccent('critic_gate')
 
-export function CriticGateNode({ id, data, selected }: NodeProps & { data: CriticGateNodeData & { runStatus?: NodeRunStatus } }) {
+export function CriticGateNode({
+  id,
+  data,
+  selected,
+}: NodeProps & { data: CriticGateNodeData & { runStatus?: NodeRunStatus; runTruncated?: boolean } }) {
   const enabled = data.config?.enabled ?? true
   const Icon = enabled ? ShieldCheck : ShieldOff
   const summary = enabled ? `Up to ${data.config?.max_revisions ?? 1} revision(s)` : 'Gate disabled'
-  const badge = nodeRunBadge(data.runStatus)
+  const badge = nodeRunBadge(data.runStatus, data.runTruncated)
   const { updateNodeData } = useReactFlow()
   const { requestMakeFactor } = useProtocolCanvasActions()
 

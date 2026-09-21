@@ -916,6 +916,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         data: {
           ...n.data,
           runStatus: runQuery.data?.node_runs[n.id]?.status,
+          runTruncated: Boolean(runQuery.data?.node_runs[n.id]?.truncation),
           missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
           // "Require specific output format" is on, but nothing says what the
           // format is. Unlike missingLlm this doesn't stop the run -- the agent

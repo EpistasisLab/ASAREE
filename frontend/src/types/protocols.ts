@@ -67,6 +67,14 @@ export interface NodeRunState {
   // to fail without taking the prose down with it.
   payload?: Record<string, unknown> | null
   caveats?: string[]
+  // Present only when the agent's loop was cut off by its iteration ceiling
+  // instead of by the agent deciding it was done. The run still reports
+  // `completed`, and deliberately so -- everything it did up to the ceiling is
+  // real work that downstream nodes consumed (see `_truncation_fields`'s note
+  // on why this is not a status). But the *answer* was never written: what the
+  // run hands on is whatever the last tool happened to return, which is how a
+  // wired Output Parser ends up with a payload of nulls.
+  truncation?: { reason: string; iterations?: number | null; max_iterations?: number | null } | null
   // Critic Gate only -- absent on a plain agent's NodeRunState. `run_id`
   // above doubles as the CRITIC's own run (not the upstream worker's) for a
   // gate, so its own Sense/Reason/Plan/Act steps are inspectable the same

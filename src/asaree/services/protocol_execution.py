@@ -24,7 +24,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -3442,6 +3442,29 @@ async def _sync_durable_agent(*, name: str, owner_id: uuid.UUID, fields: dict[st
         return await update_agent(existing.id, **fields)
 
 
+# What an all-null payload means, said once. Motoro's extractor builds its
+# model with every contracted field typed ``T | None`` and is forbidden from
+# inferring a value the text does not state, so "the parser ran and found
+# nothing" and "the parser ran and the answer genuinely had none of these"
+# produce the identical object: every key present, every value null. Without
+# this the UI renders that as a result -- a tidy list of fields whose answer is
+# "null" -- which reads as a finding rather than as a failed read.
+_EMPTY_PAYLOAD_CAVEAT = (
+    "every field the Output Parser declared came back empty: the text it was given "
+    "stated none of them, so this is a failed read rather than a result"
+)
+
+
+def _payload_is_empty(payload: Any) -> bool:
+    """True when a payload came back shaped but entirely unfilled.
+
+    Non-empty on purpose: a contract declaring no fields at all would otherwise
+    trip this vacuously, and there is nothing to warn about when nothing was
+    asked for.
+    """
+    return isinstance(payload, Mapping) and len(payload) > 0 and all(value is None for value in payload.values())
+
+
 def _extraction_fields(envelope: OutputEnvelope | None) -> dict[str, Any] | None:
     """What an Output Parser contributed to one node run, or ``None``.
 
@@ -3456,11 +3479,48 @@ def _extraction_fields(envelope: OutputEnvelope | None) -> dict[str, Any] | None
     if envelope is None:
         return None
     fields: dict[str, Any] = {}
+    caveats = list(envelope.caveats or [])
     if envelope.payload is not None:
         fields["payload"] = envelope.payload
-    if envelope.caveats:
-        fields["caveats"] = list(envelope.caveats)
+        if _payload_is_empty(envelope.payload):
+            caveats.append(_EMPTY_PAYLOAD_CAVEAT)
+    if caveats:
+        fields["caveats"] = caveats
     return fields or None
+
+
+def _truncation_fields(run: Any) -> dict[str, Any] | None:
+    """Whether the agent's loop was cut off by its iteration ceiling, or ``None``.
+
+    A Reason+Act run that exhausts ``max_iterations`` does NOT fail: Motoro's
+    loop falls through its ``for...else``, keeps whatever the last Act produced
+    as the run output, and still reports ``completed``
+    (``motoro/engine/runtime.py``). Downstream that is indistinguishable from an
+    agent that finished -- which is how a run whose report was never written
+    ends up handed to an Output Parser that can only find nulls in a tool dump.
+
+    Read from ``agent_runs.pattern_overrides`` rather than rederived from the
+    step list: the ReasonAct pattern already records exactly this
+    (``reason_act_state``, see its ``_state``/``_persist_state``), and the step
+    rows cannot answer it -- the persisted Act step carries the pre-hook
+    ``should_continue`` and is ``false`` on every run, truncated or not.
+
+    Deliberately NOT expressed as a node-run *status*: the status vocabulary is
+    read in ~20 places (metric collection, result-node gating, the conversation
+    and supervisor flows) that all mean "did this node produce usable output",
+    and the answer for a truncated run is still yes -- its work up to the
+    ceiling is real. This is a flag on a completed run, the way ``caveats`` is.
+    """
+    state = (getattr(run, "pattern_overrides", None) or {}).get("reason_act_state")
+    if not isinstance(state, Mapping) or not state.get("max_iterations_hit"):
+        return None
+    return {
+        "truncation": {
+            "reason": str(state.get("terminated_by") or "max_iterations"),
+            "iterations": state.get("iterations"),
+            "max_iterations": state.get("max_iterations"),
+        }
+    }
 
 
 async def _run_agent_node(
@@ -3486,10 +3546,12 @@ async def _run_agent_node(
     this node's own step trace (``GET /runs/{run_id}/steps``); only ``None`` if
     agent creation/sync itself failed before a run could even be created.
 
-    ``extraction`` is what an Output Parser contributed, ready to merge into the
-    node run: ``payload`` (the envelope's typed object) when the extraction
-    succeeded, ``caveats`` when it had something to say about why it did not.
-    ``None`` when there was no parser, or nothing to report. It is returned
+    ``extraction`` is the annotation fragment, ready to merge into the node run:
+    ``payload`` (the envelope's typed object) when the extraction succeeded,
+    ``caveats`` when it had something to say about why it did not, and
+    ``truncation`` when the agent's loop was cut off by its iteration ceiling
+    (:func:`_truncation_fields`) rather than by the agent deciding it was done.
+    ``None`` when there was no parser and nothing to report. It is returned
     *alongside* ``output_text``, never instead of it: extraction is post-hoc and
     best-effort (``extract_payload`` returns ``(None, caveats)`` rather than
     raising), so the prose handoff must never depend on it having worked -- and
@@ -3632,7 +3694,11 @@ async def _run_agent_node(
         return None, finished.error, run.id, None
     envelope = parse_envelope(finished.output)
     output_text = envelope.result if envelope is not None else (finished.output or "")
-    return output_text, None, run.id, _extraction_fields(envelope)
+    # Merged into one fragment because both are node-run annotations on a run
+    # that completed, and they are usually seen together: hitting the ceiling
+    # is the single most common reason the parser has nothing to read.
+    node_fields = {**(_extraction_fields(envelope) or {}), **(_truncation_fields(finished) or {})}
+    return output_text, None, run.id, node_fields or None
 
 
 async def _run_critic(

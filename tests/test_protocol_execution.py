@@ -863,7 +863,7 @@ def test_build_user_input_lists_multiple_bound_scripts() -> None:
     assert "2 scripts are wired" in result
     assert "first-report" in result
     assert "second-report" in result
-    assert 'run_wired_script(script=...)' in result
+    assert "run_wired_script(script=...)" in result
     assert "print('first')" not in result
     assert "print('second')" not in result
 
@@ -1932,6 +1932,68 @@ def test_the_extraction_fragment_carries_only_what_there_is() -> None:
         "payload": {"n": 1},
         "caveats": ["guessed"],
     }
+
+
+def test_an_all_null_payload_is_flagged_as_a_failed_read() -> None:
+    """The extractor's model types every contracted field `T | None` and may not
+    infer, so "found nothing" and "the answer had none of these" produce the
+    same all-null object -- which the UI would otherwise show as a tidy list of
+    results whose answer is null. One null among real values is a real partial
+    reading and says nothing."""
+    from motoro.schemas.output import OutputEnvelope
+
+    fields = pe._extraction_fields(OutputEnvelope(result="x", payload={"a": None, "b": None}))
+    assert fields is not None
+    assert fields["payload"] == {"a": None, "b": None}
+    assert fields["caveats"] == [pe._EMPTY_PAYLOAD_CAVEAT]
+
+    # Kept alongside whatever the extractor already said, not instead of it.
+    both = pe._extraction_fields(OutputEnvelope(result="x", payload={"a": None}, caveats=["guessed"]))
+    assert both is not None
+    assert both["caveats"] == ["guessed", pe._EMPTY_PAYLOAD_CAVEAT]
+
+    # A contract that declared nothing has nothing to warn about, and a payload
+    # with any real value in it was a successful read.
+    assert pe._extraction_fields(OutputEnvelope(result="x", payload={})) == {"payload": {}}
+    assert pe._extraction_fields(OutputEnvelope(result="x", payload={"a": None, "b": 2})) == {
+        "payload": {"a": None, "b": 2}
+    }
+
+
+def test_a_ceiling_truncated_run_is_flagged_even_though_it_completed() -> None:
+    """Motoro reports a cap-exhausted Reason+Act run as `completed` with the
+    last tool result as its output, so the only thing that distinguishes it
+    from a finished run is the loop summary the pattern persists."""
+
+    class _Run:
+        def __init__(self, overrides: dict[str, object] | None) -> None:
+            self.pattern_overrides = overrides
+
+    hit = {
+        "reason_act_state": {
+            "iterations": 15,
+            "max_iterations": 15,
+            "max_iterations_hit": True,
+            "terminated_by": "max_iterations",
+        }
+    }
+    assert pe._truncation_fields(_Run(hit)) == {
+        "truncation": {"reason": "max_iterations", "iterations": 15, "max_iterations": 15}
+    }
+
+    # An agent that decided it was done, a non-ReasonAct pattern, and a run
+    # whose telemetry write lost its race all read as "nothing to say".
+    done = {
+        "reason_act_state": {
+            "iterations": 2,
+            "max_iterations": 15,
+            "max_iterations_hit": False,
+            "terminated_by": "final_answer",
+        }
+    }
+    assert pe._truncation_fields(_Run(done)) is None
+    assert pe._truncation_fields(_Run({"other_pattern_state": {}})) is None
+    assert pe._truncation_fields(_Run(None)) is None
 
 
 async def test_run_protocol_stores_the_extraction_beside_the_output_text(

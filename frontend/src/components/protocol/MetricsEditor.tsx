@@ -144,12 +144,13 @@ function MetricsDialog({
   const canvasMetricKeys = new Set(contextualMetricSuggestions(graph).map((suggestion) => suggestion.key))
   const hasValidTool = canvasMetricKeys.has('tool_error_rate')
   const hasCriticGate = graph?.nodes.some((node) => node.type === 'critic_gate') ?? false
+  const canvasCannotProduce = (key: string) =>
+    ((key === 'tool_calls' || key === 'tool_error_rate') && !hasValidTool)
+    || ((key === 'critic_approvals' || key === 'critic_rejections') && !hasCriticGate)
   const unavailableBuiltInKeys = capabilitiesLoading || capabilitiesUnavailable
     ? []
     : builtInEntries.flatMap((entry) => {
-      const unavailable = !supportedBuiltInKeys.has(entry.key)
-        || ((entry.key === 'tool_calls' || entry.key === 'tool_error_rate') && !hasValidTool)
-        || ((entry.key === 'critic_approvals' || entry.key === 'critic_rejections') && !hasCriticGate)
+      const unavailable = !supportedBuiltInKeys.has(entry.key) || canvasCannotProduce(entry.key)
       return unavailable ? [entry.key] : []
     })
   const unavailableBuiltInKeySignature = unavailableBuiltInKeys.join('\u0000')
@@ -207,7 +208,12 @@ function MetricsDialog({
     }
     if (wasOpenRef.current) return
     wasOpenRef.current = true
-    setDraftKeys(new Set(initialDraftKeySet))
+    // A default selection (nothing saved yet) must not pre-check a metric this
+    // canvas can't produce -- it would save a metric that can never report.
+    // A saved selection is shown as-is, so it can still be unchecked.
+    setDraftKeys(new Set(initialDraftSignature === undefined
+      ? initialDraftKeySet
+      : [...initialDraftKeySet].filter((key) => !canvasCannotProduce(key))))
     setSaveError(undefined)
     setCustomChanges([])
     setCustomMetricIds(initialCustomMetricIds)
@@ -215,6 +221,9 @@ function MetricsDialog({
     setCustomMetricDirty(false)
     setCustomMetricPendingDelete(undefined)
     setCustomMetricDraft(undefined)
+    // Seeds once per open (wasOpenRef); canvas availability changing while the
+    // dialog is open is handled by the newly-unavailable effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialDraftKeySet, metrics, initialCustomMetricIds, initialCustomMetricSignature])
 
   useEffect(() => {
@@ -317,7 +326,7 @@ function MetricsDialog({
                     const unavailableReasonId = `metric-unavailable-${entry.key}`
                     return <div key={entry.key} className={`rounded-md border p-2.5 ${unavailableReason ? 'opacity-70' : 'hover:bg-muted/40'}`}>
                       <label className={unavailableReason ? 'flex cursor-not-allowed items-start gap-3' : 'flex cursor-pointer items-start gap-3'}>
-                      <Checkbox aria-label={entry.name} aria-describedby={unavailableReason ? unavailableReasonId : undefined} checked={selected} disabled={disabled || Boolean(unavailableReason)} onCheckedChange={(checked) => toggle(entry.key, checked === true)} />
+                      <Checkbox aria-label={entry.name} aria-describedby={unavailableReason ? unavailableReasonId : undefined} checked={selected} disabled={disabled || (Boolean(unavailableReason) && !selected)} onCheckedChange={(checked) => toggle(entry.key, checked === true)} />
                       <span className="min-w-0 flex-1">
                         <span className="text-sm font-medium">{entry.name}</span>
                         <span className="mt-0.5 block text-xs text-muted-foreground">{entry.shortDescription}</span>
@@ -466,13 +475,29 @@ export function MetricsEditor({
 
   function builtInDraft(selectedKeys: Set<string>) {
     const currentByKey = new Map(runtimeBuiltIns.map((metric) => [metric.catalogKey!, metric]))
+    // The plan's runtime outputs are what the dialog shows as selected, so they
+    // are also what a deselect must remove -- even when the design's own metric
+    // list has lost the matching declaration, which would otherwise leave the
+    // plan naming a metric nothing declares and every save 422ing.
+    const plannedIdByKey = new Map(
+      (measurementPlan?.producers ?? [])
+        .filter((producer) => producer.producer_id === 'asaree.runtime')
+        .flatMap((producer) => Object.entries(producer.outputs)),
+    )
     const preserved = normalized.filter((metric) => !(metric.kind === 'runtime' && metric.catalogKey && catalogBuiltIns.some((entry) => entry.key === metric.catalogKey)))
     const selected = catalogBuiltIns
       .filter((entry) => selectedKeys.has(entry.key))
-      .map((entry) => currentByKey.get(entry.key) ?? makeCatalogMetric(entry, false))
+      .map((entry) => {
+        const current = currentByKey.get(entry.key)
+        if (current) return current
+        const plannedId = plannedIdByKey.get(entry.key)
+        return plannedId ? { ...makeCatalogMetric(entry, false), id: plannedId } : makeCatalogMetric(entry, false)
+      })
     let nextPlan = measurementPlan
-    for (const metric of runtimeBuiltIns.filter((metric) => catalogBuiltIns.some((entry) => entry.key === metric.catalogKey) && !selectedKeys.has(metric.catalogKey!))) {
-      nextPlan = removeMetricFromMeasurementPlan(nextPlan, metric.id)
+    for (const entry of catalogBuiltIns.filter((entry) => !selectedKeys.has(entry.key))) {
+      for (const metricId of new Set([currentByKey.get(entry.key)?.id, plannedIdByKey.get(entry.key)])) {
+        nextPlan = removeMetricFromMeasurementPlan(nextPlan, metricId)
+      }
     }
     for (const metric of selected) nextPlan = upsertRuntimeMetric(nextPlan, metric)
     const nextMetrics = withoutRanking([...preserved, ...selected])

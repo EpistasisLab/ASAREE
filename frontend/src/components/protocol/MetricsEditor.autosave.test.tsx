@@ -25,14 +25,17 @@ describe('MetricsEditor autosave', () => {
     })
   })
 
-  it('selects every built-in by default and disables contextual metrics without eligible nodes', async () => {
+  it('selects every producible built-in by default and disables contextual metrics without eligible nodes', async () => {
     const user = userEvent.setup()
     renderEditor(<MetricsEditor experimentId="experiment-1" metrics={[]} measurementPlan={null} graph={EMPTY_GRAPH} onChange={vi.fn()} />)
 
     await user.click(screen.getByRole('button', { name: 'Add metrics' }))
     const dialog = await screen.findByRole('dialog', { name: 'Manage metrics' })
+    const contextual = new Set(['tool_calls', 'tool_error_rate', 'critic_approvals', 'critic_rejections'])
     for (const entry of METRIC_CATALOG.filter((candidate) => candidate.kind === 'runtime')) {
-      expect(within(dialog).getByRole('checkbox', { name: new RegExp(`^${entry.name}`) })).toBeChecked()
+      const checkbox = within(dialog).getByRole('checkbox', { name: new RegExp(`^${entry.name}`) })
+      if (contextual.has(entry.key)) expect(checkbox).not.toBeChecked()
+      else expect(checkbox).toBeChecked()
     }
     expect(within(dialog).getByRole('checkbox', { name: /^Tool calls/ })).toHaveAttribute('aria-disabled', 'true')
     expect(within(dialog).getByRole('checkbox', { name: /^Tool error rate/ })).toHaveAttribute('aria-disabled', 'true')

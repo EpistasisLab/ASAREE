@@ -117,15 +117,13 @@ def test_recommended_runtime_measurements_form_one_normalized_non_primary_plan()
         "cost_usd",
         "duration_seconds",
         "total_tokens",
-        "tool_calls",
     ]
-    assert [metric["primary"] for metric in declarations] == [False, False, False, False]
+    assert [metric["primary"] for metric in declarations] == [False, False, False]
     assert normalize_measurement_plan(plan) == plan
     assert plan["producers"][0]["outputs"] == {
         "cost_usd": "runtime-cost",
         "duration_seconds": "runtime-duration",
         "total_tokens": "runtime-total-tokens",
-        "tool_calls": "runtime-tool-calls",
     }
 
 

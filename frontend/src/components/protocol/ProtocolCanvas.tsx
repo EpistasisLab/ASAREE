@@ -796,13 +796,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   }, [nodes, edges])
 
   // The most recent thing this canvas actually did, whichever kind it was.
-  // The node badges read `runQuery` alone, because that's the run the canvas
-  // is *watching*; a Test Run reports itself in its own results panel instead
-  // (list_protocol_runs excludes test runs, so it can never seed runQuery).
-  // Config findings can't follow that split: a Test Run is how you iterate on
-  // the canvas, so "your cap is too low" learned from one has to reach the
-  // node you'd fix. Newest wins, so raising the cap and running for real
-  // clears a finding the earlier Test Run left behind.
+  // Node badges, inspectors' Input/Output and config findings all read this,
+  // not `runQuery` alone: list_protocol_runs excludes test runs, so after a
+  // page reload runQuery can never be seeded with one, and a Test Run's node
+  // output vanished from the inspectors while its results panel still showed
+  // it. Newest wins, so running for real supersedes an earlier Test Run.
   const latestNodeRuns = useMemo(() => {
     const run = runQuery.data
     const test = testRunQuery.data
@@ -985,8 +983,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         deletable: !nonDeletablePatternNodeIds.has(n.id),
         data: {
           ...n.data,
-          runStatus: runQuery.data?.node_runs[n.id]?.status,
-          runTruncated: Boolean(runQuery.data?.node_runs[n.id]?.truncation),
+          runStatus: latestNodeRuns?.[n.id]?.status,
+          runTruncated: Boolean(latestNodeRuns?.[n.id]?.truncation),
           missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
           // "Require specific output format" is on, but nothing says what the
           // format is. Unlike missingLlm this doesn't stop the run -- the agent
@@ -1043,7 +1041,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     })
   }, [
     nodes,
-    runQuery.data,
+    latestNodeRuns,
     nonDeletablePatternNodeIds,
     agentIdsWithLlm,
     agentIdsWithParser,
@@ -2129,7 +2127,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           <CriticGateNodeInspector
             node={{ id: selectedNode.id, type: 'critic_gate', position: selectedNode.position, data: selectedNode.data as CriticGateNodeData }}
             experimentId={experimentId}
-            nodeRun={runQuery.data?.node_runs[selectedNode.id]}
+            nodeRun={latestNodeRuns?.[selectedNode.id]}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
@@ -2244,7 +2242,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               handoffPeers={selectedHandoffPeers}
               wiredOutputParserLabel={selectedOutputParserLabel}
               fetchPromptPreview={fetchPromptPreview}
-              nodeRun={runQuery.data?.node_runs[selectedNode.id]}
+              nodeRun={latestNodeRuns?.[selectedNode.id]}
               onChange={updateNodeData}
               onDelete={requestDeleteNode}
               onClose={() => setSelectedNodeId(null)}

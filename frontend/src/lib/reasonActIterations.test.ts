@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isUnderIterated, suggestedMaxIterations } from './reasonActIterations'
+import { isUnderIterated, raiseForTruncation, suggestedMaxIterations } from './reasonActIterations'
 import type { ProtocolGraph, ProtocolNode } from '@/types/protocols'
 
 function node(id: string, type: string, config: Record<string, unknown> = {}): ProtocolNode {
@@ -98,5 +98,30 @@ describe('isUnderIterated', () => {
   it('leaves a cap at or above the suggestion alone -- too high costs nothing', () => {
     expect(isUnderIterated(30, 30)).toBe(false)
     expect(isUnderIterated(100, 30)).toBe(false)
+  })
+})
+
+describe('raiseForTruncation', () => {
+  it('leaves the wiring estimate alone when no run has been truncated', () => {
+    expect(raiseForTruncation(30, null)).toBe(30)
+    expect(raiseForTruncation(30, undefined)).toBe(30)
+  })
+
+  it('pushes past a cap a real run already died at', () => {
+    // 40 * 1.5 = 60, which beats the wiring's 30.
+    expect(raiseForTruncation(30, 40)).toBe(60)
+  })
+
+  it('never climbs down from the wiring estimate', () => {
+    // 15 * 1.5 = 23 -> 25, below the 30 the wiring already asked for.
+    expect(raiseForTruncation(30, 15)).toBe(30)
+  })
+
+  it('still answers when the pattern drives no agent to estimate from', () => {
+    expect(raiseForTruncation(null, 20)).toBe(30)
+  })
+
+  it('stays inside the catalog schema maximum', () => {
+    expect(raiseForTruncation(100, 90)).toBe(100)
   })
 })

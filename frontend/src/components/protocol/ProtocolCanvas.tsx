@@ -25,7 +25,7 @@ import { handoffPeers, promptReferenceScope } from '@/lib/promptReferences'
 import { mergeProtocolSaveIntoCache, protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
 import { nodeDisplayNames } from '@/lib/nodeNames'
-import { suggestedMaxIterations } from '@/lib/reasonActIterations'
+import { raiseForTruncation, suggestedMaxIterations } from '@/lib/reasonActIterations'
 import {
   defaultAgentNodeData,
   defaultAnthropicLlmNodeData,
@@ -49,6 +49,7 @@ import type {
   LlmNodeData,
   McpToolNodeData,
   MemoryNodeData,
+  NodeRunState,
   OkfBundleNodeData,
   OkfDocumentNodeData,
   OutputParserNodeData,
@@ -787,12 +788,40 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // the whole canvas, because it depends on the AGENT's wiring rather than the
   // pattern node's own data -- and because the node card's warning triangle
   // and the inspector's "Use N" hint have to agree on the number.
-  const suggestedIterationsByPattern = useMemo(() => {
+  const wiringIterationsByPattern = useMemo(() => {
     const patternIds = nodes.filter((n) => n.type === 'pattern_reason_act').map((n) => n.id)
     if (patternIds.length === 0) return new Map<string, number | null>()
     const graph = toPersistedGraph(nodes, edges)
     return new Map(patternIds.map((id) => [id, suggestedMaxIterations(graph, id)]))
   }, [nodes, edges])
+
+  // What the last run's own loop reported, by PATTERN node id: a Reason+Act
+  // agent that exhausted its ceiling (services/protocol_execution.py's
+  // _truncation_fields) leaves the marker on the AGENT's node_run, but the cap
+  // that caused it is configured on the pattern node driving that agent, so the
+  // finding has to be carried across the edge to be actionable.
+  const truncationByPattern = useMemo(() => {
+    const map = new Map<string, NodeRunState['truncation']>()
+    for (const n of nodes) {
+      if (n.type !== 'pattern_reason_act') continue
+      const hostId = patternHostIds.get(n.id)
+      const truncation = hostId ? runQuery.data?.node_runs[hostId]?.truncation : null
+      if (truncation) map.set(n.id, truncation)
+    }
+    return map
+  }, [nodes, patternHostIds, runQuery.data])
+
+  // A truncated run outranks the wiring estimate -- see raiseForTruncation.
+  const suggestedIterationsByPattern = useMemo(
+    () =>
+      new Map(
+        [...wiringIterationsByPattern].map(([id, wiring]) => [
+          id,
+          raiseForTruncation(wiring, truncationByPattern.get(id)?.max_iterations),
+        ]),
+      ),
+    [wiringIterationsByPattern, truncationByPattern],
+  )
 
   // Who each agent may consult under the Peer Collaboration coordination
   // strategy, mirroring services/protocol_execution.py's _connected_agent_ids:
@@ -982,6 +1011,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             !agentIdsWithCallableTools.has(patternHostId) &&
             !(isPeerCollaboration && (peerIdsByAgent.get(patternHostId)?.length ?? 0) > 0),
           suggestedIterations: suggestedIterationsByPattern.get(n.id) ?? null,
+          hostTruncation: truncationByPattern.get(n.id) ?? null,
         },
       }
     })
@@ -996,6 +1026,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     patternHostIds,
     peerIdsByAgent,
     suggestedIterationsByPattern,
+    truncationByPattern,
     llmConfigByAgent,
     isPeerCollaboration,
     isSupervisor,
@@ -2160,6 +2191,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
             suggestedIterations={suggestedIterationsByPattern.get(selectedNode.id) ?? null}
+            truncatedAt={truncationByPattern.get(selectedNode.id)?.max_iterations ?? null}
             onChange={updateNodeData}
             onClose={() => setSelectedNodeId(null)}
           />

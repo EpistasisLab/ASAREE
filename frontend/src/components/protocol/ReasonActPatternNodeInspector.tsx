@@ -33,6 +33,7 @@ export function ReasonActPatternNodeInspector({
   experimentId,
   factorNodeLabel,
   suggestedIterations,
+  truncatedAt,
   onChange,
   onClose,
 }: {
@@ -45,6 +46,9 @@ export function ReasonActPatternNodeInspector({
   // What the driven agent's wiring implies (lib/reasonActIterations.ts), or
   // null when this pattern drives no agent yet.
   suggestedIterations: number | null
+  // The cap the last run actually died at, when it did -- evidence rather than
+  // estimate, so the hint below cites it instead of the wiring.
+  truncatedAt: number | null
   onChange: (nodeId: string, data: ReasonActPatternNodeData) => void
   onClose: () => void
 }) {
@@ -135,8 +139,10 @@ export function ReasonActPatternNodeInspector({
               />
               {underIterated && (
                 <p className="text-xs text-[color:var(--chart-4)]">
-                  This agent&apos;s wiring suggests at least {suggestedIterations} — each tool call costs an iteration,
-                  and a run that hits the cap stops mid-work with its answer unwritten.{' '}
+                  {truncatedAt != null
+                    ? `The last run stopped at ${truncatedAt} with its answer unwritten, so at least ${suggestedIterations} — `
+                    : `This agent's wiring suggests at least ${suggestedIterations} — `}
+                  each tool call costs an iteration, and a run that hits the cap stops mid-work.{' '}
                   <button
                     type="button"
                     className="underline underline-offset-2 hover:no-underline"

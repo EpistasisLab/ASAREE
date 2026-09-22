@@ -2,7 +2,7 @@ import { nodeAccent } from '@/lib/nodeAccent'
 import { isUnderIterated } from '@/lib/reasonActIterations'
 import { useNodeConnections, type NodeProps } from '@xyflow/react'
 import { Repeat2 } from 'lucide-react'
-import type { ReasonActPatternNodeData } from '@/types/protocols'
+import type { NodeRunState, ReasonActPatternNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
@@ -23,7 +23,13 @@ export function ReasonActPatternNode({
   id,
   data,
   selected,
-}: NodeProps & { data: ReasonActPatternNodeData & { hostHasNoTools?: boolean; suggestedIterations?: number | null } }) {
+}: NodeProps & {
+  data: ReasonActPatternNodeData & {
+    hostHasNoTools?: boolean
+    suggestedIterations?: number | null
+    hostTruncation?: NodeRunState['truncation']
+  }
+}) {
   // An agent's execution pattern must never go to zero (see
   // ProtocolCanvas.tsx's nonDeletablePatternNodeIds), so once this is
   // actually wired into an agent, its hover toolbar offers Swap instead of
@@ -50,6 +56,20 @@ export function ReasonActPatternNode({
   if (data.config.max_iterations != null && isUnderIterated(data.config.max_iterations, data.suggestedIterations ?? null))
     warnings.push(
       `Max iterations (${data.config.max_iterations}) is below what this agent's wiring needs (about ${data.suggestedIterations}) -- the loop will be cut off before the agent writes its answer`,
+    )
+  // Not an estimate -- the last run's own loop reported hitting the ceiling
+  // (protocol_execution.py's _truncation_fields), which is why this is stated
+  // as fact where the warning above hedges. Carried here from the AGENT's
+  // node_run by ProtocolCanvas.tsx, because the cap that caused it is
+  // configured on this node, not the one showing the "Hit iteration limit"
+  // badge. Deliberately NOT part of findNodeConfigIssues: a past run's outcome
+  // would keep blocking the pre-run dialog after the cap was already raised,
+  // right up until the next run replaced it. Once the cap IS above what died,
+  // the fix is made and only a re-run is missing, so this stops.
+  const truncatedAt = data.hostTruncation?.max_iterations
+  if (truncatedAt != null && data.config.max_iterations != null && data.config.max_iterations <= truncatedAt)
+    warnings.push(
+      `The last run stopped at this iteration limit (${truncatedAt}) with its answer unwritten -- raise Max iterations and run it again`,
     )
   // Not a misconfiguration -- the run succeeds. It just doesn't LOOP: with
   // nothing callable bound, motoro's reason_act ends on turn one (its own

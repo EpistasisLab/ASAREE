@@ -93,3 +93,23 @@ export function suggestedMaxIterations(graph: ProtocolGraph, patternNodeId: stri
 export function isUnderIterated(maxIterations: number | null | undefined, suggested: number | null): boolean {
   return suggested != null && (maxIterations == null || maxIterations < suggested)
 }
+
+// How far past a cap that has already failed to go. A run that died at 15
+// proves 15 was short; it does not say by how much, since the loop was cut off
+// before it could show us. Half again is enough headroom to finish a run that
+// was close without turning a runaway loop into an expensive one -- and the
+// next truncation, if there is one, raises it again from the new number.
+const TRUNCATION_HEADROOM = 1.5
+
+/** The suggestion, raised when a real run already hit this cap.
+ *
+ * Evidence beats the wiring heuristic: `suggestedMaxIterations` guesses from
+ * what's connected, but a truncated run is the loop itself reporting that the
+ * number was too small. Takes the larger of the two so a raise is never a
+ * climb-down, and stays inside the catalog schema's own maximum.
+ */
+export function raiseForTruncation(suggested: number | null, truncatedAt: number | null | undefined): number | null {
+  if (truncatedAt == null || !Number.isFinite(truncatedAt) || truncatedAt <= 0) return suggested
+  const raised = Math.min(MAX_SUGGESTION, Math.ceil((truncatedAt * TRUNCATION_HEADROOM) / 5) * 5)
+  return suggested == null ? raised : Math.max(suggested, raised)
+}

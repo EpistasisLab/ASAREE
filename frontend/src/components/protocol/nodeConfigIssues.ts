@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import { toPersistedGraph } from '@/lib/protocolGraph'
-import { isUnderIterated, suggestedMaxIterations } from '@/lib/reasonActIterations'
+import { isUnderIterated, raiseForTruncation, suggestedMaxIterations } from '@/lib/reasonActIterations'
 import type { LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { Skill } from '@/types/skills'
@@ -44,7 +44,17 @@ export interface NodeConfigIssue {
 // its own network request or makes clicking Run wait on one. A cache miss
 // (that query never ran, or hasn't resolved yet) just means "can't tell,"
 // same as LlmNode.tsx's own empty-list case -- not treated as an issue.
-export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: QueryClient): NodeConfigIssue[] {
+// `truncatedCaps` maps a Reason + Act node id to the `max_iterations` the last
+// run of its agent actually hit (ProtocolCanvas.tsx's truncationByPattern).
+// Optional because the callers that run from a stored `Protocol.graph` alone
+// (the Runs tab's dialogs) have no run in hand; they report truncation at the
+// replicate level instead, via RunConfirmDialog's own `truncationNotice`.
+export function findNodeConfigIssues(
+  nodes: Node[],
+  edges: Edge[],
+  queryClient: QueryClient,
+  truncatedCaps?: ReadonlyMap<string, number>,
+): NodeConfigIssue[] {
   const agentIdsWithLlm = new Set(edges.filter((e) => e.targetHandle === 'ai').map((e) => e.target))
   // suggestedMaxIterations walks the persisted shape (it also runs against a
   // graph loaded from the server), so convert once rather than per node.
@@ -201,8 +211,18 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
         // `completed`, but Motoro cuts the loop off before the agent writes its
         // answer, so what comes back is a tool dump and an Output Parser full
         // of nulls. Cheaper to raise the number than to pay for the run twice.
-        const suggested = suggestedMaxIterations(graph, node.id)
-        if (config.max_iterations != null && isUnderIterated(config.max_iterations, suggested)) {
+        //
+        // A cap a real run already died at says the same thing with evidence
+        // instead of an estimate, so it replaces the estimate rather than
+        // stacking a second line saying it again. Safe to state here, where a
+        // run outcome normally wouldn't belong: it is reported only while the
+        // cap is STILL at or below what failed, so raising it silences this
+        // immediately -- the next run doesn't have to happen first.
+        const truncatedAt = truncatedCaps?.get(node.id)
+        const suggested = raiseForTruncation(suggestedMaxIterations(graph, node.id), truncatedAt)
+        if (config.max_iterations != null && truncatedAt != null && config.max_iterations <= truncatedAt) {
+          issues.push(`The last run stopped at this iteration limit (${truncatedAt}) with its answer unwritten -- raise Max iterations to about ${suggested}`)
+        } else if (config.max_iterations != null && isUnderIterated(config.max_iterations, suggested)) {
           issues.push(`Max iterations (${config.max_iterations}) is below what this agent's wiring needs (about ${suggested})`)
         }
         // The "no tools wired, so this loop won't loop" warning deliberately

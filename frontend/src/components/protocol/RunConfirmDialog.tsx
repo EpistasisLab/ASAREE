@@ -37,6 +37,8 @@ export function RunConfirmDialog({
   nodes,
   edges,
   queryClient,
+  truncatedCaps,
+  truncationNotice = null,
   onCancel,
   onConfirm,
   hasUnpublishedChanges = false,
@@ -54,6 +56,13 @@ export function RunConfirmDialog({
   nodes: Node[]
   edges: Edge[]
   queryClient: QueryClient
+  // Reason + Act node id -> the `max_iterations` its agent's last run hit, for
+  // callers that have a run in hand (the canvas). See findNodeConfigIssues.
+  truncatedCaps?: ReadonlyMap<string, number>
+  // The same finding at the replicate level, for callers that don't: the Runs
+  // tab knows which replicates came back truncated but not which node's cap
+  // did it, so it says that instead of naming a node.
+  truncationNotice?: string | null
   onCancel: () => void
   onConfirm: () => void
   hasUnpublishedChanges?: boolean
@@ -68,7 +77,7 @@ export function RunConfirmDialog({
   confirmError?: string | null
 }) {
   const summary = summarizeRun(nodes, edges, scope)
-  const allIssues = findNodeConfigIssues(nodes, edges, queryClient)
+  const allIssues = findNodeConfigIssues(nodes, edges, queryClient, truncatedCaps)
   // A node-scoped run only ever touches that node plus its own directly
   // wired dependencies -- an issue on some unrelated node elsewhere on the
   // canvas isn't relevant to THIS run, so don't show it here.
@@ -161,6 +170,16 @@ export function RunConfirmDialog({
               This run will use published canvas v{publishedRevision}. Publish the latest canvas first to run the changes you are viewing.
             </p>
             {publishError && <p className="text-xs text-destructive">{publishError}</p>}
+          </div>
+        )}
+
+        {/* --chart-4, the same amber every other truncation surface uses (the
+            node badge, the Runs tab badges), so one situation keeps one color
+            wherever it's reported. */}
+        {truncationNotice && (
+          <div className="space-y-1 rounded-md border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/10 px-3 py-2 text-sm">
+            <p className="font-medium text-[color:var(--chart-4)]">Iteration limit reached last time</p>
+            <p className="text-xs text-muted-foreground">{truncationNotice}</p>
           </div>
         )}
 

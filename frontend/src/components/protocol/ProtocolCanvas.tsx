@@ -827,6 +827,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     return map
   }, [nodes, patternHostIds, latestNodeRuns])
 
+  // Just the caps, for the pre-run scan (findNodeConfigIssues), which names
+  // the node but has no run of its own to read.
+  const truncatedCaps = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const [patternId, truncation] of truncationByPattern) {
+      if (typeof truncation?.max_iterations === 'number') map.set(patternId, truncation.max_iterations)
+    }
+    return map
+  }, [truncationByPattern])
+
   // A truncated run outranks the wiring estimate -- see raiseForTruncation.
   const suggestedIterationsByPattern = useMemo(
     () =>
@@ -2272,6 +2282,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           nodes={nodes}
           edges={edges}
           queryClient={queryClient}
+          truncatedCaps={truncatedCaps}
           onCancel={() => setPendingRunConfirm(null)}
           onConfirm={confirmPendingRun}
           hasUnpublishedChanges={hasUnpublishedChanges}

@@ -8,7 +8,7 @@ import type { LLMConnectionStatus, LLMProvider } from '@/types/llmSettings'
 // page's credentials table, the save step in CreateCredentialDialog, and the
 // LLM node inspector's Credential field. One definition on purpose: the same
 // status must always resolve to the same color and the same word everywhere
-// (the root CLAUDE.md's rule for status-driven tint), and "Key valid" in one
+// (the root AGENTS.md's rule for status-driven tint), and "Key valid" in one
 // place with "Connected" in another would read as two different claims.
 //
 // Colors follow the app's status language: emerald for done/good, amber for

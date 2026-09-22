@@ -46,7 +46,7 @@ function CellsBody({ experiment, cells }: { experiment: Experiment; cells: Repli
  * experiment has cells, so a future non-factorial type gets an explicit
  * "not available" line instead of an empty, broken-looking grid.
  *
- * Maximize is CLAUDE.md's established convention for a dense view that
+ * Maximize is AGENTS.md's established convention for a dense view that
  * outgrows the panel's column (same as ResultsTab): a fixed inset-0 overlay
  * with an Escape handler and a body-scroll lock, never the browser Fullscreen
  * API. The table is mounted in exactly one of the two places at a time, so

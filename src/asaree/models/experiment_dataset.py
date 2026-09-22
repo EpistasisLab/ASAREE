@@ -9,7 +9,7 @@ than keep the FK and let it silently mean "the first one", the relationship
 itself changed shape and the column was dropped (migration ``d5a3b90c71e4``,
 which backfills one row per existing non-null ``dataset_id``).
 
-Deliberately NOT the same call as CLAUDE.md's "agents are not a stored
+Deliberately NOT the same call as AGENTS.md's "agents are not a stored
 relationship". An experiment's datasets are answerable only from the canvas
 graph otherwise, and unlike agents (reusable per-user templates that an
 experiment merely borrows) a dataset is part of what the experiment IS --

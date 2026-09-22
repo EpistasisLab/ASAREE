@@ -15,7 +15,7 @@ import { Split } from 'lucide-react'
 //
 // Violet (`--chart-2`), not the host node's `--card-accent`: violet is already
 // this app's factor hue (FACTOR_TRIGGER_CLASSNAME's own button, the factor
-// editor dialog), and CLAUDE.md's colour rule wants a tint to mean something
+// editor dialog), and AGENTS.md's colour rule wants a tint to mean something
 // -- here it means "factor", the one thing this badge is for, so it must not
 // dissolve into whatever hue the node underneath happens to be.
 //

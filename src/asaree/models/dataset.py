@@ -11,7 +11,7 @@ separate, later, optional action (``services.datasets.quick_split_dataset``/
 ``register_manual_split``), so ``train_path``/``test_path`` are nullable: a
 freshly-registered dataset has a raw file and no split yet, same as an
 experiment created before the ``dataset_id`` FK existed permanently has
-``dataset_id: null`` (see CLAUDE.md's own Experiment data model section) —
+``dataset_id: null`` (see AGENTS.md's own Experiment data model section) —
 not a bug to backfill, just a real, valid state. This split-off-registration
 design is deliberate, not an oversight: scientific splitting needs vary
 per experiment (stratified holdout, group-aware holdout, k-fold, time-based,
@@ -47,7 +47,7 @@ class RegisteredDataset(Base, TimestampMixin):
     # re-derived. The one thing registration itself is responsible for.
     # Nullable purely for a dataset registered before this column existed
     # (this concept didn't exist yet, so there's nothing to backfill it
-    # from -- same "permanent, valid null" reasoning CLAUDE.md's own
+    # from -- same "permanent, valid null" reasoning AGENTS.md's own
     # Experiment data model section gives for a pre-migration
     # dataset_id) -- every dataset registered from here on always has one.
     raw_path: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -11,7 +11,7 @@ import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark'
 // itself, not its accompanying background theme) is used verbatim for
 // those -- a code editor's multi-hue token coloring is its own established
 // visual language, not something this app's single-accent color convention
-// (CLAUDE.md's "Color -- meaningful variation, not decoration") is meant to
+// (AGENTS.md's "Color -- meaningful variation, not decoration") is meant to
 // constrain, the same way a syntax-highlighted code block in a chat UI
 // doesn't reskin its colors to match the surrounding chrome either.
 const editorTheme = EditorView.theme(

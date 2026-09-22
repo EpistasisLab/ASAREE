@@ -213,6 +213,12 @@ export interface Trial {
   // True when this run used an older published canvas version than the
   // protocol's current published version.
   obsolete: boolean
+  // An agent in this run was stopped by its iteration ceiling, so the run
+  // finished without finishing its work. Such a replicate is `completed` and
+  // deliberately UNSCORED -- the backend withholds the measurement projection
+  // rather than let an unfinished run count toward a cell's scored tally --
+  // so this is the only thing that explains the empty metric_values.
+  truncated: boolean
   error: string | null
   updated_at: string
 }

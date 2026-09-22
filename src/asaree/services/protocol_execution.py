@@ -82,6 +82,7 @@ from asaree.services.protocol_runs import (
     get_cancel_requested_at,
     get_protocol_run,
     is_current_replicate_attempt,
+    node_run_truncation,
     set_status,
     touch_protocol_run_heartbeat,
     update_node_run,
@@ -4763,6 +4764,19 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                         "artifacts": {
                             "output_text": node_runs[result_node_id].get("output_text"),
                             "protocol_run_id": str(protocol_run_id),
+                            # Why this replicate will come back unscored (see
+                            # record_measurement_evaluation). Written here, on
+                            # the same pass as output_text, so the marker
+                            # exists even for a replicate whose measurement
+                            # never runs -- otherwise "completed but unscored"
+                            # would have nothing to explain itself with. Safe
+                            # against a rerun: create_protocol_run clears
+                            # `artifacts` when it claims the slot.
+                            **(
+                                {"truncation": truncation}
+                                if (truncation := node_run_truncation(node_runs)) is not None
+                                else {}
+                            ),
                         }
                     },
                     revision_id=design_revision_id,

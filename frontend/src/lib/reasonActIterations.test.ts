@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { suggestedMaxIterations } from './reasonActIterations'
+import { isUnderIterated, suggestedMaxIterations } from './reasonActIterations'
 import type { ProtocolGraph, ProtocolNode } from '@/types/protocols'
 
 function node(id: string, type: string, config: Record<string, unknown> = {}): ProtocolNode {
@@ -81,5 +81,22 @@ describe('suggestedMaxIterations', () => {
       [patternEdge, ...scripts.map((s, i) => wire(`e${i}`, s.id, 'tool'))],
     )
     expect(suggestedMaxIterations(g, 'pattern-1')).toBe(100)
+  })
+})
+
+describe('isUnderIterated', () => {
+  it('says nothing when the wiring implies no suggestion', () => {
+    expect(isUnderIterated(5, null)).toBe(false)
+    expect(isUnderIterated(null, null)).toBe(false)
+  })
+
+  it('flags a cap below the suggestion, and an unset one', () => {
+    expect(isUnderIterated(15, 30)).toBe(true)
+    expect(isUnderIterated(null, 30)).toBe(true)
+  })
+
+  it('leaves a cap at or above the suggestion alone -- too high costs nothing', () => {
+    expect(isUnderIterated(30, 30)).toBe(false)
+    expect(isUnderIterated(100, 30)).toBe(false)
   })
 })

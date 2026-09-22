@@ -82,3 +82,14 @@ export function suggestedMaxIterations(graph: ProtocolGraph, patternNodeId: stri
   const suggestion = Math.ceil(Math.max(...costs) / 5) * 5
   return Math.min(MAX_SUGGESTION, Math.max(MIN_SUGGESTION, suggestion))
 }
+
+/** Whether a configured cap is below what the wiring needs.
+ *
+ * An unset cap counts as under-iterated: an empty field is exactly the case
+ * where the suggestion helps most. The two surfaces that already report "Max
+ * iterations is required" separately (the node's warning triangle and the
+ * pre-run scan) gate on the field being set, so neither says it twice.
+ */
+export function isUnderIterated(maxIterations: number | null | undefined, suggested: number | null): boolean {
+  return suggested != null && (maxIterations == null || maxIterations < suggested)
+}

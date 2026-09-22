@@ -764,6 +764,92 @@ async def test_measurement_evaluations_are_immutable_per_attempt_with_one_curren
         await delete_experiment(db, experiment_id)
 
 
+async def test_a_truncated_run_keeps_its_numbers_but_does_not_score_its_replicate(
+    owner_id: uuid.UUID,
+) -> None:
+    """An agent cut off by its iteration ceiling measured an unfinished run."""
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f"truncated-{uuid.uuid4().hex}", owner_id=owner_id)
+        protocol = await create_protocol(
+            db,
+            name=f"truncated-protocol-{uuid.uuid4().hex}",
+            owner_id=owner_id,
+            experiment_id=experiment.id,
+        )
+        replicate = await upsert_replicate(
+            db,
+            experiment_id=experiment.id,
+            replicate_label="cell-1",
+            fields={"factor_values": {"tier": "small"}},
+        )
+        run = await create_protocol_run(
+            db,
+            protocol_id=protocol.id,
+            owner_id=owner_id,
+            replicate_label=replicate.replicate_label,
+            factor_values=replicate.factor_values,
+            replicate_result_id=replicate.id,
+            design_revision_id=replicate.design_revision_id,
+        )
+        run.node_runs = {
+            "agent-1": {
+                "status": "completed",
+                "truncation": {"reason": "max_iterations", "iterations": 15, "max_iterations": 15},
+            }
+        }
+        await db.flush()
+        await record_measurement_evaluation(
+            db,
+            run.id,
+            MeasurementEvaluation(
+                replicate_id=str(replicate.id),
+                attempt_id=str(run.id),
+                observations=(
+                    MetricObservation(
+                        metric_id="accuracy",
+                        metric_name="Accuracy",
+                        value_type="number",
+                        status="measured",
+                        value=0.9,
+                        error=None,
+                        attempt_id=str(run.id),
+                        producer=ProducerProvenance(
+                            binding_id="reported",
+                            producer_id="asaree.reported",
+                            kind="reported",
+                            version="1",
+                        ),
+                        input_provenance={"facts": {"protocol_run_id": str(run.id)}},
+                    ),
+                ),
+                artifacts=(),
+            ),
+        )
+        experiment_id = experiment.id
+        protocol_id = protocol.id
+        run_id = run.id
+
+    async with get_session() as db:
+        stored_run = await get_protocol_run(db, run_id)
+        assert stored_run is not None
+        assert stored_run.attempt_result is not None
+        # The measurement itself is real and stays inspectable.
+        assert stored_run.attempt_result["metric_values"] == {"Accuracy": 0.9}
+        stored_replicate = await get_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="cell-1",
+        )
+        assert stored_replicate is not None
+        assert not stored_replicate.metric_values
+        assert stored_replicate.artifacts is not None
+        assert stored_replicate.artifacts["measurement"]["attempt_id"] == str(run_id)
+
+    async with get_session() as db:
+        await delete_protocol(db, protocol_id)
+        await delete_experiment(db, experiment_id)
+
+
 async def test_runtime_measurement_is_snapshotted_on_attempt_and_current_replicate(
     owner_id: uuid.UUID, monkeypatch
 ) -> None:

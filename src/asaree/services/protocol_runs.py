@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -34,6 +34,22 @@ from asaree.services.measurement_migration import normalize_experiment_measureme
 logger = logging.getLogger(__name__)
 
 TERMINAL_PROTOCOL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "limit_reached"})
+
+
+def node_run_truncation(node_runs: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """The first agent in this run whose loop was cut off by its iteration
+    ceiling (see ``protocol_execution._truncation_fields``), or ``None``.
+
+    First rather than all: the consequence is the same whichever agent it was
+    -- the replicate's numbers describe an unfinished run -- and naming one
+    node is what makes the message actionable. The rest of the chain is in the
+    node timeline for anyone who wants it.
+    """
+    for node_id, node_run in (node_runs or {}).items():
+        truncation = node_run.get("truncation") if isinstance(node_run, Mapping) else None
+        if isinstance(truncation, Mapping):
+            return {"node_id": node_id, **dict(truncation)}
+    return None
 
 
 def _apply_status(run: ProtocolRun, *, status: str, error: str | None, now: datetime) -> None:
@@ -422,7 +438,18 @@ async def record_measurement_evaluation(
         artifacts = dict(replicate.artifacts or {})
         artifacts["measurement"] = evaluation.to_document()
         replicate.artifacts = artifacts
-        if measured_values:
+        # A replicate whose agent was cut off by its iteration ceiling is NOT
+        # scored: the metrics are real measurements of an unfinished run, and
+        # projecting them would let a cell read "3/3 scored" when all three
+        # agents stopped mid-work. "Scored" is `metric_values` being set --
+        # one predicate, read by the cell accents, the design-history counts,
+        # and the factorial analysis alike -- so withholding the projection is
+        # what excludes it from every one of them at once.
+        #
+        # The numbers are not lost: `attempt_result["metric_values"]` above and
+        # `artifacts["measurement"]` here both keep the full document, so the
+        # run stays inspectable and a re-run at a workable cap scores normally.
+        if measured_values and node_run_truncation(run.node_runs) is None:
             replicate.metric_values = {**(replicate.metric_values or {}), **measured_values}
     await db.flush()
     await db.refresh(run)
@@ -489,6 +516,14 @@ class ExperimentTrial:
     # protocol's current one. This is derived on read, preserving the run's
     # actual lifecycle status and history rather than mutating either.
     obsolete: bool
+    # An agent in this replicate's run was cut off by its iteration ceiling, so
+    # the run finished without finishing its work and its measurements were
+    # deliberately not projected onto the replicate (see
+    # ``record_measurement_evaluation``). Derived on read from the marker the
+    # run left in ``artifacts``, the same way ``obsolete`` is derived rather
+    # than stored: a row that is `completed` and unscored is otherwise
+    # inexplicable.
+    truncated: bool
     error: str | None
     updated_at: datetime
 
@@ -567,6 +602,7 @@ async def list_experiment_trials(
                 status=status,
                 run_id=replicate.run_id,
                 obsolete=obsolete,
+                truncated=bool((replicate.artifacts or {}).get("truncation")),
                 error=error,
                 updated_at=updated_at,
             )

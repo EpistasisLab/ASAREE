@@ -1,4 +1,5 @@
 import { nodeAccent } from '@/lib/nodeAccent'
+import { isUnderIterated } from '@/lib/reasonActIterations'
 import { useNodeConnections, type NodeProps } from '@xyflow/react'
 import { Repeat2 } from 'lucide-react'
 import type { ReasonActPatternNodeData } from '@/types/protocols'
@@ -22,7 +23,7 @@ export function ReasonActPatternNode({
   id,
   data,
   selected,
-}: NodeProps & { data: ReasonActPatternNodeData & { hostHasNoTools?: boolean } }) {
+}: NodeProps & { data: ReasonActPatternNodeData & { hostHasNoTools?: boolean; suggestedIterations?: number | null } }) {
   // An agent's execution pattern must never go to zero (see
   // ProtocolCanvas.tsx's nonDeletablePatternNodeIds), so once this is
   // actually wired into an agent, its hover toolbar offers Swap instead of
@@ -39,6 +40,17 @@ export function ReasonActPatternNode({
   const warnings: string[] = []
   if (data.config.max_iterations == null) warnings.push('Max iterations is required')
   if (data.config.include_scratchpad && data.config.scratchpad_window == null) warnings.push('Scratchpad window is required')
+  // The cap is set, but lower than the driven agent's own wiring needs
+  // (lib/reasonActIterations.ts; computed in ProtocolCanvas.tsx because it
+  // depends on the AGENT's connectors, not this node's config). A warning
+  // rather than a silent default, because exhausting the cap does not fail the
+  // run: Motoro keeps the last tool result and reports `completed`, so the
+  // symptom the user actually sees is an Output Parser full of nulls, several
+  // steps removed from the number that caused it.
+  if (data.config.max_iterations != null && isUnderIterated(data.config.max_iterations, data.suggestedIterations ?? null))
+    warnings.push(
+      `Max iterations (${data.config.max_iterations}) is below what this agent's wiring needs (about ${data.suggestedIterations}) -- the loop will be cut off before the agent writes its answer`,
+    )
   // Not a misconfiguration -- the run succeeds. It just doesn't LOOP: with
   // nothing callable bound, motoro's reason_act ends on turn one (its own
   // `implicit_final_answer` path), so the arm is a single LLM call wearing a

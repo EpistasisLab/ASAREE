@@ -1,6 +1,7 @@
 import { Repeat2 } from 'lucide-react'
 import { useState } from 'react'
 import { nodeAccent } from '@/lib/nodeAccent'
+import { isUnderIterated } from '@/lib/reasonActIterations'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -63,8 +64,7 @@ export function ReasonActPatternNodeInspector({
   // the run into a payload of nulls that still reports as completed, while
   // going above it costs nothing -- the loop stops when the agent answers --
   // so there is no symmetric "you set this too high" to warn about.
-  const underIterated =
-    suggestedIterations != null && (config.max_iterations == null || config.max_iterations < suggestedIterations)
+  const underIterated = isUnderIterated(config.max_iterations, suggestedIterations)
 
   const missingFields: string[] = []
   if (config.max_iterations == null) missingFields.push('Max iterations')

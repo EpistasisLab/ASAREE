@@ -781,6 +781,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     return map
   }, [edges])
 
+  // The iteration cap each Reason+Act node's driven agent actually needs
+  // (lib/reasonActIterations.ts), by pattern node id. Computed here, once for
+  // the whole canvas, because it depends on the AGENT's wiring rather than the
+  // pattern node's own data -- and because the node card's warning triangle
+  // and the inspector's "Use N" hint have to agree on the number.
+  const suggestedIterationsByPattern = useMemo(() => {
+    const patternIds = nodes.filter((n) => n.type === 'pattern_reason_act').map((n) => n.id)
+    if (patternIds.length === 0) return new Map<string, number | null>()
+    const graph = toPersistedGraph(nodes, edges)
+    return new Map(patternIds.map((id) => [id, suggestedMaxIterations(graph, id)]))
+  }, [nodes, edges])
+
   // Who each agent may consult under the Peer Collaboration coordination
   // strategy, mirroring services/protocol_execution.py's _connected_agent_ids:
   // a plain (non-connector) edge joining two Agent nodes, read undirected. The
@@ -966,6 +978,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             !!patternHostId &&
             !agentIdsWithCallableTools.has(patternHostId) &&
             !(isPeerCollaboration && (peerIdsByAgent.get(patternHostId)?.length ?? 0) > 0),
+          suggestedIterations: suggestedIterationsByPattern.get(n.id) ?? null,
         },
       }
     })
@@ -979,6 +992,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     agentIdsWithCallableTools,
     patternHostIds,
     peerIdsByAgent,
+    suggestedIterationsByPattern,
     llmConfigByAgent,
     isPeerCollaboration,
     isSupervisor,
@@ -2142,7 +2156,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
-            suggestedIterations={suggestedMaxIterations(toPersistedGraph(nodes, edges), selectedNode.id)}
+            suggestedIterations={suggestedIterationsByPattern.get(selectedNode.id) ?? null}
             onChange={updateNodeData}
             onClose={() => setSelectedNodeId(null)}
           />

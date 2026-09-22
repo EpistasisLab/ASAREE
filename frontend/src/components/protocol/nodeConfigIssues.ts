@@ -1,5 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
+import { toPersistedGraph } from '@/lib/protocolGraph'
+import { isUnderIterated, suggestedMaxIterations } from '@/lib/reasonActIterations'
 import type { LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { Skill } from '@/types/skills'
@@ -44,6 +46,9 @@ export interface NodeConfigIssue {
 // same as LlmNode.tsx's own empty-list case -- not treated as an issue.
 export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: QueryClient): NodeConfigIssue[] {
   const agentIdsWithLlm = new Set(edges.filter((e) => e.targetHandle === 'ai').map((e) => e.target))
+  // suggestedMaxIterations walks the persisted shape (it also runs against a
+  // graph loaded from the server), so convert once rather than per node.
+  const graph = toPersistedGraph(nodes, edges)
   const result: NodeConfigIssue[] = []
 
   for (const node of nodes) {
@@ -190,6 +195,16 @@ export function findNodeConfigIssues(nodes: Node[], edges: Edge[], queryClient: 
         const config = (node.data as ReasonActPatternNodeData).config
         if (config.max_iterations == null) issues.push('Max iterations is required')
         if (config.include_scratchpad && config.scratchpad_window == null) issues.push('Scratchpad window is required')
+        // A cap below what the driven agent's wiring needs (see
+        // lib/reasonActIterations.ts) IS worth interrupting a Run for, unlike
+        // the no-tools case below: the run burns real tokens and still reports
+        // `completed`, but Motoro cuts the loop off before the agent writes its
+        // answer, so what comes back is a tool dump and an Output Parser full
+        // of nulls. Cheaper to raise the number than to pay for the run twice.
+        const suggested = suggestedMaxIterations(graph, node.id)
+        if (config.max_iterations != null && isUnderIterated(config.max_iterations, suggested)) {
+          issues.push(`Max iterations (${config.max_iterations}) is below what this agent's wiring needs (about ${suggested})`)
+        }
         // The "no tools wired, so this loop won't loop" warning deliberately
         // ISN'T repeated here -- it lives only where the canvas warning icon
         // is computed (ProtocolCanvas.tsx's agentIdsWithCallableTools). Unlike

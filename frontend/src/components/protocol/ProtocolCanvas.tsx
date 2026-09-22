@@ -795,8 +795,24 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     return new Map(patternIds.map((id) => [id, suggestedMaxIterations(graph, id)]))
   }, [nodes, edges])
 
-  // What the last run's own loop reported, by PATTERN node id: a Reason+Act
-  // agent that exhausted its ceiling (services/protocol_execution.py's
+  // The most recent thing this canvas actually did, whichever kind it was.
+  // The node badges read `runQuery` alone, because that's the run the canvas
+  // is *watching*; a Test Run reports itself in its own results panel instead
+  // (list_protocol_runs excludes test runs, so it can never seed runQuery).
+  // Config findings can't follow that split: a Test Run is how you iterate on
+  // the canvas, so "your cap is too low" learned from one has to reach the
+  // node you'd fix. Newest wins, so raising the cap and running for real
+  // clears a finding the earlier Test Run left behind.
+  const latestNodeRuns = useMemo(() => {
+    const run = runQuery.data
+    const test = testRunQuery.data
+    if (!run) return test?.execution_summary.node_runs
+    if (!test) return run.node_runs
+    return test.created_at > run.created_at ? test.execution_summary.node_runs : run.node_runs
+  }, [runQuery.data, testRunQuery.data])
+
+  // What that run's own loop reported, by PATTERN node id: a Reason+Act agent
+  // that exhausted its ceiling (services/protocol_execution.py's
   // _truncation_fields) leaves the marker on the AGENT's node_run, but the cap
   // that caused it is configured on the pattern node driving that agent, so the
   // finding has to be carried across the edge to be actionable.
@@ -805,11 +821,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     for (const n of nodes) {
       if (n.type !== 'pattern_reason_act') continue
       const hostId = patternHostIds.get(n.id)
-      const truncation = hostId ? runQuery.data?.node_runs[hostId]?.truncation : null
+      const truncation = hostId ? latestNodeRuns?.[hostId]?.truncation : null
       if (truncation) map.set(n.id, truncation)
     }
     return map
-  }, [nodes, patternHostIds, runQuery.data])
+  }, [nodes, patternHostIds, latestNodeRuns])
 
   // A truncated run outranks the wiring estimate -- see raiseForTruncation.
   const suggestedIterationsByPattern = useMemo(

@@ -132,18 +132,6 @@ async def test_create_experiment_returns_a_persisted_recommended_measurement_pla
             "primary": False,
             "unit": "tokens",
         },
-        {
-            "id": "runtime-tool-calls",
-            "catalogKey": "tool_calls",
-            "name": "Tool calls",
-            "description": "Recorded tool-call attempts across attributed Agent runs.",
-            "kind": "runtime",
-            "valueType": "number",
-            "direction": "minimize",
-            "aggregation": "sum",
-            "primary": False,
-            "unit": "calls",
-        },
     ]
     expected_plan = {
         "metrics": [
@@ -177,16 +165,6 @@ async def test_create_experiment_returns_a_persisted_recommended_measurement_pla
                 "description": "Combined input and output tokens for the run.",
                 "unit": "tokens",
             },
-            {
-                "id": "runtime-tool-calls",
-                "name": "Tool calls",
-                "value_type": "number",
-                "direction": "minimize",
-                "aggregation": "sum",
-                "primary": False,
-                "description": "Recorded tool-call attempts across attributed Agent runs.",
-                "unit": "calls",
-            },
         ],
         "producers": [
             {
@@ -197,7 +175,6 @@ async def test_create_experiment_returns_a_persisted_recommended_measurement_pla
                     "cost_usd": "runtime-cost",
                     "duration_seconds": "runtime-duration",
                     "total_tokens": "runtime-total-tokens",
-                    "tool_calls": "runtime-tool-calls",
                 },
                 "artifacts": [],
                 "config": {},

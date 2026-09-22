@@ -116,12 +116,14 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
     },
 )
 _CATALOG_BY_KEY = {str(entry["key"]): entry for entry in METRIC_CATALOG}
-RECOMMENDED_RUNTIME_METRIC_KEYS = ("cost_usd", "duration_seconds", "total_tokens", "tool_calls")
+# Only metrics every run can produce. Tool calls is deliberately absent: an
+# experiment is created before its canvas exists, and on a canvas with no tool
+# wired it can never measure anything -- the metrics editor offers it once one is.
+RECOMMENDED_RUNTIME_METRIC_KEYS = ("cost_usd", "duration_seconds", "total_tokens")
 _RECOMMENDED_RUNTIME_METRIC_IDS = {
     "cost_usd": "runtime-cost",
     "duration_seconds": "runtime-duration",
     "total_tokens": "runtime-total-tokens",
-    "tool_calls": "runtime-tool-calls",
 }
 _KINDS = {"runtime", "custom"}
 _VALUE_TYPES = {"number", "boolean", "opaque"}

@@ -24,6 +24,7 @@ import { newNodeId } from '@/lib/nodeId'
 import { handoffPeers, promptReferenceScope } from '@/lib/promptReferences'
 import { mergeProtocolSaveIntoCache, protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
+import { nodeDisplayNames } from '@/lib/nodeNames'
 import { suggestedMaxIterations } from '@/lib/reasonActIterations'
 import {
   defaultAgentNodeData,
@@ -888,10 +889,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     return map
   }, [nodes, edges])
 
-  const agentNames = useMemo(
-    () => new Map(nodes.filter((n) => n.type === 'agent').map((n) => [n.id, (n.data as AgentNodeData).label || 'Agent'])),
-    [nodes],
-  )
+  // Every node, not just the agents: the run panels list a node_run per node
+  // in the graph (datasets and output parsers included -- see
+  // run_protocol's own loop), and a raw uuid there names nothing the user can
+  // find on the canvas. A superset is harmless for the transcript, whose
+  // speaker ids are always agents.
+  const nodeNames = useMemo(() => nodeDisplayNames(nodes), [nodes])
 
   // The experiment's declared coordination strategy, which decides what the
   // main handles MEAN -- whether a lead marker is in force, and whether the
@@ -1980,10 +1983,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             />
           </div>
           {testResultsOpen && testRunQuery.data && (
-            <TestRunResults run={testRunQuery.data} agentNames={agentNames} onClose={() => setTestResultsOpen(false)} />
+            <TestRunResults run={testRunQuery.data} nodeNames={nodeNames} onClose={() => setTestResultsOpen(false)} />
           )}
           {playResultsOpen && playResult && (
-            <TestRunResults title="Play Results" run={playResult} agentNames={agentNames} onClose={() => setPlayResultsOpen(false)} />
+            <TestRunResults title="Play Results" run={playResult} nodeNames={nodeNames} onClose={() => setPlayResultsOpen(false)} />
           )}
           {/* One top-left column rather than two independently-positioned
               overlays: the lock badge and the transcript are both anchored
@@ -2002,7 +2005,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 </div>
               )}
               {showStandaloneConversation && runQuery.data?.conversation && (
-                <ConversationTranscript conversation={runQuery.data.conversation} agentNames={agentNames} />
+                <ConversationTranscript conversation={runQuery.data.conversation} agentNames={nodeNames} />
               )}
             </div>
           )}

@@ -67,6 +67,14 @@ export interface NodeRunState {
   // to fail without taking the prose down with it.
   payload?: Record<string, unknown> | null
   caveats?: string[]
+  // Present only when the agent's loop was cut off by its iteration ceiling
+  // instead of by the agent deciding it was done. The run still reports
+  // `completed`, and deliberately so -- everything it did up to the ceiling is
+  // real work that downstream nodes consumed (see `_truncation_fields`'s note
+  // on why this is not a status). But the *answer* was never written: what the
+  // run hands on is whatever the last tool happened to return, which is how a
+  // wired Output Parser ends up with a payload of nulls.
+  truncation?: { reason: string; iterations?: number | null; max_iterations?: number | null } | null
   // Critic Gate only -- absent on a plain agent's NodeRunState. `run_id`
   // above doubles as the CRITIC's own run (not the upstream worker's) for a
   // gate, so its own Sense/Reason/Plan/Act steps are inspectable the same
@@ -764,10 +772,19 @@ export interface ReasonActPatternNodeData {
   [key: string]: unknown
 }
 
+// `max_iterations: 30` departs from the catalog schema's own default of 15 on
+// purpose. The cap is a safety stop, not a budget -- the loop exits as soon as
+// the agent answers, so a generous cap costs a simple agent nothing, while a
+// tight one truncates a tool-using agent mid-work: Motoro keeps the last tool
+// result as the run output and still reports `completed`, so the run looks
+// finished and its Output Parser silently yields a payload of nulls. 15 was
+// measured as too low for even a modest ASAREE canvas (4 Script nodes spent 13
+// iterations before the report was started) -- see lib/reasonActIterations.ts,
+// which sizes the same estimate against the actual wiring once there is any.
 export function defaultReasonActPatternNodeData(label = 'Reason + Act'): ReasonActPatternNodeData {
   return {
     label,
-    config: { max_iterations: 15, include_scratchpad: true, scratchpad_window: 10, observation_format: 'raw' },
+    config: { max_iterations: 30, include_scratchpad: true, scratchpad_window: 10, observation_format: 'raw' },
   }
 }
 

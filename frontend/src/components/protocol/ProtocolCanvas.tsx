@@ -24,6 +24,8 @@ import { newNodeId } from '@/lib/nodeId'
 import { handoffPeers, promptReferenceScope } from '@/lib/promptReferences'
 import { mergeProtocolSaveIntoCache, protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import { TERMINAL_RUN_STATUSES } from '@/lib/protocolRun'
+import { nodeDisplayNames } from '@/lib/nodeNames'
+import { raiseForTruncation, suggestedMaxIterations } from '@/lib/reasonActIterations'
 import {
   defaultAgentNodeData,
   defaultAnthropicLlmNodeData,
@@ -47,6 +49,7 @@ import type {
   LlmNodeData,
   McpToolNodeData,
   MemoryNodeData,
+  NodeRunState,
   OkfBundleNodeData,
   OkfDocumentNodeData,
   OutputParserNodeData,
@@ -780,6 +783,72 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     return map
   }, [edges])
 
+  // The iteration cap each Reason+Act node's driven agent actually needs
+  // (lib/reasonActIterations.ts), by pattern node id. Computed here, once for
+  // the whole canvas, because it depends on the AGENT's wiring rather than the
+  // pattern node's own data -- and because the node card's warning triangle
+  // and the inspector's "Use N" hint have to agree on the number.
+  const wiringIterationsByPattern = useMemo(() => {
+    const patternIds = nodes.filter((n) => n.type === 'pattern_reason_act').map((n) => n.id)
+    if (patternIds.length === 0) return new Map<string, number | null>()
+    const graph = toPersistedGraph(nodes, edges)
+    return new Map(patternIds.map((id) => [id, suggestedMaxIterations(graph, id)]))
+  }, [nodes, edges])
+
+  // The most recent thing this canvas actually did, whichever kind it was.
+  // The node badges read `runQuery` alone, because that's the run the canvas
+  // is *watching*; a Test Run reports itself in its own results panel instead
+  // (list_protocol_runs excludes test runs, so it can never seed runQuery).
+  // Config findings can't follow that split: a Test Run is how you iterate on
+  // the canvas, so "your cap is too low" learned from one has to reach the
+  // node you'd fix. Newest wins, so raising the cap and running for real
+  // clears a finding the earlier Test Run left behind.
+  const latestNodeRuns = useMemo(() => {
+    const run = runQuery.data
+    const test = testRunQuery.data
+    if (!run) return test?.execution_summary.node_runs
+    if (!test) return run.node_runs
+    return test.created_at > run.created_at ? test.execution_summary.node_runs : run.node_runs
+  }, [runQuery.data, testRunQuery.data])
+
+  // What that run's own loop reported, by PATTERN node id: a Reason+Act agent
+  // that exhausted its ceiling (services/protocol_execution.py's
+  // _truncation_fields) leaves the marker on the AGENT's node_run, but the cap
+  // that caused it is configured on the pattern node driving that agent, so the
+  // finding has to be carried across the edge to be actionable.
+  const truncationByPattern = useMemo(() => {
+    const map = new Map<string, NodeRunState['truncation']>()
+    for (const n of nodes) {
+      if (n.type !== 'pattern_reason_act') continue
+      const hostId = patternHostIds.get(n.id)
+      const truncation = hostId ? latestNodeRuns?.[hostId]?.truncation : null
+      if (truncation) map.set(n.id, truncation)
+    }
+    return map
+  }, [nodes, patternHostIds, latestNodeRuns])
+
+  // Just the caps, for the pre-run scan (findNodeConfigIssues), which names
+  // the node but has no run of its own to read.
+  const truncatedCaps = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const [patternId, truncation] of truncationByPattern) {
+      if (typeof truncation?.max_iterations === 'number') map.set(patternId, truncation.max_iterations)
+    }
+    return map
+  }, [truncationByPattern])
+
+  // A truncated run outranks the wiring estimate -- see raiseForTruncation.
+  const suggestedIterationsByPattern = useMemo(
+    () =>
+      new Map(
+        [...wiringIterationsByPattern].map(([id, wiring]) => [
+          id,
+          raiseForTruncation(wiring, truncationByPattern.get(id)?.max_iterations),
+        ]),
+      ),
+    [wiringIterationsByPattern, truncationByPattern],
+  )
+
   // Who each agent may consult under the Peer Collaboration coordination
   // strategy, mirroring services/protocol_execution.py's _connected_agent_ids:
   // a plain (non-connector) edge joining two Agent nodes, read undirected. The
@@ -875,10 +944,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     return map
   }, [nodes, edges])
 
-  const agentNames = useMemo(
-    () => new Map(nodes.filter((n) => n.type === 'agent').map((n) => [n.id, (n.data as AgentNodeData).label || 'Agent'])),
-    [nodes],
-  )
+  // Every node, not just the agents: the run panels list a node_run per node
+  // in the graph (datasets and output parsers included -- see
+  // run_protocol's own loop), and a raw uuid there names nothing the user can
+  // find on the canvas. A superset is harmless for the transcript, whose
+  // speaker ids are always agents.
+  const nodeNames = useMemo(() => nodeDisplayNames(nodes), [nodes])
 
   // The experiment's declared coordination strategy, which decides what the
   // main handles MEAN -- whether a lead marker is in force, and whether the
@@ -915,6 +986,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         data: {
           ...n.data,
           runStatus: runQuery.data?.node_runs[n.id]?.status,
+          runTruncated: Boolean(runQuery.data?.node_runs[n.id]?.truncation),
           missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
           // "Require specific output format" is on, but nothing says what the
           // format is. Unlike missingLlm this doesn't stop the run -- the agent
@@ -964,6 +1036,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             !!patternHostId &&
             !agentIdsWithCallableTools.has(patternHostId) &&
             !(isPeerCollaboration && (peerIdsByAgent.get(patternHostId)?.length ?? 0) > 0),
+          suggestedIterations: suggestedIterationsByPattern.get(n.id) ?? null,
+          hostTruncation: truncationByPattern.get(n.id) ?? null,
         },
       }
     })
@@ -977,6 +1051,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     agentIdsWithCallableTools,
     patternHostIds,
     peerIdsByAgent,
+    suggestedIterationsByPattern,
+    truncationByPattern,
     llmConfigByAgent,
     isPeerCollaboration,
     isSupervisor,
@@ -1964,10 +2040,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             />
           </div>
           {testResultsOpen && testRunQuery.data && (
-            <TestRunResults run={testRunQuery.data} agentNames={agentNames} onClose={() => setTestResultsOpen(false)} />
+            <TestRunResults run={testRunQuery.data} nodeNames={nodeNames} onClose={() => setTestResultsOpen(false)} />
           )}
           {playResultsOpen && playResult && (
-            <TestRunResults title="Play Results" run={playResult} agentNames={agentNames} onClose={() => setPlayResultsOpen(false)} />
+            <TestRunResults title="Play Results" run={playResult} nodeNames={nodeNames} onClose={() => setPlayResultsOpen(false)} />
           )}
           {/* One top-left column rather than two independently-positioned
               overlays: the lock badge and the transcript are both anchored
@@ -1986,7 +2062,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 </div>
               )}
               {showStandaloneConversation && runQuery.data?.conversation && (
-                <ConversationTranscript conversation={runQuery.data.conversation} agentNames={agentNames} />
+                <ConversationTranscript conversation={runQuery.data.conversation} agentNames={nodeNames} />
               )}
             </div>
           )}
@@ -2140,6 +2216,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
+            suggestedIterations={suggestedIterationsByPattern.get(selectedNode.id) ?? null}
+            truncatedAt={truncationByPattern.get(selectedNode.id)?.max_iterations ?? null}
             onChange={updateNodeData}
             onClose={() => setSelectedNodeId(null)}
           />
@@ -2204,6 +2282,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           nodes={nodes}
           edges={edges}
           queryClient={queryClient}
+          truncatedCaps={truncatedCaps}
           onCancel={() => setPendingRunConfirm(null)}
           onConfirm={confirmPendingRun}
           hasUnpublishedChanges={hasUnpublishedChanges}

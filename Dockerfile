@@ -96,9 +96,24 @@ COPY scripts/ ./scripts/
 # outside Compose therefore needs the context passed explicitly:
 #
 #   docker build --build-context gitdir=./.git --secret id=gh_token,env=GH_TOKEN .
-RUN --mount=type=bind,from=gitdir,target=/app/.git \
+#
+# The `update-index` line is what keeps the derived version honest. /app is a
+# deliberately partial checkout -- frontend/, tests/, docs/ and the repo root's
+# own files are never COPYed -- so against the mounted index every one of them
+# reads as deleted and `git describe --dirty` (which is exactly what hatch-vcs
+# runs) appends `-dirty`. setuptools_scm treats dirty like distance: a build of
+# the tagged commit v0.6.0 came out as 0.6.1.dev0, i.e. every release build
+# announced itself as a prerelease of the *next* one. Marking the absent paths
+# assume-unchanged makes describe see the clean tree the tag actually names.
+# The cost, accepted: uncommitted edits to the files that ARE copied no longer
+# mark the build dirty either -- "which release is this server" is what the
+# badge is for, and a dev build is identified by its commit distance anyway.
+# `readwrite` is required to write the index; the mount is a throwaway copy of
+# the named context, so the host's .git is not touched.
+RUN --mount=type=bind,from=gitdir,target=/app/.git,readwrite \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv sync --frozen --no-dev
+    git -C /app ls-files -d -z | xargs -0 -r git -C /app update-index --assume-unchanged \
+    && uv sync --frozen --no-dev
 
 # Absent on purpose: the repo's .env. AsareeSettings reads host-side URLs
 # (localhost:5432) that are wrong inside a compose network; real values
@@ -123,9 +138,14 @@ COPY tests/ ./tests/
 # Python source of truth. Keep the test image narrow while making that source
 # available at the same repository-relative path used outside containers.
 COPY frontend/src/lib/metricCatalog.ts ./frontend/src/lib/metricCatalog.ts
-RUN --mount=type=bind,from=gitdir,target=/app/.git \
+# Same assume-unchanged guard as the application stage: this reinstalls the
+# project (now with tests/ present, so a different set of paths is missing),
+# which regenerates _version.py -- without it the test image would overwrite
+# the correct version with a dirty one.
+RUN --mount=type=bind,from=gitdir,target=/app/.git,readwrite \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv sync --frozen --group dev
+    git -C /app ls-files -d -z | xargs -0 -r git -C /app update-index --assume-unchanged \
+    && uv sync --frozen --group dev
 
 CMD ["pytest", "tests/", "-q", "--tb=short"]
 

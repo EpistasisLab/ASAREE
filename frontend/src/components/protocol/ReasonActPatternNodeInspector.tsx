@@ -1,6 +1,7 @@
 import { Repeat2 } from 'lucide-react'
 import { useState } from 'react'
 import { nodeAccent } from '@/lib/nodeAccent'
+import { isUnderIterated } from '@/lib/reasonActIterations'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -31,6 +32,8 @@ export function ReasonActPatternNodeInspector({
   node,
   experimentId,
   factorNodeLabel,
+  suggestedIterations,
+  truncatedAt,
   onChange,
   onClose,
 }: {
@@ -40,6 +43,12 @@ export function ReasonActPatternNodeInspector({
   // -- distinct from data.label, which is this node's own plain label shown
   // in the header title.
   factorNodeLabel: string
+  // What the driven agent's wiring implies (lib/reasonActIterations.ts), or
+  // null when this pattern drives no agent yet.
+  suggestedIterations: number | null
+  // The cap the last run actually died at, when it did -- evidence rather than
+  // estimate, so the hint below cites it instead of the wiring.
+  truncatedAt: number | null
   onChange: (nodeId: string, data: ReasonActPatternNodeData) => void
   onClose: () => void
 }) {
@@ -54,6 +63,12 @@ export function ReasonActPatternNodeInspector({
   const data = node.data
   const config = data.config
   const bindings = data.factor_bindings ?? {}
+
+  // Only ever offered as a raise. Going below what the wiring needs truncates
+  // the run into a payload of nulls that still reports as completed, while
+  // going above it costs nothing -- the loop stops when the agent answers --
+  // so there is no symmetric "you set this too high" to warn about.
+  const underIterated = isUnderIterated(config.max_iterations, suggestedIterations)
 
   const missingFields: string[] = []
   if (config.max_iterations == null) missingFields.push('Max iterations')
@@ -122,6 +137,21 @@ export function ReasonActPatternNodeInspector({
                 value={config.max_iterations ?? ''}
                 onChange={(e) => patchConfig({ max_iterations: e.target.value === '' ? null : Number(e.target.value) })}
               />
+              {underIterated && (
+                <p className="text-xs text-[color:var(--chart-4)]">
+                  {truncatedAt != null
+                    ? `The last run stopped at ${truncatedAt} with its answer unwritten, so at least ${suggestedIterations} — `
+                    : `This agent's wiring suggests at least ${suggestedIterations} — `}
+                  each tool call costs an iteration, and a run that hits the cap stops mid-work.{' '}
+                  <button
+                    type="button"
+                    className="underline underline-offset-2 hover:no-underline"
+                    onClick={() => patchConfig({ max_iterations: suggestedIterations })}
+                  >
+                    Use {suggestedIterations}
+                  </button>
+                </p>
+              )}
             </div>
           )}
         </FactorBindableField>

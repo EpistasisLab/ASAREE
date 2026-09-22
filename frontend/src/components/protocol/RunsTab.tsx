@@ -83,6 +83,17 @@ const OBSOLETE_TRIAL_BADGE = {
   className: 'border-transparent bg-[color:var(--chart-2)]/10 text-[color:var(--chart-2)]',
 }
 
+// Ranked above the plain status badge for the same reason Obsolete is: the
+// row's status really is "completed", and that is exactly the misreading
+// worth preventing. Amber, the app's "finished, with a caveat" color.
+const TRUNCATED_TRIAL_BADGE = {
+  label: 'Hit iteration limit',
+  className: 'border-transparent bg-[color:var(--chart-4)]/10 text-[color:var(--chart-4)]',
+}
+
+const TRUNCATED_REPLICATE_HELP =
+  'An agent in this replicate was stopped by its iteration limit, so it finished without finishing its work. It is not counted as scored. Raise Max iterations on the Reason + Act node and run it again.'
+
 function formatCurrency(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) return null
   return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value)
@@ -180,6 +191,17 @@ export function RunAllCellsButton({
   const eligibleReplicateLabels = replicates
     .filter((replicate) => !activeReplicateLabels.has(replicate.replicate_label))
     .map((replicate) => replicate.replicate_label)
+  // Replicates in THIS button's scope whose agent ran out of iterations. The
+  // dialog says so before a re-run because nothing about the cap has changed
+  // in between: the same run at the same cap truncates again, and comes back
+  // unscored again, having cost the same money. Named by count rather than by
+  // node -- this button only ever has the stored graph and the trial list, so
+  // it can't tell which node's cap did it (the canvas can; see
+  // RunConfirmDialog's `truncatedCaps`).
+  const truncatedLabels = new Set(
+    (trialsQuery.data ?? []).filter((trial) => trial.truncated && !trial.obsolete).map((trial) => trial.replicate_label),
+  )
+  const truncatedInScope = replicates.filter((replicate) => truncatedLabels.has(replicate.replicate_label)).length
   const cellCount = groupReplicatesIntoCells(replicates).length
   const previouslyRunReplicateLabels = new Set(
     replicates
@@ -428,6 +450,11 @@ export function RunAllCellsButton({
           nodes={protocol.graph.nodes as unknown as Node[]}
           edges={protocol.graph.edges as Edge[]}
           queryClient={queryClient}
+          truncationNotice={
+            truncatedInScope > 0
+              ? `${truncatedInScope} replicate${truncatedInScope === 1 ? '' : 's'} here stopped at the iteration limit and came back unscored. Unless you raise Max iterations on the Reason + Act node first, this run will hit the same limit.`
+              : null
+          }
           onCancel={() => setDialogOpen(false)}
           onConfirm={beginRun}
           hasUnpublishedChanges={protocol.has_unpublished_changes}
@@ -594,6 +621,7 @@ function RunReplicateButton({
   replicateLabel,
   replicateNumber,
   hasCompletedRun,
+  truncated = false,
   activeRunId,
   regenerationRequired,
   unboundFactors,
@@ -604,6 +632,9 @@ function RunReplicateButton({
   replicateLabel: string
   replicateNumber: number
   hasCompletedRun: boolean
+  // This replicate's last attempt ran out of iterations -- worth saying before
+  // a re-run at the unchanged cap repeats it. See RunAllCellsButton's own.
+  truncated?: boolean
   activeRunId: string | null
   regenerationRequired: boolean
   unboundFactors: string[]
@@ -664,6 +695,11 @@ function RunReplicateButton({
           nodes={protocol.graph.nodes as unknown as Node[]}
           edges={protocol.graph.edges as Edge[]}
           queryClient={queryClient}
+          truncationNotice={
+            truncated
+              ? 'This replicate stopped at the iteration limit and came back unscored. Unless you raise Max iterations on the Reason + Act node first, this run will hit the same limit.'
+              : null
+          }
           onCancel={() => setDialogOpen(false)}
           onConfirm={() => runMutation.mutate()}
           hasUnpublishedChanges={protocol.has_unpublished_changes}
@@ -749,6 +785,11 @@ export function RunsTab({
     (count, cell) => count + cell.replicates.filter((replicate) => trialsByLabel.get(replicate.replicate_label)?.obsolete).length,
     0,
   )
+  const truncatedCells = cells.filter((cell) => cell.replicates.some((replicate) => trialsByLabel.get(replicate.replicate_label)?.truncated))
+  const truncatedReplicateCount = cells.reduce(
+    (count, cell) => count + cell.replicates.filter((replicate) => trialsByLabel.get(replicate.replicate_label)?.truncated).length,
+    0,
+  )
   // Runs stays operational rather than becoming a second Results dashboard:
   // this one compact line answers whether there is work in flight, while
   // comparison metrics, spend, and outputs stay in the Results rail item.
@@ -818,6 +859,12 @@ export function RunsTab({
               className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
             />
           )}
+          {truncatedReplicateCount > 0 && (
+            <WarningBadge
+              issues={`${truncatedReplicateCount} replicate${truncatedReplicateCount === 1 ? '' : 's'} across ${truncatedCells.length} cell${truncatedCells.length === 1 ? '' : 's'} stopped at the iteration limit and ${truncatedReplicateCount === 1 ? 'is' : 'are'} not counted as scored. Raise Max iterations on the Reason + Act node and run them again.`}
+              className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
+            />
+          )}
           <RunAllCellsButton
             protocol={protocol}
             experimentId={experimentId}
@@ -851,6 +898,7 @@ export function RunsTab({
           const expanded = expandedCells.has(cell.label)
           const replicateListId = `cell-${cell.label}-replicates`
           const obsoleteCount = cell.replicates.filter((replicate) => trialsByLabel.get(replicate.replicate_label)?.obsolete).length
+          const truncatedCount = cell.replicates.filter((replicate) => trialsByLabel.get(replicate.replicate_label)?.truncated).length
           const cellResult = cellResultsByLabel.get(cell.label)
           const cellUsage = cellResult ? usageSummary(cellResult) : []
           const activeCellRunIds = cell.replicates
@@ -884,6 +932,12 @@ export function RunsTab({
                       {obsoleteCount > 0 && (
                         <WarningBadge
                           issues={`${obsoleteCount} replicate${obsoleteCount === 1 ? '' : 's'} ran against an older published canvas version.`}
+                          className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
+                        />
+                      )}
+                      {truncatedCount > 0 && (
+                        <WarningBadge
+                          issues={`${truncatedCount} replicate${truncatedCount === 1 ? '' : 's'} stopped at the iteration limit, so ${truncatedCount === 1 ? 'it is' : 'they are'} not counted as scored.`}
                           className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
                         />
                       )}
@@ -935,7 +989,13 @@ export function RunsTab({
                         const trial = trialsByLabel.get(replicate.replicate_label)
                         const replicateResult = replicateResultsByLabel.get(replicate.replicate_label)
                         const replicateUsage = replicateResult ? usageSummary(replicateResult) : []
-                        const badge = trial ? (trial.obsolete ? OBSOLETE_TRIAL_BADGE : trialStatusBadge(trial.status)) : null
+                        const badge = trial
+                          ? trial.obsolete
+                            ? OBSOLETE_TRIAL_BADGE
+                            : trial.truncated
+                              ? TRUNCATED_TRIAL_BADGE
+                              : trialStatusBadge(trial.status)
+                          : null
                         return (
                           <li key={replicate.id} className="rounded-md border bg-background px-2.5 py-2">
                             <div className="flex items-center justify-between gap-3">
@@ -945,6 +1005,12 @@ export function RunsTab({
                                   {trial?.obsolete && (
                                     <WarningBadge
                                       issues="This replicate ran against an older published canvas version. Run it again to produce a current result."
+                                      className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
+                                    />
+                                  )}
+                                  {trial?.truncated && !trial.obsolete && (
+                                    <WarningBadge
+                                      issues={TRUNCATED_REPLICATE_HELP}
                                       className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
                                     />
                                   )}
@@ -969,6 +1035,7 @@ export function RunsTab({
                                   replicateLabel={replicate.replicate_label}
                                   replicateNumber={replicate.replicate_number}
                                   hasCompletedRun={hasFinishedRun(trial)}
+                                  truncated={Boolean(trial?.truncated && !trial.obsolete)}
                                   activeRunId={isActiveTrial(trial) ? trial.run_id : null}
                                   regenerationRequired={regenerationRequired}
                                   unboundFactors={unboundFactors}

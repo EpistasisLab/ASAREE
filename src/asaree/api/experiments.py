@@ -1168,6 +1168,9 @@ class TrialResponse(BaseModel):
     status: str
     run_id: uuid.UUID | None
     obsolete: bool
+    # Finished, but an agent hit its iteration ceiling on the way -- so this
+    # row is `completed` with no metric_values on purpose (see ExperimentTrial).
+    truncated: bool
     error: str | None
     updated_at: datetime
 
@@ -1190,6 +1193,7 @@ async def list_experiment_trials_endpoint(
             status=_RUN_STATUS_TO_TRIAL_STATUS.get(t.status, t.status),
             run_id=t.run_id,
             obsolete=t.obsolete,
+            truncated=t.truncated,
             error=t.error,
             updated_at=t.updated_at,
         )

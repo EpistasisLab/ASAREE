@@ -53,7 +53,7 @@ describe('TestRunResults', () => {
         state: 'working', entry_agent_id: 'agent-1',
         messages: [{ message_id: 'message-1', sequence: 1, from_agent_id: 'user', to_agent_id: 'agent-1', parts: [{ kind: 'text', text: 'Analyze this.' }], created_at: '2026-09-16T12:00:00Z' }],
       },
-    })} agentNames={new Map([['agent-1', 'Analyst']])} onClose={vi.fn()} />)
+    })} nodeNames={new Map([['agent-1', 'Analyst']])} onClose={vi.fn()} />)
 
     expect(screen.getByText('Task execution in progress…')).toBeInTheDocument()
     expect(screen.getByText('Analyst')).toBeInTheDocument()
@@ -116,7 +116,7 @@ describe('TestRunResults', () => {
         evaluation: { duration_seconds: 2, cost_usd: null },
         total: { duration_seconds: 10, cost_usd: null },
       },
-    })} agentNames={new Map([['agent-1', 'Analyst']])} onClose={vi.fn()} />)
+    })} nodeNames={new Map([['agent-1', 'Analyst']])} onClose={vi.fn()} />)
 
     expect(screen.getByText('Partially evaluated')).toBeInTheDocument()
     expect(screen.getByText('Task')).toBeInTheDocument()

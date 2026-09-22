@@ -188,6 +188,25 @@ export function UnresolvedReferencesNote({ names }: { names: string[] }) {
   )
 }
 
+// The loop ran out of iterations before the agent answered.
+//
+// Not an error, and not a failure the run itself reports: Motoro keeps
+// whatever the last Act produced and still marks the run `completed`, so
+// without this the output below looks like a considered answer when it is
+// really a tool result the agent never got to write up. Says what to do about
+// it, because the fix is one number in the Reason + Act inspector.
+export function TruncationNote({ truncation }: { truncation: NodeRunState['truncation'] }) {
+  if (!truncation) return null
+  const cap = truncation.max_iterations
+  return (
+    <p className="rounded-lg border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/5 p-3 text-xs text-[color:var(--chart-4)]">
+      This agent was stopped by its iteration limit{cap ? ` of ${cap}` : ''} rather than finishing — the output below is
+      whatever its last step returned, not an answer it wrote. Raise <span className="font-mono">Max iterations</span> on
+      the Reason + Act node and run it again.
+    </p>
+  )
+}
+
 // What the Output Parser pulled out of the answer above, if one was wired.
 //
 // Below the output, never in place of it: the free text is what the agent
@@ -259,7 +278,7 @@ export function NodeRunOutputPanel({
   // both columns would say the split means less than it does.
   showReceivedPrompt?: boolean
 }) {
-  const badge = nodeRunBadge(nodeRun?.status)
+  const badge = nodeRunBadge(nodeRun?.status, Boolean(nodeRun?.truncation))
   const unresolved = nodeRun?.unresolved_references ?? []
 
   if (!nodeRun) {
@@ -310,6 +329,8 @@ export function NodeRunOutputPanel({
       {showReceivedPrompt && (
         <UnresolvedReferencesNote names={unresolved.map((ref) => referenceLabel(ref, referenceNames))} />
       )}
+
+      <TruncationNote truncation={nodeRun.truncation} />
 
       {nodeRun.error ? (
         <div className="space-y-1.5">

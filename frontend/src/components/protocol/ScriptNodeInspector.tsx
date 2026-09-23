@@ -15,7 +15,7 @@ const ACCENT = nodeAccent('script')
 // is a fixed label, not a picker, so there's nothing to configure there yet.
 // The whole node is also factor-bindable (bindableFields.ts's 'script_config'
 // kind) -- comparing two hand-written scoring scripts as an experimental
-// factor is a direct use of the same whole-node-config mechanism llm_config/
+// factor is a direct use of the same whole-node-config mechanism model_config/
 // tool_config/pattern already have.
 export function ScriptNodeInspector({
   node,

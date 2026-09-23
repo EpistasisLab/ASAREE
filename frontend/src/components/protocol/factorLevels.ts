@@ -1,8 +1,8 @@
 import type { DesignFactor } from '@/types/experiments'
 
-// llm_config/tool_config/pattern/script_config/dataset_config are the "whole
+// model_config/tool_config/pattern/script_config/dataset_config are the "whole
 // node as a factor" kinds (see bindableFields.ts) -- their levels are OBJECTS
-// (a whole LLM/Tool/Script/Dataset node config, or a {execution_pattern,
+// (a whole Model/Tool/Script/Dataset node config, or a {execution_pattern,
 // pattern_params} payload), never strings, unlike every other kind here.
 //
 // tool_names is the odd one out: its levels are ARRAYS of bare tool names,
@@ -15,7 +15,7 @@ export type LevelType =
   | 'text'
   | 'number'
   | 'boolean'
-  | 'llm_config'
+  | 'model_config'
   | 'tool_config'
   | 'pattern'
   | 'script_config'
@@ -27,7 +27,7 @@ export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   text: 'Long text',
   number: 'Number',
   boolean: 'Boolean',
-  llm_config: 'Provider & model',
+  model_config: 'Provider & model',
   tool_config: 'Server & tools',
   pattern: 'Execution pattern',
   script_config: 'Script',
@@ -42,7 +42,7 @@ export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
 // its own one-line-Input popover.
 export function isStructuredLevelType(type: LevelType): boolean {
   return (
-    type === 'llm_config' ||
+    type === 'model_config' ||
     type === 'tool_config' ||
     type === 'pattern' ||
     type === 'script_config' ||
@@ -90,13 +90,13 @@ export function parseLevelValue(raw: string, type: LevelType): unknown {
 }
 
 // A blank starting point for one structured level -- shaped exactly like
-// what protocol_execution.py's _resolve_llm_config/_resolve_tool_config/
+// what protocol_execution.py's _resolve_model_config/_resolve_tool_config/
 // _resolve_pattern_config already expect, so a freshly-added level is
 // immediately a valid (if unconfigured) whole-node config rather than an
 // empty object the executor can't do anything with.
 export function emptyStructuredLevel(type: LevelType): unknown {
   switch (type) {
-    case 'llm_config':
+    case 'model_config':
       return { provider: 'anthropic', model: '', temperature: 0.7, max_tokens: 128000 }
     case 'tool_config':
       return { server_id: null, server_name: null, tool_names: [], enabled: true }

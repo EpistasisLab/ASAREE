@@ -10,7 +10,7 @@ describe('nodeDisplayNames', () => {
   it('falls back to the placeholder the unlabelled node shows on its card', () => {
     const names = nodeDisplayNames([
       { id: 'n1', type: 'output_parser', data: { label: '' } },
-      { id: 'n2', type: 'llm_anthropic', data: {} },
+      { id: 'n2', type: 'model_anthropic', data: {} },
     ])
     expect(names.get('n1')).toBe('Output Parser')
     expect(names.get('n2')).toBe('Anthropic')

@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 
 export type ConnectorSlot =
-  | 'ai'
+  | 'model'
   | 'tool'
   | 'memory'
   | 'architectural_pattern'
@@ -16,7 +16,7 @@ export type ConnectorSlot =
 // sync with the captions AgentNode/CriticGateNode render next to each
 // handle.
 export const CONNECTOR_SLOT_LABELS: Record<ConnectorSlot, string> = {
-  ai: 'AI',
+  model: 'Model',
   tool: 'Tool',
   memory: 'Memory',
   architectural_pattern: 'Architectural Pattern',
@@ -89,7 +89,7 @@ interface ProtocolCanvasActions {
   // -- so an interrupted conversion can't leave a graph with the contract in
   // two places at once (which the backend rejects outright).
   //
-  // User-initiated and never automatic, unlike migrateLegacyHandles: that one
+  // User-initiated and never automatic, unlike migrateLegacyGraph: that one
   // rewrites an invisible handle string on an edge the user drew themselves,
   // whereas this one MATERIALISES A NODE the user never placed, and autosave
   // would then persist it. A graph is a document; nothing edits it on the

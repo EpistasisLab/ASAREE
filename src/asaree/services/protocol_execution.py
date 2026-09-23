@@ -177,7 +177,7 @@ class ProtocolValidationError(Exception):
 #
 # 1. CAPABILITY -- what the agent can DO: the model, the execution pattern, the
 #    tool allow-list, knowledge servers, skills. Route: resolve it into the
-#    agent's stored config (``_resolve_llm_config``, ``_resolve_tool_config``,
+#    agent's stored config (``_resolve_model_config``, ``_resolve_tool_config``,
 #    ``_resolve_pattern_config``, ``_resolve_skill_config``, ...) and let
 #    Motoro carry it on ``RunContext``. Never prompt text: a capability is
 #    something the runtime arranges, not something the model is told about.
@@ -212,7 +212,7 @@ class ProtocolValidationError(Exception):
 # ``run_wired_script``, granted by ``_resolve_script_tool_config``. Wiring a
 # script is what declares that the agent should run one.
 #
-# The connector-typed slots on an agent/critic_gate node. ai/tool/memory are
+# The connector-typed slots on an agent/critic_gate node. model/tool/memory are
 # a deliberately closed set; architectural_pattern and dataset are
 # ASAREE-specific -- architectural_pattern for ARES's pluggable
 # architectural patterns, dataset for the data an agent operates ON as
@@ -224,13 +224,14 @@ class ProtocolValidationError(Exception):
 # data-flow) is any edge whose targetHandle is one of these -- everything
 # else. The type marker always lives on the target side of an edge.
 #
-# "llm" and "resource" are in here purely as pre-rename spellings of "ai" and
-# "dataset" (see _LEGACY_AI_HANDLES/_LEGACY_DATASET_HANDLES): an un-migrated
+# "ai", "llm", and "resource" are pre-rename spellings of "model" and
+# "dataset" (see _LEGACY_MODEL_HANDLES/_LEGACY_DATASET_HANDLES): an un-migrated
 # edge must still be recognised as a connector, or it would be misread as a
 # main pipeline edge and turn a perfectly good graph into a cycle/ordering
 # error.
 _CONNECTOR_HANDLES = frozenset(
     {
+        "model",
         "ai",
         "llm",
         "tool",
@@ -251,9 +252,11 @@ _CONNECTOR_HANDLES = frozenset(
 # a single generic node with a Provider/kind field -- config shape is identical
 # across LLM providers (provider is baked into the node type instead of a
 # user-editable field), but genuinely differs per architectural pattern (see
-# each pattern's own NodeConfig on the frontend), so the LLM family shares
+# each pattern's own NodeConfig on the frontend), so the Model family shares
 # one inspector while each pattern gets its own.
-_LLM_NODE_TYPES = frozenset({"llm_anthropic", "llm_openai", "llm_azure_foundry"})
+_MODEL_NODE_TYPES = frozenset(
+    {"model_anthropic", "model_openai", "model_azure_foundry", "model_openrouter", "model_local"}
+)
 # Only two builtin execution patterns exist in Motoro today
 # (engine/patterns/builtin/) -- PatternConfig already has unused slots for
 # safety_patterns/coordination_pattern/knowledge_patterns/quality_patterns/
@@ -358,7 +361,7 @@ _OUTPUT_PARSER_NODE_TYPES = frozenset({"output_parser"})
 # main loop), and may only ever emit its own connector-typed edge (see the
 # "outgoing wrong handle" check in topological_order below).
 _PURE_CONFIG_SOURCE_TYPES = (
-    _LLM_NODE_TYPES
+    _MODEL_NODE_TYPES
     | _EXECUTION_PATTERN_NODE_TYPES
     | _MEMORY_NODE_TYPES
     | _MCP_TOOL_NODE_TYPES
@@ -372,15 +375,15 @@ _PURE_CONFIG_SOURCE_TYPES = (
 # Which connector handle each pure-config-source node type may exclusively
 # emit into, and the human-facing label for that handle -- both keyed off
 # the same family grouping so a new provider/pattern node type only needs
-# adding to _LLM_NODE_TYPES/_EXECUTION_PATTERN_NODE_TYPES above, not a
+# adding to _MODEL_NODE_TYPES/_EXECUTION_PATTERN_NODE_TYPES above, not a
 # second lookup.
 _NODE_TYPE_TO_HANDLE: dict[str, str] = {
-    **{t: "ai" for t in _LLM_NODE_TYPES},
+    **{t: "model" for t in _MODEL_NODE_TYPES},
     **{t: "architectural_pattern" for t in _EXECUTION_PATTERN_NODE_TYPES},
     **{t: "memory" for t in _MEMORY_NODE_TYPES},
     # Script still shares the Tool connector rather than getting its own slot
     # -- one connector accepting a FAMILY of node types (see this dict's own
-    # docstring above _LLM_NODE_TYPES). Both are pure config sources an
+    # docstring above _MODEL_NODE_TYPES). Both are pure config sources an
     # agent's Tool "+" panel can add (AddNodePanel filters its catalog by
     # CONNECTOR_PANEL_INFO.tool's allowedTypes on the frontend); which one a
     # given wired node actually IS is recovered by checking the source node's
@@ -401,8 +404,9 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
 # CONNECTOR_SLOT_LABELS on the frontend, so a validation error always names
 # the connector by the caption printed next to it on the canvas.
 _HANDLE_LABELS: dict[str, str] = {
-    "ai": "AI",
-    "llm": "AI",  # pre-rename spelling, same slot -- see _LEGACY_AI_HANDLES
+    "model": "Model",
+    "ai": "Model",  # pre-rename spellings, same slot -- see _LEGACY_MODEL_HANDLES
+    "llm": "Model",
     "memory": "Memory",
     "architectural_pattern": "Architectural Pattern",
     "tool": "Tool",
@@ -417,8 +421,8 @@ _HANDLE_LABELS: dict[str, str] = {
 # and a stored graph is an opaque JSONB blob, so every spelling has to keep
 # resolving:
 #
-#   "llm" -> "ai"       the AI connector (its caption was renamed first, the
-#                       handle id after -- migration 3f1a7c9b2e04)
+#   "llm" -> "ai" -> "model"  the Model connector (migrations
+#                              3f1a7c9b2e04 and the Model-schema migration)
 #   "tool" -> "resource" for a Dataset source, when Dataset stopped sharing
 #                       the Tool slot (same migration)
 #   "resource" -> "dataset"  when that slot, whose only member is the Dataset
@@ -432,7 +436,7 @@ _HANDLE_LABELS: dict[str, str] = {
 # old-spelling edges at whatever moment the new backend goes live, and an
 # SDK/notebook caller pinned to an older graph shape keeps working. Nothing
 # creates an old-spelling edge going forward -- isValidConnection won't.
-_LEGACY_AI_HANDLES = frozenset({"ai", "llm"})
+_LEGACY_MODEL_HANDLES = frozenset({"model", "ai", "llm"})
 _LEGACY_DATASET_HANDLES = frozenset({"dataset", "resource", "tool"})
 # Keyed by the CURRENT slot id -- every spelling an edge into that slot may
 # legitimately still carry *on the handle alone*, i.e. every rename that was
@@ -443,7 +447,7 @@ _LEGACY_DATASET_HANDLES = frozenset({"dataset", "resource", "tool"})
 # out by ALSO checking its source node's type, which is why the wider
 # _LEGACY_DATASET_HANDLES is applied at its own call sites instead.
 _LEGACY_HANDLES_BY_SLOT: dict[str, frozenset[str]] = {
-    "ai": _LEGACY_AI_HANDLES,
+    "model": _LEGACY_MODEL_HANDLES,
     "dataset": frozenset({"dataset", "resource"}),
 }
 
@@ -925,9 +929,11 @@ _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "output_parser": "Output Parser",
     "pattern_reason_act": "Reason + Act",
     "pattern_single_agent_baseline": "Single-Agent Baseline",
-    "llm_anthropic": "Anthropic",
-    "llm_openai": "OpenAI",
-    "llm_azure_foundry": "Azure AI Foundry",
+    "model_anthropic": "Anthropic",
+    "model_openai": "OpenAI",
+    "model_azure_foundry": "Azure AI Foundry",
+    "model_openrouter": "OpenRouter",
+    "model_local": "Local",
 }
 
 
@@ -936,7 +942,7 @@ def _node_display_name(node: dict[str, Any]) -> str:
     user has set one (matching what they'd actually see in the inspector
     header/on the card), else the same placeholder text the frontend shows
     for an unnamed node of that type (EditableNodeTitle's own `placeholder`
-    prop, or the provider label for the three LLM node types). Never the
+    prop, or the provider label for the three Model node types). Never the
     bare internal node id -- that's graph bookkeeping (see newNodeId on the
     frontend), meaningless to a user reading a failed-validation message."""
     data = node.get("data")
@@ -983,7 +989,7 @@ def _kahn_order(graph: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[
 
     Split out of :func:`topological_order` for callers that only want to know
     what order the canvas draws -- :func:`derive_stage_plan` reads a half-built
-    graph while the user is still wiring it, and a missing AI connection there
+    graph while the user is still wiring it, and a missing Model connection there
     is a thing to report on the canvas, not a reason for stage derivation to
     raise. Returns the node map, the walk, and whether every node was reached
     (``False`` is the cycle signature); unreached nodes are appended in
@@ -1035,7 +1041,7 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
     for nid, node in nodes.items():
         if node.get("type") != "critic_gate":
             continue
-        # Main-pipeline incoming edges only -- a gate's own LLM connector
+        # Main-pipeline incoming edges only -- a gate's own Model connector
         # edge is a separate concept (validated below) and must not count
         # towards "how many things feed this gate on the main pipeline."
         ups = _upstream_ids(graph, nid)
@@ -1066,14 +1072,14 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
         name = _node_display_name(node)
 
         if node_type in ("agent", "critic_gate"):
-            llm_edges = _edges_with_handle(graph, nid, "ai", direction="incoming")
-            if len(llm_edges) != 1:
+            model_edges = _edges_with_handle(graph, nid, "model", direction="incoming")
+            if len(model_edges) != 1:
                 raise ProtocolValidationError(
-                    f"Node {name!r} must have exactly one AI connection (found {len(llm_edges)})."
+                    f"Node {name!r} must have exactly one Model connection (found {len(model_edges)})."
                 )
-            llm_source = nodes.get(llm_edges[0]["source"])
-            if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
-                raise ProtocolValidationError(f"Node {name!r}'s AI connection must come from an AI node.")
+            model_source = nodes.get(model_edges[0]["source"])
+            if model_source is None or model_source.get("type") not in _MODEL_NODE_TYPES:
+                raise ProtocolValidationError(f"Node {name!r}'s Model connection must come from a Model node.")
 
         tool_edges = _edges_with_handle(graph, nid, "tool", direction="incoming")
         memory_edges = _edges_with_handle(graph, nid, "memory", direction="incoming")
@@ -1786,13 +1792,13 @@ async def _node_run_context(
     return ambient_meta, dataset
 
 
-def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+def _resolve_model_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """The node's connected ``llm`` node's own config -- agent/critic_gate
     nodes no longer carry ``model_config_data`` themselves, it's resolved
-    from the required LLM connector instead (``topological_order`` already
+    from the required Model connector instead (``topological_order`` already
     validated it exists exactly once)."""
     nodes, _downstream, _upstream = _adjacency(graph)
-    edges = _edges_with_handle(graph, node_id, "ai", direction="incoming")
+    edges = _edges_with_handle(graph, node_id, "model", direction="incoming")
     if not edges:
         return {}
     source = nodes.get(edges[0]["source"])
@@ -2174,7 +2180,7 @@ async def resolve_agent_card(
         description=config.get("description") or "",
         goal=config.get("goal") or "",
         skills=[dict(s) for s in skills],
-        model=_resolve_llm_config(graph, node_id).get("model"),
+        model=_resolve_model_config(graph, node_id).get("model"),
         metadata=metadata,
     )
 
@@ -2373,7 +2379,7 @@ def _resolve_output_contract(graph: dict[str, Any], node_id: str) -> dict[str, A
       from the SDK or a notebook, at any time. There is no cutover date after
       which nothing produces one.
 
-    So this is unlike ``_LEGACY_AI_HANDLES``, which covers a rename whose
+    So this is unlike ``_LEGACY_MODEL_HANDLES``, which covers a rename whose
     stored data really was migrated: nothing here ever becomes dead code.
 
     The two sources are never merged and never race -- ``topological_order``
@@ -3702,14 +3708,14 @@ async def _run_agent_node(
     # into the description instead, purely as a human label.
     agent_name = f"protocol-{protocol_id}-{node['id']}"
     # Model/tool/execution-pattern are no longer fields on the agent's own
-    # config -- resolved from its required LLM connector, its (optional,
+    # config -- resolved from its required Model connector, its (optional,
     # repeatable) Tool connectors, and its optional Architectural Pattern
     # connector instead (topological_order already validated their shape).
     # output_contract joined them, with one extra argument the others didn't
     # need: extraction is a second LLM call per run, so its cost belongs on the
     # canvas. Unlike the three above, the node's own field is still read as a
     # fallback and always will be -- see _resolve_output_contract.
-    model_config_data = {k: v for k, v in _resolve_llm_config(graph, node["id"]).items() if v is not None}
+    model_config_data = {k: v for k, v in _resolve_model_config(graph, node["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
     # Four connectors feed one allow-list. The Knowledge connector's OKF
     # bundles and documents are MCP servers like any other, so they land here
@@ -3851,10 +3857,10 @@ async def _run_critic(
     ``CRITIC_TOOLS = []`` / ``SINGLE_PASS_PATTERN``), and its
     ``output_contract`` is always :data:`CRITIC_OUTPUT_CONTRACT` -- not
     whatever (if anything) is in the node's own config. Model is resolved
-    from its required LLM connector, same as an agent node."""
+    from its required Model connector, same as an agent node."""
     config = gate["data"]["config"]
     agent_name = f"protocol-{protocol_id}-{gate['id']}"
-    model_config_data = {k: v for k, v in _resolve_llm_config(graph, gate["id"]).items() if v is not None}
+    model_config_data = {k: v for k, v in _resolve_model_config(graph, gate["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
     pattern_config = PatternConfig(execution_pattern="single_agent_baseline").model_dump()
     goal = config.get("goal") or "Review the given output and return an approval verdict with feedback."
@@ -4345,14 +4351,16 @@ def validate_single_node_runnable(graph: dict[str, Any], node_id: str) -> dict[s
             "This agent has upstream input from another node -- running it alone isn't supported yet. "
             "Use the canvas's main Run button to run the whole pipeline."
         )
-    llm_edges = _edges_with_handle(graph, node_id, "ai", direction="incoming")
-    if len(llm_edges) != 1:
+    model_edges = _edges_with_handle(graph, node_id, "model", direction="incoming")
+    if len(model_edges) != 1:
         raise ProtocolValidationError(
-            f"Node {_node_display_name(node)!r} must have exactly one AI connection (found {len(llm_edges)})."
+            f"Node {_node_display_name(node)!r} must have exactly one Model connection (found {len(model_edges)})."
         )
-    llm_source = nodes.get(llm_edges[0]["source"])
-    if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
-        raise ProtocolValidationError(f"Node {_node_display_name(node)!r}'s AI connection must come from an AI node.")
+    model_source = nodes.get(model_edges[0]["source"])
+    if model_source is None or model_source.get("type") not in _MODEL_NODE_TYPES:
+        raise ProtocolValidationError(
+            f"Node {_node_display_name(node)!r}'s Model connection must come from a Model node."
+        )
     return node
 
 
@@ -4384,16 +4392,16 @@ def validate_conversation_entry(graph: dict[str, Any], node_id: str) -> dict[str
     # or the consultation fails partway through a run the user already paid for.
     for participant_id in [node_id, *peers]:
         participant = nodes[participant_id]
-        llm_edges = _edges_with_handle(graph, participant_id, "ai", direction="incoming")
-        if len(llm_edges) != 1:
+        model_edges = _edges_with_handle(graph, participant_id, "model", direction="incoming")
+        if len(model_edges) != 1:
             raise ProtocolValidationError(
-                f"Node {_node_display_name(participant)!r} must have exactly one AI connection "
-                f"(found {len(llm_edges)})."
+                f"Node {_node_display_name(participant)!r} must have exactly one Model connection "
+                f"(found {len(model_edges)})."
             )
-        llm_source = nodes.get(str(llm_edges[0]["source"]))
-        if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
+        model_source = nodes.get(str(model_edges[0]["source"]))
+        if model_source is None or model_source.get("type") not in _MODEL_NODE_TYPES:
             raise ProtocolValidationError(
-                f"Node {_node_display_name(participant)!r}'s AI connection must come from an AI node."
+                f"Node {_node_display_name(participant)!r}'s Model connection must come from a Model node."
             )
     return node
 
@@ -4730,7 +4738,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
         if node.get("type") in _PURE_CONFIG_SOURCE_TYPES:
             # Pure config sources -- never get their own execution turn (see
-            # _resolve_llm_config/_resolve_tool_config). Memory and
+            # _resolve_model_config/_resolve_tool_config). Memory and
             # architectural-pattern nodes are visual scaffolding only this
             # phase: connecting one declares intent for a future phase, but
             # has no runtime effect yet.

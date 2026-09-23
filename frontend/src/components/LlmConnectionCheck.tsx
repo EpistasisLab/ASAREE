@@ -6,7 +6,7 @@ import type { LLMConnectionStatus, LLMProvider } from '@/types/llmSettings'
 
 // Shared by all three places a credential's health is shown -- the Profile
 // page's credentials table, the save step in CreateCredentialDialog, and the
-// LLM node inspector's Credential field. One definition on purpose: the same
+// Model node inspector's Credential field. One definition on purpose: the same
 // status must always resolve to the same color and the same word everywhere
 // (the root AGENTS.md's rule for status-driven tint), and "Key valid" in one
 // place with "Connected" in another would read as two different claims.

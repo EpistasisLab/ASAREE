@@ -5,10 +5,10 @@ export function factorCount(designSpec: Experiment['design_spec']): number | nul
   return Array.isArray(factors) ? factors.length : null
 }
 
-// A "whole node as a factor" level (LLM/Tool config, pattern override) is a
+// A "whole node as a factor" level (Model/Tool config, pattern override) is a
 // plain object, not a scalar -- JS's default `String({...})` collapses every
 // distinct object to the same "[object Object]", which would silently
-// conflate different LLM/Tool/Pattern configs wherever this codebase
+// conflate different Model/Tool/Pattern configs wherever this codebase
 // compares/dedupes/sorts factor values by their string form (this module's own
 // deriveFactors/replicatesMatching). A canonical (recursively key-sorted) JSON
 // string is stable across separately-deserialized-but-content-identical
@@ -48,7 +48,7 @@ const FACTOR_VALUE_DISPLAY_PRIORITY_KEYS = [
 ]
 
 /** Human-readable rendering of a factor value for table/badge display --
- * scalars render as-is; a dict-valued "whole node" level (LLM/Tool config,
+ * scalars render as-is; a dict-valued "whole node" level (Model/Tool config,
  * pattern override) picks its own most identifying field instead of
  * JS's default object stringification. */
 export function displayFactorValue(value: unknown): string {

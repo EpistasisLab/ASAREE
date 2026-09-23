@@ -21,7 +21,7 @@ const CONNECTOR_X: { agent: Record<ConnectorSlot, number>; critic_gate: Partial<
     skill: 0.18,
     dataset: 0.71,
     knowledge: 0.9,
-    ai: 0.2,
+    model: 0.2,
     memory: 0.5,
     tool: 0.8,
     // Added after the other seven, and placed after Tool rather than among
@@ -31,7 +31,7 @@ const CONNECTOR_X: { agent: Record<ConnectorSlot, number>; critic_gate: Partial<
     // see AgentNode's own showOutputParser.
     output_parser: 0.95,
   },
-  critic_gate: { ai: 0.5 },
+  critic_gate: { model: 0.5 },
 }
 
 // The host cards' own widths: AgentNode is w-72, CriticGateNode w-36.
@@ -71,7 +71,7 @@ export function connectorNodeOffsetX(hostType: string | undefined, slot: Connect
  * connector, which is the thing anchoring them to their connector is for.
  * 84x80 is roughly a circle-plus-caption's real footprint, and 84 rather
  * than 90 on purpose: the bottom row's three connectors are 86px apart on a
- * w-72 card, so at 84 a full AI + Memory + Tool row keeps every node exactly
+ * w-72 card, so at 84 a full Model + Memory + Tool row keeps every node exactly
  * under its own connector with nothing displaced. */
 export const CONNECTOR_CHILD_CLEARANCE = { width: 84, height: 80 }
 

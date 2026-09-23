@@ -116,7 +116,7 @@
 
        Eight because the canvas used to hash a node kind into the five chart
        hues, which made repeats arithmetic rather than unlucky: thirteen kinds
-       across five hues left buckets of three and four, so Skill and AI came
+       across five hues left buckets of three and four, so Skill and Model came
        out the same color, as did Dataset/Knowledge and Pattern/Script. The
        fix keeps one kind per bucket on its familiar chart hue (the canvas
        shouldn't recolor itself wholesale over a collision) and moves the rest
@@ -141,7 +141,7 @@
        227, 253, 280, 307, 333, 359 -- every gap is ~25deg except 25->60, and
        the wide-looking 60->105 gap is NOT free, because --node-label's yellow
        sits at 92. So this takes the one real gap (42, between Critic's 25 and
-       the LLM family's 60) and leans on the lightness/chroma axis the block's
+       the Model family's 60) and leans on the lightness/chroma axis the block's
        comment above already establishes for exactly this case: at 0.88/0.1
        it's the lightest and least chromatic hue on the canvas, a washed
        salmon, where both neighbours are saturated (0.18-0.17 chroma) and
@@ -149,7 +149,7 @@
        that's the point to ask whether thirteen-plus kinds should still be
        distinguished by color alone. */
     --node-9: oklch(0.88 0.1 42);
-    /* Connector captions (Pattern/Skill/Dataset/Knowledge/AI/Memory/Tool on
+    /* Connector captions (Pattern/Skill/Dataset/Knowledge/Model/Memory/Tool on
        AgentNode and CriticGateNode). One fixed yellow rather than the host
        node's own accent: these sit outside the card on the canvas backdrop,
        where they have to be found rather than merely read, and yellow is the

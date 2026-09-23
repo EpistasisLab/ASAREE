@@ -10,14 +10,14 @@ import { SKILL_BROWSE } from './skillCatalog'
 // Every entry here earns its place: GET /api/mcp-servers already backs the
 // tool picker, GET /datasets already backs the dataset picker,
 // services.protocol_execution._run_gated_worker already implements the
-// critic gate's revision loop, and _resolve_llm_config/_resolve_tool_config/
+// critic gate's revision loop, and _resolve_model_config/_resolve_tool_config/
 // _resolve_dataset_configs/_resolve_script_configs already resolve an agent's
 // respective connectors. "memory" and the two pattern entries are the
 // exceptions -- each is real in the graph/validation sense (wiring one up is
 // accepted and does something visually) but has NO runtime effect yet,
 // documented on the node/inspector itself, not hidden from the catalog.
 // LLM/Architectural Pattern are each a family of node types (one per
-// provider/pattern -- see LlmNodeData/ReasonActPatternNodeData in
+// provider/pattern -- see ModelNodeData/ReasonActPatternNodeData in
 // types/protocols.ts for why), not one generic entry with an internal
 // picker -- this catalog, filtered to a connector's own family via
 // allowedTypes, IS that picker.
@@ -43,22 +43,22 @@ const NODE_CATALOG = [
     description: "Reviews an upstream Agent's output, requests revisions",
     icon: ShieldCheck,
   },
-  { type: 'llm_anthropic', label: 'Anthropic', description: "An Agent or Critic Gate's model, temperature, and parameters", icon: Sparkles },
-  { type: 'llm_openai', label: 'OpenAI', description: "An Agent or Critic Gate's model, temperature, and parameters", icon: Atom },
+  { type: 'model_anthropic', label: 'Anthropic', description: "An Agent or Critic Gate's model, temperature, and parameters", icon: Sparkles },
+  { type: 'model_openai', label: 'OpenAI', description: "An Agent or Critic Gate's model, temperature, and parameters", icon: Atom },
   {
-    type: 'llm_azure_foundry',
+    type: 'model_azure_foundry',
     label: 'Azure AI Foundry',
     description: "An Agent or Critic Gate's model, temperature, and parameters -- routed through your own Azure resource",
     icon: Cloud,
   },
   {
-    type: 'llm_openrouter',
+    type: 'model_openrouter',
     label: 'OpenRouter',
     description: "An Agent or Critic Gate's model, temperature, and parameters -- routed through your own OpenRouter account",
     icon: Route,
   },
   {
-    type: 'llm_local',
+    type: 'model_local',
     label: 'Local',
     description: "An Agent or Critic Gate's model, temperature, and parameters -- routed to a self-hosted OpenAI-compatible server",
     icon: HardDrive,

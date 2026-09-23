@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label'
 import { PasswordInput } from '@/components/ui/password-input'
 import { cn, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
 import { LLM_PROVIDER_CATALOG, type LLMProvider } from '@/types/llmSettings'
-import { PROVIDER_META } from '@/components/protocol/nodes/LlmNode'
+import { PROVIDER_META } from '@/components/protocol/nodes/ModelNode'
 
 const PROVIDER_CATALOG = LLM_PROVIDER_CATALOG
 
@@ -21,7 +21,7 @@ export function CreateCredentialDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  // Opening this from a specific LLM node's inspector should land straight
+  // Opening this from a specific Model node's inspector should land straight
   // on that provider's fields, not the search screen -- only meaningful with
   // more than one catalog entry to search through.
   defaultProvider?: LLMProvider | null

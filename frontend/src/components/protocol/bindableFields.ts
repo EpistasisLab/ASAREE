@@ -92,7 +92,7 @@ export function pickToolNamesForServer(previousToolNames: string[], availableToo
 }
 
 // Whether a node has at least one field (including a whole-node factor like
-// pattern_override/llm_config/tool_config/script_config, which is stored
+// pattern_override/model_config/tool_config/script_config, which is stored
 // under factor_bindings the same way an ordinary field-path binding is --
 // see bindableFieldsForNode's own comment) bound to an experimental factor.
 // Every node component reads this straight off its own `data.factor_bindings`
@@ -112,7 +112,13 @@ export function boundFactorCount(data: { factor_bindings?: Record<string, string
 // The connector-type node families whose whole `config` (or, for Pattern, a
 // synthetic `pattern_override`) can itself become a factor -- see each
 // bindableFieldsForNode case below and the node-as-factor plan.
-const LLM_NODE_TYPES = new Set(['llm_anthropic', 'llm_openai', 'llm_azure_foundry'])
+const MODEL_NODE_TYPES = new Set([
+  'model_anthropic',
+  'model_openai',
+  'model_azure_foundry',
+  'model_openrouter',
+  'model_local',
+])
 
 // The Design tab's "Add factor" picker needs to know, for any node type,
 // which fields are ever wrapped in a FactorBindableField "+" -- this is the
@@ -120,7 +126,7 @@ const LLM_NODE_TYPES = new Set(['llm_anthropic', 'llm_openai', 'llm_azure_foundr
 // own FactorBindableField calls agree with, so the two never drift apart.
 // Kept as a plain node-type switch rather than co-locating it inside each
 // inspector component: the inspectors need live, capability-gated data
-// (LlmNodeInspector's Temperature/Effort only show for models that support
+// (ModelNodeInspector's Temperature/Effort only show for models that support
 // them) that isn't available outside that component's own query state, so
 // this catalog deliberately lists every field a node type *could* ever
 // bind, not only the ones currently visible on one specific node instance.
@@ -135,13 +141,13 @@ const LLM_NODE_TYPES = new Set(['llm_anthropic', 'llm_openai', 'llm_azure_foundr
 // field today with zero backend changes; only the frontend never offered
 // a way to bind it until now.
 //
-// The whole-`config`/`pattern_override` entries below (llm_config/
+// The whole-`config`/`pattern_override` entries below (model_config/
 // tool_config/pattern) are how a NODE itself becomes a factor -- e.g. an
-// LLM node's levels can be entirely different provider+model+credential
+// Model node's levels can be entirely different provider+model+credential
 // combinations, not just one scalar field varying inside an unchanging
 // node. These are additive to (and mutually exclusive with, see
 // unboundBindableFields) the ordinary per-field entries. Each also has its
-// own inline "+" in its inspector (LlmNodeInspector's Credential row,
+// own inline "+" in its inspector (ModelNodeInspector's Credential row,
 // McpToolNodeInspector's Server row -- both via FactorBindableField, which
 // escalates straight to FactorEditorDialog for these 3 structured kinds),
 // same as every other field; the Design tab's picker is just the other
@@ -169,20 +175,22 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       ]
     case 'critic_gate':
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
-    case 'llm_anthropic':
-    case 'llm_openai':
-    case 'llm_azure_foundry':
+    case 'model_anthropic':
+    case 'model_openai':
+    case 'model_azure_foundry':
+    case 'model_openrouter':
+    case 'model_local':
       return [
         { fieldPath: 'config.model', label: 'Model', levelType: 'string' },
         { fieldPath: 'config.temperature', label: 'Temperature', levelType: 'number' },
         { fieldPath: 'config.effort', label: 'Effort', levelType: 'string' },
         { fieldPath: 'config.max_tokens', label: 'Max tokens', levelType: 'number' },
         // The whole node as a factor -- levels are entirely different
-        // provider+model+credential combinations. _resolve_llm_config reads
-        // a connected LLM node's whole config verbatim (never the node's
+        // provider+model+credential combinations. _resolve_model_config reads
+        // a connected Model node's whole config verbatim (never the node's
         // xyflow `type`), so replacing it wholesale per cell already works
         // with zero backend changes.
-        { fieldPath: 'config', label: 'Provider & model', levelType: 'llm_config' },
+        { fieldPath: 'config', label: 'Provider & model', levelType: 'model_config' },
       ]
     case 'mcp_tool':
     case 'mcp_scikit_learn':
@@ -284,7 +292,7 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       // The whole node as a factor -- levels are entirely different scripts.
       // _resolve_script_configs reads each wired script node's whole config
       // verbatim, so comparing two scoring scripts already works with zero
-      // backend changes, same reasoning as llm_config/tool_config.
+      // backend changes, same reasoning as model_config/tool_config.
       return [{ fieldPath: 'config', label: 'Script', levelType: 'script_config' }]
     default:
       return []
@@ -391,13 +399,13 @@ function isConnectorNodeType(type: string | undefined): boolean {
     type === 'okf_bundle' ||
     type === 'okf_document' ||
     type === 'script' ||
-    LLM_NODE_TYPES.has(type ?? '') ||
+    MODEL_NODE_TYPES.has(type ?? '') ||
     (type ?? '').startsWith('pattern_')
   )
 }
 
 // A connector node's own label alone doesn't say which agent it belongs to
-// -- two different agents can each have an LLM node labeled "Anthropic," and
+// -- two different agents can each have a Model node labeled "Anthropic," and
 // the factor dialog otherwise can't tell them apart. Traces from the
 // connector node to whichever single agent/critic_gate it's wired into (via
 // the matching connector edge) and prefixes the label with that agent's own

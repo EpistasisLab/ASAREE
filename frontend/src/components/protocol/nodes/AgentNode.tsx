@@ -40,11 +40,11 @@ export function AgentNode({
     // Paired with runStatus, never derivable from it: a truncated run is still
     // `completed` (see NodeRunState.truncation).
     runTruncated?: boolean
-    missingLlm?: boolean
+    missingModel?: boolean
     missingOutputParser?: boolean
     canRunAlone?: boolean
     // Both injected by ProtocolCanvas: whether a plain Agent-to-Agent edge
-    // reaches this node, and the model its AI connector resolves to. The
+    // reaches this node, and the model its Model connector resolves to. The
     // canvas supplies the wiring; the capability lookup below is this card's.
     hasPeers?: boolean
     llmConfig?: { provider?: string; model?: string } | null
@@ -74,7 +74,7 @@ export function AgentNode({
   const peerNeedsToolCalling =
     !!data.hasPeers && models.find((m) => m.id === data.llmConfig?.model)?.supports_tool_calling === false
   const warnings = [
-    ...(data.missingLlm ? ["No AI connected -- this agent can't run"] : []),
+    ...(data.missingModel ? ["No Model connected -- this agent can't run"] : []),
     ...(data.missingOutputParser
       ? ['A specific output format is required, but no Output Parser says what it is']
       : []),
@@ -160,6 +160,7 @@ export function AgentNode({
         title="Connect to another agent (or a Critic Gate)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
+      <ConnectorHandleLabel side="left" top="calc(50% - 20px)">Agent</ConnectorHandleLabel>
       <MainEdgeAddStub nodeId={id} direction="incoming" full={data.mainInFull} />
       <div className="flex items-center gap-1.5">
         <Bot className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
@@ -219,7 +220,7 @@ export function AgentNode({
           toolbar is above the stub's z-index and only there on hover, and the
           visible "+" glyph still clears it).
 
-          The 3 bottom sub-connectors: required AI (exactly one), optional
+          The 3 bottom sub-connectors: required Model (exactly one), optional
           max-1 Memory (visual scaffolding only -- see MemoryNodeData), and
           optional repeatable Tool. Script is a repeatable pure config source
           too, but deliberately does NOT get its own slot -- it wires into that same
@@ -239,7 +240,7 @@ export function AgentNode({
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.architectural_pattern} side="top">Pattern</ConnectorHandleLabel>
-      {/* Never hides once connected (unlike AI/Memory) -- an execution
+      {/* Never hides once connected (unlike Model/Memory) -- an execution
           pattern must never go to zero (Motoro silently falls back
           to reason_act if left unconnected, undoing the whole point of
           making the default explicit), so the only way to change it is to
@@ -329,21 +330,21 @@ export function AgentNode({
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.knowledge} side="top">Knowledge</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="knowledge" left={CONNECTOR_LEFT.knowledge} side="top" alwaysVisible />
-      {/* Handle id `ai`; graphs saved before the rename carry these edges on
-          `llm` -- ProtocolCanvas.tsx rewrites those on load
+      {/* Handle id `model`; graphs saved before the rename carry these edges on
+          `ai` or `llm` -- ProtocolCanvas.tsx rewrites those on load
           (migrateLegacyHandles) and the backend keeps accepting both (see
-          _LEGACY_AI_HANDLES). The node types feeding it are still called
-          LLM_NODE_TYPES: those name a model family, not this slot. */}
+          _LEGACY_MODEL_HANDLES). The node types feeding it are called
+          MODEL_NODE_TYPES: those name a model family, not this slot. */}
       <Handle
         type="target"
-        id="ai"
+        id="model"
         position={Position.Bottom}
-        style={{ left: CONNECTOR_LEFT.ai }}
-        title="AI (required)"
+        style={{ left: CONNECTOR_LEFT.model }}
+        title="Model (required)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left={CONNECTOR_LEFT.ai}>AI</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="ai" left={CONNECTOR_LEFT.ai} />
+      <ConnectorHandleLabel left={CONNECTOR_LEFT.model}>Model</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="model" left={CONNECTOR_LEFT.model} />
       <Handle
         type="target"
         id="memory"
@@ -367,7 +368,7 @@ export function AgentNode({
       {/* Output Parser -- the field spec the agent's answer is written to and
           read back out of. Last on the bottom edge, at 95%: it's the only
           connector here whose work outlives the agent's own turn, so it sits
-          at the end of the row the run reads left-to-right (AI -> Memory ->
+          at the end of the row the run reads left-to-right (Model -> Memory ->
           Tool -> Parser).
           Capped at one (no `alwaysVisible`) -- two contracts would be two
           answers to "what shape is this agent's output". */}
@@ -399,6 +400,7 @@ export function AgentNode({
         title="Connect to another agent (or a Critic Gate)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
+      <ConnectorHandleLabel side="right" top="calc(50% - 20px)">Agent</ConnectorHandleLabel>
       <MainEdgeAddStub nodeId={id} direction="outgoing" full={data.mainOutFull} />
     </div>
   )

@@ -120,7 +120,7 @@ def test_fixture_is_the_published_protocol(graph: dict[str, Any]) -> None:
     assert by_type["critic_gate"] == 4
     assert by_type["dataset"] == 1
     assert by_type["script"] == 1
-    assert by_type["llm_azure_foundry"] == 1
+    assert by_type["model_azure_foundry"] == 1
 
 
 # -- validation ----------------------------------------------------------
@@ -363,13 +363,13 @@ def test_the_model_and_effort_factors_still_bind(graph: dict[str, Any]) -> None:
     node. ``apply_factor_bindings`` runs before any validation, so a broken
     binding would make every cell run the same arm."""
     patched = pe.apply_factor_bindings(graph, {"Azure Foundry:Model": "claude-opus-5", "Azure Foundry:Effort": "xhigh"})
-    llm = next(n for n in patched["nodes"] if n.get("type") == "llm_azure_foundry")
+    llm = next(n for n in patched["nodes"] if n.get("type") == "model_azure_foundry")
     config = llm["data"]["config"]
     assert config["model"] == "claude-opus-5"
     assert config["effort"] == "xhigh"
     # The original is untouched -- apply_factor_bindings deep-copies, which is
     # what lets replicates of different arms share one stored graph.
-    original = next(n for n in graph["nodes"] if n.get("type") == "llm_azure_foundry")
+    original = next(n for n in graph["nodes"] if n.get("type") == "model_azure_foundry")
     assert original["data"]["config"]["model"] != "claude-opus-5"
 
 

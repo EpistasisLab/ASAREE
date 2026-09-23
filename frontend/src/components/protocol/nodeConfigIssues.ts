@@ -7,7 +7,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { Skill } from '@/types/skills'
 import type {
   DatasetNodeData,
-  LlmNodeData,
+  ModelNodeData,
   McpToolNodeData,
   OutputParserNodeData,
   ReasonActPatternNodeData,
@@ -16,7 +16,7 @@ import type {
   OkfDocumentNodeData,
   SkillNodeData,
 } from '@/types/protocols'
-import { PROVIDER_META } from './nodes/LlmNode'
+import { PROVIDER_META } from './nodes/ModelNode'
 import { providerModelsKey } from './useProviderModels'
 
 export interface NodeConfigIssue {
@@ -27,23 +27,23 @@ export interface NodeConfigIssue {
 
 // A pre-flight scan run right before a real Run fires, so an obviously
 // misconfigured node (no model, no dataset or skill picked, no script code, an
-// agent with nothing wired into its required LLM connector) surfaces as an
+// agent with nothing wired into its required Model connector) surfaces as an
 // upfront "run anyway?" confirmation instead of only ever showing up as a
 // generic "one or more nodes failed" AFTER a real (billable) run attempt.
 // Mirrors the SAME cheap, synchronous presence checks each node's own
-// canvas card already computes for its own warning triangle (LlmNode.tsx/
+// canvas card already computes for its own warning triangle (ModelNode.tsx/
 // McpToolNode.tsx/DatasetNode.tsx/ScriptNode.tsx) -- kept as a plain
 // duplicate rather than a shared import specifically to avoid coupling this
 // module's shape to each node component's own render; update both places
 // together if these conditions ever change.
 //
 // `queryClient` lets the LLM check also catch a model that's SET but not
-// among the provider's own discovered list (LlmNode.tsx's own richer
-// check) -- read from cache only, via the exact same queryKey LlmNode.tsx
+// among the provider's own discovered list (ModelNode.tsx's own richer
+// check) -- read from cache only, via the exact same queryKey ModelNode.tsx
 // already populates by rendering on this same canvas, so this never fires
 // its own network request or makes clicking Run wait on one. A cache miss
 // (that query never ran, or hasn't resolved yet) just means "can't tell,"
-// same as LlmNode.tsx's own empty-list case -- not treated as an issue.
+// same as ModelNode.tsx's own empty-list case -- not treated as an issue.
 // `truncatedCaps` maps a Reason + Act node id to the `max_iterations` the last
 // run of its agent actually hit (ProtocolCanvas.tsx's truncationByPattern).
 // Optional because the callers that run from a stored `Protocol.graph` alone
@@ -55,7 +55,7 @@ export function findNodeConfigIssues(
   queryClient: QueryClient,
   truncatedCaps?: ReadonlyMap<string, number>,
 ): NodeConfigIssue[] {
-  const agentIdsWithLlm = new Set(edges.filter((e) => e.targetHandle === 'ai').map((e) => e.target))
+  const agentIdsWithModel = new Set(edges.filter((e) => e.targetHandle === 'model').map((e) => e.target))
   // suggestedMaxIterations walks the persisted shape (it also runs against a
   // graph loaded from the server), so convert once rather than per node.
   const graph = toPersistedGraph(nodes, edges)
@@ -68,12 +68,14 @@ export function findNodeConfigIssues(
 
     switch (node.type) {
       case 'agent':
-        if (!agentIdsWithLlm.has(node.id)) issues.push('No AI connected')
+        if (!agentIdsWithModel.has(node.id)) issues.push('No Model connected')
         break
-      case 'llm_anthropic':
-      case 'llm_openai':
-      case 'llm_azure_foundry': {
-        const config = (node.data as LlmNodeData).config
+      case 'model_anthropic':
+      case 'model_openai':
+      case 'model_azure_foundry':
+      case 'model_openrouter':
+      case 'model_local': {
+        const config = (node.data as ModelNodeData).config
         let selectedModelInfo: LLMSettingModelsResponse['models'][number] | undefined
         if (!config?.model) {
           issues.push('No model set')
@@ -87,7 +89,7 @@ export function findNodeConfigIssues(
           // knowingly incomplete and the inspector's "Custom model..." field
           // exists to go past it, so an off-catalog id there is a supported
           // choice, not a misconfigured node worth interrupting a Run for.
-          // Same gate as LlmNode.tsx's own warning triangle; see the longer
+          // Same gate as ModelNode.tsx's own warning triangle; see the longer
           // note there.
           if (cached?.source === 'api' && models.length > 0 && !selectedModelInfo) {
             const label = PROVIDER_META[config.provider]?.label ?? config.provider
@@ -96,7 +98,7 @@ export function findNodeConfigIssues(
         }
         if (config?.max_tokens == null) issues.push('Max tokens is required')
         // Same "unrecognized model defaults to temperature-only" fallback as
-        // LlmNodeInspector.tsx's own showTemperature -- required whenever
+        // ModelNodeInspector.tsx's own showTemperature -- required whenever
         // it's the field actually offered for this model, so it's never
         // Motoro's own silent ModelConfig default (0.7) filling the gap.
         if ((selectedModelInfo?.supports_temperature ?? true) && config?.temperature == null) {

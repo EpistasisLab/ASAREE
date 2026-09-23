@@ -200,7 +200,7 @@ async def _discover_anthropic(setting: UserLLMSetting) -> tuple[list[ModelInfo],
     Failure falls back to the curated catalog rather than surfacing an error:
     the catalog is stale, not wrong, and an empty dropdown is a worse answer
     than an incomplete one. The returned source is "static" in that case, so
-    callers gating on "api" (LlmNode's unrecognized-model warning) correctly
+    callers gating on "api" (ModelNode's unrecognized-model warning) correctly
     stay quiet about ids this list can't vouch for.
     """
     api_key = decrypt_api_key(setting)
@@ -302,7 +302,7 @@ async def _discover_local(setting: UserLLMSetting) -> tuple[list[ModelInfo], str
     implement -- but that route isn't a hard requirement of being "an
     OpenAI-compatible chat endpoint", so a server that doesn't expose it is a
     normal, expected outcome (surfaced via ``source="error"`` purely so the
-    inspector's note actually renders -- see LlmNodeInspector.tsx, which only
+    inspector's note actually renders -- see ModelNodeInspector.tsx, which only
     shows ``note`` for that source -- not because it's a real error).
     """
     base = setting.api_base.rstrip("/") if setting.api_base else ""

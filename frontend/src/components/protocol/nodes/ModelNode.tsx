@@ -1,17 +1,17 @@
 import type { NodeProps } from '@xyflow/react'
 import { Atom, Cloud, HardDrive, Route, Sparkles } from 'lucide-react'
 import { nodeAccent } from '@/lib/nodeAccent'
-import type { LlmNodeData } from '@/types/protocols'
+import type { ModelNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { useProviderModels } from '../useProviderModels'
 import { CircleNode } from './CircleNode'
 
 // One shared card renderer for all three LLM provider node types
-// (llm_anthropic/llm_openai/llm_azure_foundry -- see LlmNodeData's own
+// (model_anthropic/model_openai/model_azure_foundry -- see ModelNodeData's own
 // comment in types/protocols.ts for why they're separate node types).
 // Icon/placeholder are derived from data.config.provider rather than the
 // xyflow `type` prop, so this stays correct even if a node is ever duplicated.
-// The ACCENT is not: every provider draws in the one `llm` hue (see
+  // The ACCENT is not: every provider draws in the one `model` hue (see
 // lib/nodeAccent.ts). It used to hash the provider, giving each its own -- but
 // that made one node kind look like five, and put Skill and Azure on the same
 // color. Which vendor this is stays legible from the icon and the label.
@@ -29,15 +29,15 @@ export const PROVIDER_META: Record<string, { label: string; icon: typeof Sparkle
   local: { label: 'Local', icon: HardDrive },
 }
 
-export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData }) {
-  const meta = PROVIDER_META[data.config?.provider] ?? { label: data.config?.provider || 'LLM', icon: Sparkles }
-  const accent = nodeAccent('llm')
+export function ModelNode({ id, data, selected }: NodeProps & { data: ModelNodeData }) {
+  const meta = PROVIDER_META[data.config?.provider] ?? { label: data.config?.provider || 'Model', icon: Sparkles }
+  const accent = nodeAccent('model')
   const provider = data.config?.provider
 
-  // Shared with LlmNodeInspector via useProviderModels -- one cache entry per
+  // Shared with ModelNodeInspector via useProviderModels -- one cache entry per
   // provider, so N nodes of the same provider on a canvas cost one request,
   // not N. "model is set" alone can't catch a stale/invalid model id (every
-  // default LLM node config ships with a real-looking model string, so that
+  // default Model node config ships with a real-looking model string, so that
   // check can basically never fire in practice); this instead validates
   // against the provider's own actually-discovered model list.
   const { modelsQuery, models } = useProviderModels(provider)
@@ -68,7 +68,7 @@ export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData 
   }
   if (data.config?.max_tokens == null) warnings.push('Max tokens is required')
   // Same "unrecognized model defaults to temperature-only" fallback as
-  // LlmNodeInspector.tsx's own showTemperature -- Temperature is required
+  // ModelNodeInspector.tsx's own showTemperature -- Temperature is required
   // (not left to Motoro's own silent 0.7 default) whenever it's the field
   // actually offered for this model.
   if ((selectedModelInfo?.supports_temperature ?? true) && data.config?.temperature == null) {
@@ -83,7 +83,7 @@ export function LlmNode({ id, data, selected }: NodeProps & { data: LlmNodeData 
       icon={meta.icon}
       label={data.label}
       placeholder={meta.label}
-      handleId="ai"
+      handleId="model"
       warning={warnings.length > 0 ? warnings : undefined}
       factorCount={boundFactorCount(data)}
     />

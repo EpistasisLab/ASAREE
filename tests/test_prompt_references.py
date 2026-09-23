@@ -220,10 +220,10 @@ def test_connector_nodes_are_out_of_scope() -> None:
     graph = {
         "nodes": [
             _agent("a"),
-            {"id": "llm", "type": "llm_anthropic", "data": {"label": "", "config": {}}},
+            {"id": "llm", "type": "model_anthropic", "data": {"label": "", "config": {}}},
             _agent("b"),
         ],
-        "edges": [_edge("a", "b"), _edge("llm", "b", "ai")],
+        "edges": [_edge("a", "b"), _edge("llm", "b", "model")],
     }
     assert referenceable_node_ids(graph, "b") == ["a"]
 

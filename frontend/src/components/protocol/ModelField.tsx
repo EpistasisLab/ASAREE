@@ -7,9 +7,9 @@ import type { LLMModelInfo } from '@/types/llmSettings'
 const NONE_VALUE = '__none__'
 const CUSTOM_VALUE = '__custom__'
 
-// The Model picker, shared by LlmNodeInspector and an "llm_config" factor
+// The Model picker, shared by ModelNodeInspector and a "model_config" factor
 // level's own row (FactorEditorDialog's LlmConfigLevelRow) -- a factor level
-// IS a whole LLM node config (protocol_execution.py's _resolve_llm_config
+// IS a whole Model node config (protocol_execution.py's _resolve_model_config
 // reads it verbatim), so the two have to offer exactly the same choices or a
 // factor sweep can't express what a single node can.
 //

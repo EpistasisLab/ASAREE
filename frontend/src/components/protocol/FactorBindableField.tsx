@@ -31,7 +31,7 @@ import type { DesignFactor } from '@/types/experiments'
 // NOT its layout -- `children` is a render prop that receives the trigger
 // element (a "make it a factor" button, a bound "Factor: {name}" badge, or a
 // disabled button) and decides where to put it. Callers place it inline
-// right next to their own field's Label text (see e.g. LlmNodeInspector's
+// right next to their own field's Label text (see e.g. ModelNodeInspector's
 // "Model" Label) rather than trailing after the whole Label+control block --
 // a fixed trailing position reads as decoration bolted onto the end of a
 // row; sitting directly beside the text it labels reads as part of the
@@ -111,7 +111,7 @@ export function FactorBindableField({
   // The field's own current value, e.g. config.system_prompt -- omitted for
   // a boolean field, since its levels are always the fixed [true, false].
   currentValue?: unknown
-  // The field's own already-fetched choices (e.g. LlmNodeInspector's model/
+  // The field's own already-fetched choices (e.g. ModelNodeInspector's model/
   // effort lists) -- when given, each level row renders as a Select over
   // these exact values instead of a freeform Input, so a factor's levels
   // can never drift from what the field itself actually accepts. Passed

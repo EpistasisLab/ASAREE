@@ -34,7 +34,7 @@ export function ConnectorHandleLabel({
   // McpToolNode's main output and its Tool connector) each get their own
   // vertical slot instead of both defaulting to dead center.
   top?: string
-  side?: 'bottom' | 'right' | 'top'
+  side?: 'bottom' | 'left' | 'right' | 'top'
   children: string
 }) {
   if (side === 'right') {
@@ -44,10 +44,17 @@ export function ConnectorHandleLabel({
       </span>
     )
   }
+  if (side === 'left') {
+    return (
+      <span className={`${LABEL_CLASSNAME} -left-10 -translate-y-1/2`} style={{ top: top ?? '50%' }}>
+        {children}
+      </span>
+    )
+  }
   if (side === 'top') {
     // Centered directly ABOVE its handle -- an exact mirror of the bottom
     // branch below, so the three top-edge captions (Pattern / Skill /
-    // Resource) read the same way as AI / Memory / Tool do underneath. They
+    // Resource) read the same way as Model / Memory / Tool do underneath. They
     // used to hang off to one side of the handle instead, which meant a
     // caption's own position had to be reasoned about per-connector
     // (left-hanging near the right corner, right-hanging near the left one);

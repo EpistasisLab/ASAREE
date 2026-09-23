@@ -5,7 +5,7 @@
     "nodes": [
       {
         "id": "llm-shared",
-        "type": "llm_openai",
+        "type": "model_openai",
         "position": {
           "x": 1140,
           "y": 680
@@ -766,57 +766,57 @@
         "id": "e-llm-dc",
         "source": "llm-shared",
         "target": "agent-dc",
-        "sourceHandle": "ai",
-        "targetHandle": "ai"
+        "sourceHandle": "model",
+        "targetHandle": "model"
       },
       {
         "id": "e-llm-fte",
         "source": "llm-shared",
         "target": "agent-fte",
-        "sourceHandle": "ai",
-        "targetHandle": "ai"
+        "sourceHandle": "model",
+        "targetHandle": "model"
       },
       {
         "id": "e-llm-fs",
         "source": "llm-shared",
         "target": "agent-fs",
-        "sourceHandle": "ai",
-        "targetHandle": "ai"
+        "sourceHandle": "model",
+        "targetHandle": "model"
       },
       {
         "id": "e-llm-mlm",
         "source": "llm-shared",
         "target": "agent-mlm",
-        "sourceHandle": "ai",
-        "targetHandle": "ai"
+        "sourceHandle": "model",
+        "targetHandle": "model"
       },
       {
         "id": "e-llm-gatedc",
         "source": "llm-shared",
         "target": "gate-dc",
-        "sourceHandle": "ai",
-        "targetHandle": "ai"
+        "sourceHandle": "model",
+        "targetHandle": "model"
       },
       {
         "id": "e-llm-gatefte",
         "source": "llm-shared",
         "target": "gate-fte",
-        "sourceHandle": "ai",
-        "targetHandle": "ai"
+        "sourceHandle": "model",
+        "targetHandle": "model"
       },
       {
         "id": "e-llm-gatefs",
         "source": "llm-shared",
         "target": "gate-fs",
-        "sourceHandle": "ai",
-        "targetHandle": "ai"
+        "sourceHandle": "model",
+        "targetHandle": "model"
       },
       {
         "id": "e-llm-gatemlm",
         "source": "llm-shared",
         "target": "gate-mlm",
-        "sourceHandle": "ai",
-        "targetHandle": "ai"
+        "sourceHandle": "model",
+        "targetHandle": "model"
       },
       {
         "id": "e-pattern-dc",
@@ -939,8 +939,8 @@
         "id": "e-llm-score",
         "source": "llm-shared",
         "target": "agent-score",
-        "sourceHandle": "ai",
-        "targetHandle": "ai"
+        "sourceHandle": "model",
+        "targetHandle": "model"
       },
       {
         "id": "e-pattern-score",

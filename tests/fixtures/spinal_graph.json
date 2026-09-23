@@ -38,58 +38,58 @@
     {
       "id": "node-msza682j-6y15rt43",
       "source": "node-msza682j-etejc4b2",
-      "sourceHandle": "ai",
+      "sourceHandle": "model",
       "target": "node-msza682j-w2vslmwn",
-      "targetHandle": "ai"
+      "targetHandle": "model"
     },
     {
       "id": "node-msza682j-njszbkth",
       "source": "node-msza682j-etejc4b2",
-      "sourceHandle": "ai",
+      "sourceHandle": "model",
       "target": "node-msza682j-hiy7igv5",
-      "targetHandle": "ai"
+      "targetHandle": "model"
     },
     {
       "id": "node-msza682j-1x5e60c9",
       "source": "node-msza682j-etejc4b2",
-      "sourceHandle": "ai",
+      "sourceHandle": "model",
       "target": "node-msza682j-7qbpg0yc",
-      "targetHandle": "ai"
+      "targetHandle": "model"
     },
     {
       "id": "node-msza682j-2ty4tcke",
       "source": "node-msza682j-etejc4b2",
-      "sourceHandle": "ai",
+      "sourceHandle": "model",
       "target": "node-msza682j-i5qx7sfa",
-      "targetHandle": "ai"
+      "targetHandle": "model"
     },
     {
       "id": "node-msza682j-hkq1v06s",
       "source": "node-msza682j-etejc4b2",
-      "sourceHandle": "ai",
+      "sourceHandle": "model",
       "target": "node-msza682j-qvpuwtef",
-      "targetHandle": "ai"
+      "targetHandle": "model"
     },
     {
       "id": "node-msza682j-j2ekhe90",
       "source": "node-msza682j-etejc4b2",
-      "sourceHandle": "ai",
+      "sourceHandle": "model",
       "target": "node-msza682j-c6k6eyan",
-      "targetHandle": "ai"
+      "targetHandle": "model"
     },
     {
       "id": "node-msza682j-4glesw3r",
       "source": "node-msza682j-etejc4b2",
-      "sourceHandle": "ai",
+      "sourceHandle": "model",
       "target": "node-msza682j-ffxyvn78",
-      "targetHandle": "ai"
+      "targetHandle": "model"
     },
     {
       "id": "node-msza682j-tpg8d3td",
       "source": "node-msza682j-etejc4b2",
-      "sourceHandle": "ai",
+      "sourceHandle": "model",
       "target": "node-msza682j-gvf1u5gg",
-      "targetHandle": "ai"
+      "targetHandle": "model"
     },
     {
       "id": "node-msza682j-1tww3o22",
@@ -211,9 +211,9 @@
     {
       "id": "node-msza682j-ptkvuihb",
       "source": "node-msza682j-etejc4b2",
-      "sourceHandle": "ai",
+      "sourceHandle": "model",
       "target": "node-msza682j-tqhfa0mx",
-      "targetHandle": "ai"
+      "targetHandle": "model"
     },
     {
       "id": "node-msza682j-iy6j9ws7",
@@ -258,7 +258,7 @@
         "x": 487.0905726370586,
         "y": 909.7169944010625
       },
-      "type": "llm_azure_foundry"
+      "type": "model_azure_foundry"
     },
     {
       "data": {

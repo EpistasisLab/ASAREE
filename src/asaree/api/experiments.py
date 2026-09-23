@@ -66,6 +66,7 @@ from asaree.services.metrics import (
     normalize_design_spec,
     validate_metric_values,
 )
+from asaree.services.protocol_graph_schema import normalize_protocol_graph
 from asaree.services.protocol_revisions import get_published_revision, is_draft_published, publish_protocol
 from asaree.services.protocol_runs import list_experiment_trials
 from asaree.services.protocols import (
@@ -461,6 +462,9 @@ async def import_experiment_definition_endpoint(
     ):
         raise HTTPException(status_code=422, detail="The imported published canvas must contain nodes and edges")
 
+    graph = normalize_protocol_graph(body.graph)
+    published_graph = normalize_protocol_graph(body.published_graph) if body.published_graph is not None else None
+
     try:
         design_spec = normalize_design_spec(body.design_spec, validate_metrics=True)
     except ValueError as exc:
@@ -495,22 +499,22 @@ async def import_experiment_definition_endpoint(
                 owner_id=user.id,
                 description=body.protocol_description,
                 experiment_id=experiment.id,
-                graph=body.published_graph or body.graph,
+                graph=published_graph or graph,
             )
             if body.measurement_plan is not None:
                 await _require_valid_measurement_plan(
                     db,
                     document=experiment.measurement_plan,
                     metrics=(experiment.design_spec or {}).get("metrics"),
-                    graph=body.published_graph or body.graph,
+                    graph=published_graph or graph,
                     experiment_id=experiment.id,
                     owner_id=experiment.owner_id,
                     allow_preserved_bindings=False,
                 )
-            if body.published_graph is not None:
+            if published_graph is not None:
                 await publish_protocol(db, protocol)
-                if body.graph != body.published_graph:
-                    protocol.graph = body.graph
+                if graph != published_graph:
+                    protocol.graph = graph
                     await db.flush()
     except IntegrityError as exc:
         if "uq_research_experiments_owner_name" in str(exc.orig):
@@ -849,7 +853,7 @@ async def list_design_revisions_endpoint(
             id=s.revision.id,
             revision=s.revision.revision,
             superseded_at=s.revision.superseded_at,
-            design_spec=s.revision.design_spec,
+            design_spec=normalize_design_spec(s.revision.design_spec),
             cell_count=s.cell_count,
             replicate_count=s.replicate_count,
             scored_replicate_count=s.scored_replicate_count,

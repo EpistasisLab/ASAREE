@@ -35,6 +35,7 @@ from asaree.services.protocol_execution import (
     validate_single_node_runnable,
     validate_stage_plan,
 )
+from asaree.services.protocol_graph_schema import normalize_protocol_graph
 from asaree.services.protocol_revisions import (
     get_published_revision,
     get_revision,
@@ -284,7 +285,7 @@ async def _protocol_response(db: DbSession, protocol: Any) -> ProtocolResponse:
         name=protocol.name,
         description=protocol.description,
         experiment_id=protocol.experiment_id,
-        graph=protocol.graph,
+        graph=normalize_protocol_graph(protocol.graph),
         published_revision_id=published.id if published else None,
         published_revision=published.revision if published else None,
         has_unpublished_changes=not is_draft_published(protocol, published),
@@ -409,7 +410,13 @@ async def get_protocol_revision_endpoint(
     revision = await get_revision(db, revision_id)
     if revision is None or revision.protocol_id != protocol_id:
         raise HTTPException(status_code=404, detail="No such protocol revision")
-    return ProtocolRevisionResponse.model_validate(revision)
+    return ProtocolRevisionResponse(
+        id=revision.id,
+        protocol_id=revision.protocol_id,
+        revision=revision.revision,
+        graph=normalize_protocol_graph(revision.graph),
+        published_at=revision.published_at,
+    )
 
 
 @router.delete("/{protocol_id}", status_code=204)
@@ -532,7 +539,7 @@ async def preview_node_prompt_endpoint(
     protocol = await _get_owned_protocol(db, protocol_id, user)
     try:
         text = await preview_node_prompt(
-            body.graph if body.graph is not None else protocol.graph,
+            normalize_protocol_graph(body.graph) if body.graph is not None else protocol.graph,
             node_id,
             owner_id=user.id,
             experiment_id=protocol.experiment_id,

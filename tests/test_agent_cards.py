@@ -72,7 +72,7 @@ def test_non_agent_nodes_are_never_peers() -> None:
         "nodes": [
             _agent("planner"),
             {"id": "gate", "type": "critic_gate", "data": {"config": {}}},
-            {"id": "llm", "type": "llm_anthropic", "data": {"config": {}}},
+            {"id": "llm", "type": "model_anthropic", "data": {"config": {}}},
         ],
         "edges": [_edge("planner", "gate"), _edge("llm", "planner")],
     }
@@ -181,8 +181,8 @@ async def test_the_card_carries_the_node_id_not_the_motoro_agent_id() -> None:
 
 async def test_the_model_family_comes_from_the_wired_ai_connector() -> None:
     graph = _pair_graph()
-    graph["nodes"].append({"id": "llm", "type": "llm_anthropic", "data": {"config": {"model": "claude-sonnet-5"}}})
-    graph["edges"].append(_edge("llm", "critic", "ai"))
+    graph["nodes"].append({"id": "llm", "type": "model_anthropic", "data": {"config": {"model": "claude-sonnet-5"}}})
+    graph["edges"].append(_edge("llm", "critic", "model"))
 
     card = await pe.resolve_agent_card(graph, "critic", owner_id=OWNER)
     assert card is not None
@@ -190,7 +190,7 @@ async def test_the_model_family_comes_from_the_wired_ai_connector() -> None:
 
 
 async def test_a_non_agent_node_has_no_card() -> None:
-    graph = {"nodes": [{"id": "llm", "type": "llm_anthropic", "data": {"config": {}}}], "edges": []}
+    graph = {"nodes": [{"id": "llm", "type": "model_anthropic", "data": {"config": {}}}], "edges": []}
     assert await pe.resolve_agent_card(graph, "llm", owner_id=OWNER) is None
     assert await pe.resolve_agent_card(graph, "missing", owner_id=OWNER) is None
 

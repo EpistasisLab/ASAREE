@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   addEdge,
   Background,
+  MarkerType,
   MiniMap,
   ReactFlow,
   useEdgesState,
@@ -28,15 +29,15 @@ import { nodeDisplayNames } from '@/lib/nodeNames'
 import { raiseForTruncation, suggestedMaxIterations } from '@/lib/reasonActIterations'
 import {
   defaultAgentNodeData,
-  defaultAnthropicLlmNodeData,
-  defaultAzureFoundryLlmNodeData,
+  defaultAnthropicModelNodeData,
+  defaultAzureFoundryModelNodeData,
   defaultCriticGateNodeData,
   defaultDatasetNodeData,
-  defaultLocalLlmNodeData,
+  defaultLocalModelNodeData,
   defaultMcpToolNodeData,
   defaultMemoryNodeData,
-  defaultOpenAiLlmNodeData,
-  defaultOpenRouterLlmNodeData,
+  defaultOpenAiModelNodeData,
+  defaultOpenRouterModelNodeData,
   defaultOutputParserNodeData,
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
@@ -46,7 +47,7 @@ import type {
   AgentNodeData,
   CriticGateNodeData,
   DatasetNodeData,
-  LlmNodeData,
+  ModelNodeData,
   McpToolNodeData,
   MemoryNodeData,
   NodeRunState,
@@ -78,7 +79,7 @@ import { DeleteNodeConfirmDialog } from './DeleteNodeConfirmDialog'
 import { DEFAULT_ZOOM } from './constants'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import { CONNECTOR_CHILD_CLEARANCE, connectorNodeOffsetX, findFreePosition, tidyLayout } from './layout'
-import { LlmNodeInspector } from './LlmNodeInspector'
+import { ModelNodeInspector } from './ModelNodeInspector'
 import { DatasetBrowserPanel } from './DatasetBrowserPanel'
 import { DATASET_BROWSE, nodeDataForDataset } from './datasetCatalog'
 import { McpServerBrowserPanel } from './McpServerBrowserPanel'
@@ -119,7 +120,7 @@ import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
 import { DatasetNode } from './nodes/DatasetNode'
-import { LlmNode } from './nodes/LlmNode'
+import { ModelNode } from './nodes/ModelNode'
 import { McpClientToolNode } from './nodes/McpClientToolNode'
 import { McpToolNode } from './nodes/McpToolNode'
 import { MemoryNode } from './nodes/MemoryNode'
@@ -132,11 +133,11 @@ import { OkfDocumentNode } from './nodes/OkfDocumentNode'
 import { SkillNode } from './nodes/SkillNode'
 import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 
-// One node type per LLM provider / architectural pattern (see LlmNodeData/
+// One node type per LLM provider / architectural pattern (see ModelNodeData/
 // ReasonActPatternNodeData's own comments in types/protocols.ts) -- each
 // connector slot accepts this whole family, not one exact type, mirroring
 // how the "tool" slot already accepts any mcp_tool node.
-const LLM_NODE_TYPES = ['llm_anthropic', 'llm_openai', 'llm_azure_foundry', 'llm_openrouter', 'llm_local']
+const MODEL_NODE_TYPES = ['model_anthropic', 'model_openai', 'model_azure_foundry', 'model_openrouter', 'model_local']
 const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
 // The Knowledge slot's family, mirroring _KNOWLEDGE_NODE_TYPES in
 // services/protocol_execution.py: a server-side folder or an uploaded single
@@ -162,11 +163,11 @@ const NODE_TYPES = {
   // All five LLM provider types render through the same component -- it
   // derives icon/accent/placeholder from data.config.provider, not from
   // which of these five keys it was registered under.
-  llm_anthropic: LlmNode,
-  llm_openai: LlmNode,
-  llm_azure_foundry: LlmNode,
-  llm_openrouter: LlmNode,
-  llm_local: LlmNode,
+  model_anthropic: ModelNode,
+  model_openai: ModelNode,
+  model_azure_foundry: ModelNode,
+  model_openrouter: ModelNode,
+  model_local: ModelNode,
   memory: MemoryNode,
   output_parser: OutputParserNode,
   dataset: DatasetNode,
@@ -209,11 +210,11 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   // it.
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData()
   if (nodeType === 'critic_gate') return defaultCriticGateNodeData()
-  if (nodeType === 'llm_anthropic') return defaultAnthropicLlmNodeData()
-  if (nodeType === 'llm_openai') return defaultOpenAiLlmNodeData()
-  if (nodeType === 'llm_azure_foundry') return defaultAzureFoundryLlmNodeData()
-  if (nodeType === 'llm_openrouter') return defaultOpenRouterLlmNodeData()
-  if (nodeType === 'llm_local') return defaultLocalLlmNodeData()
+  if (nodeType === 'model_anthropic') return defaultAnthropicModelNodeData()
+  if (nodeType === 'model_openai') return defaultOpenAiModelNodeData()
+  if (nodeType === 'model_azure_foundry') return defaultAzureFoundryModelNodeData()
+  if (nodeType === 'model_openrouter') return defaultOpenRouterModelNodeData()
+  if (nodeType === 'model_local') return defaultLocalModelNodeData()
   if (nodeType === 'memory') return defaultMemoryNodeData()
   if (nodeType === 'output_parser') return defaultOutputParserNodeData()
   if (nodeType === 'dataset') return defaultDatasetNodeData()
@@ -265,7 +266,7 @@ function datasetIdsInGraph(nodes: Node[], factors: DesignFactor[] = EMPTY_FACTOR
 
 // Mirrors isValidConnection's own per-slot source-type-family rule -- the
 // panel that opens for a connector "+" is pre-filtered to that slot's whole
-// family of node types (LLM_NODE_TYPES/PATTERN_NODE_TYPES above) rather than
+// family of node types (MODEL_NODE_TYPES/PATTERN_NODE_TYPES above) rather than
 // the full catalog. Tool's own family includes Script alongside mcp_tool
 // (one connector accepting several kinds of node -- see AgentNode.tsx's own
 // comment on its Tool handle): a Script is a pure config source with no
@@ -273,7 +274,7 @@ function datasetIdsInGraph(nodes: Node[], factors: DesignFactor[] = EMPTY_FACTOR
 // getting a dedicated one. Dataset used to share it too, but now has its
 // own slot -- what an agent operates ON, not a capability it operates WITH.
 const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; title: string }> = {
-  ai: { allowedTypes: LLM_NODE_TYPES, title: 'Add AI' },
+  model: { allowedTypes: MODEL_NODE_TYPES, title: 'Add Model' },
   tool: { allowedTypes: [MCP_SERVER_BROWSE, 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
   output_parser: { allowedTypes: ['output_parser'], title: 'Add Output Parser' },
@@ -303,7 +304,8 @@ function parserPositionFor(agent: Node, otherNodes: Node[]) {
 // Connector slots have been renamed since graphs started being saved, and a
 // slot id lives in persisted data (it's the edge's source/targetHandle):
 //
-//   * "llm" -> "ai", on every edge, when the connector's caption became "AI".
+//   * "llm" -> "ai" -> "model", on every edge as the connector vocabulary evolved.
+//   * "llm_*" -> "model_*", for the five provider-node discriminators.
 //   * "tool" -> "resource" for DATASET-sourced edges only -- Dataset used to
 //     share the Tool slot with mcp_tool/script, which both keep "tool". Hence
 //     the source-type check rather than a blanket swap.
@@ -315,14 +317,35 @@ function parserPositionFor(agent: Node, otherNodes: Node[]) {
 // the right handle and the next autosave persists the fix. This is one of
 // three layers, none of them load-bearing alone: Alembic data migrations
 // (3f1a7c9b2e04, b7c2d9e14a35) make stored graphs canonical, the backend keeps
-// resolving the old spellings (_LEGACY_AI_HANDLES / _LEGACY_DATASET_HANDLES in
+// resolving the old spellings (_LEGACY_MODEL_HANDLES / _LEGACY_DATASET_HANDLES in
 // services/protocol_execution.py) so a graph that's never opened still runs,
 // and this covers a tab that loaded before the deploy and is still autosaving
 // old-spelling edges.
+const LEGACY_MODEL_NODE_TYPES: Record<string, string> = {
+  llm_anthropic: 'model_anthropic',
+  llm_openai: 'model_openai',
+  llm_azure_foundry: 'model_azure_foundry',
+  llm_openrouter: 'model_openrouter',
+  llm_local: 'model_local',
+}
+
+function migrateLegacyNodes(graph: ProtocolGraph): Node[] {
+  return (graph.nodes as Node[]).map((node) => {
+    const type = LEGACY_MODEL_NODE_TYPES[node.type ?? '']
+    return type ? { ...node, type } : node
+  })
+}
+
 function migrateLegacyHandles(graph: ProtocolGraph): Edge[] {
   const datasetIds = new Set(graph.nodes.filter((n) => n.type === 'dataset').map((n) => n.id))
   return (graph.edges as Edge[]).map((e) => {
-    if (e.targetHandle === 'llm') return { ...e, sourceHandle: 'ai', targetHandle: 'ai' }
+    if (e.targetHandle === 'ai' || e.targetHandle === 'llm' || e.sourceHandle === 'ai' || e.sourceHandle === 'llm') {
+      return {
+        ...e,
+        sourceHandle: e.sourceHandle === 'ai' || e.sourceHandle === 'llm' ? 'model' : e.sourceHandle,
+        targetHandle: e.targetHandle === 'ai' || e.targetHandle === 'llm' ? 'model' : e.targetHandle,
+      }
+    }
     if (e.targetHandle === 'resource' || (e.targetHandle === 'tool' && datasetIds.has(e.source))) {
       return { ...e, sourceHandle: 'dataset', targetHandle: 'dataset' }
     }
@@ -365,7 +388,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   publishedRevision: number | null
   experimentLocked?: boolean
 }>(function ProtocolCanvas({ protocolId, experimentId, initialGraph, hasUnpublishedChanges, publishedRevision, experimentLocked = false }, canvasHandleRef) {
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialGraph.nodes as Node[])
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(migrateLegacyNodes(initialGraph))
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateLegacyHandles(initialGraph))
   const queryClient = useQueryClient()
 
@@ -731,7 +754,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // wire-time by isValidConnection, and an execution pattern can never
   // reach zero (see nonDeletablePatternNodeIds above) -- so this is the
   // only one actually reachable through normal use.
-  const agentIdsWithLlm = useMemo(() => new Set(edges.filter((e) => e.targetHandle === 'ai').map((e) => e.target)), [edges])
+  const agentIdsWithModel = useMemo(() => new Set(edges.filter((e) => e.targetHandle === 'model').map((e) => e.target)), [edges])
   const agentIdsWithParser = useMemo(
     () => new Set(edges.filter((e) => e.targetHandle === 'output_parser').map((e) => e.target)),
     [edges],
@@ -753,7 +776,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // pattern node's "this loop won't loop" warning icon below. That node's
   // warning depends on its AGENT's wiring rather than its own config, so it
   // can't be computed inside the node component the way its other warnings
-  // are; it's injected here alongside missingLlm instead.
+  // are; it's injected here alongside missingModel instead.
   //
   // Mirrors the backend's three tool sources (services/protocol_execution.py):
   // MCP nodes on the Tool connector (_resolve_tool_config), OKF bundles and
@@ -926,7 +949,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     [protocolId, nodes, edges],
   )
 
-  // The model each agent will actually run on, resolved through its AI
+  // The model each agent will actually run on, resolved through its Model
   // connector. Injected into the node's data rather than read here, because
   // whether that model can be sent function schemas needs the provider's model
   // list -- a query, which the node card subscribes to itself (see AgentNode's
@@ -935,8 +958,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     const nodeById = new Map(nodes.map((n) => [n.id, n]))
     const map = new Map<string, { provider?: string; model?: string }>()
     for (const e of edges) {
-      if (e.targetHandle !== 'ai') continue
-      const config = (nodeById.get(e.source)?.data as LlmNodeData | undefined)?.config
+      if (e.targetHandle !== 'model') continue
+      const config = (nodeById.get(e.source)?.data as ModelNodeData | undefined)?.config
       if (config) map.set(e.target, { provider: config.provider, model: config.model })
     }
     return map
@@ -959,6 +982,29 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const isPeerCollaboration = coordinationSlug === 'peer_collaboration'
   const isSupervisor = coordinationSlug === 'supervisor_architecture'
   const isSequential = coordinationSlug === 'sequential'
+
+  const renderedEdges = useMemo<Edge[]>(() => {
+    if (!isSequential) return edges
+    const agentIds = new Set(nodes.filter((node) => node.type === 'agent').map((node) => node.id))
+    return edges.map((edge) => {
+      const isAgentFlow =
+        !edge.sourceHandle &&
+        !edge.targetHandle &&
+        agentIds.has(edge.source) &&
+        agentIds.has(edge.target)
+      if (!isAgentFlow) return edge
+      return {
+        ...edge,
+        data: { ...edge.data, sequentialAgentFlow: true },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 18,
+          height: 18,
+          color: 'color-mix(in oklch, var(--muted-foreground), transparent 30%)',
+        },
+      }
+    })
+  }, [edges, isSequential, nodes])
 
   // Which main-flow sides are already taken. Only consulted under
   // 'sequential', where the chain rule caps each side at one edge
@@ -985,9 +1031,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           ...n.data,
           runStatus: latestNodeRuns?.[n.id]?.status,
           runTruncated: Boolean(latestNodeRuns?.[n.id]?.truncation),
-          missingLlm: n.type === 'agent' && !agentIdsWithLlm.has(n.id),
+          missingModel: n.type === 'agent' && !agentIdsWithModel.has(n.id),
           // "Require specific output format" is on, but nothing says what the
-          // format is. Unlike missingLlm this doesn't stop the run -- the agent
+          // format is. Unlike missingModel this doesn't stop the run -- the agent
           // just answers in prose, which is the outcome the switch was flipped
           // to prevent, so it has to be visible on the card and not only in the
           // inspector the user has already closed. A legacy stored contract
@@ -1043,7 +1089,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     nodes,
     latestNodeRuns,
     nonDeletablePatternNodeIds,
-    agentIdsWithLlm,
+    agentIdsWithModel,
     agentIdsWithParser,
     agentIdsWithUpstream,
     agentIdsWithCallableTools,
@@ -1397,7 +1443,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       // same spot the auto-created default one did.
       // x is the connector's OWN position along the host's edge, not the
       // host's left corner: with all seven slots dropping their node at the
-      // same x, a Tool node could land above the AI connector and every one
+      // same x, a Tool node could land above the Model connector and every one
       // after the first got shoved onto a ring around that same point, which
       // read as nodes scattered at random rather than as "this one belongs to
       // that connector". findFreePosition then prefers the same row when the
@@ -1717,7 +1763,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null
   // Computed once per selection change, not per FactorBindableField -- an
-  // LLM/Tool/Memory node's plain label alone doesn't say which agent it
+  // Model/Tool/Memory node's plain label alone doesn't say which agent it
   // belongs to (see bindableFields.ts's own comment), so every inspector
   // that wraps a field in "+ Make experimental factor" gets this instead of
   // data.label for that purpose specifically; the header title itself still
@@ -1757,7 +1803,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | AgentNodeData
       | McpToolNodeData
       | CriticGateNodeData
-      | LlmNodeData
+      | ModelNodeData
       | MemoryNodeData
       | OutputParserNodeData
       | DatasetNodeData
@@ -1790,9 +1836,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       const targetNode = nodes.find((n) => n.id === connection.target)
       if (!sourceNode || !targetNode) return false
       switch (connection.targetHandle) {
-        case 'ai':
+        case 'model':
           return (
-            LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
+            MODEL_NODE_TYPES.includes(sourceNode.type ?? '') &&
             (targetNode.type === 'agent' || targetNode.type === 'critic_gate')
           )
         case 'tool':
@@ -1830,7 +1876,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           // the first place, so this mostly guards against a stray
           // connection, not real interactive use.
           const sourceCanFeedMainFlow =
-            !LLM_NODE_TYPES.includes(sourceNode.type ?? '') &&
+            !MODEL_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'memory' &&
             sourceNode.type !== 'output_parser' &&
             !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
@@ -1886,7 +1932,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         <div ref={paneRef} className="relative flex-1">
           <ReactFlow
             nodes={nodesWithRunStatus}
-            edges={edges}
+            edges={renderedEdges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -1987,7 +2033,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 billable run on one click. That dialog does its own pre-flight
                 scan for obviously misconfigured nodes (no model, no dataset
                 picked, no script code, an agent with nothing wired into its
-                required AI connector) and surfaces them inline, instead of
+                required Model connector) and surfaces them inline, instead of
                 the user only finding out via a generic "one or more nodes
                 failed" AFTER paying for the attempt. It also owns the
                 publish-then-run choice when the draft differs from the
@@ -2132,9 +2178,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
           />
-        ) : LLM_NODE_TYPES.includes(selectedNode?.type ?? '') ? (
-          <LlmNodeInspector
-            node={{ id: selectedNode!.id, type: selectedNode!.type!, position: selectedNode!.position, data: selectedNode!.data as LlmNodeData }}
+        ) : MODEL_NODE_TYPES.includes(selectedNode?.type ?? '') ? (
+          <ModelNodeInspector
+            node={{ id: selectedNode!.id, type: selectedNode!.type!, position: selectedNode!.position, data: selectedNode!.data as ModelNodeData }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}

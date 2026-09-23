@@ -36,7 +36,7 @@ from asaree.services.protocols import create_protocol, delete_protocol
 
 def _graph(node_ids: list[str], edges: list[tuple[str, str]]) -> dict:
     # "step" is a deliberately-unregistered node type -- not "agent" (needs
-    # an LLM connector) and not "mcp_tool" (now handle-restricted to its own
+    # a Model connector) and not "mcp_tool" (now handle-restricted to its own
     # Tool connector, see _MCP_TOOL_NODE_TYPES) -- so these pure DAG-shape
     # tests (topological order, cycle detection, sink detection) can wire
     # plain edges freely with zero setup. topological_order only applies
@@ -57,13 +57,13 @@ def _edges(*pairs: tuple[str, str]) -> list[dict]:
 
 
 def _llm_node(node_id: str = "llm", config: dict | None = None) -> dict:
-    # llm_anthropic -- one arbitrary member of the LLM node-type family
-    # (pe._LLM_NODE_TYPES); which one doesn't matter for these DAG-shape/
+    # model_anthropic -- one arbitrary member of the Model node-type family
+    # (pe._MODEL_NODE_TYPES); which one doesn't matter for these DAG-shape/
     # validation tests, only that it's a family member.
-    return {"id": node_id, "type": "llm_anthropic", "data": {"label": "", "config": config or {}}}
+    return {"id": node_id, "type": "model_anthropic", "data": {"label": "", "config": config or {}}}
 
 
-def _llm_edge(source: str, target: str, handle: str = "ai") -> dict:
+def _llm_edge(source: str, target: str, handle: str = "model") -> dict:
     # `handle` is only ever overridden to exercise the pre-rename "llm"
     # spelling that migration 3f1a7c9b2e04 rewrites -- see
     # test_legacy_llm_handle_still_resolves.
@@ -213,9 +213,9 @@ def _knowledge_edge(source: str, target: str) -> dict:
 
 
 def _agent_with_llm(node_id: str, llm_id: str = "llm") -> tuple[dict, dict]:
-    """A minimal valid agent + its required LLM connector edge -- the
+    """A minimal valid agent + its required Model connector edge -- the
     boilerplate every connector-validation test below needs just to get
-    past the "every agent needs exactly one AI connection" rule so it can
+    past the "every agent needs exactly one Model connection" rule so it can
     test the thing it actually cares about."""
     return _node(node_id, "agent"), _llm_edge(llm_id, node_id)
 
@@ -1760,7 +1760,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
 ) -> None:
     """End-to-end (minus the actual LLM call): a run created with
     cell_label/factor_values set gets the substituted value resolvable via
-    the worker's LLM connector, and the sink node's output lands on the
+    the worker's Model connector, and the sink node's output lands on the
     right replicate via the real upsert_replicate -- proves apply_factor_bindings is
     actually wired into run_protocol, not just correct in isolation. Model
     config lives on the connected `llm` node now, not the agent's own
@@ -1769,7 +1769,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
     received_workspace_ids = []
 
     async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
-        received_configs.append(pe._resolve_llm_config(graph, node["id"]))
+        received_configs.append(pe._resolve_model_config(graph, node["id"]))
         received_workspace_ids.append(workspace_id)
         return f"output for {node['id']}", None, None, None
 
@@ -1787,7 +1787,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
                 "nodes": [
                     {
                         "id": "llm1",
-                        "type": "llm_anthropic",
+                        "type": "model_anthropic",
                         "data": {
                             "config": {"temperature": 0.9},
                             "factor_bindings": {"config.temperature": "Temperature"},
@@ -1795,7 +1795,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
                     },
                     {"id": "worker", "type": "agent", "data": {"config": {}}},
                 ],
-                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "ai"}],
+                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "model"}],
             },
         )
         protocol_id = protocol.id
@@ -2238,12 +2238,12 @@ async def test_monitor_protocol_run_sets_event_once_cancellation_requested(owner
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
 
 
-# --- LLM / Tool / Memory connector validation (pure) -------------------------
+# --- Model / Tool / Memory connector validation (pure) -------------------------
 
 
 def test_agent_missing_llm_connection_raises() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one Model connection"):
         topological_order(graph)
 
 
@@ -2253,7 +2253,7 @@ def test_agent_duplicate_llm_connection_raises() -> None:
         "nodes": [llm1, llm2, _node("a", "agent")],
         "edges": [_llm_edge("llm1", "a"), _llm_edge("llm2", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one Model connection"):
         topological_order(graph)
 
 
@@ -2264,33 +2264,34 @@ def test_critic_gate_missing_llm_connection_raises() -> None:
         "nodes": [llm, worker, _node("g1", "critic_gate")],
         "edges": [worker_llm_edge, {"id": "w1-g1", "source": "w1", "target": "g1"}],
     }
-    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one Model connection"):
         topological_order(graph)
 
 
-def test_legacy_llm_handle_still_resolves() -> None:
-    # The AI connector's handle id was "llm" before it was renamed to "ai"
-    # (migration 3f1a7c9b2e04 rewrites stored graphs). An un-migrated edge --
+@pytest.mark.parametrize("legacy_handle", ["ai", "llm"])
+def test_legacy_model_handle_still_resolves(legacy_handle: str) -> None:
+    # The Model connector's handles were "llm" and then "ai" before "model".
+    # Data migrations rewrite stored graphs, but an un-migrated edge --
     # or one autosaved by a browser tab still running the pre-rename JS --
     # must resolve identically: same wiring, same model config, no "exactly
-    # one AI connection" error from the edge being read as a main pipeline
+    # one Model connection" error from the edge being read as a main pipeline
     # edge instead.
     llm = _llm_node(config={"provider": "anthropic", "model": "claude-sonnet-4-5"})
     agent = _node("a", "agent")
     graph = {
         "nodes": [llm, agent],
-        "edges": [_llm_edge("llm", "a", handle="llm")],
+        "edges": [_llm_edge("llm", "a", handle=legacy_handle)],
     }
     assert [n["id"] for n in topological_order(graph)] == ["llm", "a"]
-    assert pe._resolve_llm_config(graph, "a")["model"] == "claude-sonnet-4-5"
+    assert pe._resolve_model_config(graph, "a")["model"] == "claude-sonnet-4-5"
 
 
 def test_llm_connection_from_non_llm_source_raises() -> None:
     graph = {
         "nodes": [_node("t1", "step"), _node("a", "agent")],
-        "edges": [{"id": "t1-a-ai", "source": "t1", "target": "a", "targetHandle": "ai"}],
+        "edges": [{"id": "t1-a-ai", "source": "t1", "target": "a", "targetHandle": "model"}],
     }
-    with pytest.raises(ProtocolValidationError, match="must come from an AI node"):
+    with pytest.raises(ProtocolValidationError, match="must come from a Model node"):
         topological_order(graph)
 
 
@@ -2372,7 +2373,7 @@ def test_llm_node_with_plain_outgoing_edge_raises() -> None:
         "nodes": [llm, agent, _node("b", "agent")],
         "edges": [agent_llm_edge, {"id": "llm-b", "source": "llm", "target": "b"}],
     }
-    with pytest.raises(ProtocolValidationError, match="AI node .* can only connect to a node's AI slot"):
+    with pytest.raises(ProtocolValidationError, match="Model node .* can only connect to a node's Model slot"):
         topological_order(graph)
 
 
@@ -2901,19 +2902,21 @@ def test_valid_llm_tool_memory_wiring_passes() -> None:
     assert set(order) == {"llm", "a", "tool1", "memory", "pattern"}
 
 
-def test_llm_connection_accepts_any_provider_node_type() -> None:
-    # Membership, not equality -- llm_openai/llm_azure_foundry are just as
-    # valid an LLM connector source as _llm_node()'s default llm_anthropic.
-    agent1, agent1_llm_edge = _agent_with_llm("a1", llm_id="openai")
-    agent2, agent2_llm_edge = _agent_with_llm("a2", llm_id="foundry")
-    openai_llm = {"id": "openai", "type": "llm_openai", "data": {"label": "", "config": {}}}
-    foundry_llm = {"id": "foundry", "type": "llm_azure_foundry", "data": {"label": "", "config": {}}}
+def test_model_connection_accepts_every_provider_node_type() -> None:
+    providers = ["anthropic", "openai", "azure_foundry", "openrouter", "local"]
+    agents_and_edges = [_agent_with_llm(f"a{index}", llm_id=provider) for index, provider in enumerate(providers)]
+    agents = [agent for agent, _edge in agents_and_edges]
+    edges = [edge for _agent, edge in agents_and_edges]
+    models = [
+        {"id": provider, "type": f"model_{provider}", "data": {"label": "", "config": {}}}
+        for provider in providers
+    ]
     graph = {
-        "nodes": [agent1, agent2, openai_llm, foundry_llm],
-        "edges": [agent1_llm_edge, agent2_llm_edge],
+        "nodes": [*agents, *models],
+        "edges": edges,
     }
     order = [n["id"] for n in topological_order(graph)]
-    assert set(order) == {"a1", "a2", "openai", "foundry"}
+    assert set(order) == {*(agent["id"] for agent in agents), *providers}
 
 
 def test_architectural_pattern_connection_accepts_any_pattern_node_type() -> None:
@@ -2928,23 +2931,23 @@ def test_architectural_pattern_connection_accepts_any_pattern_node_type() -> Non
     assert set(order) == {"llm", "a", "baseline"}
 
 
-# --- LLM / Tool connector resolution (pure) -----------------------------------
+# --- Model / Tool connector resolution (pure) -----------------------------------
 
 
-def test_resolve_llm_config_returns_connected_node_config() -> None:
+def test_resolve_model_config_returns_connected_node_config() -> None:
     llm = _llm_node(config={"provider": "anthropic", "model": "claude-sonnet-5", "temperature": 0.5})
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
-    assert pe._resolve_llm_config(graph, "a") == {
+    assert pe._resolve_model_config(graph, "a") == {
         "provider": "anthropic",
         "model": "claude-sonnet-5",
         "temperature": 0.5,
     }
 
 
-def test_resolve_llm_config_empty_when_unconnected() -> None:
+def test_resolve_model_config_empty_when_unconnected() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    assert pe._resolve_llm_config(graph, "a") == {}
+    assert pe._resolve_model_config(graph, "a") == {}
 
 
 def test_resolve_dataset_configs_returns_connected_node_config() -> None:
@@ -3471,11 +3474,11 @@ def test_sequential_rejects_a_loop() -> None:
 
 
 def test_sequential_ignores_connector_fan_in() -> None:
-    """One LLM node feeding every agent in the chain is the normal shape. It is
+    """One Model node feeding every agent in the chain is the normal shape. It is
     a fan-in on the graph and must not read as one on the chain."""
     graph = _chain_graph("a", "b", "c")
-    graph["nodes"] = [n for n in graph["nodes"] if n["type"] != "llm_anthropic"] + [_llm_node("shared")]
-    graph["edges"] = [e for e in graph["edges"] if e.get("targetHandle") != "ai"]
+    graph["nodes"] = [n for n in graph["nodes"] if n["type"] != "model_anthropic"] + [_llm_node("shared")]
+    graph["edges"] = [e for e in graph["edges"] if e.get("targetHandle") != "model"]
     graph["edges"] += [_llm_edge("shared", a) for a in ("a", "b", "c")]
     validate_coordination_strategy(_SEQUENTIAL, graph=graph)
 
@@ -3997,7 +4000,7 @@ def test_validate_single_node_runnable_rejects_a_node_with_upstream_input() -> N
 
 def test_validate_single_node_runnable_rejects_zero_llm_connections() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    with pytest.raises(ProtocolValidationError, match="must have exactly one AI connection"):
+    with pytest.raises(ProtocolValidationError, match="must have exactly one Model connection"):
         pe.validate_single_node_runnable(graph, "a")
 
 
@@ -4005,7 +4008,7 @@ def test_validate_single_node_runnable_rejects_llm_edge_from_wrong_node_type() -
     agent = _node("a", "agent")
     not_an_llm = _node("x", "agent")
     graph = {"nodes": [agent, not_an_llm], "edges": [_llm_edge("x", "a")]}
-    with pytest.raises(ProtocolValidationError, match="must come from an AI node"):
+    with pytest.raises(ProtocolValidationError, match="must come from a Model node"):
         pe.validate_single_node_runnable(graph, "a")
 
 
@@ -4052,8 +4055,8 @@ def test_validate_conversation_entry_rejects_a_peer_with_no_model() -> None:
     """A peer's own wiring is checked too: it will really run, and finding out
     mid-conversation costs the user a run they already paid for."""
     graph = _conversation_graph("a", "b")
-    graph["edges"] = [e for e in graph["edges"] if e.get("target") != "b" or e.get("targetHandle") != "ai"]
-    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
+    graph["edges"] = [e for e in graph["edges"] if e.get("target") != "b" or e.get("targetHandle") != "model"]
+    with pytest.raises(ProtocolValidationError, match="exactly one Model connection"):
         pe.validate_conversation_entry(graph, "a")
 
 
@@ -4077,7 +4080,7 @@ async def test_run_single_node_ignores_an_unrelated_broken_sibling_node(
 ) -> None:
     """The whole point of a narrower, per-node check: a single-node Play run
     must not fail because some OTHER node elsewhere in the same graph is
-    unrelated and broken (e.g. missing its own LLM connector) -- only
+    unrelated and broken (e.g. missing its own Model connector) -- only
     topological_order's full-graph walk cares about that."""
 
     async def fake_run_agent_node(node, *, user_input, **_kwargs):
@@ -4087,7 +4090,7 @@ async def test_run_single_node_ignores_an_unrelated_broken_sibling_node(
 
     target, target_llm_edge = _agent_with_llm("target")
     target["data"]["config"] = {"prompt": "do the one thing", "goal": ""}
-    broken_sibling = _node("broken", "agent")  # no LLM connector at all
+    broken_sibling = _node("broken", "agent")  # no Model connector at all
 
     graph = {"nodes": [target, broken_sibling, _llm_node()], "edges": [target_llm_edge]}
 

@@ -36,6 +36,7 @@ WORKSPACE_SERVER_NAME = "asaree-workspace"
 SCRIPT_SERVER_NAME = "asaree-script"
 OKF_SERVER_NAME = "motoro-okf"
 SCIKIT_LEARN_SERVER_NAME = "scikit-learn-mcp"
+EDA_SERVER_NAME = "asaree-sklearn-eda"
 
 # The workspace tools every agent with a Dataset connector wired gets, without
 # the user having to also drag an asaree-workspace Tool node onto the canvas
@@ -93,6 +94,8 @@ UNSPLIT_DATASET_AGENT_TOOLS: Final[tuple[str, ...]] = (
     "describe_split",
     "train_test_split",
 )
+
+DATASET_DICTIONARY_AGENT_TOOLS: Final[tuple[str, ...]] = ("get_data_dictionary",)
 
 # (server name, module to run). Every module here is importable from this
 # repo's own venv -- asaree.* is ASAREE, motoro.* comes from the pinned Motoro

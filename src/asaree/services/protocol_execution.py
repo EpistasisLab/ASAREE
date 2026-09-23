@@ -91,6 +91,8 @@ from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
 from asaree.services.runtime_metrics import finalize_attempt_measurement
 from asaree.services.system_mcp_servers import (
+    DATASET_DICTIONARY_AGENT_TOOLS,
+    EDA_SERVER_NAME,
     SCIKIT_LEARN_SERVER_NAME,
     SCRIPT_AGENT_TOOLS,
     SCRIPT_SERVER_NAME,
@@ -1419,9 +1421,7 @@ def _compute_workspace_id(
 def _materialize_script(workspace_id: str | None, node_id: str, code: str) -> str:
     """Write a wired Script node's code next to the run's workspace; return its path.
 
-    ``""`` when there's nowhere to put it -- no workspace id (an unlinked
-    protocol run) or the write failed. The caller falls back to inlining the
-    code in the prompt, which is what this replaces.
+    ``""`` when no materialization id was supplied or the write failed.
 
     The file lives under the run's own workspace directory because that
     directory is already the shared surface between this process and the MCP
@@ -1450,8 +1450,33 @@ def _materialize_script(workspace_id: str | None, node_id: str, code: str) -> st
     return str(path)
 
 
+def _script_workspace_id(workspace_id: str | None, protocol_run_id: uuid.UUID | None, agent_node_id: str) -> str | None:
+    """Choose real workspace storage or an isolated standalone-run directory."""
+    safe_agent = _UNSAFE_WORKSPACE_LABEL_CHAR.sub("_", agent_node_id)
+    return workspace_id or (f"_protocol_runs/{protocol_run_id}/{safe_agent}" if protocol_run_id else None)
+
+
+def _cleanup_adhoc_scripts(ambient_meta: dict[str, Any] | None) -> None:
+    """Remove standalone-run script files after their consuming agent stops."""
+    adhoc_root = (Path(WORKSPACE_ROOT).resolve() / "_protocol_runs").resolve()
+    for item in (ambient_meta or {}).get("script_paths") or []:
+        path = Path(str(item.get("path") or "")).resolve()
+        if adhoc_root not in path.parents:
+            continue
+        with contextlib.suppress(OSError):
+            path.unlink()
+        for directory in (path.parent, path.parent.parent, path.parent.parent.parent):
+            with contextlib.suppress(OSError):
+                directory.rmdir()
+
+
 def _ambient_meta_for(
-    graph: dict[str, Any], node_id: str, workspace_id: str | None = None, *, slots: tuple[str, ...] = ()
+    graph: dict[str, Any],
+    node_id: str,
+    workspace_id: str | None = None,
+    *,
+    script_workspace_id: str | None = None,
+    slots: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """The node's Reference-route values, for Motoro's caller-ambient ``_meta``.
 
@@ -1539,7 +1564,7 @@ def _ambient_meta_for(
         if not code:
             continue
         script_node_id = str(config.get("node_id") or f"script-{index}")
-        script_path = _materialize_script(workspace_id, script_node_id, str(code))
+        script_path = _materialize_script(script_workspace_id or workspace_id, script_node_id, str(code))
         if script_path:
             script_paths.append(
                 {
@@ -1654,6 +1679,18 @@ async def _resolve_node_dataset(
                 "workspace_preseed_failed", extra={"node_id": node_id, "dataset": name, "error": "not found"}
             )
             continue
+        # Enrich this run's in-memory graph with current catalog metadata. The
+        # published graph still owns identity/order; the registry owns mutable
+        # descriptive facts, so old nodes gain the same discovery context as
+        # newly-created ones without rewriting a revision.
+        for config in _resolve_dataset_configs(graph, node_id):
+            if str(config.get("dataset_name") or "") == name:
+                config.update(
+                    description=reg.get("description"),
+                    target_column=reg.get("target_column"),
+                    split_state="split" if reg.get("train_path") and reg.get("test_path") else "unsplit",
+                    dictionary_available=bool(reg.get("dictionary_json")),
+                )
         if not (reg.get("train_path") and reg.get("test_path")):
             # Unsplit: no workspace to seed (``seed_cell_workspace`` says why),
             # so the raw file itself becomes the run's dataset and the agent
@@ -1708,6 +1745,7 @@ async def _node_run_context(
     workspace_id: str | None,
     owner_id: uuid.UUID,
     *,
+    protocol_run_id: uuid.UUID | None = None,
     slot_prefix: str | None = None,
     stage_plan: Any = None,
 ) -> tuple[dict[str, Any], NodeDataset]:
@@ -1738,6 +1776,7 @@ async def _node_run_context(
         graph,
         node_id,
         workspace_id,
+        script_workspace_id=_script_workspace_id(workspace_id, protocol_run_id, node_id),
         slots=tuple(slot for _name, slot in dataset.seeded) if slot_prefix else (),
     )
     if dataset.data_path and "data_path" not in ambient_meta:
@@ -2276,6 +2315,7 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
     nodes, _downstream, _upstream = _adjacency(graph)
     server_names: list[str] = []
     tool_names: list[str] = []
+    tool_descriptions: dict[str, str] = {}
     for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
         source = nodes.get(edge["source"])
         if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
@@ -2287,8 +2327,21 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
         if not server_name or server_name in server_names:
             continue
         server_names.append(server_name)
-        tool_names.extend(f"{server_name}.{name}" for name in bundle_config.get("tool_names") or [])
-    return {"server_names": server_names, "tool_names": tool_names}
+        label = str(
+            bundle_config.get("document_title")
+            or bundle_config.get("bundle_label")
+            or (source.get("data") or {}).get("label")
+            or server_name
+        )
+        summary = str(bundle_config.get("document_description") or bundle_config.get("bundle_description") or "")
+        for name in bundle_config.get("tool_names") or []:
+            full_name = f"{server_name}.{name}"
+            tool_names.append(full_name)
+            tool_descriptions[full_name] = f"Knowledge source: {label}. {summary}".strip()
+    resolved: dict[str, Any] = {"server_names": server_names, "tool_names": tool_names}
+    if tool_descriptions:
+        resolved["tool_descriptions"] = tool_descriptions
+    return resolved
 
 
 def _declares_a_field(contract: Any) -> bool:
@@ -2357,13 +2410,13 @@ def _resolve_output_contract(graph: dict[str, Any], node_id: str) -> dict[str, A
         if not parser_config.get("enabled", True):
             continue
         contract = parser_config.get("output_contract")
-        if _declares_a_field(contract):
+        if isinstance(contract, dict) and _declares_a_field(contract):
             return dict(contract)
     if wired:
         return None
     node = nodes.get(node_id) or {}
     legacy = ((node.get("data") or {}).get("config") or {}).get("output_contract")
-    return dict(legacy) if _declares_a_field(legacy) else None
+    return dict(legacy) if isinstance(legacy, dict) and _declares_a_field(legacy) else None
 
 
 def _output_shape_block(contract: dict[str, Any] | None) -> str:
@@ -2458,6 +2511,9 @@ def _resolve_dataset_tool_config(graph: dict[str, Any], node_id: str, *, unsplit
     if unsplit_dataset:
         server_names.append(SCIKIT_LEARN_SERVER_NAME)
         tool_names.extend(f"{SCIKIT_LEARN_SERVER_NAME}.{name}" for name in UNSPLIT_DATASET_AGENT_TOOLS)
+    if any(config.get("dictionary_available") for config in _resolve_dataset_configs(graph, node_id)):
+        server_names.append(EDA_SERVER_NAME)
+        tool_names.extend(f"{EDA_SERVER_NAME}.{name}" for name in DATASET_DICTIONARY_AGENT_TOOLS)
     return {"server_names": server_names, "tool_names": tool_names}
 
 
@@ -2497,6 +2553,7 @@ def _merge_tool_configs(*configs: dict[str, Any]) -> dict[str, Any]:
     """
     server_names: list[str] = []
     tool_names: list[str] = []
+    tool_descriptions: dict[str, str] = {}
     for config in configs:
         for name in config.get("server_names") or []:
             if name not in server_names:
@@ -2504,7 +2561,11 @@ def _merge_tool_configs(*configs: dict[str, Any]) -> dict[str, Any]:
         for name in config.get("tool_names") or []:
             if name not in tool_names:
                 tool_names.append(name)
-    return {"server_names": server_names, "tool_names": tool_names}
+        tool_descriptions.update(config.get("tool_descriptions") or {})
+    resolved: dict[str, Any] = {"server_names": server_names, "tool_names": tool_names}
+    if tool_descriptions:
+        resolved["tool_descriptions"] = tool_descriptions
+    return resolved
 
 
 def _is_node_active(node: dict[str, Any]) -> bool:
@@ -2901,6 +2962,72 @@ def validate_prompt_references(*, graph: dict[str, Any]) -> None:
                 )
 
 
+def _resource_catalog(graph: dict[str, Any], node_id: str) -> str:
+    """Compact semantic metadata for references wired into one agent.
+
+    Paths, ids, and source bodies stay out of the prompt. This block gives the
+    model only enough meaning to choose among already-authorized resources;
+    native tool schemas remain the interface for reading or executing them.
+    """
+    sections: list[str] = []
+
+    datasets = _resolve_dataset_configs(graph, node_id)
+    if datasets:
+        lines = []
+        for config in datasets:
+            name = str(config.get("dataset_name") or "dataset")
+            facts = [str(config.get("description") or "").strip()]
+            if config.get("target_column"):
+                facts.append(f"target={config['target_column']}")
+            if config.get("split_state"):
+                facts.append(f"state={config['split_state']}")
+            if config.get("dictionary_available"):
+                facts.append("data dictionary available through an authorized EDA tool")
+            detail = "; ".join(fact for fact in facts if fact)
+            lines.append(f"- {name}: {detail}" if detail else f"- {name}")
+        sections.append("Available datasets:\n" + "\n".join(lines))
+
+    nodes, _downstream, _upstream = _adjacency(graph)
+    knowledge_lines: list[str] = []
+    for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
+            continue
+        config = (source.get("data") or {}).get("config") or {}
+        if not config.get("enabled", True):
+            continue
+        label = str(
+            config.get("document_title")
+            or config.get("bundle_label")
+            or (source.get("data") or {}).get("label")
+            or "knowledge source"
+        )
+        facts = [str(config.get("document_description") or config.get("bundle_description") or "").strip()]
+        if config.get("document_type"):
+            facts.append(f"type={config['document_type']}")
+        tags = config.get("document_tags") or []
+        if tags:
+            facts.append("tags=" + ", ".join(str(tag) for tag in tags))
+        detail = "; ".join(fact for fact in facts if fact)
+        knowledge_lines.append(f"- {label}: {detail}" if detail else f"- {label}")
+    if knowledge_lines:
+        sections.append(
+            "Available knowledge sources (use their list/search/get tools to disclose content on demand):\n"
+            + "\n".join(knowledge_lines)
+        )
+
+    scripts = [config for config in _resolve_script_configs(graph, node_id) if config.get("code")]
+    if scripts:
+        lines = []
+        for index, config in enumerate(scripts, start=1):
+            name = str(config.get("name") or f"script-{index}")
+            description = str(config.get("description") or "").strip()
+            lines.append(f"- {name}: {description}" if description else f"- {name}")
+        sections.append("Available scripts (source remains out of context until execution):\n" + "\n".join(lines))
+
+    return "\n\n".join(sections)
+
+
 def _build_user_input(
     node: dict[str, Any],
     graph: dict[str, Any],
@@ -2937,9 +3064,10 @@ def _build_user_input(
     more than one is wired.
 
     *script_bound* says the wired scripts reached ``_meta`` as paths
-    (``_ambient_meta_for``). When it didn't -- an unlinked protocol run has no
-    workspace directory to write them to -- the code is inlined here as before,
-    because a prompt the model can copy from beats no scripts at all.
+    (``_ambient_meta_for``). Production callers provide either the experiment
+    workspace or an isolated standalone-run directory, so source stays out of
+    the prompt in both cases. The false branch is a defensive diagnostic for a
+    materialization failure.
 
     *seeded_datasets* are the ``(dataset name, workspace slot)`` pairs ASAREE
     already opened on the agent's behalf (``_resolve_node_dataset``). When
@@ -2992,6 +3120,10 @@ def _build_user_input(
     )
     if upstream_context:
         parts.append(upstream_context)
+
+    resource_catalog = _resource_catalog(graph, node["id"])
+    if resource_catalog:
+        parts.append(resource_catalog)
 
     dataset_configs = _resolve_dataset_configs(graph, node["id"])
     if dataset_configs and experiment_id is not None and effective_cell_label is not None:
@@ -3084,7 +3216,7 @@ def _build_user_input(
             )
         else:
             listed = "\n".join(
-                f'- {str(config.get("name") or f"script-{index}")!r} (id: {config["node_id"]!r})'
+                f"- {str(config.get('name') or f'script-{index}')!r} (id: {config['node_id']!r})"
                 for index, config in enumerate(script_configs, start=1)
             )
             parts.append(
@@ -3095,25 +3227,12 @@ def _build_user_input(
                 "select by id."
             )
     elif script_configs:
-        # No workspace directory to write it to (see _materialize_script), so
-        # fall back to what this did before: paste it and ask for a verbatim
-        # copy. Costs prompt tokens on every turn and is only as faithful as
-        # the model's transcription -- which is the whole reason the path
-        # above exists.
-        if len(script_configs) == 1:
-            parts.append(
-                "Script to pass verbatim as the relevant tool's own code argument (run_wired_script's or "
-                f"run_model_script's `code`):\n```python\n{script_configs[0]['code']}\n```"
-            )
-        else:
-            blocks = []
-            for index, config in enumerate(script_configs, start=1):
-                name = str(config.get("name") or f"script-{index}")
-                blocks.append(f"Script {name!r} (id: {config['node_id']!r}):\n```python\n{config['code']}\n```")
-            parts.append(
-                "Scripts to pass verbatim as the relevant tool's own code argument "
-                "(run_wired_script's or run_model_script's `code`):\n" + "\n\n".join(blocks)
-            )
+        parts.append(
+            "Script context:\n"
+            "A script is wired into this unlinked run, but no isolated run workspace exists in which to materialize "
+            "it. Its source has deliberately not been inserted into the prompt. Link the protocol to an experiment "
+            "to execute wired scripts."
+        )
 
     # The shape block is the only *prose* this function composes. Everything
     # else appended here is either the user's own text or a labelled, fenced
@@ -3209,6 +3328,14 @@ async def _preview_node_dataset(graph: dict[str, Any], node_id: str, owner_id: u
         reg = await fetch_owned_registration(name, owner_id)
         if reg is None:
             continue
+        for config in _resolve_dataset_configs(graph, node_id):
+            if str(config.get("dataset_name") or "") == name:
+                config.update(
+                    description=reg.get("description"),
+                    target_column=reg.get("target_column"),
+                    split_state="split" if reg.get("train_path") and reg.get("test_path") else "unsplit",
+                    dictionary_available=bool(reg.get("dictionary_json")),
+                )
         if not (reg.get("train_path") and reg.get("test_path")):
             if solo:
                 return NodeDataset(
@@ -3644,6 +3771,16 @@ async def _run_agent_node(
     )
     assert agent is not None
 
+    resolved_ambient = (
+        ambient_meta
+        if ambient_meta is not None
+        else _ambient_meta_for(
+            graph,
+            node["id"],
+            workspace_id,
+            script_workspace_id=_script_workspace_id(workspace_id, protocol_run_id, str(node["id"])),
+        )
+    )
     run = await create_run(
         agent_id=agent.id,
         user_input=user_input,
@@ -3656,15 +3793,7 @@ async def _run_agent_node(
             # Precomputed by the caller when it also needed to know whether the
             # script got bound (_build_user_input's script_bound); recomputed
             # here only for a caller that didn't care.
-            **(
-                {"ambient_meta": resolved_ambient}
-                if (
-                    resolved_ambient := (
-                        ambient_meta if ambient_meta is not None else _ambient_meta_for(graph, node["id"], workspace_id)
-                    )
-                )
-                else {}
-            ),
+            **({"ambient_meta": resolved_ambient} if resolved_ambient else {}),
         },
     )
     timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
@@ -3681,6 +3810,8 @@ async def _run_agent_node(
         return None, f"run exceeded its {timeout}s execution budget", run.id, None
     except Exception as e:  # noqa: BLE001 -- same boundary reasoning as execute_run_task
         return None, f"{type(e).__name__}: {e}", run.id, None
+    finally:
+        _cleanup_adhoc_scripts(resolved_ambient)
 
     finished = await get_run(run.id)
     if finished is None:
@@ -3834,7 +3965,12 @@ async def _run_gated_worker(
     # worker against the same references, so re-materializing the script per
     # attempt would only rewrite an identical file.
     worker_ambient, worker_dataset = await _node_run_context(
-        graph, worker["id"], workspace_id, owner_id, stage_plan=stage_plan
+        graph,
+        worker["id"],
+        workspace_id,
+        owner_id,
+        protocol_run_id=protocol_run_id,
+        stage_plan=stage_plan,
     )
     base_instruction = _build_user_input(
         worker,
@@ -4295,7 +4431,12 @@ async def _run_single_node(
         experiment = await get_experiment(db, experiment_id) if experiment_id else None
     single_design_spec = experiment.design_spec if experiment is not None else None
     ambient_meta, node_dataset = await _node_run_context(
-        graph, node["id"], workspace_id, owner_id, stage_plan=stage_plan_spec(single_design_spec, graph=graph)
+        graph,
+        node["id"],
+        workspace_id,
+        owner_id,
+        protocol_run_id=protocol_run_id,
+        stage_plan=stage_plan_spec(single_design_spec, graph=graph),
     )
     user_input = _build_user_input(
         node,
@@ -4467,7 +4608,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         entry_agent_id = resolve_conversation_entry_id(graph)  # already validated above
         entry_node = next(n for n in graph["nodes"] if str(n.get("id")) == entry_agent_id)
         ambient_meta, entry_dataset = await _node_run_context(
-            graph, entry_agent_id, workspace_id, owner_id, stage_plan=stage_plan
+            graph,
+            entry_agent_id,
+            workspace_id,
+            owner_id,
+            protocol_run_id=protocol_run_id,
+            stage_plan=stage_plan,
         )
         node_run, conversation_status = await execute_conversation(
             protocol_run_id,
@@ -4515,7 +4661,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         # own Dataset/Script cues are rebuilt inside each of its two turns,
         # which is where the slot keys it will actually be given are known.
         ambient_meta, supervisor_dataset = await _node_run_context(
-            graph, roles.supervisor, workspace_id, owner_id, stage_plan=stage_plan
+            graph,
+            roles.supervisor,
+            workspace_id,
+            owner_id,
+            protocol_run_id=protocol_run_id,
+            stage_plan=stage_plan,
         )
         node_run, supervisor_status = await execute_supervisor_architecture(
             protocol_run_id,
@@ -4647,7 +4798,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             )
         else:
             ambient_meta, node_dataset = await _node_run_context(
-                graph, node_id, workspace_id, owner_id, stage_plan=stage_plan
+                graph,
+                node_id,
+                workspace_id,
+                owner_id,
+                protocol_run_id=protocol_run_id,
+                stage_plan=stage_plan,
             )
             user_input = _build_user_input(
                 node,

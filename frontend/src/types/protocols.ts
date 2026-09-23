@@ -558,6 +558,10 @@ export function defaultOutputParserNodeData(label = 'Output Parser'): OutputPars
 export interface DatasetNodeConfig {
   dataset_id: string | null
   dataset_name: string | null
+  description?: string | null
+  target_column?: string | null
+  split_state?: 'split' | 'unsplit' | null
+  dictionary_available?: boolean
   // Absent means enabled, matching every other connector's own convention.
   enabled?: boolean
 }
@@ -584,6 +588,7 @@ export function defaultDatasetNodeData(label = 'Dataset'): DatasetNodeData {
 // itself).
 export interface ScriptNodeConfig {
   name: string
+  description?: string
   language: 'python'
   code: string
 }
@@ -596,7 +601,7 @@ export interface ScriptNodeData {
 }
 
 export function defaultScriptNodeData(label = 'Script'): ScriptNodeData {
-  return { label, config: { name: 'script', language: 'python', code: '' } }
+  return { label, config: { name: 'script', description: '', language: 'python', code: '' } }
 }
 
 // A "Skill" node -- names one registered Agent Skill for the Agent it's wired
@@ -665,6 +670,7 @@ export interface OkfBundleNodeConfig {
   // the folder's own name.
   bundle_path: string | null
   bundle_label: string | null
+  bundle_description?: string | null
   // The bundle server's tools, BARE (e.g. "read_concept"), cached at
   // registration. Namespaced "{server_name}.{tool}" at resolve time, matching
   // McpToolNodeConfig. No per-tool picker in V1: a bundle's tools are a fixed
@@ -709,6 +715,9 @@ export interface OkfDocumentNodeConfig {
   // rewrite the document's frontmatter mid-run, and the canvas card shouldn't
   // silently rename itself. The inspector shows the live values.
   document_title: string | null
+  document_description?: string | null
+  document_type?: string | null
+  document_tags?: string[]
   document_path: string | null
   // The document server's tools, BARE, cached at registration -- namespaced
   // "{server_name}.{tool}" at resolve time. No per-tool picker, same reason as

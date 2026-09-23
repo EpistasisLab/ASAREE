@@ -53,6 +53,7 @@ def gather_tools(agent: Any) -> list[dict[str, Any]]:
     allow-list, because ``lookup_tool``'s bare-name index is registry-wide.
     """
     tool_names = set((agent.tool_config_data or {}).get("tool_names") or [])
+    description_prefixes = (agent.tool_config_data or {}).get("tool_descriptions") or {}
     if not tool_names:
         return []
     catalog = get_registry().get_all_tools()
@@ -66,5 +67,9 @@ def gather_tools(agent: Any) -> list[dict[str, Any]]:
             continue
         if len(servers_by_bare_name.get(str(tool.get("tool_name") or ""), ())) > 1:
             tool = {**tool, "tool_name": tool["name"]}
+        prefix = str(description_prefixes.get(tool["name"]) or "").strip()
+        if prefix:
+            description = str(tool.get("description") or "").strip()
+            tool = {**tool, "description": f"{prefix}\n\n{description}" if description else prefix}
         admitted.append(tool)
     return admitted

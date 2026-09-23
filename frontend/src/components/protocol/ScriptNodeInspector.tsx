@@ -81,6 +81,16 @@ export function ScriptNodeInspector({
         </div>
       </div>
 
+      <div className="space-y-1.5">
+        <Label htmlFor="script-description">Description and when to use it</Label>
+        <Input
+          id="script-description"
+          value={config.description ?? ''}
+          onChange={(e) => patchConfig({ description: e.target.value })}
+          placeholder="What this script does and when the agent should run it"
+        />
+      </div>
+
       <FactorBindableField
         experimentId={experimentId}
         fieldPath="config"

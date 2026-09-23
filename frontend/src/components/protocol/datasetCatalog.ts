@@ -25,6 +25,14 @@ export const DATASET_BROWSE = 'datasets_browse'
 export function nodeDataForDataset(dataset: Dataset): DatasetNodeData {
   return {
     label: dataset.name,
-    config: { dataset_id: dataset.id, dataset_name: dataset.name, enabled: true },
+    config: {
+      dataset_id: dataset.id,
+      dataset_name: dataset.name,
+      description: dataset.description,
+      target_column: dataset.target_column,
+      split_state: dataset.train_path && dataset.test_path ? 'split' : 'unsplit',
+      dictionary_available: Boolean(dataset.dictionary_json),
+      enabled: true,
+    },
   }
 }

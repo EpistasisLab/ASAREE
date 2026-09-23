@@ -30,8 +30,10 @@ class _FakeRegistry:
 
 
 class _FakeAgent:
-    def __init__(self, tool_names: list[str] | None) -> None:
-        self.tool_config_data = None if tool_names is None else {"tool_names": tool_names}
+    def __init__(self, tool_names: list[str] | None, tool_descriptions: dict[str, str] | None = None) -> None:
+        self.tool_config_data = (
+            None if tool_names is None else {"tool_names": tool_names, "tool_descriptions": tool_descriptions or {}}
+        )
 
 
 @pytest.fixture
@@ -57,6 +59,14 @@ def test_admits_only_named_tools(registry: _FakeRegistry) -> None:
     assert [t["name"] for t in tools] == ["scikit-learn-mcp.describe_dataset"]
     # Unique bare name -> left alone, so the model sees the clean tool name.
     assert tools[0]["tool_name"] == "describe_dataset"
+
+
+def test_resource_description_is_prefixed_to_the_live_tool_description(registry: _FakeRegistry) -> None:
+    name = "okf-doc-hair-concentrations.search_concepts"
+    [tool] = run_tools.gather_tools(_FakeAgent([name], {name: "Knowledge source: Hair concentrations."}))
+
+    assert tool["description"].startswith("Knowledge source: Hair concentrations.\n\n")
+    assert tool["description"].endswith("search_concepts on okf-doc-hair-concentrations")
 
 
 def test_colliding_bare_name_is_namespaced(registry: _FakeRegistry) -> None:

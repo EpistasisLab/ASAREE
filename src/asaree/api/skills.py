@@ -117,8 +117,8 @@ async def upload_skill_endpoint(
     return SkillResponse.model_validate(skill)
 
 
-async def _folder_payload(files: list[UploadFile]) -> list[tuple[str, str]]:
-    """``(path relative to the skill folder, text)`` for one directory upload.
+async def _folder_payload(files: list[UploadFile]) -> list[tuple[str, bytes]]:
+    """``(path relative to the skill folder, bytes)`` for one directory upload.
 
     The leading ``webkitRelativePath`` segment is the folder the user picked —
     ``code-simplification/SKILL.md`` — and core's ``parse_skill_bundle`` wants
@@ -129,7 +129,7 @@ async def _folder_payload(files: list[UploadFile]) -> list[tuple[str, str]]:
     the user dragged loose files, and a skill assembled from an unknown
     directory layout is not the directory they have on disk.
     """
-    payload: list[tuple[str, str]] = []
+    payload: list[tuple[str, bytes]] = []
     for upload in files:
         name = upload.filename or ""
         parts = [p for p in name.replace("\\", "/").split("/") if p]
@@ -138,7 +138,7 @@ async def _folder_payload(files: list[UploadFile]) -> list[tuple[str, str]]:
                 status_code=422,
                 detail=f"{name or 'A file'} didn't come from a folder — pick the skill's own folder.",
             )
-        payload.append(("/".join(parts[1:]), _decode(await upload.read())))
+        payload.append(("/".join(parts[1:]), await upload.read()))
     return payload
 
 

@@ -70,6 +70,7 @@ async def fetch_owned_registration(name: str, owner_id: uuid.UUID) -> dict[str, 
         if dataset is None or dataset.owner_id != owner_id:
             return None
         return {
+            "description": dataset.description,
             "target_column": dataset.target_column,
             "raw_path": dataset.raw_path,
             "train_path": dataset.train_path,

@@ -10,6 +10,12 @@ export interface Skill {
   name: string
   description: string
   body: string
+  frontmatter: {
+    license?: string
+    compatibility?: string
+    metadata?: Record<string, string>
+    'allowed-tools'?: string
+  }
   is_system: boolean
   // The folder the skill was uploaded from, or the .md file for a single-file
   // upload. Shown back to the user, never used to resolve anything.

@@ -527,7 +527,12 @@ class AgentMessenger:
         # workspace seeded and its `data_path` bound before it can run a script,
         # exactly like any other node.
         ambient_meta, dataset = await _node_run_context(
-            self._graph, to_agent_id, self._workspace_id, self._owner_id, stage_plan=self._stage_plan
+            self._graph,
+            to_agent_id,
+            self._workspace_id,
+            self._owner_id,
+            protocol_run_id=self._protocol_run_id,
+            stage_plan=self._stage_plan,
         )
         # A consultation reply is prose the asking agent reads, never a typed
         # value anything binds to, so whatever the peer's parser extracted (if
@@ -620,7 +625,12 @@ async def execute_conversation(
 
     if ambient_meta is None:
         ambient_meta, entry_dataset = await _node_run_context(
-            graph, entry_agent_id, workspace_id, owner_id, stage_plan=stage_plan
+            graph,
+            entry_agent_id,
+            workspace_id,
+            owner_id,
+            protocol_run_id=protocol_run_id,
+            stage_plan=stage_plan,
         )
         unsplit_dataset = unsplit_dataset or entry_dataset.unsplit_name
 
@@ -857,7 +867,13 @@ async def execute_supervisor_architecture(
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, {"status": "running"})
         ambient_meta, dataset = await _node_run_context(
-            graph, node_id, workspace_id, owner_id, slot_prefix=slot_prefix, stage_plan=stage_plan
+            graph,
+            node_id,
+            workspace_id,
+            owner_id,
+            protocol_run_id=protocol_run_id,
+            slot_prefix=slot_prefix,
+            stage_plan=stage_plan,
         )
         prompt = _build_user_input(
             nodes[node_id],

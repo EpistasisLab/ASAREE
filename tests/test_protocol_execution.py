@@ -372,10 +372,9 @@ def test_a_reader_downstream_of_a_deactivated_node_sees_that_nodes_name() -> Non
 
 
 def test_build_user_input_cues_dataset_without_dictating_ids() -> None:
-    # The ids the prompt used to spell out -- experiment_id, cell_label, the
-    # dataset name -- all reach open_workspace as ambient _meta now. Anything
-    # the model has to retype is something it can retype wrong, so the prompt
-    # keeps only the part _meta can't carry: that there IS a dataset waiting.
+    # Operational ids reach open_workspace as ambient _meta. The dataset's
+    # descriptive metadata is deliberately visible in the resource catalog so
+    # the model can decide whether and how to use the resource.
     agent, agent_llm_edge = _agent_with_llm("a")
     dataset = _dataset_node(dataset_name="spinal-fusion-v1")
     graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
@@ -384,9 +383,41 @@ def test_build_user_input_cues_dataset_without_dictating_ids() -> None:
     )
     assert "Dataset context:" in result
     assert "open_workspace()" in result
-    assert "spinal-fusion-v1" not in result
+    assert "Available datasets:" in result
+    assert "spinal-fusion-v1" in result
     assert str(uuid.UUID(int=1)) not in result
     assert "tier_a__rep_0" not in result
+
+
+def test_resource_catalog_exposes_meaning_but_not_bodies_or_paths() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node()
+    dataset["data"]["config"].update(
+        description="Postoperative outcomes cohort", target_column="fusion", dictionary_available=True
+    )
+    knowledge = _okf_bundle_node()
+    knowledge["data"]["config"].update(bundle_label="Spine ontology", bundle_description="Clinical concepts")
+    script = _script_node(code="SECRET_SCRIPT_BODY")
+    script["data"]["config"]["description"] = "Compute the validated score"
+    graph = {
+        "nodes": [agent, dataset, knowledge, script],
+        "edges": [
+            agent_llm_edge,
+            _dataset_edge(dataset["id"], "a"),
+            _knowledge_edge(knowledge["id"], "a"),
+            _script_edge(script["id"], "a"),
+        ],
+    }
+
+    catalog = pe._resource_catalog(graph, "a")
+
+    assert "Postoperative outcomes cohort" in catalog
+    assert "target=fusion" in catalog
+    assert "data dictionary available" in catalog
+    assert "Spine ontology: Clinical concepts" in catalog
+    assert "scoring-script: Compute the validated score" in catalog
+    assert "SECRET_SCRIPT_BODY" not in catalog
+    assert "/home/r/okf/spine" not in catalog
 
 
 def test_ambient_meta_carries_every_wired_dataset_name() -> None:
@@ -458,6 +489,7 @@ def test_build_user_input_states_the_dataset_is_already_open_when_preseeded() ->
 def _registration(**overrides: object) -> dict[str, object]:
     """A split registration as ``fetch_owned_registration`` returns one."""
     return {
+        "description": "A registered test dataset",
         "target_column": "outcome",
         "raw_path": "/data/raw.csv",
         "train_path": "/data/train.parquet",
@@ -697,6 +729,22 @@ def test_dataset_connector_grants_the_workspace_tools() -> None:
     assert pe._resolve_dataset_tool_config(bare, "a") == {"server_names": [], "tool_names": []}
 
 
+def test_dataset_with_dictionary_grants_only_the_dictionary_reader() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="spinal-fusion-v1")
+    dataset["data"]["config"]["dictionary_available"] = True
+    graph = {
+        "nodes": [agent, dataset],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+
+    resolved = pe._resolve_dataset_tool_config(graph, "a")
+
+    assert "asaree-sklearn-eda" in resolved["server_names"]
+    eda_tools = {name for name in resolved["tool_names"] if name.startswith("asaree-sklearn-eda.")}
+    assert eda_tools == {"asaree-sklearn-eda.get_data_dictionary"}
+
+
 def test_an_unsplit_dataset_grants_the_tools_its_prompt_names() -> None:
     """The gap the first sequential demo run fell into: an unsplit registration
     has no workspace, so the Dataset block tells the agent NOT to call
@@ -868,15 +916,15 @@ def test_build_user_input_lists_multiple_bound_scripts() -> None:
     assert "print('second')" not in result
 
 
-def test_build_user_input_inlines_script_when_it_could_not_be_bound() -> None:
-    # No workspace to write it to (an unlinked protocol run): a prompt the
-    # model can copy from beats no script at all.
+def test_build_user_input_does_not_inline_script_when_it_could_not_be_bound() -> None:
+    # Source code is never prompt content. An unlinked run reports the missing
+    # materialization context instead of asking the model to retranscribe code.
     agent, agent_llm_edge = _agent_with_llm("a")
     script = _script_node(code="print('hello')")
     graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
     result = pe._build_user_input(agent, graph, {}, script_bound=False)
-    assert "Script to pass verbatim" in result
-    assert "print('hello')" in result
+    assert "no isolated run workspace" in result
+    assert "print('hello')" not in result
 
 
 def test_build_user_input_omits_script_block_when_unwired() -> None:
@@ -985,12 +1033,31 @@ async def test_node_run_context_seeds_before_reading_head(monkeypatch: pytest.Mo
 
 
 def test_ambient_meta_omits_script_path_without_a_workspace() -> None:
-    # Nowhere to write it, so no path -- and _build_user_input falls back to
-    # inlining rather than cueing a file that doesn't exist.
+    # The low-level helper still requires an explicit materialization surface.
     agent, agent_llm_edge = _agent_with_llm("a")
     script = _script_node(code="print('hello')")
     graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
     assert pe._ambient_meta_for(graph, "a", None) == {}
+
+
+def test_standalone_run_materializes_script_out_of_band(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pe, "WORKSPACE_ROOT", str(tmp_path))
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hello')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+
+    meta = pe._ambient_meta_for(graph, "a", script_workspace_id="_protocol_runs/run-1")
+
+    path = Path(meta["script_path"])
+    assert path.read_text() == "print('hello')"
+    assert "_protocol_runs/run-1" in str(path)
+    pe._cleanup_adhoc_scripts(meta)
+    assert not path.exists()
+
+
+def test_standalone_agents_get_distinct_script_directories() -> None:
+    run_id = uuid.uuid4()
+    assert pe._script_workspace_id(None, run_id, "agent-a") != pe._script_workspace_id(None, run_id, "agent-b")
 
 
 # --- _run_gated_worker (mocked -- no real LLM calls) -------------------------
@@ -2648,6 +2715,10 @@ def test_resolve_knowledge_config_namespaces_tool_names() -> None:
             "okf-bundle-spine-abc12345.list_concepts",
             "okf-bundle-spine-abc12345.read_concept",
         ],
+        "tool_descriptions": {
+            "okf-bundle-spine-abc12345.list_concepts": "Knowledge source: spine.",
+            "okf-bundle-spine-abc12345.read_concept": "Knowledge source: spine.",
+        },
     }
 
 
@@ -2718,6 +2789,11 @@ def test_resolve_knowledge_config_mixes_bundles_and_documents() -> None:
             "okf-bundle-spine-abc12345.read_concept",
             "okf-doc-spinal-cord-def45678.read_concept",
         ],
+        "tool_descriptions": {
+            "okf-bundle-spine-abc12345.list_concepts": "Knowledge source: spine.",
+            "okf-bundle-spine-abc12345.read_concept": "Knowledge source: spine.",
+            "okf-doc-spinal-cord-def45678.read_concept": "Knowledge source: Spinal cord.",
+        },
     }
 
 

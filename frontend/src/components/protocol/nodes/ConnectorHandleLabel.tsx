@@ -17,11 +17,11 @@
 // those x-positions are forced), so horizontal padding here is the one
 // dimension that can't grow without them colliding.
 //
-// Offset a step further out than the handle needs (top/bottom-5, right-10)
-// so the chip clears the connector's own 8px dot rather than crowding it --
-// the caption names the connector, it isn't part of it.
+// Top/bottom captions clear their connector dot. Side captions are centered
+// on the same boundary position and sit just above the dot, keeping the Agent
+// flow label visually attached to its connector.
 const LABEL_CLASSNAME =
-  'absolute rounded bg-background/70 px-0.5 text-[0.6rem] font-semibold whitespace-nowrap text-[color:var(--node-label)]'
+  'pointer-events-none absolute rounded bg-background/70 px-0.5 text-[0.6rem] font-semibold whitespace-nowrap text-[color:var(--node-label)]'
 
 export function ConnectorHandleLabel({
   left,
@@ -39,14 +39,14 @@ export function ConnectorHandleLabel({
 }) {
   if (side === 'right') {
     return (
-      <span className={`${LABEL_CLASSNAME} -right-10 -translate-y-1/2`} style={{ top: top ?? '50%' }}>
+      <span className={`${LABEL_CLASSNAME} right-0 translate-x-1/2 -translate-y-1/2`} style={{ top: top ?? '50%' }}>
         {children}
       </span>
     )
   }
   if (side === 'left') {
     return (
-      <span className={`${LABEL_CLASSNAME} -left-10 -translate-y-1/2`} style={{ top: top ?? '50%' }}>
+      <span className={`${LABEL_CLASSNAME} left-0 -translate-x-1/2 -translate-y-1/2`} style={{ top: top ?? '50%' }}>
         {children}
       </span>
     )

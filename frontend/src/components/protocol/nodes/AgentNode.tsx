@@ -126,12 +126,11 @@ export function AgentNode({
         onToggleActive={() => updateNodeData(id, { active: !isActive })}
         runAlone={{ canRun: !!data.canRunAlone, onRun: () => requestRunNode(id) }}
       />
-      {/* Steps left to `right-6` when the factor badge is also showing: that
-          badge straddles this same corner (-right-3, size-7, so 12px out to
-          16px in) and this Badge straddles the top border (-top-2.5, h-5), so
-          at the default right-1.5 the two would sit on top of each other. */}
+      {/* Sits inside the top-right corner so it stays clear of the Knowledge
+          connector above the card. Steps left to `right-6` when the factor
+          badge is also showing because that badge straddles this corner. */}
       {badge && (
-        <Badge className={`absolute -top-2.5 ${hasBoundFactor(data) ? 'right-6' : 'right-1.5'} ${badge.className}`}>
+        <Badge className={`absolute top-1 ${hasBoundFactor(data) ? 'right-6' : 'right-1.5'} ${badge.className}`}>
           {badge.label}
         </Badge>
       )}
@@ -160,7 +159,7 @@ export function AgentNode({
         title="Connect to another agent (or a Critic Gate)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel side="left" top="calc(50% - 20px)">Agent</ConnectorHandleLabel>
+      <ConnectorHandleLabel side="left" top="calc(50% - 11px)">Agent</ConnectorHandleLabel>
       <MainEdgeAddStub nodeId={id} direction="incoming" full={data.mainInFull} />
       <div className="flex items-center gap-1.5">
         <Bot className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
@@ -400,7 +399,7 @@ export function AgentNode({
         title="Connect to another agent (or a Critic Gate)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel side="right" top="calc(50% - 20px)">Agent</ConnectorHandleLabel>
+      <ConnectorHandleLabel side="right" top="calc(50% - 11px)">Agent</ConnectorHandleLabel>
       <MainEdgeAddStub nodeId={id} direction="outgoing" full={data.mainOutFull} />
     </div>
   )

@@ -31,7 +31,7 @@ from asaree.services.protocol_execution import (
 )
 from asaree.services.protocol_revisions import publish_protocol
 from asaree.services.protocol_runs import create_protocol_run, request_protocol_run_cancellation
-from asaree.services.protocols import create_protocol, delete_protocol
+from asaree.services.protocols import create_protocol, delete_protocol, update_protocol
 
 
 def _graph(node_ids: list[str], edges: list[tuple[str, str]]) -> dict:
@@ -1710,6 +1710,10 @@ async def test_plan_cell_runs_runs_an_obsolete_completed_replicate(owner_id: uui
             protocol_revision_id=old_revision.id,
         )
         completed_run.status = "completed"
+        new_graph = _graph(["a", "b"], [("a", "b")])
+        new_graph["nodes"][0]["data"]["config"] = {"revision": "new"}
+        protocol = await update_protocol(db, protocol_id, fields={"graph": new_graph})
+        assert protocol is not None
         new_revision = await publish_protocol(db, protocol)
         await db.flush()
         await upsert_replicate(
@@ -1726,7 +1730,7 @@ async def test_plan_cell_runs_runs_an_obsolete_completed_replicate(owner_id: uui
                 protocol_id=protocol_id,
                 experiment_id=experiment_id,
                 owner_id=owner_id,
-                graph=graph,
+                graph=new_graph,
                 protocol_revision_id=new_revision.id,
             )
         assert [run.replicate_label for run in runs] == ["cell-obsolete"]

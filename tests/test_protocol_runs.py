@@ -616,6 +616,17 @@ async def test_list_experiment_trials_marks_runs_obsolete_after_a_new_canvas_pub
             fields={"run_id": legacy_run.id},
         )
 
+        protocol = await update_protocol(
+            db,
+            protocol_id,
+            fields={
+                "graph": {
+                    "nodes": [{"id": "new-step", "type": "step", "data": {}}],
+                    "edges": [],
+                }
+            },
+        )
+        assert protocol is not None
         second_revision = await publish_protocol(db, protocol)
         assert second_revision.id != first_revision.id
 

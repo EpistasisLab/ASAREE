@@ -13,6 +13,7 @@ from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.protocol_graph_schema import functional_protocol_graph_hash
 
 
 async def get_revision(db: AsyncSession, revision_id: uuid.UUID) -> ProtocolRevision | None:
@@ -27,6 +28,10 @@ async def get_published_revision(db: AsyncSession, protocol: Protocol) -> Protoc
 
 async def publish_protocol(db: AsyncSession, protocol: Protocol) -> ProtocolRevision:
     """Freeze the protocol's current draft as its next production revision."""
+    published = await get_published_revision(db, protocol)
+    if published is not None and is_draft_published(protocol, published):
+        return published
+
     highest = (
         await db.execute(
             select(func.max(ProtocolRevision.revision)).where(ProtocolRevision.protocol_id == protocol.id)
@@ -79,7 +84,9 @@ async def publish_protocol(db: AsyncSession, protocol: Protocol) -> ProtocolRevi
 
 
 def is_draft_published(protocol: Protocol, published: ProtocolRevision | None) -> bool:
-    return published is not None and protocol.graph == published.graph
+    return published is not None and functional_protocol_graph_hash(protocol.graph) == functional_protocol_graph_hash(
+        published.graph
+    )
 
 
 __all__ = ["get_published_revision", "get_revision", "is_draft_published", "publish_protocol"]

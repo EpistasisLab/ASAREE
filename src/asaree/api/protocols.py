@@ -367,6 +367,9 @@ async def update_protocol_endpoint(
 async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ProtocolResponse:
     """Make the current autosaved canvas the immutable version future runs use."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
+    published = await get_published_revision(db, protocol)
+    if published is not None and is_draft_published(protocol, published):
+        return await _protocol_response(db, protocol)
     if protocol.experiment_id:
         experiment = await get_experiment(db, protocol.experiment_id)
         if experiment is not None and experiment.locked_at is not None:

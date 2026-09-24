@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -43,4 +45,55 @@ def normalize_protocol_graph(graph: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-__all__ = ["normalize_protocol_graph"]
+def functional_protocol_graph(graph: dict[str, Any]) -> dict[str, Any]:
+    """Return the canonical execution-relevant definition of *graph*.
+
+    Canvas layout and React Flow bookkeeping remain useful in the autosaved
+    draft, but they do not change what production executes. Node ids are
+    retained because prompt references and edges address them; edge ids are
+    omitted because execution identifies an edge by its endpoints and handles.
+    Sorting makes equivalent JSON arrays produce the same fingerprint.
+    """
+    normalized = normalize_protocol_graph(graph)
+    nodes = normalized.get("nodes")
+    edges = normalized.get("edges")
+
+    functional_nodes = [
+        {
+            "id": node.get("id"),
+            "type": node.get("type"),
+            "data": deepcopy(node.get("data")),
+        }
+        for node in nodes or []
+        if isinstance(node, dict)
+    ]
+    functional_edges = [
+        {
+            "source": edge.get("source"),
+            "target": edge.get("target"),
+            "sourceHandle": edge.get("sourceHandle"),
+            "targetHandle": edge.get("targetHandle"),
+        }
+        for edge in edges or []
+        if isinstance(edge, dict)
+    ]
+
+    def canonical_json(value: dict[str, Any]) -> str:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+    functional_nodes.sort(key=canonical_json)
+    functional_edges.sort(key=canonical_json)
+    return {"nodes": functional_nodes, "edges": functional_edges}
+
+
+def functional_protocol_graph_hash(graph: dict[str, Any]) -> str:
+    """Return a stable SHA-256 fingerprint of the functional canvas."""
+    encoded = json.dumps(
+        functional_protocol_graph(graph),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+__all__ = ["functional_protocol_graph", "functional_protocol_graph_hash", "normalize_protocol_graph"]

@@ -12,13 +12,16 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from copy import deepcopy
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import func, select
 
 import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for research_experiments' FK
 import asaree.models.experiment  # noqa: F401 -- registers research_experiments for the FK
 from asaree.models.database import dispose_engine, get_session
+from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.user import User
 from asaree.services.experiments import create_experiment
 from asaree.services.protocol_revisions import get_published_revision, is_draft_published, publish_protocol
@@ -118,6 +121,44 @@ async def test_publish_freezes_the_draft_and_advances_the_revision(owner_id: uui
         assert second.revision == 2
         assert second.graph == second_graph
         assert first.graph == first_graph
+        await delete_protocol(db, protocol.id)
+
+
+async def test_publish_ignores_layout_changes_and_does_not_duplicate_revision(owner_id: uuid.UUID) -> None:
+    graph = {
+        "nodes": [
+            {
+                "id": "agent",
+                "type": "agent",
+                "position": {"x": 0, "y": 0},
+                "data": {"config": {"system_prompt": "Original"}},
+            }
+        ],
+        "edges": [],
+    }
+    async with get_session() as db:
+        protocol = await create_protocol(db, name="meaningful-publish", owner_id=owner_id, graph=graph)
+        first = await publish_protocol(db, protocol)
+
+        moved = deepcopy(graph)
+        moved["nodes"][0]["position"] = {"x": 500, "y": 600}
+        await update_protocol(db, protocol.id, fields={"graph": moved})
+        assert is_draft_published(protocol, first) is True
+        assert (await publish_protocol(db, protocol)).id == first.id
+        count = (
+            await db.execute(
+                select(func.count()).select_from(ProtocolRevision).where(ProtocolRevision.protocol_id == protocol.id)
+            )
+        ).scalar_one()
+        assert count == 1
+
+        changed = deepcopy(moved)
+        changed["nodes"][0]["data"]["config"]["system_prompt"] = "Changed"
+        await update_protocol(db, protocol.id, fields={"graph": changed})
+        assert is_draft_published(protocol, first) is False
+
+        await update_protocol(db, protocol.id, fields={"graph": moved})
+        assert is_draft_published(protocol, first) is True
         await delete_protocol(db, protocol.id)
 
 

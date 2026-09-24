@@ -3,9 +3,8 @@ import { nodeAccent } from '@/lib/nodeAccent'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
+import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
-import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import type { SingleAgentBaselinePatternConfig, SingleAgentBaselinePatternNodeData, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = nodeAccent('pattern_single_agent_baseline')
@@ -35,7 +34,6 @@ export function SingleAgentBaselinePatternNodeInspector({
   onChange: (nodeId: string, data: SingleAgentBaselinePatternNodeData) => void
   onClose: () => void
 }) {
-  const { requestMakeFactor } = useProtocolCanvasActions()
 
   if (!node) return null
   const data = node.data
@@ -67,7 +65,6 @@ export function SingleAgentBaselinePatternNodeInspector({
         <>
           <ArrowRight className="size-5" style={{ color: ACCENT }} />
           <h2 className="text-lg font-semibold">{data.label || 'Single-Agent Baseline'}</h2>
-          <MakeNodeFactorButton onClick={() => requestMakeFactor(node.id)} />
         </>
       }
       onClose={onClose}

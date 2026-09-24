@@ -51,26 +51,6 @@ import type { DesignFactor } from '@/types/experiments'
 // (slow, inconsistent chrome -- see CanvasControls.tsx's own reasoning for
 // the same swap).
 //
-// The Agent/Pattern inspectors' own title-row button (opens the per-node
-// field picker, rather than binding one specific field the way every
-// FactorBindableField instance below does) -- shares the exact same visual
-// identity (icon, text, violet accent, Tooltip) so every "this makes a
-// factor" control in the app reads as the same kind of thing regardless of
-// which of the two entry points it is.
-export function MakeNodeFactorButton({ onClick }: { onClick: () => void }) {
-  return (
-    <TooltipProvider delay={200}>
-      <Tooltip>
-        <TooltipTrigger render={<Button variant="default" size="xs" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" onClick={onClick} />}>
-          <Split className="size-3.5" />
-          Make factor
-        </TooltipTrigger>
-        <TooltipContent>Bind one of this node's fields to an experimental factor</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  )
-}
-
 // 'text' levelType (a long-form value, e.g. a full system prompt) and every
 // structured kind (isStructuredLevelType -- the "whole node as a factor"
 // ones plus tool_names, see factorLevels.ts) escalate straight to

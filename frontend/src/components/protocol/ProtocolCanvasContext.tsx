@@ -72,12 +72,8 @@ interface ProtocolCanvasActions {
   // ever called for a node with no upstream input (see AgentNode.tsx's own
   // canRunAlone computation); the backend re-validates this regardless.
   requestRunNode: (nodeId: string) => void
-  // The canvas's per-node "Make experimental factor" icon (NodeHoverToolbar,
-  // last button, every node type) -- opens the same field-picker dialog as
-  // DesignTab's "Add factor," pre-filtered to this one node's own bindable
-  // fields. A no-op when the protocol has no linked experiment yet (nothing
-  // to attach a factor to), same as FactorBindableField's own disabled
-  // state for that case.
+  // Critic Gate's canvas-toolbar factor action. Other node fields bind
+  // directly through their inspector's FactorBindableField controls.
   requestMakeFactor: (nodeId: string) => void
   requestEditFactor: (factorName: string) => void
   // Custom metric declarations live on the experiment rather than in canvas

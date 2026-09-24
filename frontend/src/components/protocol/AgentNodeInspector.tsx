@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { defaultSystemPrompt } from './defaultSystemPrompt'
 import { EditableNodeTitle } from './EditableNodeTitle'
-import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
+import { FactorBindableField } from './FactorBindableField'
 import { ReceivesSummary, SendsSummary } from './HandoffSummary'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { NodeRunOutputPanel, ReceivedPromptPanel, UnresolvedReferencesNote } from './NodeRunOutputPanel'
@@ -96,7 +96,7 @@ export function AgentNodeInspector({
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
-  const { requestMakeFactor, requestConnectorAdd, convertLegacyOutputContract } = useProtocolCanvasActions()
+  const { requestConnectorAdd, convertLegacyOutputContract } = useProtocolCanvasActions()
   const isSubAgent = node?.type === 'sub_agent'
   // Measured at drag start so each pane's ceiling accounts for what the other
   // one is currently taking; read through a ref because the two hooks below
@@ -195,7 +195,20 @@ export function AgentNodeInspector({
             placeholder={node.type === 'sub_agent' ? 'Sub-Agent' : 'Agent'}
             onCommit={(label) => onChange(node.id, { ...data, label })}
           />
-          <MakeNodeFactorButton onClick={() => requestMakeFactor(node.id)} />
+          <FactorBindableField
+            experimentId={experimentId}
+            nodeId={node.id}
+            fieldPath="active"
+            defaultLabel="Active"
+            nodeLabel={data.label || (isSubAgent ? 'Sub-Agent' : 'Agent')}
+            levelType="boolean"
+            currentValue={data.active ?? true}
+            boundFactorName={bindings.active}
+            onBind={(name) => bindFactor('active', name)}
+            onUnbind={() => unbindFactor('active')}
+          >
+            {(trigger) => trigger}
+          </FactorBindableField>
         </>
       }
       onDelete={() => onDelete(node.id)}

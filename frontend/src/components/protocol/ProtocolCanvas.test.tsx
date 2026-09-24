@@ -245,4 +245,25 @@ describe('ProtocolCanvas connector adds', () => {
     expect(screen.getByText('Factor name')).toBeInTheDocument()
   })
 
+  it('binds the Agent inspector header action directly to Active', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue({
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    })
+    renderCanvas({
+      nodes: [{ id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: defaultAgentNodeData('Writer') }],
+      edges: [],
+    }, 'experiment-1')
+
+    fireEvent.doubleClick(await screen.findByText('Writer'))
+    await user.click(screen.getAllByRole('button', { name: 'Make experimental factor' })[0])
+
+    expect(await screen.findByText('Writer:Active')).toBeInTheDocument()
+    expect(screen.getByText('Levels: true, false')).toBeInTheDocument()
+    expect(screen.queryByText('Bind to a field on the canvas')).not.toBeInTheDocument()
+  })
+
 })

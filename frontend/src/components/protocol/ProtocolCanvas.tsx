@@ -1002,6 +1002,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // find on the canvas. A superset is harmless for the transcript, whose
   // speaker ids are always agents.
   const nodeNames = useMemo(() => nodeDisplayNames(nodes), [nodes])
+  const nodeTypes = useMemo(() => new Map(nodes.map((node) => [node.id, node.type ?? ''])), [nodes])
 
   // The experiment's declared coordination strategy, which decides what the
   // main handles MEAN -- whether a lead marker is in force, and whether the
@@ -1244,15 +1245,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
     [nodes],
   )
-  // The "Make experimental factor" icon inside Agent/Pattern's own inspector
-  // title (next to the node's name -- see those inspectors' own title prop)
-  // and Critic Gate's hover toolbar -- a no-op without a linked experiment,
+  // The Critic Gate's hover-toolbar "Make experimental factor" icon -- a
+  // no-op without a linked experiment,
   // since there's nothing to attach a factor to (matches FactorBindableField's
-  // own disabled state for the same case). Deliberately does NOT clear
-  // selectedNodeId: the Agent/Pattern title button is called from WITHIN an
-  // already-open inspector for that same node, and closing it out from under
-  // the user just to open the factor picker on top would be a worse
-  // experience than the two dialogs simply stacking.
+  // own disabled state for the same case).
   const requestMakeFactor = useCallback(
     (nodeId: string) => {
       if (!experimentId || experimentLocked) return
@@ -2146,10 +2142,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             />
           </div>
           {testResultsOpen && testRunQuery.data && (
-            <TestRunResults run={testRunQuery.data} nodeNames={nodeNames} onClose={() => setTestResultsOpen(false)} />
+            <TestRunResults run={testRunQuery.data} nodeNames={nodeNames} nodeTypes={nodeTypes} onClose={() => setTestResultsOpen(false)} />
           )}
           {playResultsOpen && playResult && (
-            <TestRunResults title="Play Results" run={playResult} nodeNames={nodeNames} onClose={() => setPlayResultsOpen(false)} />
+            <TestRunResults title="Play Results" run={playResult} nodeNames={nodeNames} nodeTypes={nodeTypes} onClose={() => setPlayResultsOpen(false)} />
           )}
           {/* One top-left column rather than two independently-positioned
               overlays: the lock badge and the transcript are both anchored

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { TestRun } from '@/types/protocols'
@@ -59,6 +59,43 @@ describe('TestRunResults', () => {
     expect(screen.getByText('Analyst')).toBeInTheDocument()
     expect(screen.getByText('Agent conversation flow')).toBeInTheDocument()
     expect(screen.getByText('Analyze this.')).toBeInTheDocument()
+  })
+
+  it('orders executable nodes by the canvas and omits configuration-only nodes', () => {
+    render(<TestRunResults run={testRun({
+      execution_summary: {
+        node_runs: {
+          model: { status: 'completed', output_text: null },
+          child: { status: 'skipped', output_text: null },
+          parent: { status: 'running', output_text: null },
+        },
+        started_at: '2026-09-16T12:00:00Z', completed_at: null, cancel_requested_at: null,
+      },
+    })} nodeNames={new Map([['parent', 'Lead'], ['child', 'Researcher'], ['model', 'OpenAI']])} nodeTypes={new Map([['parent', 'agent'], ['child', 'sub_agent'], ['model', 'model_openai']])} onClose={vi.fn()} />)
+
+    const progress = screen.getByRole('region', { name: 'Node progress' })
+    expect(within(progress).getAllByText(/^(Lead|Researcher)$/).map((node) => node.textContent)).toEqual(['Lead', 'Researcher'])
+    expect(within(progress).queryByText('OpenAI')).not.toBeInTheDocument()
+    expect(within(progress).getByText('Available')).toBeInTheDocument()
+  })
+
+  it('collapses node progress and calls an unused Sub-Agent not invoked after the run', async () => {
+    const user = userEvent.setup()
+    const nodeNames = new Map([['child', 'Researcher']])
+    const nodeTypes = new Map([['child', 'sub_agent']])
+    const execution_summary = {
+      node_runs: { child: { status: 'skipped' as const, output_text: null } },
+      started_at: '2026-09-16T12:00:00Z', completed_at: null, cancel_requested_at: null,
+    }
+    const { rerender } = render(<TestRunResults run={testRun({ execution_summary })} nodeNames={nodeNames} nodeTypes={nodeTypes} onClose={vi.fn()} />)
+
+    const progressToggle = screen.getByRole('button', { name: /Node progress/ })
+    await user.click(progressToggle)
+    expect(progressToggle).toHaveAttribute('aria-expanded', 'false')
+
+    rerender(<TestRunResults run={testRun({ status: 'completed', execution_summary: { ...execution_summary, completed_at: '2026-09-16T12:00:08Z' } })} nodeNames={nodeNames} nodeTypes={nodeTypes} onClose={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: /Node progress/ }))
+    expect(screen.getByText('Not invoked')).toBeInTheDocument()
   })
 
   it('shows a captured metric alongside downstream task progress', () => {

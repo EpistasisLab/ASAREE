@@ -78,6 +78,67 @@ function orderedMetricsFixture() {
 }
 
 describe('results measurement states', () => {
+  it('shows explicit units for cost and duration in an individual replicate result', async () => {
+    const replicate = {
+      replicate_label: 'replicate-1', replicate_number: 1, cell_label: 'model_a', factor_values: { model: 'a' },
+      metric_values: { cost_usd: 0.0123, duration_seconds: 65 }, status: 'completed' as const, obsolete: false,
+      error: null, run_id: 'run-1', protocol_revision_id: 'revision-1', updated_at: '2026-01-01T00:00:00Z',
+      duration_seconds: 65, node_runs: [], input_tokens: null, output_tokens: null, total_tokens: null, cost_usd: 0.0123,
+      agent_run_count: 0, reported_usage_count: 0, reported_cost_count: 0, metric_evaluation: null,
+      metric_observations: [], evaluation_artifacts: [], obsolete_runs: [], superseded_runs: [],
+    }
+    vi.mocked(experimentsApi.getRunResults).mockResolvedValue({
+      overview,
+      metric_keys: ['cost_usd', 'duration_seconds'],
+      metric_types: { cost_usd: 'number', duration_seconds: 'number' },
+      metric_aggregations: { cost_usd: 'sum', duration_seconds: 'sum' },
+      metric_directions: { cost_usd: 'minimize', duration_seconds: 'minimize' },
+      primary_metric: null,
+      primary_metric_direction: null,
+      cells: [],
+      replicates: [replicate],
+    } satisfies ExperimentRunResults)
+
+    renderWithQuery(<ResultsInspectorPanel experimentId="experiment-1" experiment={experiment} selection={{ type: 'replicate', replicateLabel: 'replicate-1' }} onClose={vi.fn()} />)
+
+    expect(await screen.findByText('$0.01')).toBeInTheDocument()
+    expect(screen.getByText('1.1 min')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Outcome' })).not.toBeInTheDocument()
+    const usage = screen.getByRole('heading', { name: 'Usage' }).parentElement!
+    expect(within(usage).getAllByText(/^(Estimated cost|Duration|Total tokens|Agent calls)$/).map((label) => label.textContent)).toEqual([
+      'Estimated cost',
+      'Duration',
+      'Total tokens',
+      'Agent calls',
+    ])
+  })
+
+  it('shows a measured observation once in Outcome and keeps its provenance there', async () => {
+    const producer = { binding_id: 'judge', producer_id: 'asaree.judge', kind: 'deterministic_evaluator' as const, version: '1' }
+    const replicate = {
+      replicate_label: 'replicate-1', replicate_number: 1, cell_label: 'model_a', factor_values: { model: 'a' },
+      metric_values: { Quality: 0.9 }, status: 'completed' as const, obsolete: false, error: null, run_id: 'run-1',
+      protocol_revision_id: 'revision-1', updated_at: '2026-01-01T00:00:00Z', duration_seconds: null,
+      node_runs: [], input_tokens: null, output_tokens: null, total_tokens: null, cost_usd: null,
+      agent_run_count: 0, reported_usage_count: 0, reported_cost_count: 0, metric_evaluation: null,
+      metric_observations: [{ metric_id: 'quality', metric_name: 'Quality', value_type: 'number' as const, status: 'measured' as const, value: 0.9, error: null, attempt_id: 'run-1', producer, input_provenance: {} }],
+      evaluation_artifacts: [], obsolete_runs: [], superseded_runs: [],
+    }
+    vi.mocked(experimentsApi.getRunResults).mockResolvedValue({
+      overview,
+      metric_keys: ['Quality'], metric_types: { Quality: 'number' }, metric_aggregations: { Quality: 'mean' },
+      metric_directions: { Quality: 'maximize' }, primary_metric: null, primary_metric_direction: null,
+      cells: [], replicates: [replicate],
+    } satisfies ExperimentRunResults)
+
+    renderWithQuery(<ResultsInspectorPanel experimentId="experiment-1" experiment={experiment} selection={{ type: 'replicate', replicateLabel: 'replicate-1' }} onClose={vi.fn()} />)
+
+    expect(await screen.findByRole('heading', { name: 'Outcome' })).toBeInTheDocument()
+    expect(screen.getAllByText('0.9')).toHaveLength(1)
+    expect(screen.getByText('asaree.judge · v1')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Measurement observations' })).not.toBeInTheDocument()
+  })
+
   it('presents metrics in the measurement-plan order declared by the designer', async () => {
     const { orderedExperiment, results } = orderedMetricsFixture()
     vi.mocked(experimentsApi.getRunResults).mockResolvedValue(results)
@@ -99,6 +160,30 @@ describe('results measurement states', () => {
       'Safety · average',
       'Clarity · average',
     ])
+  })
+
+  it('shows condition-level cost and duration once under Usage', async () => {
+    vi.mocked(experimentsApi.getRunResults).mockResolvedValue({
+      overview,
+      metric_keys: ['cost_usd', 'duration_seconds'],
+      metric_types: { cost_usd: 'number', duration_seconds: 'number' },
+      metric_aggregations: { cost_usd: 'sum', duration_seconds: 'sum' },
+      metric_directions: { cost_usd: 'minimize', duration_seconds: 'minimize' },
+      primary_metric: null,
+      primary_metric_direction: null,
+      cells: [{
+        cell_label: 'model_a', factor_values: { model: 'a' }, replicate_count: 2, completed_count: 2,
+        current_completed_count: 2, obsolete_count: 0, metric_means: { cost_usd: 0.0123, duration_seconds: 65 },
+        metric_counts: { cost_usd: 2, duration_seconds: 2 }, cost_usd: 0.0123, total_tokens: null, duration_seconds: 65,
+      }],
+      replicates: [],
+    } satisfies ExperimentRunResults)
+
+    renderWithQuery(<ResultsInspectorPanel experimentId="experiment-1" experiment={experiment} selection={{ type: 'cell', cellLabel: 'model_a' }} onClose={vi.fn()} />)
+
+    expect(await screen.findByText('$0.01')).toBeInTheDocument()
+    expect(screen.getByText('1.1 min')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Outcome metrics' })).not.toBeInTheDocument()
   })
 
   it('ranks measured minimize values before missing values without skipping rank one', async () => {

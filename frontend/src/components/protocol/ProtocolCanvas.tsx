@@ -1029,8 +1029,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         data: { ...edge.data, sequentialAgentFlow: true },
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          width: 18,
-          height: 18,
+          width: 12,
+          height: 12,
           color: 'color-mix(in oklch, var(--muted-foreground), transparent 30%)',
         },
       }

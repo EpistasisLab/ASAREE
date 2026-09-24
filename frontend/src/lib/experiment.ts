@@ -241,6 +241,7 @@ const PREFERRED_METRICS = ['average_precision', 'roc_auc', 'accuracy', 'f1']
 const METRIC_LABEL_OVERRIDES: Record<string, string> = {
   cost_usd: 'cost (USD)',
   duration_s: 'duration (minutes)',
+  duration_seconds: 'duration (seconds)',
   n_features_created: 'n eng. feat.',
   n_created_selected: 'n eng. feat. selected',
   frac_created_selected: '% eng. feat. selected',
@@ -265,6 +266,7 @@ export function scaledMetricValue(key: string, value: number): number {
  * scaledMetricValue so a metric can add a unit suffix without needing its
  * own numeric rescale (or vice versa). */
 const METRIC_VALUE_SUFFIXES: Record<string, string> = {
+  duration_seconds: ' sec',
   frac_created_selected: '%',
 }
 
@@ -327,7 +329,8 @@ export function formatMetricValue(key: string, value: unknown): string {
   // custom metrics.  The Results detail panel surfaces these values in a
   // compact grid where an ungrouped `12500` is needlessly hard to scan.
   const formatted = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 }).format(scaledMetricValue(key, value))
-  return `${formatted}${metricValueSuffix(key)}`
+  const prefix = key === 'cost_usd' ? '$' : ''
+  return `${prefix}${formatted}${metricValueSuffix(key)}`
 }
 
 /** Every cell whose factor_values match `match` on all of its keys -- i.e. one

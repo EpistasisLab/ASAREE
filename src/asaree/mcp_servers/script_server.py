@@ -80,6 +80,7 @@ _META_KEY_WORKSPACE_ID = "motoro.workspace_id"
 _META_KEY_DATA_PATH = "motoro.ambient.data_path"
 _META_KEY_TARGET_COLUMN = "motoro.ambient.target_column"
 _META_KEY_DATASET_NAMES = "motoro.ambient.dataset_names"
+_META_KEY_DATASET_MODE = "motoro.ambient.dataset_mode"
 
 _RUN_CONTEXT_ENV = "ASAREE_RUN_CONTEXT"
 
@@ -202,7 +203,10 @@ def _runtime_manifest(ctx: Context[Any, Any, Any] | None, workspace_id: str) -> 
     """
     raw_names = _ambient_value(ctx, _META_KEY_DATASET_NAMES)
     names = [str(name) for name in raw_names if isinstance(name, str)] if isinstance(raw_names, list) else []
-    locators = raw_training_data_locators(workspace_id) if workspace_id else {}
+    dataset_mode = _ambient(ctx, _META_KEY_DATASET_MODE)
+    # An explicitly wired unsplit dataset must not inherit a durable workspace
+    # left by an older protocol revision for the same experiment/cell.
+    locators = raw_training_data_locators(workspace_id) if workspace_id and dataset_mode != "raw_unsplit" else {}
     training_inputs: list[dict[str, Any]] = []
     for slot, locator in locators.items():
         recorded_name = str(locator.get("name") or "")

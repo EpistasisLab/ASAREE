@@ -738,6 +738,7 @@ async def test_an_unsplit_dataset_binds_its_raw_file_instead_of_a_workspace(
     assert dataset.seeded == ()
     assert ambient["data_path"] == "/data/spine/raw.csv"
     assert ambient["target_column"] == "outcome"
+    assert ambient["dataset_mode"] == "raw_unsplit"
 
     # And the prompt says so, because a model left to infer it reaches for
     # open_workspace -- which has nothing to open.
@@ -754,22 +755,71 @@ async def test_an_unsplit_dataset_binds_its_raw_file_instead_of_a_workspace(
     assert "train_test_split" in result
 
 
-async def test_a_workspace_head_wins_over_an_unsplit_raw_file(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The raw file is a fallback, never an override: a cell with a workspace has
-    # already moved past the upload, and a Score step must fit the engineered
-    # matrix at HEAD rather than the raw CSV.
+async def test_an_attached_unsplit_dataset_wins_over_a_stale_workspace_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A workspace survives reruns and may belong to a Dataset connector from an
+    # older published revision. The current node's explicit unsplit attachment
+    # must win; only nodes with no Dataset connector inherit upstream HEAD.
     async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
-        return _registration(train_path=None, test_path=None)
+        return _registration(train_path=None, test_path=None, raw_path="/data/current.csv")
 
     monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
     monkeypatch.setattr(pe, "head_data_locator", lambda wid: ("/ws/v2_fte/train.parquet", "outcome"))
+    monkeypatch.setattr(
+        pe,
+        "slot_data_locators",
+        lambda wid: {
+            "dataset:old": {"data_path": "/ws/old.parquet", "target_column": "old_target"},
+            "dataset:other": {"data_path": "/ws/other.parquet", "target_column": "other_target"},
+        },
+    )
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {
         "nodes": [agent, _dataset_node(dataset_name="spine-raw")],
         "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
     }
     ambient, _dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
-    assert ambient["data_path"] == "/ws/v2_fte/train.parquet"
+    assert ambient["data_path"] == "/data/current.csv"
+    assert ambient["target_column"] == "outcome"
+    assert ambient["dataset_mode"] == "raw_unsplit"
+    assert "data_slots" not in ambient
+
+
+async def test_an_attached_split_dataset_sees_only_its_workspace_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _resolved(*_args: object, **_kwargs: object) -> pe.NodeDataset:
+        return pe.NodeDataset(seeded=(("current", "dataset:current"),))
+
+    monkeypatch.setattr(pe, "_resolve_node_dataset", _resolved)
+    monkeypatch.setattr(
+        pe,
+        "slot_data_locators",
+        lambda wid: {
+            "dataset:current": {
+                "name": "current",
+                "data_path": "/ws/current/train.parquet",
+                "target_column": "outcome",
+            },
+            "dataset:unwired": {
+                "name": "unwired",
+                "data_path": "/ws/unwired/train.parquet",
+                "target_column": "other_target",
+            },
+        },
+    )
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="current")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+
+    ambient, _dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
+
+    assert ambient["data_path"] == "/ws/current/train.parquet"
+    assert ambient["target_column"] == "outcome"
+    assert "data_slots" not in ambient
 
 
 def test_dataset_connector_grants_the_workspace_tools() -> None:

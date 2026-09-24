@@ -240,6 +240,47 @@ def test_workspace_context_exposes_raw_train_not_head_or_test(
     }
 
 
+def test_explicit_unsplit_context_ignores_a_stale_workspace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    current = tmp_path / "current.csv"
+    current.touch()
+    monkeypatch.setattr(
+        ss,
+        "raw_training_data_locators",
+        lambda _workspace_id: {
+            "dataset:old": {
+                "name": "old",
+                "data_path": "/workspace/old/v0_raw/train.parquet",
+                "target_column": "old_target",
+            }
+        },
+    )
+
+    manifest = ss._runtime_manifest(
+        _FakeCtx(
+            {
+                "motoro.ambient.dataset_names": ["current"],
+                "motoro.ambient.dataset_mode": "raw_unsplit",
+                "motoro.ambient.data_path": str(current),
+                "motoro.ambient.target_column": "outcome",
+            }
+        ),
+        "exp/cell",
+    )
+
+    assert manifest["training_inputs"] == [
+        {
+            "name": "current",
+            "path": str(current),
+            "target_column": "outcome",
+            "mode": "raw_unsplit",
+            "slot": None,
+            "workspace_version": None,
+        }
+    ]
+
+
 def test_runs_in_the_cells_workspace_when_there_is_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # Relative paths in a wired script should reach this cell's own data
     # without the script being told where it is.

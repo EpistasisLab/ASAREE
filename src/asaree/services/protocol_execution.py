@@ -1799,16 +1799,19 @@ async def _node_run_context(
     Dataset connector the seeding is a no-op and the path comes from whatever
     an earlier node in the run already seeded.
 
-    An unsplit dataset supplies that path itself, and only as a fallback: a
-    workspace HEAD always wins, because a cell that has one has already moved
-    past the raw file (and a later Score step must fit on the engineered
-    matrix, not on the upload).
+    An explicitly wired unsplit dataset supplies the path itself and wins over
+    any existing workspace HEAD. A workspace is durable across reruns, so its
+    HEAD may belong to a dataset that was wired to an older protocol revision;
+    allowing it to override the current connector would silently give this
+    node data it is no longer attached to. Nodes with no Dataset connector
+    still inherit workspace HEAD, which is how later Score steps consume the
+    engineered matrix.
 
     *slot_prefix* gives this node a private workspace lineage (see
-    :func:`_resolve_node_dataset`). When it is set the ambient view is narrowed
-    to the slots that were just seeded for it, so a worker sharing a cell
-    workspace with several sibling workers still sees exactly one HEAD -- its
-    own -- rather than everybody's."""
+    :func:`_resolve_node_dataset`). Any node that wires Dataset connectors has
+    its ambient view narrowed to the slots just resolved for those connectors;
+    this also ensures a worker sharing a cell workspace with sibling workers
+    sees its own HEAD rather than everybody's."""
     dataset = await _resolve_node_dataset(
         graph, node_id, workspace_id, owner_id, slot_prefix=slot_prefix, stage_plan=stage_plan
     )
@@ -1817,12 +1820,18 @@ async def _node_run_context(
         node_id,
         workspace_id,
         script_workspace_id=_script_workspace_id(workspace_id, protocol_run_id, node_id),
-        slots=tuple(slot for _name, slot in dataset.seeded) if slot_prefix else (),
+        # A node with Dataset connectors sees only the slots those connectors
+        # just resolved. Nodes with none keep the whole-cell view so downstream
+        # stages can consume the workspace produced upstream.
+        slots=tuple(slot for _name, slot in dataset.seeded),
     )
-    if dataset.data_path and "data_path" not in ambient_meta:
+    if dataset.data_path:
+        ambient_meta.pop("data_slots", None)
         ambient_meta["data_path"] = dataset.data_path
+        ambient_meta.pop("target_column", None)
         if dataset.target_column:
             ambient_meta["target_column"] = dataset.target_column
+        ambient_meta["dataset_mode"] = "raw_unsplit"
     return ambient_meta, dataset
 
 

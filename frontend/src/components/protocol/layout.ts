@@ -45,6 +45,12 @@ const HOST_WIDTH: Record<string, number> = { agent: 288, sub_agent: 288, critic_
 // and being a whole card-width off is the thing this fixes.
 const NEW_NODE_HALF_WIDTH = 38
 
+// A Sub-Agent needs a full satellite row between it and its parent for its
+// own required Pattern node. Keeping the two equal-width cards aligned also
+// makes the ownership hierarchy read vertically instead of as another step
+// in the left-to-right main flow.
+export const SUB_AGENT_CHILD_OFFSET_Y = 320
+
 /** The `left` style for each of a host card's connectors, as a percentage
  * string — for the `<Handle>`, its caption and its "+" stub, which must all
  * sit at the same x. */
@@ -55,15 +61,15 @@ export function connectorLefts(host: 'agent' | 'critic_gate'): Record<ConnectorS
 }
 
 /** How far right of a host node's own position to place the new node a
- * connector just asked for, so the node lands centered on that connector
- * rather than on the host's left corner. Unknown host type falls back to
- * the middle of an agent-sized card. */
+ * connector just asked for. Small satellites center on their connector;
+ * equal-width Sub-Agent cards align with their parent. Unknown host types
+ * fall back to the middle of an agent-sized card. */
 export function connectorNodeOffsetX(hostType: string | undefined, slot: ConnectorSlot): number {
+  if (slot === 'sub_agents') return 0
   const canonicalHost = hostType === 'sub_agent' ? 'agent' : hostType
   const table = canonicalHost === 'agent' || canonicalHost === 'critic_gate' ? CONNECTOR_X[canonicalHost] : undefined
   const width = HOST_WIDTH[hostType ?? ''] ?? HOST_WIDTH.agent
-  const halfWidth = slot === 'sub_agents' ? HOST_WIDTH.sub_agent / 2 : NEW_NODE_HALF_WIDTH
-  return (table?.[slot] ?? 0.5) * width - halfWidth
+  return (table?.[slot] ?? 0.5) * width - NEW_NODE_HALF_WIDTH
 }
 
 /** The clearance to use for the small CircleNode a connector's "+" creates,
@@ -235,7 +241,13 @@ export function tidyLayout(nodes: TidyNode[], edges: TidyEdge[]): Map<string, XY
     for (const child of childrenByHost.get(host.id) ?? []) {
       const desired = {
         x: hostPosition.x + connectorNodeOffsetX(host.type, child.slot),
-        y: hostPosition.y + (TIDY_TOP_SLOTS.has(child.slot) ? -TIDY_CHILD_OFFSET_Y : TIDY_CHILD_OFFSET_Y),
+        y: hostPosition.y + (
+          TIDY_TOP_SLOTS.has(child.slot)
+            ? -TIDY_CHILD_OFFSET_Y
+            : child.slot === 'sub_agents'
+              ? SUB_AGENT_CHILD_OFFSET_Y
+              : TIDY_CHILD_OFFSET_Y
+        ),
       }
       const position = findFreePosition(
         placed,

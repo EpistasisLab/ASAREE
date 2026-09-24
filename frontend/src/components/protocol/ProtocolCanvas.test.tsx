@@ -139,6 +139,10 @@ describe('ProtocolCanvas connector adds', () => {
     await waitFor(() => {
       const graph = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
       const child = graph?.nodes.find((node) => node.type === 'sub_agent')
+      const patternEdge = graph?.edges.find(
+        (edge) => edge.target === child?.id && edge.targetHandle === 'architectural_pattern',
+      )
+      const pattern = graph?.nodes.find((node) => node.id === patternEdge?.source)
       expect(child).toBeDefined()
       expect(graph?.edges).toContainEqual(expect.objectContaining({
         source: child!.id,
@@ -146,10 +150,20 @@ describe('ProtocolCanvas connector adds', () => {
         target: 'agent-1',
         targetHandle: 'sub_agents',
       }))
+      expect(child!.position.x).toBe(100)
+      expect(child!.position.y).toBeGreaterThanOrEqual(400)
+      expect(pattern).toBeDefined()
+      expect(pattern!.position.x).toBeGreaterThanOrEqual(child!.position.x - 50)
+      expect(pattern!.position.x).toBeLessThanOrEqual(child!.position.x + 50)
+      expect(pattern!.position.y).toBeGreaterThan(100)
+      expect(pattern!.position.y).toBeLessThan(child!.position.y)
     })
 
     expect(screen.getByText('Parent')).toBeInTheDocument()
     expect(screen.getAllByText('Sub-Agent').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Input')).not.toBeInTheDocument()
+    expect(screen.getByText('Output')).toBeInTheDocument()
+    expect(screen.queryByText('Nothing downstream — this is the final output.')).not.toBeInTheDocument()
   })
 
   it('does not expose custom metric controls in the Script inspector', async () => {

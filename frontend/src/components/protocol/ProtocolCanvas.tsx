@@ -78,7 +78,13 @@ import { DatasetNodeInspector } from './DatasetNodeInspector'
 import { DeleteNodeConfirmDialog } from './DeleteNodeConfirmDialog'
 import { DEFAULT_ZOOM } from './constants'
 import { FactorEditorDialog } from './FactorEditorDialog'
-import { CONNECTOR_CHILD_CLEARANCE, connectorNodeOffsetX, findFreePosition, tidyLayout } from './layout'
+import {
+  CONNECTOR_CHILD_CLEARANCE,
+  SUB_AGENT_CHILD_OFFSET_Y,
+  connectorNodeOffsetX,
+  findFreePosition,
+  tidyLayout,
+} from './layout'
 import { ModelNodeInspector } from './ModelNodeInspector'
 import { DatasetBrowserPanel } from './DatasetBrowserPanel'
 import { DATASET_BROWSE, nodeDataForDataset } from './datasetCatalog'
@@ -1484,7 +1490,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       const desired = originNode
         ? {
             x: originNode.position.x + connectorNodeOffsetX(originNode.type, slot),
-            y: originNode.position.y + (TOP_EDGE_SLOTS.has(slot) ? -160 : 160),
+            y: originNode.position.y + (
+              TOP_EDGE_SLOTS.has(slot) ? -160 : slot === 'sub_agents' ? SUB_AGENT_CHILD_OFFSET_Y : 160
+            ),
           }
         : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
       const position = findFreePosition(

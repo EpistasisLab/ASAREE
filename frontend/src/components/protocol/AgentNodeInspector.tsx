@@ -40,9 +40,10 @@ const GUTTER_WIDTH = 96
 // unaffected by which Parameters/Settings tab is active) is shared with the
 // other node inspectors via `NodeInspectorDialog` -- see that file for why.
 //
-// Three columns: Input, then Parameters/Settings, then Output -- laid out in
-// the direction data actually travels, so the agent's configuration sits
-// literally between what it is handed and what it produces.
+// Agents use three columns: Input, then Parameters/Settings, then Output --
+// laid out in the direction data actually travels. Sub-Agents omit Input
+// because they are invoked as tools by their parent rather than participating
+// in the previous/next-agent handoff chain.
 //
 // Input and Output are always-visible panes rather than tabs because both are
 // things you check *while* adjusting Parameters, not destinations you tab away
@@ -96,6 +97,7 @@ export function AgentNodeInspector({
   onClose: () => void
 }) {
   const { requestMakeFactor, requestConnectorAdd, convertLegacyOutputContract } = useProtocolCanvasActions()
+  const isSubAgent = node?.type === 'sub_agent'
   // Measured at drag start so each pane's ceiling accounts for what the other
   // one is currently taking; read through a ref because the two hooks below
   // would otherwise have to reference each other's not-yet-declared width.
@@ -122,7 +124,7 @@ export function AgentNodeInspector({
     resolveMaxWidth: () => roomFor('input'),
     recomputeKey: node?.id ?? '',
   })
-  widthsRef.current = { input: inputPane.width, output: outputPane.width }
+  widthsRef.current = { input: isSubAgent ? 0 : inputPane.width, output: outputPane.width }
 
   const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
@@ -200,44 +202,48 @@ export function AgentNodeInspector({
       onClose={onClose}
     >
       <div ref={columnsRef} className="flex h-full">
-        <div className="min-w-0 shrink-0 space-y-3 overflow-y-auto pr-4" style={{ width: inputPane.width }}>
-          <p className="text-sm font-semibold">Input</p>
-          {/* First, because it is the context everything below is read
-              against: every incoming edge delivers, so "what am I even given?"
-              has to be answerable before the assembled prompt underneath means
-              anything. */}
-          <ReceivesSummary peers={handoffPeers} prompt={seedPromptText(node)} />
-          <PromptPreviewPanel
-            // The panel holds the last text it assembled; on a node switch
-            // that text describes the previous node, so it starts over.
-            key={node.id}
-            signature={JSON.stringify(data)}
-            fetchPreview={() => fetchPromptPreview(node.id)}
-          />
-          {/* Below the design-time preview, because it supersedes it: a
-              placeholder proves nothing about a run that actually happened. */}
-          {nodeRun?.run_id && (
-            // Boxed to match the preview above it -- in this pane the two are a
-            // matched pair, where elsewhere the panel is one item in a list.
-            <div className="rounded-md border bg-muted/20 p-3">
-              <ReceivedPromptPanel runId={nodeRun.run_id} />
+        {!isSubAgent && (
+          <>
+            <div className="min-w-0 shrink-0 space-y-3 overflow-y-auto pr-4" style={{ width: inputPane.width }}>
+              <p className="text-sm font-semibold">Input</p>
+              {/* First, because it is the context everything below is read
+                  against: every incoming edge delivers, so "what am I even given?"
+                  has to be answerable before the assembled prompt underneath means
+                  anything. */}
+              <ReceivesSummary peers={handoffPeers} prompt={seedPromptText(node)} />
+              <PromptPreviewPanel
+                // The panel holds the last text it assembled; on a node switch
+                // that text describes the previous node, so it starts over.
+                key={node.id}
+                signature={JSON.stringify(data)}
+                fetchPreview={() => fetchPromptPreview(node.id)}
+              />
+              {/* Below the design-time preview, because it supersedes it: a
+                  placeholder proves nothing about a run that actually happened. */}
+              {nodeRun?.run_id && (
+                // Boxed to match the preview above it -- in this pane the two are a
+                // matched pair, where elsewhere the panel is one item in a list.
+                <div className="rounded-md border bg-muted/20 p-3">
+                  <ReceivedPromptPanel runId={nodeRun.run_id} />
+                </div>
+              )}
+              <UnresolvedReferencesNote
+                names={(nodeRun?.unresolved_references ?? []).map((ref) => referenceLabel(ref, referenceScope.names))}
+              />
             </div>
-          )}
-          <UnresolvedReferencesNote
-            names={(nodeRun?.unresolved_references ?? []).map((ref) => referenceLabel(ref, referenceScope.names))}
-          />
-        </div>
 
-        <div
-          role="separator"
-          aria-label="Resize input panel"
-          aria-orientation="vertical"
-          title="Drag to resize input panel"
-          className={RESIZE_HANDLE_CLASSNAME}
-          {...inputPane.handleProps}
-        />
+            <div
+              role="separator"
+              aria-label="Resize input panel"
+              aria-orientation="vertical"
+              title="Drag to resize input panel"
+              className={RESIZE_HANDLE_CLASSNAME}
+              {...inputPane.handleProps}
+            />
+          </>
+        )}
 
-        <div className="mx-4 min-w-0 flex-1 overflow-y-auto">
+        <div className={`${isSubAgent ? 'mr-4' : 'mx-4'} min-w-0 flex-1 overflow-y-auto`}>
           <Tabs defaultValue="parameters">
             <TabsList>
               <TabsTrigger value="parameters">Parameters</TabsTrigger>
@@ -513,7 +519,7 @@ export function AgentNodeInspector({
           <p className="text-sm font-semibold">Output</p>
           {/* Mirroring Receives on the far side: who this answer is handed to,
               stated above the answer itself. */}
-          <SendsSummary peers={handoffPeers} />
+          {!isSubAgent && <SendsSummary peers={handoffPeers} />}
           {/* The received prompt lives in the Input pane instead -- see the
               layout note at the top of this file. */}
           <NodeRunOutputPanel nodeRun={nodeRun} referenceNames={referenceScope.names} showReceivedPrompt={false} />

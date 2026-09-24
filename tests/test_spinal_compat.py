@@ -298,7 +298,9 @@ def _assert_golden(graph: dict[str, Any]) -> None:
     # derived from the topology; both are withdrawn, so there is nothing left
     # here for the walk to add.
     actual = _prompt(graph, _GOLDEN_NODE_ID, node_runs=_GOLDEN_NODE_RUNS)
-    assert actual == golden.read_text()
+    # The fixture is an ordinary text file and may end with its conventional
+    # storage newline; that newline is not part of the assembled prompt.
+    assert actual == golden.read_text().removesuffix("\n")
 
 
 def test_the_assembled_prompt_matches_its_snapshot(graph: dict[str, Any]) -> None:
@@ -335,15 +337,18 @@ def test_a_deactivated_node_passes_its_input_through_verbatim(graph: dict[str, A
     assert pe._upstream_output_text(graph, fte_id, node_runs) == "DC accepted v1_dc."
 
 
-def test_the_score_agents_script_is_inlined_when_no_workspace_exists(graph: dict[str, Any]) -> None:
-    """SF-Score has the Script node wired. With a workspace the code reaches it
-    as an ambient ``script_path``; without one it is inlined in the prompt, and
-    that fallback is what an unlinked run still relies on."""
+def test_the_score_agents_script_source_stays_out_of_an_unlinked_prompt(graph: dict[str, Any]) -> None:
+    """SF-Score has the Script node wired. Production runs materialize its
+    source into either the experiment workspace or an isolated standalone-run
+    directory. If neither context exists, progressive disclosure still keeps
+    the source out of the prompt and reports that execution is unavailable."""
     text = _prompt(graph, _AGENTS[4][0], script_bound=False)
     script = next(n for n in graph["nodes"] if n.get("type") == "script")
     code = (script["data"].get("config") or {}).get("code") or ""
     assert code, "fixture's Script node lost its code"
-    assert code in text
+    assert code not in text
+    assert "Available scripts (source remains out of context until execution):" in text
+    assert "Link the protocol to an experiment to execute wired scripts." in text
 
 
 def test_a_script_bound_prompt_does_not_inline_the_code(graph: dict[str, Any]) -> None:

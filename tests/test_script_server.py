@@ -156,6 +156,48 @@ def test_unsplit_dataset_reaches_script_through_runtime_context(tmp_path: Path) 
     }
 
 
+def test_legacy_workspace_script_profiles_unsplit_input_without_creating_a_workspace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    raw = tmp_path / "cohort.csv"
+    raw.write_text("record_id,outcome\n1,1\n")
+    workspace_root = tmp_path / "workspaces"
+    workspace_dir = workspace_root / "exp1" / "cellA"
+    workspace_dir.mkdir(parents=True)
+    monkeypatch.setenv("ASAREE_DATASET_WORKSPACE_DIR", str(workspace_root))
+    script = tmp_path / "profile-data.py"
+    script.write_text(
+        "import json\n"
+        "from pathlib import Path\n"
+        "state = json.loads(Path('state.json').read_text())\n"
+        "raw = next(v for v in state['versions'] if v['id'] == 'v0_raw')\n"
+        "assert 'test' not in raw\n"
+        "output = Path('profile-result.json').resolve()\n"
+        "output.write_text(json.dumps({'source': raw['train'], 'target': state['target_column']}))\n"
+        "print(json.dumps({'output': str(output), 'source': raw['train']}))\n"
+    )
+    ctx = _FakeCtx(
+        {
+            "motoro.ambient.script_path": str(script),
+            "motoro.workspace_id": "exp1/cellA",
+            "motoro.ambient.dataset_names": ["runtime-cohort"],
+            "motoro.ambient.data_path": str(raw),
+            "motoro.ambient.target_column": "outcome",
+        }
+    )
+
+    out = _run(ctx=ctx)
+
+    assert out["exit_code"] == 0
+    payload = json.loads(out["stdout"])
+    artifact = Path(payload["output"])
+    assert payload["source"] == str(raw)
+    assert artifact.is_file()
+    assert json.loads(artifact.read_text()) == {"source": str(raw), "target": "outcome"}
+    assert not (artifact.parent / "state.json").exists()
+    assert not (workspace_dir / "state.json").exists()
+
+
 def test_workspace_context_exposes_raw_train_not_head_or_test(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

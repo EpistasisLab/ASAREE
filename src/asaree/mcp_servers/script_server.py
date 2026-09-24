@@ -26,6 +26,9 @@ When a Dataset is also wired, the subprocess receives a short-lived runtime
 manifest through :mod:`asaree.script_context`. That stable API resolves either
 an unsplit raw file or a workspace's ``v0_raw`` training partition without
 exposing the held-out test partition or making user code parse ``state.json``.
+Legacy scripts that explicitly read ``state.json`` receive the same training
+reference through an isolated, execution-only compatibility view; it is never
+written at the real workspace root.
 
 **This is isolation, not a sandbox.** The script runs as a subprocess of this
 server, with a deny-by-default environment (see ``_ENV_PASSTHROUGH``) and a
@@ -233,6 +236,26 @@ def _runtime_manifest(ctx: Context[Any, Any, Any] | None, workspace_id: str) -> 
     return {"schema_version": 1, "training_inputs": training_inputs}
 
 
+def _legacy_unsplit_state(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """A read-only workspace-shaped view for scripts written before the API.
+
+    This is never placed at a real workspace root.  It exists only in an
+    isolated execution directory while a single unsplit input's script runs,
+    so workspace tools cannot mistake it for a seeded train/test lineage.
+    """
+    inputs = manifest.get("training_inputs")
+    if not isinstance(inputs, list) or len(inputs) != 1:
+        return None
+    item = inputs[0]
+    if not isinstance(item, dict) or item.get("mode") != "raw_unsplit" or not item.get("path"):
+        return None
+    return {
+        "target_column": str(item.get("target_column") or ""),
+        "head": "v0_raw",
+        "versions": [{"id": "v0_raw", "train": str(item["path"])}],
+    }
+
+
 @mcp.tool()
 def run_wired_script(
     code: str = "",
@@ -334,10 +357,27 @@ def run_wired_script(
     env["PYTHONUNBUFFERED"] = "1"
     result: dict[str, Any] = {"code_sha256": code_sha256, "script": script_file.name}
     cwd = _working_dir(workspace_id, script_file)
+    manifest = _runtime_manifest(ctx, workspace_id)
+    # Preserve cwd for ordinary/helper-based scripts.  The isolated legacy
+    # view is only needed when the authored source explicitly expects the old
+    # state-file contract.
+    legacy_state = _legacy_unsplit_state(manifest) if "state.json" in source else None
+    compatibility_dir: Path | None = None
+    if legacy_state is not None:
+        try:
+            # Never put this view at the workspace root: it has no test
+            # partition and must not make workspace_status report a real
+            # workspace.  Keep artifacts created by the script in this unique
+            # run directory after the compatibility files are removed.
+            compatibility_dir = Path(tempfile.mkdtemp(prefix=f".{script_file.stem}-unsplit-", dir=script_file.parent))
+            cwd = compatibility_dir
+            (cwd / "state.json").write_text(json.dumps(legacy_state), encoding="utf-8")
+        except OSError as e:
+            return json.dumps({**result, "error": f"could not prepare the unsplit dataset view: {e}"})
     try:
         with tempfile.TemporaryDirectory(prefix=".asaree-script-context-", dir=cwd) as context_dir:
             context_path = Path(context_dir) / "context.json"
-            context_path.write_text(json.dumps(_runtime_manifest(ctx, workspace_id)), encoding="utf-8")
+            context_path.write_text(json.dumps(manifest), encoding="utf-8")
             env[_RUN_CONTEXT_ENV] = str(context_path)
             try:
                 completed = subprocess.run(  # noqa: S603 -- user-authored script, by design; see module docstring
@@ -364,6 +404,13 @@ def run_wired_script(
                 return json.dumps({**result, "error": f"could not start the script: {e}"})
     except OSError as e:
         return json.dumps({**result, "error": f"could not prepare the script runtime context: {e}"})
+    finally:
+        if compatibility_dir is not None:
+            try:
+                (compatibility_dir / "state.json").unlink(missing_ok=True)
+                compatibility_dir.rmdir()  # succeeds only when the script left no artifacts
+            except OSError:
+                pass
 
     result["exit_code"] = completed.returncode
     result["stdout"] = _clip(completed.stdout, _STDOUT_CHARS)

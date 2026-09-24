@@ -293,3 +293,39 @@ def slot_data_locators(workspace_id: str) -> dict[str, dict[str, str]]:
             "target_column": str(state.get("target_column") or ""),
         }
     return locators
+
+
+def raw_training_data_locators(workspace_id: str) -> dict[str, dict[str, str]]:
+    """Every slot's authorized ``v0_raw`` training input, keyed by slot.
+
+    This is the script-facing counterpart to :func:`slot_data_locators`, which
+    deliberately names HEAD for modeling tools.  A read-only assessment script
+    needs the registered training partition instead: later accepted stages may
+    have dropped, encoded, or selected columns.  The held-out test path is
+    intentionally never returned.
+
+    Total like the other locators: an absent or unreadable workspace is ``{}``.
+    """
+    try:
+        ws = Workspace(workspace_id)
+        if not ws.exists():
+            return {}
+        slots = ws.slots()
+    except WorkspaceError:
+        return {}
+    except (OSError, ValueError) as e:
+        logger.warning("workspace_raw_locator_failed", extra={"workspace_id": workspace_id, "error": str(e)})
+        return {}
+
+    locators: dict[str, dict[str, str]] = {}
+    for key, state in slots.items():
+        raw = next((v for v in state.get("versions", []) if v.get("id") == "v0_raw"), None)
+        train = str((raw or {}).get("train") or "")
+        if not train:
+            continue
+        locators[key] = {
+            "name": str(state.get("name") or key.split(":", 1)[-1]),
+            "data_path": train,
+            "target_column": str(state.get("target_column") or ""),
+        }
+    return locators

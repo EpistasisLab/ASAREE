@@ -114,7 +114,7 @@ describe('results measurement states', () => {
   })
 
   it('shows a measured observation once in Outcome and keeps its provenance there', async () => {
-    const producer = { binding_id: 'judge', producer_id: 'asaree.judge', kind: 'deterministic_evaluator' as const, version: '1' }
+    const producer = { binding_id: 'judge', producer_id: 'asaree.judge', kind: 'reported' as const, version: '1' }
     const replicate = {
       replicate_label: 'replicate-1', replicate_number: 1, cell_label: 'model_a', factor_values: { model: 'a' },
       metric_values: { Quality: 0.9 }, status: 'completed' as const, obsolete: false, error: null, run_id: 'run-1',

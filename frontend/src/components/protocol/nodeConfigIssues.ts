@@ -70,6 +70,15 @@ export function findNodeConfigIssues(
       case 'agent':
         if (!agentIdsWithModel.has(node.id)) issues.push('No Model connected')
         break
+      case 'sub_agent':
+        if (
+          node.data.active !== false &&
+          edges.some((edge) => edge.source === node.id && edge.targetHandle === 'sub_agents') &&
+          !agentIdsWithModel.has(node.id)
+        ) {
+          issues.push('No Model connected')
+        }
+        break
       case 'model_anthropic':
       case 'model_openai':
       case 'model_azure_foundry':

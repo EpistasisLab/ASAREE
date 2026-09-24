@@ -22,6 +22,7 @@
 // it's the only node whose job is to stop a run), and the Model family.
 const NODE_ACCENTS: Record<string, string> = {
   agent: 'var(--chart-3)',
+  sub_agent: 'var(--node-10)',
   dataset: 'var(--chart-2)',
   pattern_reason_act: 'var(--chart-1)',
   critic_gate: 'var(--chart-5)',

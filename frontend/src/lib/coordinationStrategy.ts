@@ -18,6 +18,7 @@ export const CONNECTOR_HANDLES = new Set([
   'resource',
   'knowledge',
   'output_parser',
+  'sub_agents',
 ])
 
 export function isMainEdge(edge: Pick<ProtocolEdge, 'targetHandle'>): boolean {

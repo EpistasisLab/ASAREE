@@ -57,7 +57,7 @@ class ProtocolRun(Base, TimestampMixin):
     #         "evaluation_completed_at": iso}.
     attempt_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # The agent-to-agent transcript, present only once a run's agents actually
-    # consult each other -- null for every single-agent and pipeline run.
+    # communicate -- including a pipeline Agent delegating to a Sub-Agent.
     # Shape: {"state": <A2A TaskState>, "messages": [{"message_id", "sequence",
     #         "from_agent_id", "to_agent_id", "parts": [...], "created_at"}, ...]}
     # Kept alongside node_runs and for the same reason: it is an append-only,

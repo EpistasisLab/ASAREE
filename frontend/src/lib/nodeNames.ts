@@ -10,6 +10,7 @@
 // placeholders; keep it in step with the node components if one is renamed.
 const NODE_TYPE_NAMES: Record<string, string> = {
   agent: 'Agent',
+  sub_agent: 'Sub-Agent',
   critic_gate: 'Critic Gate',
   dataset: 'Dataset',
   model_anthropic: 'Anthropic',

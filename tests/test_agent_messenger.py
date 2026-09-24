@@ -1,4 +1,4 @@
-"""Consultation delivery: authorization, budgets, transcript, and the clock.
+"""Consultation delivery: authorization, recursion, transcript, and the clock.
 
 The property under test throughout is that **a refusal is an answer, not an
 error**. Every cap and every authorization failure below asserts on the returned
@@ -8,7 +8,7 @@ exception would be asserting the opposite of the design.
 
 DB-free by construction: ``get_session`` and the five service calls the
 messenger makes through it are stubbed, so what runs is exactly the ordering,
-budget and authorization logic and nothing else.
+recursion and authorization logic and nothing else.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ class _Row:
 
 @pytest.fixture
 def stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Cut every DB call, keeping the real authorization and budget logic."""
+    """Cut every DB call, keeping the real authorization and recursion logic."""
     state: dict[str, Any] = {
         "checkpoints": [],
         "node_runs": [],
@@ -143,6 +143,20 @@ async def test_a_consultation_runs_the_peer_and_returns_its_words(stubs: dict[st
     assert reply.text == "A peer answer."
     assert [r[0] for r in stubs["peer_runs"]] == ["critic"]
     assert stubs["peer_runs"][0][1] == "What is weak here?"
+
+
+async def test_a_parsed_reply_returns_compact_json_and_records_the_payload(
+    stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _run_agent_node(*_args: Any, **_kwargs: Any) -> tuple[str, None, uuid.UUID, dict[str, Any]]:
+        return "prose", None, uuid.uuid4(), {"payload": {"score": 0.91}}
+
+    monkeypatch.setattr(am, "_run_agent_node", _run_agent_node)
+    reply = await _ask(_messenger())
+
+    assert reply.text == '{"score":0.91}'
+    assert stubs["node_runs"][-1][1]["payload"] == {"score": 0.91}
+    assert stubs["node_runs"][-1][1]["last_successful_output_text"] == '{"score":0.91}'
 
 
 async def test_the_peer_is_handed_the_messenger_so_it_can_consult_back(stubs: dict[str, Any]) -> None:
@@ -385,22 +399,16 @@ async def test_a_stop_between_consultations_prevents_further_ones(stubs: dict[st
 
 
 # ----------------------------------------------------------------------
-# Budgets
+# Recursion guard
 # ----------------------------------------------------------------------
 
 
-async def test_the_execution_budget_is_spent_not_bypassed(
-    stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(am, "_MAX_PEER_EXECUTIONS", 2)
+async def test_sequential_consultations_are_not_capped(stubs: dict[str, Any]) -> None:
     messenger = _messenger()
-    assert (await _ask(messenger)).state == "completed"
-    assert (await _ask(messenger)).state == "completed"
-    exhausted = await _ask(messenger)
-    assert exhausted.state == "rejected"
-    assert "consultations" in exhausted.text
-    assert len(stubs["peer_runs"]) == 2
-    assert messenger.limit_reached is True
+    for _ in range(10):
+        assert (await _ask(messenger)).state == "completed"
+    assert len(stubs["peer_runs"]) == 10
+    assert messenger.limit_reached is False
 
 
 async def test_depth_is_capped_and_the_cap_is_a_reply(stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -440,20 +448,6 @@ async def test_depth_is_released_when_a_consultation_returns(
     messenger = _messenger()
     assert (await _ask(messenger)).state == "completed"
     assert (await _ask(messenger)).state == "completed"
-
-
-async def test_the_conversation_wall_clock_is_the_backstop(
-    stubs: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Peer time is given back to individual agents but never to this cap --
-    otherwise nothing would bound the total."""
-    from datetime import timedelta
-
-    monkeypatch.setattr(am, "_MAX_CONVERSATION_DURATION", timedelta(seconds=0))
-    reply = await _ask(_messenger())
-    assert reply.state == "rejected"
-    assert "seconds" in reply.text
-    assert stubs["peer_runs"] == []
 
 
 # ----------------------------------------------------------------------
@@ -664,6 +658,58 @@ async def test_a_completed_chain_reads_as_a_conversation(stubs: dict[str, Any]) 
     assert [m["sequence"] for m in conversation["messages"]] == [1, 2, 3, 4]
     assert am._text_of(conversation["messages"][0]["parts"]) == "Fit a model."
     assert am._text_of(conversation["messages"][3]["parts"]) == "AUC 0.81."
+
+
+async def test_sequential_handoffs_preserve_nested_delegation_messages(stubs: dict[str, Any]) -> None:
+    messenger = am.AgentMessenger(
+        protocol_id=PROTOCOL_ID,
+        protocol_run_id=RUN_ID,
+        owner_id=OWNER,
+        graph=_chain_graph(),
+        entry_agent_id="a",
+        workspace_id=None,
+    )
+    messenger.append(
+        from_agent_id=am.USER_PARTICIPANT,
+        to_agent_id="a",
+        parts=[{"kind": "text", "text": "Fit a model."}],
+    )
+    messenger.append(
+        from_agent_id="a",
+        to_agent_id="worker",
+        parts=[{"kind": "text", "text": "Check the assumptions."}],
+    )
+    messenger.append(
+        from_agent_id="worker",
+        to_agent_id="a",
+        parts=[{"kind": "text", "text": "Assumptions pass."}],
+    )
+
+    await am.record_sequential_transcript(
+        RUN_ID,
+        protocol_id=PROTOCOL_ID,
+        owner_id=OWNER,
+        graph=_chain_graph(),
+        chain=["a", "b", "c"],
+        node_runs={
+            "a": {"status": "completed", "output_text": "Cleaned."},
+            "b": {"status": "completed", "output_text": "Fitted."},
+            "c": {"status": "completed", "output_text": "AUC 0.81."},
+        },
+        entry_prompt="Fit a model.",
+        state="completed",
+        messenger=messenger,
+    )
+
+    conversation = stubs["checkpoints"][-1]
+    assert [(m["from_agent_id"], m["to_agent_id"]) for m in conversation["messages"]] == [
+        (am.USER_PARTICIPANT, "a"),
+        ("a", "worker"),
+        ("worker", "a"),
+        ("a", "b"),
+        ("b", "c"),
+        ("c", am.USER_PARTICIPANT),
+    ]
 
 
 async def test_the_transcript_stops_where_the_chain_stopped(stubs: dict[str, Any]) -> None:

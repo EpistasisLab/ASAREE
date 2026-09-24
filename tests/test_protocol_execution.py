@@ -220,6 +220,71 @@ def _agent_with_llm(node_id: str, llm_id: str = "llm") -> tuple[dict, dict]:
     return _node(node_id, "agent"), _llm_edge(llm_id, node_id)
 
 
+def _sub_agent_edge(child: str, parent: str) -> dict:
+    return {
+        "id": f"{child}-{parent}-sub-agent",
+        "source": child,
+        "sourceHandle": "sub_agents",
+        "target": parent,
+        "targetHandle": "sub_agents",
+    }
+
+
+def test_sub_agent_is_a_callable_connector_not_a_pipeline_sink() -> None:
+    parent, parent_model = _agent_with_llm("parent", "parent-model")
+    child = _node("child", "sub_agent")
+    graph = {
+        "nodes": [parent, child, _llm_node("parent-model"), _llm_node("child-model")],
+        "edges": [parent_model, _llm_edge("child-model", "child"), _sub_agent_edge("child", "parent")],
+    }
+
+    topological_order(graph)
+
+    assert pe.sink_node_ids(graph) == ["parent"]
+    assert pe._sub_agent_ids(graph, "parent") == ["child"]
+    assert pe._can_deliver_communication(graph, "parent", "child") is True
+    assert pe._can_deliver_communication(graph, "child", "parent") is False
+
+
+def test_sub_agent_cannot_have_two_parents() -> None:
+    parent_a, parent_a_model = _agent_with_llm("parent-a", "model-a")
+    parent_b, parent_b_model = _agent_with_llm("parent-b", "model-b")
+    child = _node("child", "sub_agent")
+    graph = {
+        "nodes": [parent_a, parent_b, child, _llm_node("model-a"), _llm_node("model-b"), _llm_node("model-c")],
+        "edges": [
+            parent_a_model,
+            parent_b_model,
+            _llm_edge("model-c", "child"),
+            _sub_agent_edge("child", "parent-a"),
+            _sub_agent_edge("child", "parent-b"),
+        ],
+    }
+
+    with pytest.raises(ProtocolValidationError, match="exactly one parent"):
+        topological_order(graph)
+
+
+def test_only_active_connected_sub_agents_require_a_model() -> None:
+    parent, parent_model = _agent_with_llm("parent", "parent-model")
+    model = _llm_node("parent-model")
+    orphan = _node("orphan", "sub_agent")
+    inactive = _node("inactive", "sub_agent")
+    inactive["data"]["active"] = False
+    graph = {
+        "nodes": [parent, model, orphan, inactive],
+        "edges": [parent_model, _sub_agent_edge("inactive", "parent")],
+    }
+
+    topological_order(graph)
+
+    active = _node("active", "sub_agent")
+    graph["nodes"].append(active)
+    graph["edges"].append(_sub_agent_edge("active", "parent"))
+    with pytest.raises(ProtocolValidationError, match="must have exactly one Model"):
+        topological_order(graph)
+
+
 def test_linear_order() -> None:
     order = [n["id"] for n in topological_order(_graph(["a", "b", "c"], [("a", "b"), ("b", "c")]))]
     assert order == ["a", "b", "c"]
@@ -3986,7 +4051,7 @@ def test_validate_single_node_runnable_missing_node_raises() -> None:
 def test_validate_single_node_runnable_rejects_non_agent_type() -> None:
     node = _node("g1", "critic_gate")
     graph = {"nodes": [node], "edges": []}
-    with pytest.raises(ProtocolValidationError, match="Only Agent nodes"):
+    with pytest.raises(ProtocolValidationError, match="Only Agent and Sub-Agent nodes"):
         pe.validate_single_node_runnable(graph, "g1")
 
 

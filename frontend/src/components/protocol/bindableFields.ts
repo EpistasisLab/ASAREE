@@ -155,6 +155,7 @@ const MODEL_NODE_TYPES = new Set([
 export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
   switch (node.type) {
     case 'agent':
+    case 'sub_agent':
       return [
         // The run's own ask, and the field `{{...}}` references resolve in --
         // so a prompt factor's levels are how "does reference placement

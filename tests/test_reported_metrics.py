@@ -217,6 +217,31 @@ async def test_agent_output_report_is_unavailable_when_agent_did_not_complete() 
 
 
 @pytest.mark.asyncio
+async def test_sub_agent_metric_keeps_latest_success_after_a_failed_retry() -> None:
+    run = SimpleNamespace(
+        id=uuid4(),
+        replicate_result_id=None,
+        node_runs={
+            "worker": {
+                "status": "failed",
+                "output_text": None,
+                "last_successful_output_text": '{"score":0.91}',
+                "last_successful_run_id": str(uuid4()),
+            }
+        },
+    )
+
+    result = await collect_reported_metrics(
+        run,
+        _plan("asaree.agent_output", {"agent_node_id": "worker"}),
+        {"nodes": [{"id": "worker", "type": "sub_agent", "data": {}}], "edges": []},
+    )
+
+    assert result.observations[0].status == "measured"
+    assert result.observations[0].value == '{"score":0.91}'
+
+
+@pytest.mark.asyncio
 async def test_agent_output_plan_requires_an_active_agent() -> None:
     plan = _plan("asaree.agent_output", {"agent_node_id": "agent"})
 
@@ -231,6 +256,12 @@ async def test_agent_output_plan_requires_an_active_agent() -> None:
 
     assert valid.valid
     assert [issue.code for issue in disabled.issues] == ["agent_output_agent_disabled"]
+
+    sub_agent = await validate_reported_measurement_plan(
+        plan,
+        {"nodes": [{"id": "agent", "type": "sub_agent", "data": {}}]},
+    )
+    assert sub_agent.valid
 
 
 async def _async_value(value):

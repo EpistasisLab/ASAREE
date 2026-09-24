@@ -9,6 +9,7 @@ export type ConnectorSlot =
   | 'dataset'
   | 'knowledge'
   | 'output_parser'
+  | 'sub_agents'
 
 // What each slot is CALLED in the UI, as opposed to the handle id it's
 // stored under -- the multi-word ones would otherwise surface raw,
@@ -24,6 +25,7 @@ export const CONNECTOR_SLOT_LABELS: Record<ConnectorSlot, string> = {
   dataset: 'Dataset',
   knowledge: 'Knowledge',
   output_parser: 'Output Parser',
+  sub_agents: 'Sub-Agents',
 }
 
 export interface ConnectorAddRequest {

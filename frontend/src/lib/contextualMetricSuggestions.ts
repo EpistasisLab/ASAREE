@@ -7,7 +7,7 @@ export interface ContextualMetricSuggestion {
 }
 
 function enabledAgent(node: ProtocolNode | undefined): boolean {
-  return node?.type === 'agent' && node.data.active !== false
+  return (node?.type === 'agent' || node?.type === 'sub_agent') && node.data.active !== false
 }
 
 function sourceIsCallable(node: ProtocolNode, targetHandle: string | null | undefined): boolean {

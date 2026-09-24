@@ -87,7 +87,7 @@ export function isPromptReferenceField(fieldPath: string): boolean {
 
 function baseName(node: ProtocolNode): string {
   const label = (node.data as { label?: string } | undefined)?.label
-  return label?.trim() || (node.type === 'agent' ? 'Agent' : node.type)
+  return label?.trim() || (node.type === 'agent' ? 'Agent' : node.type === 'sub_agent' ? 'Sub-Agent' : node.type)
 }
 
 /** A unique, human display name per node id.

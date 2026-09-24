@@ -242,6 +242,7 @@ _CONNECTOR_HANDLES = frozenset(
         "skill",
         "knowledge",
         "output_parser",
+        "sub_agents",
     }
 )
 
@@ -355,11 +356,12 @@ _KNOWLEDGE_NODE_TYPES = _OKF_BUNDLE_NODE_TYPES | _OKF_DOCUMENT_NODE_TYPES
 # Capped at one, like Memory and unlike Tool/Skill/Knowledge: two field specs
 # for one output is an ambiguity, not a richer declaration.
 _OUTPUT_PARSER_NODE_TYPES = frozenset({"output_parser"})
+_SUB_AGENT_NODE_TYPES = frozenset({"sub_agent"})
 
-# Every node type that's a pure config source -- never gets its own execution
-# turn, never a pipeline "final output" (see sink_node_ids/run_protocol's
-# main loop), and may only ever emit its own connector-typed edge (see the
-# "outgoing wrong handle" check in topological_order below).
+# Every node type skipped by the main pipeline walk and excluded as a final
+# output. Most are pure config sources; Sub-Agent is the deliberate exception:
+# it executes only as a nested delegated turn. All may emit only their own
+# connector-typed edge (see topological_order's outgoing-handle check).
 _PURE_CONFIG_SOURCE_TYPES = (
     _MODEL_NODE_TYPES
     | _EXECUTION_PATTERN_NODE_TYPES
@@ -370,9 +372,10 @@ _PURE_CONFIG_SOURCE_TYPES = (
     | _SKILL_NODE_TYPES
     | _KNOWLEDGE_NODE_TYPES
     | _OUTPUT_PARSER_NODE_TYPES
+    | _SUB_AGENT_NODE_TYPES
 )
 
-# Which connector handle each pure-config-source node type may exclusively
+# Which connector handle each pipeline-skipped node type may exclusively
 # emit into, and the human-facing label for that handle -- both keyed off
 # the same family grouping so a new provider/pattern node type only needs
 # adding to _MODEL_NODE_TYPES/_EXECUTION_PATTERN_NODE_TYPES above, not a
@@ -399,6 +402,7 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "skill" for t in _SKILL_NODE_TYPES},
     **{t: "knowledge" for t in _KNOWLEDGE_NODE_TYPES},
     **{t: "output_parser" for t in _OUTPUT_PARSER_NODE_TYPES},
+    **{t: "sub_agents" for t in _SUB_AGENT_NODE_TYPES},
 }
 # The user-facing name of each connector slot -- mirrors
 # CONNECTOR_SLOT_LABELS on the frontend, so a validation error always names
@@ -415,6 +419,7 @@ _HANDLE_LABELS: dict[str, str] = {
     "skill": "Skill",
     "knowledge": "Knowledge",
     "output_parser": "Output Parser",
+    "sub_agents": "Sub-Agents",
 }
 
 # Connector slots have been renamed twice since graphs started being saved,
@@ -579,7 +584,7 @@ def derive_stage_plan(graph: dict[str, Any]) -> Any:
     stage_ids: list[str] = []
     for nid in ordered:
         node = nodes[nid]
-        if node.get("type") != "agent":
+        if node.get("type") not in ("agent", "sub_agent"):
             continue
         for edge in _edges_with_handle(graph, nid, "tool", direction="incoming"):
             source = nodes.get(str(edge.get("source")))
@@ -916,6 +921,7 @@ def resolve_conversation_entry_id(graph: dict[str, Any]) -> str:
 
 _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "agent": "Agent",
+    "sub_agent": "Sub-Agent",
     "critic_gate": "Critic Gate",
     "mcp_tool": "MCP Tool",
     "mcp_scikit_learn": "Scikit-learn MCP",
@@ -1071,7 +1077,12 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
         node_type = node.get("type")
         name = _node_display_name(node)
 
-        if node_type in ("agent", "critic_gate"):
+        sub_agent_is_callable = (
+            node_type == "sub_agent"
+            and _is_node_active(node)
+            and bool(_edges_with_handle(graph, nid, "sub_agents", direction="outgoing"))
+        )
+        if node_type in ("agent", "critic_gate") or sub_agent_is_callable:
             model_edges = _edges_with_handle(graph, nid, "model", direction="incoming")
             if len(model_edges) != 1:
                 raise ProtocolValidationError(
@@ -1088,7 +1099,8 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
         skill_edges = _edges_with_handle(graph, nid, "skill", direction="incoming")
         knowledge_edges = _edges_with_handle(graph, nid, "knowledge", direction="incoming")
         parser_edges = _edges_with_handle(graph, nid, "output_parser", direction="incoming")
-        if node_type == "agent":
+        sub_agent_edges = _edges_with_handle(graph, nid, "sub_agents", direction="incoming")
+        if node_type in ("agent", "sub_agent"):
             # The Tool connector accepts a family of source types -- an
             # mcp_tool node contributes a callable capability, while a
             # Script node contributes declarative config/context (see
@@ -1191,6 +1203,15 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
                     f"Node {name!r} has both an Output Parser connection and its own stored output contract. "
                     "Convert the stored one to a node, or remove it, so there is one output shape."
                 )
+            if node_type == "agent":
+                for edge in sub_agent_edges:
+                    child = nodes.get(edge["source"])
+                    if child is None or child.get("type") != "sub_agent":
+                        raise ProtocolValidationError(
+                            f"Node {name!r}'s Sub-Agents connection must come from a Sub-Agent node."
+                        )
+            elif sub_agent_edges:
+                raise ProtocolValidationError(f"Sub-Agent node {name!r} cannot own other Sub-Agents.")
         elif (
             tool_edges
             or memory_edges
@@ -1199,11 +1220,25 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
             or skill_edges
             or knowledge_edges
             or parser_edges
+            or sub_agent_edges
         ):
             raise ProtocolValidationError(
                 f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, "
                 f"Knowledge, or Output Parser connection (node {name!r})."
             )
+
+        if node_type == "sub_agent":
+            parent_edges = _edges_with_handle(graph, nid, "sub_agents", direction="outgoing")
+            if len(parent_edges) > 1:
+                raise ProtocolValidationError(
+                    f"Sub-Agent node {name!r} can have exactly one parent (found {len(parent_edges)})."
+                )
+            for edge in parent_edges:
+                parent = nodes.get(str(edge.get("target")))
+                if parent is None or parent.get("type") != "agent":
+                    raise ProtocolValidationError(
+                        f"Sub-Agent node {name!r}'s Parent connection must lead to an Agent node."
+                    )
 
         if node_type in _NODE_TYPE_TO_HANDLE:
             expected_handle = _NODE_TYPE_TO_HANDLE[node_type]
@@ -1229,7 +1264,8 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
                 # "Dataset" either way.
                 leading_label = (
                     _NODE_TYPE_DISPLAY_NAMES[node_type]
-                    if node_type in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES | _KNOWLEDGE_NODE_TYPES
+                    if node_type
+                    in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES | _KNOWLEDGE_NODE_TYPES | _SUB_AGENT_NODE_TYPES
                     else handle_label
                 )
                 raise ProtocolValidationError(
@@ -1259,11 +1295,9 @@ def sink_node_ids(graph: dict[str, Any]) -> list[str]:
     """Every node with no outgoing edges -- used both to validate a graph is
     runnable per-cell (exactly one sink required, see ``plan_cell_runs``) and
     by ``run_protocol`` itself to find the node whose output becomes a cell's
-    result. Excludes every pure-config-source node type (every LLM provider/
-    architectural pattern node, plus ``memory`` and ``mcp_tool``) -- these are
-    never a pipeline's "final output," whether or not they're connected to
-    anything (an unwired one would otherwise falsely count as an extra
-    sink)."""
+    result. Excludes every pipeline-skipped node type: connector config sources
+    and Sub-Agents, whose output belongs to a nested delegated turn rather than
+    the main pipeline. An unwired one must not falsely count as an extra sink."""
     nodes, downstream, _upstream = _adjacency(graph)
     return [
         nid for nid, node in nodes.items() if not downstream[nid] and node.get("type") not in _PURE_CONFIG_SOURCE_TYPES
@@ -2136,6 +2170,27 @@ def _connected_agent_ids(graph: dict[str, Any], node_id: str) -> list[str]:
     return peers
 
 
+def _sub_agent_ids(graph: dict[str, Any], parent_id: str) -> list[str]:
+    """Active Sub-Agents owned by *parent_id*, in canvas wiring order."""
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
+    if (nodes.get(parent_id) or {}).get("type") != "agent":
+        return []
+    children: list[str] = []
+    for edge in graph.get("edges") or []:
+        if edge.get("target") != parent_id or edge.get("targetHandle") != "sub_agents":
+            continue
+        child_id = str(edge.get("source"))
+        child = nodes.get(child_id)
+        if (
+            child is not None
+            and child.get("type") == "sub_agent"
+            and _is_node_active(child)
+            and child_id not in children
+        ):
+            children.append(child_id)
+    return children
+
+
 def _can_deliver_communication(graph: dict[str, Any], from_agent_id: str, to_agent_id: str) -> bool:
     """Live authorization check, re-run for every consultation.
 
@@ -2147,7 +2202,9 @@ def _can_deliver_communication(graph: dict[str, Any], from_agent_id: str, to_age
     """
     if from_agent_id == to_agent_id:
         return False
-    return to_agent_id in _connected_agent_ids(graph, from_agent_id)
+    return to_agent_id in _connected_agent_ids(graph, from_agent_id) or to_agent_id in _sub_agent_ids(
+        graph, from_agent_id
+    )
 
 
 async def resolve_agent_card(
@@ -2167,7 +2224,7 @@ async def resolve_agent_card(
     """
     nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
     node = nodes.get(node_id)
-    if node is None or node.get("type") != "agent":
+    if node is None or node.get("type") not in ("agent", "sub_agent") or not _is_node_active(node):
         return None
     config = (node.get("data") or {}).get("config") or {}
     # The registered skill documents, not the ids: a peer reads names and
@@ -2199,8 +2256,20 @@ async def resolve_available_agents(
     are bound no new function schemas (invariant 11).
     """
     cards: list[dict[str, Any]] = []
-    for peer_id in _connected_agent_ids(graph, node_id):
+    for peer_id in [*_connected_agent_ids(graph, node_id), *_sub_agent_ids(graph, node_id)]:
         card = await resolve_agent_card(graph, peer_id, owner_id=owner_id, metadata=metadata)
+        if card is not None:
+            cards.append(card.to_dict())
+    return cards
+
+
+async def resolve_available_sub_agents(
+    graph: dict[str, Any], node_id: str, *, owner_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    """Serialized cards for active Sub-Agents owned by one parent Agent."""
+    cards: list[dict[str, Any]] = []
+    for child_id in _sub_agent_ids(graph, node_id):
+        card = await resolve_agent_card(graph, child_id, owner_id=owner_id)
         if card is not None:
             cards.append(card.to_dict())
     return cards
@@ -3409,7 +3478,7 @@ async def preview_node_prompt(
     node = nodes.get(node_id)
     if node is None:
         raise ProtocolValidationError(f"No node {node_id!r} on this canvas.")
-    if node.get("type") != "agent":
+    if node.get("type") not in ("agent", "sub_agent"):
         raise ProtocolValidationError(f"{_node_display_name(node)} is not an agent, so it is never given a prompt.")
 
     node_runs = {
@@ -4344,8 +4413,8 @@ def validate_single_node_runnable(graph: dict[str, Any], node_id: str) -> dict[s
     node = nodes.get(node_id)
     if node is None:
         raise ProtocolValidationError(f"No such node: {node_id!r}")
-    if node.get("type") != "agent":
-        raise ProtocolValidationError("Only Agent nodes can be run on their own.")
+    if node.get("type") not in ("agent", "sub_agent"):
+        raise ProtocolValidationError("Only Agent and Sub-Agent nodes can be run on their own.")
     if _upstream_ids(graph, node_id):
         raise ProtocolValidationError(
             "This agent has upstream input from another node -- running it alone isn't supported yet. "
@@ -4712,6 +4781,26 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         sinks = sink_node_ids(graph)
         result_node_id = sinks[0] if len(sinks) == 1 else None
 
+    pipeline_messenger = None
+    if order:
+        pipeline_parents = [
+            str(node.get("id"))
+            for node in order
+            if node.get("type") == "agent" and _sub_agent_ids(graph, str(node.get("id")))
+        ]
+        if pipeline_parents:
+            from asaree.services.agent_messenger import AgentMessenger
+
+            pipeline_messenger = AgentMessenger(
+                protocol_id=protocol_id,
+                protocol_run_id=protocol_run_id,
+                owner_id=owner_id,
+                graph=graph,
+                entry_agent_id=pipeline_parents[0],
+                workspace_id=workspace_id,
+                stage_plan=stage_plan,
+            )
+
     for node in order:
         node_id = node["id"]
         if node_id in node_runs:
@@ -4737,12 +4826,16 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             continue
 
         if node.get("type") in _PURE_CONFIG_SOURCE_TYPES:
-            # Pure config sources -- never get their own execution turn (see
-            # _resolve_model_config/_resolve_tool_config). Memory and
-            # architectural-pattern nodes are visual scaffolding only this
-            # phase: connecting one declares intent for a future phase, but
-            # has no runtime effect yet.
-            node_runs[node_id] = {"status": "completed", "output_text": None, "error": None}
+            # A Sub-Agent has no automatic pipeline turn. It starts skipped
+            # and AgentMessenger overwrites that status only if its parent
+            # actually invokes it; this also keeps its declared metrics blank
+            # when it was available but unused. The other members are pure
+            # config sources and count as resolved by the graph walk.
+            node_runs[node_id] = (
+                {"status": "skipped"}
+                if node.get("type") == "sub_agent"
+                else {"status": "completed", "output_text": None, "error": None}
+            )
             async with get_session() as db:
                 await update_node_run(db, protocol_run_id, node_id, node_runs[node_id])
             continue
@@ -4833,18 +4926,44 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 node_runs,
                 unresolved_out=unresolved,
             )
-            output_text, error, run_id, extraction = await _run_agent_node(
-                node,
-                protocol_id=protocol_id,
-                protocol_run_id=protocol_run_id,
-                owner_id=owner_id,
-                user_input=user_input,
-                graph=graph,
-                system_prompt=node_system_prompt,
-                workspace_id=workspace_id,
-                ambient_meta=ambient_meta,
-                unsplit_dataset=node_dataset.unsplit_name,
-            )
+            available_sub_agents = await resolve_available_sub_agents(graph, node_id, owner_id=owner_id)
+            if pipeline_messenger is not None and available_sub_agents:
+                from asaree.services.agent_messenger import USER_PARTICIPANT
+
+                pipeline_messenger.append(
+                    from_agent_id=USER_PARTICIPANT,
+                    to_agent_id=node_id,
+                    parts=[{"kind": "text", "text": user_input}],
+                )
+                await pipeline_messenger.checkpoint()
+                with pipeline_messenger.turn(node_id):
+                    output_text, error, run_id, extraction = await _run_agent_node(
+                        node,
+                        protocol_id=protocol_id,
+                        protocol_run_id=protocol_run_id,
+                        owner_id=owner_id,
+                        user_input=user_input,
+                        graph=graph,
+                        system_prompt=node_system_prompt,
+                        workspace_id=workspace_id,
+                        ambient_meta=ambient_meta,
+                        available_agents=available_sub_agents,
+                        agent_messenger=pipeline_messenger,
+                        unsplit_dataset=node_dataset.unsplit_name,
+                    )
+            else:
+                output_text, error, run_id, extraction = await _run_agent_node(
+                    node,
+                    protocol_id=protocol_id,
+                    protocol_run_id=protocol_run_id,
+                    owner_id=owner_id,
+                    user_input=user_input,
+                    graph=graph,
+                    system_prompt=node_system_prompt,
+                    workspace_id=workspace_id,
+                    ambient_meta=ambient_meta,
+                    unsplit_dataset=node_dataset.unsplit_name,
+                )
 
         if error == _AGENT_CANCELLED:
             node_runs[node_id] = {
@@ -4873,6 +4992,10 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 failed = True
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, node_runs[node_id])
+    if pipeline_messenger is not None:
+        pipeline_messenger.set_state("canceled" if cancelled else ("failed" if failed else "completed"))
+        await pipeline_messenger.checkpoint()
+
     if coordination_strategy_slug(design_spec) == "sequential":
         # A chain's handoffs are agent-to-agent messages, so they get the same
         # transcript a conversation does. Best-effort: a transcript is a view of
@@ -4896,6 +5019,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                     # transcript is meant to read as what was asked.
                     entry_prompt=_node_seed_prompt(head) if head else "",
                     state="canceled" if cancelled else ("failed" if failed else "completed"),
+                    messenger=pipeline_messenger,
                 )
             except Exception:
                 logger.exception("sequential_transcript_failed", extra={"protocol_run_id": str(protocol_run_id)})
@@ -4904,9 +5028,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         if cancelled:
             await set_status(db, protocol_run_id, status="cancelled")
         elif failed:
-            # A conversation that ran out of budget gets its own terminal status
-            # rather than being flattened into "failed" -- it's the one failure
-            # mode the user fixes by raising a cap, not by fixing the protocol.
+            # Recursive conversation-depth exhaustion retains its distinct
+            # terminal status instead of being flattened into "failed".
             await set_status(db, protocol_run_id, status=failure_status, error=failure_error)
         else:
             await set_status(db, protocol_run_id, status="finalizing")

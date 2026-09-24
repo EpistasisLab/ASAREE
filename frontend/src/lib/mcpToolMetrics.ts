@@ -24,7 +24,7 @@ export function mcpToolSourceOptions(graph: ProtocolGraph | undefined): McpToolS
   return graph.edges.flatMap((edge) => {
     if (edge.targetHandle !== 'tool') return []
     const agent = nodes.get(edge.target); const tool = nodes.get(edge.source)
-    if (!agent || !tool || agent.type !== 'agent' || !isMcpToolNodeType(tool.type)) return []
+    if (!agent || !tool || !['agent', 'sub_agent'].includes(agent.type) || !isMcpToolNodeType(tool.type)) return []
     const config = 'config' in tool.data ? tool.data.config : undefined
     const serverId = config && 'server_id' in config ? config.server_id : null
     const toolNames = config && 'tool_names' in config && Array.isArray(config.tool_names) ? config.tool_names : []

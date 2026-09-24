@@ -116,13 +116,13 @@ export interface ProtocolRun {
   id: string
   protocol_id: string
   // `limit_reached` is conversation-mode only: the agents were still talking
-  // when a budget (consultation count, depth, or the conversation wall clock)
-  // ran out. Distinct from `failed` because the work up to that point is
+  // when the recursive consultation-depth guard ran out. Distinct from
+  // `failed` because the work up to that point is
   // sound -- the transcript is worth reading.
   status: 'pending' | 'running' | 'finalizing' | 'completed' | 'failed' | 'cancelled' | 'limit_reached'
   node_runs: Record<string, NodeRunState>
-  // Null for every pipeline run; populated once a conversation-mode run's
-  // agents start talking.
+  // Populated once agents communicate, whether through a conversation
+  // strategy or a pipeline Agent delegating to a Sub-Agent.
   conversation: Conversation | null
   error: string | null
   // Both null for a plain graph run. Set together only for a run created by

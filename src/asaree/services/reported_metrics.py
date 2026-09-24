@@ -85,7 +85,9 @@ async def _last_matching_call(
 ) -> Mapping[str, Any] | None:
     agent_node_id = str(binding.config.get("agent_node_id") or "")
     node_run = (run.node_runs or {}).get(agent_node_id)
-    agent_run_id = node_run.get("run_id") if isinstance(node_run, Mapping) else None
+    agent_run_id = (
+        node_run.get("last_successful_run_id") or node_run.get("run_id") if isinstance(node_run, Mapping) else None
+    )
     try:
         steps = await get_run_steps(uuid.UUID(str(agent_run_id)))
     except (TypeError, ValueError):
@@ -135,11 +137,16 @@ async def collect_reported_metrics(
         if binding.producer_id not in REPORTED_PRODUCER_IDS:
             continue
         node_run = (run.node_runs or {}).get(str(binding.config.get("agent_node_id") or ""))
+        successful_output = (
+            node_run.get("last_successful_output_text", node_run.get("output_text"))
+            if isinstance(node_run, Mapping)
+            else None
+        )
         agent_output_available = (
             binding.producer_id == AGENT_OUTPUT_PRODUCER_ID
             and isinstance(node_run, Mapping)
-            and node_run.get("status") == "completed"
-            and node_run.get("output_text") is not None
+            and (node_run.get("status") == "completed" or "last_successful_output_text" in node_run)
+            and successful_output is not None
         )
         call = (
             None if binding.producer_id == AGENT_OUTPUT_PRODUCER_ID else await _last_matching_call(run, binding, graph)
@@ -175,7 +182,7 @@ async def collect_reported_metrics(
                     metric_name=metric.name,
                     value_type=metric.value_type,
                     value=(
-                        node_run.get("output_text")
+                        successful_output
                         if agent_output_available
                         else call.get("result")
                         if call is not None
@@ -262,7 +269,7 @@ def _agent_issue(
         preserved_binding_ids,
         has_preserved_value=isinstance(agent_id, str) and bool(agent_id),
     )
-    if agent is None or agent.get("type") != "agent":
+    if agent is None or agent.get("type") not in ("agent", "sub_agent"):
         return ValidationIssue(f"{prefix}_agent_missing", "The source Agent is unavailable.", path, severity)
     if _node_data(agent).get("active") is False:
         return ValidationIssue(f"{prefix}_agent_disabled", "The source Agent is disabled.", path, severity)

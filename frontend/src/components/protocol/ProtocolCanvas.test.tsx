@@ -126,6 +126,32 @@ describe('ProtocolCanvas connector adds', () => {
     expect(screen.queryByText('Parser')).not.toBeInTheDocument()
   })
 
+  it('adds a connector-only Sub-Agent from an Agent', async () => {
+    const user = userEvent.setup()
+    const { client } = renderCanvas({
+      nodes: [{ id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: defaultAgentNodeData('Planner') }],
+      edges: [],
+    })
+
+    fireEvent.click(await screen.findByTitle('Add Sub-Agents'))
+    await user.click(await screen.findByRole('button', { name: /^Sub-Agent A delegated worker/ }))
+
+    await waitFor(() => {
+      const graph = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      const child = graph?.nodes.find((node) => node.type === 'sub_agent')
+      expect(child).toBeDefined()
+      expect(graph?.edges).toContainEqual(expect.objectContaining({
+        source: child!.id,
+        sourceHandle: 'sub_agents',
+        target: 'agent-1',
+        targetHandle: 'sub_agents',
+      }))
+    })
+
+    expect(screen.getByText('Parent')).toBeInTheDocument()
+    expect(screen.getAllByText('Sub-Agent').length).toBeGreaterThan(0)
+  })
+
   it('does not expose custom metric controls in the Script inspector', async () => {
     const scriptData = defaultScriptNodeData('Score script')
     scriptData.config.code = 'def evaluate(output): return 1'

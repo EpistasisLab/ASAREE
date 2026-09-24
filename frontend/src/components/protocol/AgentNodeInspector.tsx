@@ -23,8 +23,6 @@ import { referenceLabel, seedPromptText } from '@/lib/promptReferences'
 import type { HandoffPeers, PromptReferenceScope } from '@/lib/promptReferences'
 import type { AgentNodeConfig, AgentNodeData, NodeRunState, PromptPreview, ProtocolNode } from '@/types/protocols'
 
-const ACCENT = nodeAccent('agent')
-
 // The middle column is where the actual editing happens, so neither side pane
 // may drag it below a width its labels and textareas still work at. Enforced
 // at drag start (see useResizablePane) against the frame's measured width.
@@ -134,6 +132,7 @@ export function AgentNodeInspector({
 
   if (!node) return null
   const data = node.data
+  const accent = nodeAccent(node.type === 'sub_agent' ? 'sub_agent' : 'agent')
   const config = data.config
   const bindings = data.factor_bindings ?? {}
   // The lead marker is meaningless under any other coordination strategy, so
@@ -152,7 +151,8 @@ export function AgentNodeInspector({
   // to move the role. Showing it everywhere would invite creating an invalid
   // canvas, and silently reassigning on click would move a role the user might
   // only have been inspecting.
-  const canMarkLead = leadRole !== null && (markedLeadAgentId === null || markedLeadAgentId === node.id)
+  const canMarkLead =
+    node.type !== 'sub_agent' && leadRole !== null && (markedLeadAgentId === null || markedLeadAgentId === node.id)
   // The pre-node way of declaring an output shape, still honoured by the
   // executor when no parser node is wired (see _resolve_output_contract).
   // Its presence swaps the section below into the convert-it banner: an agent
@@ -184,11 +184,15 @@ export function AgentNodeInspector({
       onOpenChange={(open) => {
         if (!open) onClose()
       }}
-      accent={ACCENT}
+      accent={accent}
       title={
         <>
-          <Bot className="size-5" style={{ color: ACCENT }} />
-          <EditableNodeTitle label={data.label} placeholder="Agent" onCommit={(label) => onChange(node.id, { ...data, label })} />
+          <Bot className="size-5" style={{ color: accent }} />
+          <EditableNodeTitle
+            label={data.label}
+            placeholder={node.type === 'sub_agent' ? 'Sub-Agent' : 'Agent'}
+            onCommit={(label) => onChange(node.id, { ...data, label })}
+          />
           <MakeNodeFactorButton onClick={() => requestMakeFactor(node.id)} />
         </>
       }

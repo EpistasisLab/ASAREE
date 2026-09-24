@@ -21,8 +21,9 @@ const CONNECTOR_X: { agent: Record<ConnectorSlot, number>; critic_gate: Partial<
     skill: 0.18,
     dataset: 0.71,
     knowledge: 0.9,
-    model: 0.2,
-    memory: 0.5,
+    model: 0.08,
+    sub_agents: 0.32,
+    memory: 0.58,
     tool: 0.8,
     // Added after the other seven, and placed after Tool rather than among
     // them: every existing slot keeps the x it already had, because a canvas
@@ -35,7 +36,7 @@ const CONNECTOR_X: { agent: Record<ConnectorSlot, number>; critic_gate: Partial<
 }
 
 // The host cards' own widths: AgentNode is w-72, CriticGateNode w-36.
-const HOST_WIDTH: Record<string, number> = { agent: 288, critic_gate: 144 }
+const HOST_WIDTH: Record<string, number> = { agent: 288, sub_agent: 288, critic_gate: 144 }
 
 // A connector's node is a CircleNode: a 56px circle under a caption that can
 // grow to 96px, with the circle -- where its handle is -- centered in
@@ -58,9 +59,11 @@ export function connectorLefts(host: 'agent' | 'critic_gate'): Record<ConnectorS
  * rather than on the host's left corner. Unknown host type falls back to
  * the middle of an agent-sized card. */
 export function connectorNodeOffsetX(hostType: string | undefined, slot: ConnectorSlot): number {
-  const table = hostType === 'agent' || hostType === 'critic_gate' ? CONNECTOR_X[hostType] : undefined
+  const canonicalHost = hostType === 'sub_agent' ? 'agent' : hostType
+  const table = canonicalHost === 'agent' || canonicalHost === 'critic_gate' ? CONNECTOR_X[canonicalHost] : undefined
   const width = HOST_WIDTH[hostType ?? ''] ?? HOST_WIDTH.agent
-  return (table?.[slot] ?? 0.5) * width - NEW_NODE_HALF_WIDTH
+  const halfWidth = slot === 'sub_agents' ? HOST_WIDTH.sub_agent / 2 : NEW_NODE_HALF_WIDTH
+  return (table?.[slot] ?? 0.5) * width - halfWidth
 }
 
 /** The clearance to use for the small CircleNode a connector's "+" creates,
@@ -147,7 +150,7 @@ type TidyEdge = { source: string; target: string; targetHandle?: string | null }
  * already knows) and one of two correct y's. A layout library would have to be
  * fought to honor that and would price in a dependency for the privilege. */
 export function tidyLayout(nodes: TidyNode[], edges: TidyEdge[]): Map<string, XYPosition> {
-  const isHost = (n: TidyNode) => n.type === 'agent' || n.type === 'critic_gate'
+  const isHost = (n: TidyNode) => n.type === 'agent' || n.type === 'sub_agent' || n.type === 'critic_gate'
   const hosts = nodes.filter(isHost)
   // A connector edge carries a targetHandle (the slot it feeds); a main-flow
   // edge between two hosts doesn't. So the presence of a handle is what
@@ -234,7 +237,11 @@ export function tidyLayout(nodes: TidyNode[], edges: TidyEdge[]): Map<string, XY
         x: hostPosition.x + connectorNodeOffsetX(host.type, child.slot),
         y: hostPosition.y + (TIDY_TOP_SLOTS.has(child.slot) ? -TIDY_CHILD_OFFSET_Y : TIDY_CHILD_OFFSET_Y),
       }
-      const position = findFreePosition(placed, desired, CONNECTOR_CHILD_CLEARANCE)
+      const position = findFreePosition(
+        placed,
+        desired,
+        child.slot === 'sub_agents' ? { width: 320, height: 140 } : CONNECTOR_CHILD_CLEARANCE,
+      )
       positions.set(child.id, position)
       placed.push(position)
     }

@@ -23,6 +23,7 @@ import { SKILL_BROWSE } from './skillCatalog'
 // allowedTypes, IS that picker.
 const NODE_CATALOG = [
   { type: 'agent', label: 'Agent', description: 'An LLM agent stage in the pipeline', icon: Bot },
+  { type: 'sub_agent', label: 'Sub-Agent', description: 'A delegated worker callable by one parent Agent', icon: Bot },
   // Not a node type -- picking this opens the server browser
   // (McpServerBrowserPanel), and the node gets created from whichever
   // server is chosen there. It replaced a plain "MCP Tool" entry that made
@@ -152,7 +153,9 @@ export function AddNodePanel({
   title?: string
 }) {
   const [query, setQuery] = useState('')
-  const catalog = allowedTypes ? NODE_CATALOG.filter((item) => allowedTypes.includes(item.type)) : NODE_CATALOG
+  const catalog = allowedTypes
+    ? NODE_CATALOG.filter((item) => allowedTypes.includes(item.type))
+    : NODE_CATALOG.filter((item) => item.type !== 'sub_agent')
   const filtered = catalog.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()))
 
   return (

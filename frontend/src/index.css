@@ -149,6 +149,10 @@
        that's the point to ask whether thirteen-plus kinds should still be
        distinguished by color alone. */
     --node-9: oklch(0.88 0.1 42);
+    /* Sub-Agent deliberately sits between the Agent's emerald and the app's
+       cyan primary: a distinct node kind, but visibly part of the same agent
+       family rather than another unrelated capability. */
+    --node-10: oklch(0.8 0.12 184);
     /* Connector captions (Pattern/Skill/Dataset/Knowledge/Model/Memory/Tool on
        AgentNode and CriticGateNode). One fixed yellow rather than the host
        node's own accent: these sit outside the card on the canvas backdrop,

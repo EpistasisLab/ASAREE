@@ -150,6 +150,7 @@ const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill',
 
 const NODE_TYPES = {
   agent: AgentNode,
+  sub_agent: AgentNode,
   // Both MCP-tool types render through the same component (as the five LLM
   // provider types do) -- they carry identical data and differ only in
   // whether their server was picked in the browser or in a dropdown.
@@ -221,7 +222,7 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'script') return defaultScriptNodeData()
   if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData()
   if (nodeType === 'pattern_single_agent_baseline') return defaultSingleAgentBaselinePatternNodeData()
-  return defaultAgentNodeData()
+  return defaultAgentNodeData(nodeType === 'sub_agent' ? 'Sub-Agent' : 'Agent')
 }
 
 // The registered datasets this canvas declares, in the order their nodes were
@@ -285,6 +286,7 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   // folder already on the server (bundle) or as a file the user uploads
   // (document), and which of those you have is the question the panel asks.
   knowledge: { allowedTypes: [OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE], title: 'Add Knowledge' },
+  sub_agents: { allowedTypes: ['sub_agent'], title: 'Add Sub-Agent' },
 }
 
 // Where an Output Parser belongs relative to the agent it serves: under that
@@ -759,6 +761,25 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     () => new Set(edges.filter((e) => e.targetHandle === 'output_parser').map((e) => e.target)),
     [edges],
   )
+  const agentIdsWithSubAgents = useMemo(
+    () => {
+      const activeSubAgents = new Set(
+        nodes.filter((node) => node.type === 'sub_agent' && node.data.active !== false).map((node) => node.id),
+      )
+      return new Set(
+        edges.filter((edge) => edge.targetHandle === 'sub_agents' && activeSubAgents.has(edge.source)).map((edge) => edge.target),
+      )
+    },
+    [edges, nodes],
+  )
+  const connectedActiveSubAgentIds = useMemo(() => {
+    const activeSubAgents = new Set(
+      nodes.filter((node) => node.type === 'sub_agent' && node.data.active !== false).map((node) => node.id),
+    )
+    return new Set(
+      edges.filter((edge) => edge.targetHandle === 'sub_agents' && activeSubAgents.has(edge.source)).map((edge) => edge.source),
+    )
+  }, [edges, nodes])
 
   // The canvas's per-node Play icon is only offered for a node with no
   // upstream *main* pipeline edge (mirrors services.protocol_execution's
@@ -787,9 +808,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // runner, so they count as callable just like explicit MCP Tool nodes.
   const agentIdsWithCallableTools = useMemo(() => {
     const nodeTypeById = new Map(nodes.map((n) => [n.id, n.type]))
+    const activeSubAgents = new Set(
+      nodes.filter((node) => node.type === 'sub_agent' && node.data.active !== false).map((node) => node.id),
+    )
     return new Set(
       edges
         .filter((e) => {
+          if (e.targetHandle === 'sub_agents') return activeSubAgents.has(e.source)
           if (e.targetHandle === 'knowledge' || e.targetHandle === 'skill') return true
           if (e.targetHandle !== 'tool') return false
           const sourceType = nodeTypeById.get(e.source)
@@ -1024,14 +1049,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const nodesWithRunStatus = useMemo((): Node[] => {
     return nodes.map((n) => {
       const patternHostId = patternHostIds.get(n.id)
+      const isAgentLike = n.type === 'agent' || n.type === 'sub_agent'
       return {
         ...n,
         deletable: !nonDeletablePatternNodeIds.has(n.id),
         data: {
           ...n.data,
+          isSubAgent: n.type === 'sub_agent',
           runStatus: latestNodeRuns?.[n.id]?.status,
           runTruncated: Boolean(latestNodeRuns?.[n.id]?.truncation),
-          missingModel: n.type === 'agent' && !agentIdsWithModel.has(n.id),
+          missingModel:
+            (n.type === 'agent' || (n.type === 'sub_agent' && connectedActiveSubAgentIds.has(n.id))) &&
+            !agentIdsWithModel.has(n.id),
           // "Require specific output format" is on, but nothing says what the
           // format is. Unlike missingModel this doesn't stop the run -- the agent
           // just answers in prose, which is the outcome the switch was flipped
@@ -1039,13 +1068,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           // inspector the user has already closed. A legacy stored contract
           // counts as the answer: the executor falls back to it.
           missingOutputParser:
-            n.type === 'agent' &&
+            isAgentLike &&
             (n.data as AgentNodeData).config?.require_output_parser === true &&
             !agentIdsWithParser.has(n.id) &&
             !(n.data as AgentNodeData).config?.output_contract,
-          canRunAlone: n.type === 'agent' && !agentIdsWithUpstream.has(n.id),
-          hasPeers: n.type === 'agent' && (peerIdsByAgent.get(n.id)?.length ?? 0) > 0,
-          llmConfig: n.type === 'agent' ? llmConfigByAgent.get(n.id) ?? null : null,
+          canRunAlone: isAgentLike && !agentIdsWithUpstream.has(n.id),
+          hasPeers:
+            n.type === 'agent' &&
+            ((peerIdsByAgent.get(n.id)?.length ?? 0) > 0 || agentIdsWithSubAgents.has(n.id)),
+          llmConfig: isAgentLike ? llmConfigByAgent.get(n.id) ?? null : null,
           // Gated on the strategy, not just the flag: a "Lead" badge left over
           // from a Peer Collaboration experiment that has since been switched
           // to Sequential would claim a role nothing acts on. The flag itself
@@ -1091,6 +1122,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     nonDeletablePatternNodeIds,
     agentIdsWithModel,
     agentIdsWithParser,
+    agentIdsWithSubAgents,
+    connectedActiveSubAgentIds,
     agentIdsWithUpstream,
     agentIdsWithCallableTools,
     patternHostIds,
@@ -1454,7 +1487,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             y: originNode.position.y + (TOP_EDGE_SLOTS.has(slot) ? -160 : 160),
           }
         : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
-      const position = findFreePosition(nodes.map((n) => n.position), desired, CONNECTOR_CHILD_CLEARANCE)
+      const position = findFreePosition(
+        nodes.map((n) => n.position),
+        desired,
+        slot === 'sub_agents' ? { width: 320, height: 140 } : CONNECTOR_CHILD_CLEARANCE,
+      )
       const newId = newNodeId()
       // Execution pattern is capped at one but must never go to zero (see
       // AgentNode.tsx's own comment) -- its "+" stays visible even once
@@ -1466,16 +1503,24 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         slot === 'architectural_pattern'
           ? edges.find((e) => e.target === originId && e.targetHandle === 'architectural_pattern')
           : undefined
-      setNodes((nds) =>
-        nds
-          .filter((n) => n.id !== existingPatternEdge?.source)
-          .concat({ id: newId, type: nodeType, position, data: dataOverride ?? defaultDataFor(nodeType) }),
-      )
-      setEdges((eds) =>
-        eds
-          .filter((e) => e.id !== existingPatternEdge?.id)
-          .concat({ id: newNodeId(), source: newId, sourceHandle: slot, target: originId, targetHandle: slot }),
-      )
+      const connectorNode: Node = { id: newId, type: nodeType, position, data: dataOverride ?? defaultDataFor(nodeType) }
+      const ownerEdge: Edge = { id: newNodeId(), source: newId, sourceHandle: slot, target: originId, targetHandle: slot }
+      if (nodeType === 'sub_agent') {
+        const { patternNode, patternEdge } = agentDefaultPattern(newId, position, nodes.map((n) => n.position))
+        setNodes((nds) => nds.concat(connectorNode, patternNode))
+        setEdges((eds) => eds.concat(ownerEdge, patternEdge))
+      } else {
+        setNodes((nds) =>
+          nds
+            .filter((n) => n.id !== existingPatternEdge?.source)
+            .concat(connectorNode),
+        )
+        setEdges((eds) =>
+          eds
+            .filter((e) => e.id !== existingPatternEdge?.id)
+            .concat(ownerEdge),
+        )
+      }
       setPendingConnectorAdd(null)
       setAddPanelOpen(false)
       // Picking a node from the connector panel goes straight into that
@@ -1574,7 +1619,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     // edge, which is the same work as correcting a wrong one.
     if (nodeType === 'output_parser') {
       const parserless = nodes.filter(
-        (n) => n.type === 'agent' && !edges.some((e) => e.target === n.id && e.targetHandle === 'output_parser'),
+        (n) => (n.type === 'agent' || n.type === 'sub_agent') && !edges.some((e) => e.target === n.id && e.targetHandle === 'output_parser'),
       )
       const asking = parserless.filter((n) => (n.data as AgentNodeData).config?.require_output_parser === true)
       const host = (asking.length === 1 ? asking : parserless.length === 1 ? parserless : [])[0]
@@ -1835,28 +1880,29 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       const sourceNode = nodes.find((n) => n.id === connection.source)
       const targetNode = nodes.find((n) => n.id === connection.target)
       if (!sourceNode || !targetNode) return false
+      const targetIsAgentLike = targetNode.type === 'agent' || targetNode.type === 'sub_agent'
       switch (connection.targetHandle) {
         case 'model':
           return (
             MODEL_NODE_TYPES.includes(sourceNode.type ?? '') &&
-            (targetNode.type === 'agent' || targetNode.type === 'critic_gate')
+            (targetIsAgentLike || targetNode.type === 'critic_gate')
           )
         case 'tool':
           return (
             (MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') || sourceNode.type === 'script') &&
-            targetNode.type === 'agent'
+            targetIsAgentLike
           )
         case 'memory':
-          return sourceNode.type === 'memory' && targetNode.type === 'agent'
+          return sourceNode.type === 'memory' && targetIsAgentLike
         case 'output_parser':
           // Agent only, deliberately not critic_gate: a gate's answer is a
           // pass/fail decision the executor already reads structurally, so
           // there is nothing for a contract to extract.
-          return sourceNode.type === 'output_parser' && targetNode.type === 'agent'
+          return sourceNode.type === 'output_parser' && targetIsAgentLike
         case 'architectural_pattern':
-          return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
+          return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetIsAgentLike
         case 'skill':
-          return sourceNode.type === 'skill' && targetNode.type === 'agent'
+          return sourceNode.type === 'skill' && targetIsAgentLike
         case 'dataset':
           // Uncapped: a cell's workspace holds one dataset per named SLOT, so
           // several datasets on one agent is a supported shape, not a run-time
@@ -1864,12 +1910,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           // order the agent's prompt lists the slots in. Note this is still
           // distinct from COMPARING datasets across cells, which is a
           // 'dataset_config' factor.
-          return sourceNode.type === 'dataset' && targetNode.type === 'agent'
+          return sourceNode.type === 'dataset' && targetIsAgentLike
         case 'knowledge':
           // The one connector with two source types -- bundles and uploaded
           // documents are interchangeable here, since both resolve to the same
           // per-directory OKF server.
-          return KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') && targetNode.type === 'agent'
+          return KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') && targetIsAgentLike
+        case 'sub_agents':
+          return (
+            sourceNode.type === 'sub_agent' &&
+            targetNode.type === 'agent' &&
+            !edges.some((edge) => edge.source === sourceNode.id && edge.targetHandle === 'sub_agents')
+          )
         default: {
           // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool/
           // dataset/skill/knowledge/script nodes have no main handle to drag from in
@@ -1884,7 +1936,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             sourceNode.type !== 'skill' &&
             !KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') &&
             sourceNode.type !== 'script' &&
-            !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '')
+            !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') &&
+            sourceNode.type !== 'sub_agent' &&
+            targetNode.type !== 'sub_agent'
           if (!sourceCanFeedMainFlow) return false
           // Under Sequential the main flow is a chain: one edge out of each
           // node, one into each. Enforced here so the canvas refuses the fork

@@ -22,8 +22,6 @@ import { NodeSummaryLine } from './NodeSummaryLine'
 // not its label. The connector captions below are the one thing here that
 // does NOT follow --card-accent: they're yellow, to be found against the node
 // rather than to match it (ConnectorHandleLabel).
-const ACCENT = nodeAccent('agent')
-
 // Every connector's handle, caption and "+" stub reads its x from here, and so
 // does the placement of whatever node the connector's own "+" creates (see
 // layout.ts) -- otherwise a node can land under a connector that isn't the one
@@ -59,8 +57,11 @@ export function AgentNode({
     // one -- see ProtocolCanvas's `mainEdgeSlots`.
     mainInFull?: boolean
     mainOutFull?: boolean
+    isSubAgent?: boolean
   }
 }) {
+  const isSubAgent = data.isSubAgent === true
+  const accent = nodeAccent(isSubAgent ? 'sub_agent' : 'agent')
   const badge = nodeRunBadge(data.runStatus, data.runTruncated)
   // Peers are offered to the model as function schemas -- that is the only
   // channel a consultation can be *chosen* through -- so an agent on a model
@@ -78,7 +79,7 @@ export function AgentNode({
     ...(data.missingOutputParser
       ? ['A specific output format is required, but no Output Parser says what it is']
       : []),
-    ...(peerNeedsToolCalling ? ["This model can't call tools, so this agent can't consult its connected peers"] : []),
+    ...(peerNeedsToolCalling ? ["This model can't call tools, so this agent can't consult or delegate to connected agents"] : []),
   ]
   const { updateNodeData } = useReactFlow()
   const { requestRunNode } = useProtocolCanvasActions()
@@ -115,7 +116,7 @@ export function AgentNode({
 
   return (
     <div
-      style={cardAccent(ACCENT)}
+      style={cardAccent(accent)}
       className={`group relative flex min-h-20 w-72 flex-col justify-center rounded-md border bg-card px-2.5 py-3.5 shadow-[0_0_12px_-6px_var(--card-accent)] ring-1 ring-[color:var(--card-accent)]/40 ${
         selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
       } ${isActive ? '' : 'opacity-50'}`}
@@ -142,7 +143,7 @@ export function AgentNode({
           Architectural Pattern connector's own label/stub live OUTSIDE the
           card on the left of this edge, so neither competes for this corner. */}
       {hasBoundFactor(data) && <NodeFactorBadge count={boundFactorCount(data)} className="-top-3 -right-3" />}
-      {/* Main flow is left-to-right -- the 4 sub-connectors below stay on the
+      {/* Main flow is left-to-right -- the bottom sub-connectors stay on the
           bottom edge regardless, since a config source hangs below a node no
           matter which way the main flow runs.
 
@@ -153,20 +154,37 @@ export function AgentNode({
           decides the cardinality: unrestricted under Peer Collaboration and
           Critic Gate, but exactly one per side under Sequential, where the
           chain rule applies and the "+" stub hides once a side is taken. */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        title="Connect to another agent (or a Critic Gate)"
-        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
-      />
-      <ConnectorHandleLabel side="left" top="calc(50% - 11px)">Agent</ConnectorHandleLabel>
-      <MainEdgeAddStub nodeId={id} direction="incoming" full={data.mainInFull} />
+      {!isSubAgent && (
+        <>
+          <Handle
+            type="target"
+            position={Position.Left}
+            title="Connect to another agent (or a Critic Gate)"
+            className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+          />
+          <ConnectorHandleLabel side="left" top="calc(50% - 11px)">Agent</ConnectorHandleLabel>
+          <MainEdgeAddStub nodeId={id} direction="incoming" full={data.mainInFull} />
+        </>
+      )}
+      {isSubAgent && (
+        <>
+          <Handle
+            type="source"
+            id="sub_agents"
+            position={Position.Top}
+            style={{ left: '50%' }}
+            title="Parent Agent"
+            className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+          />
+          <ConnectorHandleLabel left="50%" side="top">Parent</ConnectorHandleLabel>
+        </>
+      )}
       <div className="flex items-center gap-1.5">
         <Bot className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
         {/* Renaming happens in the Inspector's own title now (click it,
             same as the experiment name) -- not here anymore. */}
         <span className="truncate text-xs font-medium" title={data.label}>
-          {data.label || 'Agent'}
+          {data.label || (isSubAgent ? 'Sub-Agent' : 'Agent')}
         </span>
         {/* Inline on the title row rather than hung off a corner: all three
             corners are spoken for (run status and the factor badge share the
@@ -219,9 +237,10 @@ export function AgentNode({
           toolbar is above the stub's z-index and only there on hover, and the
           visible "+" glyph still clears it).
 
-          The 3 bottom sub-connectors: required Model (exactly one), optional
-          max-1 Memory (visual scaffolding only -- see MemoryNodeData), and
-          optional repeatable Tool. Script is a repeatable pure config source
+          The bottom sub-connectors: required Model (exactly one), optional
+          repeatable Sub-Agents on parent Agents, optional max-1 Memory (visual
+          scaffolding only -- see MemoryNodeData), optional repeatable Tool,
+          and optional max-1 Output Parser. Script is a repeatable pure config source
           too, but deliberately does NOT get its own slot -- it wires into that same
           Tool connector (one connector accepting a FAMILY of node types,
           matching Motoro's own
@@ -344,6 +363,20 @@ export function AgentNode({
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.model}>Model</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="model" left={CONNECTOR_LEFT.model} />
+      {!isSubAgent && (
+        <>
+          <Handle
+            type="target"
+            id="sub_agents"
+            position={Position.Bottom}
+            style={{ left: CONNECTOR_LEFT.sub_agents }}
+            title="Sub-Agents -- delegated workers this agent may invoke"
+            className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+          />
+          <ConnectorHandleLabel left={CONNECTOR_LEFT.sub_agents}>Sub-Agents</ConnectorHandleLabel>
+          <ConnectorAddStub nodeId={id} slot="sub_agents" left={CONNECTOR_LEFT.sub_agents} alwaysVisible />
+        </>
+      )}
       <Handle
         type="target"
         id="memory"
@@ -359,7 +392,7 @@ export function AgentNode({
         id="tool"
         position={Position.Bottom}
         style={{ left: CONNECTOR_LEFT.tool }}
-        title="Tool -- MCP server, Dataset, or Script"
+        title="Tool -- MCP server or Script"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.tool}>Tool</ConnectorHandleLabel>
@@ -367,8 +400,8 @@ export function AgentNode({
       {/* Output Parser -- the field spec the agent's answer is written to and
           read back out of. Last on the bottom edge, at 95%: it's the only
           connector here whose work outlives the agent's own turn, so it sits
-          at the end of the row the run reads left-to-right (Model -> Memory ->
-          Tool -> Parser).
+          at the end of the row the run reads left-to-right (Model ->
+          Sub-Agents -> Memory -> Tool -> Parser).
           Capped at one (no `alwaysVisible`) -- two contracts would be two
           answers to "what shape is this agent's output". */}
       {/* Keep the handle mounted even while its affordances are hidden.
@@ -393,14 +426,18 @@ export function AgentNode({
           <ConnectorAddStub nodeId={id} slot="output_parser" left={CONNECTOR_LEFT.output_parser} />
         </>
       )}
-      <Handle
-        type="source"
-        position={Position.Right}
-        title="Connect to another agent (or a Critic Gate)"
-        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
-      />
-      <ConnectorHandleLabel side="right" top="calc(50% - 11px)">Agent</ConnectorHandleLabel>
-      <MainEdgeAddStub nodeId={id} direction="outgoing" full={data.mainOutFull} />
+      {!isSubAgent && (
+        <>
+          <Handle
+            type="source"
+            position={Position.Right}
+            title="Connect to another agent (or a Critic Gate)"
+            className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+          />
+          <ConnectorHandleLabel side="right" top="calc(50% - 11px)">Agent</ConnectorHandleLabel>
+          <MainEdgeAddStub nodeId={id} direction="outgoing" full={data.mainOutFull} />
+        </>
+      )}
     </div>
   )
 }

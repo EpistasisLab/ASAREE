@@ -3,6 +3,7 @@ allow-list resolver. Fake registry throughout; no MCP server is contacted."""
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import pytest
@@ -15,11 +16,13 @@ class _FakeRegistry:
     def __init__(self, servers: dict[str, list[str]]) -> None:
         self.servers = servers
 
-    def get_all_tools(self) -> list[dict[str, Any]]:
+    def get_all_tools(self, *, owner_id: uuid.UUID | None = None) -> list[dict[str, Any]]:
+        assert owner_id == _OWNER_ID
         return [
             {
                 "name": f"{server}.{tool}",
                 "server": server,
+                "server_id": str(uuid.uuid5(uuid.NAMESPACE_DNS, server)),
                 "tool_name": tool,
                 "description": f"{tool} on {server}",
                 "input_schema": {"type": "object", "properties": {}},
@@ -34,6 +37,10 @@ class _FakeAgent:
         self.tool_config_data = (
             None if tool_names is None else {"tool_names": tool_names, "tool_descriptions": tool_descriptions or {}}
         )
+        self.owner_id = _OWNER_ID
+
+
+_OWNER_ID = uuid.uuid4()
 
 
 @pytest.fixture
@@ -98,9 +105,9 @@ def test_colliding_bare_name_is_namespaced(registry: _FakeRegistry) -> None:
     assert {t["name"] for t in tools} == set(agent.tool_config_data["tool_names"])
 
 
-def test_collision_is_registry_wide_not_allowlist_wide(registry: _FakeRegistry) -> None:
+def test_collision_is_owner_catalog_wide_not_allowlist_wide(registry: _FakeRegistry) -> None:
     """Only one server's ``ping`` is granted, but the other is still connected
-    -- ``lookup_tool``'s bare-name index spans the whole registry, so a bare
-    ``ping`` could resolve to the server this run was never granted."""
+    -- bare ``ping`` would still be ambiguous among servers visible to this
+    owner even though only one is granted to this run."""
     tools = run_tools.gather_tools(_FakeAgent(["scikit-learn-mcp.ping"]))
     assert [t["tool_name"] for t in tools] == ["scikit-learn-mcp.ping"]

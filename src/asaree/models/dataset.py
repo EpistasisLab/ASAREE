@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -40,9 +40,10 @@ from asaree.models.base import Base, TimestampMixin, generate_uuid
 
 class RegisteredDataset(Base, TimestampMixin):
     __tablename__ = "registered_datasets"
+    __table_args__ = (Index("uq_registered_datasets_owner_name", "owner_id", "name", unique=True),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=generate_uuid)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     # The original uploaded file, verbatim -- never modified, never
     # re-derived. The one thing registration itself is responsible for.
     # Nullable purely for a dataset registered before this column existed

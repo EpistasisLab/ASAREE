@@ -20,6 +20,7 @@ from asaree.deps import CurrentUser, DbSession
 from asaree.models.dataset_workspace_event import WorkspaceEventType
 from asaree.services.dataset_workspace_events import list_events, record_event
 from asaree.services.datasets import (
+    DatasetNameConflictError,
     DatasetValidationError,
     create_dataset,
     delete_dataset,
@@ -41,8 +42,8 @@ async def _get_owned_dataset(db: DbSession, dataset_id: uuid.UUID, user: Current
 
 
 async def _get_owned_dataset_by_name(db: DbSession, name: str, user: CurrentUser) -> Any:
-    dataset = await get_dataset_by_name(db, name)
-    if dataset is None or dataset.owner_id != user.id:
+    dataset = await get_dataset_by_name(db, name, owner_id=user.id)
+    if dataset is None:
         raise HTTPException(status_code=404, detail="No such dataset")
     return dataset
 
@@ -129,7 +130,7 @@ async def create_dataset_endpoint(
 ) -> DatasetResponse:
     """Stores the raw file, verbatim -- never splits it. See a split's own
     two endpoints below (`.../split/quick`, `.../split/manual`)."""
-    if await get_dataset_by_name(db, name) is not None:
+    if await get_dataset_by_name(db, name, owner_id=user.id) is not None:
         raise HTTPException(status_code=409, detail="A dataset with this name already exists")
     try:
         dataset = await create_dataset(
@@ -141,6 +142,8 @@ async def create_dataset_endpoint(
             description=description,
             dictionary_json=dictionary_json,
         )
+    except DatasetNameConflictError as exc:
+        raise HTTPException(status_code=409, detail="A dataset with this name already exists") from exc
     except DatasetValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _dataset_response(dataset)

@@ -23,6 +23,7 @@ from pathlib import Path
 import pandas as pd
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.config import get_settings
@@ -32,6 +33,10 @@ from asaree.security.hashing import sha256_file
 
 class DatasetValidationError(ValueError):
     """A dataset request that fails validation before anything is written."""
+
+
+class DatasetNameConflictError(ValueError):
+    """A dataset name is already in use in this owner's namespace."""
 
 
 def _split(
@@ -102,7 +107,11 @@ async def create_dataset(
         owner_id=owner_id,
     )
     db.add(dataset)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise DatasetNameConflictError(f"Dataset name '{name}' is already in use") from exc
     await db.refresh(dataset)
     return dataset
 
@@ -222,8 +231,17 @@ async def get_dataset(db: AsyncSession, dataset_id: uuid.UUID) -> RegisteredData
     return (await db.execute(select(RegisteredDataset).where(RegisteredDataset.id == dataset_id))).scalar_one_or_none()
 
 
-async def get_dataset_by_name(db: AsyncSession, name: str) -> RegisteredDataset | None:
-    return (await db.execute(select(RegisteredDataset).where(RegisteredDataset.name == name))).scalar_one_or_none()
+async def get_dataset_by_name(
+    db: AsyncSession, name: str, *, owner_id: uuid.UUID
+) -> RegisteredDataset | None:
+    return (
+        await db.execute(
+            select(RegisteredDataset).where(
+                RegisteredDataset.owner_id == owner_id,
+                RegisteredDataset.name == name,
+            )
+        )
+    ).scalar_one_or_none()
 
 
 async def list_datasets(db: AsyncSession, *, owner_id: uuid.UUID) -> Sequence[RegisteredDataset]:

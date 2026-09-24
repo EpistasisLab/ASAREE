@@ -66,8 +66,8 @@ async def fetch_owned_registration(name: str, owner_id: uuid.UUID) -> dict[str, 
     (``asaree/api/datasets.py``).
     """
     async with get_session() as db:
-        dataset = await get_dataset_by_name(db, name)
-        if dataset is None or dataset.owner_id != owner_id:
+        dataset = await get_dataset_by_name(db, name, owner_id=owner_id)
+        if dataset is None:
             return None
         return {
             "description": dataset.description,

@@ -275,11 +275,11 @@ async def refresh_system_server_capabilities() -> None:
     registry = get_registry().servers
     for name, _ in SYSTEM_MCP_SERVERS:
         try:
-            entry = registry.get(name)
-            if entry is None or not entry.client.connected:
-                continue
             config = await get_server_by_name(name)
             if config is None:
+                continue
+            entry = registry.get(config.id)
+            if entry is None or not entry.client.connected:
                 continue
             capabilities = config.capabilities or {}
             live = sorted(t.name for t in entry.client.tools)

@@ -1,3 +1,4 @@
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -19,9 +20,11 @@ async def test_capabilities_include_live_mcp_tool_annotations(monkeypatch: pytes
             return SimpleNamespace(tools=[SimpleNamespace(name="score", annotations=_Annotations())])
 
     client = SimpleNamespace(_session=_Session())
-    registry = SimpleNamespace(servers={"quality": SimpleNamespace(client=client)})
+    server_id = uuid.uuid4()
+    registry = SimpleNamespace(servers={server_id: SimpleNamespace(client=client)})
     monkeypatch.setattr(mcp_servers, "get_registry", lambda: registry)
     config = SimpleNamespace(
+        id=server_id,
         name="quality",
         capabilities={"tools": [{"name": "score", "description": "Scores an answer", "input_schema": {}}]},
     )

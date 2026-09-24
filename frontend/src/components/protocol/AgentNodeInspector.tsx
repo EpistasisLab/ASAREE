@@ -522,7 +522,12 @@ export function AgentNodeInspector({
           {!isSubAgent && <SendsSummary peers={handoffPeers} />}
           {/* The received prompt lives in the Input pane instead -- see the
               layout note at the top of this file. */}
-          <NodeRunOutputPanel nodeRun={nodeRun} referenceNames={referenceScope.names} showReceivedPrompt={false} />
+          <NodeRunOutputPanel
+            nodeRun={nodeRun}
+            referenceNames={referenceScope.names}
+            showReceivedPrompt={false}
+            resizableOutput
+          />
         </div>
       </div>
     </NodeInspectorDialog>

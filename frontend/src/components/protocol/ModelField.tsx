@@ -93,7 +93,7 @@ export function ModelField({
       }}
     >
       <SelectTrigger id={id} className="w-full">
-        <SelectValue>{() => known?.label ?? value ?? 'Select a model…'}</SelectValue>
+        <SelectValue>{() => known?.label || value || 'Select a model…'}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={NONE_VALUE} disabled>

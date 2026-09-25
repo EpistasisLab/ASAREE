@@ -445,26 +445,24 @@ export interface ModelNodeData {
 // every one of its agents/critics, well under Motoro's own
 // ModelConfig cap of 200000.
 export function defaultAnthropicModelNodeData(label = 'Anthropic'): ModelNodeData {
-  return { label, config: { provider: 'anthropic', model: 'claude-sonnet-5', temperature: 0.7, max_tokens: 128000 } }
+  return { label, config: { provider: 'anthropic', model: '', temperature: 0.7, max_tokens: 128000 } }
 }
 
 export function defaultOpenAiModelNodeData(label = 'OpenAI'): ModelNodeData {
-  return { label, config: { provider: 'openai', model: 'gpt-5', temperature: 0.7, max_tokens: 128000 } }
+  return { label, config: { provider: 'openai', model: '', temperature: 0.7, max_tokens: 128000 } }
 }
 
 export function defaultAzureFoundryModelNodeData(label = 'Azure AI Foundry'): ModelNodeData {
-  return { label, config: { provider: 'azure_foundry', model: 'gpt-5', temperature: 0.7, max_tokens: 128000 } }
+  return { label, config: { provider: 'azure_foundry', model: '', temperature: 0.7, max_tokens: 128000 } }
 }
 
 export function defaultOpenRouterModelNodeData(label = 'OpenRouter'): ModelNodeData {
-  return { label, config: { provider: 'openrouter', model: 'anthropic/claude-sonnet-5', temperature: 0.7, max_tokens: 128000 } }
+  return { label, config: { provider: 'openrouter', model: '', temperature: 0.7, max_tokens: 128000 } }
 }
 
-// model starts empty -- unlike every other provider here, there's no
-// universal default self-hosted model name to assume (see
-// CreateCredentialDialog.tsx's requiresApiBase for the matching "no default
-// host" reasoning on api_base). The Model field's own required-field
-// warning already flags this until the user picks one.
+// Every provider starts empty so adding a Model node never silently chooses a
+// model the user's credential may not expose. The Model field's required-field
+// warning remains until the user makes an explicit catalog/custom selection.
 export function defaultLocalModelNodeData(label = 'Local'): ModelNodeData {
   return { label, config: { provider: 'local', model: '', temperature: 0.7, max_tokens: 128000 } }
 }

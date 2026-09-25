@@ -132,8 +132,8 @@ export function DatasetNodeInspector({
           <EditableNodeTitle label={data.label} placeholder="Dataset" onCommit={(label) => onChange(node.id, { ...data, label })} />
           {/* In the title row rather than beside a field, because there is no
               "which dataset" field here to sit beside -- the dataset IS the
-              node. Same position as the Agent/Pattern inspectors' own
-              MakeNodeFactorButton, and the same visual identity, but this one
+              node. Same position and visual identity as the Agent inspector's
+              own Active factor control, but this one
               binds one specific field (`config`, the whole node) directly
               instead of opening a per-node field picker: a Dataset node has
               exactly one whole-node factor worth making, so a picker listing

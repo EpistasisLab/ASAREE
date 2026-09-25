@@ -15,7 +15,7 @@ const ACCENT = nodeAccent('script')
 // is a fixed label, not a picker, so there's nothing to configure there yet.
 // The whole node is also factor-bindable (bindableFields.ts's 'script_config'
 // kind) -- comparing two hand-written scoring scripts as an experimental
-// factor is a direct use of the same whole-node-config mechanism llm_config/
+// factor is a direct use of the same whole-node-config mechanism model_config/
 // tool_config/pattern already have.
 export function ScriptNodeInspector({
   node,
@@ -81,6 +81,16 @@ export function ScriptNodeInspector({
         </div>
       </div>
 
+      <div className="space-y-1.5">
+        <Label htmlFor="script-description">Description and when to use it</Label>
+        <Input
+          id="script-description"
+          value={config.description ?? ''}
+          onChange={(e) => patchConfig({ description: e.target.value })}
+          placeholder="What this script does and when the agent should run it"
+        />
+      </div>
+
       <FactorBindableField
         experimentId={experimentId}
         fieldPath="config"
@@ -98,7 +108,7 @@ export function ScriptNodeInspector({
               Code
               {trigger}
             </Label>
-            <PythonCodeEditor value={config.code} onChange={(code) => patchConfig({ code })} rows={16} />
+            <PythonCodeEditor value={config.code} onChange={(code) => patchConfig({ code })} rows={16} resizable />
           </div>
         )}
       </FactorBindableField>

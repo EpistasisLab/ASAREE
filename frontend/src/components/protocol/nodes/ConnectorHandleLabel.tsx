@@ -17,11 +17,11 @@
 // those x-positions are forced), so horizontal padding here is the one
 // dimension that can't grow without them colliding.
 //
-// Offset a step further out than the handle needs (top/bottom-5, right-10)
-// so the chip clears the connector's own 8px dot rather than crowding it --
-// the caption names the connector, it isn't part of it.
+// Top/bottom captions clear their connector dot. Side captions are centered
+// on the same boundary position and sit just above the dot, keeping the Agent
+// flow label visually attached to its connector.
 const LABEL_CLASSNAME =
-  'absolute rounded bg-background/70 px-0.5 text-[0.6rem] font-semibold whitespace-nowrap text-[color:var(--node-label)]'
+  'pointer-events-none absolute rounded bg-background/70 px-0.5 text-[0.6rem] font-semibold whitespace-nowrap text-[color:var(--node-label)]'
 
 export function ConnectorHandleLabel({
   left,
@@ -34,12 +34,19 @@ export function ConnectorHandleLabel({
   // McpToolNode's main output and its Tool connector) each get their own
   // vertical slot instead of both defaulting to dead center.
   top?: string
-  side?: 'bottom' | 'right' | 'top'
+  side?: 'bottom' | 'left' | 'right' | 'top'
   children: string
 }) {
   if (side === 'right') {
     return (
-      <span className={`${LABEL_CLASSNAME} -right-10 -translate-y-1/2`} style={{ top: top ?? '50%' }}>
+      <span className={`${LABEL_CLASSNAME} right-0 translate-x-1/2 -translate-y-1/2`} style={{ top: top ?? '50%' }}>
+        {children}
+      </span>
+    )
+  }
+  if (side === 'left') {
+    return (
+      <span className={`${LABEL_CLASSNAME} left-0 -translate-x-1/2 -translate-y-1/2`} style={{ top: top ?? '50%' }}>
         {children}
       </span>
     )
@@ -47,7 +54,7 @@ export function ConnectorHandleLabel({
   if (side === 'top') {
     // Centered directly ABOVE its handle -- an exact mirror of the bottom
     // branch below, so the three top-edge captions (Pattern / Skill /
-    // Resource) read the same way as AI / Memory / Tool do underneath. They
+    // Resource) read the same way as Model / Memory / Tool do underneath. They
     // used to hang off to one side of the handle instead, which meant a
     // caption's own position had to be reasoned about per-connector
     // (left-hanging near the right corner, right-hanging near the left one);

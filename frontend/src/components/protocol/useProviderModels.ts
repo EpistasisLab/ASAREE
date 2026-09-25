@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { llmSettingsApi } from '@/api/client'
 
 // The one place the provider model list is fetched. Every consumer -- the
-// canvas node cards, the inspector, an llm_config factor level -- goes
+// canvas node cards, the inspector, a model_config factor level -- goes
 // through this so they share a single cache entry rather than three
 // near-identical useQuery calls that can drift apart (FactorEditorDialog was
 // already missing the azure credential gate the other two had).
@@ -22,7 +22,7 @@ export const providerModelsKey = (provider: string | undefined) => ['llm-setting
 // Model lists turn over on the order of weeks, but the default QueryClient
 // (main.tsx) sets no staleTime, so every inspector open, canvas mount and
 // window refocus refired this -- data already in cache, request still sent.
-// Two LLM nodes for the same provider therefore cost two requests even
+// Two Model nodes for the same provider therefore cost two requests even
 // though they render one identical list. That's also live against a real
 // 10-per-60s limiter on GET /llm-settings/{provider}/models, so the old
 // behaviour could 429 a canvas with a few nodes and some tab-switching.

@@ -88,6 +88,16 @@ _Avoid_: Inferred observation, promoted score
 A metric an Agent inspector includes in that agent's system prompt as evaluation guidance; it never exposes a future observation.
 _Avoid_: Prompt metric
 
+### Protocols
+
+**Model**:
+The configured language model an Agent or Critic Gate uses to produce or review output.
+_Avoid_: AI, LLM (when naming the protocol role)
+
+**Model connection**:
+The required relationship assigning exactly one Model to an Agent or Critic Gate.
+_Avoid_: AI connection, LLM connection
+
 ### Runs
 
 **Protocol canvas**:

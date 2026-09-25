@@ -6,7 +6,16 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
-import { defaultAgentNodeData, defaultScriptNodeData, type ProtocolGraph } from '@/types/protocols'
+import {
+  defaultAgentNodeData,
+  defaultAnthropicModelNodeData,
+  defaultCriticGateNodeData,
+  defaultMemoryNodeData,
+  defaultOutputParserNodeData,
+  defaultReasonActPatternNodeData,
+  defaultScriptNodeData,
+  type ProtocolGraph,
+} from '@/types/protocols'
 import { ProtocolCanvas } from './ProtocolCanvas'
 
 vi.mock('./PythonCodeEditor', () => ({
@@ -126,6 +135,77 @@ describe('ProtocolCanvas connector adds', () => {
     expect(screen.queryByText('Parser')).not.toBeInTheDocument()
   })
 
+  it('makes occupied single-capacity connector handles non-connectable', async () => {
+    const agentData = defaultAgentNodeData('Writer')
+    agentData.config.require_output_parser = true
+    renderCanvas({
+      nodes: [
+        { id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: agentData },
+        { id: 'gate-1', type: 'critic_gate', position: { x: 400, y: 100 }, data: defaultCriticGateNodeData() },
+        { id: 'model-1', type: 'model_anthropic', position: { x: 0, y: 0 }, data: defaultAnthropicModelNodeData() },
+        { id: 'memory-1', type: 'memory', position: { x: 0, y: 0 }, data: defaultMemoryNodeData() },
+        { id: 'pattern-1', type: 'pattern_reason_act', position: { x: 0, y: 0 }, data: defaultReasonActPatternNodeData() },
+        { id: 'parser-1', type: 'output_parser', position: { x: 0, y: 0 }, data: defaultOutputParserNodeData() },
+      ],
+      edges: [
+        { id: 'model-agent', source: 'model-1', sourceHandle: 'model', target: 'agent-1', targetHandle: 'model' },
+        { id: 'model-gate', source: 'model-1', sourceHandle: 'model', target: 'gate-1', targetHandle: 'model' },
+        { id: 'memory-agent', source: 'memory-1', sourceHandle: 'memory', target: 'agent-1', targetHandle: 'memory' },
+        { id: 'pattern-agent', source: 'pattern-1', sourceHandle: 'architectural_pattern', target: 'agent-1', targetHandle: 'architectural_pattern' },
+        { id: 'parser-agent', source: 'parser-1', sourceHandle: 'output_parser', target: 'agent-1', targetHandle: 'output_parser' },
+      ],
+    })
+
+    await screen.findByText('Writer')
+    for (const handleId of ['model', 'memory', 'architectural_pattern', 'output_parser']) {
+      const handle = document.querySelector(`[data-nodeid="agent-1"][data-handleid="${handleId}"]`)
+      expect(handle).toBeInTheDocument()
+      expect(handle).not.toHaveClass('connectable')
+    }
+    expect(document.querySelector('[data-nodeid="gate-1"][data-handleid="model"]')).not.toHaveClass('connectable')
+    expect(document.querySelector('[data-nodeid="model-1"][data-handleid="model"]')).toHaveClass('connectable')
+  })
+
+  it('adds a connector-only Sub-Agent from an Agent', async () => {
+    const user = userEvent.setup()
+    const { client } = renderCanvas({
+      nodes: [{ id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: defaultAgentNodeData('Planner') }],
+      edges: [],
+    })
+
+    fireEvent.click(await screen.findByTitle('Add Sub-Agents'))
+    await user.click(await screen.findByRole('button', { name: /^Sub-Agent A delegated worker/ }))
+
+    await waitFor(() => {
+      const graph = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      const child = graph?.nodes.find((node) => node.type === 'sub_agent')
+      const patternEdge = graph?.edges.find(
+        (edge) => edge.target === child?.id && edge.targetHandle === 'architectural_pattern',
+      )
+      const pattern = graph?.nodes.find((node) => node.id === patternEdge?.source)
+      expect(child).toBeDefined()
+      expect(graph?.edges).toContainEqual(expect.objectContaining({
+        source: child!.id,
+        sourceHandle: 'sub_agents',
+        target: 'agent-1',
+        targetHandle: 'sub_agents',
+      }))
+      expect(child!.position.x).toBe(100)
+      expect(child!.position.y).toBeGreaterThanOrEqual(400)
+      expect(pattern).toBeDefined()
+      expect(pattern!.position.x).toBeGreaterThanOrEqual(child!.position.x - 50)
+      expect(pattern!.position.x).toBeLessThanOrEqual(child!.position.x + 50)
+      expect(pattern!.position.y).toBeGreaterThan(100)
+      expect(pattern!.position.y).toBeLessThan(child!.position.y)
+    })
+
+    expect(screen.getByText('Parent')).toBeInTheDocument()
+    expect(screen.getAllByText('Sub-Agent').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Input')).not.toBeInTheDocument()
+    expect(screen.getByText('Output')).toBeInTheDocument()
+    expect(screen.queryByText('Nothing downstream — this is the final output.')).not.toBeInTheDocument()
+  })
+
   it('does not expose custom metric controls in the Script inspector', async () => {
     const scriptData = defaultScriptNodeData('Score script')
     scriptData.config.code = 'def evaluate(output): return 1'
@@ -203,6 +283,27 @@ describe('ProtocolCanvas connector adds', () => {
 
     expect(await screen.findByRole('heading', { name: 'Scoring variants' })).toBeInTheDocument()
     expect(screen.getByText('Factor name')).toBeInTheDocument()
+  })
+
+  it('binds the Agent inspector header action directly to Active', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue({
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    })
+    renderCanvas({
+      nodes: [{ id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: defaultAgentNodeData('Writer') }],
+      edges: [],
+    }, 'experiment-1')
+
+    fireEvent.doubleClick(await screen.findByText('Writer'))
+    await user.click(screen.getAllByRole('button', { name: 'Make experimental factor' })[0])
+
+    expect(await screen.findByText('Writer:Active')).toBeInTheDocument()
+    expect(screen.getByText('Levels: true, false')).toBeInTheDocument()
+    expect(screen.queryByText('Bind to a field on the canvas')).not.toBeInTheDocument()
   })
 
 })

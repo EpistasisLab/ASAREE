@@ -118,24 +118,25 @@ def test_reads_files_relative_to_the_repo_root() -> None:
     assert sorted(files) == ["SKILL.md", "docs/REF.md"]
 
 
-def test_drops_files_core_would_refuse() -> None:
-    # Scripts, binaries and dotfiles are dropped rather than raised over: a
-    # repository is full of them and none is the user's mistake. The rule is
-    # core's validate_bundle_path, not a second copy of it here.
+def test_keeps_scripts_but_drops_hidden_files() -> None:
+    # Portable skill resources include scripts. Repository housekeeping stays
+    # excluded and never becomes part of the installed bundle.
     files = ss._read_archive(
         make_archive({"SKILL.md": SKILL, "scripts/run.py": "print(1)", ".github/workflows/ci.yml": "on: push"})
     )
-    assert sorted(files) == ["SKILL.md"]
+    assert sorted(files) == ["SKILL.md", "scripts/run.py"]
 
 
-def test_drops_files_that_are_not_utf8() -> None:
+def test_keeps_files_that_are_not_utf8() -> None:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
         for name, raw in (("repo-main/SKILL.md", SKILL.encode()), ("repo-main/logo.md", b"\xff\xfe\x00")):
             info = tarfile.TarInfo(name=name)
             info.size = len(raw)
             archive.addfile(info, io.BytesIO(raw))
-    assert sorted(ss._read_archive(buffer.getvalue())) == ["SKILL.md"]
+    files = ss._read_archive(buffer.getvalue())
+    assert sorted(files) == ["SKILL.md", "logo.md"]
+    assert files["logo.md"] == b"\xff\xfe\x00"
 
 
 def test_ignores_symlinks_and_other_non_files() -> None:
@@ -198,7 +199,7 @@ def test_a_bundle_is_re_rooted_at_the_skill_directory() -> None:
     files = ss._read_archive(
         make_archive({"skills/foo/SKILL.md": SKILL, "skills/foo/references/x.md": "ref", "README.md": "hi"})
     )
-    assert ss._bundle_at(files, "skills/foo") == [("SKILL.md", SKILL), ("references/x.md", "ref")]
+    assert ss._bundle_at(files, "skills/foo") == [("SKILL.md", SKILL.encode()), ("references/x.md", b"ref")]
 
 
 def test_a_skill_does_not_swallow_a_nested_skill() -> None:
@@ -209,4 +210,4 @@ def test_a_skill_does_not_swallow_a_nested_skill() -> None:
     files = ss._read_archive(make_archive({"SKILL.md": SKILL, "NOTES.md": "notes", "skills/foo/SKILL.md": SKILL}))
     directories = ss._skill_dirs(files, "")
     assert directories == ["", "skills/foo"]
-    assert ss._bundle_at(files, "", directories) == [("NOTES.md", "notes"), ("SKILL.md", SKILL)]
+    assert ss._bundle_at(files, "", directories) == [("NOTES.md", b"notes"), ("SKILL.md", SKILL.encode())]

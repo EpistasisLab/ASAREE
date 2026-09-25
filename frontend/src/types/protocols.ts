@@ -26,7 +26,7 @@ export interface ProtocolNode {
     | AgentNodeData
     | McpToolNodeData
     | CriticGateNodeData
-    | LlmNodeData
+    | ModelNodeData
     | MemoryNodeData
     | OutputParserNodeData
     | DatasetNodeData
@@ -116,13 +116,13 @@ export interface ProtocolRun {
   id: string
   protocol_id: string
   // `limit_reached` is conversation-mode only: the agents were still talking
-  // when a budget (consultation count, depth, or the conversation wall clock)
-  // ran out. Distinct from `failed` because the work up to that point is
+  // when the recursive consultation-depth guard ran out. Distinct from
+  // `failed` because the work up to that point is
   // sound -- the transcript is worth reading.
   status: 'pending' | 'running' | 'finalizing' | 'completed' | 'failed' | 'cancelled' | 'limit_reached'
   node_runs: Record<string, NodeRunState>
-  // Null for every pipeline run; populated once a conversation-mode run's
-  // agents start talking.
+  // Populated once agents communicate, whether through a conversation
+  // strategy or a pipeline Agent delegating to a Sub-Agent.
   conversation: Conversation | null
   error: string | null
   // Both null for a plain graph run. Set together only for a run created by
@@ -216,9 +216,9 @@ export interface AgentModelConfigData {
   model: string
   temperature?: number | null
   effort?: string | null
-  // Nullable so LlmNodeInspector's Input can be backspaced to empty without
+  // Nullable so ModelNodeInspector's Input can be backspaced to empty without
   // snapping to a forced value -- null is a real, persisted "not set yet"
-  // state flagged by LlmNode's warning triangle and nodeConfigIssues.ts's
+  // state flagged by ModelNode's warning triangle and nodeConfigIssues.ts's
   // pre-flight scan, same convention as ReasonActPatternConfig's fields.
   max_tokens: number | null
 }
@@ -273,10 +273,10 @@ export interface AgentNodeConfig {
   // a purely presentational flag would orphan it on every canvas already saved.
   require_output_parser?: boolean
   // Model, tool assignment, and execution pattern are no longer fields
-  // here -- resolved from the node's required LLM connector, optional Tool
+  // here -- resolved from the node's required Model connector, optional Tool
   // connector(s), and optional Architectural Pattern connector instead (see
-  // LlmNodeData/McpToolNodeData/ReasonActPatternNodeData and
-  // services.protocol_execution's _resolve_llm_config/_resolve_tool_config/
+  // ModelNodeData/McpToolNodeData/ReasonActPatternNodeData and
+  // services.protocol_execution's _resolve_model_config/_resolve_tool_config/
   // _resolve_pattern_config) -- deliberately kept out of a node's own
   // settings.
   //
@@ -385,7 +385,7 @@ export interface CriticGateNodeConfig {
   goal: string
   description: string
   system_prompt: string
-  // Resolved from the gate's required LLM connector instead, same as an
+  // Resolved from the gate's required Model connector instead, same as an
   // agent node -- see AgentNodeConfig's own comment.
   // Critic gates have no separate top-level `active` flag the way
   // AgentNodeData/McpToolNodeData do -- this field already means exactly
@@ -417,25 +417,24 @@ export function defaultCriticGateNodeData(label = 'Critic Gate'): CriticGateNode
   }
 }
 
-// The LLM connector's node family -- named to match this app's existing
-// LLMProvider/LLMSetting vocabulary. One node type per provider
-// (llm_anthropic/llm_openai/llm_azure_foundry/llm_openrouter/llm_local), not
+// The Model connector's node family. One node type per provider
+// (model_anthropic/model_openai/model_azure_foundry/model_openrouter/model_local), not
 // one generic node with a Provider field -- a dedicated node per capability
 // rather than one node with an internal picker. Config shape is identical
 // across all five (provider is baked into which node type you
 // picked, not user-editable), so they share this one config/data shape and
-// -- see LlmNodeInspector.tsx -- one inspector component, varying only the
+// -- see ModelNodeInspector.tsx -- one inspector component, varying only the
 // hardcoded `provider` each default-data factory below sets. Supplies
 // model/provider/temperature/effort/max_tokens to whichever agent/
-// critic_gate node(s) it's wired into via their required LLM connector.
-// One LLM node's output can fan out to multiple agents (shared config,
+// critic_gate node(s) it's wired into via their required Model connector.
+// One Model node's output can fan out to multiple agents (shared config,
 // reused rather than re-entered per agent) -- nothing prevents this, though
 // there's no dedicated UI for it yet.
-export type LlmNodeConfig = AgentModelConfigData
+export type ModelNodeConfig = AgentModelConfigData
 
-export interface LlmNodeData {
+export interface ModelNodeData {
   label: string
-  config: LlmNodeConfig
+  config: ModelNodeConfig
   factor_bindings?: Record<string, string>
   [key: string]: unknown
 }
@@ -445,34 +444,32 @@ export interface LlmNodeData {
 // (asaree-spinal-use-case/spinal_pipeline.ipynb) -- used uniformly across
 // every one of its agents/critics, well under Motoro's own
 // ModelConfig cap of 200000.
-export function defaultAnthropicLlmNodeData(label = 'Anthropic'): LlmNodeData {
-  return { label, config: { provider: 'anthropic', model: 'claude-sonnet-5', temperature: 0.7, max_tokens: 128000 } }
+export function defaultAnthropicModelNodeData(label = 'Anthropic'): ModelNodeData {
+  return { label, config: { provider: 'anthropic', model: '', temperature: 0.7, max_tokens: 128000 } }
 }
 
-export function defaultOpenAiLlmNodeData(label = 'OpenAI'): LlmNodeData {
-  return { label, config: { provider: 'openai', model: 'gpt-5', temperature: 0.7, max_tokens: 128000 } }
+export function defaultOpenAiModelNodeData(label = 'OpenAI'): ModelNodeData {
+  return { label, config: { provider: 'openai', model: '', temperature: 0.7, max_tokens: 128000 } }
 }
 
-export function defaultAzureFoundryLlmNodeData(label = 'Azure AI Foundry'): LlmNodeData {
-  return { label, config: { provider: 'azure_foundry', model: 'gpt-5', temperature: 0.7, max_tokens: 128000 } }
+export function defaultAzureFoundryModelNodeData(label = 'Azure AI Foundry'): ModelNodeData {
+  return { label, config: { provider: 'azure_foundry', model: '', temperature: 0.7, max_tokens: 128000 } }
 }
 
-export function defaultOpenRouterLlmNodeData(label = 'OpenRouter'): LlmNodeData {
-  return { label, config: { provider: 'openrouter', model: 'anthropic/claude-sonnet-5', temperature: 0.7, max_tokens: 128000 } }
+export function defaultOpenRouterModelNodeData(label = 'OpenRouter'): ModelNodeData {
+  return { label, config: { provider: 'openrouter', model: '', temperature: 0.7, max_tokens: 128000 } }
 }
 
-// model starts empty -- unlike every other provider here, there's no
-// universal default self-hosted model name to assume (see
-// CreateCredentialDialog.tsx's requiresApiBase for the matching "no default
-// host" reasoning on api_base). The Model field's own required-field
-// warning already flags this until the user picks one.
-export function defaultLocalLlmNodeData(label = 'Local'): LlmNodeData {
+// Every provider starts empty so adding a Model node never silently chooses a
+// model the user's credential may not expose. The Model field's required-field
+// warning remains until the user makes an explicit catalog/custom selection.
+export function defaultLocalModelNodeData(label = 'Local'): ModelNodeData {
   return { label, config: { provider: 'local', model: '', temperature: 0.7, max_tokens: 128000 } }
 }
 
 // A "Memory" node -- visual/validation scaffolding only for now. Wiring one
 // into an Agent's Memory connector is accepted by the graph (validated the
-// same way LLM/Tool connectors are) but has NO effect on execution yet --
+// same way Model/Tool connectors are) but has NO effect on execution yet --
 // porting Motoro's actual episodic-memory service (already built,
 // Postgres+pgvector-backed, just not yet invoked anywhere in ASAREE's own
 // execution path) is an explicit, deliberate follow-up, not this phase.
@@ -558,6 +555,10 @@ export function defaultOutputParserNodeData(label = 'Output Parser'): OutputPars
 export interface DatasetNodeConfig {
   dataset_id: string | null
   dataset_name: string | null
+  description?: string | null
+  target_column?: string | null
+  split_state?: 'split' | 'unsplit' | null
+  dictionary_available?: boolean
   // Absent means enabled, matching every other connector's own convention.
   enabled?: boolean
 }
@@ -584,6 +585,7 @@ export function defaultDatasetNodeData(label = 'Dataset'): DatasetNodeData {
 // itself).
 export interface ScriptNodeConfig {
   name: string
+  description?: string
   language: 'python'
   code: string
 }
@@ -596,7 +598,7 @@ export interface ScriptNodeData {
 }
 
 export function defaultScriptNodeData(label = 'Script'): ScriptNodeData {
-  return { label, config: { name: 'script', language: 'python', code: '' } }
+  return { label, config: { name: 'script', description: '', language: 'python', code: '' } }
 }
 
 // A "Skill" node -- names one registered Agent Skill for the Agent it's wired
@@ -665,6 +667,7 @@ export interface OkfBundleNodeConfig {
   // the folder's own name.
   bundle_path: string | null
   bundle_label: string | null
+  bundle_description?: string | null
   // The bundle server's tools, BARE (e.g. "read_concept"), cached at
   // registration. Namespaced "{server_name}.{tool}" at resolve time, matching
   // McpToolNodeConfig. No per-tool picker in V1: a bundle's tools are a fixed
@@ -709,6 +712,9 @@ export interface OkfDocumentNodeConfig {
   // rewrite the document's frontmatter mid-run, and the canvas card shouldn't
   // silently rename itself. The inspector shows the live values.
   document_title: string | null
+  document_description?: string | null
+  document_type?: string | null
+  document_tags?: string[]
   document_path: string | null
   // The document server's tools, BARE, cached at registration -- namespaced
   // "{server_name}.{tool}" at resolve time. No per-tool picker, same reason as
@@ -735,11 +741,11 @@ export interface OkfDocumentNodeData {
 // services.protocol_execution's _resolve_pattern_config reads the wired
 // node's own config into a real Motoro PatternConfig, passed straight
 // into create_agent/update_agent. ASAREE-specific, alongside
-// LLM/Tool/Memory.
+// Model/Tool/Memory.
 //
 // One node type per pattern (pattern_reason_act/pattern_single_agent_baseline),
 // not one generic node with a Pattern-name field -- same reasoning as the
-// LLM node family above, and unlike that family these genuinely have
+// Model node family above, and unlike that family these genuinely have
 // different config shapes (Motoro's own `pattern_params` schema per
 // plugin, see engine/patterns/builtin/*.py), so each gets its own dedicated
 // inspector rather than sharing one. `PatternConfig` (Motoro) already

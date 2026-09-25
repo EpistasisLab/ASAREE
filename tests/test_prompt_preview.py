@@ -183,7 +183,7 @@ async def test_an_unwired_predecessor_previews_as_the_block_it_will_deliver() ->
 
 async def test_a_node_that_is_not_an_agent_has_no_prompt_to_preview() -> None:
     graph = _chain("Draft it.")
-    graph["nodes"].append({"id": "llm", "type": "llm_anthropic", "data": {"label": "Claude", "config": {}}})
+    graph["nodes"].append({"id": "llm", "type": "model_anthropic", "data": {"label": "Claude", "config": {}}})
     with pytest.raises(ProtocolValidationError, match="not an agent"):
         await preview_node_prompt(graph, "llm", owner_id=OWNER_ID)
 

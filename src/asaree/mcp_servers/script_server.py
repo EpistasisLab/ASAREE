@@ -22,6 +22,14 @@ Script node wired (``protocol_execution._resolve_script_tool_config``) — the s
 arrangement as the Dataset connector and the workspace tools, so wiring a script
 is the only gesture needed to let the agent run it.
 
+When a Dataset is also wired, the subprocess receives a short-lived runtime
+manifest through :mod:`asaree.script_context`. That stable API resolves either
+an unsplit raw file or a workspace's ``v0_raw`` training partition without
+exposing the held-out test partition or making user code parse ``state.json``.
+Legacy scripts that explicitly read ``state.json`` receive the same training
+reference through an isolated, execution-only compatibility view; it is never
+written at the real workspace root.
+
 **This is isolation, not a sandbox.** The script runs as a subprocess of this
 server, with a deny-by-default environment (see ``_ENV_PASSTHROUGH``) and a
 timeout, but it runs as the same user with the same filesystem. That is the trust
@@ -39,11 +47,14 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
+
+from asaree.services.dataset_workspaces import raw_training_data_locators
 
 INSTRUCTIONS = """\
 Run a Python script wired into this step and report what it printed.
@@ -52,7 +63,8 @@ With one wired script, call run_wired_script() with no arguments. With several, 
 call run_wired_script(script=...) using the name or id listed in the run prompt. \
 Scripts arrive as ambient run context, so there is nothing to paste or retype. \
 They are plain Python -- no required entry point, no dataset needed. Read stdout \
-for the result."""
+for the result. A wired script can resolve an attached authorized training input \
+with `from asaree.script_context import training_input`."""
 
 mcp = FastMCP("asaree-script", instructions=INSTRUCTIONS)
 
@@ -65,6 +77,12 @@ logger = logging.getLogger(__name__)
 _META_KEY_SCRIPT_PATH = "motoro.ambient.script_path"
 _META_KEY_SCRIPT_PATHS = "motoro.ambient.script_paths"
 _META_KEY_WORKSPACE_ID = "motoro.workspace_id"
+_META_KEY_DATA_PATH = "motoro.ambient.data_path"
+_META_KEY_TARGET_COLUMN = "motoro.ambient.target_column"
+_META_KEY_DATASET_NAMES = "motoro.ambient.dataset_names"
+_META_KEY_DATASET_MODE = "motoro.ambient.dataset_mode"
+
+_RUN_CONTEXT_ENV = "ASAREE_RUN_CONTEXT"
 
 # Truncation budgets, matching the sklearn servers': a tool result is read by a
 # model, so a script that prints in a loop must not cost more context than the
@@ -174,6 +192,74 @@ def _working_dir(workspace_id: str, script: Path) -> Path:
     return script.parent
 
 
+def _runtime_manifest(ctx: Context[Any, Any, Any] | None, workspace_id: str) -> dict[str, Any]:
+    """Build the model-inaccessible dataset contract for a wired subprocess.
+
+    Workspace inputs always name ``v0_raw.train`` rather than HEAD: assessment
+    scripts must see the registered training partition even after later stages
+    have transformed HEAD.  With no workspace, the ambient path is the raw
+    unsplit registration resolved by protocol execution.  Neither route ever
+    includes the held-out test path.
+    """
+    raw_names = _ambient_value(ctx, _META_KEY_DATASET_NAMES)
+    names = [str(name) for name in raw_names if isinstance(name, str)] if isinstance(raw_names, list) else []
+    dataset_mode = _ambient(ctx, _META_KEY_DATASET_MODE)
+    # An explicitly wired unsplit dataset must not inherit a durable workspace
+    # left by an older protocol revision for the same experiment/cell.
+    locators = raw_training_data_locators(workspace_id) if workspace_id and dataset_mode != "raw_unsplit" else {}
+    training_inputs: list[dict[str, Any]] = []
+    for slot, locator in locators.items():
+        recorded_name = str(locator.get("name") or "")
+        if names and recorded_name not in names and not (len(locators) == 1 and len(names) == 1):
+            continue
+        name = names[0] if len(locators) == 1 and len(names) == 1 else recorded_name
+        training_inputs.append(
+            {
+                "name": name,
+                "path": str(locator.get("data_path") or ""),
+                "target_column": str(locator.get("target_column") or ""),
+                "mode": "workspace",
+                "slot": slot,
+                "workspace_version": "v0_raw",
+            }
+        )
+
+    if not training_inputs and not locators:
+        data_path = _ambient(ctx, _META_KEY_DATA_PATH)
+        if data_path:
+            training_inputs.append(
+                {
+                    "name": names[0] if len(names) == 1 else "",
+                    "path": data_path,
+                    "target_column": _ambient(ctx, _META_KEY_TARGET_COLUMN),
+                    "mode": "raw_unsplit",
+                    "slot": None,
+                    "workspace_version": None,
+                }
+            )
+    return {"schema_version": 1, "training_inputs": training_inputs}
+
+
+def _legacy_unsplit_state(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    """A read-only workspace-shaped view for scripts written before the API.
+
+    This is never placed at a real workspace root.  It exists only in an
+    isolated execution directory while a single unsplit input's script runs,
+    so workspace tools cannot mistake it for a seeded train/test lineage.
+    """
+    inputs = manifest.get("training_inputs")
+    if not isinstance(inputs, list) or len(inputs) != 1:
+        return None
+    item = inputs[0]
+    if not isinstance(item, dict) or item.get("mode") != "raw_unsplit" or not item.get("path"):
+        return None
+    return {
+        "target_column": str(item.get("target_column") or ""),
+        "head": "v0_raw",
+        "versions": [{"id": "v0_raw", "train": str(item["path"])}],
+    }
+
+
 @mcp.tool()
 def run_wired_script(
     code: str = "",
@@ -274,29 +360,61 @@ def run_wired_script(
     # printed -- the whole value of a partial result is that it survives.
     env["PYTHONUNBUFFERED"] = "1"
     result: dict[str, Any] = {"code_sha256": code_sha256, "script": script_file.name}
+    cwd = _working_dir(workspace_id, script_file)
+    manifest = _runtime_manifest(ctx, workspace_id)
+    # Preserve cwd for ordinary/helper-based scripts.  The isolated legacy
+    # view is only needed when the authored source explicitly expects the old
+    # state-file contract.
+    legacy_state = _legacy_unsplit_state(manifest) if "state.json" in source else None
+    compatibility_dir: Path | None = None
+    if legacy_state is not None:
+        try:
+            # Never put this view at the workspace root: it has no test
+            # partition and must not make workspace_status report a real
+            # workspace.  Keep artifacts created by the script in this unique
+            # run directory after the compatibility files are removed.
+            compatibility_dir = Path(tempfile.mkdtemp(prefix=f".{script_file.stem}-unsplit-", dir=script_file.parent))
+            cwd = compatibility_dir
+            (cwd / "state.json").write_text(json.dumps(legacy_state), encoding="utf-8")
+        except OSError as e:
+            return json.dumps({**result, "error": f"could not prepare the unsplit dataset view: {e}"})
     try:
-        completed = subprocess.run(  # noqa: S603 -- user-authored script, by design; see module docstring
-            [sys.executable, str(script_file)],
-            cwd=str(_working_dir(workspace_id, script_file)),
-            env=env,
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as e:
-        logger.warning("wired_script_timeout", extra={"script": str(script_file), "timeout": timeout})
-        return json.dumps(
-            {
-                **result,
-                "timed_out": True,
-                "error": f"the script was killed after {timeout}s.",
-                "stdout": _clip(_as_text(e.stdout), _STDOUT_CHARS),
-                "stderr": _clip(_as_text(e.stderr), _STDERR_CHARS, tail=True),
-            }
-        )
+        with tempfile.TemporaryDirectory(prefix=".asaree-script-context-", dir=cwd) as context_dir:
+            context_path = Path(context_dir) / "context.json"
+            context_path.write_text(json.dumps(manifest), encoding="utf-8")
+            env[_RUN_CONTEXT_ENV] = str(context_path)
+            try:
+                completed = subprocess.run(  # noqa: S603 -- user-authored script, by design; see module docstring
+                    [sys.executable, str(script_file)],
+                    cwd=str(cwd),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as e:
+                logger.warning("wired_script_timeout", extra={"script": str(script_file), "timeout": timeout})
+                return json.dumps(
+                    {
+                        **result,
+                        "timed_out": True,
+                        "error": f"the script was killed after {timeout}s.",
+                        "stdout": _clip(_as_text(e.stdout), _STDOUT_CHARS),
+                        "stderr": _clip(_as_text(e.stderr), _STDERR_CHARS, tail=True),
+                    }
+                )
+            except OSError as e:
+                return json.dumps({**result, "error": f"could not start the script: {e}"})
     except OSError as e:
-        return json.dumps({**result, "error": f"could not start the script: {e}"})
+        return json.dumps({**result, "error": f"could not prepare the script runtime context: {e}"})
+    finally:
+        if compatibility_dir is not None:
+            try:
+                (compatibility_dir / "state.json").unlink(missing_ok=True)
+                compatibility_dir.rmdir()  # succeeds only when the script left no artifacts
+            except OSError:
+                pass
 
     result["exit_code"] = completed.returncode
     result["stdout"] = _clip(completed.stdout, _STDOUT_CHARS)

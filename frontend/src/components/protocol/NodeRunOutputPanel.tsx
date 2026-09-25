@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import { runsApi } from '@/api/client'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import { referenceLabel } from '@/lib/promptReferences'
-import { hashToChartHue } from '@/lib/utils'
+import { cn, hashToChartHue } from '@/lib/utils'
 import type { NodeRunState } from '@/types/protocols'
 import type { RunStep } from '@/types/runs'
 
@@ -266,6 +266,7 @@ export function NodeRunOutputPanel({
   nodeRun,
   referenceNames = {},
   showReceivedPrompt = true,
+  resizableOutput = false,
 }: {
   nodeRun: NodeRunState | undefined
   // Node id -> display name, for naming a reference that resolved empty. The
@@ -277,6 +278,9 @@ export function NodeRunOutputPanel({
   // Agent inspector) -- what an agent was handed is input, and showing it in
   // both columns would say the split means less than it does.
   showReceivedPrompt?: boolean
+  // Agent and Sub-Agent inspectors give the final answer its own draggable
+  // viewport, matching the resize affordance on their prompt textareas.
+  resizableOutput?: boolean
 }) {
   const badge = nodeRunBadge(nodeRun?.status, Boolean(nodeRun?.truncation))
   const unresolved = nodeRun?.unresolved_references ?? []
@@ -345,7 +349,15 @@ export function NodeRunOutputPanel({
               through, not text the critic itself wrote -- the Verdict block
               above is the critic's own contribution. */}
           <p className="text-sm font-medium">{isGateRun ? 'Passed-through output' : 'Output'}</p>
-          <p className="max-h-64 overflow-y-auto rounded-lg border bg-muted/30 p-3 text-sm whitespace-pre-wrap">{nodeRun.output_text}</p>
+          <p
+            className={cn(
+              'overflow-auto rounded-lg border bg-muted/30 p-3 text-sm whitespace-pre-wrap',
+              resizableOutput ? 'h-64 min-h-24 resize-y' : 'max-h-64',
+            )}
+            title={resizableOutput ? 'Drag the lower-right corner to resize the output' : undefined}
+          >
+            {nodeRun.output_text}
+          </p>
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">No output yet.</p>

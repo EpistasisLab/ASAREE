@@ -16,7 +16,7 @@ export function pythonScriptSourceOptions(graph: ProtocolGraph | undefined): Pyt
     if (edge.targetHandle !== 'tool') return []
     const agent = nodes.get(edge.target)
     const script = nodes.get(edge.source)
-    if (!agent || !script || agent.type !== 'agent' || script.type !== 'script') return []
+    if (!agent || !script || !['agent', 'sub_agent'].includes(agent.type) || script.type !== 'script') return []
     const config = 'config' in script.data ? script.data.config : undefined
     const code = config && 'code' in config ? config.code : ''
     const enabled = !(config && 'enabled' in config && config.enabled === false)

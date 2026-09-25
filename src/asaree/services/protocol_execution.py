@@ -91,6 +91,8 @@ from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
 from asaree.services.runtime_metrics import finalize_attempt_measurement
 from asaree.services.system_mcp_servers import (
+    DATASET_DICTIONARY_AGENT_TOOLS,
+    EDA_SERVER_NAME,
     SCIKIT_LEARN_SERVER_NAME,
     SCRIPT_AGENT_TOOLS,
     SCRIPT_SERVER_NAME,
@@ -175,7 +177,7 @@ class ProtocolValidationError(Exception):
 #
 # 1. CAPABILITY -- what the agent can DO: the model, the execution pattern, the
 #    tool allow-list, knowledge servers, skills. Route: resolve it into the
-#    agent's stored config (``_resolve_llm_config``, ``_resolve_tool_config``,
+#    agent's stored config (``_resolve_model_config``, ``_resolve_tool_config``,
 #    ``_resolve_pattern_config``, ``_resolve_skill_config``, ...) and let
 #    Motoro carry it on ``RunContext``. Never prompt text: a capability is
 #    something the runtime arranges, not something the model is told about.
@@ -210,7 +212,7 @@ class ProtocolValidationError(Exception):
 # ``run_wired_script``, granted by ``_resolve_script_tool_config``. Wiring a
 # script is what declares that the agent should run one.
 #
-# The connector-typed slots on an agent/critic_gate node. ai/tool/memory are
+# The connector-typed slots on an agent/critic_gate node. model/tool/memory are
 # a deliberately closed set; architectural_pattern and dataset are
 # ASAREE-specific -- architectural_pattern for ARES's pluggable
 # architectural patterns, dataset for the data an agent operates ON as
@@ -222,13 +224,14 @@ class ProtocolValidationError(Exception):
 # data-flow) is any edge whose targetHandle is one of these -- everything
 # else. The type marker always lives on the target side of an edge.
 #
-# "llm" and "resource" are in here purely as pre-rename spellings of "ai" and
-# "dataset" (see _LEGACY_AI_HANDLES/_LEGACY_DATASET_HANDLES): an un-migrated
+# "ai", "llm", and "resource" are pre-rename spellings of "model" and
+# "dataset" (see _LEGACY_MODEL_HANDLES/_LEGACY_DATASET_HANDLES): an un-migrated
 # edge must still be recognised as a connector, or it would be misread as a
 # main pipeline edge and turn a perfectly good graph into a cycle/ordering
 # error.
 _CONNECTOR_HANDLES = frozenset(
     {
+        "model",
         "ai",
         "llm",
         "tool",
@@ -239,6 +242,7 @@ _CONNECTOR_HANDLES = frozenset(
         "skill",
         "knowledge",
         "output_parser",
+        "sub_agents",
     }
 )
 
@@ -249,9 +253,11 @@ _CONNECTOR_HANDLES = frozenset(
 # a single generic node with a Provider/kind field -- config shape is identical
 # across LLM providers (provider is baked into the node type instead of a
 # user-editable field), but genuinely differs per architectural pattern (see
-# each pattern's own NodeConfig on the frontend), so the LLM family shares
+# each pattern's own NodeConfig on the frontend), so the Model family shares
 # one inspector while each pattern gets its own.
-_LLM_NODE_TYPES = frozenset({"llm_anthropic", "llm_openai", "llm_azure_foundry"})
+_MODEL_NODE_TYPES = frozenset(
+    {"model_anthropic", "model_openai", "model_azure_foundry", "model_openrouter", "model_local"}
+)
 # Only two builtin execution patterns exist in Motoro today
 # (engine/patterns/builtin/) -- PatternConfig already has unused slots for
 # safety_patterns/coordination_pattern/knowledge_patterns/quality_patterns/
@@ -350,13 +356,14 @@ _KNOWLEDGE_NODE_TYPES = _OKF_BUNDLE_NODE_TYPES | _OKF_DOCUMENT_NODE_TYPES
 # Capped at one, like Memory and unlike Tool/Skill/Knowledge: two field specs
 # for one output is an ambiguity, not a richer declaration.
 _OUTPUT_PARSER_NODE_TYPES = frozenset({"output_parser"})
+_SUB_AGENT_NODE_TYPES = frozenset({"sub_agent"})
 
-# Every node type that's a pure config source -- never gets its own execution
-# turn, never a pipeline "final output" (see sink_node_ids/run_protocol's
-# main loop), and may only ever emit its own connector-typed edge (see the
-# "outgoing wrong handle" check in topological_order below).
+# Every node type skipped by the main pipeline walk and excluded as a final
+# output. Most are pure config sources; Sub-Agent is the deliberate exception:
+# it executes only as a nested delegated turn. All may emit only their own
+# connector-typed edge (see topological_order's outgoing-handle check).
 _PURE_CONFIG_SOURCE_TYPES = (
-    _LLM_NODE_TYPES
+    _MODEL_NODE_TYPES
     | _EXECUTION_PATTERN_NODE_TYPES
     | _MEMORY_NODE_TYPES
     | _MCP_TOOL_NODE_TYPES
@@ -365,20 +372,21 @@ _PURE_CONFIG_SOURCE_TYPES = (
     | _SKILL_NODE_TYPES
     | _KNOWLEDGE_NODE_TYPES
     | _OUTPUT_PARSER_NODE_TYPES
+    | _SUB_AGENT_NODE_TYPES
 )
 
-# Which connector handle each pure-config-source node type may exclusively
+# Which connector handle each pipeline-skipped node type may exclusively
 # emit into, and the human-facing label for that handle -- both keyed off
 # the same family grouping so a new provider/pattern node type only needs
-# adding to _LLM_NODE_TYPES/_EXECUTION_PATTERN_NODE_TYPES above, not a
+# adding to _MODEL_NODE_TYPES/_EXECUTION_PATTERN_NODE_TYPES above, not a
 # second lookup.
 _NODE_TYPE_TO_HANDLE: dict[str, str] = {
-    **{t: "ai" for t in _LLM_NODE_TYPES},
+    **{t: "model" for t in _MODEL_NODE_TYPES},
     **{t: "architectural_pattern" for t in _EXECUTION_PATTERN_NODE_TYPES},
     **{t: "memory" for t in _MEMORY_NODE_TYPES},
     # Script still shares the Tool connector rather than getting its own slot
     # -- one connector accepting a FAMILY of node types (see this dict's own
-    # docstring above _LLM_NODE_TYPES). Both are pure config sources an
+    # docstring above _MODEL_NODE_TYPES). Both are pure config sources an
     # agent's Tool "+" panel can add (AddNodePanel filters its catalog by
     # CONNECTOR_PANEL_INFO.tool's allowedTypes on the frontend); which one a
     # given wired node actually IS is recovered by checking the source node's
@@ -394,13 +402,15 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "skill" for t in _SKILL_NODE_TYPES},
     **{t: "knowledge" for t in _KNOWLEDGE_NODE_TYPES},
     **{t: "output_parser" for t in _OUTPUT_PARSER_NODE_TYPES},
+    **{t: "sub_agents" for t in _SUB_AGENT_NODE_TYPES},
 }
 # The user-facing name of each connector slot -- mirrors
 # CONNECTOR_SLOT_LABELS on the frontend, so a validation error always names
 # the connector by the caption printed next to it on the canvas.
 _HANDLE_LABELS: dict[str, str] = {
-    "ai": "AI",
-    "llm": "AI",  # pre-rename spelling, same slot -- see _LEGACY_AI_HANDLES
+    "model": "Model",
+    "ai": "Model",  # pre-rename spellings, same slot -- see _LEGACY_MODEL_HANDLES
+    "llm": "Model",
     "memory": "Memory",
     "architectural_pattern": "Architectural Pattern",
     "tool": "Tool",
@@ -409,14 +419,15 @@ _HANDLE_LABELS: dict[str, str] = {
     "skill": "Skill",
     "knowledge": "Knowledge",
     "output_parser": "Output Parser",
+    "sub_agents": "Sub-Agents",
 }
 
 # Connector slots have been renamed twice since graphs started being saved,
 # and a stored graph is an opaque JSONB blob, so every spelling has to keep
 # resolving:
 #
-#   "llm" -> "ai"       the AI connector (its caption was renamed first, the
-#                       handle id after -- migration 3f1a7c9b2e04)
+#   "llm" -> "ai" -> "model"  the Model connector (migrations
+#                              3f1a7c9b2e04 and the Model-schema migration)
 #   "tool" -> "resource" for a Dataset source, when Dataset stopped sharing
 #                       the Tool slot (same migration)
 #   "resource" -> "dataset"  when that slot, whose only member is the Dataset
@@ -430,7 +441,7 @@ _HANDLE_LABELS: dict[str, str] = {
 # old-spelling edges at whatever moment the new backend goes live, and an
 # SDK/notebook caller pinned to an older graph shape keeps working. Nothing
 # creates an old-spelling edge going forward -- isValidConnection won't.
-_LEGACY_AI_HANDLES = frozenset({"ai", "llm"})
+_LEGACY_MODEL_HANDLES = frozenset({"model", "ai", "llm"})
 _LEGACY_DATASET_HANDLES = frozenset({"dataset", "resource", "tool"})
 # Keyed by the CURRENT slot id -- every spelling an edge into that slot may
 # legitimately still carry *on the handle alone*, i.e. every rename that was
@@ -441,7 +452,7 @@ _LEGACY_DATASET_HANDLES = frozenset({"dataset", "resource", "tool"})
 # out by ALSO checking its source node's type, which is why the wider
 # _LEGACY_DATASET_HANDLES is applied at its own call sites instead.
 _LEGACY_HANDLES_BY_SLOT: dict[str, frozenset[str]] = {
-    "ai": _LEGACY_AI_HANDLES,
+    "model": _LEGACY_MODEL_HANDLES,
     "dataset": frozenset({"dataset", "resource"}),
 }
 
@@ -573,7 +584,7 @@ def derive_stage_plan(graph: dict[str, Any]) -> Any:
     stage_ids: list[str] = []
     for nid in ordered:
         node = nodes[nid]
-        if node.get("type") != "agent":
+        if node.get("type") not in ("agent", "sub_agent"):
             continue
         for edge in _edges_with_handle(graph, nid, "tool", direction="incoming"):
             source = nodes.get(str(edge.get("source")))
@@ -910,6 +921,7 @@ def resolve_conversation_entry_id(graph: dict[str, Any]) -> str:
 
 _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "agent": "Agent",
+    "sub_agent": "Sub-Agent",
     "critic_gate": "Critic Gate",
     "mcp_tool": "MCP Tool",
     "mcp_scikit_learn": "Scikit-learn MCP",
@@ -923,9 +935,11 @@ _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "output_parser": "Output Parser",
     "pattern_reason_act": "Reason + Act",
     "pattern_single_agent_baseline": "Single-Agent Baseline",
-    "llm_anthropic": "Anthropic",
-    "llm_openai": "OpenAI",
-    "llm_azure_foundry": "Azure AI Foundry",
+    "model_anthropic": "Anthropic",
+    "model_openai": "OpenAI",
+    "model_azure_foundry": "Azure AI Foundry",
+    "model_openrouter": "OpenRouter",
+    "model_local": "Local",
 }
 
 
@@ -934,7 +948,7 @@ def _node_display_name(node: dict[str, Any]) -> str:
     user has set one (matching what they'd actually see in the inspector
     header/on the card), else the same placeholder text the frontend shows
     for an unnamed node of that type (EditableNodeTitle's own `placeholder`
-    prop, or the provider label for the three LLM node types). Never the
+    prop, or the provider label for the three Model node types). Never the
     bare internal node id -- that's graph bookkeeping (see newNodeId on the
     frontend), meaningless to a user reading a failed-validation message."""
     data = node.get("data")
@@ -981,7 +995,7 @@ def _kahn_order(graph: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[
 
     Split out of :func:`topological_order` for callers that only want to know
     what order the canvas draws -- :func:`derive_stage_plan` reads a half-built
-    graph while the user is still wiring it, and a missing AI connection there
+    graph while the user is still wiring it, and a missing Model connection there
     is a thing to report on the canvas, not a reason for stage derivation to
     raise. Returns the node map, the walk, and whether every node was reached
     (``False`` is the cycle signature); unreached nodes are appended in
@@ -1033,7 +1047,7 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
     for nid, node in nodes.items():
         if node.get("type") != "critic_gate":
             continue
-        # Main-pipeline incoming edges only -- a gate's own LLM connector
+        # Main-pipeline incoming edges only -- a gate's own Model connector
         # edge is a separate concept (validated below) and must not count
         # towards "how many things feed this gate on the main pipeline."
         ups = _upstream_ids(graph, nid)
@@ -1063,15 +1077,20 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
         node_type = node.get("type")
         name = _node_display_name(node)
 
-        if node_type in ("agent", "critic_gate"):
-            llm_edges = _edges_with_handle(graph, nid, "ai", direction="incoming")
-            if len(llm_edges) != 1:
+        sub_agent_is_callable = (
+            node_type == "sub_agent"
+            and _is_node_active(node)
+            and bool(_edges_with_handle(graph, nid, "sub_agents", direction="outgoing"))
+        )
+        if node_type in ("agent", "critic_gate") or sub_agent_is_callable:
+            model_edges = _edges_with_handle(graph, nid, "model", direction="incoming")
+            if len(model_edges) != 1:
                 raise ProtocolValidationError(
-                    f"Node {name!r} must have exactly one AI connection (found {len(llm_edges)})."
+                    f"Node {name!r} must have exactly one Model connection (found {len(model_edges)})."
                 )
-            llm_source = nodes.get(llm_edges[0]["source"])
-            if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
-                raise ProtocolValidationError(f"Node {name!r}'s AI connection must come from an AI node.")
+            model_source = nodes.get(model_edges[0]["source"])
+            if model_source is None or model_source.get("type") not in _MODEL_NODE_TYPES:
+                raise ProtocolValidationError(f"Node {name!r}'s Model connection must come from a Model node.")
 
         tool_edges = _edges_with_handle(graph, nid, "tool", direction="incoming")
         memory_edges = _edges_with_handle(graph, nid, "memory", direction="incoming")
@@ -1080,7 +1099,8 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
         skill_edges = _edges_with_handle(graph, nid, "skill", direction="incoming")
         knowledge_edges = _edges_with_handle(graph, nid, "knowledge", direction="incoming")
         parser_edges = _edges_with_handle(graph, nid, "output_parser", direction="incoming")
-        if node_type == "agent":
+        sub_agent_edges = _edges_with_handle(graph, nid, "sub_agents", direction="incoming")
+        if node_type in ("agent", "sub_agent"):
             # The Tool connector accepts a family of source types -- an
             # mcp_tool node contributes a callable capability, while a
             # Script node contributes declarative config/context (see
@@ -1183,6 +1203,15 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
                     f"Node {name!r} has both an Output Parser connection and its own stored output contract. "
                     "Convert the stored one to a node, or remove it, so there is one output shape."
                 )
+            if node_type == "agent":
+                for edge in sub_agent_edges:
+                    child = nodes.get(edge["source"])
+                    if child is None or child.get("type") != "sub_agent":
+                        raise ProtocolValidationError(
+                            f"Node {name!r}'s Sub-Agents connection must come from a Sub-Agent node."
+                        )
+            elif sub_agent_edges:
+                raise ProtocolValidationError(f"Sub-Agent node {name!r} cannot own other Sub-Agents.")
         elif (
             tool_edges
             or memory_edges
@@ -1191,11 +1220,25 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
             or skill_edges
             or knowledge_edges
             or parser_edges
+            or sub_agent_edges
         ):
             raise ProtocolValidationError(
                 f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, "
                 f"Knowledge, or Output Parser connection (node {name!r})."
             )
+
+        if node_type == "sub_agent":
+            parent_edges = _edges_with_handle(graph, nid, "sub_agents", direction="outgoing")
+            if len(parent_edges) > 1:
+                raise ProtocolValidationError(
+                    f"Sub-Agent node {name!r} can have exactly one parent (found {len(parent_edges)})."
+                )
+            for edge in parent_edges:
+                parent = nodes.get(str(edge.get("target")))
+                if parent is None or parent.get("type") != "agent":
+                    raise ProtocolValidationError(
+                        f"Sub-Agent node {name!r}'s Parent connection must lead to an Agent node."
+                    )
 
         if node_type in _NODE_TYPE_TO_HANDLE:
             expected_handle = _NODE_TYPE_TO_HANDLE[node_type]
@@ -1221,7 +1264,8 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
                 # "Dataset" either way.
                 leading_label = (
                     _NODE_TYPE_DISPLAY_NAMES[node_type]
-                    if node_type in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES | _KNOWLEDGE_NODE_TYPES
+                    if node_type
+                    in _DATASET_NODE_TYPES | _SCRIPT_NODE_TYPES | _KNOWLEDGE_NODE_TYPES | _SUB_AGENT_NODE_TYPES
                     else handle_label
                 )
                 raise ProtocolValidationError(
@@ -1251,11 +1295,9 @@ def sink_node_ids(graph: dict[str, Any]) -> list[str]:
     """Every node with no outgoing edges -- used both to validate a graph is
     runnable per-cell (exactly one sink required, see ``plan_cell_runs``) and
     by ``run_protocol`` itself to find the node whose output becomes a cell's
-    result. Excludes every pure-config-source node type (every LLM provider/
-    architectural pattern node, plus ``memory`` and ``mcp_tool``) -- these are
-    never a pipeline's "final output," whether or not they're connected to
-    anything (an unwired one would otherwise falsely count as an extra
-    sink)."""
+    result. Excludes every pipeline-skipped node type: connector config sources
+    and Sub-Agents, whose output belongs to a nested delegated turn rather than
+    the main pipeline. An unwired one must not falsely count as an extra sink."""
     nodes, downstream, _upstream = _adjacency(graph)
     return [
         nid for nid, node in nodes.items() if not downstream[nid] and node.get("type") not in _PURE_CONFIG_SOURCE_TYPES
@@ -1419,9 +1461,7 @@ def _compute_workspace_id(
 def _materialize_script(workspace_id: str | None, node_id: str, code: str) -> str:
     """Write a wired Script node's code next to the run's workspace; return its path.
 
-    ``""`` when there's nowhere to put it -- no workspace id (an unlinked
-    protocol run) or the write failed. The caller falls back to inlining the
-    code in the prompt, which is what this replaces.
+    ``""`` when no materialization id was supplied or the write failed.
 
     The file lives under the run's own workspace directory because that
     directory is already the shared surface between this process and the MCP
@@ -1450,8 +1490,33 @@ def _materialize_script(workspace_id: str | None, node_id: str, code: str) -> st
     return str(path)
 
 
+def _script_workspace_id(workspace_id: str | None, protocol_run_id: uuid.UUID | None, agent_node_id: str) -> str | None:
+    """Choose real workspace storage or an isolated standalone-run directory."""
+    safe_agent = _UNSAFE_WORKSPACE_LABEL_CHAR.sub("_", agent_node_id)
+    return workspace_id or (f"_protocol_runs/{protocol_run_id}/{safe_agent}" if protocol_run_id else None)
+
+
+def _cleanup_adhoc_scripts(ambient_meta: dict[str, Any] | None) -> None:
+    """Remove standalone-run script files after their consuming agent stops."""
+    adhoc_root = (Path(WORKSPACE_ROOT).resolve() / "_protocol_runs").resolve()
+    for item in (ambient_meta or {}).get("script_paths") or []:
+        path = Path(str(item.get("path") or "")).resolve()
+        if adhoc_root not in path.parents:
+            continue
+        with contextlib.suppress(OSError):
+            path.unlink()
+        for directory in (path.parent, path.parent.parent, path.parent.parent.parent):
+            with contextlib.suppress(OSError):
+                directory.rmdir()
+
+
 def _ambient_meta_for(
-    graph: dict[str, Any], node_id: str, workspace_id: str | None = None, *, slots: tuple[str, ...] = ()
+    graph: dict[str, Any],
+    node_id: str,
+    workspace_id: str | None = None,
+    *,
+    script_workspace_id: str | None = None,
+    slots: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """The node's Reference-route values, for Motoro's caller-ambient ``_meta``.
 
@@ -1539,7 +1604,7 @@ def _ambient_meta_for(
         if not code:
             continue
         script_node_id = str(config.get("node_id") or f"script-{index}")
-        script_path = _materialize_script(workspace_id, script_node_id, str(code))
+        script_path = _materialize_script(script_workspace_id or workspace_id, script_node_id, str(code))
         if script_path:
             script_paths.append(
                 {
@@ -1654,6 +1719,18 @@ async def _resolve_node_dataset(
                 "workspace_preseed_failed", extra={"node_id": node_id, "dataset": name, "error": "not found"}
             )
             continue
+        # Enrich this run's in-memory graph with current catalog metadata. The
+        # published graph still owns identity/order; the registry owns mutable
+        # descriptive facts, so old nodes gain the same discovery context as
+        # newly-created ones without rewriting a revision.
+        for config in _resolve_dataset_configs(graph, node_id):
+            if str(config.get("dataset_name") or "") == name:
+                config.update(
+                    description=reg.get("description"),
+                    target_column=reg.get("target_column"),
+                    split_state="split" if reg.get("train_path") and reg.get("test_path") else "unsplit",
+                    dictionary_available=bool(reg.get("dictionary_json")),
+                )
         if not (reg.get("train_path") and reg.get("test_path")):
             # Unsplit: no workspace to seed (``seed_cell_workspace`` says why),
             # so the raw file itself becomes the run's dataset and the agent
@@ -1708,6 +1785,7 @@ async def _node_run_context(
     workspace_id: str | None,
     owner_id: uuid.UUID,
     *,
+    protocol_run_id: uuid.UUID | None = None,
     slot_prefix: str | None = None,
     stage_plan: Any = None,
 ) -> tuple[dict[str, Any], NodeDataset]:
@@ -1721,16 +1799,19 @@ async def _node_run_context(
     Dataset connector the seeding is a no-op and the path comes from whatever
     an earlier node in the run already seeded.
 
-    An unsplit dataset supplies that path itself, and only as a fallback: a
-    workspace HEAD always wins, because a cell that has one has already moved
-    past the raw file (and a later Score step must fit on the engineered
-    matrix, not on the upload).
+    An explicitly wired unsplit dataset supplies the path itself and wins over
+    any existing workspace HEAD. A workspace is durable across reruns, so its
+    HEAD may belong to a dataset that was wired to an older protocol revision;
+    allowing it to override the current connector would silently give this
+    node data it is no longer attached to. Nodes with no Dataset connector
+    still inherit workspace HEAD, which is how later Score steps consume the
+    engineered matrix.
 
     *slot_prefix* gives this node a private workspace lineage (see
-    :func:`_resolve_node_dataset`). When it is set the ambient view is narrowed
-    to the slots that were just seeded for it, so a worker sharing a cell
-    workspace with several sibling workers still sees exactly one HEAD -- its
-    own -- rather than everybody's."""
+    :func:`_resolve_node_dataset`). Any node that wires Dataset connectors has
+    its ambient view narrowed to the slots just resolved for those connectors;
+    this also ensures a worker sharing a cell workspace with sibling workers
+    sees its own HEAD rather than everybody's."""
     dataset = await _resolve_node_dataset(
         graph, node_id, workspace_id, owner_id, slot_prefix=slot_prefix, stage_plan=stage_plan
     )
@@ -1738,22 +1819,29 @@ async def _node_run_context(
         graph,
         node_id,
         workspace_id,
-        slots=tuple(slot for _name, slot in dataset.seeded) if slot_prefix else (),
+        script_workspace_id=_script_workspace_id(workspace_id, protocol_run_id, node_id),
+        # A node with Dataset connectors sees only the slots those connectors
+        # just resolved. Nodes with none keep the whole-cell view so downstream
+        # stages can consume the workspace produced upstream.
+        slots=tuple(slot for _name, slot in dataset.seeded),
     )
-    if dataset.data_path and "data_path" not in ambient_meta:
+    if dataset.data_path:
+        ambient_meta.pop("data_slots", None)
         ambient_meta["data_path"] = dataset.data_path
+        ambient_meta.pop("target_column", None)
         if dataset.target_column:
             ambient_meta["target_column"] = dataset.target_column
+        ambient_meta["dataset_mode"] = "raw_unsplit"
     return ambient_meta, dataset
 
 
-def _resolve_llm_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+def _resolve_model_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """The node's connected ``llm`` node's own config -- agent/critic_gate
     nodes no longer carry ``model_config_data`` themselves, it's resolved
-    from the required LLM connector instead (``topological_order`` already
+    from the required Model connector instead (``topological_order`` already
     validated it exists exactly once)."""
     nodes, _downstream, _upstream = _adjacency(graph)
-    edges = _edges_with_handle(graph, node_id, "ai", direction="incoming")
+    edges = _edges_with_handle(graph, node_id, "model", direction="incoming")
     if not edges:
         return {}
     source = nodes.get(edges[0]["source"])
@@ -2091,6 +2179,27 @@ def _connected_agent_ids(graph: dict[str, Any], node_id: str) -> list[str]:
     return peers
 
 
+def _sub_agent_ids(graph: dict[str, Any], parent_id: str) -> list[str]:
+    """Active Sub-Agents owned by *parent_id*, in canvas wiring order."""
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
+    if (nodes.get(parent_id) or {}).get("type") != "agent":
+        return []
+    children: list[str] = []
+    for edge in graph.get("edges") or []:
+        if edge.get("target") != parent_id or edge.get("targetHandle") != "sub_agents":
+            continue
+        child_id = str(edge.get("source"))
+        child = nodes.get(child_id)
+        if (
+            child is not None
+            and child.get("type") == "sub_agent"
+            and _is_node_active(child)
+            and child_id not in children
+        ):
+            children.append(child_id)
+    return children
+
+
 def _can_deliver_communication(graph: dict[str, Any], from_agent_id: str, to_agent_id: str) -> bool:
     """Live authorization check, re-run for every consultation.
 
@@ -2102,7 +2211,9 @@ def _can_deliver_communication(graph: dict[str, Any], from_agent_id: str, to_age
     """
     if from_agent_id == to_agent_id:
         return False
-    return to_agent_id in _connected_agent_ids(graph, from_agent_id)
+    return to_agent_id in _connected_agent_ids(graph, from_agent_id) or to_agent_id in _sub_agent_ids(
+        graph, from_agent_id
+    )
 
 
 async def resolve_agent_card(
@@ -2122,7 +2233,7 @@ async def resolve_agent_card(
     """
     nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
     node = nodes.get(node_id)
-    if node is None or node.get("type") != "agent":
+    if node is None or node.get("type") not in ("agent", "sub_agent") or not _is_node_active(node):
         return None
     config = (node.get("data") or {}).get("config") or {}
     # The registered skill documents, not the ids: a peer reads names and
@@ -2135,7 +2246,7 @@ async def resolve_agent_card(
         description=config.get("description") or "",
         goal=config.get("goal") or "",
         skills=[dict(s) for s in skills],
-        model=_resolve_llm_config(graph, node_id).get("model"),
+        model=_resolve_model_config(graph, node_id).get("model"),
         metadata=metadata,
     )
 
@@ -2154,8 +2265,20 @@ async def resolve_available_agents(
     are bound no new function schemas (invariant 11).
     """
     cards: list[dict[str, Any]] = []
-    for peer_id in _connected_agent_ids(graph, node_id):
+    for peer_id in [*_connected_agent_ids(graph, node_id), *_sub_agent_ids(graph, node_id)]:
         card = await resolve_agent_card(graph, peer_id, owner_id=owner_id, metadata=metadata)
+        if card is not None:
+            cards.append(card.to_dict())
+    return cards
+
+
+async def resolve_available_sub_agents(
+    graph: dict[str, Any], node_id: str, *, owner_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    """Serialized cards for active Sub-Agents owned by one parent Agent."""
+    cards: list[dict[str, Any]] = []
+    for child_id in _sub_agent_ids(graph, node_id):
+        card = await resolve_agent_card(graph, child_id, owner_id=owner_id)
         if card is not None:
             cards.append(card.to_dict())
     return cards
@@ -2276,6 +2399,7 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
     nodes, _downstream, _upstream = _adjacency(graph)
     server_names: list[str] = []
     tool_names: list[str] = []
+    tool_descriptions: dict[str, str] = {}
     for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
         source = nodes.get(edge["source"])
         if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
@@ -2287,8 +2411,21 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
         if not server_name or server_name in server_names:
             continue
         server_names.append(server_name)
-        tool_names.extend(f"{server_name}.{name}" for name in bundle_config.get("tool_names") or [])
-    return {"server_names": server_names, "tool_names": tool_names}
+        label = str(
+            bundle_config.get("document_title")
+            or bundle_config.get("bundle_label")
+            or (source.get("data") or {}).get("label")
+            or server_name
+        )
+        summary = str(bundle_config.get("document_description") or bundle_config.get("bundle_description") or "")
+        for name in bundle_config.get("tool_names") or []:
+            full_name = f"{server_name}.{name}"
+            tool_names.append(full_name)
+            tool_descriptions[full_name] = f"Knowledge source: {label}. {summary}".strip()
+    resolved: dict[str, Any] = {"server_names": server_names, "tool_names": tool_names}
+    if tool_descriptions:
+        resolved["tool_descriptions"] = tool_descriptions
+    return resolved
 
 
 def _declares_a_field(contract: Any) -> bool:
@@ -2320,7 +2457,7 @@ def _resolve_output_contract(graph: dict[str, Any], node_id: str) -> dict[str, A
       from the SDK or a notebook, at any time. There is no cutover date after
       which nothing produces one.
 
-    So this is unlike ``_LEGACY_AI_HANDLES``, which covers a rename whose
+    So this is unlike ``_LEGACY_MODEL_HANDLES``, which covers a rename whose
     stored data really was migrated: nothing here ever becomes dead code.
 
     The two sources are never merged and never race -- ``topological_order``
@@ -2357,13 +2494,13 @@ def _resolve_output_contract(graph: dict[str, Any], node_id: str) -> dict[str, A
         if not parser_config.get("enabled", True):
             continue
         contract = parser_config.get("output_contract")
-        if _declares_a_field(contract):
+        if isinstance(contract, dict) and _declares_a_field(contract):
             return dict(contract)
     if wired:
         return None
     node = nodes.get(node_id) or {}
     legacy = ((node.get("data") or {}).get("config") or {}).get("output_contract")
-    return dict(legacy) if _declares_a_field(legacy) else None
+    return dict(legacy) if isinstance(legacy, dict) and _declares_a_field(legacy) else None
 
 
 def _output_shape_block(contract: dict[str, Any] | None) -> str:
@@ -2458,6 +2595,9 @@ def _resolve_dataset_tool_config(graph: dict[str, Any], node_id: str, *, unsplit
     if unsplit_dataset:
         server_names.append(SCIKIT_LEARN_SERVER_NAME)
         tool_names.extend(f"{SCIKIT_LEARN_SERVER_NAME}.{name}" for name in UNSPLIT_DATASET_AGENT_TOOLS)
+    if any(config.get("dictionary_available") for config in _resolve_dataset_configs(graph, node_id)):
+        server_names.append(EDA_SERVER_NAME)
+        tool_names.extend(f"{EDA_SERVER_NAME}.{name}" for name in DATASET_DICTIONARY_AGENT_TOOLS)
     return {"server_names": server_names, "tool_names": tool_names}
 
 
@@ -2497,6 +2637,7 @@ def _merge_tool_configs(*configs: dict[str, Any]) -> dict[str, Any]:
     """
     server_names: list[str] = []
     tool_names: list[str] = []
+    tool_descriptions: dict[str, str] = {}
     for config in configs:
         for name in config.get("server_names") or []:
             if name not in server_names:
@@ -2504,7 +2645,11 @@ def _merge_tool_configs(*configs: dict[str, Any]) -> dict[str, Any]:
         for name in config.get("tool_names") or []:
             if name not in tool_names:
                 tool_names.append(name)
-    return {"server_names": server_names, "tool_names": tool_names}
+        tool_descriptions.update(config.get("tool_descriptions") or {})
+    resolved: dict[str, Any] = {"server_names": server_names, "tool_names": tool_names}
+    if tool_descriptions:
+        resolved["tool_descriptions"] = tool_descriptions
+    return resolved
 
 
 def _is_node_active(node: dict[str, Any]) -> bool:
@@ -2901,6 +3046,72 @@ def validate_prompt_references(*, graph: dict[str, Any]) -> None:
                 )
 
 
+def _resource_catalog(graph: dict[str, Any], node_id: str) -> str:
+    """Compact semantic metadata for references wired into one agent.
+
+    Paths, ids, and source bodies stay out of the prompt. This block gives the
+    model only enough meaning to choose among already-authorized resources;
+    native tool schemas remain the interface for reading or executing them.
+    """
+    sections: list[str] = []
+
+    datasets = _resolve_dataset_configs(graph, node_id)
+    if datasets:
+        lines = []
+        for config in datasets:
+            name = str(config.get("dataset_name") or "dataset")
+            facts = [str(config.get("description") or "").strip()]
+            if config.get("target_column"):
+                facts.append(f"target={config['target_column']}")
+            if config.get("split_state"):
+                facts.append(f"state={config['split_state']}")
+            if config.get("dictionary_available"):
+                facts.append("data dictionary available through an authorized EDA tool")
+            detail = "; ".join(fact for fact in facts if fact)
+            lines.append(f"- {name}: {detail}" if detail else f"- {name}")
+        sections.append("Available datasets:\n" + "\n".join(lines))
+
+    nodes, _downstream, _upstream = _adjacency(graph)
+    knowledge_lines: list[str] = []
+    for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
+            continue
+        config = (source.get("data") or {}).get("config") or {}
+        if not config.get("enabled", True):
+            continue
+        label = str(
+            config.get("document_title")
+            or config.get("bundle_label")
+            or (source.get("data") or {}).get("label")
+            or "knowledge source"
+        )
+        facts = [str(config.get("document_description") or config.get("bundle_description") or "").strip()]
+        if config.get("document_type"):
+            facts.append(f"type={config['document_type']}")
+        tags = config.get("document_tags") or []
+        if tags:
+            facts.append("tags=" + ", ".join(str(tag) for tag in tags))
+        detail = "; ".join(fact for fact in facts if fact)
+        knowledge_lines.append(f"- {label}: {detail}" if detail else f"- {label}")
+    if knowledge_lines:
+        sections.append(
+            "Available knowledge sources (use their list/search/get tools to disclose content on demand):\n"
+            + "\n".join(knowledge_lines)
+        )
+
+    scripts = [config for config in _resolve_script_configs(graph, node_id) if config.get("code")]
+    if scripts:
+        lines = []
+        for index, config in enumerate(scripts, start=1):
+            name = str(config.get("name") or f"script-{index}")
+            description = str(config.get("description") or "").strip()
+            lines.append(f"- {name}: {description}" if description else f"- {name}")
+        sections.append("Available scripts (source remains out of context until execution):\n" + "\n".join(lines))
+
+    return "\n\n".join(sections)
+
+
 def _build_user_input(
     node: dict[str, Any],
     graph: dict[str, Any],
@@ -2937,9 +3148,10 @@ def _build_user_input(
     more than one is wired.
 
     *script_bound* says the wired scripts reached ``_meta`` as paths
-    (``_ambient_meta_for``). When it didn't -- an unlinked protocol run has no
-    workspace directory to write them to -- the code is inlined here as before,
-    because a prompt the model can copy from beats no scripts at all.
+    (``_ambient_meta_for``). Production callers provide either the experiment
+    workspace or an isolated standalone-run directory, so source stays out of
+    the prompt in both cases. The false branch is a defensive diagnostic for a
+    materialization failure.
 
     *seeded_datasets* are the ``(dataset name, workspace slot)`` pairs ASAREE
     already opened on the agent's behalf (``_resolve_node_dataset``). When
@@ -2992,6 +3204,10 @@ def _build_user_input(
     )
     if upstream_context:
         parts.append(upstream_context)
+
+    resource_catalog = _resource_catalog(graph, node["id"])
+    if resource_catalog:
+        parts.append(resource_catalog)
 
     dataset_configs = _resolve_dataset_configs(graph, node["id"])
     if dataset_configs and experiment_id is not None and effective_cell_label is not None:
@@ -3084,7 +3300,7 @@ def _build_user_input(
             )
         else:
             listed = "\n".join(
-                f'- {str(config.get("name") or f"script-{index}")!r} (id: {config["node_id"]!r})'
+                f"- {str(config.get('name') or f'script-{index}')!r} (id: {config['node_id']!r})"
                 for index, config in enumerate(script_configs, start=1)
             )
             parts.append(
@@ -3095,25 +3311,12 @@ def _build_user_input(
                 "select by id."
             )
     elif script_configs:
-        # No workspace directory to write it to (see _materialize_script), so
-        # fall back to what this did before: paste it and ask for a verbatim
-        # copy. Costs prompt tokens on every turn and is only as faithful as
-        # the model's transcription -- which is the whole reason the path
-        # above exists.
-        if len(script_configs) == 1:
-            parts.append(
-                "Script to pass verbatim as the relevant tool's own code argument (run_wired_script's or "
-                f"run_model_script's `code`):\n```python\n{script_configs[0]['code']}\n```"
-            )
-        else:
-            blocks = []
-            for index, config in enumerate(script_configs, start=1):
-                name = str(config.get("name") or f"script-{index}")
-                blocks.append(f"Script {name!r} (id: {config['node_id']!r}):\n```python\n{config['code']}\n```")
-            parts.append(
-                "Scripts to pass verbatim as the relevant tool's own code argument "
-                "(run_wired_script's or run_model_script's `code`):\n" + "\n\n".join(blocks)
-            )
+        parts.append(
+            "Script context:\n"
+            "A script is wired into this unlinked run, but no isolated run workspace exists in which to materialize "
+            "it. Its source has deliberately not been inserted into the prompt. Link the protocol to an experiment "
+            "to execute wired scripts."
+        )
 
     # The shape block is the only *prose* this function composes. Everything
     # else appended here is either the user's own text or a labelled, fenced
@@ -3209,6 +3412,14 @@ async def _preview_node_dataset(graph: dict[str, Any], node_id: str, owner_id: u
         reg = await fetch_owned_registration(name, owner_id)
         if reg is None:
             continue
+        for config in _resolve_dataset_configs(graph, node_id):
+            if str(config.get("dataset_name") or "") == name:
+                config.update(
+                    description=reg.get("description"),
+                    target_column=reg.get("target_column"),
+                    split_state="split" if reg.get("train_path") and reg.get("test_path") else "unsplit",
+                    dictionary_available=bool(reg.get("dictionary_json")),
+                )
         if not (reg.get("train_path") and reg.get("test_path")):
             if solo:
                 return NodeDataset(
@@ -3276,7 +3487,7 @@ async def preview_node_prompt(
     node = nodes.get(node_id)
     if node is None:
         raise ProtocolValidationError(f"No node {node_id!r} on this canvas.")
-    if node.get("type") != "agent":
+    if node.get("type") not in ("agent", "sub_agent"):
         raise ProtocolValidationError(f"{_node_display_name(node)} is not an agent, so it is never given a prompt.")
 
     node_runs = {
@@ -3575,14 +3786,14 @@ async def _run_agent_node(
     # into the description instead, purely as a human label.
     agent_name = f"protocol-{protocol_id}-{node['id']}"
     # Model/tool/execution-pattern are no longer fields on the agent's own
-    # config -- resolved from its required LLM connector, its (optional,
+    # config -- resolved from its required Model connector, its (optional,
     # repeatable) Tool connectors, and its optional Architectural Pattern
     # connector instead (topological_order already validated their shape).
     # output_contract joined them, with one extra argument the others didn't
     # need: extraction is a second LLM call per run, so its cost belongs on the
     # canvas. Unlike the three above, the node's own field is still read as a
     # fallback and always will be -- see _resolve_output_contract.
-    model_config_data = {k: v for k, v in _resolve_llm_config(graph, node["id"]).items() if v is not None}
+    model_config_data = {k: v for k, v in _resolve_model_config(graph, node["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
     # Four connectors feed one allow-list. The Knowledge connector's OKF
     # bundles and documents are MCP servers like any other, so they land here
@@ -3644,6 +3855,16 @@ async def _run_agent_node(
     )
     assert agent is not None
 
+    resolved_ambient = (
+        ambient_meta
+        if ambient_meta is not None
+        else _ambient_meta_for(
+            graph,
+            node["id"],
+            workspace_id,
+            script_workspace_id=_script_workspace_id(workspace_id, protocol_run_id, str(node["id"])),
+        )
+    )
     run = await create_run(
         agent_id=agent.id,
         user_input=user_input,
@@ -3656,15 +3877,7 @@ async def _run_agent_node(
             # Precomputed by the caller when it also needed to know whether the
             # script got bound (_build_user_input's script_bound); recomputed
             # here only for a caller that didn't care.
-            **(
-                {"ambient_meta": resolved_ambient}
-                if (
-                    resolved_ambient := (
-                        ambient_meta if ambient_meta is not None else _ambient_meta_for(graph, node["id"], workspace_id)
-                    )
-                )
-                else {}
-            ),
+            **({"ambient_meta": resolved_ambient} if resolved_ambient else {}),
         },
     )
     timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
@@ -3681,6 +3894,8 @@ async def _run_agent_node(
         return None, f"run exceeded its {timeout}s execution budget", run.id, None
     except Exception as e:  # noqa: BLE001 -- same boundary reasoning as execute_run_task
         return None, f"{type(e).__name__}: {e}", run.id, None
+    finally:
+        _cleanup_adhoc_scripts(resolved_ambient)
 
     finished = await get_run(run.id)
     if finished is None:
@@ -3720,10 +3935,10 @@ async def _run_critic(
     ``CRITIC_TOOLS = []`` / ``SINGLE_PASS_PATTERN``), and its
     ``output_contract`` is always :data:`CRITIC_OUTPUT_CONTRACT` -- not
     whatever (if anything) is in the node's own config. Model is resolved
-    from its required LLM connector, same as an agent node."""
+    from its required Model connector, same as an agent node."""
     config = gate["data"]["config"]
     agent_name = f"protocol-{protocol_id}-{gate['id']}"
-    model_config_data = {k: v for k, v in _resolve_llm_config(graph, gate["id"]).items() if v is not None}
+    model_config_data = {k: v for k, v in _resolve_model_config(graph, gate["id"]).items() if v is not None}
     model_config = ModelConfig(**model_config_data)
     pattern_config = PatternConfig(execution_pattern="single_agent_baseline").model_dump()
     goal = config.get("goal") or "Review the given output and return an approval verdict with feedback."
@@ -3834,7 +4049,12 @@ async def _run_gated_worker(
     # worker against the same references, so re-materializing the script per
     # attempt would only rewrite an identical file.
     worker_ambient, worker_dataset = await _node_run_context(
-        graph, worker["id"], workspace_id, owner_id, stage_plan=stage_plan
+        graph,
+        worker["id"],
+        workspace_id,
+        owner_id,
+        protocol_run_id=protocol_run_id,
+        stage_plan=stage_plan,
     )
     base_instruction = _build_user_input(
         worker,
@@ -4202,21 +4422,23 @@ def validate_single_node_runnable(graph: dict[str, Any], node_id: str) -> dict[s
     node = nodes.get(node_id)
     if node is None:
         raise ProtocolValidationError(f"No such node: {node_id!r}")
-    if node.get("type") != "agent":
-        raise ProtocolValidationError("Only Agent nodes can be run on their own.")
+    if node.get("type") not in ("agent", "sub_agent"):
+        raise ProtocolValidationError("Only Agent and Sub-Agent nodes can be run on their own.")
     if _upstream_ids(graph, node_id):
         raise ProtocolValidationError(
             "This agent has upstream input from another node -- running it alone isn't supported yet. "
             "Use the canvas's main Run button to run the whole pipeline."
         )
-    llm_edges = _edges_with_handle(graph, node_id, "ai", direction="incoming")
-    if len(llm_edges) != 1:
+    model_edges = _edges_with_handle(graph, node_id, "model", direction="incoming")
+    if len(model_edges) != 1:
         raise ProtocolValidationError(
-            f"Node {_node_display_name(node)!r} must have exactly one AI connection (found {len(llm_edges)})."
+            f"Node {_node_display_name(node)!r} must have exactly one Model connection (found {len(model_edges)})."
         )
-    llm_source = nodes.get(llm_edges[0]["source"])
-    if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
-        raise ProtocolValidationError(f"Node {_node_display_name(node)!r}'s AI connection must come from an AI node.")
+    model_source = nodes.get(model_edges[0]["source"])
+    if model_source is None or model_source.get("type") not in _MODEL_NODE_TYPES:
+        raise ProtocolValidationError(
+            f"Node {_node_display_name(node)!r}'s Model connection must come from a Model node."
+        )
     return node
 
 
@@ -4248,16 +4470,16 @@ def validate_conversation_entry(graph: dict[str, Any], node_id: str) -> dict[str
     # or the consultation fails partway through a run the user already paid for.
     for participant_id in [node_id, *peers]:
         participant = nodes[participant_id]
-        llm_edges = _edges_with_handle(graph, participant_id, "ai", direction="incoming")
-        if len(llm_edges) != 1:
+        model_edges = _edges_with_handle(graph, participant_id, "model", direction="incoming")
+        if len(model_edges) != 1:
             raise ProtocolValidationError(
-                f"Node {_node_display_name(participant)!r} must have exactly one AI connection "
-                f"(found {len(llm_edges)})."
+                f"Node {_node_display_name(participant)!r} must have exactly one Model connection "
+                f"(found {len(model_edges)})."
             )
-        llm_source = nodes.get(str(llm_edges[0]["source"]))
-        if llm_source is None or llm_source.get("type") not in _LLM_NODE_TYPES:
+        model_source = nodes.get(str(model_edges[0]["source"]))
+        if model_source is None or model_source.get("type") not in _MODEL_NODE_TYPES:
             raise ProtocolValidationError(
-                f"Node {_node_display_name(participant)!r}'s AI connection must come from an AI node."
+                f"Node {_node_display_name(participant)!r}'s Model connection must come from a Model node."
             )
     return node
 
@@ -4295,7 +4517,12 @@ async def _run_single_node(
         experiment = await get_experiment(db, experiment_id) if experiment_id else None
     single_design_spec = experiment.design_spec if experiment is not None else None
     ambient_meta, node_dataset = await _node_run_context(
-        graph, node["id"], workspace_id, owner_id, stage_plan=stage_plan_spec(single_design_spec, graph=graph)
+        graph,
+        node["id"],
+        workspace_id,
+        owner_id,
+        protocol_run_id=protocol_run_id,
+        stage_plan=stage_plan_spec(single_design_spec, graph=graph),
     )
     user_input = _build_user_input(
         node,
@@ -4467,7 +4694,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         entry_agent_id = resolve_conversation_entry_id(graph)  # already validated above
         entry_node = next(n for n in graph["nodes"] if str(n.get("id")) == entry_agent_id)
         ambient_meta, entry_dataset = await _node_run_context(
-            graph, entry_agent_id, workspace_id, owner_id, stage_plan=stage_plan
+            graph,
+            entry_agent_id,
+            workspace_id,
+            owner_id,
+            protocol_run_id=protocol_run_id,
+            stage_plan=stage_plan,
         )
         node_run, conversation_status = await execute_conversation(
             protocol_run_id,
@@ -4515,7 +4747,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         # own Dataset/Script cues are rebuilt inside each of its two turns,
         # which is where the slot keys it will actually be given are known.
         ambient_meta, supervisor_dataset = await _node_run_context(
-            graph, roles.supervisor, workspace_id, owner_id, stage_plan=stage_plan
+            graph,
+            roles.supervisor,
+            workspace_id,
+            owner_id,
+            protocol_run_id=protocol_run_id,
+            stage_plan=stage_plan,
         )
         node_run, supervisor_status = await execute_supervisor_architecture(
             protocol_run_id,
@@ -4553,6 +4790,26 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         sinks = sink_node_ids(graph)
         result_node_id = sinks[0] if len(sinks) == 1 else None
 
+    pipeline_messenger = None
+    if order:
+        pipeline_parents = [
+            str(node.get("id"))
+            for node in order
+            if node.get("type") == "agent" and _sub_agent_ids(graph, str(node.get("id")))
+        ]
+        if pipeline_parents:
+            from asaree.services.agent_messenger import AgentMessenger
+
+            pipeline_messenger = AgentMessenger(
+                protocol_id=protocol_id,
+                protocol_run_id=protocol_run_id,
+                owner_id=owner_id,
+                graph=graph,
+                entry_agent_id=pipeline_parents[0],
+                workspace_id=workspace_id,
+                stage_plan=stage_plan,
+            )
+
     for node in order:
         node_id = node["id"]
         if node_id in node_runs:
@@ -4578,12 +4835,16 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             continue
 
         if node.get("type") in _PURE_CONFIG_SOURCE_TYPES:
-            # Pure config sources -- never get their own execution turn (see
-            # _resolve_llm_config/_resolve_tool_config). Memory and
-            # architectural-pattern nodes are visual scaffolding only this
-            # phase: connecting one declares intent for a future phase, but
-            # has no runtime effect yet.
-            node_runs[node_id] = {"status": "completed", "output_text": None, "error": None}
+            # A Sub-Agent has no automatic pipeline turn. It starts skipped
+            # and AgentMessenger overwrites that status only if its parent
+            # actually invokes it; this also keeps its declared metrics blank
+            # when it was available but unused. The other members are pure
+            # config sources and count as resolved by the graph walk.
+            node_runs[node_id] = (
+                {"status": "skipped"}
+                if node.get("type") == "sub_agent"
+                else {"status": "completed", "output_text": None, "error": None}
+            )
             async with get_session() as db:
                 await update_node_run(db, protocol_run_id, node_id, node_runs[node_id])
             continue
@@ -4647,7 +4908,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             )
         else:
             ambient_meta, node_dataset = await _node_run_context(
-                graph, node_id, workspace_id, owner_id, stage_plan=stage_plan
+                graph,
+                node_id,
+                workspace_id,
+                owner_id,
+                protocol_run_id=protocol_run_id,
+                stage_plan=stage_plan,
             )
             user_input = _build_user_input(
                 node,
@@ -4669,18 +4935,44 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 node_runs,
                 unresolved_out=unresolved,
             )
-            output_text, error, run_id, extraction = await _run_agent_node(
-                node,
-                protocol_id=protocol_id,
-                protocol_run_id=protocol_run_id,
-                owner_id=owner_id,
-                user_input=user_input,
-                graph=graph,
-                system_prompt=node_system_prompt,
-                workspace_id=workspace_id,
-                ambient_meta=ambient_meta,
-                unsplit_dataset=node_dataset.unsplit_name,
-            )
+            available_sub_agents = await resolve_available_sub_agents(graph, node_id, owner_id=owner_id)
+            if pipeline_messenger is not None and available_sub_agents:
+                from asaree.services.agent_messenger import USER_PARTICIPANT
+
+                pipeline_messenger.append(
+                    from_agent_id=USER_PARTICIPANT,
+                    to_agent_id=node_id,
+                    parts=[{"kind": "text", "text": user_input}],
+                )
+                await pipeline_messenger.checkpoint()
+                with pipeline_messenger.turn(node_id):
+                    output_text, error, run_id, extraction = await _run_agent_node(
+                        node,
+                        protocol_id=protocol_id,
+                        protocol_run_id=protocol_run_id,
+                        owner_id=owner_id,
+                        user_input=user_input,
+                        graph=graph,
+                        system_prompt=node_system_prompt,
+                        workspace_id=workspace_id,
+                        ambient_meta=ambient_meta,
+                        available_agents=available_sub_agents,
+                        agent_messenger=pipeline_messenger,
+                        unsplit_dataset=node_dataset.unsplit_name,
+                    )
+            else:
+                output_text, error, run_id, extraction = await _run_agent_node(
+                    node,
+                    protocol_id=protocol_id,
+                    protocol_run_id=protocol_run_id,
+                    owner_id=owner_id,
+                    user_input=user_input,
+                    graph=graph,
+                    system_prompt=node_system_prompt,
+                    workspace_id=workspace_id,
+                    ambient_meta=ambient_meta,
+                    unsplit_dataset=node_dataset.unsplit_name,
+                )
 
         if error == _AGENT_CANCELLED:
             node_runs[node_id] = {
@@ -4709,6 +5001,10 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 failed = True
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, node_runs[node_id])
+    if pipeline_messenger is not None:
+        pipeline_messenger.set_state("canceled" if cancelled else ("failed" if failed else "completed"))
+        await pipeline_messenger.checkpoint()
+
     if coordination_strategy_slug(design_spec) == "sequential":
         # A chain's handoffs are agent-to-agent messages, so they get the same
         # transcript a conversation does. Best-effort: a transcript is a view of
@@ -4732,6 +5028,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                     # transcript is meant to read as what was asked.
                     entry_prompt=_node_seed_prompt(head) if head else "",
                     state="canceled" if cancelled else ("failed" if failed else "completed"),
+                    messenger=pipeline_messenger,
                 )
             except Exception:
                 logger.exception("sequential_transcript_failed", extra={"protocol_run_id": str(protocol_run_id)})
@@ -4740,9 +5037,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         if cancelled:
             await set_status(db, protocol_run_id, status="cancelled")
         elif failed:
-            # A conversation that ran out of budget gets its own terminal status
-            # rather than being flattened into "failed" -- it's the one failure
-            # mode the user fixes by raising a cap, not by fixing the protocol.
+            # Recursive conversation-depth exhaustion retains its distinct
+            # terminal status instead of being flattened into "failed".
             await set_status(db, protocol_run_id, status=failure_status, error=failure_error)
         else:
             await set_status(db, protocol_run_id, status="finalizing")

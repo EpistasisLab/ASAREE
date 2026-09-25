@@ -11,11 +11,11 @@ import { Split } from 'lucide-react'
 // nothing about a 16px icon said *what* it marked: a `size-7` disc (exactly
 // half CircleNode's own `size-14`, so it reads as "attached to this node",
 // never as a node in its own right) with a "N factor(s)" caption under it, the
-// same circle-above-label idiom every Pattern/LLM/Tool node already uses.
+// same circle-above-label idiom every Pattern/Model/Tool node already uses.
 //
 // Violet (`--chart-2`), not the host node's `--card-accent`: violet is already
 // this app's factor hue (FACTOR_TRIGGER_CLASSNAME's own button, the factor
-// editor dialog), and CLAUDE.md's colour rule wants a tint to mean something
+// editor dialog), and AGENTS.md's colour rule wants a tint to mean something
 // -- here it means "factor", the one thing this badge is for, so it must not
 // dissolve into whatever hue the node underneath happens to be.
 //

@@ -426,7 +426,7 @@ async def register_bundle(*, owner_id: uuid.UUID, relative_path: str | None) -> 
     """
     path = validate_bundle_path(relative_path)
     name = server_name_for(owner_id, path)
-    existing = await mcp_service.get_server_by_name(name)
+    existing = await mcp_service.get_server_by_name(name, owner_id=owner_id)
     if existing is not None:
         return existing
     return await mcp_service.register_server(

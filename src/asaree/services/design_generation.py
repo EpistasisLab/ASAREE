@@ -76,7 +76,7 @@ def generate_design(factors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [dict(zip(names, values, strict=True)) for values in itertools.product(*levels_lists)]
 
 
-# Checked in order for a dict-valued level (e.g. a whole LLM/Tool/Dataset node
+# Checked in order for a dict-valued level (e.g. a whole Model/Tool/Dataset node
 # config or a pattern-override payload bound as a single factor) -- whichever
 # of these identifying keys is present first names the slug, since one of them
 # is always the thing a human actually wants to see in a cell label

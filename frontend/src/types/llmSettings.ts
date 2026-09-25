@@ -20,7 +20,7 @@ export interface LLMSetting {
 // Matches ASAREE's backend SUPPORTED_PROVIDERS (credential_resolver.py) --
 // every provider a per-user credential can be resolved for. The single
 // shared source for provider display info -- CreateCredentialDialog's
-// provider picker and the LLM node inspector's Credential section both read
+// provider picker and the Model node inspector's Credential section both read
 // this instead of keeping their own copy.
 export const LLM_PROVIDER_CATALOG: { id: LLMProvider; label: string; description: string }[] = [
   { id: 'anthropic', label: 'Anthropic', description: 'Route requests through your own Anthropic account' },

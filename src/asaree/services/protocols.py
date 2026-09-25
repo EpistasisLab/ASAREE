@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.protocol import Protocol
+from asaree.services.protocol_graph_schema import normalize_protocol_graph
 
 _DEFAULT_GRAPH: dict[str, Any] = {"nodes": [], "edges": []}
 _SETTABLE_FIELDS = frozenset({"name", "description", "experiment_id", "graph"})
@@ -86,7 +87,7 @@ async def create_protocol(
         name=name,
         description=description,
         experiment_id=experiment_id,
-        graph=graph if graph is not None else dict(_DEFAULT_GRAPH),
+        graph=normalize_protocol_graph(graph) if graph is not None else dict(_DEFAULT_GRAPH),
         owner_id=owner_id,
     )
     db.add(protocol)
@@ -140,6 +141,8 @@ async def update_protocol(
     protocol = await get_protocol(db, protocol_id)
     if protocol is None:
         return None
+    if isinstance(fields.get("graph"), dict):
+        fields = {**fields, "graph": normalize_protocol_graph(fields["graph"])}
     for key, value in fields.items():
         setattr(protocol, key, value)
     await db.flush()

@@ -17,10 +17,12 @@ import pytest_asyncio
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.user import User
 from asaree.services.datasets import (
+    DatasetNameConflictError,
     DatasetValidationError,
     create_dataset,
     delete_dataset,
     get_dataset,
+    get_dataset_by_name,
     quick_split_dataset,
     register_manual_split,
 )
@@ -65,6 +67,55 @@ async def test_create_dataset_stores_raw_file_without_splitting(owner_id: uuid.U
         assert dataset.train_sha256 is None
         assert dataset.test_sha256 is None
         await delete_dataset(db, dataset.id)
+
+
+async def test_dataset_names_are_scoped_per_owner(owner_id: uuid.UUID) -> None:
+    name = f"shared-dataset-{uuid.uuid4().hex}"
+    async with get_session() as db:
+        other = User(
+            email=f"dataset-other-{uuid.uuid4().hex}@example.com",
+            hashed_password="not-a-real-hash",
+            display_name="Other Dataset User",
+        )
+        db.add(other)
+        await db.flush()
+        other_owner_id = other.id
+
+    dataset_ids: list[uuid.UUID] = []
+    try:
+        for current_owner_id in (owner_id, other_owner_id):
+            async with get_session() as db:
+                dataset = await create_dataset(db, name=name, csv_bytes=_CSV, owner_id=current_owner_id)
+                dataset_ids.append(dataset.id)
+
+        async with get_session() as db:
+            first = await get_dataset_by_name(db, name, owner_id=owner_id)
+            second = await get_dataset_by_name(db, name, owner_id=other_owner_id)
+            assert first is not None and first.id == dataset_ids[0]
+            assert second is not None and second.id == dataset_ids[1]
+    finally:
+        for dataset_id in dataset_ids:
+            async with get_session() as db:
+                await delete_dataset(db, dataset_id)
+        async with get_session() as db:
+            other = await db.get(User, other_owner_id)
+            if other is not None:
+                await db.delete(other)
+
+
+async def test_dataset_names_remain_unique_within_one_owner(owner_id: uuid.UUID) -> None:
+    name = f"duplicate-dataset-{uuid.uuid4().hex}"
+    async with get_session() as db:
+        dataset = await create_dataset(db, name=name, csv_bytes=_CSV, owner_id=owner_id)
+        dataset_id = dataset.id
+
+    try:
+        with pytest.raises(DatasetNameConflictError, match="already in use"):
+            async with get_session() as db:
+                await create_dataset(db, name=name, csv_bytes=_CSV, owner_id=owner_id)
+    finally:
+        async with get_session() as db:
+            await delete_dataset(db, dataset_id)
 
 
 async def test_create_dataset_rejects_unparseable_csv(owner_id: uuid.UUID) -> None:

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from asaree_workspace_core import workspace as ws_module
 
-from asaree.services.dataset_workspaces import head_data_locator
+from asaree.services.dataset_workspaces import head_data_locator, raw_training_data_locators
 
 
 def _write_state(root: Path, workspace_id: str, state: dict) -> None:
@@ -41,6 +41,13 @@ def test_head_data_locator_names_the_head_version(tmp_path: Path, monkeypatch: p
     # from the file they're handed, so naming the frozen test parquet would
     # invite fitting on it.
     assert head_data_locator("exp1/cellA") == ("/ws/v1_dc/train.parquet", "outcome")
+    assert raw_training_data_locators("exp1/cellA") == {
+        "dataset:default": {
+            "name": "default",
+            "data_path": "/uploads/train.parquet",
+            "target_column": "outcome",
+        }
+    }
 
 
 def test_head_data_locator_is_total(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,3 +59,4 @@ def test_head_data_locator_is_total(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     _write_state(tmp_path, "exp1/cellB", {"target_column": "outcome", "head": "v9", "versions": []})
     assert head_data_locator("exp1/cellB") == ("", "")  # HEAD missing from state
+    assert raw_training_data_locators("exp1/never-seeded") == {}

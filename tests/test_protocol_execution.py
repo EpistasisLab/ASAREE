@@ -31,12 +31,12 @@ from asaree.services.protocol_execution import (
 )
 from asaree.services.protocol_revisions import publish_protocol
 from asaree.services.protocol_runs import create_protocol_run, request_protocol_run_cancellation
-from asaree.services.protocols import create_protocol, delete_protocol
+from asaree.services.protocols import create_protocol, delete_protocol, update_protocol
 
 
 def _graph(node_ids: list[str], edges: list[tuple[str, str]]) -> dict:
     # "step" is a deliberately-unregistered node type -- not "agent" (needs
-    # an LLM connector) and not "mcp_tool" (now handle-restricted to its own
+    # a Model connector) and not "mcp_tool" (now handle-restricted to its own
     # Tool connector, see _MCP_TOOL_NODE_TYPES) -- so these pure DAG-shape
     # tests (topological order, cycle detection, sink detection) can wire
     # plain edges freely with zero setup. topological_order only applies
@@ -57,13 +57,13 @@ def _edges(*pairs: tuple[str, str]) -> list[dict]:
 
 
 def _llm_node(node_id: str = "llm", config: dict | None = None) -> dict:
-    # llm_anthropic -- one arbitrary member of the LLM node-type family
-    # (pe._LLM_NODE_TYPES); which one doesn't matter for these DAG-shape/
+    # model_anthropic -- one arbitrary member of the Model node-type family
+    # (pe._MODEL_NODE_TYPES); which one doesn't matter for these DAG-shape/
     # validation tests, only that it's a family member.
-    return {"id": node_id, "type": "llm_anthropic", "data": {"label": "", "config": config or {}}}
+    return {"id": node_id, "type": "model_anthropic", "data": {"label": "", "config": config or {}}}
 
 
-def _llm_edge(source: str, target: str, handle: str = "ai") -> dict:
+def _llm_edge(source: str, target: str, handle: str = "model") -> dict:
     # `handle` is only ever overridden to exercise the pre-rename "llm"
     # spelling that migration 3f1a7c9b2e04 rewrites -- see
     # test_legacy_llm_handle_still_resolves.
@@ -213,11 +213,76 @@ def _knowledge_edge(source: str, target: str) -> dict:
 
 
 def _agent_with_llm(node_id: str, llm_id: str = "llm") -> tuple[dict, dict]:
-    """A minimal valid agent + its required LLM connector edge -- the
+    """A minimal valid agent + its required Model connector edge -- the
     boilerplate every connector-validation test below needs just to get
-    past the "every agent needs exactly one AI connection" rule so it can
+    past the "every agent needs exactly one Model connection" rule so it can
     test the thing it actually cares about."""
     return _node(node_id, "agent"), _llm_edge(llm_id, node_id)
+
+
+def _sub_agent_edge(child: str, parent: str) -> dict:
+    return {
+        "id": f"{child}-{parent}-sub-agent",
+        "source": child,
+        "sourceHandle": "sub_agents",
+        "target": parent,
+        "targetHandle": "sub_agents",
+    }
+
+
+def test_sub_agent_is_a_callable_connector_not_a_pipeline_sink() -> None:
+    parent, parent_model = _agent_with_llm("parent", "parent-model")
+    child = _node("child", "sub_agent")
+    graph = {
+        "nodes": [parent, child, _llm_node("parent-model"), _llm_node("child-model")],
+        "edges": [parent_model, _llm_edge("child-model", "child"), _sub_agent_edge("child", "parent")],
+    }
+
+    topological_order(graph)
+
+    assert pe.sink_node_ids(graph) == ["parent"]
+    assert pe._sub_agent_ids(graph, "parent") == ["child"]
+    assert pe._can_deliver_communication(graph, "parent", "child") is True
+    assert pe._can_deliver_communication(graph, "child", "parent") is False
+
+
+def test_sub_agent_cannot_have_two_parents() -> None:
+    parent_a, parent_a_model = _agent_with_llm("parent-a", "model-a")
+    parent_b, parent_b_model = _agent_with_llm("parent-b", "model-b")
+    child = _node("child", "sub_agent")
+    graph = {
+        "nodes": [parent_a, parent_b, child, _llm_node("model-a"), _llm_node("model-b"), _llm_node("model-c")],
+        "edges": [
+            parent_a_model,
+            parent_b_model,
+            _llm_edge("model-c", "child"),
+            _sub_agent_edge("child", "parent-a"),
+            _sub_agent_edge("child", "parent-b"),
+        ],
+    }
+
+    with pytest.raises(ProtocolValidationError, match="exactly one parent"):
+        topological_order(graph)
+
+
+def test_only_active_connected_sub_agents_require_a_model() -> None:
+    parent, parent_model = _agent_with_llm("parent", "parent-model")
+    model = _llm_node("parent-model")
+    orphan = _node("orphan", "sub_agent")
+    inactive = _node("inactive", "sub_agent")
+    inactive["data"]["active"] = False
+    graph = {
+        "nodes": [parent, model, orphan, inactive],
+        "edges": [parent_model, _sub_agent_edge("inactive", "parent")],
+    }
+
+    topological_order(graph)
+
+    active = _node("active", "sub_agent")
+    graph["nodes"].append(active)
+    graph["edges"].append(_sub_agent_edge("active", "parent"))
+    with pytest.raises(ProtocolValidationError, match="must have exactly one Model"):
+        topological_order(graph)
 
 
 def test_linear_order() -> None:
@@ -372,10 +437,9 @@ def test_a_reader_downstream_of_a_deactivated_node_sees_that_nodes_name() -> Non
 
 
 def test_build_user_input_cues_dataset_without_dictating_ids() -> None:
-    # The ids the prompt used to spell out -- experiment_id, cell_label, the
-    # dataset name -- all reach open_workspace as ambient _meta now. Anything
-    # the model has to retype is something it can retype wrong, so the prompt
-    # keeps only the part _meta can't carry: that there IS a dataset waiting.
+    # Operational ids reach open_workspace as ambient _meta. The dataset's
+    # descriptive metadata is deliberately visible in the resource catalog so
+    # the model can decide whether and how to use the resource.
     agent, agent_llm_edge = _agent_with_llm("a")
     dataset = _dataset_node(dataset_name="spinal-fusion-v1")
     graph = {"nodes": [agent, dataset], "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")]}
@@ -384,9 +448,41 @@ def test_build_user_input_cues_dataset_without_dictating_ids() -> None:
     )
     assert "Dataset context:" in result
     assert "open_workspace()" in result
-    assert "spinal-fusion-v1" not in result
+    assert "Available datasets:" in result
+    assert "spinal-fusion-v1" in result
     assert str(uuid.UUID(int=1)) not in result
     assert "tier_a__rep_0" not in result
+
+
+def test_resource_catalog_exposes_meaning_but_not_bodies_or_paths() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node()
+    dataset["data"]["config"].update(
+        description="Postoperative outcomes cohort", target_column="fusion", dictionary_available=True
+    )
+    knowledge = _okf_bundle_node()
+    knowledge["data"]["config"].update(bundle_label="Spine ontology", bundle_description="Clinical concepts")
+    script = _script_node(code="SECRET_SCRIPT_BODY")
+    script["data"]["config"]["description"] = "Compute the validated score"
+    graph = {
+        "nodes": [agent, dataset, knowledge, script],
+        "edges": [
+            agent_llm_edge,
+            _dataset_edge(dataset["id"], "a"),
+            _knowledge_edge(knowledge["id"], "a"),
+            _script_edge(script["id"], "a"),
+        ],
+    }
+
+    catalog = pe._resource_catalog(graph, "a")
+
+    assert "Postoperative outcomes cohort" in catalog
+    assert "target=fusion" in catalog
+    assert "data dictionary available" in catalog
+    assert "Spine ontology: Clinical concepts" in catalog
+    assert "scoring-script: Compute the validated score" in catalog
+    assert "SECRET_SCRIPT_BODY" not in catalog
+    assert "/home/r/okf/spine" not in catalog
 
 
 def test_ambient_meta_carries_every_wired_dataset_name() -> None:
@@ -458,6 +554,7 @@ def test_build_user_input_states_the_dataset_is_already_open_when_preseeded() ->
 def _registration(**overrides: object) -> dict[str, object]:
     """A split registration as ``fetch_owned_registration`` returns one."""
     return {
+        "description": "A registered test dataset",
         "target_column": "outcome",
         "raw_path": "/data/raw.csv",
         "train_path": "/data/train.parquet",
@@ -641,6 +738,7 @@ async def test_an_unsplit_dataset_binds_its_raw_file_instead_of_a_workspace(
     assert dataset.seeded == ()
     assert ambient["data_path"] == "/data/spine/raw.csv"
     assert ambient["target_column"] == "outcome"
+    assert ambient["dataset_mode"] == "raw_unsplit"
 
     # And the prompt says so, because a model left to infer it reaches for
     # open_workspace -- which has nothing to open.
@@ -657,22 +755,71 @@ async def test_an_unsplit_dataset_binds_its_raw_file_instead_of_a_workspace(
     assert "train_test_split" in result
 
 
-async def test_a_workspace_head_wins_over_an_unsplit_raw_file(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The raw file is a fallback, never an override: a cell with a workspace has
-    # already moved past the upload, and a Score step must fit the engineered
-    # matrix at HEAD rather than the raw CSV.
+async def test_an_attached_unsplit_dataset_wins_over_a_stale_workspace_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A workspace survives reruns and may belong to a Dataset connector from an
+    # older published revision. The current node's explicit unsplit attachment
+    # must win; only nodes with no Dataset connector inherit upstream HEAD.
     async def _reg(name: str, owner_id: uuid.UUID) -> dict[str, object]:
-        return _registration(train_path=None, test_path=None)
+        return _registration(train_path=None, test_path=None, raw_path="/data/current.csv")
 
     monkeypatch.setattr(pe, "fetch_owned_registration", _reg)
     monkeypatch.setattr(pe, "head_data_locator", lambda wid: ("/ws/v2_fte/train.parquet", "outcome"))
+    monkeypatch.setattr(
+        pe,
+        "slot_data_locators",
+        lambda wid: {
+            "dataset:old": {"data_path": "/ws/old.parquet", "target_column": "old_target"},
+            "dataset:other": {"data_path": "/ws/other.parquet", "target_column": "other_target"},
+        },
+    )
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {
         "nodes": [agent, _dataset_node(dataset_name="spine-raw")],
         "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
     }
     ambient, _dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
-    assert ambient["data_path"] == "/ws/v2_fte/train.parquet"
+    assert ambient["data_path"] == "/data/current.csv"
+    assert ambient["target_column"] == "outcome"
+    assert ambient["dataset_mode"] == "raw_unsplit"
+    assert "data_slots" not in ambient
+
+
+async def test_an_attached_split_dataset_sees_only_its_workspace_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _resolved(*_args: object, **_kwargs: object) -> pe.NodeDataset:
+        return pe.NodeDataset(seeded=(("current", "dataset:current"),))
+
+    monkeypatch.setattr(pe, "_resolve_node_dataset", _resolved)
+    monkeypatch.setattr(
+        pe,
+        "slot_data_locators",
+        lambda wid: {
+            "dataset:current": {
+                "name": "current",
+                "data_path": "/ws/current/train.parquet",
+                "target_column": "outcome",
+            },
+            "dataset:unwired": {
+                "name": "unwired",
+                "data_path": "/ws/unwired/train.parquet",
+                "target_column": "other_target",
+            },
+        },
+    )
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [agent, _dataset_node(dataset_name="current")],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+
+    ambient, _dataset = await pe._node_run_context(graph, "a", "exp1/cellA", uuid.UUID(int=7))
+
+    assert ambient["data_path"] == "/ws/current/train.parquet"
+    assert ambient["target_column"] == "outcome"
+    assert "data_slots" not in ambient
 
 
 def test_dataset_connector_grants_the_workspace_tools() -> None:
@@ -695,6 +842,22 @@ def test_dataset_connector_grants_the_workspace_tools() -> None:
     # No Dataset wired -> no implicit grant.
     bare = {"nodes": [agent], "edges": [agent_llm_edge]}
     assert pe._resolve_dataset_tool_config(bare, "a") == {"server_names": [], "tool_names": []}
+
+
+def test_dataset_with_dictionary_grants_only_the_dictionary_reader() -> None:
+    agent, agent_llm_edge = _agent_with_llm("a")
+    dataset = _dataset_node(dataset_name="spinal-fusion-v1")
+    dataset["data"]["config"]["dictionary_available"] = True
+    graph = {
+        "nodes": [agent, dataset],
+        "edges": [agent_llm_edge, _dataset_edge("dataset1", "a")],
+    }
+
+    resolved = pe._resolve_dataset_tool_config(graph, "a")
+
+    assert "asaree-sklearn-eda" in resolved["server_names"]
+    eda_tools = {name for name in resolved["tool_names"] if name.startswith("asaree-sklearn-eda.")}
+    assert eda_tools == {"asaree-sklearn-eda.get_data_dictionary"}
 
 
 def test_an_unsplit_dataset_grants_the_tools_its_prompt_names() -> None:
@@ -868,15 +1031,15 @@ def test_build_user_input_lists_multiple_bound_scripts() -> None:
     assert "print('second')" not in result
 
 
-def test_build_user_input_inlines_script_when_it_could_not_be_bound() -> None:
-    # No workspace to write it to (an unlinked protocol run): a prompt the
-    # model can copy from beats no script at all.
+def test_build_user_input_does_not_inline_script_when_it_could_not_be_bound() -> None:
+    # Source code is never prompt content. An unlinked run reports the missing
+    # materialization context instead of asking the model to retranscribe code.
     agent, agent_llm_edge = _agent_with_llm("a")
     script = _script_node(code="print('hello')")
     graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
     result = pe._build_user_input(agent, graph, {}, script_bound=False)
-    assert "Script to pass verbatim" in result
-    assert "print('hello')" in result
+    assert "no isolated run workspace" in result
+    assert "print('hello')" not in result
 
 
 def test_build_user_input_omits_script_block_when_unwired() -> None:
@@ -985,12 +1148,31 @@ async def test_node_run_context_seeds_before_reading_head(monkeypatch: pytest.Mo
 
 
 def test_ambient_meta_omits_script_path_without_a_workspace() -> None:
-    # Nowhere to write it, so no path -- and _build_user_input falls back to
-    # inlining rather than cueing a file that doesn't exist.
+    # The low-level helper still requires an explicit materialization surface.
     agent, agent_llm_edge = _agent_with_llm("a")
     script = _script_node(code="print('hello')")
     graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
     assert pe._ambient_meta_for(graph, "a", None) == {}
+
+
+def test_standalone_run_materializes_script_out_of_band(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pe, "WORKSPACE_ROOT", str(tmp_path))
+    agent, agent_llm_edge = _agent_with_llm("a")
+    script = _script_node(code="print('hello')")
+    graph = {"nodes": [agent, script], "edges": [agent_llm_edge, _script_edge("script1", "a")]}
+
+    meta = pe._ambient_meta_for(graph, "a", script_workspace_id="_protocol_runs/run-1")
+
+    path = Path(meta["script_path"])
+    assert path.read_text() == "print('hello')"
+    assert "_protocol_runs/run-1" in str(path)
+    pe._cleanup_adhoc_scripts(meta)
+    assert not path.exists()
+
+
+def test_standalone_agents_get_distinct_script_directories() -> None:
+    run_id = uuid.uuid4()
+    assert pe._script_workspace_id(None, run_id, "agent-a") != pe._script_workspace_id(None, run_id, "agent-b")
 
 
 # --- _run_gated_worker (mocked -- no real LLM calls) -------------------------
@@ -1528,6 +1710,10 @@ async def test_plan_cell_runs_runs_an_obsolete_completed_replicate(owner_id: uui
             protocol_revision_id=old_revision.id,
         )
         completed_run.status = "completed"
+        new_graph = _graph(["a", "b"], [("a", "b")])
+        new_graph["nodes"][0]["data"]["config"] = {"revision": "new"}
+        protocol = await update_protocol(db, protocol_id, fields={"graph": new_graph})
+        assert protocol is not None
         new_revision = await publish_protocol(db, protocol)
         await db.flush()
         await upsert_replicate(
@@ -1544,7 +1730,7 @@ async def test_plan_cell_runs_runs_an_obsolete_completed_replicate(owner_id: uui
                 protocol_id=protocol_id,
                 experiment_id=experiment_id,
                 owner_id=owner_id,
-                graph=graph,
+                graph=new_graph,
                 protocol_revision_id=new_revision.id,
             )
         assert [run.replicate_label for run in runs] == ["cell-obsolete"]
@@ -1693,7 +1879,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
 ) -> None:
     """End-to-end (minus the actual LLM call): a run created with
     cell_label/factor_values set gets the substituted value resolvable via
-    the worker's LLM connector, and the sink node's output lands on the
+    the worker's Model connector, and the sink node's output lands on the
     right replicate via the real upsert_replicate -- proves apply_factor_bindings is
     actually wired into run_protocol, not just correct in isolation. Model
     config lives on the connected `llm` node now, not the agent's own
@@ -1702,7 +1888,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
     received_workspace_ids = []
 
     async def fake_run_agent_node(node, *, graph, workspace_id=None, **kwargs):
-        received_configs.append(pe._resolve_llm_config(graph, node["id"]))
+        received_configs.append(pe._resolve_model_config(graph, node["id"]))
         received_workspace_ids.append(workspace_id)
         return f"output for {node['id']}", None, None, None
 
@@ -1720,7 +1906,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
                 "nodes": [
                     {
                         "id": "llm1",
-                        "type": "llm_anthropic",
+                        "type": "model_anthropic",
                         "data": {
                             "config": {"temperature": 0.9},
                             "factor_bindings": {"config.temperature": "Temperature"},
@@ -1728,7 +1914,7 @@ async def test_run_protocol_substitutes_factor_and_writes_back_to_cell(
                     },
                     {"id": "worker", "type": "agent", "data": {"config": {}}},
                 ],
-                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "ai"}],
+                "edges": [{"id": "llm1-worker", "source": "llm1", "target": "worker", "targetHandle": "model"}],
             },
         )
         protocol_id = protocol.id
@@ -2171,12 +2357,12 @@ async def test_monitor_protocol_run_sets_event_once_cancellation_requested(owner
             await delete_protocol(db, protocol_id)  # cascades the created ProtocolRun
 
 
-# --- LLM / Tool / Memory connector validation (pure) -------------------------
+# --- Model / Tool / Memory connector validation (pure) -------------------------
 
 
 def test_agent_missing_llm_connection_raises() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one Model connection"):
         topological_order(graph)
 
 
@@ -2186,7 +2372,7 @@ def test_agent_duplicate_llm_connection_raises() -> None:
         "nodes": [llm1, llm2, _node("a", "agent")],
         "edges": [_llm_edge("llm1", "a"), _llm_edge("llm2", "a")],
     }
-    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one Model connection"):
         topological_order(graph)
 
 
@@ -2197,33 +2383,34 @@ def test_critic_gate_missing_llm_connection_raises() -> None:
         "nodes": [llm, worker, _node("g1", "critic_gate")],
         "edges": [worker_llm_edge, {"id": "w1-g1", "source": "w1", "target": "g1"}],
     }
-    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
+    with pytest.raises(ProtocolValidationError, match="exactly one Model connection"):
         topological_order(graph)
 
 
-def test_legacy_llm_handle_still_resolves() -> None:
-    # The AI connector's handle id was "llm" before it was renamed to "ai"
-    # (migration 3f1a7c9b2e04 rewrites stored graphs). An un-migrated edge --
+@pytest.mark.parametrize("legacy_handle", ["ai", "llm"])
+def test_legacy_model_handle_still_resolves(legacy_handle: str) -> None:
+    # The Model connector's handles were "llm" and then "ai" before "model".
+    # Data migrations rewrite stored graphs, but an un-migrated edge --
     # or one autosaved by a browser tab still running the pre-rename JS --
     # must resolve identically: same wiring, same model config, no "exactly
-    # one AI connection" error from the edge being read as a main pipeline
+    # one Model connection" error from the edge being read as a main pipeline
     # edge instead.
     llm = _llm_node(config={"provider": "anthropic", "model": "claude-sonnet-4-5"})
     agent = _node("a", "agent")
     graph = {
         "nodes": [llm, agent],
-        "edges": [_llm_edge("llm", "a", handle="llm")],
+        "edges": [_llm_edge("llm", "a", handle=legacy_handle)],
     }
     assert [n["id"] for n in topological_order(graph)] == ["llm", "a"]
-    assert pe._resolve_llm_config(graph, "a")["model"] == "claude-sonnet-4-5"
+    assert pe._resolve_model_config(graph, "a")["model"] == "claude-sonnet-4-5"
 
 
 def test_llm_connection_from_non_llm_source_raises() -> None:
     graph = {
         "nodes": [_node("t1", "step"), _node("a", "agent")],
-        "edges": [{"id": "t1-a-ai", "source": "t1", "target": "a", "targetHandle": "ai"}],
+        "edges": [{"id": "t1-a-ai", "source": "t1", "target": "a", "targetHandle": "model"}],
     }
-    with pytest.raises(ProtocolValidationError, match="must come from an AI node"):
+    with pytest.raises(ProtocolValidationError, match="must come from a Model node"):
         topological_order(graph)
 
 
@@ -2305,7 +2492,7 @@ def test_llm_node_with_plain_outgoing_edge_raises() -> None:
         "nodes": [llm, agent, _node("b", "agent")],
         "edges": [agent_llm_edge, {"id": "llm-b", "source": "llm", "target": "b"}],
     }
-    with pytest.raises(ProtocolValidationError, match="AI node .* can only connect to a node's AI slot"):
+    with pytest.raises(ProtocolValidationError, match="Model node .* can only connect to a node's Model slot"):
         topological_order(graph)
 
 
@@ -2648,6 +2835,10 @@ def test_resolve_knowledge_config_namespaces_tool_names() -> None:
             "okf-bundle-spine-abc12345.list_concepts",
             "okf-bundle-spine-abc12345.read_concept",
         ],
+        "tool_descriptions": {
+            "okf-bundle-spine-abc12345.list_concepts": "Knowledge source: spine.",
+            "okf-bundle-spine-abc12345.read_concept": "Knowledge source: spine.",
+        },
     }
 
 
@@ -2718,6 +2909,11 @@ def test_resolve_knowledge_config_mixes_bundles_and_documents() -> None:
             "okf-bundle-spine-abc12345.read_concept",
             "okf-doc-spinal-cord-def45678.read_concept",
         ],
+        "tool_descriptions": {
+            "okf-bundle-spine-abc12345.list_concepts": "Knowledge source: spine.",
+            "okf-bundle-spine-abc12345.read_concept": "Knowledge source: spine.",
+            "okf-doc-spinal-cord-def45678.read_concept": "Knowledge source: Spinal cord.",
+        },
     }
 
 
@@ -2825,19 +3021,21 @@ def test_valid_llm_tool_memory_wiring_passes() -> None:
     assert set(order) == {"llm", "a", "tool1", "memory", "pattern"}
 
 
-def test_llm_connection_accepts_any_provider_node_type() -> None:
-    # Membership, not equality -- llm_openai/llm_azure_foundry are just as
-    # valid an LLM connector source as _llm_node()'s default llm_anthropic.
-    agent1, agent1_llm_edge = _agent_with_llm("a1", llm_id="openai")
-    agent2, agent2_llm_edge = _agent_with_llm("a2", llm_id="foundry")
-    openai_llm = {"id": "openai", "type": "llm_openai", "data": {"label": "", "config": {}}}
-    foundry_llm = {"id": "foundry", "type": "llm_azure_foundry", "data": {"label": "", "config": {}}}
+def test_model_connection_accepts_every_provider_node_type() -> None:
+    providers = ["anthropic", "openai", "azure_foundry", "openrouter", "local"]
+    agents_and_edges = [_agent_with_llm(f"a{index}", llm_id=provider) for index, provider in enumerate(providers)]
+    agents = [agent for agent, _edge in agents_and_edges]
+    edges = [edge for _agent, edge in agents_and_edges]
+    models = [
+        {"id": provider, "type": f"model_{provider}", "data": {"label": "", "config": {}}}
+        for provider in providers
+    ]
     graph = {
-        "nodes": [agent1, agent2, openai_llm, foundry_llm],
-        "edges": [agent1_llm_edge, agent2_llm_edge],
+        "nodes": [*agents, *models],
+        "edges": edges,
     }
     order = [n["id"] for n in topological_order(graph)]
-    assert set(order) == {"a1", "a2", "openai", "foundry"}
+    assert set(order) == {*(agent["id"] for agent in agents), *providers}
 
 
 def test_architectural_pattern_connection_accepts_any_pattern_node_type() -> None:
@@ -2852,23 +3050,23 @@ def test_architectural_pattern_connection_accepts_any_pattern_node_type() -> Non
     assert set(order) == {"llm", "a", "baseline"}
 
 
-# --- LLM / Tool connector resolution (pure) -----------------------------------
+# --- Model / Tool connector resolution (pure) -----------------------------------
 
 
-def test_resolve_llm_config_returns_connected_node_config() -> None:
+def test_resolve_model_config_returns_connected_node_config() -> None:
     llm = _llm_node(config={"provider": "anthropic", "model": "claude-sonnet-5", "temperature": 0.5})
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
-    assert pe._resolve_llm_config(graph, "a") == {
+    assert pe._resolve_model_config(graph, "a") == {
         "provider": "anthropic",
         "model": "claude-sonnet-5",
         "temperature": 0.5,
     }
 
 
-def test_resolve_llm_config_empty_when_unconnected() -> None:
+def test_resolve_model_config_empty_when_unconnected() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    assert pe._resolve_llm_config(graph, "a") == {}
+    assert pe._resolve_model_config(graph, "a") == {}
 
 
 def test_resolve_dataset_configs_returns_connected_node_config() -> None:
@@ -3395,11 +3593,11 @@ def test_sequential_rejects_a_loop() -> None:
 
 
 def test_sequential_ignores_connector_fan_in() -> None:
-    """One LLM node feeding every agent in the chain is the normal shape. It is
+    """One Model node feeding every agent in the chain is the normal shape. It is
     a fan-in on the graph and must not read as one on the chain."""
     graph = _chain_graph("a", "b", "c")
-    graph["nodes"] = [n for n in graph["nodes"] if n["type"] != "llm_anthropic"] + [_llm_node("shared")]
-    graph["edges"] = [e for e in graph["edges"] if e.get("targetHandle") != "ai"]
+    graph["nodes"] = [n for n in graph["nodes"] if n["type"] != "model_anthropic"] + [_llm_node("shared")]
+    graph["edges"] = [e for e in graph["edges"] if e.get("targetHandle") != "model"]
     graph["edges"] += [_llm_edge("shared", a) for a in ("a", "b", "c")]
     validate_coordination_strategy(_SEQUENTIAL, graph=graph)
 
@@ -3907,7 +4105,7 @@ def test_validate_single_node_runnable_missing_node_raises() -> None:
 def test_validate_single_node_runnable_rejects_non_agent_type() -> None:
     node = _node("g1", "critic_gate")
     graph = {"nodes": [node], "edges": []}
-    with pytest.raises(ProtocolValidationError, match="Only Agent nodes"):
+    with pytest.raises(ProtocolValidationError, match="Only Agent and Sub-Agent nodes"):
         pe.validate_single_node_runnable(graph, "g1")
 
 
@@ -3921,7 +4119,7 @@ def test_validate_single_node_runnable_rejects_a_node_with_upstream_input() -> N
 
 def test_validate_single_node_runnable_rejects_zero_llm_connections() -> None:
     graph = {"nodes": [_node("a", "agent")], "edges": []}
-    with pytest.raises(ProtocolValidationError, match="must have exactly one AI connection"):
+    with pytest.raises(ProtocolValidationError, match="must have exactly one Model connection"):
         pe.validate_single_node_runnable(graph, "a")
 
 
@@ -3929,7 +4127,7 @@ def test_validate_single_node_runnable_rejects_llm_edge_from_wrong_node_type() -
     agent = _node("a", "agent")
     not_an_llm = _node("x", "agent")
     graph = {"nodes": [agent, not_an_llm], "edges": [_llm_edge("x", "a")]}
-    with pytest.raises(ProtocolValidationError, match="must come from an AI node"):
+    with pytest.raises(ProtocolValidationError, match="must come from a Model node"):
         pe.validate_single_node_runnable(graph, "a")
 
 
@@ -3976,8 +4174,8 @@ def test_validate_conversation_entry_rejects_a_peer_with_no_model() -> None:
     """A peer's own wiring is checked too: it will really run, and finding out
     mid-conversation costs the user a run they already paid for."""
     graph = _conversation_graph("a", "b")
-    graph["edges"] = [e for e in graph["edges"] if e.get("target") != "b" or e.get("targetHandle") != "ai"]
-    with pytest.raises(ProtocolValidationError, match="exactly one AI connection"):
+    graph["edges"] = [e for e in graph["edges"] if e.get("target") != "b" or e.get("targetHandle") != "model"]
+    with pytest.raises(ProtocolValidationError, match="exactly one Model connection"):
         pe.validate_conversation_entry(graph, "a")
 
 
@@ -4001,7 +4199,7 @@ async def test_run_single_node_ignores_an_unrelated_broken_sibling_node(
 ) -> None:
     """The whole point of a narrower, per-node check: a single-node Play run
     must not fail because some OTHER node elsewhere in the same graph is
-    unrelated and broken (e.g. missing its own LLM connector) -- only
+    unrelated and broken (e.g. missing its own Model connector) -- only
     topological_order's full-graph walk cares about that."""
 
     async def fake_run_agent_node(node, *, user_input, **_kwargs):
@@ -4011,7 +4209,7 @@ async def test_run_single_node_ignores_an_unrelated_broken_sibling_node(
 
     target, target_llm_edge = _agent_with_llm("target")
     target["data"]["config"] = {"prompt": "do the one thing", "goal": ""}
-    broken_sibling = _node("broken", "agent")  # no LLM connector at all
+    broken_sibling = _node("broken", "agent")  # no Model connector at all
 
     graph = {"nodes": [target, broken_sibling, _llm_node()], "edges": [target_llm_edge]}
 

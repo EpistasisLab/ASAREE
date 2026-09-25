@@ -1,27 +1,34 @@
 import type { Edge, Node } from '@xyflow/react'
 import type {
   DatasetNodeData,
-  LlmNodeData,
+  ModelNodeData,
   McpToolNodeData,
   OkfBundleNodeData,
   OkfDocumentNodeData,
   SkillNodeData,
 } from '@/types/protocols'
 
-// Plain duplicate of ProtocolCanvas.tsx's own LLM_NODE_TYPES rather than a
+// Plain duplicate of ProtocolCanvas.tsx's own MODEL_NODE_TYPES rather than a
 // shared import -- same reasoning as nodeConfigIssues.ts's own comment:
 // keeps this module from being coupled to that component's internals.
-const LLM_NODE_TYPES = new Set(['llm_anthropic', 'llm_openai', 'llm_azure_foundry'])
+const MODEL_NODE_TYPES = new Set([
+  'model_anthropic',
+  'model_openai',
+  'model_azure_foundry',
+  'model_openrouter',
+  'model_local',
+])
 // Ditto for the MCP-tool family (mcpServerCatalog.ts's MCP_TOOL_NODE_TYPES)
 // -- every type in it carries the same config, so a run summary reads the
 // server name off any of them identically.
 const MCP_TOOL_NODE_TYPES = ['mcp_tool', 'mcp_scikit_learn', 'mcp_client_tool']
-// "llm" and "resource" are the pre-rename spellings of "ai" and "dataset"
+// "llm" and "resource" are the pre-rename spellings of "model" and "dataset"
 // (see migrateLegacyHandles in ProtocolCanvas.tsx) -- kept here, as in that
 // file's CONNECTOR_HANDLES, so this stays a question of "is this a connector
 // edge at all" rather than one that silently answers no for a graph that
 // hasn't been normalised yet.
 const DEPENDENCY_HANDLES = new Set([
+  'model',
   'ai',
   'llm',
   'tool',
@@ -67,7 +74,7 @@ export interface RunSummary {
 // (a replicate run is the same graph, just with factor_values substituted); for
 // scope "node" (the per-node Play icon) only that node's own directly-wired
 // dependencies count, mirroring the one-level connector traversal
-// services.protocol_execution's _resolve_llm_config/_resolve_tool_config/
+// services.protocol_execution's _resolve_model_config/_resolve_tool_config/
 // _resolve_dataset_configs do server-side -- kept as a client-side duplicate
 // for the same reason nodeConfigIssues.ts already is.
 export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): RunSummary {
@@ -116,9 +123,9 @@ export function summarizeRun(nodes: Node[], edges: Edge[], scope: RunScope): Run
   )
   const models = uniq(
     relevantNodes
-      .filter((n) => LLM_NODE_TYPES.has(n.type ?? ''))
+      .filter((n) => MODEL_NODE_TYPES.has(n.type ?? ''))
       .map((n) => {
-        const config = (n.data as LlmNodeData).config
+        const config = (n.data as ModelNodeData).config
         return config?.model ? `${config.provider}/${config.model}` : null
       })
       .filter((m): m is string => !!m),

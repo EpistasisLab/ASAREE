@@ -12,25 +12,25 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { FactorBindableField } from './FactorBindableField'
 import { ModelField } from './ModelField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
-import { PROVIDER_META } from './nodes/LlmNode'
+import { PROVIDER_META } from './nodes/ModelNode'
 import { useProviderModels } from './useProviderModels'
-import type { LlmNodeConfig, LlmNodeData, ProtocolNode } from '@/types/protocols'
+import type { ModelNodeConfig, ModelNodeData, ProtocolNode } from '@/types/protocols'
 import type { LLMProvider } from '@/types/llmSettings'
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
-// Shared by all three LLM provider node types (llm_anthropic/llm_openai/
-// llm_azure_foundry) -- fields are identical across providers (see
-// LlmNodeData's own comment in types/protocols.ts), only the Credential
+// Shared by all three LLM provider node types (model_anthropic/model_openai/
+// model_azure_foundry) -- fields are identical across providers (see
+// ModelNodeData's own comment in types/protocols.ts), only the Credential
 // section's content differs, branched on config.provider below. Model/
 // Temperature/Effort/Max tokens are exactly the fields AgentNodeInspector/
 // CriticGateNodeInspector used to have, relocated here -- this is now the
 // ONLY place that config lives, resolved at execution time via the agent/
-// critic_gate's required LLM connector (services.protocol_execution's
-// _resolve_llm_config). The free-text "Provider" field is gone entirely --
+// critic_gate's required Model connector (services.protocol_execution's
+// _resolve_model_config). The free-text "Provider" field is gone entirely --
 // provider is fixed by which node type you picked from the "+" panel, not a
 // field you fill in.
-export function LlmNodeInspector({
+export function ModelNodeInspector({
   node,
   experimentId,
   factorNodeLabel,
@@ -38,21 +38,21 @@ export function LlmNodeInspector({
   onDelete,
   onClose,
 }: {
-  node: (ProtocolNode & { data: LlmNodeData }) | null
+  node: (ProtocolNode & { data: ModelNodeData }) | null
   experimentId: string | null
   // The agent-traced display label (see bindableFields.ts's
   // agentTracedLabel) -- distinct from data.label/meta.label, which is this
   // node's own plain label/provider name shown in the header title. Two
-  // different agents' LLM nodes can share the exact same plain label (e.g.
+  // different agents' Model nodes can share the exact same plain label (e.g.
   // both "Anthropic"), so factor names need this instead to stay
   // unambiguous.
   factorNodeLabel: string
-  onChange: (nodeId: string, data: LlmNodeData) => void
+  onChange: (nodeId: string, data: ModelNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
   const [credentialDialogOpen, setCredentialDialogOpen] = useState(false)
-  // Shown instead of closing outright when a required field (see LlmNode.tsx's
+  // Shown instead of closing outright when a required field (see ModelNode.tsx's
   // matching warning-triangle check) is still empty -- lets the user close
   // anyway rather than trapping them in the inspector, but makes sure they
   // saw it first. Same convention as ReasonActPatternNodeInspector.
@@ -103,7 +103,7 @@ export function LlmNodeInspector({
   const bindings = data.factor_bindings ?? {}
   const meta = PROVIDER_META[provider!] ?? { label: provider, icon: Sparkles }
   const Icon = meta.icon
-  const ACCENT = nodeAccent('llm')
+  const ACCENT = nodeAccent('model')
 
   // Unrecognized model (list still loading, discovery failed, or a
   // hand-typed value not in the catalog) -- default to temperature-only,
@@ -133,7 +133,7 @@ export function LlmNodeInspector({
     onClose()
   }
 
-  function patchConfig(patch: Partial<LlmNodeConfig>) {
+  function patchConfig(patch: Partial<ModelNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
   }
 
@@ -169,7 +169,7 @@ export function LlmNodeInspector({
           fieldPath="config"
           defaultLabel="Provider & model"
           nodeLabel={factorNodeLabel}
-          levelType="llm_config"
+          levelType="model_config"
           currentValue={config}
           boundFactorName={bindings.config}
           onBind={(name) => bindFactor('config', name)}

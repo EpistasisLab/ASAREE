@@ -207,8 +207,17 @@ function Scorecard({ label, help, value, note, icon: Icon }: { label: string; he
   )
 }
 
+function usageSummarizesMetric(
+  key: string,
+  result: Pick<ResultCell, 'cost_usd' | 'total_tokens' | 'duration_seconds'>,
+): boolean {
+  return (key === 'cost_usd' && result.cost_usd !== null)
+    || (key === 'total_tokens' && result.total_tokens !== null)
+    || (key === 'duration_seconds' && result.duration_seconds !== null)
+}
+
 function CellResultSummary({ cell, metricKeys, metricTypes, metricAggregations }: { cell: ResultCell; metricKeys: string[]; metricTypes: ResultMetricTypes; metricAggregations: ResultMetricAggregations }) {
-  const metrics = metricKeys.filter((key) => typeof cell.metric_means[key] === 'number')
+  const metrics = metricKeys.filter((key) => typeof cell.metric_means[key] === 'number' && !usageSummarizesMetric(key, cell))
   const hasUsage = cell.cost_usd !== null || cell.total_tokens !== null || cell.duration_seconds !== null
   return (
     <section className="rounded-lg border bg-card p-3 shadow-sm" aria-label="Cell result summary">
@@ -240,8 +249,8 @@ function CellResultSummary({ cell, metricKeys, metricTypes, metricAggregations }
           <h3 className="flex items-center gap-1 text-xs font-medium text-muted-foreground">Usage<InfoTooltip>Totals across current replicates in this condition. Provider telemetry can be unavailable for some calls.</InfoTooltip></h3>
           <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
             {cell.cost_usd !== null && <div className="rounded-md bg-muted/40 px-2 py-1.5"><p className="text-muted-foreground">Cost</p><p className="mt-0.5 font-medium tabular-nums text-foreground">{formatCurrency(cell.cost_usd)}</p></div>}
-            {cell.total_tokens !== null && <div className="rounded-md bg-muted/40 px-2 py-1.5"><p className="text-muted-foreground">Tokens</p><p className="mt-0.5 font-medium tabular-nums text-foreground">{formatNumber(cell.total_tokens)}</p></div>}
             {cell.duration_seconds !== null && <div className="rounded-md bg-muted/40 px-2 py-1.5"><p className="text-muted-foreground">Duration</p><p className="mt-0.5 font-medium tabular-nums text-foreground">{formatDuration(cell.duration_seconds)}</p></div>}
+            {cell.total_tokens !== null && <div className="rounded-md bg-muted/40 px-2 py-1.5"><p className="text-muted-foreground">Tokens</p><p className="mt-0.5 font-medium tabular-nums text-foreground">{formatNumber(cell.total_tokens)}</p></div>}
           </div>
         </section>
       )}
@@ -301,7 +310,16 @@ function ReplicateResultDetail({ replicate, metricKeys, metricTypes }: {
   metricKeys: string[]
   metricTypes: ResultMetricTypes
 }) {
-  const metrics = metricKeys.filter((key) => typeof replicate.metric_values[key] === 'number')
+  const metrics = metricKeys.filter((key) => {
+    if (typeof replicate.metric_values[key] !== 'number') return false
+    return !usageSummarizesMetric(key, replicate)
+  })
+  const summarizedObservations = new Set(
+    metrics
+      .map((key) => observationForMetric(replicate, undefined, key))
+      .filter((observation): observation is MetricObservation => observation?.status === 'measured'),
+  )
+  const detailedObservations = replicate.metric_observations.filter((observation) => !summarizedObservations.has(observation))
   const hasUsage = replicate.cost_usd !== null || replicate.total_tokens !== null || replicate.duration_seconds !== null || replicate.agent_run_count > 0
   const timelineOnly = metrics.length === 0 && !hasUsage && !replicate.error
   const agentNodes = replicate.node_runs.filter((node) => node.agent_run_id)
@@ -318,11 +336,18 @@ function ReplicateResultDetail({ replicate, metricKeys, metricTypes }: {
             <section className="space-y-2">
               <h3 className="text-sm font-medium">Outcome</h3>
             <div className="grid grid-cols-2 gap-2 @lg:grid-cols-3">
-              {metrics.map((key) => <div key={key} className="rounded-md border px-2.5 py-2"><p className="truncate text-xs text-muted-foreground" title={formatMetricLabel(key)}>{formatMetricLabel(key)}</p><p className="mt-0.5 font-medium tabular-nums">{formatResultMetricValue(key, replicate.metric_values[key], metricTypes, true)}</p></div>)}
+              {metrics.map((key) => {
+                const observation = observationForMetric(replicate, undefined, key)
+                return <div key={key} className="rounded-md border px-2.5 py-2">
+                  <p className="truncate text-xs text-muted-foreground" title={formatMetricLabel(key)}>{formatMetricLabel(key)}</p>
+                  <p className="mt-0.5 font-medium tabular-nums">{formatResultMetricValue(key, replicate.metric_values[key], metricTypes, true)}</p>
+                  {observation?.status === 'measured' && <p className="mt-1 font-mono text-[11px] text-muted-foreground">{observation.producer.producer_id} · v{observation.producer.version}</p>}
+                </div>
+              })}
             </div>
             </section>
           )}
-          {replicate.metric_observations.length > 0 && <section className="space-y-2"><h3 className="text-sm font-medium">Measurement observations</h3><div className="grid gap-2 @lg:grid-cols-2">{replicate.metric_observations.map((observation) => <ObservationCard key={observation.metric_id} observation={observation} />)}</div></section>}
+          {detailedObservations.length > 0 && <section className="space-y-2"><h3 className="text-sm font-medium">Measurement observations</h3><div className="grid gap-2 @lg:grid-cols-2">{detailedObservations.map((observation) => <ObservationCard key={observation.metric_id} observation={observation} />)}</div></section>}
           {(replicate.legacy_values ?? []).length > 0 && <section className="space-y-2"><h3 className="text-sm font-medium">Legacy values</h3><p className="text-xs text-muted-foreground">The original producers were not recorded, so these values are shown without inferred provenance and are not ranked.</p><div className="grid gap-2 @lg:grid-cols-2">{replicate.legacy_values!.map((item) => <div key={item.metric_id} className="rounded-md border px-2.5 py-2"><p className="truncate text-xs text-muted-foreground">{item.metric_name}</p><pre className="mt-1 overflow-x-auto text-xs">{typeof item.value === 'string' ? item.value : JSON.stringify(item.value, null, 2)}</pre><Badge variant="outline" className="mt-2">Legacy · producer unknown</Badge></div>)}</div></section>}
           {replicate.evaluation_artifacts.length > 0 && <section className="space-y-2"><h3 className="text-sm font-medium">Evaluation artifacts</h3><div className="space-y-2">{replicate.evaluation_artifacts.map((artifact) => <ArtifactCard key={`${artifact.artifact_key}-${artifact.attempt_id}`} artifact={artifact} />)}</div></section>}
           {hasUsage && (
@@ -330,8 +355,8 @@ function ReplicateResultDetail({ replicate, metricKeys, metricTypes }: {
               <h3 className="text-sm font-medium">Usage</h3>
               <div className="grid grid-cols-2 gap-2 @lg:grid-cols-4">
                 <Scorecard label="Estimated cost" help="Provider-reported or estimated cost for this replicate’s Agent calls." value={formatCurrency(replicate.cost_usd)} icon={CircleDollarSign} />
-                <Scorecard label="Total tokens" help="Input and output tokens reported by the provider for this replicate." value={formatNumber(replicate.total_tokens)} icon={Coins} />
                 <Scorecard label="Duration" help="Wall-clock time from the protocol run starting to it finishing." value={formatDuration(replicate.duration_seconds)} icon={Clock3} />
+                <Scorecard label="Total tokens" help="Input and output tokens reported by the provider for this replicate." value={formatNumber(replicate.total_tokens)} icon={Coins} />
                 <Scorecard label="Agent calls" help="Number of Agent runs recorded while executing this replicate." value={String(replicate.agent_run_count)} icon={Cpu} />
               </div>
               {replicate.agent_run_count > 0 && (replicate.reported_usage_count < replicate.agent_run_count || replicate.reported_cost_count < replicate.agent_run_count) && <p className="text-xs text-muted-foreground">Usage and cost are shown only where the provider reported them.</p>}

@@ -22,8 +22,6 @@ import { NodeSummaryLine } from './NodeSummaryLine'
 // not its label. The connector captions below are the one thing here that
 // does NOT follow --card-accent: they're yellow, to be found against the node
 // rather than to match it (ConnectorHandleLabel).
-const ACCENT = nodeAccent('agent')
-
 // Every connector's handle, caption and "+" stub reads its x from here, and so
 // does the placement of whatever node the connector's own "+" creates (see
 // layout.ts) -- otherwise a node can land under a connector that isn't the one
@@ -40,11 +38,11 @@ export function AgentNode({
     // Paired with runStatus, never derivable from it: a truncated run is still
     // `completed` (see NodeRunState.truncation).
     runTruncated?: boolean
-    missingLlm?: boolean
+    missingModel?: boolean
     missingOutputParser?: boolean
     canRunAlone?: boolean
     // Both injected by ProtocolCanvas: whether a plain Agent-to-Agent edge
-    // reaches this node, and the model its AI connector resolves to. The
+    // reaches this node, and the model its Model connector resolves to. The
     // canvas supplies the wiring; the capability lookup below is this card's.
     hasPeers?: boolean
     llmConfig?: { provider?: string; model?: string } | null
@@ -59,8 +57,11 @@ export function AgentNode({
     // one -- see ProtocolCanvas's `mainEdgeSlots`.
     mainInFull?: boolean
     mainOutFull?: boolean
+    isSubAgent?: boolean
   }
 }) {
+  const isSubAgent = data.isSubAgent === true
+  const accent = nodeAccent(isSubAgent ? 'sub_agent' : 'agent')
   const badge = nodeRunBadge(data.runStatus, data.runTruncated)
   // Peers are offered to the model as function schemas -- that is the only
   // channel a consultation can be *chosen* through -- so an agent on a model
@@ -74,11 +75,11 @@ export function AgentNode({
   const peerNeedsToolCalling =
     !!data.hasPeers && models.find((m) => m.id === data.llmConfig?.model)?.supports_tool_calling === false
   const warnings = [
-    ...(data.missingLlm ? ["No AI connected -- this agent can't run"] : []),
+    ...(data.missingModel ? ["No Model connected -- this agent can't run"] : []),
     ...(data.missingOutputParser
       ? ['A specific output format is required, but no Output Parser says what it is']
       : []),
-    ...(peerNeedsToolCalling ? ["This model can't call tools, so this agent can't consult its connected peers"] : []),
+    ...(peerNeedsToolCalling ? ["This model can't call tools, so this agent can't consult or delegate to connected agents"] : []),
   ]
   const { updateNodeData } = useReactFlow()
   const { requestRunNode } = useProtocolCanvasActions()
@@ -109,13 +110,16 @@ export function AgentNode({
   //
   // The already-wired clause keeps the visible caption in sync with graphs
   // created outside this UI, where the edge may exist without the flag.
+  const modelConnections = useNodeConnections({ id, handleType: 'target', handleId: 'model' })
+  const memoryConnections = useNodeConnections({ id, handleType: 'target', handleId: 'memory' })
+  const patternConnections = useNodeConnections({ id, handleType: 'target', handleId: 'architectural_pattern' })
   const parserConnections = useNodeConnections({ id, handleType: 'target', handleId: 'output_parser' })
   const showOutputParser =
     !!data.config?.require_output_parser || parserConnections.length > 0 || !!data.config?.output_contract
 
   return (
     <div
-      style={cardAccent(ACCENT)}
+      style={cardAccent(accent)}
       className={`group relative flex min-h-20 w-72 flex-col justify-center rounded-md border bg-card px-2.5 py-3.5 shadow-[0_0_12px_-6px_var(--card-accent)] ring-1 ring-[color:var(--card-accent)]/40 ${
         selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
       } ${isActive ? '' : 'opacity-50'}`}
@@ -126,12 +130,11 @@ export function AgentNode({
         onToggleActive={() => updateNodeData(id, { active: !isActive })}
         runAlone={{ canRun: !!data.canRunAlone, onRun: () => requestRunNode(id) }}
       />
-      {/* Steps left to `right-6` when the factor badge is also showing: that
-          badge straddles this same corner (-right-3, size-7, so 12px out to
-          16px in) and this Badge straddles the top border (-top-2.5, h-5), so
-          at the default right-1.5 the two would sit on top of each other. */}
+      {/* Sits inside the top-right corner so it stays clear of the Knowledge
+          connector above the card. Steps left to `right-6` when the factor
+          badge is also showing because that badge straddles this corner. */}
       {badge && (
-        <Badge className={`absolute -top-2.5 ${hasBoundFactor(data) ? 'right-6' : 'right-1.5'} ${badge.className}`}>
+        <Badge className={`absolute top-1 ${hasBoundFactor(data) ? 'right-6' : 'right-1.5'} ${badge.className}`}>
           {badge.label}
         </Badge>
       )}
@@ -143,7 +146,7 @@ export function AgentNode({
           Architectural Pattern connector's own label/stub live OUTSIDE the
           card on the left of this edge, so neither competes for this corner. */}
       {hasBoundFactor(data) && <NodeFactorBadge count={boundFactorCount(data)} className="-top-3 -right-3" />}
-      {/* Main flow is left-to-right -- the 4 sub-connectors below stay on the
+      {/* Main flow is left-to-right -- the bottom sub-connectors stay on the
           bottom edge regardless, since a config source hangs below a node no
           matter which way the main flow runs.
 
@@ -154,19 +157,37 @@ export function AgentNode({
           decides the cardinality: unrestricted under Peer Collaboration and
           Critic Gate, but exactly one per side under Sequential, where the
           chain rule applies and the "+" stub hides once a side is taken. */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        title="Connect to another agent (or a Critic Gate)"
-        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
-      />
-      <MainEdgeAddStub nodeId={id} direction="incoming" full={data.mainInFull} />
+      {!isSubAgent && (
+        <>
+          <Handle
+            type="target"
+            position={Position.Left}
+            title="Connect to another agent (or a Critic Gate)"
+            className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+          />
+          <ConnectorHandleLabel side="left" top="calc(50% - 11px)">Agent</ConnectorHandleLabel>
+          <MainEdgeAddStub nodeId={id} direction="incoming" full={data.mainInFull} />
+        </>
+      )}
+      {isSubAgent && (
+        <>
+          <Handle
+            type="source"
+            id="sub_agents"
+            position={Position.Top}
+            style={{ left: '50%' }}
+            title="Parent Agent"
+            className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+          />
+          <ConnectorHandleLabel left="50%" side="top">Parent</ConnectorHandleLabel>
+        </>
+      )}
       <div className="flex items-center gap-1.5">
         <Bot className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
         {/* Renaming happens in the Inspector's own title now (click it,
             same as the experiment name) -- not here anymore. */}
         <span className="truncate text-xs font-medium" title={data.label}>
-          {data.label || 'Agent'}
+          {data.label || (isSubAgent ? 'Sub-Agent' : 'Agent')}
         </span>
         {/* Inline on the title row rather than hung off a corner: all three
             corners are spoken for (run status and the factor badge share the
@@ -219,9 +240,10 @@ export function AgentNode({
           toolbar is above the stub's z-index and only there on hover, and the
           visible "+" glyph still clears it).
 
-          The 3 bottom sub-connectors: required AI (exactly one), optional
-          max-1 Memory (visual scaffolding only -- see MemoryNodeData), and
-          optional repeatable Tool. Script is a repeatable pure config source
+          The bottom sub-connectors: required Model (exactly one), optional
+          repeatable Sub-Agents on parent Agents, optional max-1 Memory (visual
+          scaffolding only -- see MemoryNodeData), optional repeatable Tool,
+          and optional max-1 Output Parser. Script is a repeatable pure config source
           too, but deliberately does NOT get its own slot -- it wires into that same
           Tool connector (one connector accepting a FAMILY of node types,
           matching Motoro's own
@@ -233,13 +255,14 @@ export function AgentNode({
       <Handle
         type="target"
         id="architectural_pattern"
+        isConnectable={patternConnections.length === 0}
         position={Position.Top}
         style={{ left: CONNECTOR_LEFT.architectural_pattern }}
         title="Architectural Pattern -- always exactly one; pick a node here to swap it"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.architectural_pattern} side="top">Pattern</ConnectorHandleLabel>
-      {/* Never hides once connected (unlike AI/Memory) -- an execution
+      {/* Never hides once connected (unlike Model/Memory) -- an execution
           pattern must never go to zero (Motoro silently falls back
           to reason_act if left unconnected, undoing the whole point of
           making the default explicit), so the only way to change it is to
@@ -329,24 +352,40 @@ export function AgentNode({
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.knowledge} side="top">Knowledge</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="knowledge" left={CONNECTOR_LEFT.knowledge} side="top" alwaysVisible />
-      {/* Handle id `ai`; graphs saved before the rename carry these edges on
-          `llm` -- ProtocolCanvas.tsx rewrites those on load
+      {/* Handle id `model`; graphs saved before the rename carry these edges on
+          `ai` or `llm` -- ProtocolCanvas.tsx rewrites those on load
           (migrateLegacyHandles) and the backend keeps accepting both (see
-          _LEGACY_AI_HANDLES). The node types feeding it are still called
-          LLM_NODE_TYPES: those name a model family, not this slot. */}
+          _LEGACY_MODEL_HANDLES). The node types feeding it are called
+          MODEL_NODE_TYPES: those name a model family, not this slot. */}
       <Handle
         type="target"
-        id="ai"
+        id="model"
+        isConnectable={modelConnections.length === 0}
         position={Position.Bottom}
-        style={{ left: CONNECTOR_LEFT.ai }}
-        title="AI (required)"
+        style={{ left: CONNECTOR_LEFT.model }}
+        title="Model (required)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left={CONNECTOR_LEFT.ai}>AI</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="ai" left={CONNECTOR_LEFT.ai} />
+      <ConnectorHandleLabel left={CONNECTOR_LEFT.model}>Model</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="model" left={CONNECTOR_LEFT.model} />
+      {!isSubAgent && (
+        <>
+          <Handle
+            type="target"
+            id="sub_agents"
+            position={Position.Bottom}
+            style={{ left: CONNECTOR_LEFT.sub_agents }}
+            title="Sub-Agents -- delegated workers this agent may invoke"
+            className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+          />
+          <ConnectorHandleLabel left={CONNECTOR_LEFT.sub_agents}>Sub-Agents</ConnectorHandleLabel>
+          <ConnectorAddStub nodeId={id} slot="sub_agents" left={CONNECTOR_LEFT.sub_agents} alwaysVisible />
+        </>
+      )}
       <Handle
         type="target"
         id="memory"
+        isConnectable={memoryConnections.length === 0}
         position={Position.Bottom}
         style={{ left: CONNECTOR_LEFT.memory }}
         title="Memory (not yet functional)"
@@ -359,7 +398,7 @@ export function AgentNode({
         id="tool"
         position={Position.Bottom}
         style={{ left: CONNECTOR_LEFT.tool }}
-        title="Tool -- MCP server, Dataset, or Script"
+        title="Tool -- MCP server or Script"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.tool}>Tool</ConnectorHandleLabel>
@@ -367,8 +406,8 @@ export function AgentNode({
       {/* Output Parser -- the field spec the agent's answer is written to and
           read back out of. Last on the bottom edge, at 95%: it's the only
           connector here whose work outlives the agent's own turn, so it sits
-          at the end of the row the run reads left-to-right (AI -> Memory ->
-          Tool -> Parser).
+          at the end of the row the run reads left-to-right (Model ->
+          Sub-Agents -> Memory -> Tool -> Parser).
           Capped at one (no `alwaysVisible`) -- two contracts would be two
           answers to "what shape is this agent's output". */}
       {/* Keep the handle mounted even while its affordances are hidden.
@@ -377,9 +416,10 @@ export function AgentNode({
           leaves React Flow one measurement behind and the edge can stay
           visually detached until another canvas update. Opacity hides an
           unused handle without removing the endpoint React Flow registers. */}
-      <Handle
-        type="target"
-        id="output_parser"
+          <Handle
+            type="target"
+            id="output_parser"
+            isConnectable={parserConnections.length === 0}
         position={Position.Bottom}
         style={{ left: CONNECTOR_LEFT.output_parser }}
         title="Output Parser -- defines the format of this agent's answer and reads its typed fields back out"
@@ -393,13 +433,18 @@ export function AgentNode({
           <ConnectorAddStub nodeId={id} slot="output_parser" left={CONNECTOR_LEFT.output_parser} />
         </>
       )}
-      <Handle
-        type="source"
-        position={Position.Right}
-        title="Connect to another agent (or a Critic Gate)"
-        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
-      />
-      <MainEdgeAddStub nodeId={id} direction="outgoing" full={data.mainOutFull} />
+      {!isSubAgent && (
+        <>
+          <Handle
+            type="source"
+            position={Position.Right}
+            title="Connect to another agent (or a Critic Gate)"
+            className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+          />
+          <ConnectorHandleLabel side="right" top="calc(50% - 11px)">Agent</ConnectorHandleLabel>
+          <MainEdgeAddStub nodeId={id} direction="outgoing" full={data.mainOutFull} />
+        </>
+      )}
     </div>
   )
 }

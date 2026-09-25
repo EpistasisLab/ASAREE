@@ -31,7 +31,7 @@ import type { DesignFactor } from '@/types/experiments'
 // NOT its layout -- `children` is a render prop that receives the trigger
 // element (a "make it a factor" button, a bound "Factor: {name}" badge, or a
 // disabled button) and decides where to put it. Callers place it inline
-// right next to their own field's Label text (see e.g. LlmNodeInspector's
+// right next to their own field's Label text (see e.g. ModelNodeInspector's
 // "Model" Label) rather than trailing after the whole Label+control block --
 // a fixed trailing position reads as decoration bolted onto the end of a
 // row; sitting directly beside the text it labels reads as part of the
@@ -51,26 +51,6 @@ import type { DesignFactor } from '@/types/experiments'
 // (slow, inconsistent chrome -- see CanvasControls.tsx's own reasoning for
 // the same swap).
 //
-// The Agent/Pattern inspectors' own title-row button (opens the per-node
-// field picker, rather than binding one specific field the way every
-// FactorBindableField instance below does) -- shares the exact same visual
-// identity (icon, text, violet accent, Tooltip) so every "this makes a
-// factor" control in the app reads as the same kind of thing regardless of
-// which of the two entry points it is.
-export function MakeNodeFactorButton({ onClick }: { onClick: () => void }) {
-  return (
-    <TooltipProvider delay={200}>
-      <Tooltip>
-        <TooltipTrigger render={<Button variant="default" size="xs" className={FACTOR_TRIGGER_CLASSNAME} aria-label="Make experimental factor" onClick={onClick} />}>
-          <Split className="size-3.5" />
-          Make factor
-        </TooltipTrigger>
-        <TooltipContent>Bind one of this node's fields to an experimental factor</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  )
-}
-
 // 'text' levelType (a long-form value, e.g. a full system prompt) and every
 // structured kind (isStructuredLevelType -- the "whole node as a factor"
 // ones plus tool_names, see factorLevels.ts) escalate straight to
@@ -111,7 +91,7 @@ export function FactorBindableField({
   // The field's own current value, e.g. config.system_prompt -- omitted for
   // a boolean field, since its levels are always the fixed [true, false].
   currentValue?: unknown
-  // The field's own already-fetched choices (e.g. LlmNodeInspector's model/
+  // The field's own already-fetched choices (e.g. ModelNodeInspector's model/
   // effort lists) -- when given, each level row renders as a Select over
   // these exact values instead of a freeform Input, so a factor's levels
   // can never drift from what the field itself actually accepts. Passed

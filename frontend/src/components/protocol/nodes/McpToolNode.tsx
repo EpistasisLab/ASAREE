@@ -13,9 +13,9 @@ const ACCENT = nodeAccent('mcp_tool')
 // allow-listing a subset of its tools (McpToolNodeConfig.tool_names) --
 // never a standalone pipeline step: it only ever exists as a sub-node wired
 // into an agent. No
-// run-status badge: same reasoning as LlmNode -- the executor gives it an
+// run-status badge: same reasoning as ModelNode -- the executor gives it an
 // instant, inert placeholder node_run, never a real execution. The hover
-// toolbar's own power icon DOES apply here though (unlike LlmNode) --
+// toolbar's own power icon DOES apply here though (unlike ModelNode) --
 // toggles this same config.enabled _resolve_tool_config already skips a
 // disabled tool node's contribution for, same as the Switch in its own
 // inspector.

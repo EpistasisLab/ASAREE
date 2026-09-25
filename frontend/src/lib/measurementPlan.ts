@@ -106,7 +106,7 @@ export function localMetricReadinessPreview(
   const producer = producerLabel(binding.producer_id)
   if (binding.producer_id === AGENT_OUTPUT_PRODUCER_ID) {
     const agentNodeId = String(binding.config.agent_node_id ?? '')
-    const agent = graph?.nodes.find((node) => node.id === agentNodeId && node.type === 'agent')
+    const agent = graph?.nodes.find((node) => node.id === agentNodeId && (node.type === 'agent' || node.type === 'sub_agent'))
     if (!agent) return { ready: false, producer, detail: `Agent ${agentNodeId || '(not selected)'} is not available.` }
     if (agent.data.active === false) return { ready: false, producer, detail: 'The Agent is disabled.' }
     return { ready: true, producer, detail: 'The Agent final output will be captured after execution.' }
@@ -123,7 +123,7 @@ export function localMetricReadinessPreview(
       const agentNodeId = String(binding.config.agent_node_id ?? '')
       const script = graphNodes.find((node) => node.id === scriptNodeId && node.type === 'script')
       const config = script && 'config' in script.data ? script.data.config : undefined
-      if (!graphNodes.some((node) => node.id === agentNodeId && node.type === 'agent')) {
+      if (!graphNodes.some((node) => node.id === agentNodeId && (node.type === 'agent' || node.type === 'sub_agent'))) {
         return { ready: false, producer, detail: `Source Agent ${agentNodeId || '(not selected)'} is not available.` }
       }
       if (!graphEdges.some((edge) => edge.source === scriptNodeId && edge.target === agentNodeId && edge.targetHandle === 'tool')) {
@@ -141,7 +141,7 @@ export function localMetricReadinessPreview(
       const toolNodeId = String(binding.config.mcp_node_id ?? '')
       const tool = graph?.nodes.find((node) => node.id === toolNodeId && ['mcp_tool', 'mcp_scikit_learn', 'mcp_client_tool'].includes(node.type))
       const config = tool && 'config' in tool.data ? tool.data.config as unknown as Record<string, unknown> : undefined
-      if (!graph?.nodes.some((node) => node.id === agentNodeId && node.type === 'agent')) return { ready: false, producer, detail: 'The source Agent is unavailable.' }
+      if (!graph?.nodes.some((node) => node.id === agentNodeId && (node.type === 'agent' || node.type === 'sub_agent'))) return { ready: false, producer, detail: 'The source Agent is unavailable.' }
       if (!tool || !config) return { ready: false, producer, detail: 'The MCP Tool is unavailable.' }
       if (!graph?.edges.some((edge) => edge.source === toolNodeId && edge.target === agentNodeId && edge.targetHandle === 'tool')) return { ready: false, producer, detail: 'The source Agent and MCP Tool are not directly connected.' }
       if (config.enabled === false) return { ready: false, producer, detail: 'The MCP Tool is disabled.' }

@@ -24,6 +24,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from motoro.mcp.registry import get_registry
 from motoro.services import mcp_service
+from motoro.services.mcp_service import MCPServerNameConflictError
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser
@@ -92,8 +93,11 @@ async def _capabilities_with_tool_annotations(config: Any, *, refresh: bool = Fa
     tools = capabilities.get("tools") if capabilities else None
     if not isinstance(tools, list):
         return capabilities
-    entry = get_registry().servers.get(config.name)
+    assert capabilities is not None
+    entry = get_registry().servers.get(config.id)
     client = entry.client if entry is not None else None
+    if client is None:
+        return capabilities
     session = getattr(client, "_session", None)
     if session is None:
         return capabilities
@@ -108,7 +112,7 @@ async def _capabilities_with_tool_annotations(config: Any, *, refresh: bool = Fa
                 if tool.annotations is not None
             }
             cached = (frozenset(tool.name for tool in discovered.tools), annotation_map)
-            client._asaree_tool_annotations = cached
+            client._asaree_tool_annotations = cached  # type: ignore[attr-defined]
         except Exception:
             return capabilities
     annotation_map = cached[1]
@@ -136,7 +140,7 @@ async def _to_response(config: Any, *, refresh_annotations: bool = False) -> Ser
 
 @router.post("", response_model=ServerResponse, status_code=201)
 async def register_server_endpoint(body: RegisterServerRequest, user: CurrentUser) -> ServerResponse:
-    if await mcp_service.get_server_by_name(body.name) is not None:
+    if await mcp_service.get_server_by_name(body.name, owner_id=user.id) is not None:
         raise HTTPException(status_code=409, detail="A server with this name already exists")
     try:
         config = await mcp_service.register_server(
@@ -147,6 +151,8 @@ async def register_server_endpoint(body: RegisterServerRequest, user: CurrentUse
             headers=body.headers,
             owner_id=user.id,
         )
+    except MCPServerNameConflictError as exc:
+        raise HTTPException(status_code=409, detail="A server with this name already exists") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await _to_response(config, refresh_annotations=True)
@@ -180,6 +186,8 @@ async def update_server_endpoint(server_id: uuid.UUID, body: UpdateServerRequest
             url=body.url,
             headers=body.headers,
         )
+    except MCPServerNameConflictError as exc:
+        raise HTTPException(status_code=409, detail="A server with this name already exists") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     assert config is not None  # existence already checked above

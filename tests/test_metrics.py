@@ -222,6 +222,14 @@ def test_design_spec_adds_short_default_labels_for_legacy_factor_levels() -> Non
     }
 
 
+def test_design_spec_normalizes_legacy_model_factor_kind() -> None:
+    spec = normalize_design_spec(
+        {"factors": [{"name": "Agent:Model", "level_type": "llm_config", "levels": [{"model": "gpt-5"}]}]}
+    )
+
+    assert spec["factors"][0]["level_type"] == "model_config"
+
+
 def test_level_labels_change_the_material_design_because_they_name_cells() -> None:
     without_labels = {"factors": [{"name": "Agent:System prompt", "levels": ["a", "b"]}], "replicates": 2}
     with_labels = {

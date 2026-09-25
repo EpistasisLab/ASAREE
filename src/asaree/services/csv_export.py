@@ -3,7 +3,7 @@
 One row per replicate; one column per factor_values/metric_values key seen across
 all replicates -- unlike the Cells table UI's own pickMetricColumns, which caps
 displayed metric columns at 4 for on-screen readability (frontend/src/pages/
-CLAUDE.md), a CSV has no such density constraint, so every key is included.
+AGENTS.md), a CSV has no such density constraint, so every key is included.
 """
 
 from __future__ import annotations

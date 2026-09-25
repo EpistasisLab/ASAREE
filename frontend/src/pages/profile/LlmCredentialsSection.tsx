@@ -18,7 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { CreateCredentialDialog } from '@/components/CreateCredentialDialog'
 import { ConnectionStatusBadge, useConnectionCheck } from '@/components/LlmConnectionCheck'
-import { PROVIDER_META } from '@/components/protocol/nodes/LlmNode'
+import { PROVIDER_META } from '@/components/protocol/nodes/ModelNode'
 import { LLM_PROVIDER_LABELS, type LLMProvider, type LLMSetting } from '@/types/llmSettings'
 
 /** On-demand, zero-token credential check -- a button rather than something

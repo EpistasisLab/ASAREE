@@ -82,7 +82,7 @@ def test_replicate_label_maps_to_its_cell_and_number() -> None:
 
 
 def test_cell_label_for_dict_valued_level_prefers_identifying_key() -> None:
-    """A whole-node factor (LLM/Tool config, pattern override) is a dict, not
+    """A whole-node factor (Model/Tool config, pattern override) is a dict, not
     a scalar -- the label should read as the thing a human recognizes
     ("claude-sonnet-5"), not Python's own dict repr."""
     combo = {"llm": {"provider": "anthropic", "model": "claude-sonnet-5", "temperature": 0.7}}

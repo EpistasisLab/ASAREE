@@ -3,7 +3,7 @@
 React 19 + TypeScript + Vite, styled with Tailwind v4 and a small set of local
 shadcn-style primitives over [Base UI](https://base-ui.com/) (`src/components/ui`).
 The visual language is deliberate and documented in the repo root's
-[`CLAUDE.md`](../CLAUDE.md) — read that before adding a page or component.
+[`AGENTS.md`](../AGENTS.md) — read that before adding a page or component.
 
 ## How it runs: dev server only, no build step
 

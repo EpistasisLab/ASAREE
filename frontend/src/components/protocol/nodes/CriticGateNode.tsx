@@ -1,4 +1,4 @@
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useNodeConnections, useReactFlow, type NodeProps } from '@xyflow/react'
 import { ShieldCheck, ShieldOff } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { cardAccent } from '@/lib/utils'
@@ -25,6 +25,7 @@ export function CriticGateNode({
   const Icon = enabled ? ShieldCheck : ShieldOff
   const summary = enabled ? `Up to ${data.config?.max_revisions ?? 1} revision(s)` : 'Gate disabled'
   const badge = nodeRunBadge(data.runStatus, data.runTruncated)
+  const modelConnections = useNodeConnections({ id, handleType: 'target', handleId: 'model' })
   const { updateNodeData } = useReactFlow()
   const { requestMakeFactor } = useProtocolCanvasActions()
 
@@ -53,7 +54,7 @@ export function CriticGateNode({
       )}
       {hasBoundFactor(data) && <NodeFactorBadge count={boundFactorCount(data)} className="-top-3 -right-3" />}
       {/* Main pipeline flow is left-to-right -- input on the left, output on
-          the right, same convention as AgentNode. The AI sub-connector
+          the right, same convention as AgentNode. The Model sub-connector
           stays on the bottom edge regardless. */}
       <Handle
         type="target"
@@ -70,20 +71,21 @@ export function CriticGateNode({
       <p className="truncate font-mono text-[0.65rem] text-muted-foreground" title={summary}>
         {summary}
       </p>
-      {/* Same required AI connector an agent node has (handle id `ai`, see
-          AgentNode.tsx's own note on the pre-rename `llm` spelling) -- no
+      {/* Same required Model connector an agent node has (handle id `model`, see
+          AgentNode.tsx's note on the pre-rename spellings) -- no
           Tool/Memory slots here, gates never use tools and are always
           single-pass. */}
       <Handle
         type="target"
-        id="ai"
+        id="model"
+        isConnectable={modelConnections.length === 0}
         position={Position.Bottom}
         style={{ left: '50%' }}
-        title="AI (required)"
+        title="Model (required)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left="50%">AI</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="ai" left="50%" />
+      <ConnectorHandleLabel left="50%">Model</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="model" left="50%" />
       <Handle
         type="source"
         position={Position.Right}

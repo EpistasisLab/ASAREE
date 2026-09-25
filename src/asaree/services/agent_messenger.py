@@ -4,11 +4,11 @@ Motoro's :class:`~motoro.engine.ports.AgentMessengerPort` is deliberately one
 method wide: the engine projects the peers a caller declared into callable
 function schemas and hands any resulting call straight back here. Everything
 that decides *whether* the call happens lives in this module -- authorization,
-message identity and ordering, the transcript, the budget, and cancellation.
+message identity and ordering, the transcript, recursion safety, and cancellation.
 The engine never learns what an ASAREE canvas is.
 
 **The reply is a call result, not an exception.** A peer that may not be
-reached, a spent budget and a cancelled conversation all come back as an
+reached, a recursion-depth refusal and a cancelled conversation all come back as an
 :class:`~motoro.engine.ports.AgentReply` with a state the calling model can
 read, so it absorbs the outcome and still writes a real answer. Only genuine
 infrastructure failure raises.
@@ -35,6 +35,7 @@ are byte-for-byte unaffected) structural rather than a promise.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -63,16 +64,6 @@ from asaree.services.protocols import get_protocol
 
 logger = logging.getLogger(__name__)
 
-#: Total peer turns allowed per protocol run, across the whole conversation
-#: tree. Every one of these is a full agent run with its own Reason/Plan/Act
-#: cycle and its own tokens, so this is a cost cap as much as a loop guard.
-_MAX_PEER_EXECUTIONS = 8
-
-#: The real backstop. Deliberately **not** extended by peer time the way an
-#: individual agent's own deadline is (see :mod:`asaree.services.deadline`):
-#: no agent is charged for delegating, but the total stays bounded.
-_MAX_CONVERSATION_DURATION = timedelta(minutes=5)
-
 #: How deep consultations may nest. Two is enough for "Planner asks Critic,
 #: Critic asks a clarifying question back" -- the shape this feature exists for
 #: -- without letting a chain of agents each delegate one level further.
@@ -84,7 +75,7 @@ _MAX_CONSULT_DEPTH = 2
 USER_PARTICIPANT = "user"
 
 #: How much of one earlier message a briefing reproduces. A peer's own analysis
-#: can run to thousands of tokens, and eight of them would crowd out the
+#: can run to thousands of tokens, and several of them would crowd out the
 #: question actually being asked. Truncation is marked so the reading model can
 #: tell a cut-off answer from a short one.
 _MAX_BRIEFING_CHARS_PER_MESSAGE = 1500
@@ -112,13 +103,13 @@ class AgentMessenger:
 
     The consultation path (:meth:`send`) is single-threaded by design:
     invariant 5 is that one agent executes at a time and a consulting agent
-    blocks on its peer's reply, so ``sequence``, the budget counters and the
+    blocks on its peer's reply, so ``sequence`` and the
     turn stack are only ever touched from a single logical call stack.
 
     :func:`execute_supervisor_architecture` is the deliberate exception -- it
     dispatches workers concurrently rather than having a model ask for them --
     and it uses the *transcript* only, through :meth:`record`, which is locked.
-    It never calls :meth:`send`, so nothing about the budget or the turn stack
+    It never calls :meth:`send`, so nothing about the recursion guard or the turn stack
     is ever touched concurrently.
     """
 
@@ -145,8 +136,6 @@ class AgentMessenger:
         #: else. ``None`` means "whatever this cell already stages through".
         self._stage_plan = stage_plan
         self._entry_agent_id = entry_agent_id
-        self._started_at = time.monotonic()
-        self._executions = 0
         self._sequence = 0
         #: Canvas node ids of the agents whose turns are currently on the stack,
         #: innermost last. This -- not anything the engine hands back -- is who
@@ -167,7 +156,7 @@ class AgentMessenger:
         self._display_names = {
             str(n.get("id")): str((n.get("data") or {}).get("label") or "").strip() or str(n.get("id"))
             for n in graph.get("nodes") or []
-            if n.get("type") == "agent"
+            if n.get("type") in ("agent", "sub_agent")
         }
         self._state = "working"
         #: Set when a cap is what stopped the conversation, so the run can land
@@ -298,9 +287,26 @@ class AgentMessenger:
         consultation of a conversation reads exactly as it did before.
         """
         entries: list[str] = []
+        target = next((n for n in self._graph.get("nodes") or [] if str(n.get("id")) == to_agent_id), None)
+        pair_only = target is not None and target.get("type") == "sub_agent"
+        original_user_message_id = next(
+            (m["message_id"] for m in self._messages if m["from_agent_id"] == USER_PARTICIPANT),
+            None,
+        )
         for message in self._messages:
             if message["message_id"] == exclude_message_id:
                 continue
+            if pair_only:
+                sender = message["from_agent_id"]
+                recipient = message["to_agent_id"]
+                if not (
+                    {sender, recipient}.issubset({from_agent_id, to_agent_id})
+                    or (
+                        sender == USER_PARTICIPANT
+                        and (recipient == from_agent_id or message["message_id"] == original_user_message_id)
+                    )
+                ):
+                    continue
             body = _text_of(message["parts"])
             if not body:
                 continue
@@ -374,7 +380,6 @@ class AgentMessenger:
         # sequential, which prevents a race but not this.
         head_before = head_data_locator(self._workspace_id)[0] if self._workspace_id else ""
 
-        self._executions += 1
         # The caller's own clock stops for exactly this span, failures
         # included: it waited either way, and charging it for a peer's
         # failure is the same unfairness as charging it for a peer's
@@ -468,19 +473,6 @@ class AgentMessenger:
                 f"Consultations are already nested {_MAX_CONSULT_DEPTH} deep, which is the limit. "
                 "Answer with what you have rather than delegating further."
             )
-        if self._executions >= _MAX_PEER_EXECUTIONS:
-            self.limit_reached = True
-            return (
-                f"This conversation has used all {_MAX_PEER_EXECUTIONS} of its peer consultations. "
-                "Answer with what you already have."
-            )
-        if time.monotonic() - self._started_at >= _MAX_CONVERSATION_DURATION.total_seconds():
-            self.limit_reached = True
-            return (
-                f"This conversation has run for its full {int(_MAX_CONVERSATION_DURATION.total_seconds())} seconds. "
-                "Answer with what you already have."
-            )
-
         async with get_session() as db:
             run = await get_protocol_run(db, self._protocol_run_id)
             if run is not None and run.cancel_requested_at is not None:
@@ -527,13 +519,17 @@ class AgentMessenger:
         # workspace seeded and its `data_path` bound before it can run a script,
         # exactly like any other node.
         ambient_meta, dataset = await _node_run_context(
-            self._graph, to_agent_id, self._workspace_id, self._owner_id, stage_plan=self._stage_plan
+            self._graph,
+            to_agent_id,
+            self._workspace_id,
+            self._owner_id,
+            protocol_run_id=self._protocol_run_id,
+            stage_plan=self._stage_plan,
         )
-        # A consultation reply is prose the asking agent reads, never a typed
-        # value anything binds to, so whatever the peer's parser extracted (if
-        # it even ran) is discarded here rather than stored under the peer's
-        # node run: this turn isn't that node's own pipeline run.
-        output_text, error, run_id, _extraction = await _run_agent_node(
+        # A configured Output Parser still defines a consulted worker's reply
+        # contract. Return its compact payload to the parent and retain the
+        # extraction for metrics; fall back to prose when no payload exists.
+        output_text, error, run_id, extraction = await _run_agent_node(
             node,
             protocol_id=self._protocol_id,
             protocol_run_id=self._protocol_run_id,
@@ -549,19 +545,31 @@ class AgentMessenger:
         # The canvas shows a consulted peer as a node that ran, because it did.
         # A peer consulted twice keeps only its latest turn here; the full
         # sequence is the transcript's job, not node_runs'.
+        effective_output = output_text
+        if extraction and extraction.get("payload") is not None:
+            effective_output = json.dumps(extraction["payload"], separators=(",", ":"), default=str)
+        patch: dict[str, Any] = {
+            "status": "cancelled" if error == _AGENT_CANCELLED else ("failed" if error else "completed"),
+            "output_text": effective_output,
+            "error": None if error == _AGENT_CANCELLED else error,
+            "run_id": str(run_id) if run_id else None,
+            **(extraction or {}),
+        }
+        if error is None:
+            patch.update(
+                {
+                    "last_successful_output_text": effective_output,
+                    "last_successful_run_id": str(run_id) if run_id else None,
+                }
+            )
         async with get_session() as db:
             await update_node_run(
                 db,
                 self._protocol_run_id,
                 to_agent_id,
-                {
-                    "status": "cancelled" if error == _AGENT_CANCELLED else ("failed" if error else "completed"),
-                    "output_text": output_text,
-                    "error": None if error == _AGENT_CANCELLED else error,
-                    "run_id": str(run_id) if run_id else None,
-                },
+                patch,
             )
-        return output_text, error, str(run_id) if run_id else None
+        return effective_output, error, str(run_id) if run_id else None
 
 
 async def execute_conversation(
@@ -620,7 +628,12 @@ async def execute_conversation(
 
     if ambient_meta is None:
         ambient_meta, entry_dataset = await _node_run_context(
-            graph, entry_agent_id, workspace_id, owner_id, stage_plan=stage_plan
+            graph,
+            entry_agent_id,
+            workspace_id,
+            owner_id,
+            protocol_run_id=protocol_run_id,
+            stage_plan=stage_plan,
         )
         unsplit_dataset = unsplit_dataset or entry_dataset.unsplit_name
 
@@ -857,7 +870,13 @@ async def execute_supervisor_architecture(
         async with get_session() as db:
             await update_node_run(db, protocol_run_id, node_id, {"status": "running"})
         ambient_meta, dataset = await _node_run_context(
-            graph, node_id, workspace_id, owner_id, slot_prefix=slot_prefix, stage_plan=stage_plan
+            graph,
+            node_id,
+            workspace_id,
+            owner_id,
+            protocol_run_id=protocol_run_id,
+            slot_prefix=slot_prefix,
+            stage_plan=stage_plan,
         )
         prompt = _build_user_input(
             nodes[node_id],
@@ -1051,6 +1070,7 @@ async def record_sequential_transcript(
     node_runs: dict[str, Any],
     entry_prompt: str,
     state: str,
+    messenger: AgentMessenger | None = None,
 ) -> None:
     """Render a finished sequential run as an A2A conversation document.
 
@@ -1080,7 +1100,7 @@ async def record_sequential_transcript(
     through. *entry_prompt* is the head agent's own built ``user_input``, which
     stands in as what the user asked.
     """
-    messenger = AgentMessenger(
+    messenger = messenger or AgentMessenger(
         protocol_id=protocol_id,
         protocol_run_id=protocol_run_id,
         owner_id=owner_id,
@@ -1088,11 +1108,18 @@ async def record_sequential_transcript(
         entry_agent_id=chain[0],
         workspace_id=None,
     )
-    messenger.append(
-        from_agent_id=USER_PARTICIPANT,
-        to_agent_id=chain[0],
-        parts=[{"kind": "text", "text": entry_prompt}],
-    )
+    # A pipeline messenger may already contain this entry because the head
+    # agent delegated. Keep one user-to-head opening, then add the ordinary
+    # sequential handoffs around the nested delegation messages.
+    if not any(
+        message["from_agent_id"] == USER_PARTICIPANT and message["to_agent_id"] == chain[0]
+        for message in messenger._messages
+    ):
+        messenger.append(
+            from_agent_id=USER_PARTICIPANT,
+            to_agent_id=chain[0],
+            parts=[{"kind": "text", "text": entry_prompt}],
+        )
 
     def _outcome(node_id: str) -> tuple[str, str]:
         run = node_runs.get(node_id) or {}

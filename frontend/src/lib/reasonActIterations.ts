@@ -40,7 +40,13 @@ function connectorCost(node: ProtocolNode): number {
   if (!isEnabled(node)) return 0
   if (node.type === 'script') return SCRIPT_ITERATIONS
   if (isMcpToolNodeType(node.type)) return CONNECTOR_ITERATIONS
-  if (node.type === 'skill' || node.type === 'dataset' || node.type === 'okf_bundle' || node.type === 'okf_document') {
+  if (
+    node.type === 'skill' ||
+    node.type === 'dataset' ||
+    node.type === 'okf_bundle' ||
+    node.type === 'okf_document' ||
+    node.type === 'sub_agent'
+  ) {
     return CONNECTOR_ITERATIONS
   }
   return 0
@@ -66,7 +72,7 @@ export function suggestedMaxIterations(graph: ProtocolGraph, patternNodeId: stri
   const agentIds = graph.edges
     .filter((edge) => edge.source === patternNodeId && edge.targetHandle === 'architectural_pattern')
     .map((edge) => edge.target)
-    .filter((id) => nodes.get(id)?.type === 'agent')
+    .filter((id) => ['agent', 'sub_agent'].includes(nodes.get(id)?.type ?? ''))
   if (agentIds.length === 0) return null
 
   // The max across agents, not the sum: each agent runs its own loop, and the

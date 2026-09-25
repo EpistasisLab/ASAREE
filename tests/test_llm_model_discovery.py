@@ -478,7 +478,7 @@ async def test_local_discovery_no_listing_route_surfaces_as_error_source_so_the_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A server with no GET /models route is a normal, expected outcome -- not
-    a real error -- but LlmNodeInspector.tsx only renders `note` when
+    a real error -- but ModelNodeInspector.tsx only renders `note` when
     `source == "error"`, so that's the source used to actually surface it."""
     response = _FakeResponse({}, status_code=404)
     monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))

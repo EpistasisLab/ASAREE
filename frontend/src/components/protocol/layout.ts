@@ -21,8 +21,9 @@ const CONNECTOR_X: { agent: Record<ConnectorSlot, number>; critic_gate: Partial<
     skill: 0.18,
     dataset: 0.71,
     knowledge: 0.9,
-    ai: 0.2,
-    memory: 0.5,
+    model: 0.08,
+    sub_agents: 0.32,
+    memory: 0.58,
     tool: 0.8,
     // Added after the other seven, and placed after Tool rather than among
     // them: every existing slot keeps the x it already had, because a canvas
@@ -31,11 +32,11 @@ const CONNECTOR_X: { agent: Record<ConnectorSlot, number>; critic_gate: Partial<
     // see AgentNode's own showOutputParser.
     output_parser: 0.95,
   },
-  critic_gate: { ai: 0.5 },
+  critic_gate: { model: 0.5 },
 }
 
 // The host cards' own widths: AgentNode is w-72, CriticGateNode w-36.
-const HOST_WIDTH: Record<string, number> = { agent: 288, critic_gate: 144 }
+const HOST_WIDTH: Record<string, number> = { agent: 288, sub_agent: 288, critic_gate: 144 }
 
 // A connector's node is a CircleNode: a 56px circle under a caption that can
 // grow to 96px, with the circle -- where its handle is -- centered in
@@ -43,6 +44,12 @@ const HOST_WIDTH: Record<string, number> = { agent: 288, critic_gate: 144 }
 // enough to center any of them on a connector; a few px off is invisible,
 // and being a whole card-width off is the thing this fixes.
 const NEW_NODE_HALF_WIDTH = 38
+
+// A Sub-Agent needs a full satellite row between it and its parent for its
+// own required Pattern node. Keeping the two equal-width cards aligned also
+// makes the ownership hierarchy read vertically instead of as another step
+// in the left-to-right main flow.
+export const SUB_AGENT_CHILD_OFFSET_Y = 320
 
 /** The `left` style for each of a host card's connectors, as a percentage
  * string — for the `<Handle>`, its caption and its "+" stub, which must all
@@ -54,11 +61,13 @@ export function connectorLefts(host: 'agent' | 'critic_gate'): Record<ConnectorS
 }
 
 /** How far right of a host node's own position to place the new node a
- * connector just asked for, so the node lands centered on that connector
- * rather than on the host's left corner. Unknown host type falls back to
- * the middle of an agent-sized card. */
+ * connector just asked for. Small satellites center on their connector;
+ * equal-width Sub-Agent cards align with their parent. Unknown host types
+ * fall back to the middle of an agent-sized card. */
 export function connectorNodeOffsetX(hostType: string | undefined, slot: ConnectorSlot): number {
-  const table = hostType === 'agent' || hostType === 'critic_gate' ? CONNECTOR_X[hostType] : undefined
+  if (slot === 'sub_agents') return 0
+  const canonicalHost = hostType === 'sub_agent' ? 'agent' : hostType
+  const table = canonicalHost === 'agent' || canonicalHost === 'critic_gate' ? CONNECTOR_X[canonicalHost] : undefined
   const width = HOST_WIDTH[hostType ?? ''] ?? HOST_WIDTH.agent
   return (table?.[slot] ?? 0.5) * width - NEW_NODE_HALF_WIDTH
 }
@@ -71,7 +80,7 @@ export function connectorNodeOffsetX(hostType: string | undefined, slot: Connect
  * connector, which is the thing anchoring them to their connector is for.
  * 84x80 is roughly a circle-plus-caption's real footprint, and 84 rather
  * than 90 on purpose: the bottom row's three connectors are 86px apart on a
- * w-72 card, so at 84 a full AI + Memory + Tool row keeps every node exactly
+ * w-72 card, so at 84 a full Model + Memory + Tool row keeps every node exactly
  * under its own connector with nothing displaced. */
 export const CONNECTOR_CHILD_CLEARANCE = { width: 84, height: 80 }
 
@@ -147,7 +156,7 @@ type TidyEdge = { source: string; target: string; targetHandle?: string | null }
  * already knows) and one of two correct y's. A layout library would have to be
  * fought to honor that and would price in a dependency for the privilege. */
 export function tidyLayout(nodes: TidyNode[], edges: TidyEdge[]): Map<string, XYPosition> {
-  const isHost = (n: TidyNode) => n.type === 'agent' || n.type === 'critic_gate'
+  const isHost = (n: TidyNode) => n.type === 'agent' || n.type === 'sub_agent' || n.type === 'critic_gate'
   const hosts = nodes.filter(isHost)
   // A connector edge carries a targetHandle (the slot it feeds); a main-flow
   // edge between two hosts doesn't. So the presence of a handle is what
@@ -232,9 +241,19 @@ export function tidyLayout(nodes: TidyNode[], edges: TidyEdge[]): Map<string, XY
     for (const child of childrenByHost.get(host.id) ?? []) {
       const desired = {
         x: hostPosition.x + connectorNodeOffsetX(host.type, child.slot),
-        y: hostPosition.y + (TIDY_TOP_SLOTS.has(child.slot) ? -TIDY_CHILD_OFFSET_Y : TIDY_CHILD_OFFSET_Y),
+        y: hostPosition.y + (
+          TIDY_TOP_SLOTS.has(child.slot)
+            ? -TIDY_CHILD_OFFSET_Y
+            : child.slot === 'sub_agents'
+              ? SUB_AGENT_CHILD_OFFSET_Y
+              : TIDY_CHILD_OFFSET_Y
+        ),
       }
-      const position = findFreePosition(placed, desired, CONNECTOR_CHILD_CLEARANCE)
+      const position = findFreePosition(
+        placed,
+        desired,
+        child.slot === 'sub_agents' ? { width: 320, height: 140 } : CONNECTOR_CHILD_CLEARANCE,
+      )
       positions.set(child.id, position)
       placed.push(position)
     }

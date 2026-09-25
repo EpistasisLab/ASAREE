@@ -369,7 +369,9 @@ async def open_workspace(
         name: Registered dataset name (must be a pre-split train/test registration,
             and owned by the user who started this run). Optional — resolved from
             _meta when the run has exactly one dataset wired; with several, this
-            picks between them and the error lists the candidates.
+            picks between them and the error lists the candidates. Inside an
+            ASAREE run an explicit name must be one of those wired candidates;
+            outside a run any owned registration may be named.
         target_column: Override target column; defaults to the registry's.
         stage: For a stage that hands off through a scratch directory (the
             default for every stage — see the stage-plan flags at the top of this
@@ -413,6 +415,14 @@ async def open_workspace(
                     if candidates
                     else " (no dataset is wired into this run)."
                 )
+            }
+        )
+    run_scoped = bool(resolve_workspace_id_from_ctx("", ctx, required=False))
+    if name.strip() and run_scoped and resolved_name not in candidates:
+        return json.dumps(
+            {
+                "error": f"Dataset {resolved_name!r} is not wired into this run.",
+                "wired_datasets": candidates,
             }
         )
 

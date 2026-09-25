@@ -8,9 +8,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { FactorBindableField, MakeNodeFactorButton } from './FactorBindableField'
+import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
-import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import type { ReasonActPatternConfig, ReasonActPatternNodeData, ProtocolNode } from '@/types/protocols'
 
 const OBSERVATION_FORMATS = ['raw', 'summarized'] as const
@@ -52,7 +51,6 @@ export function ReasonActPatternNodeInspector({
   onChange: (nodeId: string, data: ReasonActPatternNodeData) => void
   onClose: () => void
 }) {
-  const { requestMakeFactor } = useProtocolCanvasActions()
   // Shown instead of closing outright when a required field (see
   // ReasonActPatternNode.tsx's matching warning-triangle check) is still
   // empty -- lets the user close anyway rather than trapping them in the
@@ -107,7 +105,6 @@ export function ReasonActPatternNodeInspector({
         <>
           <Repeat2 className="size-5" style={{ color: ACCENT }} />
           <h2 className="text-lg font-semibold">{data.label || 'Reason + Act'}</h2>
-          <MakeNodeFactorButton onClick={() => requestMakeFactor(node.id)} />
         </>
       }
       onClose={requestClose}

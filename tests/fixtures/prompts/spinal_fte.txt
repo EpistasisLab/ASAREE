@@ -9,6 +9,9 @@ task_brief: {"domain": "elective spinal fusion surgeries, Cedars-Sinai Medical C
 DC accepted v1_dc.
 <<</UPSTREAM_OUTPUT>>>
 
+Available datasets:
+- spinal-fusion
+
 Dataset context:
 A dataset is registered for this run. Call open_workspace() before doing any data work -- it takes no arguments here; which dataset and which workspace both arrive as ambient run context. Its response names what it opened.
 

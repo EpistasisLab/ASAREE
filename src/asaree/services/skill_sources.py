@@ -16,12 +16,10 @@ the archive rather than caching it between the two calls: the download is
 capped small, and a server-side cache keyed by URL is state with a TTL to get
 wrong for no gain at this size.
 
-**Nothing is ever written to disk and nothing is executed.** The archive is
-walked in memory and only regular files whose paths pass core's
-``validate_bundle_path`` survive, so a skill from a stranger's repository
-arrives as exactly the same rows as one the user picked out of a folder --
-scripts refused, text only, the same caps. That is the whole security posture
-for the *contents*; the fetch itself is guarded below.
+**Nothing is ever written to disk or executed during acquisition.** The archive
+is walked in memory and only regular, contained paths survive. Scripts and
+binary assets are preserved as inert skill resources; execution is a separate
+model-controlled runtime action under the product's trust policy.
 """
 
 from __future__ import annotations
@@ -204,18 +202,15 @@ async def _download_archive(source: GithubSource) -> tuple[bytes, str]:
     )
 
 
-def _read_archive(raw: bytes) -> dict[str, str]:
-    """``{repo-relative path: text}`` for every readable file in the tarball.
+def _read_archive(raw: bytes) -> dict[str, bytes]:
+    """``{repo-relative path: bytes}`` for every regular file in the tarball.
 
-    Three things are dropped rather than raised over, because a repository is
-    full of them and none is the user's mistake: non-regular members
-    (symlinks, hardlinks, devices -- nothing here should be able to point
-    *out* of the archive), files that are not UTF-8, and anything
-    ``validate_bundle_path`` refuses. That last one is what keeps a fetched
-    skill identical to an uploaded one: scripts, images and hidden paths never
-    become rows, and the rule lives in core rather than being restated here.
+    Non-regular members (symlinks, hardlinks, devices) and invalid/hidden paths
+    are dropped rather than raised over because repositories commonly contain
+    them. Regular resources remain bytes so scripts and binary assets survive
+    with the same semantics as a directly uploaded skill folder.
     """
-    files: dict[str, str] = {}
+    files: dict[str, bytes] = {}
     extracted = 0
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as archive:
         for index, member in enumerate(archive):
@@ -237,14 +232,11 @@ def _read_archive(raw: bytes) -> dict[str, str]:
             handle = archive.extractfile(member)
             if handle is None:  # pragma: no cover -- isfile() already excludes these
                 continue
-            try:
-                files[relative] = handle.read().decode("utf-8")
-            except UnicodeDecodeError:
-                continue
+            files[relative] = handle.read()
     return files
 
 
-def _skill_dirs(files: dict[str, str], subdirectory: str) -> list[str]:
+def _skill_dirs(files: dict[str, bytes], subdirectory: str) -> list[str]:
     """Directories holding a ``SKILL.md``, at or under *subdirectory*."""
     prefix = f"{subdirectory}/" if subdirectory else ""
     found: list[str] = []
@@ -260,7 +252,7 @@ def _skill_dirs(files: dict[str, str], subdirectory: str) -> list[str]:
     return sorted(found)
 
 
-def _bundle_at(files: dict[str, str], subdirectory: str, siblings: Sequence[str] = ()) -> list[tuple[str, str]]:
+def _bundle_at(files: dict[str, bytes], subdirectory: str, siblings: Sequence[str] = ()) -> list[tuple[str, bytes]]:
     """One skill directory's subtree, re-rooted so ``SKILL.md`` is at the top.
 
     Re-rooting is the point: core's ``parse_skill_bundle`` wants paths relative
@@ -306,10 +298,10 @@ async def discover_skills(url: str) -> tuple[GithubSource, list[DiscoveredSkill]
     discovered: list[DiscoveredSkill] = []
     for directory in directories:
         bundle = _bundle_at(files, directory, directories)
-        entry = next((text for path, text in bundle if path.lower() == SKILL_MD.lower()), "")
+        entry_bytes = next((content for path, content in bundle if path.lower() == SKILL_MD.lower()), b"")
         try:
-            parsed = parse_skill_markdown(entry)
-        except SkillFormatError:
+            parsed = parse_skill_markdown(entry_bytes.decode("utf-8"))
+        except (SkillFormatError, UnicodeDecodeError):
             # Listed, not refused: a repo may hold one malformed skill among
             # ten good ones, and dropping it silently would look like it
             # simply is not there. Registering it is what surfaces the reason.
@@ -333,7 +325,7 @@ async def discover_skills(url: str) -> tuple[GithubSource, list[DiscoveredSkill]
     return resolved, discovered
 
 
-async def fetch_skill_bundle(url: str, subdirectory: str) -> tuple[GithubSource, list[tuple[str, str]]]:
+async def fetch_skill_bundle(url: str, subdirectory: str) -> tuple[GithubSource, list[tuple[str, bytes]]]:
     """One skill's files, ready for ``create_skill_from_bundle``.
 
     *subdirectory* is repo-relative and comes from a prior

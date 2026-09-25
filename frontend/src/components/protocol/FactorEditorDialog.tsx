@@ -29,7 +29,7 @@ import {
 } from './factorLevels'
 import { ModelField } from './ModelField'
 import { NODE_INSPECTOR_CONTENT_CLASSNAME } from './NodeInspectorDialog'
-import { PROVIDER_META } from './nodes/LlmNode'
+import { PROVIDER_META } from './nodes/ModelNode'
 import { PromptReferenceField } from './PromptReferenceField'
 import { PythonCodeEditor } from './PythonCodeEditor'
 import { useDialogAutosave } from './useDialogAutosave'
@@ -43,10 +43,10 @@ const PATTERN_OPTIONS = [
 
 type StructuredLevel = Record<string, unknown>
 
-// One row of an "llm_config" factor's levels -- mirrors LlmNodeInspector's
+// One row of a "model_config" factor's levels -- mirrors ModelNodeInspector's
 // own Provider/Model/Temperature/Effort/Max tokens fields exactly, since a
-// level here IS a whole LLM node's config (protocol_execution.py's
-// _resolve_llm_config reads it verbatim, never the node's xyflow type).
+// level here IS a whole Model node's config (protocol_execution.py's
+// _resolve_model_config reads it verbatim, never the node's xyflow type).
 function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
   const provider = (value.provider as string) || 'anthropic'
   const { modelsQuery, models } = useProviderModels(provider)
@@ -813,7 +813,7 @@ export function FactorEditorDialog({
                             value={levelLabels[i] ?? ''}
                             onChange={(e) => setLevelLabels((ls) => ls.map((label, j) => (j === i ? e.target.value : label)))}
                           />
-                          {levelType === 'llm_config' ? (
+                          {levelType === 'model_config' ? (
                             <LlmConfigLevelRow
                               value={level as StructuredLevel}
                               onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}

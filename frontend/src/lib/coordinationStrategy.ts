@@ -3,10 +3,11 @@ import type { AgentNodeData, ProtocolEdge, ProtocolGraph, ProtocolNode } from '@
 
 // Mirrors services.protocol_execution's own _CONNECTOR_HANDLES -- any edge
 // whose targetHandle ISN'T one of these is a plain "main" pipeline edge.
-// Includes the pre-rename "llm" and "resource" spellings for the same reason
+// Includes the pre-rename "ai", "llm", and "resource" spellings for the same reason
 // the backend set does: a graph that hasn't been through migrateLegacyHandles
-// yet must not have its AI/Dataset edges misread as main pipeline edges.
+// yet must not have its Model/Dataset edges misread as main pipeline edges.
 export const CONNECTOR_HANDLES = new Set([
+  'model',
   'ai',
   'llm',
   'tool',
@@ -17,6 +18,7 @@ export const CONNECTOR_HANDLES = new Set([
   'resource',
   'knowledge',
   'output_parser',
+  'sub_agents',
 ])
 
 export function isMainEdge(edge: Pick<ProtocolEdge, 'targetHandle'>): boolean {

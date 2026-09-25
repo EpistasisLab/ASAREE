@@ -2,6 +2,7 @@ import CodeMirror, { EditorView } from '@uiw/react-codemirror'
 import { python } from '@codemirror/lang-python'
 import { syntaxHighlighting } from '@codemirror/language'
 import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark'
+import { cn } from '@/lib/utils'
 
 // A dark theme built from this app's own CSS custom properties (index.css's
 // .dark block) for the editor's CHROME (background, gutter, active line,
@@ -11,7 +12,7 @@ import { oneDarkHighlightStyle } from '@codemirror/theme-one-dark'
 // itself, not its accompanying background theme) is used verbatim for
 // those -- a code editor's multi-hue token coloring is its own established
 // visual language, not something this app's single-accent color convention
-// (CLAUDE.md's "Color -- meaningful variation, not decoration") is meant to
+// (AGENTS.md's "Color -- meaningful variation, not decoration") is meant to
 // constrain, the same way a syntax-highlighted code block in a chat UI
 // doesn't reskin its colors to match the surrounding chrome either.
 const editorTheme = EditorView.theme(
@@ -60,18 +61,29 @@ export function PythonCodeEditor({
   value,
   onChange,
   rows = 16,
+  resizable = false,
 }: {
   value: string
   onChange: (value: string) => void
   rows?: number
+  resizable?: boolean
 }) {
+  const height = `${rows * 1.35}em`
+
   return (
-    <div className="overflow-hidden rounded-lg border border-input transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+    <div
+      className={cn(
+        'overflow-hidden rounded-lg border border-input transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50',
+        resizable && 'min-h-24 resize-y',
+      )}
+      style={resizable ? { height } : undefined}
+      title={resizable ? 'Drag the lower-right corner to resize the code editor' : undefined}
+    >
       <CodeMirror
         value={value}
         onChange={onChange}
         theme={editorTheme}
-        height={`${rows * 1.35}em`}
+        height={resizable ? '100%' : height}
         extensions={[python(), syntaxHighlighting(oneDarkHighlightStyle)]}
         basicSetup={{ foldGutter: false, highlightActiveLineGutter: false }}
       />

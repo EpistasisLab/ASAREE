@@ -1,4 +1,5 @@
-import { AlertTriangle, ChevronRight, CircleDollarSign, Clock3, X } from 'lucide-react'
+import { useState } from 'react'
+import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, CircleDollarSign, Clock3, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -76,9 +77,38 @@ function ObservationCard({ observation, artifacts }: { observation: MetricObserv
 // `nodeNames` is every canvas node's friendly name by id (lib/nodeNames.ts),
 // not just the agents': Node progress lists a row per node in the graph, and a
 // bare uuid there matches nothing the user can point at on the canvas.
-export function TestRunResults({ run, onClose, nodeNames = new Map(), title = 'Test Run Results' }: { run: TestRun; onClose: () => void; nodeNames?: Map<string, string>; title?: string }) {
+const EXECUTABLE_NODE_TYPES = new Set(['agent', 'sub_agent', 'critic_gate'])
+
+export function TestRunResults({
+  run,
+  onClose,
+  nodeNames = new Map(),
+  nodeTypes = new Map(),
+  title = 'Test Run Results',
+}: {
+  run: TestRun
+  onClose: () => void
+  nodeNames?: Map<string, string>
+  nodeTypes?: Map<string, string>
+  title?: string
+}) {
+  const [nodeProgressCollapsed, setNodeProgressCollapsed] = useState(false)
   const running = !TERMINAL_RUN_STATUSES.has(run.status)
+  const canvasOrder = new Map(Array.from(nodeTypes.keys(), (nodeId, index) => [nodeId, index]))
   const nodeRuns = Object.entries(run.execution_summary.node_runs)
+    .filter(([nodeId]) => {
+      const nodeType = nodeTypes.get(nodeId)
+      return nodeType === undefined || EXECUTABLE_NODE_TYPES.has(nodeType)
+    })
+    .sort(([leftId], [rightId]) => {
+      const leftOrder = canvasOrder.get(leftId) ?? Number.MAX_SAFE_INTEGER
+      const rightOrder = canvasOrder.get(rightId) ?? Number.MAX_SAFE_INTEGER
+      return leftOrder - rightOrder || (nodeNames.get(leftId) ?? leftId).localeCompare(nodeNames.get(rightId) ?? rightId)
+    })
+  const nodeRunGroups = [
+    { label: 'Agents', entries: nodeRuns.filter(([nodeId]) => nodeTypes.get(nodeId) !== 'critic_gate') },
+    { label: 'Critic gates', entries: nodeRuns.filter(([nodeId]) => nodeTypes.get(nodeId) === 'critic_gate') },
+  ].filter((group) => group.entries.length > 0)
   const timestamp = new Date(run.created_at)
 
   return (
@@ -105,14 +135,36 @@ export function TestRunResults({ run, onClose, nodeNames = new Map(), title = 'T
         {run.error && <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">{run.error}</p>}
 
         {nodeRuns.length > 0 && (
-          <section className="space-y-2"><h3 className="text-sm font-medium">Node progress</h3>
-            {nodeRuns.map(([nodeId, nodeRun]) => {
-              const badge = nodeRunBadge(nodeRun.status, Boolean(nodeRun.truncation))
-              return <details key={nodeId} className="rounded-lg border bg-background/45">
-                <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2"><ChevronRight className="size-3.5 text-muted-foreground [[open]>&]:rotate-90" /><span className="font-medium">{nodeNames.get(nodeId) ?? nodeId}</span>{badge && <Badge className={`ml-auto ${badge.className}`}>{badge.label}</Badge>}</summary>
-                <div className="border-t px-3 py-2 text-xs">{nodeRun.output_text ? <pre className="font-mono whitespace-pre-wrap">{nodeRun.output_text}</pre> : <p className="text-muted-foreground">No output recorded yet.</p>}{nodeRun.error && <p className="mt-2 text-destructive">{nodeRun.error}</p>}</div>
-              </details>
-            })}
+          <section className="space-y-2" aria-label="Node progress">
+            <button
+              type="button"
+              onClick={() => setNodeProgressCollapsed((collapsed) => !collapsed)}
+              className="flex w-full items-center justify-between gap-2 rounded text-left hover:opacity-80"
+              aria-expanded={!nodeProgressCollapsed}
+            >
+              <h3 className="text-sm font-medium">Node progress</h3>
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span>{nodeRuns.length}</span>
+                {nodeProgressCollapsed ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+              </span>
+            </button>
+            <div className={nodeProgressCollapsed ? 'hidden' : 'space-y-3'}>
+              {nodeRunGroups.map((group) => (
+                <div key={group.label} className="space-y-1.5">
+                  <h4 className="font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">{group.label}</h4>
+                  {group.entries.map(([nodeId, nodeRun]) => {
+                    const badge = nodeRunBadge(nodeRun.status, Boolean(nodeRun.truncation))
+                    const label = nodeTypes.get(nodeId) === 'sub_agent' && nodeRun.status === 'skipped'
+                      ? (running ? 'Available' : 'Not invoked')
+                      : badge?.label
+                    return <details key={nodeId} className="rounded-lg border bg-background/45">
+                      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2"><ChevronRight className="size-3.5 text-muted-foreground [[open]>&]:rotate-90" /><span className="font-medium">{nodeNames.get(nodeId) ?? nodeId}</span>{badge && <Badge className={`ml-auto ${badge.className}`}>{label}</Badge>}</summary>
+                      <div className="border-t px-3 py-2 text-xs">{nodeRun.output_text ? <pre className="font-mono whitespace-pre-wrap">{nodeRun.output_text}</pre> : <p className="text-muted-foreground">No output recorded yet.</p>}{nodeRun.error && <p className="mt-2 text-destructive">{nodeRun.error}</p>}</div>
+                    </details>
+                  })}
+                </div>
+              ))}
+            </div>
           </section>
         )}
 

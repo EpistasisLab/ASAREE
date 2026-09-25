@@ -15,7 +15,7 @@ export interface DesignFactor {
     | 'text'
     | 'number'
     | 'boolean'
-    | 'llm_config'
+    | 'model_config'
     | 'tool_config'
     | 'pattern'
     | 'script_config'

@@ -12,7 +12,7 @@ export interface AgentOutputSourceOption {
 export function agentOutputSourceOptions(graph: ProtocolGraph | undefined): AgentOutputSourceOption[] {
   if (!graph) return []
   return graph.nodes.flatMap((node) => {
-    if (node.type !== 'agent') return []
+    if (node.type !== 'agent' && node.type !== 'sub_agent') return []
     const disabledReason = node.data.active === false ? 'Agent is disabled.' : undefined
     return [{ agentNodeId: node.id, label: node.data.label || node.id, disabledReason }]
   })

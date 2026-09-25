@@ -328,6 +328,8 @@ def normalize_design_spec(
         for factor in factors:
             if not isinstance(factor, dict) or not isinstance(factor.get("name"), str):
                 continue
+            if factor.get("level_type") == "llm_config":
+                factor["level_type"] = "model_config"
             levels = factor.get("levels")
             if not isinstance(levels, list):
                 continue

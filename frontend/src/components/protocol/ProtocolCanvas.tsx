@@ -138,17 +138,16 @@ import { OkfBundleNode } from './nodes/OkfBundleNode'
 import { OkfDocumentNode } from './nodes/OkfDocumentNode'
 import { SkillNode } from './nodes/SkillNode'
 import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
+import {
+  MODEL_NODE_TYPES,
+  PATTERN_NODE_TYPES,
+  isProtocolConnectionValid,
+} from './connectionValidation'
 
 // One node type per LLM provider / architectural pattern (see ModelNodeData/
 // ReasonActPatternNodeData's own comments in types/protocols.ts) -- each
 // connector slot accepts this whole family, not one exact type, mirroring
 // how the "tool" slot already accepts any mcp_tool node.
-const MODEL_NODE_TYPES = ['model_anthropic', 'model_openai', 'model_azure_foundry', 'model_openrouter', 'model_local']
-const PATTERN_NODE_TYPES = ['pattern_reason_act', 'pattern_single_agent_baseline']
-// The Knowledge slot's family, mirroring _KNOWLEDGE_NODE_TYPES in
-// services/protocol_execution.py: a server-side folder or an uploaded single
-// concept, both resolved identically into the agent's tool allow-list.
-const KNOWLEDGE_NODE_TYPES = ['okf_bundle', 'okf_document']
 // The four connector slots that live on an Agent's TOP edge (see
 // AgentNode.tsx) -- a node feeding one of these is placed ABOVE its agent,
 // every other slot's source below it.
@@ -545,10 +544,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   }, [])
   const currentViewport = useViewport()
   const isAtRest = !restingViewportRef.current || isNearViewport(currentViewport, restingViewportRef.current)
-
-  const onConnect = useCallback((connection: Connection) => {
-    if (!experimentLocked) setEdges((eds) => addEdge(connection, eds))
-  }, [experimentLocked, setEdges])
 
   // "Tidy up" -- reposition every node into a generated layout (see
   // layout.ts's tidyLayout). Goes through this component's own setNodes
@@ -1014,6 +1009,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const isPeerCollaboration = coordinationSlug === 'peer_collaboration'
   const isSupervisor = coordinationSlug === 'supervisor_architecture'
   const isSequential = coordinationSlug === 'sequential'
+
+  // React Flow normally calls isValidConnection before this handler, but the
+  // mutation boundary enforces the same rule defensively so another caller
+  // cannot append an invalid edge by bypassing the drag affordance.
+  const onConnect = useCallback((connection: Connection) => {
+    if (experimentLocked) return
+    setEdges((currentEdges) =>
+      isProtocolConnectionValid(connection, nodes, currentEdges, isSequential)
+        ? addEdge(connection, currentEdges)
+        : currentEdges,
+    )
+  }, [experimentLocked, isSequential, nodes, setEdges])
 
   const renderedEdges = useMemo<Edge[]>(() => {
     if (!isSequential) return edges
@@ -1880,84 +1887,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // of truth) -- an invalid drag never even completes, rather than
   // completing and only failing later at Run time.
   const isValidConnection = useCallback(
-    (connection: Edge | Connection) => {
-      const sourceNode = nodes.find((n) => n.id === connection.source)
-      const targetNode = nodes.find((n) => n.id === connection.target)
-      if (!sourceNode || !targetNode) return false
-      const targetIsAgentLike = targetNode.type === 'agent' || targetNode.type === 'sub_agent'
-      switch (connection.targetHandle) {
-        case 'model':
-          return (
-            MODEL_NODE_TYPES.includes(sourceNode.type ?? '') &&
-            (targetIsAgentLike || targetNode.type === 'critic_gate')
-          )
-        case 'tool':
-          return (
-            (MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') || sourceNode.type === 'script') &&
-            targetIsAgentLike
-          )
-        case 'memory':
-          return sourceNode.type === 'memory' && targetIsAgentLike
-        case 'output_parser':
-          // Agent only, deliberately not critic_gate: a gate's answer is a
-          // pass/fail decision the executor already reads structurally, so
-          // there is nothing for a contract to extract.
-          return sourceNode.type === 'output_parser' && targetIsAgentLike
-        case 'architectural_pattern':
-          return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetIsAgentLike
-        case 'skill':
-          return sourceNode.type === 'skill' && targetIsAgentLike
-        case 'dataset':
-          // Uncapped: a cell's workspace holds one dataset per named SLOT, so
-          // several datasets on one agent is a supported shape, not a run-time
-          // error (see AgentNode.tsx's Dataset comment). Wiring order is the
-          // order the agent's prompt lists the slots in. Note this is still
-          // distinct from COMPARING datasets across cells, which is a
-          // 'dataset_config' factor.
-          return sourceNode.type === 'dataset' && targetIsAgentLike
-        case 'knowledge':
-          // The one connector with two source types -- bundles and uploaded
-          // documents are interchangeable here, since both resolve to the same
-          // per-directory OKF server.
-          return KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') && targetIsAgentLike
-        case 'sub_agents':
-          return (
-            sourceNode.type === 'sub_agent' &&
-            targetNode.type === 'agent' &&
-            !edges.some((edge) => edge.source === sourceNode.id && edge.targetHandle === 'sub_agents')
-          )
-        default: {
-          // A plain "main" pipeline edge -- LLM/memory/pattern/mcp_tool/
-          // dataset/skill/knowledge/script nodes have no main handle to drag from in
-          // the first place, so this mostly guards against a stray
-          // connection, not real interactive use.
-          const sourceCanFeedMainFlow =
-            !MODEL_NODE_TYPES.includes(sourceNode.type ?? '') &&
-            sourceNode.type !== 'memory' &&
-            sourceNode.type !== 'output_parser' &&
-            !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
-            sourceNode.type !== 'dataset' &&
-            sourceNode.type !== 'skill' &&
-            !KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') &&
-            sourceNode.type !== 'script' &&
-            !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') &&
-            sourceNode.type !== 'sub_agent' &&
-            targetNode.type !== 'sub_agent'
-          if (!sourceCanFeedMainFlow) return false
-          // Under Sequential the main flow is a chain: one edge out of each
-          // node, one into each. Enforced here so the canvas refuses the fork
-          // as you draw it, rather than validate_sequential_chain rejecting the
-          // whole protocol at publish time. Other strategies leave the main
-          // flow unrestricted -- a fork is exactly the shape Peer Collaboration
-          // exists for, and a Critic Gate pipeline routes around agents.
-          if (!isSequential) return true
-          return (
-            !edges.some((e) => e.source === connection.source && !CONNECTOR_HANDLES.has(e.targetHandle ?? '')) &&
-            !edges.some((e) => e.target === connection.target && !CONNECTOR_HANDLES.has(e.targetHandle ?? ''))
-          )
-        }
-      }
-    },
+    (connection: Edge | Connection) => isProtocolConnectionValid(connection, nodes, edges, isSequential),
     [nodes, edges, isSequential],
   )
 

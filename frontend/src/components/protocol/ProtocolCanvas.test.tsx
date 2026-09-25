@@ -6,7 +6,16 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
-import { defaultAgentNodeData, defaultScriptNodeData, type ProtocolGraph } from '@/types/protocols'
+import {
+  defaultAgentNodeData,
+  defaultAnthropicModelNodeData,
+  defaultCriticGateNodeData,
+  defaultMemoryNodeData,
+  defaultOutputParserNodeData,
+  defaultReasonActPatternNodeData,
+  defaultScriptNodeData,
+  type ProtocolGraph,
+} from '@/types/protocols'
 import { ProtocolCanvas } from './ProtocolCanvas'
 
 vi.mock('./PythonCodeEditor', () => ({
@@ -124,6 +133,37 @@ describe('ProtocolCanvas connector adds', () => {
     })
     expect(parserHandle).toHaveClass('!pointer-events-none', '!opacity-0')
     expect(screen.queryByText('Parser')).not.toBeInTheDocument()
+  })
+
+  it('makes occupied single-capacity connector handles non-connectable', async () => {
+    const agentData = defaultAgentNodeData('Writer')
+    agentData.config.require_output_parser = true
+    renderCanvas({
+      nodes: [
+        { id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: agentData },
+        { id: 'gate-1', type: 'critic_gate', position: { x: 400, y: 100 }, data: defaultCriticGateNodeData() },
+        { id: 'model-1', type: 'model_anthropic', position: { x: 0, y: 0 }, data: defaultAnthropicModelNodeData() },
+        { id: 'memory-1', type: 'memory', position: { x: 0, y: 0 }, data: defaultMemoryNodeData() },
+        { id: 'pattern-1', type: 'pattern_reason_act', position: { x: 0, y: 0 }, data: defaultReasonActPatternNodeData() },
+        { id: 'parser-1', type: 'output_parser', position: { x: 0, y: 0 }, data: defaultOutputParserNodeData() },
+      ],
+      edges: [
+        { id: 'model-agent', source: 'model-1', sourceHandle: 'model', target: 'agent-1', targetHandle: 'model' },
+        { id: 'model-gate', source: 'model-1', sourceHandle: 'model', target: 'gate-1', targetHandle: 'model' },
+        { id: 'memory-agent', source: 'memory-1', sourceHandle: 'memory', target: 'agent-1', targetHandle: 'memory' },
+        { id: 'pattern-agent', source: 'pattern-1', sourceHandle: 'architectural_pattern', target: 'agent-1', targetHandle: 'architectural_pattern' },
+        { id: 'parser-agent', source: 'parser-1', sourceHandle: 'output_parser', target: 'agent-1', targetHandle: 'output_parser' },
+      ],
+    })
+
+    await screen.findByText('Writer')
+    for (const handleId of ['model', 'memory', 'architectural_pattern', 'output_parser']) {
+      const handle = document.querySelector(`[data-nodeid="agent-1"][data-handleid="${handleId}"]`)
+      expect(handle).toBeInTheDocument()
+      expect(handle).not.toHaveClass('connectable')
+    }
+    expect(document.querySelector('[data-nodeid="gate-1"][data-handleid="model"]')).not.toHaveClass('connectable')
+    expect(document.querySelector('[data-nodeid="model-1"][data-handleid="model"]')).toHaveClass('connectable')
   })
 
   it('adds a connector-only Sub-Agent from an Agent', async () => {

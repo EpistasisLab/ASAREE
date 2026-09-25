@@ -110,6 +110,9 @@ export function AgentNode({
   //
   // The already-wired clause keeps the visible caption in sync with graphs
   // created outside this UI, where the edge may exist without the flag.
+  const modelConnections = useNodeConnections({ id, handleType: 'target', handleId: 'model' })
+  const memoryConnections = useNodeConnections({ id, handleType: 'target', handleId: 'memory' })
+  const patternConnections = useNodeConnections({ id, handleType: 'target', handleId: 'architectural_pattern' })
   const parserConnections = useNodeConnections({ id, handleType: 'target', handleId: 'output_parser' })
   const showOutputParser =
     !!data.config?.require_output_parser || parserConnections.length > 0 || !!data.config?.output_contract
@@ -252,6 +255,7 @@ export function AgentNode({
       <Handle
         type="target"
         id="architectural_pattern"
+        isConnectable={patternConnections.length === 0}
         position={Position.Top}
         style={{ left: CONNECTOR_LEFT.architectural_pattern }}
         title="Architectural Pattern -- always exactly one; pick a node here to swap it"
@@ -356,6 +360,7 @@ export function AgentNode({
       <Handle
         type="target"
         id="model"
+        isConnectable={modelConnections.length === 0}
         position={Position.Bottom}
         style={{ left: CONNECTOR_LEFT.model }}
         title="Model (required)"
@@ -380,6 +385,7 @@ export function AgentNode({
       <Handle
         type="target"
         id="memory"
+        isConnectable={memoryConnections.length === 0}
         position={Position.Bottom}
         style={{ left: CONNECTOR_LEFT.memory }}
         title="Memory (not yet functional)"
@@ -410,9 +416,10 @@ export function AgentNode({
           leaves React Flow one measurement behind and the edge can stay
           visually detached until another canvas update. Opacity hides an
           unused handle without removing the endpoint React Flow registers. */}
-      <Handle
-        type="target"
-        id="output_parser"
+          <Handle
+            type="target"
+            id="output_parser"
+            isConnectable={parserConnections.length === 0}
         position={Position.Bottom}
         style={{ left: CONNECTOR_LEFT.output_parser }}
         title="Output Parser -- defines the format of this agent's answer and reads its typed fields back out"

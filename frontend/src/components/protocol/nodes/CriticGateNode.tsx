@@ -1,4 +1,4 @@
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react'
+import { Handle, Position, useNodeConnections, useReactFlow, type NodeProps } from '@xyflow/react'
 import { ShieldCheck, ShieldOff } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { cardAccent } from '@/lib/utils'
@@ -25,6 +25,7 @@ export function CriticGateNode({
   const Icon = enabled ? ShieldCheck : ShieldOff
   const summary = enabled ? `Up to ${data.config?.max_revisions ?? 1} revision(s)` : 'Gate disabled'
   const badge = nodeRunBadge(data.runStatus, data.runTruncated)
+  const modelConnections = useNodeConnections({ id, handleType: 'target', handleId: 'model' })
   const { updateNodeData } = useReactFlow()
   const { requestMakeFactor } = useProtocolCanvasActions()
 
@@ -77,6 +78,7 @@ export function CriticGateNode({
       <Handle
         type="target"
         id="model"
+        isConnectable={modelConnections.length === 0}
         position={Position.Bottom}
         style={{ left: '50%' }}
         title="Model (required)"

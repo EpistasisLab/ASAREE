@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from asaree_client._multipart import multipart_directory
 from asaree_client.models import DirectoryListing, OKFBundle, OKFDocument
 
 ResourceId = uuid.UUID | str
@@ -26,18 +27,8 @@ class OKF:
         return OKFBundle(**self._client._post("/okf/bundles", json={"path": path}))
 
     def upload_bundle(self, directory: str) -> OKFBundle:
-        root = Path(directory)
-        paths = sorted(path for path in root.rglob("*") if path.is_file())
-        handles = [path.open("rb") for path in paths]
-        try:
-            files = [
-                ("files", (f"{root.name}/{path.relative_to(root).as_posix()}", handle))
-                for path, handle in zip(paths, handles, strict=True)
-            ]
+        with multipart_directory(directory) as files:
             data = self._client._post("/okf/bundles/upload", files=files)
-        finally:
-            for handle in handles:
-                handle.close()
         return OKFBundle(**data)
 
     def refresh_bundle(self, bundle_id: ResourceId) -> OKFBundle:

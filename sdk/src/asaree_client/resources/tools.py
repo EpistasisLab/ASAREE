@@ -8,7 +8,6 @@ from typing import Any
 from asaree_client.models import MCPServer, ToolCallResult
 
 ResourceId = uuid.UUID | str
-_UNSET: Any = object()
 
 
 class Tools:
@@ -41,12 +40,18 @@ class Tools:
         self,
         server_id: ResourceId,
         *,
-        name: str | None = _UNSET,
-        transport: str | None = _UNSET,
-        command: str | None = _UNSET,
-        url: str | None = _UNSET,
-        headers: dict[str, str] | None = _UNSET,
+        name: str | None = None,
+        transport: str | None = None,
+        command: str | None = None,
+        url: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> MCPServer:
+        """Update supplied connection fields.
+
+        ``None`` means unchanged, matching the server and Motoro contract.
+        The current endpoint cannot clear a saved command, URL, or headers;
+        replace the registration when that is required.
+        """
         payload = {
             key: value
             for key, value in {
@@ -56,7 +61,7 @@ class Tools:
                 "url": url,
                 "headers": headers,
             }.items()
-            if value is not _UNSET
+            if value is not None
         }
         return MCPServer(**self._client._patch(f"/mcp-servers/{server_id}", json=payload))
 
@@ -76,19 +81,19 @@ class Tools:
         arguments: dict[str, Any] | None = None,
         *,
         timeout: float | None = None,
-        retry: bool = True,
+        retry: bool = False,
     ) -> ToolCallResult:
         """*timeout* overrides the client's default for just this call (e.g. a
         long-running direct tool invocation like ``run_model_script``).
-        *retry* set to ``False`` opts this call out of the client's automatic
-        retry policy — for a non-idempotent call where re-sending on a
-        transient failure could double-run something expensive.
+        Direct tool calls are not retried by default because a timeout may
+        happen after the tool already changed state. Set *retry* to ``True``
+        only for a tool known to be safe to replay.
         """
         kwargs: dict[str, Any] = {"json": {"arguments": arguments or {}}}
         if timeout is not None:
             kwargs["timeout"] = timeout
-        if not retry:
-            kwargs["extensions"] = {"asaree_no_retry": True}
+        if retry:
+            kwargs["extensions"] = {"asaree_allow_retry": True}
         data = self._client._post(f"/mcp-servers/{server_id}/tools/{tool_name}/call", **kwargs)
         return ToolCallResult(**data)
 

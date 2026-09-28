@@ -7,7 +7,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from asaree_client.models import Skill, SkillUrlPreview
+from asaree_client._multipart import multipart_directory
+from asaree_client.models import Skill, SkillPage, SkillUrlPreview
 
 ResourceId = uuid.UUID | str
 
@@ -37,31 +38,24 @@ class Skills:
         return self._folder_request("PUT", f"/skills/{skill_id}/folder", directory)
 
     def _folder_request(self, method: str, path: str, directory: str) -> Skill:
-        root = Path(directory)
-        paths = sorted(path for path in root.rglob("*") if path.is_file())
-        handles = [path.open("rb") for path in paths]
-        try:
-            files = [
-                ("files", (f"{root.name}/{path.relative_to(root).as_posix()}", handle))
-                for path, handle in zip(paths, handles, strict=True)
-            ]
+        with multipart_directory(directory) as files:
             data = self._client._request(method, path, files=files)
-        finally:
-            for handle in handles:
-                handle.close()
         return Skill(**data)
 
     def preview_url(self, url: str) -> SkillUrlPreview:
         data = self._client._post("/skills/from-url/preview", json={"url": url})
         return SkillUrlPreview(**data)
 
-    def create_from_url(self, url: str, subdirectory: str) -> Skill:
+    def create_from_url(self, url: str, subdirectory: str = "") -> Skill:
         data = self._client._post("/skills/from-url", json={"url": url, "subdirectory": subdirectory})
         return Skill(**data)
 
     def list(self, *, limit: int = 100) -> builtins.list[Skill]:
+        return self.list_page(limit=limit).items
+
+    def list_page(self, *, limit: int = 100) -> SkillPage:
         data = self._client._get("/skills", params={"limit": limit})
-        return [Skill(**item) for item in data["items"]]
+        return SkillPage(**data)
 
     def get(self, skill_id: ResourceId) -> Skill:
         return Skill(**self._client._get(f"/skills/{skill_id}"))

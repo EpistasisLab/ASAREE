@@ -28,6 +28,7 @@ from asaree_client.exceptions import (
 )
 
 _DEFAULT_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
 
 
 @dataclass
@@ -90,16 +91,18 @@ def raise_for_status(response: httpx.Response) -> None:
 
 
 def _effective_max_retries(request: httpx.Request, policy: RetryPolicy) -> int:
-    """Per-request retry override: a truthy ``asaree_no_retry`` extension forces 0.
+    """Retry safe methods by default; require an explicit opt-in for others.
 
-    Callers set ``extensions={"asaree_no_retry": True}`` on a request (e.g. a
-    long, non-idempotent direct tool invocation like ``run_model_script``) to
-    opt out of automatic retries while keeping the client-wide policy for
-    everything else.
+    A timed-out POST may already have created or enqueued work server-side, so
+    replaying it can duplicate runs, uploads, artifacts, or tokens. Callers
+    may deliberately opt a known-safe non-idempotent method in with
+    ``asaree_allow_retry``; ``asaree_no_retry`` always wins.
     """
     if request.extensions.get("asaree_no_retry"):
         return 0
-    return policy.max_retries
+    if request.method in _IDEMPOTENT_METHODS or request.extensions.get("asaree_allow_retry"):
+        return policy.max_retries
+    return 0
 
 
 class RetryTransport(httpx.BaseTransport):

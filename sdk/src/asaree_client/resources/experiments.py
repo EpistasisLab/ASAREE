@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from asaree_client._sentinel import UNSET, UnsetType
 from asaree_client.models import (
     DesignImpact,
     DesignRevision,
@@ -27,10 +28,6 @@ from asaree_client.models import (
 )
 
 ResourceId = uuid.UUID | str
-# Distinguishes "omit this kwarg" (leave unchanged) from "pass None"
-# (explicitly clear/detach) in update() below -- a plain default of None
-# can't tell those apart.
-_UNSET: Any = object()
 
 
 class Experiments:
@@ -106,16 +103,16 @@ class Experiments:
         self,
         experiment_id: ResourceId,
         *,
-        name: str | None = _UNSET,
-        description: str | None = _UNSET,
-        hypothesis: str | None = _UNSET,
-        dataset_ids: builtins.list[ResourceId] | None = _UNSET,
-        dataset_id: ResourceId | None = _UNSET,
-        design_spec: dict[str, Any] | None = _UNSET,
-        measurement_plan: dict[str, Any] | None = _UNSET,
-        measurement_validation_protocol_id: ResourceId | None = _UNSET,
-        metric_recommendations: dict[str, Any] | None = _UNSET,
-        archived_at: datetime | None = _UNSET,
+        name: str | None | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
+        hypothesis: str | None | UnsetType = UNSET,
+        dataset_ids: builtins.list[ResourceId] | None | UnsetType = UNSET,
+        dataset_id: ResourceId | None | UnsetType = UNSET,
+        design_spec: dict[str, Any] | None | UnsetType = UNSET,
+        measurement_plan: dict[str, Any] | None | UnsetType = UNSET,
+        measurement_validation_protocol_id: ResourceId | None | UnsetType = UNSET,
+        metric_recommendations: dict[str, Any] | None | UnsetType = UNSET,
+        archived_at: datetime | None | UnsetType = UNSET,
     ) -> Experiment:
         """Only the fields actually passed are sent (omit one to leave it
         unchanged; pass ``None`` explicitly to clear/detach it) --
@@ -135,27 +132,27 @@ class Experiments:
         longer exposes ``delete()`` at all, to prevent accidental data
         loss; it's still here for scripted cleanup)."""
         payload: dict[str, Any] = {}
-        if name is not _UNSET:
+        if not isinstance(name, UnsetType):
             payload["name"] = name
-        if description is not _UNSET:
+        if not isinstance(description, UnsetType):
             payload["description"] = description
-        if hypothesis is not _UNSET:
+        if not isinstance(hypothesis, UnsetType):
             payload["hypothesis"] = hypothesis
-        if dataset_ids is not _UNSET:
+        if not isinstance(dataset_ids, UnsetType):
             payload["dataset_ids"] = [str(d) for d in dataset_ids] if dataset_ids else []
-        if dataset_id is not _UNSET:
+        if not isinstance(dataset_id, UnsetType):
             payload["dataset_id"] = str(dataset_id) if dataset_id else None
-        if design_spec is not _UNSET:
+        if not isinstance(design_spec, UnsetType):
             payload["design_spec"] = design_spec
-        if measurement_plan is not _UNSET:
+        if not isinstance(measurement_plan, UnsetType):
             payload["measurement_plan"] = measurement_plan
-        if measurement_validation_protocol_id is not _UNSET:
+        if not isinstance(measurement_validation_protocol_id, UnsetType):
             payload["measurement_validation_protocol_id"] = (
                 str(measurement_validation_protocol_id) if measurement_validation_protocol_id else None
             )
-        if metric_recommendations is not _UNSET:
+        if not isinstance(metric_recommendations, UnsetType):
             payload["metric_recommendations"] = metric_recommendations
-        if archived_at is not _UNSET:
+        if not isinstance(archived_at, UnsetType):
             payload["archived_at"] = archived_at.isoformat() if archived_at else None
         data = self._client._patch(f"/experiments/{experiment_id}", json=payload)
         return Experiment(**data)
@@ -164,10 +161,10 @@ class Experiments:
         self,
         experiment_id: ResourceId,
         *,
-        hypothesis: str | None = _UNSET,
-        design_spec: dict[str, Any] | None = _UNSET,
-        measurement_plan: dict[str, Any] | None = _UNSET,
-        measurement_validation_protocol_id: ResourceId | None = _UNSET,
+        hypothesis: str | None | UnsetType = UNSET,
+        design_spec: dict[str, Any] | None | UnsetType = UNSET,
+        measurement_plan: dict[str, Any] | None | UnsetType = UNSET,
+        measurement_validation_protocol_id: ResourceId | None | UnsetType = UNSET,
     ) -> builtins.list[Replicate]:
         """Materialize one cell per combination of the experiment's declared
         factors and their replicate results, returning the current replicates.
@@ -185,9 +182,9 @@ class Experiments:
             "design_spec": design_spec,
             "measurement_plan": measurement_plan,
         }.items():
-            if value is not _UNSET:
+            if not isinstance(value, UnsetType):
                 payload[key] = value
-        if measurement_validation_protocol_id is not _UNSET:
+        if not isinstance(measurement_validation_protocol_id, UnsetType):
             payload["measurement_validation_protocol_id"] = (
                 str(measurement_validation_protocol_id) if measurement_validation_protocol_id else None
             )
@@ -242,25 +239,25 @@ class Experiments:
         experiment_id: ResourceId,
         replicate_label: str,
         *,
-        run_id: ResourceId | None = _UNSET,
-        workspace_id: str | None = _UNSET,
-        factor_values: dict[str, Any] | None = _UNSET,
-        metric_values: dict[str, Any] | None = _UNSET,
-        artifacts: dict[str, Any] | None = _UNSET,
+        run_id: ResourceId | None | UnsetType = UNSET,
+        workspace_id: str | None | UnsetType = UNSET,
+        factor_values: dict[str, Any] | None | UnsetType = UNSET,
+        metric_values: dict[str, Any] | None | UnsetType = UNSET,
+        artifacts: dict[str, Any] | None | UnsetType = UNSET,
     ) -> Replicate:
         """Merge fields onto a replicate-result row — pass just what changed; unset
         fields are left untouched (a pre-scoring call and a post-scoring
         call land on the same row without either erasing the other)."""
         payload: dict[str, Any] = {}
-        if run_id is not _UNSET:
+        if not isinstance(run_id, UnsetType):
             payload["run_id"] = str(run_id) if run_id else None
-        if workspace_id is not _UNSET:
+        if not isinstance(workspace_id, UnsetType):
             payload["workspace_id"] = workspace_id
-        if factor_values is not _UNSET:
+        if not isinstance(factor_values, UnsetType):
             payload["factor_values"] = factor_values
-        if metric_values is not _UNSET:
+        if not isinstance(metric_values, UnsetType):
             payload["metric_values"] = metric_values
-        if artifacts is not _UNSET:
+        if not isinstance(artifacts, UnsetType):
             payload["artifacts"] = artifacts
         data = self._client._put(f"/experiments/{experiment_id}/replicates/{replicate_label}", json=payload)
         return Replicate(**data)

@@ -6,10 +6,10 @@ import builtins
 import uuid
 from typing import Any
 
+from asaree_client._sentinel import UNSET, UnsetType
 from asaree_client.models import CellRunBatch, PromptPreview, Protocol, ProtocolRevision, ProtocolRun, TestRun
 
 ResourceId = uuid.UUID | str
-_UNSET: Any = object()
 
 
 class Protocols:
@@ -47,19 +47,19 @@ class Protocols:
         self,
         protocol_id: ResourceId,
         *,
-        name: str | None = _UNSET,
-        description: str | None = _UNSET,
-        experiment_id: ResourceId | None = _UNSET,
-        graph: dict[str, Any] | None = _UNSET,
+        name: str | None | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
+        experiment_id: ResourceId | None | UnsetType = UNSET,
+        graph: dict[str, Any] | None | UnsetType = UNSET,
     ) -> Protocol:
         payload: dict[str, Any] = {}
-        if name is not _UNSET:
+        if not isinstance(name, UnsetType):
             payload["name"] = name
-        if description is not _UNSET:
+        if not isinstance(description, UnsetType):
             payload["description"] = description
-        if experiment_id is not _UNSET:
+        if not isinstance(experiment_id, UnsetType):
             payload["experiment_id"] = str(experiment_id) if experiment_id else None
-        if graph is not _UNSET:
+        if not isinstance(graph, UnsetType):
             payload["graph"] = graph
         data = self._client._patch(f"/protocols/{protocol_id}", json=payload)
         return Protocol(**data)

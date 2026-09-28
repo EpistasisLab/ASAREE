@@ -44,6 +44,7 @@ class Experiments:
         factors: builtins.list[dict[str, Any]] | None = None,
         measurement_plan: dict[str, Any] | None = None,
     ) -> Experiment:
+        """Create an experiment and its linked empty protocol canvas atomically."""
         payload: dict[str, Any] = {"design_type": design_type}
         if name is not None:
             payload["name"] = name

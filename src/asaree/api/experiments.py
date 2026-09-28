@@ -436,6 +436,15 @@ async def create_experiment_endpoint(
             owner_id=experiment.owner_id,
             allow_preserved_bindings=False,
         )
+    # An experiment's primary GUI is its protocol canvas. Create that durable
+    # shell in the same transaction so API/SDK-created experiments do not
+    # depend on somebody opening the GUI before their canvas exists.
+    await create_protocol(
+        db,
+        name=generated_protocol_name(experiment.name, experiment.id),
+        owner_id=experiment.owner_id,
+        experiment_id=experiment.id,
+    )
     return _experiment_response(experiment, await get_experiment_dataset_ids(db, experiment.id))
 
 

@@ -54,11 +54,11 @@ class Protocol(Base, TimestampMixin):
     )
     # Nullable, SET NULL on delete -- a protocol is a standalone reusable
     # object that MAY be tagged to the experiment it was built for; losing
-    # that experiment isn't a reason to lose the protocol. Which experiment
-    # a protocol belongs to (if any) is a UX convention the canvas page
-    # enforces (one protocol per experiment, created lazily on first visit),
-    # not a schema constraint -- reusing one protocol across experiments
-    # later needs no migration.
+    # that experiment isn't a reason to lose the protocol. New experiments
+    # receive one protocol transactionally at the API boundary; the canvas
+    # still repairs legacy experiments that predate that behavior. This is a
+    # UX invariant rather than a schema constraint, so standalone protocols
+    # and future protocol reuse need no migration.
     experiment_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("research_experiments.id", ondelete="SET NULL"), nullable=True, index=True
     )

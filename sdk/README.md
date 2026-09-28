@@ -44,6 +44,10 @@ experiment = client.experiments.create(name="tier-x-effort", factors=[
     {"name": "tier", "levels": ["baseline", "critic"]},
     {"name": "effort", "levels": ["low", "high"]},
 ])
+# Creation also provisions the experiment's empty protocol canvas. Retrieve it
+# to build the graph programmatically; the same canvas is immediately visible
+# when this user opens the experiment in the GUI.
+protocol = client.protocols.list(experiment_id=experiment.id)[0]
 replicates = client.experiments.generate_design(experiment.id)
 
 for replicate in replicates:

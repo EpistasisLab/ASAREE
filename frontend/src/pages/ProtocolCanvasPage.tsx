@@ -239,6 +239,8 @@ export function ProtocolCanvasPage() {
     queryFn: async () => {
       const existing = await protocolsApi.list(experimentId!)
       if (existing.length > 0) return existing[0]
+      // POST /experiments now creates this shell transactionally. Keep this
+      // fallback for experiments created before that behavior shipped.
       const experiment = await experimentsApi.get(experimentId!)
       // See generatedProtocolName for why the name is suffixed with the
       // experiment's shortid. Renaming the experiment later re-syncs this

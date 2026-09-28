@@ -33,7 +33,7 @@ class AsareeBadRequestError(AsareeAPIError):
 
 
 class AsareeAuthenticationError(AsareeAPIError):
-    """ASAREE API returned 401 Unauthorized — missing or invalid X-API-Key."""
+    """ASAREE API returned 401 Unauthorized — invalid API key or session token."""
 
     def __init__(self, detail: str, **kwargs: object) -> None:
         super().__init__(status_code=401, detail=detail, **kwargs)  # type: ignore[arg-type]

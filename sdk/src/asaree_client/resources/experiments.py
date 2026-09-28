@@ -46,8 +46,6 @@ class Experiments:
         task_brief: dict[str, Any] | None = None,
         factors: builtins.list[dict[str, Any]] | None = None,
         measurement_plan: dict[str, Any] | None = None,
-        dataset_ids: builtins.list[ResourceId] | None = None,
-        dataset_id: ResourceId | None = None,
     ) -> Experiment:
         payload: dict[str, Any] = {"design_type": design_type}
         if name is not None:
@@ -60,10 +58,6 @@ class Experiments:
             payload["factors"] = factors
         if measurement_plan is not None:
             payload["measurement_plan"] = measurement_plan
-        if dataset_ids is not None:
-            payload["dataset_ids"] = [str(d) for d in dataset_ids]
-        elif dataset_id is not None:
-            payload["dataset_id"] = str(dataset_id)
         data = self._client._post("/experiments", json=payload)
         return Experiment(**data)
 

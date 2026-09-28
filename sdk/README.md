@@ -15,20 +15,22 @@ data now belongs on a `FactorialReplicateResult` row, written via
 ## Auth bootstrap
 
 ASAREE has no static server-wide API key; each user is provisioned once and
-issues their own token:
+issues their own token through an unauthenticated client:
 
-```bash
-curl -X POST $ASAREE_BASE_URL/api/users -d '{"email": "...", "password": "..."}'
-curl -X POST $ASAREE_BASE_URL/api/users/{user_id}/tokens -d '{"password": "..."}'
+```python
+from asaree_client import AsareeClient
+
+with AsareeClient(base_url="http://localhost:8000") as bootstrap:
+    user = bootstrap.users.create(email="researcher@example.com", password="secure-password")
+    credential = bootstrap.users.issue_token(user.id, password="secure-password")
+
+print(credential.token)  # Save once; the server never returns this value again.
 ```
 
-Every ASAREE route lives under `/api` (except `/health`) — the client
-already knows this and prepends it to every request; you only need it
-yourself for the one-time bootstrap above, made directly with curl.
-
-This is a one-time setup step, not something the SDK does — set the
-resulting token as `ASAREE_API_KEY` (sent as `X-API-Key`) for everything
-after that.
+Set the resulting token as `ASAREE_API_KEY` (sent as `X-API-Key`) for
+subsequent clients. Alternatively, use `client.auth.register()` and
+`client.auth.login()` for a refreshable Bearer session; successful login and
+refresh calls update that client automatically.
 
 ## Usage
 
@@ -52,4 +54,15 @@ for replicate in replicates:
     )
 
 results = client.experiments.get_results(experiment.id)
+```
+
+For a refreshable account session instead of an API key:
+
+```python
+client = AsareeClient(base_url="http://localhost:8000")
+client.auth.login(email="researcher@example.com", password="secure-password")
+
+profile = client.auth.get_profile()
+client.auth.refresh()  # Rotates both the access and refresh tokens in-place.
+client.auth.logout()
 ```

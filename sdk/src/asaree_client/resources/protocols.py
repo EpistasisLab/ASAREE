@@ -83,8 +83,9 @@ class Protocols:
         *,
         replicate_label: str | None = None,
     ) -> ProtocolRun:
-        """Compile and run this protocol's current graph -- 422 if it's
-        empty or has a cycle. Returns immediately with status "pending";
+        """Run this protocol's immutable published revision -- 409 if it has
+        never been published, and 422 if the published graph is invalid,
+        empty, or has a cycle. Returns immediately with status "pending";
         poll with get_run. ``replicate_label`` runs that one already-generated
         replicate (its cell's factor_values substituted in) instead of
         today's ad-hoc, un-substituted whole-graph run."""

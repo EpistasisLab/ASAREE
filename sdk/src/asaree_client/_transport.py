@@ -1,9 +1,8 @@
 """Retry transport for the sync HTTP client.
 
-Trimmed from ares_client._transport: sync-only (no AsyncRetryTransport), and
-build_headers supports only X-API-Key — ASAREE's ``get_current_user`` dep
-(asaree.deps) never reads an Authorization header, so there is no second
-auth method to plumb through.
+Trimmed from ares_client._transport: sync-only (no AsyncRetryTransport).
+ASAREE accepts either a long-lived API key or a short-lived Bearer access
+token, so both authentication modes are supported here.
 """
 
 from __future__ import annotations
@@ -134,12 +133,14 @@ class RetryTransport(httpx.BaseTransport):
         self._transport.close()
 
 
-def build_headers(api_key: str | None) -> dict[str, str]:
+def build_headers(api_key: str | None, access_token: str | None = None) -> dict[str, str]:
     from asaree_client import __version__
 
     headers = {"User-Agent": f"asaree-client/{__version__}"}
     if api_key:
         headers["X-API-Key"] = api_key
+    elif access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
     return headers
 
 
@@ -154,11 +155,12 @@ def build_sync_client(
     api_key: str | None,
     timeout: float | httpx.Timeout,
     policy: RetryPolicy | None = None,
+    access_token: str | None = None,
 ) -> httpx.Client:
     transport = RetryTransport(httpx.HTTPTransport(), policy=policy or RetryPolicy())
     return httpx.Client(
         base_url=base_url,
-        headers=build_headers(api_key),
+        headers=build_headers(api_key, access_token),
         timeout=_build_timeout(timeout),
         transport=transport,
     )

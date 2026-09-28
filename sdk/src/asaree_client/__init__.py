@@ -19,6 +19,12 @@ from asaree_client.exceptions import (
 )
 from asaree_client.models import (
     Agent,
+    ApiToken,
+    ApiTokenPage,
+    ApiTokenSummary,
+    AuthTokens,
+    BootstrapApiToken,
+    BootstrapUser,
     CellRunBatch,
     DesignImpact,
     DesignRevision,
@@ -36,6 +42,7 @@ from asaree_client.models import (
     MeasurementCapabilities,
     MeasurementPlanValidation,
     MeasurementPlanValidationIssue,
+    Message,
     OKFBundle,
     OKFDocument,
     PromptPreview,
@@ -51,6 +58,7 @@ from asaree_client.models import (
     TestRun,
     ToolCallResult,
     Trial,
+    UserAccount,
     WorkspaceEvent,
 )
 
@@ -66,6 +74,9 @@ except ImportError:
 __all__ = [
     "__version__",
     "Agent",
+    "ApiToken",
+    "ApiTokenPage",
+    "ApiTokenSummary",
     "AsareeAPIError",
     "AsareeAuthenticationError",
     "AsareeBadRequestError",
@@ -78,6 +89,9 @@ __all__ = [
     "AsareeTimeoutError",
     "AsareeUnprocessableEntityError",
     "AsareeUpstreamError",
+    "AuthTokens",
+    "BootstrapApiToken",
+    "BootstrapUser",
     "CellRunBatch",
     "DesignImpact",
     "DesignRevision",
@@ -92,6 +106,7 @@ __all__ = [
     "LLMModels",
     "LLMSetting",
     "MCPServer",
+    "Message",
     "MeasurementCapabilities",
     "MeasurementPlanValidation",
     "MeasurementPlanValidationIssue",
@@ -111,5 +126,6 @@ __all__ = [
     "TestRun",
     "ToolCallResult",
     "Trial",
+    "UserAccount",
     "WorkspaceEvent",
 ]

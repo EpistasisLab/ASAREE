@@ -66,6 +66,16 @@ def test_a_direct_predecessors_output_arrives_because_the_edge_exists() -> None:
     assert text == f"Do the thing.\n\n[Analyst]\n{_fenced('Findings.')}"
 
 
+def test_a_payload_only_predecessor_still_arrives_because_the_edge_exists() -> None:
+    graph = _two_step()
+    text = _prompt(
+        graph,
+        "b",
+        {"a": {"status": "completed", "output_text": "", "payload": {"n_rows": 4300}}},
+    )
+    assert text == "Do the thing.\n\n[Analyst]\nStructured fields: n_rows=4300"
+
+
 def test_nothing_the_platform_wrote_travels_with_the_output() -> None:
     """A guard on the prose that used to be here, by the phrases it used.
 
@@ -722,6 +732,13 @@ def test_a_whole_node_reference_appends_the_extracted_fields() -> None:
     assert "4300 rows." in text
 
 
+def test_a_payload_only_whole_node_reference_resolves_to_its_fields() -> None:
+    graph = _two_step()
+    graph["nodes"][1]["data"]["config"]["prompt"] = "{{node:a}}"
+    text = _prompt(graph, "b", {"a": _ran("", {"n_rows": 4300})})
+    assert text == "Structured fields: n_rows=4300"
+
+
 def test_the_appended_fields_carry_no_frame_and_no_sender_name() -> None:
     """It is a continuation of the block it follows, which already carries
     both -- a second frame would read as a second sender."""
@@ -753,5 +770,4 @@ def test_previous_appends_each_senders_own_fields() -> None:
     text = _prompt(graph, "b", node_runs)
     assert "Structured fields: n_rows=4300" in text
     assert "Structured fields: auc=0.81" in text
-
 

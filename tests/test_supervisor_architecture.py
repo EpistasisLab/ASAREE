@@ -60,9 +60,9 @@ def stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "checkpoints": [],
         "node_runs": [],
         "cancel_requested_at": None,
-        # node_id -> (output_text, error). A node id absent from this answers
-        # with a generic completion; a callable is invoked with the
-        # _run_agent_node kwargs, which is how a test asserts mid-run.
+        # node_id -> (output_text, error[, extraction]). A node id absent from
+        # this answers with a generic completion; a callable is invoked with
+        # the _run_agent_node kwargs, which is how a test asserts mid-run.
         "answers": {},
         "turns": [],
         "run_contexts": [],
@@ -98,10 +98,12 @@ def stubs(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             # indistinguishable from serial because nothing ever yields.
             await asyncio.sleep(0)
             answer = state["answers"].get(node_id, (f"{node_id} did its part.", None))
-            output, error = answer(kwargs) if callable(answer) else answer
+            resolved = answer(kwargs) if callable(answer) else answer
+            output, error, *fields = resolved
+            extraction = fields[0] if fields else None
         finally:
             state["concurrent"] -= 1
-        return output, error, uuid.uuid4() if error is None else None, None
+        return output, error, uuid.uuid4() if error is None else None, extraction
 
     async def _node_run_context(*_args: Any, **kwargs: Any) -> tuple[dict[str, Any], Any]:
         state["run_contexts"].append(kwargs)
@@ -177,6 +179,16 @@ async def test_the_brief_reaches_every_worker(stubs: dict[str, Any]) -> None:
     await _run(stubs)
     for worker in ("w1", "w2", "w3"):
         assert "Split the cohort three ways." in _prompt_for(stubs, worker)
+
+
+async def test_payload_only_turns_reach_supervisor_review_and_synthesis(stubs: dict[str, Any]) -> None:
+    stubs["answers"]["w1"] = ("", None, {"payload": {"finding": "cohort imbalance"}})
+
+    await _run(stubs)
+
+    expected = 'Structured fields: finding="cohort imbalance"'
+    assert expected in _prompt_for(stubs, "qc")
+    assert expected in _prompt_for(stubs, "sup", occurrence=1)
 
 
 async def test_each_agent_is_told_its_role(stubs: dict[str, Any]) -> None:

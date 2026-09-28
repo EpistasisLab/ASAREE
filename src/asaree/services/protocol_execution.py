@@ -2781,10 +2781,11 @@ def _upstream_context(
     for uid in ids:
         run = node_runs.get(uid) or {}
         text = run.get("output_text")
-        if not text:
+        payload = run.get("payload") or {}
+        if not text and not payload:
             continue
         label = f"{names[uid]} ({uid})" if names[uid] in ambiguous else names[uid]
-        blocks.append(f"[{label}]\n{_sender_block(str(text), run.get('payload') or {})}")
+        blocks.append(f"[{label}]\n{_sender_block(str(text or ''), payload)}")
     return "\n\n".join(blocks)
 
 
@@ -2813,9 +2814,21 @@ def _sender_block(text: str, payload: dict[str, Any], *, raw: bool = False) -> s
     experimenter who references a predecessor by hand gets exactly what would
     have arrived anyway, only where they put it.
     """
-    body = _reference_payload(text, raw=raw)
+    body = _reference_payload(text, raw=raw) if text else ""
     fields = _payload_fields_line(payload)
-    return f"{body}\n{fields}" if fields else body
+    return "\n".join(part for part in (body, fields) if part)
+
+
+def _output_content(text: str, payload: dict[str, Any]) -> str:
+    """A run's complete handoff without sender framing.
+
+    Critic and revision prompts provide their own framing, so they need the
+    same prose-plus-fields content as :func:`_sender_block` without adding an
+    inner fence. Keeping payload rendering here also makes payload-only output
+    a real handoff instead of an empty string.
+    """
+    fields = _payload_fields_line(payload)
+    return "\n".join(part for part in (text, fields) if part)
 
 
 def _format_payload_value(value: Any) -> str:
@@ -2897,10 +2910,11 @@ def _render_reference(
     for uid in ids:
         run = node_runs.get(uid) or {}
         text = run.get("output_text")
-        if not text:
+        payload = run.get("payload") or {}
+        if not text and not payload:
             unresolved.append(uid)
             continue
-        block = _sender_block(str(text), run.get("payload") or {}, raw=ref.raw)
+        block = _sender_block(str(text or ""), payload, raw=ref.raw)
         # Labelled only where the reference itself cannot say which sender is
         # which: a `{{previous}}` that expanded to several predecessors. A
         # single-node reference needs no label, because the experimenter named
@@ -4018,6 +4032,19 @@ def _completed_worker_record(
     }
 
 
+def _handoff_payload(extraction: dict[str, Any] | None) -> dict[str, Any]:
+    """The typed portion of a worker output that a transparent gate forwards.
+
+    Caveats and truncation describe the worker run itself, so they stay on the
+    worker record. The payload is output data and must remain available to the
+    node after the gate even when Motoro intentionally left ``output_text``
+    empty.
+    """
+    if extraction is None or "payload" not in extraction:
+        return {}
+    return {"payload": extraction["payload"]}
+
+
 async def _run_gated_worker(
     worker: dict[str, Any],
     gate: dict[str, Any],
@@ -4114,11 +4141,19 @@ async def _run_gated_worker(
                 {"status": "skipped"},
             )
         assert output_text is not None, "_run_agent_node guarantees output_text when error is falsy"
+        handoff_payload = _handoff_payload(extraction)
+        complete_output = _output_content(output_text, handoff_payload.get("payload") or {})
 
         if not enabled:
             return (
                 _completed_worker_record(output_text, attempt, run_id_str, extraction),
-                {"status": "completed", "output_text": output_text, "approved": None, "revisions_used": 0},
+                {
+                    "status": "completed",
+                    "output_text": output_text,
+                    "approved": None,
+                    "revisions_used": 0,
+                    **handoff_payload,
+                },
             )
 
         if attempt == max_revisions:
@@ -4135,6 +4170,7 @@ async def _run_gated_worker(
                     "feedback": last_verdict.get("feedback") if last_verdict else None,
                     "rejection_scope": last_verdict.get("rejection_scope") if last_verdict else None,
                     "run_id": last_critic_run_id,
+                    **handoff_payload,
                 },
             )
 
@@ -4143,7 +4179,7 @@ async def _run_gated_worker(
             protocol_id=protocol_id,
             protocol_run_id=protocol_run_id,
             owner_id=owner_id,
-            worker_output=output_text,
+            worker_output=complete_output,
             graph=graph,
         )
         if verdict_error == _AGENT_CANCELLED:
@@ -4181,12 +4217,13 @@ async def _run_gated_worker(
                     "feedback": verdict.get("feedback"),
                     "rejection_scope": None,
                     "run_id": critic_run_id,
+                    **handoff_payload,
                 },
             )
 
         last_verdict = verdict
         last_critic_run_id = critic_run_id
-        instruction = _build_revision_instruction(base_instruction, verdict, output_text)
+        instruction = _build_revision_instruction(base_instruction, verdict, complete_output)
 
     raise AssertionError("_run_gated_worker fell through its attempt loop")  # unreachable
 

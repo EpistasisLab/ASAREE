@@ -56,6 +56,7 @@ from asaree.services.protocol_execution import (
     _build_user_input,
     _can_deliver_communication,
     _node_run_context,
+    _output_content,
     _run_agent_node,
     resolve_available_agents,
 )
@@ -753,7 +754,8 @@ def _supervisor_report(display_name: str, run: dict[str, Any]) -> str:
     """
     status = str(run.get("status") or "skipped")
     if status == "completed":
-        return f"--- {display_name} ---\n{str(run.get('output_text') or '').strip() or '(no output)'}"
+        content = _output_content(str(run.get("output_text") or ""), run.get("payload") or {}).strip()
+        return f"--- {display_name} ---\n{content or '(no output)'}"
     if status == "cancelled":
         return f"--- {display_name} ---\n(this agent's turn was cancelled and produced nothing)"
     if status == "failed":

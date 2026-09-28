@@ -1,10 +1,4 @@
-"""MCP tool passthrough, matching asaree.api.mcp_servers.
-
-Registration itself is one-time environment setup (done once via curl, per
-the SDK README), not part of the ongoing driver-script surface — this
-resource is deliberately limited to what a notebook calls per experiment
-run: discover registered servers, call a tool directly, reset a session.
-"""
+"""MCP server management and direct tool calls."""
 
 from __future__ import annotations
 
@@ -14,6 +8,7 @@ from typing import Any
 from asaree_client.models import MCPServer, ToolCallResult
 
 ResourceId = uuid.UUID | str
+_UNSET: Any = object()
 
 
 class Tools:
@@ -23,6 +18,56 @@ class Tools:
     def list_servers(self) -> list[MCPServer]:
         data = self._client._get("/mcp-servers")
         return [MCPServer(**s) for s in data]
+
+    def create_server(
+        self,
+        *,
+        name: str,
+        transport: str,
+        command: str | None = None,
+        url: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> MCPServer:
+        payload: dict[str, Any] = {"name": name, "transport": transport}
+        for key, value in {"command": command, "url": url, "headers": headers}.items():
+            if value is not None:
+                payload[key] = value
+        return MCPServer(**self._client._post("/mcp-servers", json=payload))
+
+    def get_server(self, server_id: ResourceId) -> MCPServer:
+        return MCPServer(**self._client._get(f"/mcp-servers/{server_id}"))
+
+    def update_server(
+        self,
+        server_id: ResourceId,
+        *,
+        name: str | None = _UNSET,
+        transport: str | None = _UNSET,
+        command: str | None = _UNSET,
+        url: str | None = _UNSET,
+        headers: dict[str, str] | None = _UNSET,
+    ) -> MCPServer:
+        payload = {
+            key: value
+            for key, value in {
+                "name": name,
+                "transport": transport,
+                "command": command,
+                "url": url,
+                "headers": headers,
+            }.items()
+            if value is not _UNSET
+        }
+        return MCPServer(**self._client._patch(f"/mcp-servers/{server_id}", json=payload))
+
+    def delete_server(self, server_id: ResourceId) -> None:
+        self._client._delete(f"/mcp-servers/{server_id}")
+
+    def refresh_server(self, server_id: ResourceId) -> MCPServer:
+        return MCPServer(**self._client._post(f"/mcp-servers/{server_id}/refresh"))
+
+    def reconnect_server(self, server_id: ResourceId) -> MCPServer:
+        return MCPServer(**self._client._post(f"/mcp-servers/{server_id}/reconnect"))
 
     def call_tool(
         self,

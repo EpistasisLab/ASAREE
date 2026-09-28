@@ -1,13 +1,13 @@
 # asaree-client
 
-A trimmed, synchronous SDK for ASAREE. It covers exactly the resources a
-driver notebook needs to run a factorial experiment end to end — agents,
-runs, experiments/cells/replicates, datasets, and MCP tool passthrough — not a full
-mirror of every ASAREE endpoint.
+A synchronous SDK for ASAREE. It covers the complete programmatic research
+workflow: agents and runs, experiments/designs/results, protocol publishing and
+execution, datasets and workspace lineage, MCP servers, Agent Skills, OKF
+knowledge, and per-user LLM settings.
 
-Deliberately not a copy of `ares_client`: ASAREE's runs execute inline
-(`POST /runs` returns only once the run is terminal), so `runs.wait()` here
-is a trivial re-fetch, not a poll loop. And the notebook's old
+Deliberately not a copy of `ares_client`: ASAREE's runs execute through a
+background worker (`POST /runs` returns while the run is pending), so
+`runs.wait()` polls until a terminal result. The notebook's old
 `client.runs.update(run_id, metadata=...)` calls have no equivalent — that
 data now belongs on a `FactorialReplicateResult` row, written via
 `client.experiments.upsert_replicate(...)`.
@@ -51,11 +51,5 @@ for replicate in replicates:
         run_id=run.id, metric_values={"roc_auc": 0.91},
     )
 
-results = client.experiments.analyze(
-    experiment.id,
-    condition_factors=["tier"],
-    positive_levels={"tier": "critic"},
-    reference_condition={"tier": "baseline"},
-    primary_metric="roc_auc",
-)
+results = client.experiments.get_results(experiment.id)
 ```

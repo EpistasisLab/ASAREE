@@ -13,8 +13,10 @@ from asaree_client.resources.agents import Agents
 from asaree_client.resources.datasets import Datasets
 from asaree_client.resources.experiments import Experiments
 from asaree_client.resources.llm_settings import LLMSettings
+from asaree_client.resources.okf import OKF
 from asaree_client.resources.protocols import Protocols
 from asaree_client.resources.runs import Runs
+from asaree_client.resources.skills import Skills
 from asaree_client.resources.tools import Tools
 
 
@@ -68,6 +70,8 @@ class AsareeClient:
         self.datasets = Datasets(self)
         self.tools = Tools(self)
         self.llm_settings = LLMSettings(self)
+        self.skills = Skills(self)
+        self.okf = OKF(self)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         response = self._http.request(method, f"/api{path}", **kwargs)
@@ -78,6 +82,11 @@ class AsareeClient:
 
     def _get(self, path: str, **kwargs: Any) -> Any:
         return self._request("GET", path, **kwargs)
+
+    def _get_bytes(self, path: str, **kwargs: Any) -> bytes:
+        response = self._http.request("GET", f"/api{path}", **kwargs)
+        raise_for_status(response)
+        return response.content
 
     def _post(self, path: str, **kwargs: Any) -> Any:
         return self._request("POST", path, **kwargs)
@@ -90,6 +99,16 @@ class AsareeClient:
 
     def _delete(self, path: str, **kwargs: Any) -> Any:
         return self._request("DELETE", path, **kwargs)
+
+    def version(self) -> str:
+        """Return the running ASAREE app version."""
+        return str(self._get("/version")["version"])
+
+    def health(self) -> dict[str, str]:
+        """Return the server health payload."""
+        response = self._http.request("GET", "/health")
+        raise_for_status(response)
+        return dict(response.json())
 
     def close(self) -> None:
         self._http.close()

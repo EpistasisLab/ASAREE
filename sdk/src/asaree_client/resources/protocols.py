@@ -6,9 +6,10 @@ import builtins
 import uuid
 from typing import Any
 
-from asaree_client.models import CellRunBatch, Protocol, ProtocolRevision, ProtocolRun
+from asaree_client.models import CellRunBatch, PromptPreview, Protocol, ProtocolRevision, ProtocolRun, TestRun
 
 ResourceId = uuid.UUID | str
+_UNSET: Any = object()
 
 
 class Protocols:
@@ -46,19 +47,19 @@ class Protocols:
         self,
         protocol_id: ResourceId,
         *,
-        name: str | None = None,
-        description: str | None = None,
-        experiment_id: ResourceId | None = None,
-        graph: dict[str, Any] | None = None,
+        name: str | None = _UNSET,
+        description: str | None = _UNSET,
+        experiment_id: ResourceId | None = _UNSET,
+        graph: dict[str, Any] | None = _UNSET,
     ) -> Protocol:
         payload: dict[str, Any] = {}
-        if name is not None:
+        if name is not _UNSET:
             payload["name"] = name
-        if description is not None:
+        if description is not _UNSET:
             payload["description"] = description
-        if experiment_id is not None:
-            payload["experiment_id"] = str(experiment_id)
-        if graph is not None:
+        if experiment_id is not _UNSET:
+            payload["experiment_id"] = str(experiment_id) if experiment_id else None
+        if graph is not _UNSET:
             payload["graph"] = graph
         data = self._client._patch(f"/protocols/{protocol_id}", json=payload)
         return Protocol(**data)
@@ -98,13 +99,40 @@ class Protocols:
         data = self._client._post(f"/protocols/{protocol_id}/nodes/{node_id}/run")
         return ProtocolRun(**data)
 
-    def run_cells(self, protocol_id: ResourceId) -> CellRunBatch:
-        """"Run all cells" -- one ProtocolRun per not-yet-completed replicate under
+    def preview_prompt(
+        self, protocol_id: ResourceId, node_id: str, *, graph: dict[str, Any] | None = None
+    ) -> PromptPreview:
+        payload = {"graph": graph} if graph is not None else {}
+        data = self._client._post(f"/protocols/{protocol_id}/nodes/{node_id}/prompt-preview", json=payload)
+        return PromptPreview(**data)
+
+    def run_cells(
+        self,
+        protocol_id: ResourceId,
+        *,
+        replicate_labels: builtins.list[str] | None = None,
+        rerun_replicate_labels: builtins.list[str] | None = None,
+    ) -> CellRunBatch:
+        """ "Run all cells" -- one ProtocolRun per not-yet-completed replicate under
         this protocol's linked experiment, each replicate's cell factor_values
         substituted in. 422 if there's no linked experiment or the graph
         doesn't have exactly one final node."""
-        data = self._client._post(f"/protocols/{protocol_id}/cell-runs")
+        payload: dict[str, Any] = {}
+        if replicate_labels is not None:
+            payload["replicate_labels"] = replicate_labels
+        if rerun_replicate_labels is not None:
+            payload["rerun_replicate_labels"] = rerun_replicate_labels
+        kwargs = {"json": payload} if payload else {}
+        data = self._client._post(f"/protocols/{protocol_id}/cell-runs", **kwargs)
         return CellRunBatch(**data)
+
+    def start_test_run(self, protocol_id: ResourceId) -> TestRun:
+        data = self._client._post(f"/protocols/{protocol_id}/test-runs")
+        return TestRun(**data)
+
+    def get_latest_test_run(self, protocol_id: ResourceId) -> TestRun:
+        data = self._client._get(f"/protocols/{protocol_id}/test-runs/latest")
+        return TestRun(**data)
 
     def get_run(self, protocol_id: ResourceId, run_id: ResourceId) -> ProtocolRun:
         data = self._client._get(f"/protocols/{protocol_id}/runs/{run_id}")
@@ -113,3 +141,7 @@ class Protocols:
     def list_runs(self, protocol_id: ResourceId) -> builtins.list[ProtocolRun]:
         data = self._client._get(f"/protocols/{protocol_id}/runs")
         return [ProtocolRun(**r) for r in data]
+
+    def cancel_run(self, protocol_id: ResourceId, run_id: ResourceId) -> ProtocolRun:
+        data = self._client._post(f"/protocols/{protocol_id}/runs/{run_id}/cancel")
+        return ProtocolRun(**data)

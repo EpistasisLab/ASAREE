@@ -2,27 +2,25 @@
 """Import a myocardial-*.json use case (and its dataset) into a running ASAREE.
 
     ASAREE_BASE_URL=http://localhost:8000 ASAREE_API_KEY=... \
-        uv run --with ./sdk python publications/bioinformatics/import_use_case.py \
+        uv run --with ./sdk python publications/BDM/import_use_case.py \
         [myocardial-anthropic-latest.json]
 
 The API-side equivalent of README.md's GUI walkthrough, for rebuilding the
-experiment from scratch repeatedly; the GUI is the documented path. Takes any
-of the variants in this directory, defaulting to the Azure Foundry one the
-paper's runs used -- in its `-latest` form; pass a `-v0.2.0` file explicitly to
-import the frozen graph behind the published numbers (see README's "Versions").
-Idempotent: run it again and it reuses whatever already exists under the same
-names rather than creating a second copy.
+experiment from scratch repeatedly. It accepts the maintained `-latest`
+provider variants and defaults to Azure Foundry. The `-v0.2.0` files are
+archival artifacts of the paper's original runs, not v0.8.0 import targets.
+Idempotent: run it again and it updates the existing experiment rather than
+creating a second copy.
 
-What it does, in order (the order matters -- an experiment has to exist before
-a protocol can attach to it, and the dataset has to be registered before the
-graph can point at it):
+What it does, in order:
 
 1. Register `myocardial_infarction` from mi_ZSN.csv + dict_ZSN.json.
 2. Split it 70/30, stratified on the target, seed 42.
-3. Create the experiment and attach the dataset.
-4. Create the protocol from the file's `graph`, rewriting the dataset and MCP
-   server UUIDs baked into it to this deployment's own (see `_localize`).
-5. Apply the file's `design_spec` and materialize its cells.
+3. Rewrite the graph and measurement-source UUIDs for this deployment.
+4. Atomically import the experiment and its canvas (or update an existing one),
+   then attach the dataset.
+5. Publish an immutable protocol revision.
+6. Apply the design and materialize its eight cells and 80 replicates.
 """
 
 from __future__ import annotations
@@ -51,21 +49,29 @@ TEST_SIZE = 0.3
 SPLIT_SEED = 42
 
 
-def _localize(graph: dict[str, Any], *, dataset_id: str, server_ids: dict[str, str]) -> list[str]:
-    """Repoint the graph's baked-in UUIDs at this deployment's own rows.
+def _localize(
+    graph: dict[str, Any],
+    measurement_plan: dict[str, Any],
+    *,
+    dataset_id: str,
+    server_ids: dict[str, str],
+) -> list[str]:
+    """Repoint baked-in resource UUIDs at this deployment's own rows.
 
     Execution itself resolves by NAME, not UUID -- `protocol_execution` reads
     `server_name` off an mcp_tool node and `dataset_name` off the dataset node
     -- so a stale `server_id`/`dataset_id` doesn't stop a run. But the protocol
     canvas reads them to show which server/dataset a node is bound to, so an
     export from someone else's install renders as unresolved until they're
-    rewritten. Cheap to fix here; confusing to leave.
+    rewritten. Measurement producers also identify the exact MCP server whose
+    call is authoritative, so those references are localized with the graph.
 
     Returns the names of any servers the graph wants that aren't registered on
     this deployment -- empty on a normal install, since all six asaree-sklearn-*
     servers and asaree-workspace now ship with ASAREE itself.
     """
     missing: list[str] = []
+    server_id_by_node: dict[str, str] = {}
     for node in graph.get("nodes", []):
         config = node.get("data", {}).get("config", {})
         if node.get("type") == "dataset":
@@ -74,8 +80,14 @@ def _localize(graph: dict[str, Any], *, dataset_id: str, server_ids: dict[str, s
             name = config.get("server_name")
             if name in server_ids:
                 config["server_id"] = server_ids[name]
+                server_id_by_node[str(node.get("id"))] = server_ids[name]
             elif name is not None and name not in missing:
                 missing.append(name)
+    for producer in measurement_plan.get("producers", []):
+        config = producer.get("config", {})
+        node_id = str(config.get("mcp_node_id", ""))
+        if node_id in server_id_by_node:
+            config["server_id"] = server_id_by_node[node_id]
     return missing
 
 
@@ -94,6 +106,13 @@ def main(argv: list[str]) -> int:
 
     use_case = json.loads(use_case_file.read_text())
     graph = use_case["graph"]
+    measurement_plan = use_case.get("measurement_plan")
+    if not isinstance(measurement_plan, dict):
+        print(
+            "ERROR: this is an archival definition without a v0.8.0 measurement plan; choose a -latest file.",
+            file=sys.stderr,
+        )
+        return 2
 
     with AsareeClient() as client:
         # --- 1. the dataset -------------------------------------------------
@@ -131,43 +150,73 @@ def main(argv: list[str]) -> int:
             )
             print(f"split        {1 - TEST_SIZE:.0%}/{TEST_SIZE:.0%} stratified, seed {SPLIT_SEED}")
 
-        # --- 3. the experiment ----------------------------------------------
+        # --- 3. deployment-local references ---------------------------------
+        servers = {s.name: str(s.id) for s in client.tools.list_servers()}
+        missing = _localize(
+            graph,
+            measurement_plan,
+            dataset_id=str(dataset.id),
+            server_ids=servers,
+        )
+        if missing:
+            print(f"ERROR: MCP servers not registered here: {', '.join(missing)}", file=sys.stderr)
+            return 2
+
+        # --- 4. experiment + canvas -----------------------------------------
         name = use_case["name"]
         experiment = next((e for e in client.experiments.list() if e.name == name), None)
+        created = experiment is None
         if experiment is None:
-            experiment = client.experiments.create(name=name, description=use_case.get("description"))
+            experiment = client.experiments.import_definition(
+                name=name,
+                description=use_case.get("description"),
+                hypothesis=use_case.get("hypothesis"),
+                design_type=use_case.get("design_type", "factorial"),
+                task_brief=use_case.get("task_brief"),
+                design_spec=use_case["design_spec"],
+                measurement_plan=measurement_plan,
+                graph=graph,
+                published_graph=graph,
+                protocol_description=use_case.get("description"),
+            )
             print(f"experiment   created {name!r} ({experiment.id})")
         else:
             print(f"experiment   reusing {name!r} ({experiment.id})")
-        experiment = client.experiments.update(experiment.id, dataset_id=dataset.id)
-
-        # --- 4. the protocol ------------------------------------------------
-        servers = {s.name: str(s.id) for s in client.tools.list_servers()}
-        missing = _localize(graph, dataset_id=str(dataset.id), server_ids=servers)
-        if missing:
-            # Not fatal -- the protocol still imports, and a run would still
-            # resolve these by name if they showed up later. But every tool
-            # call against them fails until they do, so say so loudly.
-            print(f"WARNING      MCP servers not registered here: {', '.join(missing)}", file=sys.stderr)
-
-        # Every protocol, not just this experiment's: names are unique per
-        # OWNER, so a same-named protocol parked under another experiment would
-        # make create() 409 rather than fall through to the update branch.
-        protocol = next((p for p in client.protocols.list() if p.name == name), None)
-        if protocol is None:
-            protocol = client.protocols.create(
-                name=name, description=use_case.get("description"), experiment_id=experiment.id, graph=graph
+            if experiment.locked_at is not None:
+                experiment = client.experiments.unlock(experiment.id)
+                print("experiment   unlocked for update")
+        protocols = client.protocols.list(experiment_id=experiment.id)
+        if len(protocols) != 1:
+            print(
+                f"ERROR: expected one canvas for experiment {experiment.id}, found {len(protocols)}.",
+                file=sys.stderr,
             )
-            print(f"protocol     created ({protocol.id})")
-        else:
+            return 2
+        protocol = protocols[0]
+        if not created:
             protocol = client.protocols.update(protocol.id, graph=graph)
             print(f"protocol     graph updated ({protocol.id})")
 
-        # --- 5. the design --------------------------------------------------
-        # A full replacement, not a merge -- see experiments.update's docstring.
-        experiment = client.experiments.update(experiment.id, design_spec=use_case["design_spec"])
-        cells = client.experiments.generate_design(experiment.id)
-        print(f"design       {len(cells)} cells")
+        # Full replacements, not merges. The protocol id asks the server to
+        # validate producer wiring against this exact localized graph.
+        experiment = client.experiments.update(
+            experiment.id,
+            description=use_case.get("description"),
+            hypothesis=use_case.get("hypothesis"),
+            dataset_ids=[dataset.id],
+            design_spec=use_case["design_spec"],
+            measurement_plan=measurement_plan,
+            measurement_validation_protocol_id=protocol.id,
+        )
+
+        # --- 5. immutable production revision -------------------------------
+        protocol = client.protocols.publish(protocol.id)
+        print(f"protocol     published revision {protocol.published_revision}")
+
+        # --- 6. design ------------------------------------------------------
+        replicates = client.experiments.generate_design(experiment.id)
+        cell_count = len({replicate.cell_id for replicate in replicates})
+        print(f"design       {cell_count} cells, {len(replicates)} replicates")
 
         print(f"\nDone. Open /experiments/{experiment.id}/protocol")
     return 0

@@ -30,7 +30,7 @@ function isHiddenServerName(name: string): boolean {
 }
 
 // ...unless THIS canvas is already one of the pipelines built on them (the
-// myocardial use cases in publications/bioinformatics), in which case hiding
+// imported use cases with model factors), in which case hiding
 // them stops being tidiness and becomes a trap: delete one of the six sklearn
 // Tool nodes and there'd be no way to add it back.
 //

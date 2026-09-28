@@ -618,10 +618,11 @@ export function FactorEditorDialog({
     draftLevelLabels: string[],
     field?: UnboundField,
   ) {
+    const hasCanvasBaseline = pickableFields ? !!field : true
     const selectedIndexes =
       isStructuredLevelType(draftLevelType) || draftLevelType === 'boolean'
         ? draftLevels.map((_, index) => index)
-        : (draftLevels as string[]).flatMap((level, index) => (level.trim() ? [index] : []))
+        : (draftLevels as string[]).flatMap((level, index) => (index === 0 && hasCanvasBaseline) || level.trim() ? [index] : [])
     const parsedLevels =
       isStructuredLevelType(draftLevelType)
         ? draftLevels
@@ -754,6 +755,7 @@ export function FactorEditorDialog({
                     {(levels as string[]).map((level, i) => (
                       <div key={i} className="flex items-start gap-1.5">
                         <div className="flex-1 space-y-1.5">
+                          {i === 0 && <Badge variant="outline">Canvas baseline</Badge>}
                           <Input
                             aria-label={`Level ${i + 1} label`}
                             placeholder={`Level ${i + 1} label`}
@@ -782,6 +784,7 @@ export function FactorEditorDialog({
                           variant="ghost"
                           size="icon-sm"
                           aria-label="Remove level"
+                          disabled={i === 0}
                           onClick={() => {
                             setLevels((ls) => ls.filter((_, j) => j !== i))
                             setLevelLabels((ls) => ls.filter((_, j) => j !== i))
@@ -807,6 +810,7 @@ export function FactorEditorDialog({
                     {levels.map((level, i) => (
                       <div key={i} className="flex items-start gap-1.5">
                         <div className="flex-1 space-y-1.5">
+                          {i === 0 && <Badge variant="outline">Canvas baseline</Badge>}
                           <Input
                             aria-label={`Level ${i + 1} label`}
                             placeholder={`Level ${i + 1} label`}
@@ -859,6 +863,7 @@ export function FactorEditorDialog({
                           variant="ghost"
                           size="icon-sm"
                           aria-label="Remove level"
+                          disabled={i === 0}
                           onClick={() => {
                             setLevels((ls) => ls.filter((_, j) => j !== i))
                             setLevelLabels((ls) => ls.filter((_, j) => j !== i))
@@ -883,6 +888,7 @@ export function FactorEditorDialog({
                   <div className="space-y-1.5">
                     {(levels as string[]).map((level, i) => (
                       <div key={i} className="flex items-center gap-1.5">
+                        {i === 0 && <Badge variant="outline" className="shrink-0">Canvas baseline</Badge>}
                         <Input
                           type={levelType === 'number' ? 'number' : 'text'}
                           value={level}
@@ -899,6 +905,7 @@ export function FactorEditorDialog({
                           variant="ghost"
                           size="icon-sm"
                           aria-label="Remove level"
+                          disabled={i === 0}
                           onClick={() => {
                             setLevels((ls) => ls.filter((_, j) => j !== i))
                             setLevelLabels((ls) => ls.filter((_, j) => j !== i))

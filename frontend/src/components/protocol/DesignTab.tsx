@@ -260,6 +260,9 @@ function FactorsEditor({
       return { oldName, next }
     },
     onSuccess: ({ oldName, next }) => {
+      if (next.level_type !== 'boolean' && next.levels.length > 0) {
+        canvasRef.current?.setFactorBaseline(oldName, next.levels[0])
+      }
       if (next.name !== oldName) canvasRef.current?.renameFactorBindings(oldName, next.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id] })
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })

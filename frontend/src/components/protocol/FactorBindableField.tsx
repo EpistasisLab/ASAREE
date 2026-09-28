@@ -264,6 +264,7 @@ export function FactorBindableField({
             <Label>Levels</Label>
             {levels.map((level, i) => (
               <div key={i} className="flex items-center gap-1.5">
+                {i === 0 && <Badge variant="outline" className="shrink-0">Canvas baseline</Badge>}
                 {levelOptions && levelOptions.length > 0 ? (
                   <Select
                     value={level || '__none__'}
@@ -313,6 +314,7 @@ export function FactorBindableField({
                   variant="ghost"
                   size="icon-sm"
                   aria-label="Remove level"
+                  disabled={i === 0}
                   onClick={() => {
                     setLevels((ls) => ls.filter((_, j) => j !== i))
                     setLevelLabels((ls) => ls.filter((_, j) => j !== i))
@@ -339,7 +341,9 @@ export function FactorBindableField({
           className="w-full"
           disabled={saveMutation.isPending}
           onClick={() => {
-            const selectedIndexes = levelType === 'boolean' ? [0, 1] : levels.flatMap((level, index) => (level.trim() ? [index] : []))
+            const selectedIndexes = levelType === 'boolean'
+              ? [0, 1]
+              : levels.flatMap((level, index) => index === 0 || level.trim() ? [index] : [])
             const parsedLevels =
               levelType === 'boolean' ? [true, false] : selectedIndexes.map((index) => parseLevelValue(levels[index], levelType))
             const defaults = defaultFactorLevelLabels(factorName, parsedLevels.length)

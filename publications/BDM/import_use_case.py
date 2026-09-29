@@ -3,12 +3,11 @@
 
     ASAREE_BASE_URL=http://localhost:8000 ASAREE_API_KEY=... \
         uv run --with ./sdk python publications/BDM/import_use_case.py \
-        [myocardial-anthropic-latest.json]
+        [myocardial-anthropic-v0.8.0.json]
 
 The API-side equivalent of README.md's GUI walkthrough, for rebuilding the
-experiment from scratch repeatedly. It accepts the maintained `-latest`
-provider variants and defaults to Azure Foundry. The `-v0.2.0` files are
-archival artifacts of the paper's original runs, not v0.8.0 import targets.
+experiment from scratch repeatedly. It accepts the v0.8.0 provider variants
+and defaults to Azure Foundry.
 Idempotent: run it again and it updates the existing experiment rather than
 creating a second copy.
 
@@ -36,10 +35,7 @@ from asaree_client.exceptions import AsareeNotFoundError
 
 HERE = Path(__file__).resolve().parent
 
-# The maintained one, not the frozen one: `-v0.2.0` is the exact graph the
-# paper's runs used and is kept byte-stable for reproduction, while `-latest`
-# tracks the current canvas (see README.md).
-DEFAULT_USE_CASE_FILE = HERE / "myocardial-azure-foundry-latest.json"
+DEFAULT_USE_CASE_FILE = HERE / "myocardial-azure-foundry-v0.8.0.json"
 DATA_FILE = HERE / "mi_ZSN.csv"
 DICTIONARY_FILE = HERE / "dict_ZSN.json"
 
@@ -109,7 +105,7 @@ def main(argv: list[str]) -> int:
     measurement_plan = use_case.get("measurement_plan")
     if not isinstance(measurement_plan, dict):
         print(
-            "ERROR: this is an archival definition without a v0.8.0 measurement plan; choose a -latest file.",
+            "ERROR: this definition lacks the v0.8.0 measurement plan.",
             file=sys.stderr,
         )
         return 2

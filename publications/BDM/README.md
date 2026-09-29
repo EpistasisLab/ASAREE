@@ -12,10 +12,9 @@ protocol shape, on a dataset anyone can download.
 
 | File | |
 | --- | --- |
-| `myocardial-azure-foundry-latest.json` | The experiment, wired to **Azure Foundry** — what `import_use_case.py` imports by default |
-| `myocardial-anthropic-latest.json` | The same, wired to **Anthropic** |
-| `myocardial-openai-latest.json` | The same, wired to **OpenAI** |
-| `myocardial-*-v0.2.0.json` | Archival graphs from the original runs — see "Versions" below |
+| `myocardial-azure-foundry-v0.8.0.json` | The experiment, wired to **Azure Foundry** — what `import_use_case.py` imports by default |
+| `myocardial-anthropic-v0.8.0.json` | The same, wired to **Anthropic** |
+| `myocardial-openai-v0.8.0.json` | The same, wired to **OpenAI** |
 | `mi_ZSN.csv` | The dataset — 1700 admissions × 111 features, target `mi_ZSN` |
 | `dict_ZSN.json` | The data dictionary for those 111 columns |
 | `stats/` | The paper's analysis scripts and outputs for the spinal runs (not part of this walkthrough) |
@@ -28,9 +27,9 @@ have:
 
 | File | Model factor | Effort factor | Design size |
 | --- | --- | --- | --- |
-| `myocardial-anthropic-latest.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 80 replicates |
-| `myocardial-openai-latest.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 8 cells / 80 replicates |
-| `myocardial-azure-foundry-latest.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 80 replicates |
+| `myocardial-anthropic-v0.8.0.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 80 replicates |
+| `myocardial-openai-v0.8.0.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 8 cells / 80 replicates |
+| `myocardial-azure-foundry-v0.8.0.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 80 replicates |
 
 All three are 2 × 2 × 2 designs (model × effort × critic on/off) at 10
 replicates, with the smaller/larger model of a family at the middle and top of
@@ -45,14 +44,10 @@ declared in `motoro.services.model_capabilities`, not a per-provider one, so if
 you swap a model in, check which of the two the node then offers: an effort
 factor bound to a temperature-based model varies nothing at runtime, silently.
 
-## Versions
+## ASAREE v0.8.0 execution contract
 
-Each provider variant ships twice. `-v0.2.0` is the graph retained from the
-original runs. Don't modernize it: its value is as a historical artifact, not
-as a v0.8.0 import target.
-
-`-latest` is the maintained v0.8.0 copy — the same factors, replicates, agents,
-and critic gates, brought up to the current execution contract:
+The three provider variants use the same factors, replicates, agents, and
+critic gates, with these v0.8.0 execution details:
 
 - **Dataset connector.** Its edges use the current `dataset` handle rather than
   the legacy `resource` spelling, and the Dataset node now sits *above* the
@@ -120,7 +115,7 @@ provider file that matches the credential you will use:
 
 ```bash
 uv run --with ./sdk python publications/BDM/import_use_case.py \
-  publications/BDM/myocardial-openai-latest.json
+  publications/BDM/myocardial-openai-v0.8.0.json
 ```
 
 The helper registers and splits the dataset, maps deployment-specific dataset

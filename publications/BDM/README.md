@@ -64,6 +64,10 @@ critic gates, with these v0.8.0 execution details:
   instead of retyping the wired script.
 - **Published execution.** The import helper publishes the localized graph as
   an immutable protocol revision before generating or running replicates.
+- **Visible output contracts.** Each agent's declared output shape lives in a
+  connected Output Parser node rather than the legacy hidden
+  `config.output_contract` field. The contracts and runtime behavior are
+  unchanged; the canvas now exposes where each structured payload is defined.
 - **Declared measurement source.** The complete held-out scoring response is
   captured as the opaque `Model evaluation` metric from MI-Score's exact
   `asaree-sklearn-model.run_model_script` call. This retains the returned test

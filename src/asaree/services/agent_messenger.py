@@ -949,7 +949,7 @@ async def execute_supervisor_architecture(
         await messenger.checkpoint()
         return dispatch, "cancelled" if state == "canceled" else "failed"
 
-    brief = str(dispatch["output_text"] or "")
+    brief = _output_content(str(dispatch["output_text"] or ""), dispatch.get("payload") or {})
 
     # -- 2. every worker, none skipped ---------------------------------
     async def _worker(node_id: str) -> tuple[str, dict[str, Any]]:

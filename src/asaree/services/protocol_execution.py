@@ -2670,10 +2670,15 @@ def _upstream_output_text(graph: dict[str, Any], node_id: str, node_runs: dict[s
     """What a deactivated node's own output becomes: its upstream context,
     verbatim, with no goal/prompt mixed in -- the literal "pass the input
     straight through unchanged" semantic of a disabled node. Empty
-    string for a start node (nothing upstream to pass through)."""
+    string for a start node (nothing upstream to pass through). A
+    payload-only predecessor passes through as its rendered fields, so
+    deactivating a node never silently drops a typed handoff."""
     upstream_ids = _upstream_ids(graph, node_id)
-    parts = [node_runs[uid]["output_text"] for uid in upstream_ids if node_runs.get(uid, {}).get("output_text")]
-    return "\n\n".join(parts)
+    parts = [
+        _output_content(str(run.get("output_text") or ""), run.get("payload") or {})
+        for run in (node_runs.get(uid) or {} for uid in upstream_ids)
+    ]
+    return "\n\n".join(part for part in parts if part)
 
 
 def _node_seed_prompt(node: dict[str, Any]) -> str:

@@ -408,6 +408,15 @@ def test_a_deactivated_node_passes_its_input_through_with_no_label_of_its_own() 
     assert pe._upstream_output_text(graph, "b", {"a": {"output_text": "draft text here"}}) == "draft text here"
 
 
+def test_a_deactivated_node_passes_a_payload_only_input_through_as_its_fields() -> None:
+    a = _node("a", "agent", {"prompt": "Count it"}, label="Counter")
+    b = _node("b", "agent", {"prompt": "Polish it"}, label="Editor")
+    b["data"]["active"] = False
+    graph = {"nodes": [a, b], "edges": _edges(("a", "b"))}
+    node_runs = {"a": {"output_text": "", "payload": {"n_rows": 4300}}}
+    assert pe._upstream_output_text(graph, "b", node_runs) == "Structured fields: n_rows=4300"
+
+
 def test_a_reader_downstream_of_a_deactivated_node_sees_that_nodes_name() -> None:
     """Attribution follows the graph the run actually walked, not the graph the
     user would have drawn with the node removed. Naming the deactivated node is

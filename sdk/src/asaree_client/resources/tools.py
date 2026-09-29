@@ -5,7 +5,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from asaree_client.models import MCPServer, ToolCallResult
+from asaree_client._sentinel import UNSET, UnsetType
+from asaree_client.models import MCPOAuthAuthorization, MCPServer, ToolCallResult
 
 ResourceId = uuid.UUID | str
 
@@ -26,9 +27,16 @@ class Tools:
         command: str | None = None,
         url: str | None = None,
         headers: dict[str, str] | None = None,
+        server_env: dict[str, str] | None = None,
     ) -> MCPServer:
+        """Register a server.
+
+        *headers* carries static HTTP credentials (e.g. ``{"Authorization":
+        "Bearer ..."}``); *server_env* carries encrypted environment
+        credentials for a stdio server. Neither is ever returned by the API.
+        """
         payload: dict[str, Any] = {"name": name, "transport": transport}
-        for key, value in {"command": command, "url": url, "headers": headers}.items():
+        for key, value in {"command": command, "url": url, "headers": headers, "server_env": server_env}.items():
             if value is not None:
                 payload[key] = value
         return MCPServer(**self._client._post("/mcp-servers", json=payload))
@@ -44,26 +52,46 @@ class Tools:
         transport: str | None = None,
         command: str | None = None,
         url: str | None = None,
-        headers: dict[str, str] | None = None,
+        headers: dict[str, str] | None | UnsetType = UNSET,
+        server_env: dict[str, str] | None | UnsetType = UNSET,
     ) -> MCPServer:
-        """Update supplied connection fields.
+        """Update supplied connection fields and credentials.
 
-        ``None`` means unchanged, matching the server and Motoro contract.
-        The current endpoint cannot clear a saved command, URL, or headers;
-        replace the registration when that is required.
+        For *name*, *transport*, *command* and *url*, ``None`` means unchanged:
+        the endpoint cannot clear them. Credentials distinguish omission from
+        clearing: leave *headers*/*server_env* unset to keep the stored values,
+        pass a mapping to replace them, or ``None`` to clear them.
         """
-        payload = {
+        payload: dict[str, Any] = {
             key: value
-            for key, value in {
-                "name": name,
-                "transport": transport,
-                "command": command,
-                "url": url,
-                "headers": headers,
-            }.items()
+            for key, value in {"name": name, "transport": transport, "command": command, "url": url}.items()
             if value is not None
         }
+        if not isinstance(headers, UnsetType):
+            payload["headers"] = headers
+        if not isinstance(server_env, UnsetType):
+            payload["server_env"] = server_env
         return MCPServer(**self._client._patch(f"/mcp-servers/{server_id}", json=payload))
+
+    def begin_oauth(self, server_id: ResourceId, *, scope: str | None = None) -> MCPOAuthAuthorization:
+        """Start an OAuth authorization for an HTTP server.
+
+        Open the returned ``authorization_url`` in a browser before
+        ``expires_at``. The provider redirects to the ASAREE callback, which
+        stores the tokens server-side; poll :meth:`get_server`
+        and check ``authentication.configured`` to observe completion.
+        """
+        data = self._client._post(f"/mcp-servers/{server_id}/oauth/start", json={"scope": scope})
+        return MCPOAuthAuthorization(**data)
+
+    def clear_credentials(self, server_id: ResourceId, *, revoke: bool = False) -> MCPServer:
+        """Clear every stored credential kind without deleting the registration.
+
+        With *revoke*, ASAREE first asks the OAuth provider to revoke its
+        tokens; local credentials are cleared whether or not that succeeds.
+        """
+        data = self._client._post(f"/mcp-servers/{server_id}/credentials/clear", json={"revoke": revoke})
+        return MCPServer(**data)
 
     def delete_server(self, server_id: ResourceId) -> None:
         self._client._delete(f"/mcp-servers/{server_id}")

@@ -56,7 +56,11 @@ def validate_factor_bindings(design_spec: dict[str, Any] | None, graph: dict[str
                 )
             levels = factor.get("levels") or []
             level_type = factor.get("level_type") or "string"
-            legacy_boolean = "level_type" not in factor and levels == [True, False]
+            # Mirrors the frontend's isBooleanFactor: legacy factors predate
+            # level_type, and either ordering of the two booleans is boolean.
+            legacy_boolean = (
+                "level_type" not in factor and len(levels) == 2 and all(isinstance(level, bool) for level in levels)
+            )
             if level_type != "boolean" and not legacy_boolean and (not levels or published_value != levels[0]):
                 raise ValueError(
                     f"{label!r} field {field_path!r} is bound to factor {factor_name!r}, but its published value "

@@ -71,6 +71,15 @@ def _mcp_response() -> dict[str, Any]:
         "status": "connected",
         "error_message": None,
         "capabilities": None,
+        "authentication": {
+            "auth_mode": "stdio_env",
+            "configured": True,
+            "authorization_required": False,
+            "static_headers_configured": False,
+            "stdio_env_configured": True,
+            "stdio_env_names": ["API_TOKEN"],
+        },
+        "credential_management_allowed": True,
         "created_at": datetime.now(tz=UTC).isoformat(),
     }
 
@@ -173,12 +182,55 @@ def test_create_skill_from_url_defaults_to_repository_root() -> None:
     ]
 
 
-def test_mcp_update_omits_none_fields() -> None:
+def test_mcp_update_omits_unset_fields() -> None:
     client = RecordingClient(_mcp_response())
 
-    Tools(client).update_server("server-id", name="renamed", command=None, headers=None)
+    server = Tools(client).update_server("server-id", name="renamed", command=None)
 
     assert client.calls == [("PATCH", "/mcp-servers/server-id", {"json": {"name": "renamed"}})]
+    assert server.authentication.stdio_env_names == ["API_TOKEN"]
+
+
+def test_mcp_update_sends_explicit_credential_clear_and_replacement() -> None:
+    client = RecordingClient(_mcp_response())
+
+    Tools(client).update_server("server-id", headers=None, server_env={"API_TOKEN": "secret"})
+
+    assert client.calls == [
+        ("PATCH", "/mcp-servers/server-id", {"json": {"headers": None, "server_env": {"API_TOKEN": "secret"}}})
+    ]
+
+
+def test_mcp_create_sends_stdio_credentials() -> None:
+    client = RecordingClient(_mcp_response())
+
+    Tools(client).create_server(name="local", transport="stdio", command="server", server_env={"API_TOKEN": "s"})
+
+    assert client.calls == [
+        (
+            "POST",
+            "/mcp-servers",
+            {"json": {"name": "local", "transport": "stdio", "command": "server", "server_env": {"API_TOKEN": "s"}}},
+        )
+    ]
+
+
+def test_mcp_oauth_start_and_credential_clear() -> None:
+    expires_at = datetime.now(tz=UTC).isoformat()
+    client = RecordingClient(
+        {"authorization_url": "https://auth.example/authorize", "expires_at": expires_at, "transaction_id": "t"}
+    )
+    tools = Tools(client)
+
+    authorization = tools.begin_oauth("server-id", scope="tools.read")
+    client.response = _mcp_response()
+    tools.clear_credentials("server-id", revoke=True)
+
+    assert authorization.authorization_url == "https://auth.example/authorize"
+    assert client.calls == [
+        ("POST", "/mcp-servers/server-id/oauth/start", {"json": {"scope": "tools.read"}}),
+        ("POST", "/mcp-servers/server-id/credentials/clear", {"json": {"revoke": True}}),
+    ]
 
 
 def test_tool_call_retry_is_explicit() -> None:

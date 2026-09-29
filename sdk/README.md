@@ -70,3 +70,19 @@ profile = client.auth.get_profile()
 client.auth.refresh()  # Rotates both the access and refresh tokens in-place.
 client.auth.logout()
 ```
+
+MCP server credentials are write-only: responses report `server.authentication`
+metadata but never the stored values.
+
+```python
+server = client.tools.create_server(
+    name="search", transport="http", url="https://mcp.example/mcp",
+    headers={"Authorization": "Bearer ..."},
+)
+client.tools.update_server(server.id, headers=None)  # None clears; omit to keep.
+
+# OAuth: open the URL in any browser; ASAREE stores the tokens on callback.
+authorization = client.tools.begin_oauth(server.id, scope="tools.read")
+print(authorization.authorization_url)
+client.tools.clear_credentials(server.id, revoke=True)
+```

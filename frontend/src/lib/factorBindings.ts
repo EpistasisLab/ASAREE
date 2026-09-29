@@ -52,15 +52,23 @@ function withPathValue(root: Record<string, unknown>, dottedPath: string, nextVa
   return next
 }
 
-/** Keep a factor's current canvas value in the baseline (first) slot. */
+/**
+ * Keep a factor's current canvas value in the baseline (first) slot. A value
+ * matching an alternate level is promoted; any other value *replaces* the old
+ * baseline. Bound fields save on every keystroke, so keeping the old baseline
+ * as an extra level would turn each pause mid-edit into a new treatment.
+ */
 export function factorWithCanvasBaseline(factor: DesignFactor, currentValue: unknown): DesignFactor {
   if (isBooleanFactor(factor) || valuesEqual(factor.levels[0], currentValue)) return factor
 
   const currentIndex = factor.levels.findIndex((level) => valuesEqual(level, currentValue))
+  if (currentIndex < 0) {
+    return { ...factor, levels: [currentValue, ...factor.levels.slice(1)] }
+  }
   const keptIndexes = factor.levels.flatMap((_, index) => index === currentIndex ? [] : [index])
   const levels = [currentValue, ...keptIndexes.map((index) => factor.levels[index])]
   const labels = factor.level_labels
-    ? [currentIndex >= 0 ? factor.level_labels[currentIndex] ?? 'Baseline' : 'Baseline', ...keptIndexes.map((index) => factor.level_labels?.[index] ?? '')]
+    ? [factor.level_labels[currentIndex] ?? 'Baseline', ...keptIndexes.map((index) => factor.level_labels?.[index] ?? '')]
     : undefined
   return { ...factor, levels, ...(labels ? { level_labels: labels } : {}) }
 }

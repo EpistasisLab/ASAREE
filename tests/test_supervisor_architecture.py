@@ -181,6 +181,13 @@ async def test_the_brief_reaches_every_worker(stubs: dict[str, Any]) -> None:
         assert "Split the cohort three ways." in _prompt_for(stubs, worker)
 
 
+async def test_a_payload_only_brief_still_reaches_every_worker(stubs: dict[str, Any]) -> None:
+    stubs["answers"]["sup"] = ("", None, {"payload": {"split": "three ways"}})
+    await _run(stubs)
+    for worker in ("w1", "w2", "w3"):
+        assert 'Structured fields: split="three ways"' in _prompt_for(stubs, worker)
+
+
 async def test_payload_only_turns_reach_supervisor_review_and_synthesis(stubs: dict[str, Any]) -> None:
     stubs["answers"]["w1"] = ("", None, {"payload": {"finding": "cohort imbalance"}})
 

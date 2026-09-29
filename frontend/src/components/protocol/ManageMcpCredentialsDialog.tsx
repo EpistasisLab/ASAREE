@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ApiError, mcpServersApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -33,6 +33,9 @@ export function ManageMcpCredentialsDialog({
   const [scope, setScope] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [oauthDetached, setOauthDetached] = useState(false)
+  const oauthAbortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => oauthAbortRef.current?.abort(), [])
   const queryClient = useQueryClient()
 
   const isHttp = server.transport === 'http'
@@ -55,7 +58,13 @@ export function ManageMcpCredentialsDialog({
     setError(null)
     try {
       if (mode === 'oauth') {
-        await authorizeMcpServer(server.id, scope.trim() || undefined)
+        const controller = new AbortController()
+        oauthAbortRef.current = controller
+        setOauthDetached(false)
+        await authorizeMcpServer(server.id, scope.trim() || undefined, {
+          signal: controller.signal,
+          onDetached: () => setOauthDetached(true),
+        })
         await finish(await mcpServersApi.get(server.id))
       } else if (mode === 'env') {
         await finish(await mcpServersApi.update(server.id, { server_env: credentialsRecord(entries) }))
@@ -66,10 +75,13 @@ export function ManageMcpCredentialsDialog({
         await finish(await mcpServersApi.update(server.id, { headers }))
       }
     } catch (caught) {
+      if (oauthAbortRef.current?.signal.aborted) return
       setError(caught instanceof ApiError && typeof caught.detail === 'string'
         ? caught.detail
         : caught instanceof Error ? caught.message : 'Could not update credentials.')
     } finally {
+      oauthAbortRef.current = null
+      setOauthDetached(false)
       setPending(false)
     }
   }
@@ -81,7 +93,9 @@ export function ManageMcpCredentialsDialog({
     try {
       await finish(await mcpServersApi.clearCredentials(server.id, server.authentication.auth_mode === 'oauth'))
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Could not clear credentials.')
+      setError(caught instanceof ApiError && typeof caught.detail === 'string'
+        ? caught.detail
+        : caught instanceof Error ? caught.message : 'Could not clear credentials.')
     } finally {
       setPending(false)
     }
@@ -153,12 +167,23 @@ export function ManageMcpCredentialsDialog({
               <p className="text-xs text-muted-foreground">Saving opens the provider authorization window.</p>
             </div>
           )}
+          {pending && oauthDetached && (
+            <p className="text-xs text-muted-foreground">
+              Waiting for the provider to finish. If you closed the authorization window, cancel and try again.
+            </p>
+          )}
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter className="sm:justify-between">
-          <Button type="button" variant="destructive" disabled={pending || !hasCredentials} onClick={clear}>
-            Clear credentials
-          </Button>
+          {pending && mode === 'oauth' ? (
+            <Button type="button" variant="outline" onClick={() => oauthAbortRef.current?.abort()}>
+              Cancel
+            </Button>
+          ) : (
+            <Button type="button" variant="destructive" disabled={pending || !hasCredentials} onClick={clear}>
+              Clear credentials
+            </Button>
+          )}
           <Button type="button" disabled={pending || !canSave} onClick={save}>
             {pending ? 'Saving…' : mode === 'oauth' ? 'Authorize' : 'Replace credentials'}
           </Button>

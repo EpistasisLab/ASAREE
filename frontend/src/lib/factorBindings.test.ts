@@ -30,7 +30,7 @@ describe('factorBindingDiscrepancies', () => {
     }])
   })
 
-  it('keeps the current canvas value first while preserving alternate levels', () => {
+  it('replaces the baseline with an edited canvas value, keeping alternates and labels', () => {
     const graph = {
       nodes: [{
         id: 'agent-1',
@@ -53,8 +53,36 @@ describe('factorBindingDiscrepancies', () => {
       }],
     }, graph)).toEqual([{
       name: 'Prompt',
-      levels: ['edited canvas prompt', 'old baseline', 'alternate'],
-      level_labels: ['Baseline', 'Original', 'Alternative'],
+      levels: ['edited canvas prompt', 'alternate'],
+      level_labels: ['Original', 'Alternative'],
+    }])
+  })
+
+  it('promotes a canvas value that matches an alternate level', () => {
+    const graph = {
+      nodes: [{
+        id: 'agent-1',
+        type: 'agent',
+        position: { x: 0, y: 0 },
+        data: {
+          label: 'Writer',
+          factor_bindings: { 'config.system_prompt': 'Prompt' },
+          config: { system_prompt: 'alternate' },
+        },
+      }],
+      edges: [],
+    } as unknown as ProtocolGraph
+
+    expect(reconcileFactorBaselines({
+      factors: [{
+        name: 'Prompt',
+        levels: ['old baseline', 'alternate'],
+        level_labels: ['Original', 'Alternative'],
+      }],
+    }, graph)).toEqual([{
+      name: 'Prompt',
+      levels: ['alternate', 'old baseline'],
+      level_labels: ['Alternative', 'Original'],
     }])
   })
 

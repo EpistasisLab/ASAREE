@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { KeyRound, Plug, ShieldCheck, Terminal } from 'lucide-react'
 import { ApiError, mcpServersApi } from '@/api/client'
@@ -78,6 +78,9 @@ export function ConnectMcpServerDialog({
   const [oauthServer, setOauthServer] = useState<McpServer | null>(null)
   const [oauthPending, setOauthPending] = useState(false)
   const [oauthError, setOauthError] = useState<string | null>(null)
+  const [oauthDetached, setOauthDetached] = useState(false)
+  const oauthAbortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => oauthAbortRef.current?.abort(), [])
   const queryClient = useQueryClient()
 
   const isStdio = transport === 'stdio'
@@ -112,6 +115,7 @@ export function ConnectMcpServerDialog({
   })
 
   function reset() {
+    oauthAbortRef.current?.abort()
     setName('')
     setTransport('stdio')
     setCommand('')
@@ -130,16 +134,26 @@ export function ConnectMcpServerDialog({
     if (!oauthServer || oauthPending) return
     setOauthPending(true)
     setOauthError(null)
+    setOauthDetached(false)
+    const controller = new AbortController()
+    oauthAbortRef.current = controller
     try {
-      await authorizeMcpServer(oauthServer.id, oauthScope.trim() || undefined)
+      await authorizeMcpServer(oauthServer.id, oauthScope.trim() || undefined, {
+        signal: controller.signal,
+        onDetached: () => setOauthDetached(true),
+      })
       const connected = await mcpServersApi.get(oauthServer.id)
       queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
       onConnected?.(connected)
       reset()
       onOpenChange(false)
     } catch (error) {
-      setOauthError(error instanceof Error ? error.message : 'MCP authorization failed.')
+      if (!controller.signal.aborted) {
+        setOauthError(error instanceof Error ? error.message : 'MCP authorization failed.')
+      }
     } finally {
+      if (oauthAbortRef.current === controller) oauthAbortRef.current = null
+      setOauthDetached(false)
       setOauthPending(false)
     }
   }
@@ -327,6 +341,16 @@ export function ConnectMcpServerDialog({
                 <KeyRound className="size-4" />
                 {oauthPending ? 'Waiting for authorization…' : 'Open authorization'}
               </Button>
+              {oauthPending && oauthDetached && (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs text-muted-foreground">
+                    If you closed the authorization window, cancel and try again.
+                  </p>
+                  <Button type="button" variant="outline" size="sm" onClick={() => oauthAbortRef.current?.abort()}>
+                    Cancel
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 

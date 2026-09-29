@@ -61,6 +61,22 @@ def test_bound_canvas_value_must_be_the_first_level() -> None:
         validate_factor_bindings(design_spec, graph)
 
 
+@pytest.mark.parametrize("levels", [[True, False], [False, True]])
+def test_legacy_boolean_factor_accepts_either_level_order(levels: list[bool]) -> None:
+    design_spec = {"factors": [{"name": "Gate", "levels": levels}]}
+    graph = {
+        "nodes": [
+            {
+                "id": "gate",
+                "data": {"config": {"enabled": True}, "factor_bindings": {"config.enabled": "Gate"}},
+            }
+        ],
+        "edges": [],
+    }
+
+    validate_factor_bindings(design_spec, graph)
+
+
 def test_binding_to_missing_published_field_is_rejected() -> None:
     design_spec = {"factors": [{"name": "Prompt", "levels": ["one", "two"]}]}
     graph = {

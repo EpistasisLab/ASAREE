@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
+from motoro.services import mcp_service
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 
@@ -280,6 +281,43 @@ def _reject_locked_mutation(experiment: Any, fields: dict[str, Any]) -> None:
         )
 
 
+def _localize_imported_mcp_references(
+    graph: dict[str, Any],
+    measurement_plan: dict[str, Any] | None,
+    server_ids_by_name: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Replace installation-specific MCP UUIDs using portable server names."""
+    localized_graph = deepcopy(graph)
+    localized_plan = deepcopy(measurement_plan)
+    server_id_by_node: dict[str, str] = {}
+
+    for node in localized_graph.get("nodes", []):
+        if not isinstance(node, dict) or node.get("type") not in {"mcp_tool", "mcp_scikit_learn", "mcp_client_tool"}:
+            continue
+        data = node.get("data")
+        config = data.get("config") if isinstance(data, dict) else None
+        if not isinstance(config, dict):
+            continue
+        server_id = server_ids_by_name.get(str(config.get("server_name") or ""))
+        if server_id is None:
+            continue
+        config["server_id"] = server_id
+        server_id_by_node[str(node.get("id"))] = server_id
+
+    if localized_plan is not None:
+        for producer in localized_plan.get("producers", []):
+            if not isinstance(producer, dict) or producer.get("producer_id") != "asaree.mcp_tool":
+                continue
+            config = producer.get("config")
+            if not isinstance(config, dict):
+                continue
+            server_id = server_id_by_node.get(str(config.get("mcp_node_id") or ""))
+            if server_id is not None:
+                config["server_id"] = server_id
+
+    return localized_graph, localized_plan
+
+
 async def _validated_dataset_ids(dataset_ids: list[uuid.UUID], db: DbSession, user: CurrentUser) -> list[uuid.UUID]:
     for dataset_id in dataset_ids:
         dataset = await get_dataset(db, dataset_id)
@@ -473,15 +511,25 @@ async def import_experiment_definition_endpoint(
 
     graph = normalize_protocol_graph(body.graph)
     published_graph = normalize_protocol_graph(body.published_graph) if body.published_graph is not None else None
+    servers = await mcp_service.list_servers(owner_id=user.id)
+    server_ids_by_name = {str(server.name): str(server.id) for server in servers}
+    if published_graph is None:
+        graph, measurement_plan = _localize_imported_mcp_references(graph, body.measurement_plan, server_ids_by_name)
+    else:
+        graph, _ = _localize_imported_mcp_references(graph, None, server_ids_by_name)
+        published_graph, measurement_plan = _localize_imported_mcp_references(
+            published_graph, body.measurement_plan, server_ids_by_name
+        )
 
     try:
         design_spec = normalize_design_spec(body.design_spec, validate_metrics=True)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # Do not attach source dataset IDs here.  They refer to source-workspace
-    # artifacts and may not exist for this owner; their node configuration is
-    # retained in the graph so the user can supply/reconnect them after import.
+    # Do not attach source dataset IDs here. They refer to source-workspace
+    # artifacts and may not exist for this owner. MCP references are different:
+    # server names are portable, so matching visible registrations above replace
+    # source-install UUIDs before measurement-plan validation.
     try:
         # The lookup above gives the dialog its friendly suggested name. This
         # savepoint covers the unavoidable race where another tab takes it
@@ -496,7 +544,7 @@ async def import_experiment_definition_endpoint(
                 design_type=body.design_type,
                 task_brief=body.task_brief,
                 design_spec=design_spec,
-                measurement_plan=body.measurement_plan,
+                measurement_plan=measurement_plan,
             )
             # `publish_protocol` can only freeze the protocol's current draft.
             # Start from the source published snapshot when one exists, freeze

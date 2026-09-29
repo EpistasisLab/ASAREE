@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { nodeAccent } from '@/lib/nodeAccent'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plug, RefreshCw, Wrench } from 'lucide-react'
+import { KeyRound, Plug, RefreshCw, Wrench } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -11,6 +12,7 @@ import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { MCP_CLIENT_TOOL_NODE_TYPE } from './mcpServerCatalog'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
+import { ManageMcpCredentialsDialog } from './ManageMcpCredentialsDialog'
 import type { McpToolNodeData, ProtocolNode } from '@/types/protocols'
 
 // Kept in step with McpToolNode/McpClientToolNode's own accents -- the same
@@ -64,6 +66,7 @@ export function McpToolNodeInspector({
 }) {
   const serversQuery = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list() })
   const queryClient = useQueryClient()
+  const [credentialsOpen, setCredentialsOpen] = useState(false)
   const serverId = node?.data.config.server_id ?? null
 
   // Re-dials and re-discovers tools, then writes the fresh list onto the node
@@ -92,6 +95,7 @@ export function McpToolNodeInspector({
   const instructions = selectedServer?.capabilities?.instructions?.trim()
   const selectedTools = config.tool_names ?? []
   const isClientTool = node.type === MCP_CLIENT_TOOL_NODE_TYPE
+  const canManageCredentials = selectedServer?.credential_management_allowed ?? false
   const accent = isClientTool ? CLIENT_ACCENT : ACCENT
   const Icon = isClientTool ? Plug : Wrench
 
@@ -165,16 +169,29 @@ export function McpToolNodeInspector({
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <Label>Connection</Label>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Reconnect"
-              title="Reconnect and re-discover this server's tools"
-              disabled={reconnectMutation.isPending}
-              onClick={() => reconnectMutation.mutate()}
-            >
-              <RefreshCw className={`size-3.5 ${reconnectMutation.isPending ? 'animate-spin' : ''}`} />
-            </Button>
+            <div className="flex gap-1">
+              {canManageCredentials && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Manage credentials"
+                  title="Replace, authorize, or clear credentials"
+                  onClick={() => setCredentialsOpen(true)}
+                >
+                  <KeyRound className="size-3.5" />
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Reconnect"
+                title="Reconnect and re-discover this server's tools"
+                disabled={reconnectMutation.isPending}
+                onClick={() => reconnectMutation.mutate()}
+              >
+                <RefreshCw className={`size-3.5 ${reconnectMutation.isPending ? 'animate-spin' : ''}`} />
+              </Button>
+            </div>
           </div>
           <div className="space-y-1 rounded-lg border px-3 py-2">
             <div className="flex items-center gap-2">
@@ -185,6 +202,9 @@ export function McpToolNodeInspector({
                 <Badge variant="outline" className="text-destructive">
                   {selectedServer.status}
                 </Badge>
+              )}
+              {selectedServer.authentication.authorization_required && (
+                <Badge variant="outline" className="text-destructive">authorization required</Badge>
               )}
             </div>
             {/* dir="rtl" so a long command/URL truncates at the FRONT -- the
@@ -287,6 +307,18 @@ export function McpToolNodeInspector({
           </div>
         )}
       </div>
+
+      {selectedServer && canManageCredentials && credentialsOpen && (
+        <ManageMcpCredentialsDialog
+          server={selectedServer}
+          open
+          onOpenChange={setCredentialsOpen}
+          onUpdated={(updated) => {
+            const discovered = updated.capabilities?.tools?.map((tool) => tool.name) ?? []
+            patchConfig({ tool_names: selectedTools.filter((name) => discovered.includes(name)) })
+          }}
+        />
+      )}
 
     </NodeInspectorDialog>
   )

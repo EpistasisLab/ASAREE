@@ -6,7 +6,7 @@ name = "asaree-client"
 # __version__ -- which _transport sends as the User-Agent on every request --
 # now names the exact build rather than a number someone forgot to bump.
 dynamic = ["version"]
-description = "Trimmed synchronous SDK for ASAREE — just enough to drive a factorial experiment from a notebook."
+description = "Synchronous Python SDK for ASAREE."
 readme = "README.md"
 requires-python = ">=3.12"
 

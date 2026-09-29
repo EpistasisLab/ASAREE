@@ -37,8 +37,44 @@ def test_changed_published_value_must_be_reflected_in_bound_factor_levels() -> N
         "edges": [],
     }
 
-    with pytest.raises(ValueError, match="published value does not match any declared level"):
+    with pytest.raises(ValueError, match=r"published value does not match the first \(canvas baseline\) level"):
         validate_factor_bindings(design_spec, graph)
+
+
+def test_bound_canvas_value_must_be_the_first_level() -> None:
+    design_spec = {"factors": [{"name": "Prompt", "levels": ["baseline", "alternate"]}]}
+    graph = {
+        "nodes": [
+            {
+                "id": "agent",
+                "data": {
+                    "label": "Writer",
+                    "config": {"system_prompt": "alternate"},
+                    "factor_bindings": {"config.system_prompt": "Prompt"},
+                },
+            }
+        ],
+        "edges": [],
+    }
+
+    with pytest.raises(ValueError, match="canvas baseline"):
+        validate_factor_bindings(design_spec, graph)
+
+
+@pytest.mark.parametrize("levels", [[True, False], [False, True]])
+def test_legacy_boolean_factor_accepts_either_level_order(levels: list[bool]) -> None:
+    design_spec = {"factors": [{"name": "Gate", "levels": levels}]}
+    graph = {
+        "nodes": [
+            {
+                "id": "gate",
+                "data": {"config": {"enabled": True}, "factor_bindings": {"config.enabled": "Gate"}},
+            }
+        ],
+        "edges": [],
+    }
+
+    validate_factor_bindings(design_spec, graph)
 
 
 def test_binding_to_missing_published_field_is_rejected() -> None:

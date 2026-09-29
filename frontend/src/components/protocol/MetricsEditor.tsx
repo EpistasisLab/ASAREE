@@ -18,10 +18,6 @@ import { CustomMetricFlow, MetricNodeLabel, type MetricNodeDisplay } from './Cus
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { useDialogAutosave } from './useDialogAutosave'
 
-function withoutRanking(metrics: DesignMetric[]): DesignMetric[] {
-  return metrics.map((metric) => ({ ...metric, direction: 'neutral', primary: false }))
-}
-
 function synchronizeMeasurementPlanMetrics(plan: MeasurementPlan | null, metrics: DesignMetric[]) {
   if (!plan) return null
   const definitionsById = new Map(plan.metrics.map((definition) => [definition.id, definition]))
@@ -359,7 +355,7 @@ function MetricsDialog({
                       <Button type="button" variant="ghost" size="icon-sm" aria-label={`Move ${metric.name} up in staged order`} disabled={disabled || selectedPosition === 0} onClick={() => moveStagedCustomMetric(metric, -1)}><ArrowUp className="size-3.5" /></Button>
                       <Button type="button" variant="ghost" size="icon-sm" aria-label={`Move ${metric.name} down in staged order`} disabled={disabled || selectedPosition === customMetricIds.length - 1} onClick={() => moveStagedCustomMetric(metric, 1)}><ArrowDown className="size-3.5" /></Button>
                     </span>
-                    {binding && <Button type="button" variant="ghost" size="sm" aria-label={`Edit ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricDraft(metric)}>Edit</Button>}
+                    {binding && metric.valueType === 'opaque' && <Button type="button" variant="ghost" size="sm" aria-label={`Edit ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricDraft(metric)}>Edit</Button>}
                     <Button type="button" variant="ghost" size="icon-sm" aria-label={`Delete ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricPendingDelete(metric)}><Trash2 className="size-3.5 text-destructive" /></Button>
                   </div>
                 })}</div>}
@@ -500,7 +496,7 @@ export function MetricsEditor({
       }
     }
     for (const metric of selected) nextPlan = upsertRuntimeMetric(nextPlan, metric)
-    const nextMetrics = withoutRanking([...preserved, ...selected])
+    const nextMetrics = [...preserved, ...selected]
     const byId = new Map(nextMetrics.map((metric) => [metric.id, metric]))
     const synchronizedPlan = nextPlan && {
       ...nextPlan,
@@ -564,7 +560,7 @@ export function MetricsEditor({
           const customById = new Map(draft.metrics.filter((metric) => metric.kind === 'custom' && metric.id).map((metric) => [metric.id!, metric]))
           const orderedCustomMetrics = customMetricIds.flatMap((id) => customById.get(id) ?? [])
           draft.metrics = [...draft.metrics.filter((metric) => metric.kind !== 'custom'), ...orderedCustomMetrics]
-          const normalizedDraftMetrics = withoutRanking(draft.metrics)
+          const normalizedDraftMetrics = draft.metrics
           draft = {
             metrics: normalizedDraftMetrics,
             measurementPlan: synchronizeMeasurementPlanMetrics(draft.measurementPlan, normalizedDraftMetrics),

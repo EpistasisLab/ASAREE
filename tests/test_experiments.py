@@ -29,6 +29,7 @@ from asaree.services.experiments import (
     set_experiment_datasets,
     update_experiment,
 )
+from asaree.services.protocols import delete_protocol, generated_protocol_name, list_protocols
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -51,6 +52,8 @@ async def owner_id() -> AsyncIterator[uuid.UUID]:
         uid = user.id
     yield uid
     async with get_session() as db:
+        for protocol in await list_protocols(db, owner_id=uid):
+            await delete_protocol(db, protocol.id)
         db_user = await db.get(User, uid)
         if db_user is not None:
             await db.delete(db_user)
@@ -216,6 +219,10 @@ async def test_create_experiment_returns_a_persisted_recommended_measurement_pla
                 "dismissed_version": None,
                 "intentionally_removed_keys": [],
             }
+            protocols = await list_protocols(db, owner_id=owner_id, experiment_id=experiment_id)
+            assert len(protocols) == 1
+            assert protocols[0].name == generated_protocol_name(response.name, experiment_id)
+            assert protocols[0].graph == {"nodes": [], "edges": []}
     finally:
         async with get_session() as db:
             persisted = await get_experiment(db, experiment_id)

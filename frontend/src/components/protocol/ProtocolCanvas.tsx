@@ -21,6 +21,7 @@ import { Lock, Play, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { CONNECTOR_HANDLES } from '@/lib/coordinationStrategy'
+import { graphWithFactorBaseline, reconcileFactorBaselines } from '@/lib/factorBindings'
 import { newNodeId } from '@/lib/nodeId'
 import { handoffPeers, promptReferenceScope } from '@/lib/promptReferences'
 import { mergeProtocolSaveIntoCache, protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
@@ -385,6 +386,10 @@ export interface ProtocolCanvasHandle {
   // `newName` instead of being left referencing a name that no longer
   // resolves.
   renameFactorBindings: (oldName: string, newName: string) => void
+  // A non-boolean factor's first level is its canvas baseline. Editing that
+  // level from the sibling Design tab must update every field controlled by
+  // the factor, not leave the graph and design as two sources of truth.
+  setFactorBaseline: (factorName: string, baseline: unknown) => void
 }
 
 export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
@@ -455,6 +460,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
     [setNodes],
   )
+  const setFactorBaseline = useCallback(
+    (factorName: string, baseline: unknown) => {
+      setNodes((nds) => graphWithFactorBaseline(
+        { nodes: nds as unknown as ProtocolNode[], edges: [] },
+        factorName,
+        baseline,
+      ).nodes as unknown as Node[])
+    },
+    [setNodes],
+  )
 
   useImperativeHandle(
     canvasHandleRef,
@@ -462,8 +477,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       bindFactor: bindFactorOnNode,
       removeFactorBindings,
       renameFactorBindings,
+      setFactorBaseline,
     }),
-    [bindFactorOnNode, removeFactorBindings, renameFactorBindings],
+    [bindFactorOnNode, removeFactorBindings, renameFactorBindings, setFactorBaseline],
   )
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   useEffect(() => {
@@ -1402,6 +1418,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       return { oldName, next }
     },
     onSuccess: ({ oldName, next }) => {
+      if (next.level_type !== 'boolean' && next.levels.length > 0) {
+        setFactorBaseline(oldName, next.levels[0])
+      }
       if (next.name !== oldName) renameFactorBindings(oldName, next.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
@@ -1793,6 +1812,36 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // what makes a factor save here land immediately: FactorBindableField
   // invalidates that exact key on success.
   const factors = experimentQuery.data?.design_spec?.factors ?? EMPTY_FACTORS
+  // The canvas is the baseline users see before a factor varies it. Keep that
+  // exact value in level 1, including for older factors that predate this
+  // invariant or were edited through an external client. Fetch fresh before
+  // writing so this narrow repair never overwrites a concurrent design edit.
+  const factorBaselineSyncSeqRef = useRef(0)
+  useEffect(() => {
+    if (!experimentId || !experimentQuery.data || experimentLocked || experimentQuery.data.locked_at) return
+    const graph = toPersistedGraph(nodes, edges)
+    const reconciled = reconcileFactorBaselines(experimentQuery.data.design_spec, graph)
+    if (JSON.stringify(reconciled) === JSON.stringify(factors)) return
+
+    const seq = ++factorBaselineSyncSeqRef.current
+    const timer = setTimeout(() => {
+      void experimentsApi.get(experimentId).then(async (fresh) => {
+        if (seq !== factorBaselineSyncSeqRef.current) return
+        const nextFactors = reconcileFactorBaselines(fresh.design_spec, graph)
+        if (JSON.stringify(nextFactors) === JSON.stringify(fresh.design_spec?.factors ?? [])) return
+        await experimentsApi.update(experimentId, {
+          design_spec: { ...fresh.design_spec, factors: nextFactors },
+        })
+        if (seq !== factorBaselineSyncSeqRef.current) return
+        queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+        queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+      }).catch(() => {
+        // Best-effort reconciliation. The publish/run validator remains the
+        // hard guard, and the next canvas change retries from fresh data.
+      })
+    }, AUTOSAVE_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [edges, experimentId, experimentLocked, experimentQuery.data, factors, nodes, queryClient])
   const lastSyncedDatasetIdsRef = useRef(JSON.stringify(datasetIdsInGraph(initialGraph.nodes as Node[])))
   useEffect(() => {
     if (!experimentId) return

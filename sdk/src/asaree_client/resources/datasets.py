@@ -13,7 +13,7 @@ import builtins
 import uuid
 from typing import Any
 
-from asaree_client.models import RegisteredDataset
+from asaree_client.models import RegisteredDataset, WorkspaceEvent
 
 ResourceId = uuid.UUID | str
 
@@ -92,3 +92,32 @@ class Datasets:
 
     def delete(self, dataset_id: ResourceId) -> None:
         self._client._delete(f"/datasets/{dataset_id}")
+
+    def record_workspace_event(
+        self,
+        dataset_id: ResourceId,
+        *,
+        workspace_id: str,
+        stage: str,
+        event_type: str,
+        sha256_train: str | None = None,
+        sha256_test: str | None = None,
+    ) -> WorkspaceEvent:
+        payload: dict[str, Any] = {
+            "workspace_id": workspace_id,
+            "stage": stage,
+            "event_type": event_type,
+        }
+        if sha256_train is not None:
+            payload["sha256_train"] = sha256_train
+        if sha256_test is not None:
+            payload["sha256_test"] = sha256_test
+        data = self._client._post(f"/datasets/{dataset_id}/workspace-events", json=payload)
+        return WorkspaceEvent(**data)
+
+    def list_workspace_events(
+        self, dataset_id: ResourceId, *, workspace_id: str | None = None
+    ) -> builtins.list[WorkspaceEvent]:
+        params = {"workspace_id": workspace_id} if workspace_id is not None else None
+        data = self._client._get(f"/datasets/{dataset_id}/workspace-events", params=params)
+        return [WorkspaceEvent(**event) for event in data]

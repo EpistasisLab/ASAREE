@@ -199,6 +199,115 @@ async def test_agent_output_report_captures_completed_final_output(output: str) 
 
 
 @pytest.mark.asyncio
+async def test_agent_output_projection_reads_the_structured_parser_payload() -> None:
+    plan = parse_measurement_plan(
+        {
+            "metrics": [
+                {
+                    "id": "feature-count",
+                    "name": "n_engineered_features",
+                    "value_type": "number",
+                    "direction": "neutral",
+                    "aggregation": "mean",
+                }
+            ],
+            "producers": [
+                {
+                    "id": "fte-output",
+                    "producer_id": "asaree.agent_output",
+                    "kind": "reported",
+                    "outputs": {"feature_count": "feature-count"},
+                    "config": {
+                        "agent_node_id": "agent",
+                        "projections": {
+                            "feature_count": {"path": "engineering_recipe", "transform": "length"}
+                        },
+                    },
+                }
+            ],
+            "inputs": [],
+        }
+    )
+    run = SimpleNamespace(
+        id=uuid4(),
+        replicate_result_id=None,
+        node_runs={
+            "agent": {
+                "status": "completed",
+                "output_text": "summary",
+                "payload": {"engineering_recipe": [{"name": "a"}, {"name": "b"}]},
+            }
+        },
+    )
+
+    result = await collect_reported_metrics(run, plan, {"nodes": [], "edges": []})
+
+    assert result.observations[0].status == "measured"
+    assert result.observations[0].value == 2
+
+
+@pytest.mark.asyncio
+async def test_mcp_projection_supports_json_pointer_keys_containing_dots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = parse_measurement_plan(
+        {
+            "metrics": [
+                {
+                    "id": "accuracy",
+                    "name": "accuracy_at_0_5",
+                    "value_type": "number",
+                    "direction": "maximize",
+                    "aggregation": "mean",
+                }
+            ],
+            "producers": [
+                {
+                    "id": "score",
+                    "producer_id": "asaree.mcp_tool",
+                    "kind": "reported",
+                    "outputs": {"accuracy": "accuracy"},
+                    "config": {
+                        "agent_node_id": "agent",
+                        "mcp_node_id": "mcp",
+                        "server_id": str(uuid4()),
+                        "tool_name": "score",
+                        "projections": {
+                            "accuracy": {"path": "/test_metrics/metrics_at_0.5/accuracy"}
+                        },
+                    },
+                }
+            ],
+            "inputs": [],
+        }
+    )
+    monkeypatch.setattr(
+        "asaree.services.reported_metrics.get_run_steps",
+        lambda _run_id: _async_value(
+            [
+                SimpleNamespace(
+                    tool_call={
+                        "server": "scorer",
+                        "tool": "score",
+                        "result": '{"test_metrics":{"metrics_at_0.5":{"accuracy":0.81}}}',
+                    }
+                )
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        "asaree.services.reported_metrics.mcp_service.get_server",
+        lambda _server_id: _async_value(SimpleNamespace(name="scorer")),
+    )
+    run = SimpleNamespace(id=uuid4(), replicate_result_id=None, node_runs={"agent": {"run_id": str(uuid4())}})
+
+    result = await collect_reported_metrics(run, plan, {"nodes": [], "edges": []})
+
+    assert result.observations[0].status == "measured"
+    assert result.observations[0].value == 0.81
+
+
+@pytest.mark.asyncio
 async def test_agent_output_report_is_unavailable_when_agent_did_not_complete() -> None:
     run = SimpleNamespace(
         id=uuid4(),
@@ -262,6 +371,40 @@ async def test_agent_output_plan_requires_an_active_agent() -> None:
         {"nodes": [{"id": "agent", "type": "sub_agent", "data": {}}]},
     )
     assert sub_agent.valid
+
+
+@pytest.mark.asyncio
+async def test_scalar_reported_metric_requires_a_projection() -> None:
+    plan = parse_measurement_plan(
+        {
+            "metrics": [
+                {
+                    "id": "quality",
+                    "name": "Quality",
+                    "value_type": "number",
+                    "direction": "maximize",
+                    "aggregation": "mean",
+                }
+            ],
+            "producers": [
+                {
+                    "id": "quality-source",
+                    "producer_id": "asaree.agent_output",
+                    "kind": "reported",
+                    "outputs": {"value": "quality"},
+                    "config": {"agent_node_id": "agent"},
+                }
+            ],
+            "inputs": [],
+        }
+    )
+
+    report = await validate_reported_measurement_plan(
+        plan,
+        {"nodes": [{"id": "agent", "type": "agent", "data": {}}]},
+    )
+
+    assert [issue.code for issue in report.issues] == ["reported_projection_missing"]
 
 
 async def _async_value(value):

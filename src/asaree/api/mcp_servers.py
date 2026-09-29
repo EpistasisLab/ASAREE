@@ -20,13 +20,30 @@ import asyncio
 import uuid
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import RedirectResponse
+from motoro.mcp.oauth import (
+    MCPAuthConfigurationError,
+    MCPAuthenticationError,
+    MCPOAuthCallbackError,
+    MCPOAuthDiscoveryError,
+    MCPOAuthStateError,
+    MCPReauthorizationRequiredError,
+)
 from motoro.mcp.registry import get_registry
+from motoro.security.mcp_credentials import MCPCredentialValidationError
 from motoro.services import mcp_service
-from motoro.services.mcp_service import MCPServerNameConflictError
-from pydantic import BaseModel
+from motoro.services.mcp_service import (
+    UNSET,
+    MCPOAuthClientMetadata,
+    MCPServerNameConflictError,
+    MCPServerNotFoundError,
+)
+from pydantic import BaseModel, Field
 
+from asaree.config import get_settings
 from asaree.deps import CurrentUser
 
 router = APIRouter(prefix="/mcp-servers", tags=["mcp-servers"])
@@ -58,6 +75,7 @@ class RegisterServerRequest(BaseModel):
     command: str | None = None
     url: str | None = None
     headers: dict[str, str] | None = None
+    server_env: dict[str, str] | None = None
 
 
 class UpdateServerRequest(BaseModel):
@@ -66,6 +84,30 @@ class UpdateServerRequest(BaseModel):
     command: str | None = None
     url: str | None = None
     headers: dict[str, str] | None = None
+    server_env: dict[str, str] | None = None
+
+
+class AuthenticationStatusResponse(BaseModel):
+    auth_mode: str
+    configured: bool
+    authorization_required: bool
+    static_headers_configured: bool
+    stdio_env_configured: bool
+    stdio_env_names: list[str]
+
+
+class OAuthStartRequest(BaseModel):
+    scope: str | None = Field(default=None, max_length=2000)
+
+
+class OAuthStartResponse(BaseModel):
+    authorization_url: str
+    expires_at: datetime
+    transaction_id: str
+
+
+class ClearCredentialsRequest(BaseModel):
+    revoke: bool = False
 
 
 class ServerResponse(BaseModel):
@@ -77,6 +119,8 @@ class ServerResponse(BaseModel):
     status: str
     error_message: str | None
     capabilities: dict[str, Any] | None
+    authentication: AuthenticationStatusResponse
+    credential_management_allowed: bool
     created_at: datetime
 
 
@@ -124,7 +168,10 @@ async def _capabilities_with_tool_annotations(config: Any, *, refresh: bool = Fa
     return capabilities
 
 
-async def _to_response(config: Any, *, refresh_annotations: bool = False) -> ServerResponse:
+async def _to_response(
+    config: Any, *, viewer_id: uuid.UUID | None = None, refresh_annotations: bool = False
+) -> ServerResponse:
+    auth = await mcp_service.get_authentication_status(config.id)
     return ServerResponse(
         id=config.id,
         name=config.name,
@@ -134,8 +181,31 @@ async def _to_response(config: Any, *, refresh_annotations: bool = False) -> Ser
         status=config.status.value,
         error_message=config.error_message,
         capabilities=await _capabilities_with_tool_annotations(config, refresh=refresh_annotations),
+        authentication=AuthenticationStatusResponse(
+            auth_mode=auth.auth_mode,
+            configured=auth.configured,
+            authorization_required=auth.authorization_required,
+            static_headers_configured=auth.static_headers_configured,
+            stdio_env_configured=auth.stdio_env_configured,
+            stdio_env_names=list(auth.stdio_env_names),
+        ),
+        credential_management_allowed=viewer_id is not None and config.owner_id == viewer_id,
         created_at=config.created_at,
     )
+
+
+def _raise_auth_http_error(exc: Exception) -> None:
+    if isinstance(exc, MCPServerNotFoundError):
+        raise HTTPException(status_code=404, detail="No such server") from exc
+    if isinstance(exc, MCPReauthorizationRequiredError):
+        raise HTTPException(status_code=409, detail="MCP OAuth authorization is required") from exc
+    if isinstance(exc, MCPOAuthDiscoveryError):
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if isinstance(exc, (MCPAuthConfigurationError, MCPCredentialValidationError)):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if isinstance(exc, MCPAuthenticationError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise exc
 
 
 @router.post("", response_model=ServerResponse, status_code=201)
@@ -149,19 +219,52 @@ async def register_server_endpoint(body: RegisterServerRequest, user: CurrentUse
             command=body.command,
             url=body.url,
             headers=body.headers,
+            server_env=body.server_env,
             owner_id=user.id,
         )
     except MCPServerNameConflictError as exc:
         raise HTTPException(status_code=409, detail="A server with this name already exists") from exc
+    except (MCPAuthenticationError, MCPCredentialValidationError, MCPServerNotFoundError) as exc:
+        _raise_auth_http_error(exc)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return await _to_response(config, refresh_annotations=True)
+    return await _to_response(config, viewer_id=user.id, refresh_annotations=True)
 
 
 @router.get("", response_model=list[ServerResponse])
 async def list_servers_endpoint(user: CurrentUser) -> list[ServerResponse]:
     servers = await mcp_service.list_servers(owner_id=user.id)
-    return list(await asyncio.gather(*(_to_response(s) for s in servers)))
+    return list(await asyncio.gather(*(_to_response(s, viewer_id=user.id) for s in servers)))
+
+
+@router.get("/oauth/callback", name="complete_mcp_oauth_callback")
+async def complete_oauth_callback(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    iss: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+) -> RedirectResponse:
+    """Consume the provider callback and return to the frontend popup route.
+
+    This endpoint is intentionally unauthenticated: the random, one-use OAuth
+    state is the callback credential. Motoro binds it to the owner and server.
+    """
+    settings = get_settings()
+    params: dict[str, str]
+    if error or not code or not state:
+        params = {"status": "error", "code": "authorization_rejected"}
+    else:
+        try:
+            config = await mcp_service.complete_oauth_authorization(code=code, state=state, iss=iss)
+            params = {"status": "success", "server_id": str(config.id)}
+        except MCPOAuthStateError:
+            params = {"status": "error", "code": "invalid_state"}
+        except MCPOAuthCallbackError:
+            params = {"status": "error", "code": "token_exchange_failed"}
+        except (MCPAuthenticationError, MCPServerNotFoundError, MCPReauthorizationRequiredError):
+            params = {"status": "error", "code": "authorization_failed"}
+    target = f"{settings.frontend_url.rstrip('/')}/mcp/oauth/callback?{urlencode(params)}"
+    return RedirectResponse(target, status_code=303)
 
 
 @router.get("/{server_id}", response_model=ServerResponse)
@@ -169,7 +272,7 @@ async def get_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> Server
     config = await mcp_service.get_server(server_id)
     if config is None or not _readable(config, user):
         raise HTTPException(status_code=404, detail="No such server")
-    return await _to_response(config)
+    return await _to_response(config, viewer_id=user.id)
 
 
 @router.patch("/{server_id}", response_model=ServerResponse)
@@ -184,14 +287,58 @@ async def update_server_endpoint(server_id: uuid.UUID, body: UpdateServerRequest
             transport=body.transport,
             command=body.command,
             url=body.url,
-            headers=body.headers,
+            headers=body.headers if "headers" in body.model_fields_set else UNSET,
+            server_env=body.server_env if "server_env" in body.model_fields_set else UNSET,
         )
     except MCPServerNameConflictError as exc:
         raise HTTPException(status_code=409, detail="A server with this name already exists") from exc
+    except (MCPAuthenticationError, MCPCredentialValidationError, MCPServerNotFoundError) as exc:
+        _raise_auth_http_error(exc)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     assert config is not None  # existence already checked above
-    return await _to_response(config, refresh_annotations=True)
+    return await _to_response(config, viewer_id=user.id, refresh_annotations=True)
+
+
+@router.post("/{server_id}/oauth/start", response_model=OAuthStartResponse)
+async def start_oauth_endpoint(
+    server_id: uuid.UUID, body: OAuthStartRequest, user: CurrentUser
+) -> OAuthStartResponse:
+    settings = get_settings()
+    try:
+        authorization = await mcp_service.begin_oauth_authorization(
+            server_id,
+            redirect_uri=settings.mcp_oauth_callback_url,
+            client_metadata=MCPOAuthClientMetadata(
+                client_name="ASAREE",
+                scope=body.scope,
+                client_uri=settings.frontend_url,
+            ),
+            client_metadata_url=settings.mcp_oauth_client_metadata_url,
+            owner_id=user.id,
+        )
+    except (MCPAuthenticationError, MCPCredentialValidationError, MCPServerNotFoundError) as exc:
+        _raise_auth_http_error(exc)
+        raise AssertionError("unreachable") from exc
+    return OAuthStartResponse(
+        authorization_url=authorization.authorization_url,
+        expires_at=authorization.expires_at,
+        transaction_id=authorization.transaction_id,
+    )
+
+
+@router.post("/{server_id}/credentials/clear", response_model=ServerResponse)
+async def clear_credentials_endpoint(
+    server_id: uuid.UUID, body: ClearCredentialsRequest, user: CurrentUser
+) -> ServerResponse:
+    try:
+        if body.revoke:
+            await mcp_service.clear_oauth_credentials(server_id, owner_id=user.id, revoke=True)
+        config = await mcp_service.clear_server_credentials(server_id, owner_id=user.id)
+    except (MCPAuthenticationError, MCPServerNotFoundError) as exc:
+        _raise_auth_http_error(exc)
+        raise AssertionError("unreachable") from exc
+    return await _to_response(config, viewer_id=user.id)
 
 
 @router.delete("/{server_id}", status_code=204)
@@ -209,7 +356,7 @@ async def refresh_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> Se
         raise HTTPException(status_code=404, detail="No such server")
     config = await mcp_service.refresh_server(server_id)
     assert config is not None
-    return await _to_response(config, refresh_annotations=True)
+    return await _to_response(config, viewer_id=user.id, refresh_annotations=True)
 
 
 @router.post("/{server_id}/reconnect", response_model=ServerResponse)
@@ -219,7 +366,7 @@ async def reconnect_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> 
         raise HTTPException(status_code=404, detail="No such server")
     config = await mcp_service.reconnect_server(server_id)
     assert config is not None
-    return await _to_response(config, refresh_annotations=True)
+    return await _to_response(config, viewer_id=user.id, refresh_annotations=True)
 
 
 @router.post("/{server_id}/tools/{tool_name}/call", response_model=CallToolResponse)
@@ -238,6 +385,8 @@ async def call_tool_endpoint(
         raise HTTPException(status_code=404, detail="No such server")
     try:
         outcome = await mcp_service.call_server_tool(server_id, tool_name, body.arguments)
+    except MCPReauthorizationRequiredError as exc:
+        raise HTTPException(status_code=409, detail="MCP OAuth authorization is required") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if outcome is None:

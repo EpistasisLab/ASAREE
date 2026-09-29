@@ -1,13 +1,13 @@
 # asaree-client
 
-A trimmed, synchronous SDK for ASAREE. It covers exactly the resources a
-driver notebook needs to run a factorial experiment end to end — agents,
-runs, experiments/cells/replicates, datasets, and MCP tool passthrough — not a full
-mirror of every ASAREE endpoint.
+A synchronous SDK for ASAREE. It covers the complete programmatic research
+workflow: agents and runs, experiments/designs/results, protocol publishing and
+execution, datasets and workspace lineage, MCP servers, Agent Skills, OKF
+knowledge, and per-user LLM settings.
 
-Deliberately not a copy of `ares_client`: ASAREE's runs execute inline
-(`POST /runs` returns only once the run is terminal), so `runs.wait()` here
-is a trivial re-fetch, not a poll loop. And the notebook's old
+Deliberately not a copy of `ares_client`: ASAREE's runs execute through a
+background worker (`POST /runs` returns while the run is pending), so
+`runs.wait()` polls until a terminal result. The notebook's old
 `client.runs.update(run_id, metadata=...)` calls have no equivalent — that
 data now belongs on a `FactorialReplicateResult` row, written via
 `client.experiments.upsert_replicate(...)`.
@@ -15,20 +15,22 @@ data now belongs on a `FactorialReplicateResult` row, written via
 ## Auth bootstrap
 
 ASAREE has no static server-wide API key; each user is provisioned once and
-issues their own token:
+issues their own token through an unauthenticated client:
 
-```bash
-curl -X POST $ASAREE_BASE_URL/api/users -d '{"email": "...", "password": "..."}'
-curl -X POST $ASAREE_BASE_URL/api/users/{user_id}/tokens -d '{"password": "..."}'
+```python
+from asaree_client import AsareeClient
+
+with AsareeClient(base_url="http://localhost:8000") as bootstrap:
+    user = bootstrap.users.create(email="researcher@example.com", password="secure-password")
+    credential = bootstrap.users.issue_token(user.id, password="secure-password")
+
+print(credential.token)  # Save once; the server never returns this value again.
 ```
 
-Every ASAREE route lives under `/api` (except `/health`) — the client
-already knows this and prepends it to every request; you only need it
-yourself for the one-time bootstrap above, made directly with curl.
-
-This is a one-time setup step, not something the SDK does — set the
-resulting token as `ASAREE_API_KEY` (sent as `X-API-Key`) for everything
-after that.
+Set the resulting token as `ASAREE_API_KEY` (sent as `X-API-Key`) for
+subsequent clients. Alternatively, use `client.auth.register()` and
+`client.auth.login()` for a refreshable Bearer session; successful login and
+refresh calls update that client automatically.
 
 ## Usage
 
@@ -42,6 +44,10 @@ experiment = client.experiments.create(name="tier-x-effort", factors=[
     {"name": "tier", "levels": ["baseline", "critic"]},
     {"name": "effort", "levels": ["low", "high"]},
 ])
+# Creation also provisions the experiment's empty protocol canvas. Retrieve it
+# to build the graph programmatically; the same canvas is immediately visible
+# when this user opens the experiment in the GUI.
+protocol = client.protocols.list(experiment_id=experiment.id)[0]
 replicates = client.experiments.generate_design(experiment.id)
 
 for replicate in replicates:
@@ -51,11 +57,32 @@ for replicate in replicates:
         run_id=run.id, metric_values={"roc_auc": 0.91},
     )
 
-results = client.experiments.analyze(
-    experiment.id,
-    condition_factors=["tier"],
-    positive_levels={"tier": "critic"},
-    reference_condition={"tier": "baseline"},
-    primary_metric="roc_auc",
+results = client.experiments.get_results(experiment.id)
+```
+
+For a refreshable account session instead of an API key:
+
+```python
+client = AsareeClient(base_url="http://localhost:8000")
+client.auth.login(email="researcher@example.com", password="secure-password")
+
+profile = client.auth.get_profile()
+client.auth.refresh()  # Rotates both the access and refresh tokens in-place.
+client.auth.logout()
+```
+
+MCP server credentials are write-only: responses report `server.authentication`
+metadata but never the stored values.
+
+```python
+server = client.tools.create_server(
+    name="search", transport="http", url="https://mcp.example/mcp",
+    headers={"Authorization": "Bearer ..."},
 )
+client.tools.update_server(server.id, headers=None)  # None clears; omit to keep.
+
+# OAuth: open the URL in any browser; ASAREE stores the tokens on callback.
+authorization = client.tools.begin_oauth(server.id, scope="tools.read")
+print(authorization.authorization_url)
+client.tools.clear_credentials(server.id, revoke=True)
 ```

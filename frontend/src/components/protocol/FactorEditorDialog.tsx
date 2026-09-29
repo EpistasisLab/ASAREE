@@ -597,7 +597,7 @@ export function FactorEditorDialog({
       ? seedStructuredLevels(field.currentValue, field.levelType)
       : seedLevels(field.currentValue)
     setLevels(nextLevels)
-    setLevelLabels(defaultFactorLevelLabels(nextName, nextLevels.length))
+    setLevelLabels(defaultFactorLevelLabels(nextName, nextLevels.length, field.levelType))
   }
 
   // Computed, not user-typed (see factorLevels.ts's computeFactorName) --
@@ -618,17 +618,18 @@ export function FactorEditorDialog({
     draftLevelLabels: string[],
     field?: UnboundField,
   ) {
+    const hasCanvasBaseline = pickableFields ? !!field : true
     const selectedIndexes =
       isStructuredLevelType(draftLevelType) || draftLevelType === 'boolean'
         ? draftLevels.map((_, index) => index)
-        : (draftLevels as string[]).flatMap((level, index) => (level.trim() ? [index] : []))
+        : (draftLevels as string[]).flatMap((level, index) => (index === 0 && hasCanvasBaseline) || level.trim() ? [index] : [])
     const parsedLevels =
       isStructuredLevelType(draftLevelType)
         ? draftLevels
         : draftLevelType === 'boolean'
-          ? [true, false]
+          ? [false, true]
           : selectedIndexes.map((index) => parseLevelValue((draftLevels as string[])[index], draftLevelType))
-    const defaults = defaultFactorLevelLabels(draftName, parsedLevels.length)
+    const defaults = defaultFactorLevelLabels(draftName, parsedLevels.length, draftLevelType)
     const labels = selectedIndexes.map((index, outputIndex) => draftLevelLabels[index]?.trim() || defaults[outputIndex])
     return { factor: { name: draftName, levels: parsedLevels, level_labels: labels, level_type: draftLevelType } satisfies DesignFactor, field }
   }
@@ -742,7 +743,7 @@ export function FactorEditorDialog({
               <div className="space-y-1.5">
                 <Label>Levels</Label>
                 {levelType === 'boolean' ? (
-                  <p className="text-xs text-muted-foreground">Levels: true, false</p>
+                  <p className="text-xs text-muted-foreground">Levels: false, true</p>
                 ) : levelType === 'text' ? (
                   <div className="space-y-2">
                     {promptScope && (
@@ -782,6 +783,7 @@ export function FactorEditorDialog({
                           variant="ghost"
                           size="icon-sm"
                           aria-label="Remove level"
+                          disabled={i === 0}
                           onClick={() => {
                             setLevels((ls) => ls.filter((_, j) => j !== i))
                             setLevelLabels((ls) => ls.filter((_, j) => j !== i))
@@ -796,7 +798,7 @@ export function FactorEditorDialog({
                       size="sm"
                       onClick={() => {
                         setLevels((ls) => [...ls, ''])
-                        setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(name, ls.length + 1)[ls.length]])
+                        setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(name, ls.length + 1, levelType)[ls.length]])
                       }}
                     >
                       <Plus className="size-3.5" /> Add level
@@ -859,6 +861,7 @@ export function FactorEditorDialog({
                           variant="ghost"
                           size="icon-sm"
                           aria-label="Remove level"
+                          disabled={i === 0}
                           onClick={() => {
                             setLevels((ls) => ls.filter((_, j) => j !== i))
                             setLevelLabels((ls) => ls.filter((_, j) => j !== i))
@@ -873,7 +876,7 @@ export function FactorEditorDialog({
                       size="sm"
                       onClick={() => {
                         setLevels((ls) => [...ls, emptyStructuredLevel(levelType)])
-                        setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(name, ls.length + 1)[ls.length]])
+                        setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(name, ls.length + 1, levelType)[ls.length]])
                       }}
                     >
                       <Plus className="size-3.5" /> Add level
@@ -899,6 +902,7 @@ export function FactorEditorDialog({
                           variant="ghost"
                           size="icon-sm"
                           aria-label="Remove level"
+                          disabled={i === 0}
                           onClick={() => {
                             setLevels((ls) => ls.filter((_, j) => j !== i))
                             setLevelLabels((ls) => ls.filter((_, j) => j !== i))
@@ -913,7 +917,7 @@ export function FactorEditorDialog({
                       size="sm"
                       onClick={() => {
                         setLevels((ls) => [...ls, ''])
-                        setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(name, ls.length + 1)[ls.length]])
+                        setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(name, ls.length + 1, levelType)[ls.length]])
                       }}
                     >
                       <Plus className="size-3.5" /> Add level

@@ -8,16 +8,17 @@ import { versionApi } from '@/api/client'
  * tag `v0.3.0a` comes back as `0.3.0a0`. Dropping that padding shows the tag
  * that was actually cut rather than a number nobody typed.
  *
- * `0.2.1.dev50+g8366ca1` -> `v0.2.1-dev50`: between tags hatch-vcs guesses the
- * next patch release and counts the commits since. Kept (rather than rounded to
- * the last real release) because "which build am I looking at" is the whole
- * point of the badge, and a dev build is exactly the case where the tag alone
- * would be a lie. The `+g<sha>` local part is dropped from the badge and kept
- * in its tooltip -- it's the part you only want when you're already suspicious.
+ * `0.2.0.post1.dev50+g8366ca1` -> `v0.2.0+50`: between tags hatch-vcs (with
+ * pyproject's `no-guess-dev` scheme) keeps the last real tag and counts the
+ * commits since. The count is kept (rather than rounded to the tag) because
+ * "which build am I looking at" is the whole point of the badge, and a dev
+ * build is exactly the case where the tag alone would be a lie. The `+g<sha>`
+ * local part is dropped from the badge and kept in its tooltip -- it's the part
+ * you only want when you're already suspicious.
  */
 function formatVersion(raw: string): string {
   const [publicPart] = raw.split('+')
-  return `v${publicPart.replace(/\.dev/, '-dev').replace(/(a|b|rc)0$/, '$1')}`
+  return `v${publicPart.replace(/\.post\d+\.dev(\d+)$/, '+$1').replace(/(a|b|rc)0(?=$|\+)/, '$1')}`
 }
 
 /** The running build's version, pinned to the very top-right of the viewport.
@@ -36,12 +37,15 @@ export function AppVersionBadge() {
   const { data } = useQuery({
     queryKey: ['app-version'],
     queryFn: versionApi.get,
-    // A build can't change under a running tab, so this is fetched once per
-    // session and never revalidated. Failure is silent: a missing badge is a
-    // better outcome than an error toast over the login form.
+    // A build can't change under a running tab, so once fetched this is never
+    // revalidated. Failure is silent (a missing badge beats an error toast over
+    // the login form) but not final: a tab opened while the backend is still
+    // starting -- e.g. right after `docker compose up` -- would otherwise keep
+    // that one refused request, and no badge, until a manual reload. Retry
+    // indefinitely on react-query's default backoff (capped at 30s).
     staleTime: Infinity,
     gcTime: Infinity,
-    retry: false,
+    retry: true,
   })
 
   if (!data?.version) return null

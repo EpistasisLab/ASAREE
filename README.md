@@ -87,7 +87,7 @@ docker compose up -d    # picks up the changed .env
 ```
 
 **5. Run an experiment.** Follow the worked myocardial-infarction use case in
-[`publications/bioinformatics/README.md`](publications/bioinformatics/README.md)
+[`publications/BDM/README.md`](publications/BDM/README.md)
 — five agents in series building a classifier on a public dataset. It picks up
 exactly where this step leaves off.
 
@@ -201,4 +201,4 @@ You're now at true zero. To get back to a working state:
 2. Re-add the LLM credential, then re-run a use case notebook's early setup
    cells (experiment, dataset, agent creation) — or, for the public
    myocardial-infarction use case, follow its walkthrough:
-   [`publications/bioinformatics/README.md`](publications/bioinformatics/README.md).
+   [`publications/BDM/README.md`](publications/BDM/README.md).

@@ -55,10 +55,17 @@ def validate_factor_bindings(design_spec: dict[str, Any] | None, graph: dict[str
                     "published canvas. Remove the stale binding or restore the field."
                 )
             levels = factor.get("levels") or []
-            if not any(published_value == level for level in levels):
+            level_type = factor.get("level_type") or "string"
+            # Mirrors the frontend's isBooleanFactor: legacy factors predate
+            # level_type, and either ordering of the two booleans is boolean.
+            legacy_boolean = (
+                "level_type" not in factor and len(levels) == 2 and all(isinstance(level, bool) for level in levels)
+            )
+            if level_type != "boolean" and not legacy_boolean and (not levels or published_value != levels[0]):
                 raise ValueError(
                     f"{label!r} field {field_path!r} is bound to factor {factor_name!r}, but its published value "
-                    "does not match any declared level. Update the factor levels and regenerate the design, or "
+                    "does not match the first (canvas baseline) level. Update the factor levels and regenerate "
+                    "the design, or "
                     "remove the binding before publishing or running."
                 )
 

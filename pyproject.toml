@@ -2,9 +2,9 @@
 name = "asaree"
 # Derived from the git tag by hatch-vcs (see [tool.hatch.version]), same as
 # Motoro. Nothing to edit when cutting a release: tag it and the version
-# follows. Between tags this reads as a dev version (0.2.1.dev4+g<sha>), which
-# is the point -- it names the exact build rather than whatever number was last
-# typed here.
+# follows. Between tags this reads as a post-release dev version
+# (0.2.0.post1.dev4+g<sha>), which is the point -- it names the exact build
+# rather than whatever number was last typed here.
 dynamic = ["version"]
 description = "ASAREE — the product built on Motoro."
 readme = "README.md"
@@ -94,7 +94,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-motoro = { git = "https://github.com/EpistasisLab/motoro.git", tag = "v0.8.0" }
+motoro = { git = "https://github.com/EpistasisLab/motoro.git", tag = "v0.9.0" }
 asaree-workspace-core = { path = "workspace-core", editable = true }
 # Every mcp-servers/ package is declared here, including asaree-sklearn-core
 # (which the six servers each depend on): uv resolves `tool.uv.sources` from
@@ -116,6 +116,22 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 source = "vcs"
+# `no-guess-dev` rather than the default `guess-next-dev`: between tags the
+# default invents the next patch (v0.7.0 + 17 commits -> 0.7.1.dev17), naming a
+# release nobody cut. This keeps the last real tag (0.7.0.post1.dev17), which
+# still sorts after 0.7.0 under PEP 440.
+raw-options = { version_scheme = "no-guess-dev" }
+
+# uv reuses its cached build of this project until a cache key changes, and by
+# default the only keys are pyproject.toml/setup.py/setup.cfg. The version lives
+# in git, not in any of those files, so without the git keys a new commit or tag
+# silently reused the old build -- and the Docker image kept reporting whatever
+# version was stamped the last time pyproject.toml changed.
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { git = { commit = true, tags = true } },
+]
 
 # Generated at build time, gitignored, and shipped in the wheel so an installed
 # app can report its own version without the git metadata it was built from.

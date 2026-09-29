@@ -1,9 +1,8 @@
 """Retry transport for the sync HTTP client.
 
-Trimmed from ares_client._transport: sync-only (no AsyncRetryTransport), and
-build_headers supports only X-API-Key — ASAREE's ``get_current_user`` dep
-(asaree.deps) never reads an Authorization header, so there is no second
-auth method to plumb through.
+Trimmed from ares_client._transport: sync-only (no AsyncRetryTransport).
+ASAREE accepts either a long-lived API key or a short-lived Bearer access
+token, so both authentication modes are supported here.
 """
 
 from __future__ import annotations
@@ -29,6 +28,7 @@ from asaree_client.exceptions import (
 )
 
 _DEFAULT_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
 
 
 @dataclass
@@ -91,16 +91,18 @@ def raise_for_status(response: httpx.Response) -> None:
 
 
 def _effective_max_retries(request: httpx.Request, policy: RetryPolicy) -> int:
-    """Per-request retry override: a truthy ``asaree_no_retry`` extension forces 0.
+    """Retry safe methods by default; require an explicit opt-in for others.
 
-    Callers set ``extensions={"asaree_no_retry": True}`` on a request (e.g. a
-    long, non-idempotent direct tool invocation like ``run_model_script``) to
-    opt out of automatic retries while keeping the client-wide policy for
-    everything else.
+    A timed-out POST may already have created or enqueued work server-side, so
+    replaying it can duplicate runs, uploads, artifacts, or tokens. Callers
+    may deliberately opt a known-safe non-idempotent method in with
+    ``asaree_allow_retry``; ``asaree_no_retry`` always wins.
     """
     if request.extensions.get("asaree_no_retry"):
         return 0
-    return policy.max_retries
+    if request.method in _IDEMPOTENT_METHODS or request.extensions.get("asaree_allow_retry"):
+        return policy.max_retries
+    return 0
 
 
 class RetryTransport(httpx.BaseTransport):
@@ -134,12 +136,14 @@ class RetryTransport(httpx.BaseTransport):
         self._transport.close()
 
 
-def build_headers(api_key: str | None) -> dict[str, str]:
+def build_headers(api_key: str | None, access_token: str | None = None) -> dict[str, str]:
     from asaree_client import __version__
 
     headers = {"User-Agent": f"asaree-client/{__version__}"}
     if api_key:
         headers["X-API-Key"] = api_key
+    elif access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
     return headers
 
 
@@ -154,11 +158,12 @@ def build_sync_client(
     api_key: str | None,
     timeout: float | httpx.Timeout,
     policy: RetryPolicy | None = None,
+    access_token: str | None = None,
 ) -> httpx.Client:
     transport = RetryTransport(httpx.HTTPTransport(), policy=policy or RetryPolicy())
     return httpx.Client(
         base_url=base_url,
-        headers=build_headers(api_key),
+        headers=build_headers(api_key, access_token),
         timeout=_build_timeout(timeout),
         transport=transport,
     )

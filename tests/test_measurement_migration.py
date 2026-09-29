@@ -16,6 +16,46 @@ def test_legacy_declarations_are_not_migrated_into_measurement_plans() -> None:
     assert normalize_experiment_measurement_plan(None, metrics) == {"metrics": [], "producers": [], "inputs": []}
 
 
+def test_projected_reported_metrics_keep_their_scalar_contract() -> None:
+    plan = normalize_experiment_measurement_plan(
+        {
+            "metrics": [
+                {
+                    "id": "pr-auc",
+                    "name": "pr_auc",
+                    "value_type": "number",
+                    "direction": "maximize",
+                    "aggregation": "mean",
+                    "primary": True,
+                }
+            ],
+            "producers": [
+                {
+                    "id": "score",
+                    "producer_id": "asaree.mcp_tool",
+                    "kind": "reported",
+                    "outputs": {"pr_auc": "pr-auc"},
+                    "config": {
+                        "agent_node_id": "agent",
+                        "projections": {"pr_auc": {"path": "test_metrics.average_precision"}},
+                    },
+                }
+            ],
+            "inputs": [],
+        },
+        (),
+    )
+
+    assert plan["metrics"][0] == {
+        "id": "pr-auc",
+        "name": "pr_auc",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": True,
+    }
+
+
 def test_historical_values_and_artifacts_gain_legacy_unknown_provenance() -> None:
     metrics = [{"name": "Clinical quality", "kind": "custom", "direction": "maximize"}]
 

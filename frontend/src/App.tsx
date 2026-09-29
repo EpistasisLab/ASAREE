@@ -6,6 +6,7 @@ import { RegisterPage } from '@/pages/RegisterPage'
 import { ProfilePage } from '@/pages/ProfilePage'
 import { ExperimentsPage } from '@/pages/ExperimentsPage'
 import { ProtocolCanvasPage } from '@/pages/ProtocolCanvasPage'
+import { McpOAuthCallbackPage } from '@/pages/McpOAuthCallbackPage'
 
 export function App() {
   return (
@@ -16,6 +17,7 @@ export function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/mcp/oauth/callback" element={<McpOAuthCallbackPage />} />
         <Route element={<ProtectedRoute />}>
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/experiments" element={<ExperimentsPage />} />

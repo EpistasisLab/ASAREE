@@ -13,13 +13,21 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from asaree_client.models import DesignRevision, Experiment, ExperimentArtifact, Replicate
+from asaree_client._sentinel import UNSET, UnsetType
+from asaree_client.models import (
+    DesignImpact,
+    DesignRevision,
+    Experiment,
+    ExperimentArtifact,
+    ExperimentResults,
+    ExperimentRunResults,
+    MeasurementCapabilities,
+    MeasurementPlanValidation,
+    Replicate,
+    Trial,
+)
 
 ResourceId = uuid.UUID | str
-# Distinguishes "omit this kwarg" (leave unchanged) from "pass None"
-# (explicitly clear/detach) in update() below -- a plain default of None
-# can't tell those apart.
-_UNSET: Any = object()
 
 
 class Experiments:
@@ -29,15 +37,17 @@ class Experiments:
     def create(
         self,
         *,
-        name: str,
+        name: str | None = None,
         description: str | None = None,
         design_type: str = "factorial",
         task_brief: dict[str, Any] | None = None,
         factors: builtins.list[dict[str, Any]] | None = None,
         measurement_plan: dict[str, Any] | None = None,
-        dataset_ids: builtins.list[ResourceId] | None = None,
     ) -> Experiment:
-        payload: dict[str, Any] = {"name": name, "design_type": design_type}
+        """Create an experiment and its linked empty protocol canvas atomically."""
+        payload: dict[str, Any] = {"design_type": design_type}
+        if name is not None:
+            payload["name"] = name
         if description is not None:
             payload["description"] = description
         if task_brief is not None:
@@ -46,8 +56,6 @@ class Experiments:
             payload["factors"] = factors
         if measurement_plan is not None:
             payload["measurement_plan"] = measurement_plan
-        if dataset_ids is not None:
-            payload["dataset_ids"] = [str(d) for d in dataset_ids]
         data = self._client._post("/experiments", json=payload)
         return Experiment(**data)
 
@@ -55,9 +63,39 @@ class Experiments:
         data = self._client._get(f"/experiments/{experiment_id}")
         return Experiment(**data)
 
-    def list(self) -> builtins.list[Experiment]:
-        data = self._client._get("/experiments")
+    def list(self, *, include_archived: bool = False) -> builtins.list[Experiment]:
+        params = {"include_archived": True} if include_archived else None
+        data = self._client._get("/experiments", params=params)
         return [Experiment(**e) for e in data]
+
+    def import_definition(
+        self,
+        *,
+        name: str,
+        graph: dict[str, Any],
+        description: str | None = None,
+        hypothesis: str | None = None,
+        design_type: str = "factorial",
+        task_brief: dict[str, Any] | None = None,
+        design_spec: dict[str, Any] | None = None,
+        measurement_plan: dict[str, Any] | None = None,
+        published_graph: dict[str, Any] | None = None,
+        protocol_description: str | None = None,
+    ) -> Experiment:
+        payload: dict[str, Any] = {"name": name, "graph": graph, "design_type": design_type}
+        for key, value in {
+            "description": description,
+            "hypothesis": hypothesis,
+            "task_brief": task_brief,
+            "design_spec": design_spec,
+            "measurement_plan": measurement_plan,
+            "published_graph": published_graph,
+            "protocol_description": protocol_description,
+        }.items():
+            if value is not None:
+                payload[key] = value
+        data = self._client._post("/experiments/import-definition", json=payload)
+        return Experiment(**data)
 
     def delete(self, experiment_id: ResourceId) -> None:
         self._client._delete(f"/experiments/{experiment_id}")
@@ -66,14 +104,16 @@ class Experiments:
         self,
         experiment_id: ResourceId,
         *,
-        name: str | None = _UNSET,
-        description: str | None = _UNSET,
-        hypothesis: str | None = _UNSET,
-        dataset_ids: builtins.list[ResourceId] | None = _UNSET,
-        dataset_id: ResourceId | None = _UNSET,
-        design_spec: dict[str, Any] | None = _UNSET,
-        measurement_plan: dict[str, Any] | None = _UNSET,
-        archived_at: datetime | None = _UNSET,
+        name: str | None | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
+        hypothesis: str | None | UnsetType = UNSET,
+        dataset_ids: builtins.list[ResourceId] | None | UnsetType = UNSET,
+        dataset_id: ResourceId | None | UnsetType = UNSET,
+        design_spec: dict[str, Any] | None | UnsetType = UNSET,
+        measurement_plan: dict[str, Any] | None | UnsetType = UNSET,
+        measurement_validation_protocol_id: ResourceId | None | UnsetType = UNSET,
+        metric_recommendations: dict[str, Any] | None | UnsetType = UNSET,
+        archived_at: datetime | None | UnsetType = UNSET,
     ) -> Experiment:
         """Only the fields actually passed are sent (omit one to leave it
         unchanged; pass ``None`` explicitly to clear/detach it) --
@@ -93,26 +133,40 @@ class Experiments:
         longer exposes ``delete()`` at all, to prevent accidental data
         loss; it's still here for scripted cleanup)."""
         payload: dict[str, Any] = {}
-        if name is not _UNSET:
+        if not isinstance(name, UnsetType):
             payload["name"] = name
-        if description is not _UNSET:
+        if not isinstance(description, UnsetType):
             payload["description"] = description
-        if hypothesis is not _UNSET:
+        if not isinstance(hypothesis, UnsetType):
             payload["hypothesis"] = hypothesis
-        if dataset_ids is not _UNSET:
+        if not isinstance(dataset_ids, UnsetType):
             payload["dataset_ids"] = [str(d) for d in dataset_ids] if dataset_ids else []
-        if dataset_id is not _UNSET:
+        if not isinstance(dataset_id, UnsetType):
             payload["dataset_id"] = str(dataset_id) if dataset_id else None
-        if design_spec is not _UNSET:
+        if not isinstance(design_spec, UnsetType):
             payload["design_spec"] = design_spec
-        if measurement_plan is not _UNSET:
+        if not isinstance(measurement_plan, UnsetType):
             payload["measurement_plan"] = measurement_plan
-        if archived_at is not _UNSET:
+        if not isinstance(measurement_validation_protocol_id, UnsetType):
+            payload["measurement_validation_protocol_id"] = (
+                str(measurement_validation_protocol_id) if measurement_validation_protocol_id else None
+            )
+        if not isinstance(metric_recommendations, UnsetType):
+            payload["metric_recommendations"] = metric_recommendations
+        if not isinstance(archived_at, UnsetType):
             payload["archived_at"] = archived_at.isoformat() if archived_at else None
         data = self._client._patch(f"/experiments/{experiment_id}", json=payload)
         return Experiment(**data)
 
-    def generate_design(self, experiment_id: ResourceId) -> builtins.list[Replicate]:
+    def generate_design(
+        self,
+        experiment_id: ResourceId,
+        *,
+        hypothesis: str | None | UnsetType = UNSET,
+        design_spec: dict[str, Any] | None | UnsetType = UNSET,
+        measurement_plan: dict[str, Any] | None | UnsetType = UNSET,
+        measurement_validation_protocol_id: ResourceId | None | UnsetType = UNSET,
+    ) -> builtins.list[Replicate]:
         """Materialize one cell per combination of the experiment's declared
         factors and their replicate results, returning the current replicates.
 
@@ -123,8 +177,51 @@ class Experiments:
         superseded revision as history (see ``list_design_revisions``). Nothing
         is deleted, and the returned list is always exactly the new design.
         """
-        data = self._client._post(f"/experiments/{experiment_id}/generate-design")
+        payload: dict[str, Any] = {}
+        for key, value in {
+            "hypothesis": hypothesis,
+            "design_spec": design_spec,
+            "measurement_plan": measurement_plan,
+        }.items():
+            if not isinstance(value, UnsetType):
+                payload[key] = value
+        if not isinstance(measurement_validation_protocol_id, UnsetType):
+            payload["measurement_validation_protocol_id"] = (
+                str(measurement_validation_protocol_id) if measurement_validation_protocol_id else None
+            )
+        kwargs = {"json": payload} if payload else {}
+        data = self._client._post(f"/experiments/{experiment_id}/generate-design", **kwargs)
         return [Replicate(**replicate) for replicate in data]
+
+    def get_design_impact(self, experiment_id: ResourceId) -> DesignImpact:
+        data = self._client._get(f"/experiments/{experiment_id}/design-impact")
+        return DesignImpact(**data)
+
+    def validate_measurement_plan(
+        self,
+        experiment_id: ResourceId,
+        *,
+        measurement_plan: dict[str, Any] | None,
+        metrics: builtins.list[dict[str, Any]],
+        graph: dict[str, Any],
+    ) -> MeasurementPlanValidation:
+        data = self._client._post(
+            f"/experiments/{experiment_id}/measurement-plan/validate",
+            json={"measurement_plan": measurement_plan, "metrics": metrics, "graph": graph},
+        )
+        return MeasurementPlanValidation(**data)
+
+    def get_measurement_capabilities(self, experiment_id: ResourceId) -> MeasurementCapabilities:
+        data = self._client._get(f"/experiments/{experiment_id}/measurement-capabilities")
+        return MeasurementCapabilities(**data)
+
+    def lock(self, experiment_id: ResourceId) -> Experiment:
+        data = self._client._post(f"/experiments/{experiment_id}/lock")
+        return Experiment(**data)
+
+    def unlock(self, experiment_id: ResourceId) -> Experiment:
+        data = self._client._post(f"/experiments/{experiment_id}/unlock")
+        return Experiment(**data)
 
     def list_design_revisions(self, experiment_id: ResourceId) -> builtins.list[DesignRevision]:
         """Every generation of this experiment's design, newest first. The
@@ -143,25 +240,25 @@ class Experiments:
         experiment_id: ResourceId,
         replicate_label: str,
         *,
-        run_id: ResourceId | None = None,
-        workspace_id: str | None = None,
-        factor_values: dict[str, Any] | None = None,
-        metric_values: dict[str, Any] | None = None,
-        artifacts: dict[str, Any] | None = None,
+        run_id: ResourceId | None | UnsetType = UNSET,
+        workspace_id: str | None | UnsetType = UNSET,
+        factor_values: dict[str, Any] | None | UnsetType = UNSET,
+        metric_values: dict[str, Any] | None | UnsetType = UNSET,
+        artifacts: dict[str, Any] | None | UnsetType = UNSET,
     ) -> Replicate:
         """Merge fields onto a replicate-result row — pass just what changed; unset
         fields are left untouched (a pre-scoring call and a post-scoring
         call land on the same row without either erasing the other)."""
         payload: dict[str, Any] = {}
-        if run_id is not None:
-            payload["run_id"] = str(run_id)
-        if workspace_id is not None:
+        if not isinstance(run_id, UnsetType):
+            payload["run_id"] = str(run_id) if run_id else None
+        if not isinstance(workspace_id, UnsetType):
             payload["workspace_id"] = workspace_id
-        if factor_values is not None:
+        if not isinstance(factor_values, UnsetType):
             payload["factor_values"] = factor_values
-        if metric_values is not None:
+        if not isinstance(metric_values, UnsetType):
             payload["metric_values"] = metric_values
-        if artifacts is not None:
+        if not isinstance(artifacts, UnsetType):
             payload["artifacts"] = artifacts
         data = self._client._put(f"/experiments/{experiment_id}/replicates/{replicate_label}", json=payload)
         return Replicate(**data)
@@ -212,9 +309,7 @@ class Experiments:
             payload["cost_keys"] = cost_keys
         return self._client._post(f"/experiments/{experiment_id}/analyze", json=payload)  # type: ignore[no-any-return]
 
-    def create_artifact(
-        self, experiment_id: ResourceId, *, name: str, kind: str, content: str
-    ) -> ExperimentArtifact:
+    def create_artifact(self, experiment_id: ResourceId, *, name: str, kind: str, content: str) -> ExperimentArtifact:
         """A durable landing spot for anything worth keeping past one run --
         e.g. ``analyze(...)``'s own result (``kind="analyze_result"``,
         ``content=json.dumps(result)``) or a flattened CSV export
@@ -236,3 +331,22 @@ class Experiments:
 
     def delete_artifact(self, experiment_id: ResourceId, artifact_id: ResourceId) -> None:
         self._client._delete(f"/experiments/{experiment_id}/artifacts/{artifact_id}")
+
+    def list_trials(self, experiment_id: ResourceId) -> builtins.list[Trial]:
+        data = self._client._get(f"/experiments/{experiment_id}/runs")
+        return [Trial(**trial) for trial in data]
+
+    def get_results(self, experiment_id: ResourceId) -> ExperimentResults:
+        return ExperimentResults(**self._client._get(f"/experiments/{experiment_id}/results"))
+
+    def get_run_results(self, experiment_id: ResourceId) -> ExperimentRunResults:
+        return ExperimentRunResults(**self._client._get(f"/experiments/{experiment_id}/run-results"))
+
+    def get_run_results_schema(self, experiment_id: ResourceId) -> dict[str, Any]:
+        return self._client._get(f"/experiments/{experiment_id}/run-results.schema.json")  # type: ignore[no-any-return]
+
+    def download_run_results_csv(self, experiment_id: ResourceId) -> bytes:
+        return self._client._get_bytes(f"/experiments/{experiment_id}/run-results.csv")  # type: ignore[no-any-return]
+
+    def download_replicates_csv(self, experiment_id: ResourceId) -> bytes:
+        return self._client._get_bytes(f"/experiments/{experiment_id}/replicates.csv")  # type: ignore[no-any-return]

@@ -670,7 +670,13 @@ async def finalize_attempt_measurement(
     attempt_result = dict(run.attempt_result or {})
     attempt_result["evaluation_summary"] = {"cost_usd": 0.0}
     run.attempt_result = attempt_result
-    await record_measurement_evaluation(db, run.id, evaluation)
+    primary_metric_id = next((metric.id for metric in declared.metrics if metric.primary), None)
+    await record_measurement_evaluation(
+        db,
+        run.id,
+        evaluation,
+        required_metric_id=primary_metric_id,
+    )
     completed_result = dict(run.attempt_result or {})
     completed_result["evaluation_state"] = "completed"
     run.attempt_result = completed_result

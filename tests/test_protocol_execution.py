@@ -408,6 +408,15 @@ def test_a_deactivated_node_passes_its_input_through_with_no_label_of_its_own() 
     assert pe._upstream_output_text(graph, "b", {"a": {"output_text": "draft text here"}}) == "draft text here"
 
 
+def test_a_deactivated_node_passes_a_payload_only_input_through_as_its_fields() -> None:
+    a = _node("a", "agent", {"prompt": "Count it"}, label="Counter")
+    b = _node("b", "agent", {"prompt": "Polish it"}, label="Editor")
+    b["data"]["active"] = False
+    graph = {"nodes": [a, b], "edges": _edges(("a", "b"))}
+    node_runs = {"a": {"output_text": "", "payload": {"n_rows": 4300}}}
+    assert pe._upstream_output_text(graph, "b", node_runs) == "Structured fields: n_rows=4300"
+
+
 def test_a_reader_downstream_of_a_deactivated_node_sees_that_nodes_name() -> None:
     """Attribution follows the graph the run actually walked, not the graph the
     user would have drawn with the node removed. Naming the deactivated node is
@@ -1225,6 +1234,46 @@ async def test_gated_worker_approved_first_attempt(monkeypatch: pytest.MonkeyPat
     assert critic_calls == ["worker output v1"]
 
 
+async def test_gated_worker_sends_and_forwards_payload_only_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    critic_calls = []
+
+    async def fake_run_agent_node(node, **kwargs):
+        return "", None, None, {"payload": {"score": 0.91}}
+
+    async def fake_run_critic(gate, **kwargs):
+        critic_calls.append(kwargs["worker_output"])
+        return {"approved": True, "feedback": "", "rejection_scope": ""}, None, "critic-run-1"
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+    monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
+
+    worker_run, gate_run = await _run(*_worker_gate())
+
+    assert critic_calls == ["Structured fields: score=0.91"]
+    assert worker_run["output_text"] == ""
+    assert worker_run["payload"] == {"score": 0.91}
+    assert gate_run["output_text"] == ""
+    assert gate_run["payload"] == {"score": 0.91}
+
+
+@pytest.mark.parametrize(("max_revisions", "enabled"), [(0, True), (1, False)])
+async def test_gated_worker_forwards_payload_when_review_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, max_revisions: int, enabled: bool
+) -> None:
+    async def fake_run_agent_node(node, **kwargs):
+        return "", None, None, {"payload": {"score": 0.91}}
+
+    async def unexpected_critic_call(gate, **kwargs):
+        raise AssertionError("the critic should not run")
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+    monkeypatch.setattr(pe, "_run_critic", unexpected_critic_call)
+
+    _worker_run, gate_run = await _run(*_worker_gate(max_revisions=max_revisions, enabled=enabled))
+
+    assert gate_run["payload"] == {"score": 0.91}
+
+
 async def test_gated_worker_rejected_then_approved_on_revision(monkeypatch: pytest.MonkeyPatch) -> None:
     instructions = []
     critic_calls = []
@@ -1266,6 +1315,26 @@ async def test_gated_worker_rejected_then_approved_on_revision(monkeypatch: pyte
     assert "fix the header" in instructions[1]
     assert "targeted correction" in instructions[1]  # "partial" scope clause
     assert "worker output v1" in instructions[1]  # previous output included for reference
+
+
+async def test_gated_worker_revision_includes_payload_only_previous_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    instructions = []
+
+    async def fake_run_agent_node(node, *, user_input, **_kwargs):
+        instructions.append(user_input)
+        return "", None, None, {"payload": {"score": len(instructions)}}
+
+    async def fake_run_critic(gate, **_kwargs):
+        if len(instructions) == 1:
+            return {"approved": False, "feedback": "raise the score", "rejection_scope": "partial"}, None, "critic-1"
+        return {"approved": True, "feedback": "", "rejection_scope": ""}, None, "critic-2"
+
+    monkeypatch.setattr(pe, "_run_agent_node", fake_run_agent_node)
+    monkeypatch.setattr(pe, "_run_critic", fake_run_critic)
+
+    await _run(*_worker_gate(max_revisions=2))
+
+    assert "Structured fields: score=1" in instructions[1]
 
 
 async def test_gated_worker_force_accepts_without_final_critic_call(monkeypatch: pytest.MonkeyPatch) -> None:

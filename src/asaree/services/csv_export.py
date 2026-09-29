@@ -423,9 +423,7 @@ def result_rows_schema(
                         "value_type": (
                             "string"
                             if key in script_columns
-                            else "opaque"
-                            if key in reported_keys
-                            else (metric_types or {}).get(key, "number")
+                            else (metric_types or {}).get(key, "opaque" if key in reported_keys else "number")
                         ),
                         **(
                             {}

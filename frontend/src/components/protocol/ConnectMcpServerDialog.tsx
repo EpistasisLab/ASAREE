@@ -1,12 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plug, Terminal } from 'lucide-react'
+import { KeyRound, Plug, ShieldCheck, Terminal } from 'lucide-react'
 import { ApiError, mcpServersApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
+import { authorizeMcpServer } from '@/lib/mcpOAuth'
+import { credentialsAreValid, credentialsRecord, emptyCredentialEntry, type CredentialEntry } from '@/lib/mcpCredentials'
+import { McpCredentialFields } from './McpCredentialFields'
 import type { McpServer } from '@/types/mcpServers'
 
 // The two transports an MCP client can speak here. Core's MCPTransport also
@@ -37,6 +40,15 @@ const TRANSPORTS = [
 // than discovered by submitting a command and reading a 422 back.
 const ALLOWED_EXECUTABLES = 'python, python3, python3.11, python3.12, uv, node, npx, npm'
 
+type AuthMode = 'none' | 'bearer' | 'headers' | 'oauth' | 'env'
+
+const HTTP_AUTH_MODES: { value: AuthMode; label: string; hint: string }[] = [
+  { value: 'none', label: 'None', hint: 'Connect without credentials.' },
+  { value: 'bearer', label: 'Bearer token', hint: 'Send an Authorization: Bearer header.' },
+  { value: 'headers', label: 'Headers', hint: 'Send one or more API-key or custom authentication headers.' },
+  { value: 'oauth', label: 'OAuth', hint: 'Authorize through the server’s standards-based browser flow.' },
+]
+
 // Registers a brand-new MCP server connection the user types in, then hands it
 // back so the caller can place an MCP Client Tool node bound to it.
 //
@@ -59,11 +71,24 @@ export function ConnectMcpServerDialog({
   const [transport, setTransport] = useState('stdio')
   const [command, setCommand] = useState('')
   const [url, setUrl] = useState('')
+  const [authMode, setAuthMode] = useState<AuthMode>('none')
+  const [bearerToken, setBearerToken] = useState('')
+  const [credentials, setCredentials] = useState<CredentialEntry[]>([emptyCredentialEntry()])
+  const [oauthScope, setOauthScope] = useState('')
+  const [oauthServer, setOauthServer] = useState<McpServer | null>(null)
+  const [oauthPending, setOauthPending] = useState(false)
+  const [oauthError, setOauthError] = useState<string | null>(null)
+  const [oauthDetached, setOauthDetached] = useState(false)
+  const oauthAbortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => oauthAbortRef.current?.abort(), [])
   const queryClient = useQueryClient()
 
   const isStdio = transport === 'stdio'
   const endpoint = isStdio ? command.trim() : url.trim()
-  const canSubmit = name.trim().length > 0 && endpoint.length > 0
+  const authIsValid = authMode === 'none' || authMode === 'oauth'
+    || (authMode === 'bearer' && bearerToken.length > 0)
+    || ((authMode === 'headers' || authMode === 'env') && credentialsAreValid(credentials))
+  const canSubmit = name.trim().length > 0 && endpoint.length > 0 && authIsValid
 
   const connectMutation = useMutation({
     mutationFn: () =>
@@ -72,9 +97,17 @@ export function ConnectMcpServerDialog({
         transport,
         command: isStdio ? command.trim() : null,
         url: isStdio ? null : url.trim(),
+        headers: !isStdio && authMode === 'bearer'
+          ? { Authorization: `Bearer ${bearerToken}` }
+          : !isStdio && authMode === 'headers' ? credentialsRecord(credentials) : null,
+        server_env: isStdio && authMode === 'env' ? credentialsRecord(credentials) : null,
       }),
     onSuccess: (server) => {
       queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+      if (authMode === 'oauth') {
+        setOauthServer(server)
+        return
+      }
       onConnected?.(server)
       reset()
       onOpenChange(false)
@@ -82,11 +115,47 @@ export function ConnectMcpServerDialog({
   })
 
   function reset() {
+    oauthAbortRef.current?.abort()
     setName('')
     setTransport('stdio')
     setCommand('')
     setUrl('')
+    setAuthMode('none')
+    setBearerToken('')
+    setCredentials([emptyCredentialEntry()])
+    setOauthScope('')
+    setOauthServer(null)
+    setOauthPending(false)
+    setOauthError(null)
     connectMutation.reset()
+  }
+
+  async function authorizeOAuth() {
+    if (!oauthServer || oauthPending) return
+    setOauthPending(true)
+    setOauthError(null)
+    setOauthDetached(false)
+    const controller = new AbortController()
+    oauthAbortRef.current = controller
+    try {
+      await authorizeMcpServer(oauthServer.id, oauthScope.trim() || undefined, {
+        signal: controller.signal,
+        onDetached: () => setOauthDetached(true),
+      })
+      const connected = await mcpServersApi.get(oauthServer.id)
+      queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
+      onConnected?.(connected)
+      reset()
+      onOpenChange(false)
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setOauthError(error instanceof Error ? error.message : 'MCP authorization failed.')
+      }
+    } finally {
+      if (oauthAbortRef.current === controller) oauthAbortRef.current = null
+      setOauthDetached(false)
+      setOauthPending(false)
+    }
   }
 
   const errorMessage = !connectMutation.isError
@@ -119,6 +188,7 @@ export function ConnectMcpServerDialog({
             if (canSubmit && !connectMutation.isPending) connectMutation.mutate()
           }}
         >
+          {!oauthServer && <>
           <div className="space-y-1.5">
             <Label htmlFor="mcp-name">Name</Label>
             <Input
@@ -149,8 +219,12 @@ export function ConnectMcpServerDialog({
                   <button
                     key={option.value}
                     type="button"
-                    onClick={() => setTransport(option.value)}
-                    className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                    onClick={() => {
+                      setTransport(option.value)
+                      setAuthMode('none')
+                      setCredentials([emptyCredentialEntry()])
+                    }}
+                    className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] transition-colors ${
                       active ? 'border-primary bg-primary/10 ring-1 ring-primary/40' : 'bg-background hover:bg-muted'
                     }`}
                   >
@@ -162,8 +236,9 @@ export function ConnectMcpServerDialog({
             </div>
             <p className="text-xs text-muted-foreground">{TRANSPORTS.find((t) => t.value === transport)?.hint}</p>
           </div>
+          </>}
 
-          {isStdio ? (
+          {!oauthServer && (isStdio ? (
             <div className="space-y-1.5">
               <Label htmlFor="mcp-command">Command</Label>
               <Input
@@ -190,15 +265,102 @@ export function ConnectMcpServerDialog({
               />
               <p className="text-xs text-muted-foreground">The server&rsquo;s streamable HTTP endpoint.</p>
             </div>
+          ))}
+
+          {!oauthServer && (
+            <div className="space-y-2">
+              <Label>Authentication</Label>
+              <div className="grid grid-cols-2 gap-2">
+                {(isStdio
+                  ? [
+                      { value: 'none' as const, label: 'None', hint: 'Launch without additional credentials.' },
+                      { value: 'env' as const, label: 'Environment', hint: 'Pass encrypted environment credentials to the subprocess.' },
+                    ]
+                  : HTTP_AUTH_MODES
+                ).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setAuthMode(option.value)}
+                    className={`cursor-pointer rounded-lg border px-3 py-2 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] transition-colors ${
+                      authMode === option.value ? 'border-primary bg-primary/10 ring-1 ring-primary/40' : 'bg-background hover:bg-muted'
+                    }`}
+                  >
+                    <span className="font-medium">{option.label}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {(isStdio
+                  ? authMode === 'env' ? 'Secrets are encrypted at rest and passed only to this subprocess.' : 'Launch without additional credentials.'
+                  : HTTP_AUTH_MODES.find((mode) => mode.value === authMode)?.hint)}
+              </p>
+              {authMode === 'bearer' && (
+                <Input
+                  aria-label="Bearer token"
+                  type="password"
+                  autoComplete="off"
+                  className="font-mono"
+                  placeholder="Bearer token"
+                  value={bearerToken}
+                  onChange={(event) => setBearerToken(event.target.value)}
+                />
+              )}
+              {(authMode === 'headers' || authMode === 'env') && (
+                <McpCredentialFields
+                  entries={credentials}
+                  onChange={setCredentials}
+                  namePlaceholder={authMode === 'env' ? 'API_TOKEN' : 'X-API-Key'}
+                />
+              )}
+              {authMode === 'oauth' && (
+                <div className="space-y-1.5">
+                  <Input
+                    aria-label="OAuth scopes"
+                    className="font-mono"
+                    placeholder="Optional scopes"
+                    value={oauthScope}
+                    onChange={(event) => setOauthScope(event.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">Leave blank to use the scopes advertised by the server.</p>
+                </div>
+              )}
+            </div>
           )}
 
-          {errorMessage && <p className="text-sm text-destructive">{errorMessage}</p>}
+          {oauthServer && (
+            <div className="space-y-3 rounded-lg border p-4">
+              <div className="flex items-start gap-2">
+                <ShieldCheck className="mt-0.5 size-4 text-primary" />
+                <div>
+                  <p className="text-sm font-medium">Authorize {oauthServer.name}</p>
+                  <p className="text-xs text-muted-foreground">The server is saved. Finish authorization in the provider window.</p>
+                </div>
+              </div>
+              <Button type="button" className="w-full" disabled={oauthPending} onClick={authorizeOAuth}>
+                <KeyRound className="size-4" />
+                {oauthPending ? 'Waiting for authorization…' : 'Open authorization'}
+              </Button>
+              {oauthPending && oauthDetached && (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs text-muted-foreground">
+                    If you closed the authorization window, cancel and try again.
+                  </p>
+                  <Button type="button" variant="outline" size="sm" onClick={() => oauthAbortRef.current?.abort()}>
+                    Cancel
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
 
-          <DialogFooter>
+          {(errorMessage || oauthError) && <p className="text-sm text-destructive">{oauthError ?? errorMessage}</p>}
+
+          {!oauthServer && <DialogFooter>
             <Button type="submit" disabled={!canSubmit || connectMutation.isPending}>
-              {connectMutation.isPending ? 'Connecting…' : 'Connect'}
+              {connectMutation.isPending ? 'Connecting…' : authMode === 'oauth' ? 'Continue' : 'Connect'}
             </Button>
-          </DialogFooter>
+          </DialogFooter>}
         </form>
       </DialogContent>
     </Dialog>

@@ -52,15 +52,21 @@ export function isStructuredLevelType(type: LevelType): boolean {
 }
 
 export function levelTypeOf(factor: DesignFactor): LevelType {
-  return factor.level_type ?? 'string'
+  if (factor.level_type) return factor.level_type
+  return factor.levels.length > 0 && factor.levels.every((level) => typeof level === 'boolean') ? 'boolean' : 'string'
 }
 
-export function defaultFactorLevelLabels(_factorName: string, count: number): string[] {
+export function defaultFactorLevelLabels(_factorName: string, count: number, type?: LevelType): string[] {
+  if (type === 'boolean') return ['false', 'true'].slice(0, count)
   return Array.from({ length: count }, (_, index) => `level${index + 1}`)
 }
 
 export function factorLevelLabels(factor: DesignFactor): string[] {
-  const defaults = defaultFactorLevelLabels(factor.name, factor.levels.length)
+  const type = levelTypeOf(factor)
+  const defaults =
+    type === 'boolean'
+      ? factor.levels.map((level, index) => (typeof level === 'boolean' ? String(level) : `level${index + 1}`))
+      : defaultFactorLevelLabels(factor.name, factor.levels.length, type)
   return factor.level_labels?.length === factor.levels.length
     ? factor.level_labels.map((label, index) => label.trim() || defaults[index])
     : defaults
@@ -121,13 +127,15 @@ export function emptyStructuredLevel(type: LevelType): unknown {
   }
 }
 
-// A boolean factor's levels are always exactly [true, false] -- there's
+// A boolean factor's levels are always exactly [false, true] -- there's
 // nothing to type in, so switching to it replaces whatever was there.
+// False is first because factorial analysis treats the first level as the
+// reference/-1 condition and the second as treatment/+1.
 // Every other type starts with two blank rows, matching this app's existing
 // "start with a couple of empty slots" convention (FactorBindableField's
 // own popover).
 export function defaultLevelsForType(type: LevelType): unknown[] {
-  if (type === 'boolean') return [true, false]
+  if (type === 'boolean') return [false, true]
   if (isStructuredLevelType(type)) return [emptyStructuredLevel(type), emptyStructuredLevel(type)]
   return ['', '']
 }

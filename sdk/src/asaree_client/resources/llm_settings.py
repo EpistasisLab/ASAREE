@@ -4,14 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from asaree_client.models import LLMSetting
+from asaree_client.models import LLMConnectionCheck, LLMModels, LLMSetting
 
 
 class LLMSettings:
     def __init__(self, client: Any) -> None:
         self._client = client
 
-    def set_key(self, provider: str, api_key: str, *, api_base: str | None = None) -> LLMSetting:
+    def set_key(
+        self,
+        provider: str,
+        api_key: str,
+        *,
+        api_base: str | None = None,
+        azure_project_endpoint: str | None = None,
+    ) -> LLMSetting:
         """Set (or replace) this user's credential for *provider*.
 
         For ``azure_foundry``, *api_base* is the Foundry resource name (or a
@@ -22,9 +29,22 @@ class LLMSettings:
         payload: dict[str, Any] = {"provider": provider, "api_key": api_key}
         if api_base is not None:
             payload["api_base"] = api_base
+        if azure_project_endpoint is not None:
+            payload["azure_project_endpoint"] = azure_project_endpoint
         data = self._client._put("/llm-settings", json=payload)
         return LLMSetting(**data)
 
     def list(self) -> list[LLMSetting]:
         data = self._client._get("/llm-settings")
         return [LLMSetting(**s) for s in data]
+
+    def delete(self, provider: str) -> None:
+        self._client._delete(f"/llm-settings/{provider}")
+
+    def check_connection(self, provider: str) -> LLMConnectionCheck:
+        data = self._client._get(f"/llm-settings/{provider}/connection")
+        return LLMConnectionCheck(**data)
+
+    def list_models(self, provider: str) -> LLMModels:
+        data = self._client._get(f"/llm-settings/{provider}/models")
+        return LLMModels(**data)

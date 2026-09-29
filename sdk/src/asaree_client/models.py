@@ -1,243 +1,102 @@
-"""Response models — one per resource, matching exactly what ASAREE's API returns.
+"""Stable public imports for ASAREE API response models.
 
-``model_config`` can't be a field name on a pydantic ``BaseModel`` (it's the
-reserved settings attribute), so ``Agent`` follows the same workaround
-``motoro.schemas.agent.AgentResponse`` uses on the server side: the
-field is named ``model_config_data`` and populated from the wire key
-``model_config`` via an alias.
+Model implementations are grouped by domain in private modules so resources
+can evolve independently without changing the public import path.
 """
 
-from __future__ import annotations
+from asaree_client._models.agents import Agent, Run, RunStep
+from asaree_client._models.auth import (
+    ApiToken,
+    ApiTokenPage,
+    ApiTokenSummary,
+    AuthTokens,
+    BootstrapApiToken,
+    BootstrapUser,
+    Message,
+    UserAccount,
+)
+from asaree_client._models.datasets import RegisteredDataset, WorkspaceEvent
+from asaree_client._models.experiments import (
+    DesignImpact,
+    DesignRevision,
+    Experiment,
+    ExperimentArtifact,
+    ExperimentResults,
+    ExperimentRunResults,
+    MeasurementCapabilities,
+    MeasurementPlanValidation,
+    MeasurementPlanValidationIssue,
+    Replicate,
+    Trial,
+)
+from asaree_client._models.llm import LLMConnectionCheck, LLMModelInfo, LLMModels, LLMSetting
+from asaree_client._models.mcp import MCPAuthenticationStatus, MCPOAuthAuthorization, MCPServer, ToolCallResult
+from asaree_client._models.okf import DirectoryEntry, DirectoryListing, OKFBundle, OKFDocument
+from asaree_client._models.protocols import (
+    CellRunBatch,
+    PromptPreview,
+    Protocol,
+    ProtocolRevision,
+    ProtocolRun,
+    ResourceUsage,
+    TestedPublishedRevision,
+    TestRun,
+    TestRunExecutionSummary,
+    TestRunFreshness,
+    TestRunResources,
+)
+from asaree_client._models.skills import DiscoveredSkill, Skill, SkillPage, SkillUrlPreview
 
-import uuid
-from datetime import datetime
-from typing import Any
-
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class Agent(BaseModel):
-    id: uuid.UUID
-    name: str
-    goal: str
-    description: str
-    system_prompt: str
-    model_config_data: dict[str, Any] = Field(alias="model_config")
-    tool_config_data: dict[str, Any] = Field(alias="tool_config")
-    memory_config_data: dict[str, Any] = Field(alias="memory_config")
-    pattern_config: dict[str, Any] | None = None
-    output_contract: dict[str, Any] | None = None
-    budget_limit_usd: float | None = None
-    max_run_duration_seconds: int | None = None
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = ConfigDict(populate_by_name=True)
-
-
-class Run(BaseModel):
-    id: uuid.UUID
-    agent_id: uuid.UUID
-    status: str
-    input: str
-    output: str | None
-    # Derived from `output` server-side: the human-readable text (unwrapped
-    # from the output-contract envelope, if any) and the structured payload
-    # the envelope carries when the agent declares an output_contract.
-    output_text: str
-    payload: dict[str, Any] | None = None
-    error: str | None
-    token_usage: dict[str, Any] | None
-    cost_estimate: float | None
-    run_metadata: dict[str, Any] | None = None
-    pattern_overrides: dict[str, Any] | None = None
-    created_at: datetime
-    completed_at: datetime | None
-
-
-class RunStep(BaseModel):
-    id: uuid.UUID
-    sequence: int
-    iteration: int | None
-    phase: str
-    input: dict[str, Any] | None
-    output: dict[str, Any] | None
-    llm_call: dict[str, Any] | None
-    tool_call: dict[str, Any] | None
-    started_at: datetime | None
-    completed_at: datetime | None
-
-
-class Experiment(BaseModel):
-    id: uuid.UUID
-    name: str
-    description: str | None
-    hypothesis: str | None = None
-    design_type: str
-    task_brief: dict[str, Any] | None
-    design_spec: dict[str, Any] | None
-    measurement_plan: dict[str, Any] | None = None
-    # Every dataset attached to this experiment, in canvas wiring order --
-    # an experiment can run against several since the Dataset connector was
-    # uncapped. ``dataset_id`` is a read-only view of the first one, kept so
-    # code written before that keeps working; it is no longer a stored column.
-    dataset_ids: list[uuid.UUID] = []
-    dataset_id: uuid.UUID | None = None
-    archived_at: datetime | None = None
-    locked_measurement_plan: dict[str, Any] | None = None
-    created_at: datetime
-
-
-class Replicate(BaseModel):
-    id: uuid.UUID
-    cell_id: uuid.UUID
-    cell_label: str
-    replicate_label: str
-    replicate_number: int
-    # Which generation of the experiment's design this observation was made
-    # under. Replicates from a superseded design stay in the database as history,
-    # so a replicate is only part of the live design if this matches the
-    # experiment's current DesignRevision.
-    design_revision_id: uuid.UUID
-    run_id: uuid.UUID | None
-    workspace_id: str | None
-    factor_values: dict[str, Any] | None
-    metric_values: dict[str, Any] | None
-    artifacts: dict[str, Any] | None
-    created_at: datetime
-    updated_at: datetime
-
-
-class DesignRevision(BaseModel):
-    """One generation of an experiment's factorial design.
-
-    Regenerating a design that no longer produces the same set of cells
-    supersedes the current revision and opens a new one; the old cells (and
-    whatever was scored in them) are kept as history rather than deleted.
-    ``superseded_at is None`` marks the one revision that is current.
-    """
-
-    id: uuid.UUID
-    revision: int
-    superseded_at: datetime | None
-    design_spec: dict[str, Any] | None
-    cell_count: int
-    replicate_count: int
-    scored_replicate_count: int
-    created_at: datetime
-
-
-class ExperimentArtifact(BaseModel):
-    """A durable, experiment-level (not per-cell) record -- an ``analyze``
-    snapshot, a CSV export, or anything else a use case wants to keep past
-    one run. ``content`` is opaque to ASAREE -- a CSV export and a
-    JSON-encoded analyze result serialize completely differently, and
-    neither is interpreted server-side."""
-
-    id: uuid.UUID
-    experiment_id: uuid.UUID
-    name: str
-    kind: str
-    content: str
-    created_at: datetime
-    updated_at: datetime
-
-
-class Protocol(BaseModel):
-    id: uuid.UUID
-    name: str
-    description: str | None
-    experiment_id: uuid.UUID | None
-    graph: dict[str, Any]
-    published_revision_id: uuid.UUID | None = None
-    published_revision: int | None = None
-    has_unpublished_changes: bool = False
-    created_at: datetime
-    updated_at: datetime
-
-
-class ProtocolRun(BaseModel):
-    id: uuid.UUID
-    protocol_id: uuid.UUID
-    status: str
-    node_runs: dict[str, Any]
-    error: str | None
-    replicate_label: str | None = None
-    replicate_result_id: uuid.UUID | None = None
-    factor_values: dict[str, Any] | None = None
-    design_revision_id: uuid.UUID | None = None
-    protocol_revision_id: uuid.UUID | None = None
-    target_node_id: str | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class ProtocolRevision(BaseModel):
-    id: uuid.UUID
-    protocol_id: uuid.UUID
-    revision: int
-    graph: dict[str, Any]
-    published_at: datetime
-
-
-class CellRunBatch(BaseModel):
-    """ "Run all cells" fanout result -- one ProtocolRun id per not-yet-completed
-    replicate; ``skipped`` is how many replicates already had metrics or a completed
-    run and were left alone (resume semantics)."""
-
-    protocol_run_ids: list[uuid.UUID]
-    replicate_labels: list[str]
-    skipped: int
-    protocol_revision_id: uuid.UUID | None = None
-    protocol_revision: int | None = None
-
-
-class RegisteredDataset(BaseModel):
-    id: uuid.UUID
-    name: str
-    raw_path: str | None = None
-    raw_sha256: str | None = None
-    # Null until a split is actually produced (Datasets.quick_split/
-    # register_manual_split) -- registration itself only stores the raw
-    # file, it never splits (see RegisteredDataset's own comment in the
-    # backend model).
-    train_path: str | None = None
-    test_path: str | None = None
-    train_sha256: str | None = None
-    test_sha256: str | None = None
-    target_column: str | None
-    description: str | None = None
-    dictionary_json: str | None = None
-    created_at: datetime | None = None
-
-
-class LLMSetting(BaseModel):
-    provider: str
-    api_base: str | None
-
-
-class WorkspaceEvent(BaseModel):
-    id: uuid.UUID
-    workspace_id: str
-    stage: str
-    event_type: str
-    sha256_train: str | None
-    sha256_test: str | None
-    created_at: datetime
-
-
-class MCPServer(BaseModel):
-    id: uuid.UUID
-    name: str
-    transport: str
-    command: str | None
-    url: str | None
-    status: str
-    error_message: str | None
-    capabilities: dict[str, Any] | None
-    created_at: datetime
-
-
-class ToolCallResult(BaseModel):
-    is_error: bool
-    content: str
+__all__ = [
+    "Agent",
+    "ApiToken",
+    "ApiTokenPage",
+    "ApiTokenSummary",
+    "AuthTokens",
+    "BootstrapApiToken",
+    "BootstrapUser",
+    "CellRunBatch",
+    "DesignImpact",
+    "DesignRevision",
+    "DirectoryEntry",
+    "DirectoryListing",
+    "DiscoveredSkill",
+    "Experiment",
+    "ExperimentArtifact",
+    "ExperimentResults",
+    "ExperimentRunResults",
+    "LLMConnectionCheck",
+    "LLMModelInfo",
+    "LLMModels",
+    "LLMSetting",
+    "MCPAuthenticationStatus",
+    "MCPOAuthAuthorization",
+    "MCPServer",
+    "MeasurementCapabilities",
+    "MeasurementPlanValidation",
+    "MeasurementPlanValidationIssue",
+    "Message",
+    "OKFBundle",
+    "OKFDocument",
+    "PromptPreview",
+    "Protocol",
+    "ProtocolRevision",
+    "ProtocolRun",
+    "RegisteredDataset",
+    "Replicate",
+    "ResourceUsage",
+    "Run",
+    "RunStep",
+    "Skill",
+    "SkillPage",
+    "SkillUrlPreview",
+    "TestedPublishedRevision",
+    "TestRun",
+    "TestRunExecutionSummary",
+    "TestRunFreshness",
+    "TestRunResources",
+    "ToolCallResult",
+    "Trial",
+    "UserAccount",
+    "WorkspaceEvent",
+]

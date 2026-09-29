@@ -29,9 +29,9 @@ ObservationStatus = Literal[
     "cancelled",
     "not_applicable",
 ]
-# Runtime metrics remain scalar. Reported custom metrics deliberately retain
-# the tool's opaque result, so observations must be able to carry any
-# JSON-compatible value without coercing or validating it.
+# Reported metrics can retain a producer's opaque result or project typed
+# scalar fields from structured output, so observations must carry any
+# JSON-compatible value before declaration-driven validation.
 ScalarValue = Any
 
 

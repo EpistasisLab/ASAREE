@@ -78,7 +78,7 @@ def test_declared_runtime_metrics_are_projected_from_execution_telemetry() -> No
     assert _primary_metric(spec) == ("cost_usd", "maximize")
 
 
-def test_only_builtin_metrics_declare_aggregations() -> None:
+def test_builtin_and_reported_scalar_metrics_declare_aggregations() -> None:
     assert _declared_metric_aggregations(
         {
             "metrics": [
@@ -92,10 +92,10 @@ def test_only_builtin_metrics_declare_aggregations() -> None:
                 },
             ]
         }
-    ) == {"cost_usd": "sum"}
+    ) == {"Quality": "mean", "cost_usd": "sum"}
 
 
-def test_only_builtin_metrics_declare_ranking_directions() -> None:
+def test_builtin_and_reported_scalar_metrics_declare_ranking_directions() -> None:
     assert _declared_metric_directions(
         {
             "metrics": [
@@ -109,7 +109,7 @@ def test_only_builtin_metrics_declare_ranking_directions() -> None:
                 },
             ]
         }
-    ) == {"cost_usd": "minimize"}
+    ) == {"Quality": "maximize", "cost_usd": "minimize"}
 
 
 def test_cell_metric_aggregations_apply_the_declared_operation() -> None:
@@ -167,6 +167,40 @@ def test_results_csv_keeps_an_empty_column_for_an_unreported_custom_metric() -> 
     )
     reported = next(column for column in schema["columns"] if column["name"] == "Reviewer report")
     assert reported == {"name": "Reviewer report", "role": "reported", "value_type": "opaque"}
+
+
+def test_results_csv_describes_a_reported_scalar_as_numeric() -> None:
+    design_spec = {
+        "metrics": [
+            {
+                "id": "pr-auc",
+                "name": "pr_auc",
+                "kind": "custom",
+                "valueType": "number",
+                "direction": "maximize",
+                "aggregation": "mean",
+                "primary": True,
+            }
+        ]
+    }
+    rows = [
+        {
+            "cell_label": "cell",
+            "replicate_number": 1,
+            "factor_values": {},
+            "metric_values": {"pr_auc": 0.72},
+        }
+    ]
+
+    schema = result_rows_schema(rows, metric_types={"pr_auc": "number"}, design_spec=design_spec)
+    reported = next(column for column in schema["columns"] if column["name"] == "pr_auc")
+
+    assert reported == {
+        "name": "pr_auc",
+        "role": "reported",
+        "value_type": "number",
+    }
+    assert _primary_metric(design_spec) == ("pr_auc", "maximize")
 
 
 def test_results_csv_projects_script_stdout_and_execution_metadata() -> None:
@@ -348,7 +382,12 @@ def test_results_csv_projects_categorical_factors_to_short_level_labels() -> Non
                 "metric_values": {"accuracy": 0.9, "passed": False},
             },
         ],
-        {"factors": [{"name": "model", "levels": ["small", "large"], "level_labels": ["small", "large"]}]},
+        {
+            "factors": [
+                {"name": "critic", "levels": [True, False], "level_labels": ["true", "false"]},
+                {"name": "model", "levels": ["small", "large"], "level_labels": ["small", "large"]},
+            ]
+        },
     )
     rows = list(csv.DictReader(io.StringIO(csv_text)))
 

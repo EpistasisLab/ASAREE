@@ -27,5 +27,20 @@ export interface McpServer {
   // such a row fills it in). Not a column of its own for the same reason
   // `tools` isn't: it's protocol-shaped data, not schema.
   capabilities: { tools?: McpToolCapability[]; instructions?: string } | null
+  authentication: {
+    auth_mode: 'none' | 'static_headers' | 'stdio_env' | 'oauth'
+    configured: boolean
+    authorization_required: boolean
+    static_headers_configured: boolean
+    stdio_env_configured: boolean
+    stdio_env_names: string[]
+  }
+  credential_management_allowed: boolean
   created_at: string
+}
+
+export interface McpOAuthAuthorization {
+  authorization_url: string
+  expires_at: string
+  transaction_id: string
 }

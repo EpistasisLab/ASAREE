@@ -65,6 +65,8 @@ export function normalizeDesignMetrics(metrics: DesignMetric[] | undefined): Des
     if (!raw || typeof raw.name !== 'string' || !raw.name.trim()) return []
     const catalog = metricCatalogEntry(raw.catalogKey)
     if (raw.kind && !['runtime', 'custom'].includes(raw.kind)) return []
+    const kind = raw.kind ?? catalog?.kind ?? 'custom'
+    const scalarCustom = kind === 'custom' && raw.kind === 'custom' && (raw.valueType === 'number' || raw.valueType === 'boolean')
     return [{
       ...raw,
       id: typeof raw.id === 'string' && raw.id ? raw.id : legacyId(raw),
@@ -73,13 +75,13 @@ export function normalizeDesignMetrics(metrics: DesignMetric[] | undefined): Des
       description: typeof raw.description === 'string' && raw.description.trim()
         ? raw.description.trim()
         : catalog?.shortDescription ?? `Legacy metric declaration for ${raw.name.trim()}.`,
-      kind: raw.kind ?? catalog?.kind ?? 'custom',
-      valueType: (raw.kind ?? catalog?.kind) === 'custom' ? 'opaque' : raw.valueType ?? catalog?.valueType ?? 'number',
-      direction: (raw.kind ?? catalog?.kind) === 'custom' ? 'neutral' : raw.direction === 'maximize' || raw.direction === 'minimize' || raw.direction === 'neutral'
+      kind,
+      valueType: kind === 'custom' && !scalarCustom ? 'opaque' : raw.valueType ?? catalog?.valueType ?? 'number',
+      direction: kind === 'custom' && !scalarCustom ? 'neutral' : raw.direction === 'maximize' || raw.direction === 'minimize' || raw.direction === 'neutral'
         ? raw.direction
         : (catalog?.defaultDirection ?? 'maximize'),
-      aggregation: (raw.kind ?? catalog?.kind) === 'custom' ? 'none' : raw.valueType === 'boolean' ? 'mean' : (raw.aggregation === 'sum' ? 'sum' : (catalog?.aggregation ?? 'mean')),
-      primary: (raw.kind ?? catalog?.kind) === 'custom' ? false : Boolean(raw.primary),
+      aggregation: kind === 'custom' && !scalarCustom ? 'none' : raw.valueType === 'boolean' ? 'mean' : (raw.aggregation === 'sum' ? 'sum' : raw.aggregation === 'none' ? 'none' : (catalog?.aggregation ?? 'mean')),
+      primary: kind === 'custom' && !scalarCustom ? false : Boolean(raw.primary),
       unit: raw.unit ?? catalog?.unit,
       scoring: undefined,
     }]

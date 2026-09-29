@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { displayFactorLevel } from './experiment'
+import type { Experiment } from '@/types/experiments'
+import { displayFactorLevel, primaryMetric } from './experiment'
+import { normalizeDesignMetrics } from './metricCatalog'
 
 describe('displayFactorLevel', () => {
   it('uses the label paired with a matching raw level', () => {
@@ -31,5 +33,32 @@ describe('displayFactorLevel', () => {
       'The prior, very long prompt stored on this generated cell.',
       'Agent:Prompt:Cited technical response',
     )).toBe('Cited technical response')
+  })
+})
+
+describe('reported scalar metrics', () => {
+  it('preserves an explicitly typed custom metric and uses it as primary', () => {
+    const metrics = normalizeDesignMetrics([{
+      id: 'pr-auc',
+      name: 'pr_auc',
+      kind: 'custom',
+      valueType: 'number',
+      direction: 'maximize',
+      aggregation: 'mean',
+      primary: true,
+    }])
+    const experiment = { design_spec: { metrics } } as Experiment
+
+    expect(metrics[0]).toMatchObject({ valueType: 'number', direction: 'maximize', primary: true })
+    expect(primaryMetric(experiment)).toEqual({ key: 'pr_auc', direction: 'maximize', valueType: 'number' })
+  })
+
+  it('keeps an ordinary custom draft opaque and non-primary', () => {
+    expect(normalizeDesignMetrics([{
+      name: 'Reviewer report',
+      kind: 'custom',
+      direction: 'maximize',
+      primary: true,
+    }])[0]).toMatchObject({ valueType: 'opaque', direction: 'neutral', primary: false })
   })
 })

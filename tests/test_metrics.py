@@ -169,7 +169,7 @@ def test_design_metrics_are_derived_from_a_caller_supplied_plan() -> None:
     ]
 
 
-def test_custom_metric_values_are_retained_without_type_validation() -> None:
+def test_explicit_scalar_custom_metric_values_are_type_checked() -> None:
     metrics = [
         {"name": "Passed", "kind": "custom", "valueType": "boolean", "primary": True},
         {"name": "Score", "kind": "custom", "valueType": "number", "primary": False},
@@ -178,16 +178,23 @@ def test_custom_metric_values_are_retained_without_type_validation() -> None:
         "Passed": True,
         "Score": 0.8,
     }
-    assert validate_metric_values(metrics, {"Passed": 1, "Score": {"grade": "A"}}) == {
-        "Passed": 1,
-        "Score": {"grade": "A"},
-    }
+    with pytest.raises(ValueError, match="must be Boolean"):
+        validate_metric_values(metrics, {"Passed": 1})
+    with pytest.raises(ValueError, match="finite number"):
+        validate_metric_values(metrics, {"Score": {"grade": "A"}})
 
 
-def test_custom_boolean_declarations_normalize_to_opaque_display_only_metrics() -> None:
+def test_explicit_custom_boolean_declarations_remain_scalar() -> None:
     metrics = normalize_metrics(
         [{"name": "Passed", "kind": "custom", "valueType": "boolean", "aggregation": "sum", "primary": True}]
     )
+    assert metrics[0]["valueType"] == "boolean"
+    assert metrics[0]["aggregation"] == "mean"
+    assert metrics[0]["primary"] is True
+
+
+def test_custom_draft_without_an_explicit_scalar_type_remains_opaque() -> None:
+    metrics = normalize_metrics([{"name": "Reviewer report", "kind": "custom", "primary": True}])
     assert metrics[0]["valueType"] == "opaque"
     assert metrics[0]["aggregation"] == "none"
     assert metrics[0]["primary"] is False
@@ -220,6 +227,12 @@ def test_design_spec_adds_short_default_labels_for_legacy_factor_levels() -> Non
             }
         ]
     }
+
+
+def test_design_spec_defaults_boolean_level_labels_to_values() -> None:
+    spec = normalize_design_spec({"factors": [{"name": "Critic enabled", "levels": [False, True]}]})
+
+    assert spec["factors"][0]["level_labels"] == ["false", "true"]
 
 
 def test_design_spec_normalizes_legacy_model_factor_kind() -> None:

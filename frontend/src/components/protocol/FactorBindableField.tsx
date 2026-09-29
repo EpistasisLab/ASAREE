@@ -89,7 +89,7 @@ export function FactorBindableField({
   nodeLabel: string
   levelType: LevelType
   // The field's own current value, e.g. config.system_prompt -- omitted for
-  // a boolean field, since its levels are always the fixed [true, false].
+  // a boolean field, since its levels are always the fixed [false, true].
   currentValue?: unknown
   // The field's own already-fetched choices (e.g. ModelNodeInspector's model/
   // effort lists) -- when given, each level row renders as a Select over
@@ -114,7 +114,7 @@ export function FactorBindableField({
   const { requestEditFactor } = useProtocolCanvasActions()
   const [open, setOpen] = useState(false)
   const [levels, setLevels] = useState<string[]>(() => seedLevels(currentValue))
-  const [levelLabels, setLevelLabels] = useState<string[]>(() => defaultFactorLevelLabels(`${nodeLabel}:${defaultLabel}`, 2))
+  const [levelLabels, setLevelLabels] = useState<string[]>(() => defaultFactorLevelLabels(`${nodeLabel}:${defaultLabel}`, 2, levelType))
   const queryClient = useQueryClient()
   // This component only ever renders inside a node inspector on the canvas,
   // so the graph is right there in context -- no prop-drilling needed.
@@ -220,7 +220,7 @@ export function FactorBindableField({
           factor={{
             name: factorName,
             levels: structured ? seedStructuredLevels(currentValue, levelType) : seedLevels(currentValue),
-            level_labels: defaultFactorLevelLabels(factorName, 2),
+            level_labels: defaultFactorLevelLabels(factorName, 2, levelType),
             level_type: levelType,
           }}
           onSave={(next) => saveMutation.mutateAsync(next)}
@@ -237,7 +237,7 @@ export function FactorBindableField({
         if (next) {
           const nextLevels = seedLevels(currentValue)
           setLevels(nextLevels)
-          setLevelLabels(defaultFactorLevelLabels(factorName, nextLevels.length))
+          setLevelLabels(defaultFactorLevelLabels(factorName, nextLevels.length, levelType))
         }
       }}
     >
@@ -258,7 +258,7 @@ export function FactorBindableField({
           <p className="rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground">{factorName}</p>
         </div>
         {levelType === 'boolean' ? (
-          <p className="text-xs text-muted-foreground">Levels: true, false</p>
+          <p className="text-xs text-muted-foreground">Levels: false, true</p>
         ) : (
           <div className="space-y-1.5">
             <Label>Levels</Label>
@@ -313,6 +313,7 @@ export function FactorBindableField({
                   variant="ghost"
                   size="icon-sm"
                   aria-label="Remove level"
+                  disabled={i === 0}
                   onClick={() => {
                     setLevels((ls) => ls.filter((_, j) => j !== i))
                     setLevelLabels((ls) => ls.filter((_, j) => j !== i))
@@ -327,7 +328,7 @@ export function FactorBindableField({
               size="sm"
               onClick={() => {
                 setLevels((ls) => [...ls, ''])
-                setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(factorName, ls.length + 1)[ls.length]])
+                setLevelLabels((ls) => [...ls, defaultFactorLevelLabels(factorName, ls.length + 1, levelType)[ls.length]])
               }}
             >
               Add level
@@ -339,10 +340,12 @@ export function FactorBindableField({
           className="w-full"
           disabled={saveMutation.isPending}
           onClick={() => {
-            const selectedIndexes = levelType === 'boolean' ? [0, 1] : levels.flatMap((level, index) => (level.trim() ? [index] : []))
+            const selectedIndexes = levelType === 'boolean'
+              ? [0, 1]
+              : levels.flatMap((level, index) => index === 0 || level.trim() ? [index] : [])
             const parsedLevels =
-              levelType === 'boolean' ? [true, false] : selectedIndexes.map((index) => parseLevelValue(levels[index], levelType))
-            const defaults = defaultFactorLevelLabels(factorName, parsedLevels.length)
+              levelType === 'boolean' ? [false, true] : selectedIndexes.map((index) => parseLevelValue(levels[index], levelType))
+            const defaults = defaultFactorLevelLabels(factorName, parsedLevels.length, levelType)
             const labels = selectedIndexes.map((index, outputIndex) => levelLabels[index]?.trim() || defaults[outputIndex])
             saveMutation.mutate({ name: factorName, levels: parsedLevels, level_labels: labels, level_type: levelType })
           }}

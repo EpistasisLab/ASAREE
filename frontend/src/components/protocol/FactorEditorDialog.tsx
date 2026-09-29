@@ -755,7 +755,6 @@ export function FactorEditorDialog({
                     {(levels as string[]).map((level, i) => (
                       <div key={i} className="flex items-start gap-1.5">
                         <div className="flex-1 space-y-1.5">
-                          {i === 0 && <Badge variant="outline">Canvas baseline</Badge>}
                           <Input
                             aria-label={`Level ${i + 1} label`}
                             placeholder={`Level ${i + 1} label`}
@@ -810,7 +809,6 @@ export function FactorEditorDialog({
                     {levels.map((level, i) => (
                       <div key={i} className="flex items-start gap-1.5">
                         <div className="flex-1 space-y-1.5">
-                          {i === 0 && <Badge variant="outline">Canvas baseline</Badge>}
                           <Input
                             aria-label={`Level ${i + 1} label`}
                             placeholder={`Level ${i + 1} label`}
@@ -888,7 +886,6 @@ export function FactorEditorDialog({
                   <div className="space-y-1.5">
                     {(levels as string[]).map((level, i) => (
                       <div key={i} className="flex items-center gap-1.5">
-                        {i === 0 && <Badge variant="outline" className="shrink-0">Canvas baseline</Badge>}
                         <Input
                           type={levelType === 'number' ? 'number' : 'text'}
                           value={level}

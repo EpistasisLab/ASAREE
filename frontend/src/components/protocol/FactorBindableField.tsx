@@ -264,7 +264,6 @@ export function FactorBindableField({
             <Label>Levels</Label>
             {levels.map((level, i) => (
               <div key={i} className="flex items-center gap-1.5">
-                {i === 0 && <Badge variant="outline" className="shrink-0">Canvas baseline</Badge>}
                 {levelOptions && levelOptions.length > 0 ? (
                   <Select
                     value={level || '__none__'}

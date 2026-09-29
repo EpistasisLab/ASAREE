@@ -27,7 +27,7 @@ import type {
   Trial,
 } from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
-import type { McpServer } from '@/types/mcpServers'
+import type { McpOAuthAuthorization, McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
@@ -397,14 +397,21 @@ export const mcpServersApi = {
   // existing scope (system servers like asaree-workspace aren't listed here
   // either; not something the MCP Tool node picker widens).
   list: () => request<McpServer[]>('/mcp-servers'),
+  get: (id: string) => request<McpServer>(`/mcp-servers/${id}`),
   // Registers a connection the user typed in themselves -- backs the MCP
   // Client Tool node (ConnectMcpServerDialog). The response already carries
   // the discovered tools: core connects and lists them synchronously during
   // registration, so a 201 whose `status` is 'error' means "row saved, server
   // unreachable", not a failure to save. 409 on a duplicate `name`, 422 when
   // the stdio allowlist or the SSRF guard rejects it.
-  create: (data: { name: string; transport: string; command?: string | null; url?: string | null; headers?: Record<string, string> | null }) =>
+  create: (data: { name: string; transport: string; command?: string | null; url?: string | null; headers?: Record<string, string> | null; server_env?: Record<string, string> | null }) =>
     request<McpServer>('/mcp-servers', { method: 'POST', body: data }),
+  update: (id: string, data: { headers?: Record<string, string> | null; server_env?: Record<string, string> | null }) =>
+    request<McpServer>(`/mcp-servers/${id}`, { method: 'PATCH', body: data }),
+  beginOAuth: (id: string, scope?: string | null) =>
+    request<McpOAuthAuthorization>(`/mcp-servers/${id}/oauth/start`, { method: 'POST', body: { scope: scope || null } }),
+  clearCredentials: (id: string, revoke = false) =>
+    request<McpServer>(`/mcp-servers/${id}/credentials/clear`, { method: 'POST', body: { revoke } }),
   // Re-dials and re-discovers tools. The repair path for a server registered
   // while it happened to be down.
   reconnect: (id: string) => request<McpServer>(`/mcp-servers/${id}/reconnect`, { method: 'POST' }),

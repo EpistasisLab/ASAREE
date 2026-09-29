@@ -45,6 +45,17 @@ class AsareeSettings(CoreSettings):
     # browsers refuse to combine with "*". Defaults to the Vite dev server.
     cors_allowed_origins: str = "http://localhost:5173"
 
+    # MCP OAuth uses an exact, server-reachable callback URI. Keep it explicit
+    # rather than deriving it from a request Host header, which is unreliable
+    # behind reverse proxies and unsafe as OAuth client metadata.
+    mcp_oauth_callback_url: str = "http://localhost:8000/api/mcp-servers/oauth/callback"
+    # Where the callback sends the browser after Motoro has consumed the code.
+    # The small frontend route reports the result to the opener and closes.
+    frontend_url: str = "http://localhost:5173"
+    # Optional HTTPS Client ID Metadata Document (CIMD). When absent, Motoro
+    # falls back to dynamic client registration where the provider supports it.
+    mcp_oauth_client_metadata_url: str | None = None
+
     # Local disk, matching ARES's current approach — see
     # project_plan/core_asaree_use_case.md §9: metadata (this database) and
     # hashes are what matter; where the bytes physically live is a separate,

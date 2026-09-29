@@ -89,7 +89,10 @@ describe('CustomMetricFlow', () => {
     const user = userEvent.setup()
     vi.spyOn(mcpServersApi, 'list').mockResolvedValue([{
       id: 'server-1', name: 'Quality server', transport: 'stdio', command: 'quality', url: null, status: 'connected', error_message: null,
-      capabilities: { tools: [{ name: 'score', input_schema: { properties: {} } }, { name: 'explain', input_schema: { properties: {} } }] }, created_at: '',
+      capabilities: { tools: [{ name: 'score', input_schema: { properties: {} } }, { name: 'explain', input_schema: { properties: {} } }] },
+      authentication: { auth_mode: 'none', configured: false, authorization_required: false, static_headers_configured: false, stdio_env_configured: false, stdio_env_names: [] },
+      credential_management_allowed: true,
+      created_at: '',
     }])
     const graph = {
       nodes: [

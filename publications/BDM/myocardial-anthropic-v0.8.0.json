@@ -1034,8 +1034,12 @@
       {
         "name": "Critic enabled",
         "levels": [
-          true,
-          false
+          false,
+          true
+        ],
+        "level_labels": [
+          "false",
+          "true"
         ],
         "level_type": "boolean"
       }

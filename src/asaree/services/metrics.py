@@ -333,7 +333,15 @@ def normalize_design_spec(
             levels = factor.get("levels")
             if not isinstance(levels, list):
                 continue
-            defaults = [f"level{index}" for index in range(1, len(levels) + 1)]
+            boolean_levels = bool(levels) and all(isinstance(level, bool) for level in levels)
+            defaults = (
+                [
+                    str(level).lower() if isinstance(level, bool) else f"level{index}"
+                    for index, level in enumerate(levels, 1)
+                ]
+                if factor.get("level_type") == "boolean" or boolean_levels
+                else [f"level{index}" for index in range(1, len(levels) + 1)]
+            )
             supplied = factor.get("level_labels")
             if isinstance(supplied, list) and len(supplied) == len(levels):
                 factor["level_labels"] = [

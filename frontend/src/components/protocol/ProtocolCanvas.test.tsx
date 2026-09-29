@@ -302,7 +302,7 @@ describe('ProtocolCanvas connector adds', () => {
     await user.click(screen.getAllByRole('button', { name: 'Make experimental factor' })[0])
 
     expect(await screen.findByText('Writer:Active')).toBeInTheDocument()
-    expect(screen.getByText('Levels: true, false')).toBeInTheDocument()
+    expect(screen.getByText('Levels: false, true')).toBeInTheDocument()
     expect(screen.queryByText('Bind to a field on the canvas')).not.toBeInTheDocument()
   })
 

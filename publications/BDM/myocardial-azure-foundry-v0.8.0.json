@@ -1021,6 +1021,10 @@
           "claude-sonnet-5",
           "claude-opus-5"
         ],
+        "level_labels": [
+          "sonnet-5",
+          "opus-5"
+        ],
         "level_type": "string"
       },
       {
@@ -1029,13 +1033,21 @@
           "medium",
           "xhigh"
         ],
+        "level_labels": [
+          "medium",
+          "xhigh"
+        ],
         "level_type": "string"
       },
       {
         "name": "Critic enabled",
         "levels": [
-          true,
-          false
+          false,
+          true
+        ],
+        "level_labels": [
+          "false",
+          "true"
         ],
         "level_type": "boolean"
       }

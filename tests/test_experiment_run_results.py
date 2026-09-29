@@ -348,7 +348,12 @@ def test_results_csv_projects_categorical_factors_to_short_level_labels() -> Non
                 "metric_values": {"accuracy": 0.9, "passed": False},
             },
         ],
-        {"factors": [{"name": "model", "levels": ["small", "large"], "level_labels": ["small", "large"]}]},
+        {
+            "factors": [
+                {"name": "critic", "levels": [True, False], "level_labels": ["true", "false"]},
+                {"name": "model", "levels": ["small", "large"], "level_labels": ["small", "large"]},
+            ]
+        },
     )
     rows = list(csv.DictReader(io.StringIO(csv_text)))
 

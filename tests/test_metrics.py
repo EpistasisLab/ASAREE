@@ -222,6 +222,12 @@ def test_design_spec_adds_short_default_labels_for_legacy_factor_levels() -> Non
     }
 
 
+def test_design_spec_defaults_boolean_level_labels_to_values() -> None:
+    spec = normalize_design_spec({"factors": [{"name": "Critic enabled", "levels": [False, True]}]})
+
+    assert spec["factors"][0]["level_labels"] == ["false", "true"]
+
+
 def test_design_spec_normalizes_legacy_model_factor_kind() -> None:
     spec = normalize_design_spec(
         {"factors": [{"name": "Agent:Model", "level_type": "llm_config", "levels": [{"model": "gpt-5"}]}]}

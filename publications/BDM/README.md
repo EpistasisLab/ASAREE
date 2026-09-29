@@ -37,6 +37,10 @@ its provider's effort ladder. The two ladders aren't the same length: OpenAI's
 `reasoning_effort` stops at `high`, so `high` is that variant's counterpart to
 Anthropic's `xhigh`, not a rung below it.
 
+Factor levels are ordered reference first, treatment second: smaller model →
+larger model, medium → highest effort, and critic off → critic on. This matches
+the Results analysis's −1/+1 coding and the paper's stated contrasts.
+
 Model levels are editable on the Design tab after importing, and the model field
 accepts any id you type — the levels above are just what the catalog can vouch
 for. Whether a model gets an Effort or a Temperature control is a per-model fact

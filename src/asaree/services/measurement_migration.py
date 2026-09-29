@@ -59,11 +59,18 @@ def normalize_experiment_measurement_plan(document: Any, metrics: Any) -> dict[s
     reported_bindings = tuple(binding for binding in plan.producers if binding.producer_id in reported_ids)
     reported_binding_ids = {binding.id for binding in reported_bindings}
     reported_metric_ids = {metric_id for binding in reported_bindings for metric_id in binding.outputs.values()}
+    projected_metric_ids = {
+        metric_id
+        for binding in reported_bindings
+        for output_key, metric_id in binding.outputs.items()
+        if isinstance(binding.config.get("projections"), Mapping)
+        and output_key in binding.config["projections"]
+    }
     normalized = replace(
         plan,
         metrics=tuple(
             replace(metric, value_type="opaque", direction="neutral", aggregation="none", primary=False)
-            if metric.id in reported_metric_ids
+            if metric.id in reported_metric_ids and metric.id not in projected_metric_ids
             else metric
             for metric in plan.metrics
         ),
@@ -86,7 +93,7 @@ def _legacy_metric_id(key: str, metrics: Any) -> tuple[str, str]:
 
 
 def _is_declared_custom_metric(key: str, metrics: Any) -> bool:
-    """Whether *key* belongs to a current opaque custom-metric declaration."""
+    """Whether *key* belongs to a current reported-metric declaration."""
     return any(
         metric["kind"] == "custom" and metric["name"] == key for metric in normalize_metrics(metrics)
     )

@@ -139,9 +139,9 @@ def _primary_metric(design_spec: dict[str, Any] | None) -> tuple[str | None, str
     for metric in metrics:
         if (
             isinstance(metric, dict)
-            and metric.get("kind") == "runtime"
             and metric.get("primary")
             and isinstance(metric.get("name"), str)
+            and metric.get("valueType", "number") in {"number", "boolean"}
         ):
             direction = metric.get("direction")
             # Catalog runtime metrics are stored under their telemetry key
@@ -177,9 +177,7 @@ def _declared_metric_types(design_spec: dict[str, Any] | None) -> dict[str, str]
     """Map Results metric keys to their declared numeric outcome type."""
     types: dict[str, str] = {}
     for metric in normalize_metrics((design_spec or {}).get("metrics")):
-        if metric["kind"] != "runtime":
-            continue
-        key = metric.get("catalogKey")
+        key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric.get("name")
         if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
             types[key] = metric["valueType"]
     return types
@@ -189,9 +187,7 @@ def _declared_metric_aggregations(design_spec: dict[str, Any] | None) -> dict[st
     """Map Results metric keys to their declared per-cell aggregation."""
     aggregations: dict[str, str] = {}
     for metric in normalize_metrics((design_spec or {}).get("metrics")):
-        if metric["kind"] != "runtime":
-            continue
-        key = metric.get("catalogKey")
+        key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric.get("name")
         if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
             aggregations[key] = metric["aggregation"]
     return aggregations
@@ -201,9 +197,7 @@ def _declared_metric_directions(design_spec: dict[str, Any] | None) -> dict[str,
     """Map scalar Results keys to whether higher, lower, or neither is preferred."""
     directions: dict[str, str] = {}
     for metric in normalize_metrics((design_spec or {}).get("metrics")):
-        if metric["kind"] != "runtime":
-            continue
-        key = metric.get("catalogKey")
+        key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric.get("name")
         if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
             directions[key] = metric["direction"]
     return directions

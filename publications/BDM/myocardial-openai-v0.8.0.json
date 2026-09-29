@@ -275,7 +275,7 @@
             "prompt": "",
             "goal": "Prune the feature space; commit v3_fs. After your final filter/balance-check tool call succeeds, call accept_stage(stage=\"fs\") yourself to promote your work to workspace HEAD before finishing -- this run's Critic Gate reviews your report, not this promotion, so call it on every attempt (a later revision's call simply supersedes an earlier one).\n\nRandom seed: 42\n\ntask_brief: {\"domain\": \"acute myocardial infarction admissions, UCI Myocardial Infarction Complications (ZSN) dataset\", \"prediction_task\": \"binary\", \"target_column\": \"mi_ZSN\", \"positive_class\": 1, \"expected_positive_rate\": 0.232, \"selection_metric\": \"average_precision\", \"num_classes\": 2, \"group_column\": null, \"notes\": \"Predict development of chronic heart failure (ZSN) as a post-MI complication. Dataset: 1700 admissions x 113 raw columns (1 ID + 111 features + target mi_ZSN); target is binary (0=no ZSN, 1=ZSN), observed positive rate 23.2%. Column `ID` (role=id, values 1..1700, all unique) is a non-feature record identifier -- exclude it from the training matrix entirely; it must never be imputed, engineered, selected, or scored as a feature. Unlike some ASAREE datasets, features here are RAW, not pre-encoded: types are a mix of integer, real, binary, ordinal, and categorical, and several are known to have real missingness (this is the original UCI dataset, not a cleaned derivative) -- confirm actual missingness yourself via inspect_columns rather than assuming any column is complete. Column names are NOT descriptive English words; they are short Russian-derived codes (e.g. `nr11`, `np01`, `zab_leg_01`, `S_AD_KBRIG`) -- do not infer meaning from the name alone, always confirm via get_data_dictionary, which carries a description and, for categorical/ordinal columns, its code mapping. FEATURE FAMILIES: demographics (AGE, SEX); cardiac history (INF_ANAM prior-MI count, STENOK_AN/FK_STENOK angina, GB/SIM_GIPERT/DLIT_AG hypertension, ZSN_A prior heart failure, IBS_POST/IBS_NASL coronary disease, nr*/np* prior arrhythmia and conduction-block history); comorbidities (endocr_* diabetes/obesity/thyroid, zab_leg_* chronic pulmonary disease); admission vitals and ICU-admission complications (S_AD_KBRIG/D_AD_KBRIG/S_AD_ORIT/D_AD_ORIT blood pressure, O_L_POST/K_SH_POST/MP_TP_POST/SVT_POST/GT_POST/FIB_G_POST); infarct localization (ant_im/lat_im/inf_im/post_im/IM_PG_P); admission ECG rhythm and conduction findings (ritm_ecg_p_*, n_r_ecg_p_*, n_p_ecg_p_*); labs (K_BLOOD, Na_BLOOD, ALT_BLOOD, AST_BLOOD, KFK_BLOOD, L_BLOOD, ROE) with their derived abnormal-value flags (GIPO_K, GIPER_Na); and treatment given before/during ICU admission (fibr_ter_* fibrinolytics, NA_KB/NA_R_*_n opioids, NOT_NA_*_n/NOT_NA_KB NSAIDs, LID_KB/LID_S_n lidocaine, B_BLOK_S_n beta-blockers, ANT_CA_S_n calcium-channel blockers, GEPAR_S_n heparin, ASP_S_n aspirin, TIKL_S_n/TRENT_S_n antiplatelets, NITR_S nitrates). A per-column data dictionary (description + codes) is available via get_data_dictionary.\"}",
             "description": "Filters by variance/correlation/supervised signal and checks class balance on top of v2_fte, commits the result as workspace version v3_fs.",
-            "system_prompt": "\nYou are a feature SELECTION agent for biomedical tabular data. You run THIRD, on\nthe engineered + encoded dataset from FTE (already clean, complete, and fully\nnumeric; missingness, engineering, and encoding were handled upstream). Your job\nis to profile the feature space and prune it through unsupervised filters plus one\nsupervised filter, over the FULL space of original survivors and engineered\nmeta-features alike. You do NOT clean, impute, engineer, or model. You do NOT\ntouch the test split.\n\nWORKSPACE MODEL (read this first): the FTE stage already committed the encoded,\nmodel-ready train/test matrix (v2_fte). Opening the workspace loads that encoded\nTRAINING matrix for you — you do NOT re-apply any preprocessor; the input is\nalready the space the runner will score. A selection tool computes on the\ntraining split only and writes this stage's dataset version (v3_fs) = the input\nrestricted to the columns you keep, on BOTH splits; the cell's workspace identity\ntravels with every tool call automatically, so you never pass a workspace id or a\ndataset id. There is no save_artifact step and there are no artifact keys.\n\nRUN CONTEXT\nYou will receive:\n- task_brief (same schema as DC's).\n- The approved FTE recipe report (context; the encoded data is already on disk).\n- The registered dataset name and random seed.\n- Your cell's workspace is ALREADY OPEN, seeded from the wired dataset before your\n  first turn -- your run context says so. What that does NOT do is materialize this\n  stage's scratch input, which the selection tools read, so you still make one\n  argument-free-except-stage open_workspace(stage=\"fs\") call. You never pass a\n  workspace id, an experiment id, a cell label or a dataset id to anything: the\n  workspace identity travels with every tool call as ambient run context.\n  The FINAL selection call commits the selected columns as v3_fs.\n\nReproduce the same random_seed in every tool call. Every drop must cite a\nspecific, measurable criterion.\n\nSTEPS\n1. Call open_workspace(stage=\"fs\") -- that argument and nothing else; which\n   workspace and which dataset both arrive as ambient run context.\n   It loads the ENCODED, model-ready TRAINING matrix (the FTE output) into your\n   scratch input. Do NOT re-apply a preprocessor; selection runs directly on this\n   already-encoded space, so the selected names align with what the runner scores.\n2. Profile every column (get_feature_distributions()): dtype, n_unique,\n   summary stats. (Data is already complete and numeric; this is selection context.)\n3. Variance filter: variance_filter(threshold=<t>)\n   (wraps sklearn VarianceThreshold): set and STATE a threshold; drop low /\n   near-zero-variance features. State your scaling assumption, since the threshold\n   interacts with scale.\n4. Correlation filter (compute_correlations(method='spearman')): find\n   pairs with |rho| above a stated threshold (e.g. 0.9). For each pair remove ONE\n   member using an UNSUPERVISED tie-break: keep the lower-missingness member, then\n   the higher-variance member; drop whichever is harder to interpret on a true\n   tie. Do not use the label here.\n5. Supervised filter: choose the survivors of steps 3-4 and call\n   supervised_filter(method=\"f_classif\" | \"mutual_info_classif\",\n                     k=<k>, features_json=<JSON list of survivor names>).\n   This is the FINAL selection call: it commits the selected\n   columns as this stage's output (v3_fs). The committed columns must be a subset\n   of the v2_fte columns.\n6. Call check_class_balance() and verify the observed rate matches\n   expected_positive_rate (binary) or the class count matches num_classes.\n\nCONCISENESS: report only what you changed or flagged. Summarize untouched columns\nby COUNT — do NOT enumerate all columns. Keep every rationale to one line. The\ncommitted dataset version carries the full detail; the runner reads it.\n\nOUTPUT - return ONE JSON dossier:\n{\n  \"n_features_in\": ..., \"n_features_out\": ...,\n  \"variance_threshold\": 0.0,\n  \"correlation\": {\"method\": \"spearman\", \"rho_threshold\": 0.9,\n                  \"pairs_removed\": [[\"kept\", \"dropped\", 0.95], ...]},\n  \"supervised_filter\": {\"method\": \"f_classif|mutual_info_classif\", \"k\": 0,\n                        \"top_scores\": [[\"feature\", score], ...]},\n  \"dropped_features\": [{\"feature\": \"...\", \"reason\": \"criterion + measured evidence\"}],\n  \"selected_features\": [\"...\"],\n  \"observed_class_distribution\": {\"<class>\": 0.0, ...},\n  \"class_balance_check\": \"matches task_brief\" | \"diverges: ...\",\n  \"notes_for_mlm\": \"caveats, dtype quirks, anything MLM should know.\"\n}\n",
+            "system_prompt": "\nYou are a feature SELECTION agent for biomedical tabular data. You run THIRD, on\nthe engineered + encoded dataset from FTE (already clean, complete, and fully\nnumeric; missingness, engineering, and encoding were handled upstream). Your job\nis to profile the feature space and prune it through unsupervised filters plus one\nsupervised filter, over the FULL space of original survivors and engineered\nmeta-features alike. You do NOT clean, impute, engineer, or model. You do NOT\ntouch the test split.\n\nWORKSPACE MODEL (read this first): the FTE stage already committed the encoded,\nmodel-ready train/test matrix (v2_fte). Opening the workspace loads that encoded\nTRAINING matrix for you — you do NOT re-apply any preprocessor; the input is\nalready the space the runner will score. A selection tool computes on the\ntraining split only and writes this stage's dataset version (v3_fs) = the input\nrestricted to the columns you keep, on BOTH splits; the cell's workspace identity\ntravels with every tool call automatically, so you never pass a workspace id or a\ndataset id. There is no save_artifact step and there are no artifact keys.\n\nRUN CONTEXT\nYou will receive:\n- task_brief (same schema as DC's).\n- The approved FTE recipe report (context; the encoded data is already on disk).\n- The registered dataset name and random seed.\n- Your cell's workspace is ALREADY OPEN, seeded from the wired dataset before your\n  first turn -- your run context says so. What that does NOT do is materialize this\n  stage's scratch input, which the selection tools read, so you still make one\n  argument-free-except-stage open_workspace(stage=\"fs\") call. You never pass a\n  workspace id, an experiment id, a cell label or a dataset id to anything: the\n  workspace identity travels with every tool call as ambient run context.\n  The FINAL selection call commits the selected columns as v3_fs.\n\nReproduce the same random_seed in every tool call. Every drop must cite a\nspecific, measurable criterion.\n\nSTEPS\n1. Call open_workspace(stage=\"fs\") -- that argument and nothing else; which\n   workspace and which dataset both arrive as ambient run context.\n   It loads the ENCODED, model-ready TRAINING matrix (the FTE output) into your\n   scratch input. Do NOT re-apply a preprocessor; selection runs directly on this\n   already-encoded space, so the selected names align with what the runner scores.\n2. Profile every column (get_feature_distributions()): dtype, n_unique,\n   summary stats. (Data is already complete and numeric; this is selection context.)\n3. Variance filter: variance_filter(threshold=<t>)\n   (wraps sklearn VarianceThreshold): set and STATE a threshold; drop low /\n   near-zero-variance features. State your scaling assumption, since the threshold\n   interacts with scale.\n4. Correlation filter (compute_correlations(method='spearman')): find\n   pairs with |rho| above a stated threshold (e.g. 0.9). For each pair remove ONE\n   member using an UNSUPERVISED tie-break: keep the lower-missingness member, then\n   the higher-variance member; drop whichever is harder to interpret on a true\n   tie. Do not use the label here.\n5. Supervised filter: choose the survivors of steps 3-4 and call\n   supervised_filter(method=\"f_classif\" | \"mutual_info_classif\",\n                     k=<k>, features_json=<JSON list of survivor names>).\n   This is the FINAL selection call: it commits the selected\n   columns as this stage's output (v3_fs). The committed columns must be a subset\n   of the v2_fte columns.\n6. Call check_class_balance() and verify the observed rate matches\n   expected_positive_rate (binary) or the class count matches num_classes.\n\n7. Compare selected_features with the output names in the upstream FTE\n   engineering_recipe. Report their intersection count as\n   n_engineered_features_selected and 100 times that count divided by\n   n_features_out as pct_engineered_features_selected.\n\nCONCISENESS: report only what you changed or flagged. Summarize untouched columns\nby COUNT — do NOT enumerate all columns. Keep every rationale to one line. The\ncommitted dataset version carries the full detail; the runner reads it.\n\nOUTPUT - return ONE JSON dossier:\n{\n  \"n_features_in\": ..., \"n_features_out\": ...,\n  \"n_engineered_features_selected\": ...,\n  \"pct_engineered_features_selected\": ...,\n  \"variance_threshold\": 0.0,\n  \"correlation\": {\"method\": \"spearman\", \"rho_threshold\": 0.9,\n                  \"pairs_removed\": [[\"kept\", \"dropped\", 0.95], ...]},\n  \"supervised_filter\": {\"method\": \"f_classif|mutual_info_classif\", \"k\": 0,\n                        \"top_scores\": [[\"feature\", score], ...]},\n  \"dropped_features\": [{\"feature\": \"...\", \"reason\": \"criterion + measured evidence\"}],\n  \"selected_features\": [\"...\"],\n  \"observed_class_distribution\": {\"<class>\": 0.0, ...},\n  \"class_balance_check\": \"matches task_brief\" | \"diverges: ...\",\n  \"notes_for_mlm\": \"caveats, dtype quirks, anything MLM should know.\"\n}\n",
             "output_contract": null,
             "budget_limit_usd": 200.0,
             "max_run_duration_seconds": 86400,
@@ -549,12 +549,12 @@
                 },
                 {
                   "name": "outliers",
-                  "type": "object",
+                  "type": "array",
                   "description": "Outlier handling summary per column"
                 },
                 {
                   "name": "imputation",
-                  "type": "object",
+                  "type": "array",
                   "description": "Imputation strategy used per column"
                 },
                 {
@@ -584,7 +584,7 @@
               "fields": [
                 {
                   "name": "engineering_recipe",
-                  "type": "object",
+                  "type": "array",
                   "description": "Feature-engineering steps applied"
                 },
                 {
@@ -633,6 +633,16 @@
                   "description": "Feature count after selection"
                 },
                 {
+                  "name": "n_engineered_features_selected",
+                  "type": "integer",
+                  "description": "Selected features created by the upstream engineering recipe"
+                },
+                {
+                  "name": "pct_engineered_features_selected",
+                  "type": "number",
+                  "description": "Percentage of selected features created by the upstream engineering recipe"
+                },
+                {
                   "name": "variance_threshold",
                   "type": "number",
                   "description": "Variance filter threshold used"
@@ -664,8 +674,8 @@
                 },
                 {
                   "name": "class_balance_check",
-                  "type": "boolean",
-                  "description": "Whether class balance passed the configured check"
+                  "type": "string",
+                  "description": "Whether observed class balance matches the task brief, with divergence details when it does not"
                 },
                 {
                   "name": "notes_for_mlm",
@@ -694,7 +704,7 @@
               "fields": [
                 {
                   "name": "search_space",
-                  "type": "object",
+                  "type": "array",
                   "description": "Hyperparameter search space proposal"
                 },
                 {
@@ -748,7 +758,7 @@
                   "description": "Hash of the scored payload, for the approved-payload guard"
                 },
                 {
-                  "name": "result",
+                  "name": "model_decisions",
                   "type": "object",
                   "description": "Train-side decisions the script itself reported (tuning, calibration, threshold)"
                 }
@@ -1047,9 +1057,649 @@
     "replicates": 10,
     "metrics": [
       {
+        "id": "runtime-cost",
+        "catalogKey": "cost_usd",
+        "name": "Cost",
+        "description": "Estimated provider cost for the run.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "USD"
+      },
+      {
+        "id": "runtime-duration",
+        "catalogKey": "duration_seconds",
+        "name": "Duration",
+        "description": "Wall-clock duration of the run.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "seconds"
+      },
+      {
+        "id": "runtime-input-tokens",
+        "catalogKey": "input_tokens",
+        "name": "Input tokens",
+        "description": "Tokens sent to the model during the run.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "tokens"
+      },
+      {
+        "id": "runtime-output-tokens",
+        "catalogKey": "output_tokens",
+        "name": "Output tokens",
+        "description": "Tokens generated by the model during the run.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "tokens"
+      },
+      {
+        "id": "runtime-total-tokens",
+        "catalogKey": "total_tokens",
+        "name": "Total tokens",
+        "description": "Combined input and output tokens for the run.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "tokens"
+      },
+      {
+        "id": "runtime-tool-calls",
+        "catalogKey": "tool_calls",
+        "name": "Tool calls",
+        "description": "Recorded tool-call attempts across attributed Agent runs.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "calls"
+      },
+      {
+        "id": "runtime-tool-error-rate",
+        "catalogKey": "tool_error_rate",
+        "name": "Tool error rate",
+        "description": "Failed tool calls divided by all tool-call attempts.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "mean",
+        "unit": "rate"
+      },
+      {
+        "id": "runtime-agent-loop-iterations",
+        "catalogKey": "agent_loop_iterations",
+        "name": "Agent-loop iterations",
+        "description": "Distinct Agent reasoning-loop iterations in the run.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "iterations"
+      },
+      {
+        "id": "runtime-critic-rejections",
+        "catalogKey": "critic_rejections",
+        "name": "Critic rejections",
+        "description": "Rejected critic-gate reviews during the run.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "reviews"
+      },
+      {
+        "id": "runtime-critic-approvals",
+        "catalogKey": "critic_approvals",
+        "name": "Critic approvals",
+        "description": "Critic gates ending in an actual approval.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "sum",
+        "unit": "reviews"
+      },
+      {
         "id": "model-evaluation",
-        "name": "Model evaluation",
-        "description": "The complete held-out scoring result reported by the wired asaree-sklearn-model run_model_script call, including test metrics and SHA-256 guards.",
+        "name": "model_evaluation",
+        "description": "Complete held-out scoring response from run_model_script.",
+        "kind": "custom",
+        "valueType": "opaque",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "none"
+      },
+      {
+        "id": "pr-auc",
+        "name": "pr_auc",
+        "description": "Held-out average precision (PR-AUC), the prespecified primary endpoint.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": true,
+        "direction": "maximize",
+        "aggregation": "mean",
+        "unit": "AUPRC"
+      },
+      {
+        "id": "roc-auc",
+        "name": "roc_auc",
+        "description": "Held-out ROC-AUC.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean",
+        "unit": "ROC-AUC"
+      },
+      {
+        "id": "brier-score",
+        "name": "brier_score",
+        "description": "Held-out Brier score.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "mean",
+        "unit": "score"
+      },
+      {
+        "id": "chosen-threshold",
+        "name": "chosen_threshold",
+        "description": "Training-selected operating threshold.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean"
+      },
+      {
+        "id": "test-prevalence",
+        "name": "test_prevalence",
+        "description": "Observed positive-class rate in the held-out test split.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "proportion"
+      },
+      {
+        "id": "n-test-samples",
+        "name": "n_test_samples",
+        "description": "Held-out test sample count.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "samples"
+      },
+      {
+        "id": "n-pos-test",
+        "name": "n_pos_test",
+        "description": "Positive-class sample count in the held-out test split.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "samples"
+      },
+      {
+        "id": "accuracy-0-5",
+        "name": "accuracy_at_0_5",
+        "description": "accuracy at the 0 5 operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "balanced_accuracy-0-5",
+        "name": "balanced_accuracy_at_0_5",
+        "description": "balanced accuracy at the 0 5 operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "precision-0-5",
+        "name": "precision_at_0_5",
+        "description": "precision at the 0 5 operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "recall-0-5",
+        "name": "recall_at_0_5",
+        "description": "recall at the 0 5 operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "f1-0-5",
+        "name": "f1_at_0_5",
+        "description": "f1 at the 0 5 operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "accuracy-chosen",
+        "name": "accuracy_at_chosen_threshold",
+        "description": "accuracy at the chosen threshold operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "balanced_accuracy-chosen",
+        "name": "balanced_accuracy_at_chosen_threshold",
+        "description": "balanced accuracy at the chosen threshold operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "precision-chosen",
+        "name": "precision_at_chosen_threshold",
+        "description": "precision at the chosen threshold operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "recall-chosen",
+        "name": "recall_at_chosen_threshold",
+        "description": "recall at the chosen threshold operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "f1-chosen",
+        "name": "f1_at_chosen_threshold",
+        "description": "f1 at the chosen threshold operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "accuracy-prevalence",
+        "name": "accuracy_at_prevalence",
+        "description": "accuracy at the prevalence operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "balanced_accuracy-prevalence",
+        "name": "balanced_accuracy_at_prevalence",
+        "description": "balanced accuracy at the prevalence operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "precision-prevalence",
+        "name": "precision_at_prevalence",
+        "description": "precision at the prevalence operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "recall-prevalence",
+        "name": "recall_at_prevalence",
+        "description": "recall at the prevalence operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "f1-prevalence",
+        "name": "f1_at_prevalence",
+        "description": "f1 at the prevalence operating point.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean"
+      },
+      {
+        "id": "n-pred-pos-0-5",
+        "name": "n_pred_pos_at_0_5",
+        "description": "Positive predictions at the 0.5 operating point; zero indicates undefined precision and F1.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "predictions"
+      },
+      {
+        "id": "n-pred-pos-chosen",
+        "name": "n_pred_pos_at_chosen_threshold",
+        "description": "Positive predictions at the training-selected operating point; zero indicates undefined precision and F1.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "predictions"
+      },
+      {
+        "id": "n-pred-pos-prevalence",
+        "name": "n_pred_pos_at_prevalence",
+        "description": "Positive predictions at the prevalence operating point; zero indicates undefined precision and F1.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "predictions"
+      },
+      {
+        "id": "n-features-after-dc",
+        "name": "n_features_after_dc",
+        "description": "Feature count after data cleaning.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "features"
+      },
+      {
+        "id": "missingness-threshold",
+        "name": "missingness_threshold",
+        "description": "Data-cleaning missingness threshold.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "proportion"
+      },
+      {
+        "id": "n-dropped-for-missingness",
+        "name": "n_dropped_for_missingness",
+        "description": "Columns dropped for exceeding the cleaning missingness threshold.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "features"
+      },
+      {
+        "id": "n-engineered-features",
+        "name": "n_engineered_features",
+        "description": "Feature-engineering recipe operation count.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "features"
+      },
+      {
+        "id": "n-features-after-fte",
+        "name": "n_features_after_fte",
+        "description": "Feature count after engineering and encoding.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "features"
+      },
+      {
+        "id": "n-features-after-fs",
+        "name": "n_features_after_fs",
+        "description": "Features surviving selection and reaching modeling.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "features"
+      },
+      {
+        "id": "n-engineered-features-selected",
+        "name": "n_engineered_features_selected",
+        "description": "Engineered features surviving feature selection.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "features"
+      },
+      {
+        "id": "pct-engineered-features-selected",
+        "name": "pct_engineered_features_selected",
+        "description": "Engineered features as a percentage of selected features.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "percent"
+      },
+      {
+        "id": "variance-threshold",
+        "name": "variance_threshold",
+        "description": "Feature-selection variance threshold.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean"
+      },
+      {
+        "id": "selected-features",
+        "name": "selected_features",
+        "description": "Final selected feature names.",
+        "kind": "custom",
+        "valueType": "opaque",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "none"
+      },
+      {
+        "id": "optuna-n-trials",
+        "name": "optuna_n_trials",
+        "description": "Optuna trial count.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "trials"
+      },
+      {
+        "id": "optuna-best-inner-cv-score",
+        "name": "optuna_best_inner_cv_score",
+        "description": "Best inner-CV average precision found by Optuna.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "maximize",
+        "aggregation": "mean",
+        "unit": "AUPRC"
+      },
+      {
+        "id": "calibration-brier-val",
+        "name": "calibration_brier_val",
+        "description": "Validation-fold Brier score after isotonic calibration.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "mean",
+        "unit": "score"
+      },
+      {
+        "id": "hp-n-estimators",
+        "name": "hp_n_estimators",
+        "description": "Final XGBoost n_estimators value.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean"
+      },
+      {
+        "id": "hp-max-depth",
+        "name": "hp_max_depth",
+        "description": "Final XGBoost max_depth value.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean"
+      },
+      {
+        "id": "hp-learning-rate",
+        "name": "hp_learning_rate",
+        "description": "Final XGBoost learning_rate value.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean"
+      },
+      {
+        "id": "hp-min-child-weight",
+        "name": "hp_min_child_weight",
+        "description": "Final XGBoost min_child_weight value.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean"
+      },
+      {
+        "id": "hp-subsample",
+        "name": "hp_subsample",
+        "description": "Final XGBoost subsample value.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean"
+      },
+      {
+        "id": "hp-colsample-bytree",
+        "name": "hp_colsample_bytree",
+        "description": "Final XGBoost colsample_bytree value.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean"
+      },
+      {
+        "id": "hp-reg-lambda",
+        "name": "hp_reg_lambda",
+        "description": "Final XGBoost reg_lambda value.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean"
+      },
+      {
+        "id": "hp-reg-alpha",
+        "name": "hp_reg_alpha",
+        "description": "Final XGBoost reg_alpha value.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean"
+      },
+      {
+        "id": "hp-gamma",
+        "name": "hp_gamma",
+        "description": "Final XGBoost gamma value.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean"
+      },
+      {
+        "id": "code-sha256",
+        "name": "code_sha256",
+        "description": "SHA-256 of the executed fixed modeling script.",
+        "kind": "custom",
+        "valueType": "opaque",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "none"
+      },
+      {
+        "id": "payload-sha256",
+        "name": "payload_sha256",
+        "description": "SHA-256 of the approved hyperparameter payload.",
+        "kind": "custom",
+        "valueType": "opaque",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "none"
+      },
+      {
+        "id": "data-sha256",
+        "name": "data_sha256",
+        "description": "SHA-256 provenance hash for the scored data.",
         "kind": "custom",
         "valueType": "opaque",
         "primary": false,
@@ -1064,32 +1714,870 @@
   "measurement_plan": {
     "metrics": [
       {
+        "id": "runtime-cost",
+        "name": "Cost",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Estimated provider cost for the run.",
+        "unit": "USD"
+      },
+      {
+        "id": "runtime-duration",
+        "name": "Duration",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Wall-clock duration of the run.",
+        "unit": "seconds"
+      },
+      {
+        "id": "runtime-input-tokens",
+        "name": "Input tokens",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Tokens sent to the model during the run.",
+        "unit": "tokens"
+      },
+      {
+        "id": "runtime-output-tokens",
+        "name": "Output tokens",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Tokens generated by the model during the run.",
+        "unit": "tokens"
+      },
+      {
+        "id": "runtime-total-tokens",
+        "name": "Total tokens",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Combined input and output tokens for the run.",
+        "unit": "tokens"
+      },
+      {
+        "id": "runtime-tool-calls",
+        "name": "Tool calls",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Recorded tool-call attempts across attributed Agent runs.",
+        "unit": "calls"
+      },
+      {
+        "id": "runtime-tool-error-rate",
+        "name": "Tool error rate",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Failed tool calls divided by all tool-call attempts.",
+        "unit": "rate"
+      },
+      {
+        "id": "runtime-agent-loop-iterations",
+        "name": "Agent-loop iterations",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Distinct Agent reasoning-loop iterations in the run.",
+        "unit": "iterations"
+      },
+      {
+        "id": "runtime-critic-rejections",
+        "name": "Critic rejections",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Rejected critic-gate reviews during the run.",
+        "unit": "reviews"
+      },
+      {
+        "id": "runtime-critic-approvals",
+        "name": "Critic approvals",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Critic gates ending in an actual approval.",
+        "unit": "reviews"
+      },
+      {
         "id": "model-evaluation",
-        "name": "Model evaluation",
+        "name": "model_evaluation",
         "value_type": "opaque",
         "direction": "neutral",
         "aggregation": "none",
         "primary": false,
-        "description": "The complete held-out scoring result reported by the wired asaree-sklearn-model run_model_script call, including test metrics and SHA-256 guards."
+        "description": "Complete held-out scoring response from run_model_script."
+      },
+      {
+        "id": "pr-auc",
+        "name": "pr_auc",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": true,
+        "description": "Held-out average precision (PR-AUC), the prespecified primary endpoint.",
+        "unit": "AUPRC"
+      },
+      {
+        "id": "roc-auc",
+        "name": "roc_auc",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Held-out ROC-AUC.",
+        "unit": "ROC-AUC"
+      },
+      {
+        "id": "brier-score",
+        "name": "brier_score",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Held-out Brier score.",
+        "unit": "score"
+      },
+      {
+        "id": "chosen-threshold",
+        "name": "chosen_threshold",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Training-selected operating threshold."
+      },
+      {
+        "id": "test-prevalence",
+        "name": "test_prevalence",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Observed positive-class rate in the held-out test split.",
+        "unit": "proportion"
+      },
+      {
+        "id": "n-test-samples",
+        "name": "n_test_samples",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Held-out test sample count.",
+        "unit": "samples"
+      },
+      {
+        "id": "n-pos-test",
+        "name": "n_pos_test",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Positive-class sample count in the held-out test split.",
+        "unit": "samples"
+      },
+      {
+        "id": "accuracy-0-5",
+        "name": "accuracy_at_0_5",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "accuracy at the 0 5 operating point."
+      },
+      {
+        "id": "balanced_accuracy-0-5",
+        "name": "balanced_accuracy_at_0_5",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "balanced accuracy at the 0 5 operating point."
+      },
+      {
+        "id": "precision-0-5",
+        "name": "precision_at_0_5",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "precision at the 0 5 operating point."
+      },
+      {
+        "id": "recall-0-5",
+        "name": "recall_at_0_5",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "recall at the 0 5 operating point."
+      },
+      {
+        "id": "f1-0-5",
+        "name": "f1_at_0_5",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "f1 at the 0 5 operating point."
+      },
+      {
+        "id": "accuracy-chosen",
+        "name": "accuracy_at_chosen_threshold",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "accuracy at the chosen threshold operating point."
+      },
+      {
+        "id": "balanced_accuracy-chosen",
+        "name": "balanced_accuracy_at_chosen_threshold",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "balanced accuracy at the chosen threshold operating point."
+      },
+      {
+        "id": "precision-chosen",
+        "name": "precision_at_chosen_threshold",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "precision at the chosen threshold operating point."
+      },
+      {
+        "id": "recall-chosen",
+        "name": "recall_at_chosen_threshold",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "recall at the chosen threshold operating point."
+      },
+      {
+        "id": "f1-chosen",
+        "name": "f1_at_chosen_threshold",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "f1 at the chosen threshold operating point."
+      },
+      {
+        "id": "accuracy-prevalence",
+        "name": "accuracy_at_prevalence",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "accuracy at the prevalence operating point."
+      },
+      {
+        "id": "balanced_accuracy-prevalence",
+        "name": "balanced_accuracy_at_prevalence",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "balanced accuracy at the prevalence operating point."
+      },
+      {
+        "id": "precision-prevalence",
+        "name": "precision_at_prevalence",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "precision at the prevalence operating point."
+      },
+      {
+        "id": "recall-prevalence",
+        "name": "recall_at_prevalence",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "recall at the prevalence operating point."
+      },
+      {
+        "id": "f1-prevalence",
+        "name": "f1_at_prevalence",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "f1 at the prevalence operating point."
+      },
+      {
+        "id": "n-pred-pos-0-5",
+        "name": "n_pred_pos_at_0_5",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Positive predictions at the 0.5 operating point; zero indicates undefined precision and F1.",
+        "unit": "predictions"
+      },
+      {
+        "id": "n-pred-pos-chosen",
+        "name": "n_pred_pos_at_chosen_threshold",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Positive predictions at the training-selected operating point; zero indicates undefined precision and F1.",
+        "unit": "predictions"
+      },
+      {
+        "id": "n-pred-pos-prevalence",
+        "name": "n_pred_pos_at_prevalence",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Positive predictions at the prevalence operating point; zero indicates undefined precision and F1.",
+        "unit": "predictions"
+      },
+      {
+        "id": "n-features-after-dc",
+        "name": "n_features_after_dc",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Feature count after data cleaning.",
+        "unit": "features"
+      },
+      {
+        "id": "missingness-threshold",
+        "name": "missingness_threshold",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Data-cleaning missingness threshold.",
+        "unit": "proportion"
+      },
+      {
+        "id": "n-dropped-for-missingness",
+        "name": "n_dropped_for_missingness",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Columns dropped for exceeding the cleaning missingness threshold.",
+        "unit": "features"
+      },
+      {
+        "id": "n-engineered-features",
+        "name": "n_engineered_features",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Feature-engineering recipe operation count.",
+        "unit": "features"
+      },
+      {
+        "id": "n-features-after-fte",
+        "name": "n_features_after_fte",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Feature count after engineering and encoding.",
+        "unit": "features"
+      },
+      {
+        "id": "n-features-after-fs",
+        "name": "n_features_after_fs",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Features surviving selection and reaching modeling.",
+        "unit": "features"
+      },
+      {
+        "id": "n-engineered-features-selected",
+        "name": "n_engineered_features_selected",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Engineered features surviving feature selection.",
+        "unit": "features"
+      },
+      {
+        "id": "pct-engineered-features-selected",
+        "name": "pct_engineered_features_selected",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Engineered features as a percentage of selected features.",
+        "unit": "percent"
+      },
+      {
+        "id": "variance-threshold",
+        "name": "variance_threshold",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Feature-selection variance threshold."
+      },
+      {
+        "id": "selected-features",
+        "name": "selected_features",
+        "value_type": "opaque",
+        "direction": "neutral",
+        "aggregation": "none",
+        "primary": false,
+        "description": "Final selected feature names."
+      },
+      {
+        "id": "optuna-n-trials",
+        "name": "optuna_n_trials",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Optuna trial count.",
+        "unit": "trials"
+      },
+      {
+        "id": "optuna-best-inner-cv-score",
+        "name": "optuna_best_inner_cv_score",
+        "value_type": "number",
+        "direction": "maximize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Best inner-CV average precision found by Optuna.",
+        "unit": "AUPRC"
+      },
+      {
+        "id": "calibration-brier-val",
+        "name": "calibration_brier_val",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Validation-fold Brier score after isotonic calibration.",
+        "unit": "score"
+      },
+      {
+        "id": "hp-n-estimators",
+        "name": "hp_n_estimators",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Final XGBoost n_estimators value."
+      },
+      {
+        "id": "hp-max-depth",
+        "name": "hp_max_depth",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Final XGBoost max_depth value."
+      },
+      {
+        "id": "hp-learning-rate",
+        "name": "hp_learning_rate",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Final XGBoost learning_rate value."
+      },
+      {
+        "id": "hp-min-child-weight",
+        "name": "hp_min_child_weight",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Final XGBoost min_child_weight value."
+      },
+      {
+        "id": "hp-subsample",
+        "name": "hp_subsample",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Final XGBoost subsample value."
+      },
+      {
+        "id": "hp-colsample-bytree",
+        "name": "hp_colsample_bytree",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Final XGBoost colsample_bytree value."
+      },
+      {
+        "id": "hp-reg-lambda",
+        "name": "hp_reg_lambda",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Final XGBoost reg_lambda value."
+      },
+      {
+        "id": "hp-reg-alpha",
+        "name": "hp_reg_alpha",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Final XGBoost reg_alpha value."
+      },
+      {
+        "id": "hp-gamma",
+        "name": "hp_gamma",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Final XGBoost gamma value."
+      },
+      {
+        "id": "code-sha256",
+        "name": "code_sha256",
+        "value_type": "opaque",
+        "direction": "neutral",
+        "aggregation": "none",
+        "primary": false,
+        "description": "SHA-256 of the executed fixed modeling script."
+      },
+      {
+        "id": "payload-sha256",
+        "name": "payload_sha256",
+        "value_type": "opaque",
+        "direction": "neutral",
+        "aggregation": "none",
+        "primary": false,
+        "description": "SHA-256 of the approved hyperparameter payload."
+      },
+      {
+        "id": "data-sha256",
+        "name": "data_sha256",
+        "value_type": "opaque",
+        "direction": "neutral",
+        "aggregation": "none",
+        "primary": false,
+        "description": "SHA-256 provenance hash for the scored data."
       }
     ],
     "producers": [
+      {
+        "id": "runtime",
+        "producer_id": "asaree.runtime",
+        "kind": "runtime",
+        "outputs": {
+          "cost_usd": "runtime-cost",
+          "duration_seconds": "runtime-duration",
+          "input_tokens": "runtime-input-tokens",
+          "output_tokens": "runtime-output-tokens",
+          "total_tokens": "runtime-total-tokens",
+          "tool_calls": "runtime-tool-calls",
+          "tool_error_rate": "runtime-tool-error-rate",
+          "agent_loop_iterations": "runtime-agent-loop-iterations",
+          "critic_rejections": "runtime-critic-rejections",
+          "critic_approvals": "runtime-critic-approvals"
+        },
+        "artifacts": [],
+        "config": {}
+      },
+      {
+        "id": "dc-report-source",
+        "producer_id": "asaree.agent_output",
+        "kind": "reported",
+        "outputs": {
+          "n_features_after_dc": "n-features-after-dc",
+          "missingness_threshold": "missingness-threshold",
+          "n_dropped_for_missingness": "n-dropped-for-missingness"
+        },
+        "artifacts": [],
+        "config": {
+          "agent_node_id": "agent-dc",
+          "projections": {
+            "n_features_after_dc": {
+              "path": "n_cols_out"
+            },
+            "missingness_threshold": {
+              "path": "missingness_threshold"
+            },
+            "n_dropped_for_missingness": {
+              "path": "dropped_for_missingness",
+              "transform": "length"
+            }
+          }
+        }
+      },
+      {
+        "id": "fte-report-source",
+        "producer_id": "asaree.agent_output",
+        "kind": "reported",
+        "outputs": {
+          "n_engineered_features": "n-engineered-features",
+          "n_features_after_fte": "n-features-after-fte"
+        },
+        "artifacts": [],
+        "config": {
+          "agent_node_id": "agent-fte",
+          "projections": {
+            "n_engineered_features": {
+              "path": "engineering_recipe",
+              "transform": "length"
+            },
+            "n_features_after_fte": {
+              "path": "n_features_out"
+            }
+          }
+        }
+      },
+      {
+        "id": "fs-report-source",
+        "producer_id": "asaree.agent_output",
+        "kind": "reported",
+        "outputs": {
+          "n_features_after_fs": "n-features-after-fs",
+          "n_engineered_features_selected": "n-engineered-features-selected",
+          "pct_engineered_features_selected": "pct-engineered-features-selected",
+          "variance_threshold": "variance-threshold",
+          "selected_features": "selected-features"
+        },
+        "artifacts": [],
+        "config": {
+          "agent_node_id": "agent-fs",
+          "projections": {
+            "n_features_after_fs": {
+              "path": "n_features_out"
+            },
+            "n_engineered_features_selected": {
+              "path": "n_engineered_features_selected"
+            },
+            "pct_engineered_features_selected": {
+              "path": "pct_engineered_features_selected"
+            },
+            "variance_threshold": {
+              "path": "variance_threshold"
+            },
+            "selected_features": {
+              "path": "selected_features"
+            }
+          }
+        }
+      },
       {
         "id": "model-evaluation-source",
         "producer_id": "asaree.mcp_tool",
         "kind": "reported",
         "outputs": {
-          "value": "model-evaluation"
+          "model_evaluation": "model-evaluation",
+          "pr_auc": "pr-auc",
+          "roc_auc": "roc-auc",
+          "brier_score": "brier-score",
+          "chosen_threshold": "chosen-threshold",
+          "test_prevalence": "test-prevalence",
+          "n_test_samples": "n-test-samples",
+          "n_pos_test": "n-pos-test",
+          "accuracy_at_0_5": "accuracy-0-5",
+          "balanced_accuracy_at_0_5": "balanced_accuracy-0-5",
+          "precision_at_0_5": "precision-0-5",
+          "recall_at_0_5": "recall-0-5",
+          "f1_at_0_5": "f1-0-5",
+          "accuracy_at_chosen_threshold": "accuracy-chosen",
+          "balanced_accuracy_at_chosen_threshold": "balanced_accuracy-chosen",
+          "precision_at_chosen_threshold": "precision-chosen",
+          "recall_at_chosen_threshold": "recall-chosen",
+          "f1_at_chosen_threshold": "f1-chosen",
+          "accuracy_at_prevalence": "accuracy-prevalence",
+          "balanced_accuracy_at_prevalence": "balanced_accuracy-prevalence",
+          "precision_at_prevalence": "precision-prevalence",
+          "recall_at_prevalence": "recall-prevalence",
+          "f1_at_prevalence": "f1-prevalence",
+          "n_pred_pos_at_0_5": "n-pred-pos-0-5",
+          "n_pred_pos_at_chosen_threshold": "n-pred-pos-chosen",
+          "n_pred_pos_at_prevalence": "n-pred-pos-prevalence",
+          "optuna_n_trials": "optuna-n-trials",
+          "optuna_best_inner_cv_score": "optuna-best-inner-cv-score",
+          "calibration_brier_val": "calibration-brier-val",
+          "code_sha256": "code-sha256",
+          "payload_sha256": "payload-sha256",
+          "data_sha256": "data-sha256",
+          "hp_n_estimators": "hp-n-estimators",
+          "hp_max_depth": "hp-max-depth",
+          "hp_learning_rate": "hp-learning-rate",
+          "hp_min_child_weight": "hp-min-child-weight",
+          "hp_subsample": "hp-subsample",
+          "hp_colsample_bytree": "hp-colsample-bytree",
+          "hp_reg_lambda": "hp-reg-lambda",
+          "hp_reg_alpha": "hp-reg-alpha",
+          "hp_gamma": "hp-gamma"
         },
         "artifacts": [],
         "config": {
           "agent_node_id": "agent-score",
           "mcp_node_id": "tool-model-score",
           "server_id": "b16f01eb-90af-4558-af3e-77c6fdcb7b22",
-          "tool_name": "run_model_script"
+          "tool_name": "run_model_script",
+          "projections": {
+            "pr_auc": {
+              "path": "test_metrics.average_precision"
+            },
+            "roc_auc": {
+              "path": "test_metrics.roc_auc"
+            },
+            "brier_score": {
+              "path": "test_metrics.brier_score"
+            },
+            "chosen_threshold": {
+              "path": "test_metrics.chosen_threshold"
+            },
+            "test_prevalence": {
+              "path": "test_metrics.test_prevalence"
+            },
+            "n_test_samples": {
+              "path": "test_metrics.n_test_samples"
+            },
+            "n_pos_test": {
+              "path": "test_metrics.n_pos_test"
+            },
+            "accuracy_at_0_5": {
+              "path": "/test_metrics/metrics_at_0.5/accuracy"
+            },
+            "balanced_accuracy_at_0_5": {
+              "path": "/test_metrics/metrics_at_0.5/balanced_accuracy"
+            },
+            "precision_at_0_5": {
+              "path": "/test_metrics/metrics_at_0.5/precision"
+            },
+            "recall_at_0_5": {
+              "path": "/test_metrics/metrics_at_0.5/recall"
+            },
+            "f1_at_0_5": {
+              "path": "/test_metrics/metrics_at_0.5/f1"
+            },
+            "accuracy_at_chosen_threshold": {
+              "path": "test_metrics.metrics_at_chosen_threshold.accuracy"
+            },
+            "balanced_accuracy_at_chosen_threshold": {
+              "path": "test_metrics.metrics_at_chosen_threshold.balanced_accuracy"
+            },
+            "precision_at_chosen_threshold": {
+              "path": "test_metrics.metrics_at_chosen_threshold.precision"
+            },
+            "recall_at_chosen_threshold": {
+              "path": "test_metrics.metrics_at_chosen_threshold.recall"
+            },
+            "f1_at_chosen_threshold": {
+              "path": "test_metrics.metrics_at_chosen_threshold.f1"
+            },
+            "accuracy_at_prevalence": {
+              "path": "test_metrics.metrics_at_prevalence.accuracy"
+            },
+            "balanced_accuracy_at_prevalence": {
+              "path": "test_metrics.metrics_at_prevalence.balanced_accuracy"
+            },
+            "precision_at_prevalence": {
+              "path": "test_metrics.metrics_at_prevalence.precision"
+            },
+            "recall_at_prevalence": {
+              "path": "test_metrics.metrics_at_prevalence.recall"
+            },
+            "f1_at_prevalence": {
+              "path": "test_metrics.metrics_at_prevalence.f1"
+            },
+            "n_pred_pos_at_0_5": {
+              "path": "/test_metrics/metrics_at_0.5/n_pred_pos"
+            },
+            "n_pred_pos_at_chosen_threshold": {
+              "path": "test_metrics.metrics_at_chosen_threshold.n_pred_pos"
+            },
+            "n_pred_pos_at_prevalence": {
+              "path": "test_metrics.metrics_at_prevalence.n_pred_pos"
+            },
+            "optuna_n_trials": {
+              "path": "model_decisions.n_trials"
+            },
+            "optuna_best_inner_cv_score": {
+              "path": "model_decisions.optuna_best_value"
+            },
+            "calibration_brier_val": {
+              "path": "model_decisions.calibration_brier_val"
+            },
+            "code_sha256": {
+              "path": "code_sha256"
+            },
+            "payload_sha256": {
+              "path": "payload_sha256"
+            },
+            "data_sha256": {
+              "path": "data_sha256"
+            },
+            "hp_n_estimators": {
+              "path": "model_decisions.best_hyperparameters.n_estimators"
+            },
+            "hp_max_depth": {
+              "path": "model_decisions.best_hyperparameters.max_depth"
+            },
+            "hp_learning_rate": {
+              "path": "model_decisions.best_hyperparameters.learning_rate"
+            },
+            "hp_min_child_weight": {
+              "path": "model_decisions.best_hyperparameters.min_child_weight"
+            },
+            "hp_subsample": {
+              "path": "model_decisions.best_hyperparameters.subsample"
+            },
+            "hp_colsample_bytree": {
+              "path": "model_decisions.best_hyperparameters.colsample_bytree"
+            },
+            "hp_reg_lambda": {
+              "path": "model_decisions.best_hyperparameters.reg_lambda"
+            },
+            "hp_reg_alpha": {
+              "path": "model_decisions.best_hyperparameters.reg_alpha"
+            },
+            "hp_gamma": {
+              "path": "model_decisions.best_hyperparameters.gamma"
+            }
+          }
         }
       }
     ],
-    "inputs": []
+    "inputs": [
+      {
+        "producer_binding_id": "runtime",
+        "input_key": "facts",
+        "source_key": "attempt.runtime"
+      }
+    ]
   }
 }

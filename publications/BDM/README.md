@@ -72,11 +72,13 @@ critic gates, with these v0.8.0 execution details:
   connected Output Parser node rather than the legacy hidden
   `config.output_contract` field. The contracts and runtime behavior are
   unchanged; the canvas now exposes where each structured payload is defined.
-- **Declared measurement source.** The complete held-out scoring response is
-  captured as the opaque `Model evaluation` metric from MI-Score's exact
-  `asaree-sklearn-model.run_model_script` call. This retains the returned test
-  metrics and SHA-256 guards with producer provenance; an arbitrary successful
-  tool call is not promoted as a result.
+- **Declared measurements.** The complete held-out scoring response is retained
+  as an opaque provenance record, while typed projections expose PR-AUC (the
+  primary metric), ROC-AUC, Brier and operating-point diagnostics, pipeline
+  feature counts, Optuna/XGBoost decisions, SHA-256 guards, and the built-in
+  runtime metrics as analysis-ready Results and CSV columns. Agent-stage values
+  come from their connected Output Parser payloads; scoring values come from
+  MI-Score's exact `asaree-sklearn-model.run_model_script` call.
 
 That `open_workspace(stage=...)` call is deliberately kept: seeding the
 workspace materializes `v0_raw`, but *not* a stage's `.scratch` input, which is

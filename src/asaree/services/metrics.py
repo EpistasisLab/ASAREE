@@ -300,7 +300,16 @@ def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> l
             if catalog
             else "mean"
         )
-        if metric["kind"] == "custom":
+        # Explicit scalar custom declarations are produced by structured
+        # reported-output projections. Legacy/custom drafts without an
+        # explicit scalar type keep the original opaque display-only
+        # semantics.
+        scalar_custom = (
+            metric["kind"] == "custom"
+            and raw.get("kind") == "custom"
+            and raw.get("valueType") in {"number", "boolean"}
+        )
+        if metric["kind"] == "custom" and not scalar_custom:
             metric["valueType"] = "opaque"
             metric["direction"] = "neutral"
             metric["aggregation"] = "none"

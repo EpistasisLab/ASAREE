@@ -7,6 +7,7 @@ output or the last matching call already present in its immutable run trace.
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -25,6 +26,7 @@ from asaree.services.measurement_engine import (
     ProducerProvenance,
     ValidationIssue,
     ValidationReport,
+    is_scalar_value,
     preserved_binding_severity,
 )
 from asaree.services.protocol_graph import directly_connected_tool_pair, node_map
@@ -36,6 +38,52 @@ REPORTED_PRODUCER_IDS = frozenset({AGENT_OUTPUT_PRODUCER_ID, PYTHON_SCRIPT_PRODU
 MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool", "mcp_scikit_learn", "mcp_client_tool"})
 _SCRIPT_SERVER = "asaree-script"
 _SCRIPT_TOOL = "run_wired_script"
+
+
+def _structured_value(value: Any) -> Any:
+    """Decode a JSON transport string while preserving already-typed values."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _project_reported_value(value: Any, projection: Any) -> tuple[Any, str | None]:
+    """Select one typed value from a reported JSON document.
+
+    Projection paths use dot-separated object keys (and integer list indexes).
+    ``length`` is intentionally the only transform: it covers collection counts
+    without turning measurement plans into an expression language.
+    """
+    if not isinstance(projection, Mapping):
+        return None, "The reported metric projection is invalid."
+    path = projection.get("path")
+    if not isinstance(path, str):
+        return None, "The reported metric projection has no path."
+    current = _structured_value(value)
+    segments = (
+        [part.replace("~1", "/").replace("~0", "~") for part in path.removeprefix("/").split("/")]
+        if path.startswith("/")
+        else [part for part in path.split(".") if part]
+    )
+    for segment in segments:
+        if isinstance(current, Mapping) and segment in current:
+            current = current[segment]
+        elif isinstance(current, Sequence) and not isinstance(current, str):
+            try:
+                current = current[int(segment)]
+            except (ValueError, IndexError):
+                return None, f"Reported metric path {path!r} is unavailable."
+        else:
+            return None, f"Reported metric path {path!r} is unavailable."
+    transform = projection.get("transform")
+    if transform is None:
+        return current, None
+    if transform == "length" and isinstance(current, Mapping | Sequence) and not isinstance(current, str):
+        return len(current), None
+    return None, f"Reported metric transform {transform!r} cannot be applied."
 
 
 def _tool_matches(recorded: Any, configured: str) -> bool:
@@ -142,11 +190,16 @@ async def collect_reported_metrics(
             if isinstance(node_run, Mapping)
             else None
         )
+        structured_agent_output = (
+            node_run.get("last_successful_payload", node_run.get("payload"))
+            if isinstance(node_run, Mapping)
+            else None
+        )
         agent_output_available = (
             binding.producer_id == AGENT_OUTPUT_PRODUCER_ID
             and isinstance(node_run, Mapping)
             and (node_run.get("status") == "completed" or "last_successful_output_text" in node_run)
-            and successful_output is not None
+            and (successful_output is not None or structured_agent_output is not None)
         )
         call = (
             None if binding.producer_id == AGENT_OUTPUT_PRODUCER_ID else await _last_matching_call(run, binding, graph)
@@ -172,25 +225,43 @@ async def collect_reported_metrics(
                 ),
             },
         )
-        for metric_id in binding.outputs.values():
+        projections = binding.config.get("projections")
+        projections = projections if isinstance(projections, Mapping) else {}
+        for output_key, metric_id in binding.outputs.items():
             metric = metrics.get(metric_id)
             if metric is None:
                 continue
+            raw_value = (
+                structured_agent_output
+                if agent_output_available and output_key in projections and structured_agent_output is not None
+                else successful_output
+                if agent_output_available
+                else call.get("result")
+                if call is not None
+                else None
+            )
+            value, projection_error = (
+                _project_reported_value(raw_value, projections[output_key])
+                if output_key in projections
+                else (raw_value, None)
+            )
+            type_error = (
+                None
+                if projection_error is not None or not measured or is_scalar_value(value, metric.value_type)
+                else f"Projected value does not match declared type {metric.value_type!r}."
+            )
+            observation_error = projection_error or type_error
             observations.append(
                 MetricObservation(
                     metric_id=metric.id,
                     metric_name=metric.name,
                     value_type=metric.value_type,
-                    value=(
-                        successful_output
-                        if agent_output_available
-                        else call.get("result")
-                        if call is not None
-                        else None
-                    ),
-                    status="measured" if measured else "unavailable",
+                    value=value if observation_error is None else None,
+                    status="measured" if measured and observation_error is None else "unavailable",
                     error=(
-                        None
+                        observation_error
+                        if observation_error is not None
+                        else None
                         if measured
                         else "The Agent did not produce a completed final output."
                         if binding.producer_id == AGENT_OUTPUT_PRODUCER_ID
@@ -285,10 +356,44 @@ async def validate_reported_measurement_plan(
 ) -> ValidationReport:
     """Validate reported-source identity and wiring without interpreting values."""
     issues: list[ValidationIssue] = []
+    metrics = {metric.id: metric for metric in plan.metrics}
     for index, binding in enumerate(plan.producers):
         if binding.producer_id not in REPORTED_PRODUCER_IDS:
             continue
         path = f"producers[{index}]"
+        raw_projections = binding.config.get("projections")
+        projections = raw_projections if isinstance(raw_projections, Mapping) else {}
+        if raw_projections is not None and not isinstance(raw_projections, Mapping):
+            issues.append(
+                ValidationIssue(
+                    "reported_projections_invalid",
+                    "Reported metric projections must be an object keyed by producer output.",
+                    f"{path}.config.projections",
+                )
+            )
+        for output_key, metric_id in binding.outputs.items():
+            metric = metrics.get(metric_id)
+            projection = projections.get(output_key)
+            if metric is not None and metric.value_type != "opaque" and projection is None:
+                issues.append(
+                    ValidationIssue(
+                        "reported_projection_missing",
+                        f"Scalar reported metric {metric.name!r} requires a structured field projection.",
+                        f"{path}.outputs.{output_key}",
+                    )
+                )
+            if projection is not None and (
+                not isinstance(projection, Mapping)
+                or not isinstance(projection.get("path"), str)
+                or projection.get("transform") not in {None, "length"}
+            ):
+                issues.append(
+                    ValidationIssue(
+                        "reported_projection_invalid",
+                        "A reported metric projection needs a path and an optional supported transform.",
+                        f"{path}.config.projections.{output_key}",
+                    )
+                )
         if agent_issue := _agent_issue(binding, index, graph, preserved_binding_ids):
             issues.append(agent_issue)
         if binding.producer_id == AGENT_OUTPUT_PRODUCER_ID:

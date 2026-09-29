@@ -223,7 +223,9 @@ export function CustomMetricFlow({ metric, binding, graph, existingMetrics, sour
     || !producer
     || (producer === 'agent' ? agentSourceError : producer === 'python' ? pythonSourceError : mcpSourceError || mcpMappingError),
   )
-  const nextMetric = { ...metric, name: name.trim(), description: metric.description, direction: 'neutral' as const, valueType: 'opaque' as const, aggregation: 'none' as const, primary: false }
+  // Imported measurement plans can carry typed reported metrics. Editing the
+  // source/name must not silently downgrade those declarations to opaque.
+  const nextMetric = { ...metric, name: name.trim(), description: metric.description }
   const nextConfig: CustomMetricProducerConfig | null = producer === 'agent' && selectedAgentSource
     ? { producer, agentNodeId: selectedAgentSource.agentNodeId }
     : producer === 'mcp' && selectedMcpSource

@@ -26,6 +26,7 @@ from asaree.services.measurement_engine import (
 )
 from asaree.services.protocol_revisions import publish_protocol
 from asaree.services.protocol_runs import (
+    _required_metric_was_measured,
     create_protocol_run,
     create_test_run,
     fail_protocol_run,
@@ -76,6 +77,51 @@ async def protocol_id(owner_id: uuid.UUID) -> AsyncIterator[uuid.UUID]:
     yield pid
     async with get_session() as db:
         await delete_protocol(db, pid)
+
+
+def test_primary_measurement_is_required_before_projecting_a_scored_replicate() -> None:
+    evaluation = MeasurementEvaluation(
+        replicate_id="replicate",
+        attempt_id="attempt",
+        observations=(
+            MetricObservation(
+                metric_id="pipeline-count",
+                metric_name="n_features_after_fs",
+                value_type="number",
+                status="measured",
+                value=20,
+                error=None,
+                attempt_id="attempt",
+                producer=ProducerProvenance(
+                    binding_id="fs",
+                    producer_id="asaree.agent_output",
+                    kind="reported",
+                    version="1",
+                ),
+                input_provenance={},
+            ),
+            MetricObservation(
+                metric_id="pr-auc",
+                metric_name="pr_auc",
+                value_type="number",
+                status="unavailable",
+                value=None,
+                error="The scoring tool did not return average precision.",
+                attempt_id="attempt",
+                producer=ProducerProvenance(
+                    binding_id="score",
+                    producer_id="asaree.mcp_tool",
+                    kind="reported",
+                    version="1",
+                ),
+                input_provenance={},
+            ),
+        ),
+        artifacts=(),
+    )
+
+    assert _required_metric_was_measured(evaluation, None)
+    assert not _required_metric_was_measured(evaluation, "pr-auc")
 
 
 async def test_create_get_and_node_run_progress(owner_id: uuid.UUID, protocol_id: uuid.UUID) -> None:

@@ -108,7 +108,7 @@
         "data": {
           "label": "",
           "config": {
-            "max_iterations": 12,
+            "max_iterations": 15,
             "include_scratchpad": true,
             "scratchpad_window": 10,
             "observation_format": "raw"
@@ -212,7 +212,7 @@
         "data": {
           "label": "",
           "config": {
-            "max_iterations": 12,
+            "max_iterations": 15,
             "include_scratchpad": true,
             "scratchpad_window": 10,
             "observation_format": "raw"
@@ -316,7 +316,7 @@
         "data": {
           "label": "",
           "config": {
-            "max_iterations": 12,
+            "max_iterations": 15,
             "include_scratchpad": true,
             "scratchpad_window": 10,
             "observation_format": "raw"
@@ -459,7 +459,7 @@
         "data": {
           "label": "",
           "config": {
-            "max_iterations": 12,
+            "max_iterations": 15,
             "include_scratchpad": true,
             "scratchpad_window": 10,
             "observation_format": "raw"

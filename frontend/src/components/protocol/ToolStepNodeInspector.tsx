@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Cog, Plus, X } from 'lucide-react'
 import { mcpServersApi } from '@/api/client'
@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { NodeRunOutputPanel } from './NodeRunOutputPanel'
+import { RESIZE_HANDLE_CLASSNAME, useResizablePane } from './useResizablePane'
 import type {
   NodeRunState,
   ProtocolNode,
@@ -20,6 +21,8 @@ import type {
 } from '@/types/protocols'
 
 const ACCENT = nodeAccent('tool_step')
+const MIN_CONFIG_WIDTH = 380
+const RESIZE_GUTTER_WIDTH = 16
 
 type SourceKey = 'unset' | 'value' | 'payload_json' | 'payload_object' | 'script_code' | 'workspace_id'
 
@@ -106,6 +109,17 @@ export function ToolStepNodeInspector({
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
+  const columnsRef = useRef<HTMLDivElement>(null)
+  const outputPane = useResizablePane({
+    storageKey: 'asaree:tool-step-output-pane-width',
+    defaultWidth: 384,
+    minWidth: 280,
+    maxWidth: 760,
+    side: 'right',
+    resolveMaxWidth: () =>
+      (columnsRef.current?.clientWidth ?? Number.POSITIVE_INFINITY) - MIN_CONFIG_WIDTH - RESIZE_GUTTER_WIDTH,
+    recomputeKey: node?.id ?? '',
+  })
   const serversQuery = useQuery({
     queryKey: ['mcp-servers'],
     queryFn: mcpServersApi.list,
@@ -164,8 +178,8 @@ export function ToolStepNodeInspector({
       onDelete={() => onDelete(node.id)}
       onClose={onClose}
     >
-      <div className="flex h-full gap-4">
-        <div className="min-w-0 flex-1 space-y-4 overflow-y-auto">
+      <div ref={columnsRef} className="flex h-full">
+        <div className="min-w-0 flex-1 space-y-4 overflow-y-auto pr-4">
           <p className="text-xs text-muted-foreground">
             Calls one MCP tool directly -- no model decides whether or how to call it. Choose where each argument&apos;s
             value comes from; an argument that isn&apos;t mapped isn&apos;t sent.
@@ -340,9 +354,18 @@ export function ToolStepNodeInspector({
           </div>
         </div>
 
-        <div className="w-96 shrink-0 space-y-3 overflow-y-auto border-l pl-4">
+        <div
+          role="separator"
+          aria-label="Resize output panel"
+          aria-orientation="vertical"
+          title="Drag to resize output panel"
+          className={RESIZE_HANDLE_CLASSNAME}
+          {...outputPane.handleProps}
+        />
+
+        <div className="min-w-0 shrink-0 space-y-3 overflow-y-auto pl-4" style={{ width: outputPane.width }}>
           <p className="text-sm font-semibold">Output</p>
-          <NodeRunOutputPanel nodeRun={nodeRun} />
+          <NodeRunOutputPanel nodeRun={nodeRun} resizableOutput />
         </div>
       </div>
     </NodeInspectorDialog>

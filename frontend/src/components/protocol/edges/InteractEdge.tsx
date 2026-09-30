@@ -27,22 +27,22 @@ import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 // A solid edge is deliberately not one relationship: between two Agent nodes it
 // is BOTH the left-to-right pipeline edge a normal run walks AND the "these two
 // may consult each other" edge a Peer Collaboration run reads (undirected). The
-// experiment's coordination strategy picks which. Sequential Agent-to-Agent
-// edges get a heavier stroke and an arrow from source to target; under the
-// collaboration strategies the same relationship stays undirected. An earlier
-// pass captioned peer edges "can consult"; it read as clutter on a canvas where
-// most solid edges qualify, and the Design tab already says which strategy is
-// in force.
+// experiment's coordination strategy picks which. Sequential and Critic Gate
+// main-flow edges get a heavier stroke and an arrow from source to target;
+// under the collaboration strategies the same relationship stays undirected.
+// An earlier pass captioned peer edges "can consult"; it read as clutter on a
+// canvas where most solid edges qualify, and the Design tab already says which
+// strategy is in force.
 //
 // Note the dashes are NOT the same statement as MemoryNode's dashed ring,
 // which means "not yet functional"; here they only mean "connector, not
 // pipeline". Nothing currently renders both, but don't add a third meaning.
 const EDGE_STROKE = 'color-mix(in oklch, var(--muted-foreground), transparent 30%)'
 
-function edgeStyle(isMainEdge: boolean, isSequentialAgentFlow: boolean, hovered: boolean): CSSProperties {
+function edgeStyle(isMainEdge: boolean, isDirectedFlow: boolean, hovered: boolean): CSSProperties {
   return {
     stroke: hovered ? 'var(--primary)' : EDGE_STROKE,
-    strokeWidth: isSequentialAgentFlow ? (hovered ? 3.5 : 3) : hovered ? 2.5 : 2,
+    strokeWidth: isDirectedFlow ? (hovered ? 3.5 : 3) : hovered ? 2.5 : 2,
     strokeDasharray: isMainEdge ? undefined : '6 4',
     filter: hovered ? 'drop-shadow(0 0 5px var(--primary))' : undefined,
     transition: 'stroke 120ms ease, stroke-width 120ms ease',
@@ -87,7 +87,7 @@ export function InteractEdge({
   const { requestEdgeInsert } = useProtocolCanvasActions()
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
   const isMainEdge = !sourceHandleId && !targetHandleId
-  const isSequentialAgentFlow = data?.sequentialAgentFlow === true
+  const isDirectedFlow = data?.directedFlow === true
   const isPatternEdge = targetHandleId === 'architectural_pattern'
 
   return (
@@ -97,7 +97,7 @@ export function InteractEdge({
       <BaseEdge
         id={id}
         path={edgePath}
-        style={{ ...edgeStyle(isMainEdge, isSequentialAgentFlow, hovered), ...style }}
+        style={{ ...edgeStyle(isMainEdge, isDirectedFlow, hovered), ...style }}
         markerEnd={markerEnd}
         interactionWidth={24}
       />

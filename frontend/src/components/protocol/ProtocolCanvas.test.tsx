@@ -166,6 +166,39 @@ describe('ProtocolCanvas connector adds', () => {
     expect(document.querySelector('[data-nodeid="model-1"][data-handleid="model"]')).toHaveClass('connectable')
   })
 
+  it('draws Tool Step main-flow arrows under Sequential and Critic Gate strategies', async () => {
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: defaultAgentNodeData('Writer') },
+        {
+          id: 'tool-step-1',
+          type: 'tool_step',
+          position: { x: 400, y: 100 },
+          data: { label: 'Fetch', config: { tool_name: '', arguments: {}, hash_checks: {}, timeout_seconds: null } },
+        },
+        { id: 'agent-2', type: 'agent', position: { x: 700, y: 100 }, data: defaultAgentNodeData('Reviewer') },
+      ],
+      edges: [
+        { id: 'into-tool', source: 'agent-1', target: 'tool-step-1' },
+        { id: 'out-of-tool', source: 'tool-step-1', target: 'agent-2' },
+      ],
+    }
+
+    const sequential = renderCanvas(graph)
+    await waitFor(() => expect(sequential.container.querySelector('.react-flow__arrowhead')).toBeInTheDocument())
+    sequential.unmount()
+
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue({
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [], coordination_strategy: { slug: 'critic_gate', params: {} } },
+      measurement_plan: null, dataset_ids: [], dataset_id: null, locked_at: null,
+      locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    })
+    const critic = renderCanvas(graph, 'experiment-1')
+    await waitFor(() => expect(critic.container.querySelector('.react-flow__arrowhead')).toBeInTheDocument())
+  })
+
   it('adds a connector-only Sub-Agent from an Agent', async () => {
     const user = userEvent.setup()
     const { client } = renderCanvas({

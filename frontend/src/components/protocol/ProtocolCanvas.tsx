@@ -1031,6 +1031,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const isPeerCollaboration = coordinationSlug === 'peer_collaboration'
   const isSupervisor = coordinationSlug === 'supervisor_architecture'
   const isSequential = coordinationSlug === 'sequential'
+  const isDirectedFlow = isSequential || coordinationSlug === 'critic_gate'
 
   // React Flow normally calls isValidConnection before this handler, but the
   // mutation boundary enforces the same rule defensively so another caller
@@ -1045,18 +1046,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   }, [experimentLocked, isSequential, nodes, setEdges])
 
   const renderedEdges = useMemo<Edge[]>(() => {
-    if (!isSequential) return edges
-    const agentIds = new Set(nodes.filter((node) => node.type === 'agent').map((node) => node.id))
+    if (!isDirectedFlow) return edges
     return edges.map((edge) => {
-      const isAgentFlow =
-        !edge.sourceHandle &&
-        !edge.targetHandle &&
-        agentIds.has(edge.source) &&
-        agentIds.has(edge.target)
-      if (!isAgentFlow) return edge
+      if (edge.sourceHandle || edge.targetHandle) return edge
       return {
         ...edge,
-        data: { ...edge.data, sequentialAgentFlow: true },
+        data: { ...edge.data, directedFlow: true },
         markerEnd: {
           type: MarkerType.ArrowClosed,
           width: 12,
@@ -1065,7 +1060,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         },
       }
     })
-  }, [edges, isSequential, nodes])
+  }, [edges, isDirectedFlow])
 
   // Which main-flow sides are already taken. Only consulted under
   // 'sequential', where the chain rule caps each side at one edge

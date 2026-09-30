@@ -78,7 +78,7 @@ def test_declared_runtime_metrics_are_projected_from_execution_telemetry() -> No
     assert _primary_metric(spec) == ("cost_usd", "maximize")
 
 
-def test_builtin_and_reported_scalar_metrics_declare_aggregations() -> None:
+def test_only_builtin_metrics_declare_aggregations() -> None:
     assert _declared_metric_aggregations(
         {
             "metrics": [
@@ -92,10 +92,10 @@ def test_builtin_and_reported_scalar_metrics_declare_aggregations() -> None:
                 },
             ]
         }
-    ) == {"Quality": "mean", "cost_usd": "sum"}
+    ) == {"cost_usd": "sum"}
 
 
-def test_builtin_and_reported_scalar_metrics_declare_ranking_directions() -> None:
+def test_only_builtin_metrics_declare_ranking_directions() -> None:
     assert _declared_metric_directions(
         {
             "metrics": [
@@ -109,7 +109,7 @@ def test_builtin_and_reported_scalar_metrics_declare_ranking_directions() -> Non
                 },
             ]
         }
-    ) == {"Quality": "maximize", "cost_usd": "minimize"}
+    ) == {"cost_usd": "minimize"}
 
 
 def test_cell_metric_aggregations_apply_the_declared_operation() -> None:
@@ -166,10 +166,10 @@ def test_results_csv_keeps_an_empty_column_for_an_unreported_custom_metric() -> 
         design_spec=design_spec,
     )
     reported = next(column for column in schema["columns"] if column["name"] == "Reviewer report")
-    assert reported == {"name": "Reviewer report", "role": "reported", "value_type": "opaque"}
+    assert reported == {"name": "Reviewer report", "role": "reported"}
 
 
-def test_results_csv_describes_a_reported_scalar_as_numeric() -> None:
+def test_results_csv_ignores_legacy_custom_metric_semantics() -> None:
     design_spec = {
         "metrics": [
             {
@@ -195,12 +195,8 @@ def test_results_csv_describes_a_reported_scalar_as_numeric() -> None:
     schema = result_rows_schema(rows, metric_types={"pr_auc": "number"}, design_spec=design_spec)
     reported = next(column for column in schema["columns"] if column["name"] == "pr_auc")
 
-    assert reported == {
-        "name": "pr_auc",
-        "role": "reported",
-        "value_type": "number",
-    }
-    assert _primary_metric(design_spec) == ("pr_auc", "maximize")
+    assert reported == {"name": "pr_auc", "role": "reported"}
+    assert _primary_metric(design_spec) == (None, None)
 
 
 def test_results_csv_projects_script_stdout_and_execution_metadata() -> None:
@@ -255,7 +251,6 @@ def test_results_csv_projects_script_stdout_and_execution_metadata() -> None:
     assert columns["Script custom metric"] == {
         "name": "Script custom metric",
         "role": "reported",
-        "value_type": "string",
     }
     assert columns["Script custom metric__raw_result"]["value_type"] == "json"
     assert columns["Script custom metric__exit_code"]["value_type"] == "integer"

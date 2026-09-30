@@ -14,10 +14,6 @@ def _plan(producer_id: str, config: dict) -> object:
                 {
                     "id": "quality",
                     "name": "Quality",
-                    "value_type": "opaque",
-                    "direction": "neutral",
-                    "aggregation": "none",
-                    "primary": False,
                 }
             ],
             "producers": [
@@ -199,7 +195,7 @@ async def test_agent_output_report_captures_completed_final_output(output: str) 
 
 
 @pytest.mark.asyncio
-async def test_agent_output_projection_reads_the_structured_parser_payload() -> None:
+async def test_agent_output_captures_the_complete_text_without_projection() -> None:
     plan = parse_measurement_plan(
         {
             "metrics": [
@@ -243,11 +239,12 @@ async def test_agent_output_projection_reads_the_structured_parser_payload() -> 
     result = await collect_reported_metrics(run, plan, {"nodes": [], "edges": []})
 
     assert result.observations[0].status == "measured"
-    assert result.observations[0].value == 2
+    assert result.observations[0].value == "summary"
+    assert result.observations[0].value_type is None
 
 
 @pytest.mark.asyncio
-async def test_mcp_projection_supports_json_pointer_keys_containing_dots(
+async def test_mcp_metric_captures_the_complete_tool_result_without_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan = parse_measurement_plan(
@@ -304,7 +301,8 @@ async def test_mcp_projection_supports_json_pointer_keys_containing_dots(
     result = await collect_reported_metrics(run, plan, {"nodes": [], "edges": []})
 
     assert result.observations[0].status == "measured"
-    assert result.observations[0].value == 0.81
+    assert result.observations[0].value == '{"test_metrics":{"metrics_at_0.5":{"accuracy":0.81}}}'
+    assert result.observations[0].value_type is None
 
 
 @pytest.mark.asyncio
@@ -374,7 +372,7 @@ async def test_agent_output_plan_requires_an_active_agent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scalar_reported_metric_requires_a_projection() -> None:
+async def test_reported_metric_rejects_value_semantics() -> None:
     plan = parse_measurement_plan(
         {
             "metrics": [
@@ -404,7 +402,7 @@ async def test_scalar_reported_metric_requires_a_projection() -> None:
         {"nodes": [{"id": "agent", "type": "agent", "data": {}}]},
     )
 
-    assert [issue.code for issue in report.issues] == ["reported_projection_missing"]
+    assert [issue.code for issue in report.issues] == ["reported_metric_semantics_not_supported"]
 
 
 async def _async_value(value):

@@ -223,9 +223,7 @@ export function CustomMetricFlow({ metric, binding, graph, existingMetrics, sour
     || !producer
     || (producer === 'agent' ? agentSourceError : producer === 'python' ? pythonSourceError : mcpSourceError || mcpMappingError),
   )
-  // Imported measurement plans can carry typed reported metrics. Editing the
-  // source/name must not silently downgrade those declarations to opaque.
-  const nextMetric = { ...metric, name: name.trim(), description: metric.description }
+  const nextMetric: DesignMetric = { id: metric.id, name: name.trim(), kind: 'custom' }
   const nextConfig: CustomMetricProducerConfig | null = producer === 'agent' && selectedAgentSource
     ? { producer, agentNodeId: selectedAgentSource.agentNodeId }
     : producer === 'mcp' && selectedMcpSource

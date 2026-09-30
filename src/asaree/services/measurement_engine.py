@@ -39,10 +39,10 @@ ScalarValue = Any
 class MetricDefinition:
     id: str
     name: str
-    value_type: MetricValueType
-    direction: MetricDirection
-    aggregation: MetricAggregation
-    primary: bool = False
+    value_type: MetricValueType | None = None
+    direction: MetricDirection | None = None
+    aggregation: MetricAggregation | None = None
+    primary: bool | None = None
     description: str | None = None
     unit: str | None = None
 
@@ -96,7 +96,7 @@ def parse_measurement_plan(document: Any) -> MeasurementPlan:
 def normalize_measurement_plan(document: Any) -> dict[str, Any]:
     """Return a JSON-compatible canonical plan document."""
     plan = parse_measurement_plan(document)
-    ensure_at_most_one_primary(tuple(metric.primary for metric in plan.metrics))
+    ensure_at_most_one_primary(tuple(bool(metric.primary) for metric in plan.metrics))
     return cast(
         dict[str, Any],
         _MEASUREMENT_PLAN_ADAPTER.dump_python(plan, mode="json", exclude_none=True),
@@ -203,7 +203,7 @@ class ProducerProvenance:
 class MetricObservation:
     metric_id: str
     metric_name: str
-    value_type: MetricValueType
+    value_type: MetricValueType | None
     status: ObservationStatus
     value: ScalarValue | None
     error: str | None
@@ -238,7 +238,7 @@ class MeasurementEvaluation:
                 {
                     "metric_id": item.metric_id,
                     "metric_name": item.metric_name,
-                    "value_type": item.value_type,
+                    **({"value_type": item.value_type} if item.value_type is not None else {}),
                     "status": item.status,
                     "value": item.value,
                     "error": item.error,
@@ -415,7 +415,7 @@ def validate_measurement_plan_structure(
                 )
             )
 
-    primary_count = sum(metric.primary for metric in plan.metrics)
+    primary_count = sum(bool(metric.primary) for metric in plan.metrics)
     if require_primary and plan.metrics and primary_count == 0:
         issues.append(
             ValidationIssue(
@@ -716,9 +716,10 @@ class MeasurementEngine:
                     output_key,
                     ProducedObservation.unavailable(f"Producer did not return output {output_key!r}."),
                 )
-                if outcome.status == "measured" and not is_scalar_value(outcome.value, metric.value_type):
+                value_type = metric.value_type or "opaque"
+                if outcome.status == "measured" and not is_scalar_value(outcome.value, value_type):
                     outcome = ProducedObservation.failed(
-                        f"Producer returned an invalid {metric.value_type} for output {output_key!r}."
+                        f"Producer returned an invalid {value_type} for output {output_key!r}."
                     )
                 normalized_observations.append(
                     MetricObservation(

@@ -157,6 +157,7 @@ export function localMetricReadinessPreview(
 }
 
 export function metricMetadata(metric: DesignMetric): string {
+  if (metric.kind === 'custom') return 'captured output'
   const catalog = metricCatalogEntry(metric.catalogKey)
   const unit = metric.unit || catalog?.unit || 'unitless'
   const aggregation = metric.valueType === 'boolean' ? 'rate' : (metric.aggregation ?? catalog?.aggregation ?? 'mean')

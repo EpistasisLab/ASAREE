@@ -95,8 +95,8 @@ def _merge_legacy_facets(
 ) -> LegacyResultFacets:
     """Add compatibility facts without duplicating current measurements.
 
-    Opaque reported metrics are JSON values, which legacy migration also
-    recognizes as non-scalar historical data. A matching current observation
+    Reported metrics may contain arbitrary JSON values, which legacy migration
+    also recognizes as non-scalar historical data. A matching current observation
     is authoritative, so it must not leave a duplicate ``legacy_values``
     entry that would hide the declared Results column.
     """
@@ -139,6 +139,7 @@ def _primary_metric(design_spec: dict[str, Any] | None) -> tuple[str | None, str
     for metric in metrics:
         if (
             isinstance(metric, dict)
+            and metric.get("kind") == "runtime"
             and metric.get("primary")
             and isinstance(metric.get("name"), str)
             and metric.get("valueType", "number") in {"number", "boolean"}
@@ -178,7 +179,7 @@ def _declared_metric_types(design_spec: dict[str, Any] | None) -> dict[str, str]
     types: dict[str, str] = {}
     for metric in normalize_metrics((design_spec or {}).get("metrics")):
         key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric.get("name")
-        if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
+        if isinstance(key, str) and metric.get("valueType") in {"number", "boolean"}:
             types[key] = metric["valueType"]
     return types
 
@@ -188,7 +189,7 @@ def _declared_metric_aggregations(design_spec: dict[str, Any] | None) -> dict[st
     aggregations: dict[str, str] = {}
     for metric in normalize_metrics((design_spec or {}).get("metrics")):
         key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric.get("name")
-        if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
+        if isinstance(key, str) and metric.get("valueType") in {"number", "boolean"}:
             aggregations[key] = metric["aggregation"]
     return aggregations
 
@@ -198,7 +199,7 @@ def _declared_metric_directions(design_spec: dict[str, Any] | None) -> dict[str,
     directions: dict[str, str] = {}
     for metric in normalize_metrics((design_spec or {}).get("metrics")):
         key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric.get("name")
-        if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
+        if isinstance(key, str) and metric.get("valueType") in {"number", "boolean"}:
             directions[key] = metric["direction"]
     return directions
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from copy import deepcopy
-from math import isfinite
 from typing import Any
 
 from asaree.services.measurement_engine import ensure_at_most_one_primary, parse_measurement_plan
@@ -203,13 +202,13 @@ def design_metrics_from_measurement_plan(document: Any) -> list[dict[str, Any]]:
             "id": metric.id,
             "name": metric.name,
             "kind": "runtime" if catalog_key is not None else "custom",
-            "valueType": metric.value_type,
-            "direction": metric.direction,
-            "aggregation": metric.aggregation,
-            "primary": metric.primary,
         }
         if catalog_key is not None:
             declaration["catalogKey"] = catalog_key
+            declaration["valueType"] = metric.value_type
+            declaration["direction"] = metric.direction
+            declaration["aggregation"] = metric.aggregation
+            declaration["primary"] = bool(metric.primary)
         if metric.description is not None:
             declaration["description"] = metric.description
         if metric.unit is not None:
@@ -276,6 +275,9 @@ def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> l
         metric["kind"] = (
             metric.get("kind") if metric.get("kind") in _KINDS else catalog["kind"] if catalog else "custom"
         )
+        if metric["kind"] == "custom":
+            normalized.append({"id": metric["id"], "name": name, "kind": "custom"})
+            continue
         metric["valueType"] = (
             metric.get("valueType")
             if metric.get("valueType") in _VALUE_TYPES
@@ -300,20 +302,6 @@ def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> l
             if catalog
             else "mean"
         )
-        # Explicit scalar custom declarations are produced by structured
-        # reported-output projections. Legacy/custom drafts without an
-        # explicit scalar type keep the original opaque display-only
-        # semantics.
-        scalar_custom = (
-            metric["kind"] == "custom"
-            and raw.get("kind") == "custom"
-            and raw.get("valueType") in {"number", "boolean"}
-        )
-        if metric["kind"] == "custom" and not scalar_custom:
-            metric["valueType"] = "opaque"
-            metric["direction"] = "neutral"
-            metric["aggregation"] = "none"
-            metric["primary"] = False
         if metric.get("unit") is None and catalog and catalog.get("unit"):
             metric["unit"] = catalog["unit"]
         metric.pop("scoring", None)
@@ -322,7 +310,7 @@ def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> l
         # "Untitled custom metric"), so the measurement-plan validator blocks
         # production while still preserving every draft for repair.
         normalized.append(metric)
-    ensure_at_most_one_primary(tuple(bool(metric["primary"]) for metric in normalized))
+    ensure_at_most_one_primary(tuple(bool(metric.get("primary")) for metric in normalized))
     return normalized
 
 
@@ -369,16 +357,15 @@ def normalize_design_spec(
 
 def declared_primary_metric(metrics: Any) -> dict[str, Any] | None:
     """Return the one explicitly primary design metric, if one is declared."""
-    return next((metric for metric in normalize_metrics(metrics) if metric["primary"]), None)
+    return next((metric for metric in normalize_metrics(metrics) if metric.get("primary")), None)
 
 
 def validate_metric_values(metrics: Any, values: dict[str, Any] | None) -> dict[str, Any]:
     """Validate declared outcome values at the API boundary.
 
-    Metric declarations are dynamic JSONB, so this is intentionally a
-    declaration-driven validation rather than a database-column constraint.
+    Custom metrics capture producer output without imposing a value type.
     Unknown keys stay allowed for backwards-compatible externally reported
-    metrics; declared custom metrics must honor their selected value type.
+    metrics.
     """
     declared = {metric["name"]: metric for metric in normalize_metrics(metrics) if metric["kind"] != "runtime"}
     normalized: dict[str, Any] = {}
@@ -387,14 +374,5 @@ def validate_metric_values(metrics: Any, values: dict[str, Any] | None) -> dict[
         if metric is None:
             normalized[key] = value
             continue
-        value_type = metric["valueType"]
-        if value_type == "boolean":
-            if not isinstance(value, bool):
-                raise ValueError(f"Metric {key!r} must be Boolean.")
-        elif value_type == "number":
-            if isinstance(value, bool) or not isinstance(value, int | float) or not isfinite(float(value)):
-                raise ValueError(f"Metric {key!r} must be a finite number.")
-        elif value_type == "string" and not isinstance(value, str):
-            raise ValueError(f"Metric {key!r} must be text.")
         normalized[key] = value
     return normalized

@@ -14,7 +14,7 @@ BDM = Path(__file__).parents[1] / "publications" / "BDM"
 USE_CASES = sorted(BDM.glob("myocardial-*-v0.8.0.json"))
 
 
-def test_myocardial_use_cases_declare_the_same_analysis_ready_measurements() -> None:
+def test_myocardial_use_cases_normalize_reported_metrics_as_named_observations() -> None:
     documents = [json.loads(path.read_text()) for path in USE_CASES]
     expected_metrics = documents[0]["design_spec"]["metrics"]
     expected_plan_metrics = documents[0]["measurement_plan"]["metrics"]
@@ -26,10 +26,19 @@ def test_myocardial_use_cases_declare_the_same_analysis_ready_measurements() -> 
         assert metrics == expected_metrics
         assert plan["metrics"] == expected_plan_metrics
         assert normalize_metrics(metrics) == design_metrics_from_measurement_plan(plan)
-        assert normalize_experiment_measurement_plan(plan, metrics) == plan
+        normalized_plan = normalize_experiment_measurement_plan(plan, metrics)
+        reported = next(
+            producer for producer in normalized_plan["producers"] if producer["id"] == "model-evaluation-source"
+        )
+        reported_metric_ids = set(reported["outputs"].values())
+        assert "projections" not in reported["config"]
+        assert all(
+            set(metric) <= {"id", "name"}
+            for metric in normalized_plan["metrics"]
+            if metric["id"] in reported_metric_ids
+        )
+        assert not any(metric.get("primary") for metric in normalize_metrics(metrics) if metric["kind"] == "custom")
 
-        primary = [metric for metric in metrics if metric["primary"]]
-        assert [(metric["name"], metric["direction"]) for metric in primary] == [("pr_auc", "maximize")]
         runtime = next(producer for producer in plan["producers"] if producer["producer_id"] == "asaree.runtime")
         assert set(runtime["outputs"]) == {
             "cost_usd",
@@ -42,11 +51,6 @@ def test_myocardial_use_cases_declare_the_same_analysis_ready_measurements() -> 
             "agent_loop_iterations",
             "critic_rejections",
             "critic_approvals",
-        }
-        score = next(producer for producer in plan["producers"] if producer["id"] == "model-evaluation-source")
-        assert score["config"]["projections"]["pr_auc"] == {"path": "test_metrics.average_precision"}
-        assert score["config"]["projections"]["accuracy_at_0_5"] == {
-            "path": "/test_metrics/metrics_at_0.5/accuracy"
         }
 
 

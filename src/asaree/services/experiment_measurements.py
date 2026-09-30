@@ -121,20 +121,21 @@ async def validate_experiment_measurement_plan(
                 )
             )
             continue
-        selected_semantics = (
-            str(metric.get("name") or metric_id),
-            metric.get("valueType", "number"),
-            metric.get("direction", "maximize"),
-            "rate" if metric.get("valueType") == "boolean" else metric.get("aggregation", "mean"),
-            bool(metric.get("primary")),
-        )
-        declared_semantics = (
-            declared.name,
-            declared.value_type,
-            declared.direction,
-            declared.aggregation,
-            declared.primary,
-        )
+        selected_semantics = (str(metric.get("name") or metric_id),)
+        declared_semantics = (declared.name,)
+        if metric.get("kind") == "runtime":
+            selected_semantics += (
+                metric.get("valueType", "number"),
+                metric.get("direction", "maximize"),
+                "rate" if metric.get("valueType") == "boolean" else metric.get("aggregation", "mean"),
+                bool(metric.get("primary")),
+            )
+            declared_semantics += (
+                declared.value_type,
+                declared.direction,
+                declared.aggregation,
+                bool(declared.primary),
+            )
         if selected_semantics != declared_semantics:
             reconciliation_issues.append(
                 ValidationIssue(

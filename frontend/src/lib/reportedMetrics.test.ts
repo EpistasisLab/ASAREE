@@ -10,10 +10,6 @@ const metric: DesignMetric = {
   id: 'quality',
   name: 'Quality',
   kind: 'custom',
-  valueType: 'opaque',
-  direction: 'neutral',
-  aggregation: 'none',
-  primary: false,
 }
 
 const graph = {
@@ -29,10 +25,10 @@ const graph = {
 } as unknown as ProtocolGraph
 
 describe('reported custom metric plans', () => {
-  it('stores Agent output as an opaque, display-only metric', () => {
+  it('stores an Agent output metric without value semantics', () => {
     const plan = upsertAgentOutputMetric(null, metric, 'agent')
 
-    expect(plan.metrics[0]).toMatchObject({ value_type: 'opaque', direction: 'neutral', aggregation: 'none', primary: false })
+    expect(plan.metrics[0]).toEqual({ id: 'quality', name: 'Quality' })
     expect(plan.producers[0]).toMatchObject({ producer_id: 'asaree.agent_output', kind: 'reported', config: { agent_node_id: 'agent' } })
     expect(plan.inputs).toEqual([])
     expect(localMetricReadinessPreview(metric, plan, graph).ready).toBe(true)

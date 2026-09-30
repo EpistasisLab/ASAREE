@@ -39,12 +39,6 @@ export function upsertAgentOutputMetric(
       {
         id: metric.id,
         name: metric.name,
-        value_type: 'opaque',
-        direction: 'neutral',
-        aggregation: 'none',
-        primary: false,
-        description: metric.description,
-        unit: metric.unit,
       },
     ],
     producers: [

@@ -25,13 +25,16 @@ function synchronizeMeasurementPlanMetrics(plan: MeasurementPlan | null, metrics
     const definition = metric.id ? definitionsById.get(metric.id) : undefined
     if (!definition) return []
     definitionsById.delete(definition.id)
-    return [{
+    const synchronized = {
       ...definition,
       name: metric.name,
-      direction: metric.direction,
-      primary: metric.primary,
       description: metric.description,
       unit: metric.unit,
+    }
+    return [metric.kind === 'custom' ? { id: definition.id, name: metric.name } : {
+      ...synchronized,
+      direction: metric.direction,
+      primary: metric.primary,
     }]
   })
   return { ...plan, metrics: [...orderedDefinitions, ...definitionsById.values()] }
@@ -336,7 +339,7 @@ function MetricsDialog({
           <section className="min-w-0 space-y-3 p-4 md:overflow-y-auto" aria-labelledby="metric-section-custom">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div><h3 id="metric-section-custom" className="text-sm font-semibold">Custom metrics</h3><p className="mt-1 text-xs text-muted-foreground">Create metrics from eligible nodes on this canvas.</p></div>
-                  {!customMetricDraft && <Button type="button" size="sm" disabled={disabled || !canCreateCustomMetric} onClick={() => setCustomMetricDraft(makeCustomMetric({ name: '', description: '' }))}>Create custom metric</Button>}
+                  {!customMetricDraft && <Button type="button" size="sm" disabled={disabled || !canCreateCustomMetric} onClick={() => setCustomMetricDraft(makeCustomMetric({ name: '' }))}>Create custom metric</Button>}
                 </div>
                 {visibleCustomMetrics.length > 0 && <div className="space-y-2" role="list">{visibleCustomMetrics.map((metric) => {
                   const binding = stagedBindingForMetric(metric.id)
@@ -355,7 +358,7 @@ function MetricsDialog({
                       <Button type="button" variant="ghost" size="icon-sm" aria-label={`Move ${metric.name} up in staged order`} disabled={disabled || selectedPosition === 0} onClick={() => moveStagedCustomMetric(metric, -1)}><ArrowUp className="size-3.5" /></Button>
                       <Button type="button" variant="ghost" size="icon-sm" aria-label={`Move ${metric.name} down in staged order`} disabled={disabled || selectedPosition === customMetricIds.length - 1} onClick={() => moveStagedCustomMetric(metric, 1)}><ArrowDown className="size-3.5" /></Button>
                     </span>
-                    {binding && metric.valueType === 'opaque' && <Button type="button" variant="ghost" size="sm" aria-label={`Edit ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricDraft(metric)}>Edit</Button>}
+                    {binding && <Button type="button" variant="ghost" size="sm" aria-label={`Edit ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricDraft(metric)}>Edit</Button>}
                     <Button type="button" variant="ghost" size="icon-sm" aria-label={`Delete ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricPendingDelete(metric)}><Trash2 className="size-3.5 text-destructive" /></Button>
                   </div>
                 })}</div>}
@@ -502,7 +505,7 @@ export function MetricsEditor({
       ...nextPlan,
       metrics: nextPlan.metrics.map((definition) => {
         const designMetric = byId.get(definition.id)
-        return designMetric ? { ...definition, primary: designMetric.primary } : definition
+        return designMetric?.kind === 'runtime' ? { ...definition, primary: designMetric.primary } : definition
       }),
     }
     return { metrics: nextMetrics, measurementPlan: synchronizedPlan }

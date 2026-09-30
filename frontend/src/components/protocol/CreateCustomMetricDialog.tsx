@@ -40,10 +40,7 @@ export function CreateCustomMetricDialog({
   const existingBinding = agentOutputBindingForMetric(experiment?.measurement_plan ?? null, metricId)
     ?? pythonScriptBindingForMetric(experiment?.measurement_plan ?? null, metricId)
     ?? mcpToolBindingForMetric(experiment?.measurement_plan ?? null, metricId)
-  const [draft] = useState(() => makeCustomMetric({
-    name: '',
-    description: '',
-  }))
+  const [draft] = useState(() => makeCustomMetric({ name: '' }))
   const flushAutosaveRef = useRef<(() => void) | null>(null)
   const createMutation = useMutation({
     mutationFn: async ({ metric, config }: { metric: typeof draft; config: CustomMetricProducerConfig }) => {

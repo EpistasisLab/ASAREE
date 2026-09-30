@@ -66,25 +66,28 @@ export function normalizeDesignMetrics(metrics: DesignMetric[] | undefined): Des
     const catalog = metricCatalogEntry(raw.catalogKey)
     if (raw.kind && !['runtime', 'custom'].includes(raw.kind)) return []
     const kind = raw.kind ?? catalog?.kind ?? 'custom'
-    const scalarCustom = kind === 'custom' && raw.kind === 'custom' && (raw.valueType === 'number' || raw.valueType === 'boolean')
-    return [{
+    const id = typeof raw.id === 'string' && raw.id ? raw.id : legacyId(raw)
+    const name = raw.name.trim()
+    if (kind === 'custom') return [{ id, name, kind }]
+    const metric: DesignMetric = {
       ...raw,
-      id: typeof raw.id === 'string' && raw.id ? raw.id : legacyId(raw),
+      id,
       catalogKey: catalog ? catalog.key : raw.catalogKey,
-      name: raw.name.trim(),
+      name,
       description: typeof raw.description === 'string' && raw.description.trim()
         ? raw.description.trim()
         : catalog?.shortDescription ?? `Legacy metric declaration for ${raw.name.trim()}.`,
       kind,
-      valueType: kind === 'custom' && !scalarCustom ? 'opaque' : raw.valueType ?? catalog?.valueType ?? 'number',
-      direction: kind === 'custom' && !scalarCustom ? 'neutral' : raw.direction === 'maximize' || raw.direction === 'minimize' || raw.direction === 'neutral'
+      valueType: raw.valueType ?? catalog?.valueType ?? 'number',
+      direction: raw.direction === 'maximize' || raw.direction === 'minimize' || raw.direction === 'neutral'
         ? raw.direction
         : (catalog?.defaultDirection ?? 'maximize'),
-      aggregation: kind === 'custom' && !scalarCustom ? 'none' : raw.valueType === 'boolean' ? 'mean' : (raw.aggregation === 'sum' ? 'sum' : raw.aggregation === 'none' ? 'none' : (catalog?.aggregation ?? 'mean')),
-      primary: kind === 'custom' && !scalarCustom ? false : Boolean(raw.primary),
+      aggregation: raw.valueType === 'boolean' ? 'mean' : (raw.aggregation === 'sum' ? 'sum' : raw.aggregation === 'none' ? 'none' : (catalog?.aggregation ?? 'mean')),
+      primary: Boolean(raw.primary),
       unit: raw.unit ?? catalog?.unit,
       scoring: undefined,
-    }]
+    }
+    return [metric]
   })
 }
 
@@ -103,17 +106,11 @@ export function makeCatalogMetric(entry: MetricCatalogEntry, isPrimary: boolean)
   }
 }
 
-export function makeCustomMetric(input: { name: string; description: string; unit?: string }): DesignMetric {
+export function makeCustomMetric(input: { name: string }): DesignMetric {
   return {
     id: newMetricId(),
     name: input.name.trim(),
-    description: input.description.trim(),
     kind: 'custom',
-    valueType: 'opaque',
-    direction: 'neutral',
-    aggregation: 'none',
-    primary: false,
-    unit: input.unit?.trim() || undefined,
   }
 }
 

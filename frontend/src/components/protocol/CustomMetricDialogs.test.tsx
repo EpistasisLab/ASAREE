@@ -14,10 +14,6 @@ function renderFlow(graph: ProtocolGraph, onSave = vi.fn(), sourceContext?: Cust
     id: 'metric-1',
     name: '',
     kind: 'custom',
-    valueType: 'number',
-    direction: 'neutral',
-    aggregation: 'mean',
-    primary: false,
   }
   render(
     <QueryClientProvider client={client}>
@@ -103,7 +99,7 @@ describe('CustomMetricFlow', () => {
     } as unknown as ProtocolGraph
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<QueryClientProvider client={client}><CustomMetricFlow
-      metric={{ id: 'metric-b', name: '', kind: 'custom', valueType: 'number', direction: 'neutral', aggregation: 'mean', primary: false }}
+      metric={{ id: 'metric-b', name: '', kind: 'custom' }}
       binding={undefined}
       graph={graph}
       existingMetrics={[]}
@@ -131,7 +127,7 @@ describe('CustomMetricFlow', () => {
     } as unknown as ProtocolGraph
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(<QueryClientProvider client={client}><CustomMetricFlow
-      metric={{ id: 'metric-b', name: '', kind: 'custom', valueType: 'number', direction: 'neutral', aggregation: 'mean', primary: false }}
+      metric={{ id: 'metric-b', name: '', kind: 'custom' }}
       binding={undefined}
       graph={graph}
       existingMetrics={[]}

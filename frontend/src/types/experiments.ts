@@ -33,8 +33,8 @@ export interface DesignMetric {
   kind?: 'runtime' | 'custom'
   valueType?: 'number' | 'boolean' | 'string' | 'opaque'
   unit?: string
-  primary: boolean
-  direction: 'maximize' | 'minimize' | 'neutral'
+  primary?: boolean
+  direction?: 'maximize' | 'minimize' | 'neutral'
   aggregation?: 'mean' | 'sum' | 'none'
   [key: string]: unknown
 }
@@ -47,10 +47,10 @@ export interface MeasurementPlan {
   metrics: Array<{
     id: string
     name: string
-    value_type: 'number' | 'boolean' | 'opaque'
-    direction: MeasurementDirection
-    aggregation: MeasurementAggregation
-    primary: boolean
+    value_type?: 'number' | 'boolean' | 'opaque'
+    direction?: MeasurementDirection
+    aggregation?: MeasurementAggregation
+    primary?: boolean
     description?: string
     unit?: string
   }>
@@ -315,7 +315,7 @@ export interface ResultNodeRun {
 export interface MetricObservation {
   metric_id: string
   metric_name: string
-  value_type: 'number' | 'boolean' | 'opaque'
+  value_type?: 'number' | 'boolean' | 'opaque'
   status: ObservationStatus
   value: unknown
   error: string | null

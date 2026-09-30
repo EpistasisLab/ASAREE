@@ -8,7 +8,8 @@ import { cn } from '@/lib/utils'
 // standard accessible custom-file-input pattern and gives this a natural
 // drop target: the label itself listens for the drag events, no extra
 // wrapper div needed. Shared by RegisterDatasetDialog (raw CSV, data
-// dictionary) and SplitDatasetDialog (train/test CSVs for a manual split).
+// dictionary), SplitDatasetDialog (train/test CSVs for a manual split) and
+// CreateExperimentFromFileDialog (experiment definition JSON).
 export function FileDropInput({
   id,
   accept,
@@ -47,7 +48,17 @@ export function FileDropInput({
     >
       <Upload className="size-3.5 shrink-0" />
       <span className={cn('truncate', file && 'font-mono text-xs text-foreground')}>{file ? file.name : placeholder}</span>
-      <input id={id} type="file" accept={accept} className="sr-only" onChange={(e) => onChange(e.target.files?.[0] ?? null)} />
+      <input
+        id={id}
+        type="file"
+        accept={accept}
+        className="sr-only"
+        onChange={(e) => {
+          const picked = e.target.files?.[0] ?? null
+          e.target.value = '' // re-picking the same file should still fire onChange
+          onChange(picked)
+        }}
+      />
     </label>
   )
 }

@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Conversation, ConversationMessage } from '@/types/protocols'
-import { useDraggableOverlay } from './useDraggableOverlay'
 
 // The literal id the backend uses for the human on both ends of a
 // conversation: the opening question comes from "user", and the entry agent's
@@ -53,7 +52,8 @@ function MessageBody({ parts }: { parts: ConversationMessage['parts'] }) {
   )
 }
 
-// The live transcript of a conversation-mode run, over the canvas. Deliberately
+// The live transcript of a conversation-mode run, shown inside that run's
+// results panel. Deliberately
 // a flat, ordered list rather than a threaded tree: `sequence` is assigned by
 // the runtime and one agent runs at a time, so the order things happened in IS
 // the structure -- nesting would only re-derive what the reading order already
@@ -61,7 +61,6 @@ function MessageBody({ parts }: { parts: ConversationMessage['parts'] }) {
 export function ConversationTranscript({
   conversation,
   agentNames,
-  floating = false,
   className,
 }: {
   conversation: Conversation
@@ -69,46 +68,32 @@ export function ConversationTranscript({
   // agents the way the canvas does. Ids that aren't on the canvas (a node
   // deleted since the run) fall back to the raw id rather than disappearing.
   agentNames: Map<string, string>
-  floating?: boolean
   className?: string
 }) {
   const nameOf = (id: string) => (id === USER_PARTICIPANT ? 'You' : agentNames.get(id) ?? id)
   const stateLabel = CONVERSATION_STATE_LABEL[conversation.state] ?? conversation.state
-  // Collapsible because the canvas now opens on the protocol's most recent run
-  // rather than only on one launched in this tab, so this panel is present the
-  // whole time you're editing a Peer Collaboration graph -- not just while
-  // watching a run finish. Collapsed keeps the header, which is the part that
-  // says a conversation happened at all.
+  // Collapsible so a long transcript doesn't bury the rest of the results
+  // panel. Collapsed keeps the header, which is the part that says a
+  // conversation happened at all.
   const [collapsed, setCollapsed] = useState(false)
-  const drag = useDraggableOverlay({ recomputeKey: collapsed })
 
   return (
     <aside
-      ref={drag.panelRef}
-      style={floating ? drag.style : undefined}
       className={cn(
         'pointer-events-auto flex min-h-0 flex-col rounded-lg border border-[color:var(--node-label)]/35 bg-card/95 p-3 shadow-[0_0_16px_-6px_var(--node-label)] backdrop-blur',
-        floating && 'absolute left-3 z-10 max-h-[55%] w-[min(28rem,calc(100%-1.5rem))]',
-        !floating && 'w-full',
+        'w-full',
         className,
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <div
-          className={cn('flex min-w-0 flex-1 items-center gap-2', floating && 'cursor-move touch-none select-none')}
-          aria-label={floating ? 'Move Agent conversation flow' : undefined}
-          {...(floating ? drag.handleProps : {})}
-        >
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <p className="truncate text-sm font-medium text-[color:var(--node-label)]">Agent conversation flow</p>
           <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{stateLabel}</span>
           <span className="text-xs text-muted-foreground">{conversation.messages.length}</span>
         </div>
         <button
           type="button"
-          onClick={() => {
-            drag.preservePositionOnNextLayout()
-            setCollapsed((c) => !c)
-          }}
+          onClick={() => setCollapsed((c) => !c)}
           className="shrink-0 cursor-pointer rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
           aria-label={`${collapsed ? 'Restore' : 'Minimize'} Agent conversation flow`}
           aria-expanded={!collapsed}

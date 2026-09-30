@@ -6,8 +6,8 @@ interface Position {
 }
 
 // Pointer-drag behavior shared by the movable canvas overlays. Positions are
-// offsets from each panel's authored anchor (top-left for the conversation,
-// bottom-right for results), so both keep their sensible initial placement.
+// offsets from each panel's authored anchor, so each keeps its sensible
+// initial placement.
 export function useDraggableOverlay<T extends HTMLElement = HTMLElement>({
   recomputeKey,
 }: {

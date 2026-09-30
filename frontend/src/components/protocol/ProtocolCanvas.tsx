@@ -113,7 +113,7 @@ import {
 } from './ProtocolCanvasContext'
 import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
 import { RunConfirmDialog } from './RunConfirmDialog'
-import { ReopenTestRunResultsButton, TestRunResults } from './TestRunResults'
+import { describeRun, ReopenTestRunResultsButton, TestRunResults } from './TestRunResults'
 import type { RunScope } from './runSummary'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
@@ -125,7 +125,6 @@ import { OkfDocumentNodeInspector } from './OkfDocumentNodeInspector'
 import { SkillBrowserPanel } from './SkillBrowserPanel'
 import { SKILL_BROWSE, nodeDataForSkill } from './skillCatalog'
 import { SkillNodeInspector } from './SkillNodeInspector'
-import { ConversationTranscript } from './ConversationTranscript'
 import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
@@ -549,7 +548,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // the scope it confirms even exists.
   const [runId, setRunId] = useState<string | null>(null)
   const [testResultsOpen, setTestResultsOpen] = useState(false)
-  const [playResultsOpen, setPlayResultsOpen] = useState(false)
+  const [runResultsOpen, setRunResultsOpen] = useState(false)
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, fitView } = useReactFlow()
 
@@ -641,7 +640,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     mutationFn: () => protocolsApi.testRun(protocolId),
     onSuccess: (run) => {
       setRunId(run.id)
-      setPlayResultsOpen(false)
+      setRunResultsOpen(false)
       setTestResultsOpen(true)
       queryClient.setQueryData(['protocols', protocolId, 'test-run'], run)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
@@ -658,7 +657,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     onSuccess: (run) => {
       setRunId(run.id)
       setTestResultsOpen(false)
-      setPlayResultsOpen(true)
+      setRunResultsOpen(true)
     },
   })
 
@@ -686,7 +685,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
   })
 
-  const playResult: TestRun | null = runQuery.data?.target_node_id ? {
+  // Any run the Test Run panel isn't already showing -- a node Play, a cell run,
+  // or one started from the SDK/notebook -- gets its own results panel, so a
+  // conversation is only ever shown inside a titled panel saying which run it
+  // belongs to, never as a bare transcript next to an unrelated Test Run.
+  const runResult: TestRun | null = runQuery.data && runQuery.data.id !== testRunQuery.data?.id ? {
     id: runQuery.data.id,
     protocol_id: runQuery.data.protocol_id,
     status: runQuery.data.status,
@@ -756,7 +759,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
   })
   const cancelRequested = !!testRunQuery.data?.execution_summary.cancel_requested_at || !!runQuery.data?.cancel_requested_at
-  const showStandaloneConversation = !!runQuery.data?.conversation && runQuery.data.id !== testRunQuery.data?.id
+  const runResultLabel = runQuery.data?.target_node_id ? 'Play Results' : 'Latest Run'
+  const runResultTitle = runQuery.data?.replicate_label ? `Cell Run · ${runQuery.data.replicate_label}` : runResultLabel
 
   // A connected execution-pattern node must never be deletable directly
   // (Backspace/Delete key, NodeHoverToolbar's trash icon -- both go through
@@ -1019,6 +1023,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // find on the canvas. A superset is harmless for the transcript, whose
   // speaker ids are always agents.
   const nodeNames = useMemo(() => nodeDisplayNames(nodes), [nodes])
+  const runResultKind = runQuery.data?.target_node_id
+    ? `Play of ${nodeNames.get(runQuery.data.target_node_id) ?? runQuery.data.target_node_id}`
+    : runQuery.data?.replicate_label ? 'Cell run' : 'Graph run'
   const nodeTypes = useMemo(() => new Map(nodes.map((node) => [node.id, node.type ?? ''])), [nodes])
 
   // The experiment's declared coordination strategy, which decides what the
@@ -2107,10 +2114,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               {isRunning ? 'Test Run running…' : 'Test Run'}
             </Button>
             {testRunQuery.data && !testResultsOpen && (
-              <ReopenTestRunResultsButton onOpen={() => setTestResultsOpen(true)} refresh={() => { testRunQuery.refetch() }} />
+              <ReopenTestRunResultsButton detail={describeRun('Test Run', testRunQuery.data)} onOpen={() => setTestResultsOpen(true)} refresh={() => { testRunQuery.refetch() }} />
             )}
-            {playResult && !playResultsOpen && (
-              <ReopenTestRunResultsButton label="Play Results" onOpen={() => setPlayResultsOpen(true)} refresh={() => { runQuery.refetch() }} />
+            {runResult && !runResultsOpen && (
+              <ReopenTestRunResultsButton label={runResultLabel} detail={describeRun(runResultKind, runResult)} onOpen={() => setRunResultsOpen(true)} refresh={() => { runQuery.refetch() }} />
             )}
             <Button
               size="icon"
@@ -2138,21 +2145,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           {testResultsOpen && testRunQuery.data && (
             <TestRunResults run={testRunQuery.data} nodeNames={nodeNames} nodeTypes={nodeTypes} onClose={() => setTestResultsOpen(false)} />
           )}
-          {playResultsOpen && playResult && (
-            <TestRunResults title="Play Results" run={playResult} nodeNames={nodeNames} nodeTypes={nodeTypes} onClose={() => setPlayResultsOpen(false)} />
+          {runResultsOpen && runResult && (
+            <TestRunResults title={runResultTitle} kind={runResultKind} run={runResult} nodeNames={nodeNames} nodeTypes={nodeTypes} onClose={() => setRunResultsOpen(false)} />
           )}
           {experimentLocked && (
             <div className="pointer-events-auto absolute top-3 left-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-background/95 px-2.5 py-1.5 text-xs font-medium shadow-sm">
               <Lock className="size-3.5" /> Canvas locked
             </div>
-          )}
-          {showStandaloneConversation && runQuery.data?.conversation && (
-            <ConversationTranscript
-              conversation={runQuery.data.conversation}
-              agentNames={nodeNames}
-              floating
-              className={experimentLocked ? 'top-12' : 'top-3'}
-            />
           )}
         </div>
         {addPanelOpen && serverBrowserOpen ? (

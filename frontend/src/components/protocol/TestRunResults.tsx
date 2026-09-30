@@ -86,12 +86,16 @@ export function TestRunResults({
   nodeNames = new Map(),
   nodeTypes = new Map(),
   title = 'Test Run Results',
+  kind = 'Test Run',
 }: {
   run: TestRun
   onClose: () => void
   nodeNames?: Map<string, string>
   nodeTypes?: Map<string, string>
   title?: string
+  // What kind of run this is (Test Run, node Play, cell run...), shown in the
+  // header so two open panels can't be mistaken for the same run.
+  kind?: string
 }) {
   const [nodeProgressCollapsed, setNodeProgressCollapsed] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
@@ -116,7 +120,6 @@ export function TestRunResults({
     { label: 'Tool steps', entries: nodeRuns.filter(([nodeId]) => nodeTypes.get(nodeId) === 'tool_step') },
     { label: 'Critic gates', entries: nodeRuns.filter(([nodeId]) => nodeTypes.get(nodeId) === 'critic_gate') },
   ].filter((group) => group.entries.length > 0)
-  const timestamp = new Date(run.created_at)
 
   return (
     <Card ref={drag.panelRef} style={drag.style} aria-label={title} className="absolute right-3 bottom-3 z-10 max-h-[calc(100%-1.5rem)] w-[min(44rem,calc(100%-1.5rem))] shadow-xl" size="sm">
@@ -131,7 +134,9 @@ export function TestRunResults({
         </CardTitle>
         <CardDescription>
           <span className={run.status === 'failed' ? 'text-destructive' : run.status === 'completed' ? 'text-[color:var(--chart-3)]' : 'text-[color:var(--card-accent,var(--primary))]'}>{outcomeLabel(run)}</span>
-          {run.tested_published_revision && <> · Published revision {run.tested_published_revision.number} · {Number.isNaN(timestamp.valueOf()) ? run.created_at : timestamp.toLocaleString()}</>}
+ · {kind} · <span className="font-mono">{shortRunId(run.id)}</span>
+          {run.tested_published_revision && <> · Published revision {run.tested_published_revision.number}</>}
+          {' · '}{formatRunTime(run.created_at)}
         </CardDescription>
         <CardAction>
           <div className="flex items-center gap-1">
@@ -149,7 +154,7 @@ export function TestRunResults({
             >
               {collapsed ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
             </Button>
-            <Button size="icon" variant="ghost" aria-label="Close Test Run Results" onPointerDown={(event) => event.stopPropagation()} onClick={onClose}><X className="size-4" /></Button>
+            <Button size="icon" variant="ghost" aria-label={`Close ${title}`} onPointerDown={(event) => event.stopPropagation()} onClick={onClose}><X className="size-4" /></Button>
           </div>
         </CardAction>
       </CardHeader>
@@ -210,6 +215,19 @@ export function TestRunResults({
   )
 }
 
-export function ReopenTestRunResultsButton({ onOpen, refresh, label = 'Test Run Results' }: { onOpen: () => void; refresh: () => void; label?: string }) {
-  return <Button size="sm" variant="outline" onClick={() => { onOpen(); refresh() }} title={`Reopen and refresh ${label}`}>{label}</Button>
+const shortRunId = (id: string) => id.slice(0, 8)
+
+function formatRunTime(createdAt: string) {
+  const timestamp = new Date(createdAt)
+  return Number.isNaN(timestamp.valueOf()) ? createdAt : timestamp.toLocaleString()
+}
+
+// One line naming a run -- kind, short id, start time -- shared by the reopen
+// button's tooltip and the panel header so both identify the run identically.
+export function describeRun(kind: string, run: { id: string; created_at: string }) {
+  return `${kind} · ${shortRunId(run.id)} · ${formatRunTime(run.created_at)}`
+}
+
+export function ReopenTestRunResultsButton({ onOpen, refresh, label = 'Test Run Results', detail }: { onOpen: () => void; refresh: () => void; label?: string; detail?: string }) {
+  return <Button size="sm" variant="outline" onClick={() => { onOpen(); refresh() }} title={detail ? `${label}: ${detail}\nClick to reopen and refresh` : `Reopen and refresh ${label}`}>{label}</Button>
 }

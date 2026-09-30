@@ -101,6 +101,7 @@ from asaree.services.system_mcp_servers import (
     WORKSPACE_AGENT_TOOLS,
     WORKSPACE_SERVER_NAME,
 )
+from asaree.services.tool_steps import TOOL_STEP_NODE_TYPES, execute_tool_step, validate_tool_step
 
 logger = logging.getLogger(__name__)
 
@@ -357,6 +358,14 @@ _KNOWLEDGE_NODE_TYPES = _OKF_BUNDLE_NODE_TYPES | _OKF_DOCUMENT_NODE_TYPES
 # for one output is an ambiguity, not a richer declaration.
 _OUTPUT_PARSER_NODE_TYPES = frozenset({"output_parser"})
 _SUB_AGENT_NODE_TYPES = frozenset({"sub_agent"})
+# A Tool Step is the one main-flow node that isn't an LLM turn: it calls one
+# MCP tool directly with the upstream node's typed payload (see
+# asaree.services.tool_steps). It reverses the old "no standalone tool call"
+# rule above for exactly one case -- a harness-owned, fixed call such as
+# held-out scoring, where asking an Agent to make the call is what let a
+# malformed payload through unsanitized. Its Tool connector takes one MCP Tool
+# (what to call) and at most one Script (the code argument).
+_TOOL_STEP_NODE_TYPES = TOOL_STEP_NODE_TYPES
 
 # Every node type skipped by the main pipeline walk and excluded as a final
 # output. Most are pure config sources; Sub-Agent is the deliberate exception:
@@ -923,6 +932,7 @@ _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "agent": "Agent",
     "sub_agent": "Sub-Agent",
     "critic_gate": "Critic Gate",
+    "tool_step": "Tool Step",
     "mcp_tool": "MCP Tool",
     "mcp_scikit_learn": "Scikit-learn MCP",
     "mcp_client_tool": "MCP Client Tool",
@@ -1212,6 +1222,21 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
                         )
             elif sub_agent_edges:
                 raise ProtocolValidationError(f"Sub-Agent node {name!r} cannot own other Sub-Agents.")
+        elif node_type in _TOOL_STEP_NODE_TYPES:
+            if (
+                memory_edges
+                or pattern_edges
+                or dataset_slot_edges
+                or skill_edges
+                or knowledge_edges
+                or parser_edges
+                or sub_agent_edges
+            ):
+                raise ProtocolValidationError(
+                    f"Tool Step node {name!r} can only have Tool connections (one MCP Tool, optionally one Script)."
+                )
+            if _is_node_active(node) and (problem := validate_tool_step(graph, node)):
+                raise ProtocolValidationError(f"Tool Step node {name!r} {problem}.")
         elif (
             tool_edges
             or memory_edges
@@ -4918,6 +4943,35 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 cancelled = True
             elif worker_run["status"] == "failed" or gate_run["status"] == "failed":
                 failed = True
+            continue
+
+        if node.get("type") in _TOOL_STEP_NODE_TYPES and _is_node_active(node):
+
+            async def record_step_provenance(step: dict[str, Any], *, step_node_id: str = node_id) -> None:
+                # Before the call, like the notebook's pre-scoring upsert: a
+                # crash mid-call still leaves the approved payload on record.
+                async with get_session() as db:
+                    await update_node_run(db, protocol_run_id, step_node_id, {"tool_step": step})
+                    if replicate_label and experiment_id and await is_current_replicate_attempt(db, protocol_run_id):
+                        await upsert_replicate(
+                            db,
+                            experiment_id=experiment_id,
+                            replicate_label=replicate_label,
+                            fields={"artifacts": {f"tool_step:{step_node_id}": step}},
+                            revision_id=design_revision_id,
+                        )
+
+            node_runs[node_id] = await execute_tool_step(
+                node,
+                graph=graph,
+                upstream_runs=[node_runs.get(uid) or {} for uid in _upstream_ids(graph, node_id)],
+                workspace_id=workspace_id,
+                record_provenance=record_step_provenance,
+            )
+            if node_runs[node_id]["status"] == "failed":
+                failed = True
+            async with get_session() as db:
+                await update_node_run(db, protocol_run_id, node_id, node_runs[node_id])
             continue
 
         output_text: str | None

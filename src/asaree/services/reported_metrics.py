@@ -17,6 +17,13 @@ from motoro.schemas.llm import flatten_tool_call_records
 from motoro.services import mcp_service
 
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.derived_metrics import (
+    DERIVED_PRODUCER_IDS,
+    FEATURE_PIPELINE_PRODUCER_ID,
+    TOOL_STEP_PRODUCER_ID,
+    collect_derived_observations,
+    derived_binding_issue,
+)
 from asaree.services.measurement_engine import (
     MeasurementEvaluation,
     MeasurementPlan,
@@ -32,7 +39,9 @@ from asaree.services.protocol_graph import directly_connected_tool_pair, node_ma
 AGENT_OUTPUT_PRODUCER_ID = "asaree.agent_output"
 PYTHON_SCRIPT_PRODUCER_ID = "asaree.python_script"
 MCP_TOOL_PRODUCER_ID = "asaree.mcp_tool"
-REPORTED_PRODUCER_IDS = frozenset({AGENT_OUTPUT_PRODUCER_ID, PYTHON_SCRIPT_PRODUCER_ID, MCP_TOOL_PRODUCER_ID})
+REPORTED_PRODUCER_IDS = frozenset(
+    {AGENT_OUTPUT_PRODUCER_ID, PYTHON_SCRIPT_PRODUCER_ID, MCP_TOOL_PRODUCER_ID, *DERIVED_PRODUCER_IDS}
+)
 MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool", "mcp_scikit_learn", "mcp_client_tool"})
 _SCRIPT_SERVER = "asaree-script"
 _SCRIPT_TOOL = "run_wired_script"
@@ -135,6 +144,13 @@ async def collect_reported_metrics(
     attempt_id = str(run.id)
     for binding in plan.producers:
         if binding.producer_id not in REPORTED_PRODUCER_IDS:
+            continue
+        if binding.producer_id in DERIVED_PRODUCER_IDS:
+            observations.extend(
+                await collect_derived_observations(
+                    binding, metrics, node_runs=run.node_runs or {}, graph=graph, attempt_id=attempt_id
+                )
+            )
             continue
         node_run = (run.node_runs or {}).get(str(binding.config.get("agent_node_id") or ""))
         successful_output = (
@@ -305,6 +321,18 @@ async def validate_reported_measurement_plan(
                         f"{path}.outputs.{output_key}",
                     )
                 )
+        if binding.producer_id in DERIVED_PRODUCER_IDS:
+            if derived := derived_binding_issue(binding, graph):
+                code, message, key = derived
+                issues.append(
+                    ValidationIssue(
+                        code,
+                        message,
+                        f"{path}.{key}" if key == "outputs" else f"{path}.config.{key}",
+                        preserved_binding_severity(binding.id, preserved_binding_ids),
+                    )
+                )
+            continue
         if agent_issue := _agent_issue(binding, index, graph, preserved_binding_ids):
             issues.append(agent_issue)
         if binding.producer_id == AGENT_OUTPUT_PRODUCER_ID:
@@ -434,10 +462,12 @@ async def validate_reported_measurement_plan(
 
 __all__ = [
     "AGENT_OUTPUT_PRODUCER_ID",
+    "FEATURE_PIPELINE_PRODUCER_ID",
     "MCP_TOOL_NODE_TYPES",
     "MCP_TOOL_PRODUCER_ID",
     "PYTHON_SCRIPT_PRODUCER_ID",
     "REPORTED_PRODUCER_IDS",
+    "TOOL_STEP_PRODUCER_ID",
     "collect_reported_metrics",
     "resolve_reported_metric_graph",
     "validate_reported_measurement_plan",

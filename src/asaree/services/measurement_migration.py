@@ -55,7 +55,13 @@ def normalize_experiment_measurement_plan(document: Any, metrics: Any) -> dict[s
                 if isinstance(producer, dict) and producer.get("kind") == "deterministic_evaluator":
                     producer["kind"] = "reported"
     plan = parse_measurement_plan(migrated_document) if migrated_document is not None else MeasurementPlan((), (), ())
-    reported_ids = {"asaree.agent_output", "asaree.python_script", "asaree.mcp_tool"}
+    reported_ids = {
+        "asaree.agent_output",
+        "asaree.python_script",
+        "asaree.mcp_tool",
+        "asaree.tool_step",
+        "asaree.feature_pipeline",
+    }
     reported_bindings = tuple(binding for binding in plan.producers if binding.producer_id in reported_ids)
     reported_binding_ids = {binding.id for binding in reported_bindings}
     reported_metric_ids = {metric_id for binding in reported_bindings for metric_id in binding.outputs.values()}

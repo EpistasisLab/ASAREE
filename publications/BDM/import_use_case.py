@@ -19,7 +19,7 @@ What it does, in order:
 4. Atomically import the experiment and its canvas (or update an existing one),
    then attach the dataset.
 5. Publish an immutable protocol revision.
-6. Apply the design and materialize its eight cells and 80 replicates.
+6. Apply the design and materialize its eight cells and 160 replicates.
 """
 
 from __future__ import annotations

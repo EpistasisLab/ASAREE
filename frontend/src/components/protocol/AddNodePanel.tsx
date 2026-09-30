@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, Atom, BookMarked, Bot, Braces, BrainCircuit, Cloud, Code2, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
+import { ArrowRight, Atom, BookMarked, Bot, Braces, BrainCircuit, Cloud, Code2, Cog, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DATASET_BROWSE } from './datasetCatalog'
@@ -55,6 +55,13 @@ const NODE_CATALOG = [
     label: 'Critic Gate',
     description: "Reviews an upstream Agent's output, requests revisions",
     icon: ShieldCheck,
+  },
+  {
+    type: 'tool_step',
+    category: 'tools',
+    label: 'Tool Step',
+    description: "Calls one MCP tool directly with the upstream node's payload -- deterministic, no model",
+    icon: Cog,
   },
   { type: 'model_anthropic', category: 'models', label: 'Anthropic', description: "An Agent or Critic Gate's model, temperature, and parameters", icon: Sparkles },
   { type: 'model_openai', category: 'models', label: 'OpenAI', description: "An Agent or Critic Gate's model, temperature, and parameters", icon: Atom },

@@ -77,7 +77,7 @@ function ObservationCard({ observation, artifacts }: { observation: MetricObserv
 // `nodeNames` is every canvas node's friendly name by id (lib/nodeNames.ts),
 // not just the agents': Node progress lists a row per node in the graph, and a
 // bare uuid there matches nothing the user can point at on the canvas.
-const EXECUTABLE_NODE_TYPES = new Set(['agent', 'sub_agent', 'critic_gate'])
+const EXECUTABLE_NODE_TYPES = new Set(['agent', 'sub_agent', 'critic_gate', 'tool_step'])
 
 export function TestRunResults({
   run,
@@ -106,7 +106,11 @@ export function TestRunResults({
       return leftOrder - rightOrder || (nodeNames.get(leftId) ?? leftId).localeCompare(nodeNames.get(rightId) ?? rightId)
     })
   const nodeRunGroups = [
-    { label: 'Agents', entries: nodeRuns.filter(([nodeId]) => nodeTypes.get(nodeId) !== 'critic_gate') },
+    {
+      label: 'Agents',
+      entries: nodeRuns.filter(([nodeId]) => !['critic_gate', 'tool_step'].includes(nodeTypes.get(nodeId) ?? '')),
+    },
+    { label: 'Tool steps', entries: nodeRuns.filter(([nodeId]) => nodeTypes.get(nodeId) === 'tool_step') },
     { label: 'Critic gates', entries: nodeRuns.filter(([nodeId]) => nodeTypes.get(nodeId) === 'critic_gate') },
   ].filter((group) => group.entries.length > 0)
   const timestamp = new Date(run.created_at)

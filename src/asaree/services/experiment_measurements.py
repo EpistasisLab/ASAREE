@@ -21,8 +21,10 @@ from asaree.services.measurement_migration import normalize_experiment_measureme
 from asaree.services.metrics import normalize_metrics
 from asaree.services.reported_metrics import (
     AGENT_OUTPUT_PRODUCER_ID,
+    FEATURE_PIPELINE_PRODUCER_ID,
     MCP_TOOL_PRODUCER_ID,
     PYTHON_SCRIPT_PRODUCER_ID,
+    TOOL_STEP_PRODUCER_ID,
     validate_reported_measurement_plan,
 )
 from asaree.services.runtime_metrics import RuntimeMetricProducer, validate_runtime_measurement_plan
@@ -163,6 +165,8 @@ async def validate_experiment_measurement_plan(
         AGENT_OUTPUT_PRODUCER_ID: "reported",
         PYTHON_SCRIPT_PRODUCER_ID: "reported",
         MCP_TOOL_PRODUCER_ID: "reported",
+        TOOL_STEP_PRODUCER_ID: "reported",
+        FEATURE_PIPELINE_PRODUCER_ID: "reported",
     }
     producer_issues = []
     for index, binding in enumerate(plan.producers):

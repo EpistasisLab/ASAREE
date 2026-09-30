@@ -33,6 +33,7 @@ import {
   defaultAnthropicModelNodeData,
   defaultAzureFoundryModelNodeData,
   defaultCriticGateNodeData,
+  defaultToolStepNodeData,
   defaultDatasetNodeData,
   defaultLocalModelNodeData,
   defaultMcpToolNodeData,
@@ -47,6 +48,7 @@ import {
 import type {
   AgentNodeData,
   CriticGateNodeData,
+  ToolStepNodeData,
   DatasetNodeData,
   ModelNodeData,
   McpToolNodeData,
@@ -75,6 +77,7 @@ import { AgentNodeInspector } from './AgentNodeInspector'
 import { agentTracedLabel, factorBoundField, revealsHiddenMcpServers, toolFactorServerId, unboundBindableFields, type UnboundField } from './bindableFields'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
+import { ToolStepNodeInspector } from './ToolStepNodeInspector'
 import { DatasetNodeInspector } from './DatasetNodeInspector'
 import { DeleteNodeConfirmDialog } from './DeleteNodeConfirmDialog'
 import { DEFAULT_ZOOM } from './constants'
@@ -126,6 +129,7 @@ import { ConversationTranscript } from './ConversationTranscript'
 import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
+import { ToolStepNode } from './nodes/ToolStepNode'
 import { DatasetNode } from './nodes/DatasetNode'
 import { ModelNode } from './nodes/ModelNode'
 import { McpClientToolNode } from './nodes/McpClientToolNode'
@@ -167,6 +171,7 @@ const NODE_TYPES = {
   // that distinguishes it. Same data, same inspector.
   mcp_client_tool: McpClientToolNode,
   critic_gate: CriticGateNode,
+  tool_step: ToolStepNode,
   // All five LLM provider types render through the same component -- it
   // derives icon/accent/placeholder from data.config.provider, not from
   // which of these five keys it was registered under.
@@ -217,6 +222,7 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   // it.
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData()
   if (nodeType === 'critic_gate') return defaultCriticGateNodeData()
+  if (nodeType === 'tool_step') return defaultToolStepNodeData()
   if (nodeType === 'model_anthropic') return defaultAnthropicModelNodeData()
   if (nodeType === 'model_openai') return defaultOpenAiModelNodeData()
   if (nodeType === 'model_azure_foundry') return defaultAzureFoundryModelNodeData()
@@ -1295,7 +1301,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ? producer.config.script_node_id
         : producer.producer_id === 'asaree.mcp_tool'
           ? producer.config.mcp_node_id
-          : undefined
+          : producer.producer_id === 'asaree.tool_step'
+            ? producer.config.node_id
+            : undefined
       if (typeof nodeId !== 'string' || !nodeId) continue
       const metrics = bindings.get(nodeId) ?? new Map<string, { id: string; name: string }>()
       for (const metricId of Object.values(producer.outputs)) {
@@ -1908,6 +1916,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | AgentNodeData
       | McpToolNodeData
       | CriticGateNodeData
+      | ToolStepNodeData
       | ModelNodeData
       | MemoryNodeData
       | OutputParserNodeData
@@ -2210,6 +2219,20 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           <CriticGateNodeInspector
             node={{ id: selectedNode.id, type: 'critic_gate', position: selectedNode.position, data: selectedNode.data as CriticGateNodeData }}
             experimentId={experimentId}
+            nodeRun={latestNodeRuns?.[selectedNode.id]}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'tool_step' ? (
+          <ToolStepNodeInspector
+            key={selectedNode.id}
+            node={{ id: selectedNode.id, type: 'tool_step', position: selectedNode.position, data: selectedNode.data as ToolStepNodeData }}
+            toolOptions={edges
+              .filter((edge) => edge.target === selectedNode.id && edge.targetHandle === 'tool')
+              .map((edge) => nodes.find((node) => node.id === edge.source))
+              .filter((node) => MCP_TOOL_NODE_TYPES.includes(node?.type ?? ''))
+              .flatMap((node) => (node!.data as McpToolNodeData).config?.tool_names ?? [])}
             nodeRun={latestNodeRuns?.[selectedNode.id]}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}

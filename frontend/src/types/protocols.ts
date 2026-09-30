@@ -26,6 +26,7 @@ export interface ProtocolNode {
     | AgentNodeData
     | McpToolNodeData
     | CriticGateNodeData
+    | ToolStepNodeData
     | ModelNodeData
     | MemoryNodeData
     | OutputParserNodeData
@@ -414,6 +415,41 @@ export function defaultCriticGateNodeData(label = 'Critic Gate'): CriticGateNode
       enabled: true,
       max_revisions: 1, // matches the notebook's own MAX_REVISIONS
     },
+  }
+}
+
+// A "Tool Step" calls one MCP tool directly in the main flow -- no LLM, so the
+// same approved upstream payload always produces the same call. It's the
+// canvas form of the notebook's harness-owned score_payload: the payload its
+// upstream node handed on is (optionally) sanitized, sent as
+// `payload_argument`, and the wired Script's code as `code_argument`, both
+// hash-checked against what the tool reports back (services/tool_steps.py).
+// Its Tool connector takes exactly one MCP Tool node and at most one Script.
+export interface ToolStepNodeConfig {
+  tool_name: string
+  // Fixed arguments merged into every call (e.g. random_seed, task_type).
+  arguments: Record<string, unknown>
+  // '' = pass the upstream payload through unchanged.
+  sanitizer: '' | 'xgboost_hyperparameters'
+  verify_hashes: boolean
+  payload_argument?: string
+  code_argument?: string
+  timeout_seconds?: number | null
+}
+
+export interface ToolStepNodeData {
+  label: string
+  active?: boolean
+  config: ToolStepNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultToolStepNodeData(label = 'Tool Step'): ToolStepNodeData {
+  return {
+    label,
+    active: true,
+    config: { tool_name: '', arguments: {}, sanitizer: '', verify_hashes: true },
   }
 }
 

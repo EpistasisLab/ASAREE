@@ -15,7 +15,7 @@ import type { ProtocolGraph } from '@/types/protocols'
 import { useDialogAutosave, type DialogAutosaveStatus } from './useDialogAutosave'
 
 type Binding = MeasurementPlan['producers'][number] | undefined
-export type MetricNodeDisplay = { label: string; type: 'Agent' | 'Script' | 'MCP Tool' }
+export type MetricNodeDisplay = { label: string; type: 'Agent' | 'Script' | 'MCP Tool' | 'Tool Step' | 'Feature pipeline' }
 
 export function MetricNodeLabel({ display, reason }: { display: MetricNodeDisplay; reason?: string }) {
   return (

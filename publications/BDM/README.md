@@ -1,9 +1,10 @@
 # Myocardial infarction use case
 
-A complete, runnable ASAREE experiment: five agents in series
-(**DC → FTE → FS → MLM → Score**) build a binary classifier for chronic heart
-failure after a myocardial infarction, each one handing a versioned dataset
-workspace to the next, each (except Score) behind an optional critic gate.
+A complete, runnable ASAREE experiment: four agents in series
+(**DC → FTE → FS → MLM**) build a binary classifier for chronic heart failure
+after a myocardial infarction, each one handing a versioned dataset workspace
+to the next behind an optional critic gate, and a deterministic **Score** Tool
+Step evaluates MLM's approved hyperparameter payload on the held-out split.
 
 It's the public counterpart of the spinal-surgery use case in the paper — same
 protocol shape, on a dataset anyone can download.
@@ -27,11 +28,11 @@ have:
 
 | File | Model factor | Effort factor | Design size |
 | --- | --- | --- | --- |
-| `myocardial-anthropic-v0.8.0.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 80 replicates |
-| `myocardial-openai-v0.8.0.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 8 cells / 80 replicates |
-| `myocardial-azure-foundry-v0.8.0.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 80 replicates |
+| `myocardial-anthropic-v0.8.0.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 160 replicates |
+| `myocardial-openai-v0.8.0.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 8 cells / 160 replicates |
+| `myocardial-azure-foundry-v0.8.0.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 160 replicates |
 
-All three are 2 × 2 × 2 designs (model × effort × critic on/off) at 10
+All three are 2 × 2 × 2 designs (model × effort × critic on/off) at 20
 replicates, with the smaller/larger model of a family at the middle and top of
 its provider's effort ladder. The two ladders aren't the same length: OpenAI's
 `reasoning_effort` stops at `high`, so `high` is that variant's counterpart to
@@ -64,21 +65,37 @@ critic gates, with these v0.8.0 execution details:
   workspace before the agent's first turn, and a wired Script reaches
   `run_model_script` as a path in ambient `_meta` — so DC/FTE/FS call a bare
   `open_workspace(stage=...)` instead of passing `experiment_id`/`cell_label`/
-  `name`, and Score calls `run_model_script` with **no** `code` argument
-  instead of retyping the wired script.
+  `name`.
+- **Scoring is a Tool Step, not an agent.** Like the paper's notebook
+  (`score_payload`), nothing about the scoring call is left to a model: the
+  `tool-step-score` node takes MLM's approved payload, runs it through the
+  notebook's `sanitize_payload` port (every out-of-vocabulary or out-of-bound
+  suggestion is dropped and noted, so a malformed payload still scores instead
+  of crashing), and calls `run_model_script` directly with the wired Script's
+  code, `random_seed=20260705` and `selection_metric=average_precision`. The
+  step fails unless the tool reports the exact `code_sha256` and
+  `payload_sha256` it sent, and the approved payload is recorded on the
+  replicate *before* the call.
+- **Iteration budget.** Every Reason + Act pattern allows 12 iterations, the
+  notebook's `max_iterations`.
 - **Published execution.** The import helper publishes the localized graph as
   an immutable protocol revision before generating or running replicates.
 - **Visible output contracts.** Each agent's declared output shape lives in a
   connected Output Parser node rather than the legacy hidden
   `config.output_contract` field. The contracts and runtime behavior are
   unchanged; the canvas now exposes where each structured payload is defined.
-- **Declared measurements.** The complete held-out scoring response is retained
-  as an opaque provenance record, while typed projections expose PR-AUC (the
-  primary metric), ROC-AUC, Brier and operating-point diagnostics, pipeline
-  feature counts, Optuna/XGBoost decisions, SHA-256 guards, and the built-in
-  runtime metrics as analysis-ready Results and CSV columns. Agent-stage values
-  come from their connected Output Parser payloads; scoring values come from
-  MI-Score's exact `asaree-sklearn-model.run_model_script` call.
+- **Declared measurements.** Each scoring value is its own numeric metric,
+  read by exact dotted path from the Tool Step's result
+  (`asaree.tool_step` — e.g. `test_metrics.average_precision`,
+  `test_metrics.metrics_at_0.5.f1`): PR-AUC, ROC-AUC, Brier and
+  operating-point diagnostics, Optuna/XGBoost decisions, the SHA-256 guards,
+  and `n_schema_violations` (entries the sanitizer dropped). Feature counts
+  (`n_features_after_dc/fte/fs`, `n_features_created`,
+  `n_engineered_features_selected`, `frac_created_selected`) are computed by
+  `asaree.feature_pipeline` from the stage payloads and the raw dataset's
+  columns, the way the notebook's `process_metrics` does, rather than trusted
+  from an agent's self-report. The remaining agent-stage values come from
+  their Output Parser payloads.
 
 That `open_workspace(stage=...)` call is deliberately kept: seeding the
 workspace materializes `v0_raw`, but *not* a stage's `.scratch` input, which is
@@ -180,8 +197,8 @@ built from the train half; the test half is only touched by the final model
 script. Re-splitting at a different seed overwrites rather than accumulating.
 
 **7. Inspect the generated design.** The **Design** and **Cells** tabs show
-2 × 2 × 2 factor combinations = **8 cells**, with 10 replicates per cell
-(**80 replicates** total). The imported canvas is already published.
+2 × 2 × 2 factor combinations = **8 cells**, with 20 replicates per cell
+(**160 replicates** total). The imported canvas is already published.
 
 **8. Run.** Two ways:
 
@@ -194,8 +211,8 @@ results land in **Cells** and **Results**.
 
 ## Cost
 
-Generating the grid is free — cells and replicates are rows until a run starts — but 80 runs
-of a five-agent pipeline, half of them at the top of the effort ladder, is a
+Generating the grid is free — cells and replicates are rows until a run starts — but 160 runs
+of a four-agent pipeline, half of them at the top of the effort ladder, is a
 real bill. Run one cell
 first. If you only want a smoke test, lower **Replicates** on the Design tab and
 regenerate before running; ASAREE opens a new design revision when the change

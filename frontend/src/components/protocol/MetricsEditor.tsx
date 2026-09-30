@@ -10,7 +10,14 @@ import { AGENT_OUTPUT_PRODUCER_ID, agentOutputBindingForMetric, agentOutputSourc
 import { applyCustomMetricChange, type CustomMetricProducerConfig } from '@/lib/customMetrics'
 import { pythonScriptBindingForMetric, pythonScriptSourceOptions } from '@/lib/pythonScriptMetrics'
 import { mcpToolBindingForMetric, mcpToolSourceOptions } from '@/lib/mcpToolMetrics'
-import { localMetricReadinessPreview, removeMetricFromMeasurementPlan, upsertRuntimeMetric } from '@/lib/measurementPlan'
+import {
+  DERIVED_PRODUCER_IDS,
+  FEATURE_PIPELINE_PRODUCER_ID,
+  TOOL_STEP_PRODUCER_ID,
+  localMetricReadinessPreview,
+  removeMetricFromMeasurementPlan,
+  upsertRuntimeMetric,
+} from '@/lib/measurementPlan'
 import { METRIC_CATALOG, makeCatalogMetric, makeCustomMetric, normalizeDesignMetrics, type MetricCatalogEntry } from '@/lib/metricCatalog'
 import type { ProtocolGraph } from '@/types/protocols'
 import type { DesignMetric, MeasurementPlan } from '@/types/experiments'
@@ -58,6 +65,8 @@ function customMetricProducerDisplay(
   if (binding.producer_id === 'asaree.python_script') {
     return { label: `${agent}:${nodeLabel(binding.config.script_node_id)}`, type: 'Script' }
   }
+  if (binding.producer_id === TOOL_STEP_PRODUCER_ID) return { label: nodeLabel(binding.config.node_id), type: 'Tool Step' }
+  if (binding.producer_id === FEATURE_PIPELINE_PRODUCER_ID) return { label: 'DC → FTE → FS', type: 'Feature pipeline' }
   if (binding.producer_id === 'asaree.mcp_tool') {
     const toolName = typeof binding.config.tool_name === 'string' ? binding.config.tool_name : null
     return {
@@ -358,7 +367,7 @@ function MetricsDialog({
                       <Button type="button" variant="ghost" size="icon-sm" aria-label={`Move ${metric.name} up in staged order`} disabled={disabled || selectedPosition === 0} onClick={() => moveStagedCustomMetric(metric, -1)}><ArrowUp className="size-3.5" /></Button>
                       <Button type="button" variant="ghost" size="icon-sm" aria-label={`Move ${metric.name} down in staged order`} disabled={disabled || selectedPosition === customMetricIds.length - 1} onClick={() => moveStagedCustomMetric(metric, 1)}><ArrowDown className="size-3.5" /></Button>
                     </span>
-                    {binding && <Button type="button" variant="ghost" size="sm" aria-label={`Edit ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricDraft(metric)}>Edit</Button>}
+                    {binding && !DERIVED_PRODUCER_IDS.has(binding.producer_id) && <Button type="button" variant="ghost" size="sm" aria-label={`Edit ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricDraft(metric)}>Edit</Button>}
                     <Button type="button" variant="ghost" size="icon-sm" aria-label={`Delete ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricPendingDelete(metric)}><Trash2 className="size-3.5 text-destructive" /></Button>
                   </div>
                 })}</div>}

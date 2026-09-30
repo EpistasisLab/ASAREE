@@ -19,11 +19,21 @@ export const OBSERVATION_LABELS: Record<ObservationStatus, string> = {
   not_applicable: 'Not applicable',
 }
 
+// Producers ASAREE computes in code from what a run recorded
+// (services/derived_metrics.py). Declared in the plan document, not authored
+// through the custom-metric dialog, which only knows the three capture kinds.
+export const TOOL_STEP_PRODUCER_ID = 'asaree.tool_step'
+export const FEATURE_PIPELINE_PRODUCER_ID = 'asaree.feature_pipeline'
+export const DERIVED_PRODUCER_IDS = new Set([TOOL_STEP_PRODUCER_ID, FEATURE_PIPELINE_PRODUCER_ID])
+const FEATURE_PIPELINE_STAGE_KEYS = ['dc_node_id', 'fte_node_id', 'fs_node_id'] as const
+
 const PRODUCER_LABELS: Record<string, string> = {
   'asaree.runtime': 'ASAREE runtime',
   'asaree.python_script': 'Python Script',
   [AGENT_OUTPUT_PRODUCER_ID]: 'Agent output',
   [MCP_TOOL_PRODUCER_ID]: 'MCP Tool',
+  [TOOL_STEP_PRODUCER_ID]: 'Tool Step',
+  [FEATURE_PIPELINE_PRODUCER_ID]: 'Feature pipeline',
 }
 
 export function removeMetricFromMeasurementPlan(
@@ -110,6 +120,19 @@ export function localMetricReadinessPreview(
     if (!agent) return { ready: false, producer, detail: `Agent ${agentNodeId || '(not selected)'} is not available.` }
     if (agent.data.active === false) return { ready: false, producer, detail: 'The Agent is disabled.' }
     return { ready: true, producer, detail: 'The Agent final output will be captured after execution.' }
+  }
+  if (binding.producer_id === TOOL_STEP_PRODUCER_ID) {
+    const step = graph?.nodes.find((node) => node.id === binding.config.node_id && node.type === 'tool_step')
+    if (!step) return { ready: false, producer, detail: 'The Tool Step is unavailable.' }
+    if (step.data.active === false) return { ready: false, producer, detail: 'The Tool Step is disabled.' }
+    return { ready: true, producer, detail: "The Tool Step's result will be read after execution." }
+  }
+  if (binding.producer_id === FEATURE_PIPELINE_PRODUCER_ID) {
+    const missing = FEATURE_PIPELINE_STAGE_KEYS.find((key) => !graph?.nodes.some(
+      (node) => node.id === binding.config[key] && (node.type === 'agent' || node.type === 'sub_agent'),
+    ))
+    if (missing) return { ready: false, producer, detail: `The ${missing.split('_')[0].toUpperCase()} Agent is unavailable.` }
+    return { ready: true, producer, detail: 'Computed from the stage payloads after execution.' }
   }
   if (binding.kind === 'reported') {
     const graphNodes = graph?.nodes ?? []

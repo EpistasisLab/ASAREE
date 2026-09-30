@@ -4,11 +4,13 @@ import json
 from pathlib import Path
 
 from asaree.services.csv_export import result_rows_to_csv
+from asaree.services.derived_metrics import FEATURE_PIPELINE_OUTPUTS
 from asaree.services.measurement_migration import normalize_experiment_measurement_plan
 from asaree.services.metrics import (
     design_metrics_from_measurement_plan,
     normalize_metrics,
 )
+from asaree.services.protocol_execution import topological_order
 
 BDM = Path(__file__).parents[1] / "publications" / "BDM"
 USE_CASES = sorted(BDM.glob("myocardial-*-v0.8.0.json"))
@@ -68,8 +70,35 @@ def test_myocardial_output_parser_types_match_the_prompted_payloads() -> None:
     assert parsers["output-parser-fs"]["class_balance_check"] == "string"
     assert parsers["output-parser-fs"]["n_engineered_features_selected"] == "integer"
     assert parsers["output-parser-mlm"]["search_space"] == "array"
-    assert "model_decisions" in parsers["output-parser-score"]
-    assert "result" not in parsers["output-parser-score"]
+    assert "output-parser-score" not in parsers
+
+
+def test_myocardial_scoring_is_a_deterministic_tool_step() -> None:
+    for path in USE_CASES:
+        document = json.loads(path.read_text())
+        nodes = {node["id"]: node for node in document["graph"]["nodes"]}
+        assert "agent-score" not in nodes
+        step = nodes["tool-step-score"]
+        assert step["type"] == "tool_step"
+        assert step["data"]["config"]["sanitizer"] == "xgboost_hyperparameters"
+        assert step["data"]["config"]["arguments"]["selection_metric"] == "average_precision"
+        assert [node["id"] for node in topological_order(document["graph"])][-1] == "tool-step-score"
+        assert document["design_spec"]["replicates"] == 20
+        assert {
+            node["data"]["config"]["max_iterations"] for node in nodes.values() if node["type"] == "pattern_reason_act"
+        } == {12}
+
+        producers = {producer["id"]: producer for producer in document["measurement_plan"]["producers"]}
+        scoring = producers["model-evaluation-source"]
+        assert scoring["producer_id"] == "asaree.tool_step"
+        assert scoring["config"] == {"node_id": "tool-step-score"}
+        assert scoring["outputs"]["test_metrics.average_precision"] == "pr-auc"
+        assert scoring["outputs"]["test_metrics.metrics_at_0.5.f1"] == "f1-0-5"
+        pipeline = producers["feature-pipeline-source"]
+        assert pipeline["producer_id"] == "asaree.feature_pipeline"
+        assert set(pipeline["outputs"]) == set(FEATURE_PIPELINE_OUTPUTS)
+        bound = [metric_id for producer in producers.values() for metric_id in producer["outputs"].values()]
+        assert len(bound) == len(set(bound)), "each metric has exactly one producer"
 
 
 def test_myocardial_results_export_has_analysis_ready_custom_columns() -> None:
@@ -96,7 +125,9 @@ def test_myocardial_results_export_has_analysis_ready_custom_columns() -> None:
         "n_engineered_features",
         "n_features_after_fs",
         "n_engineered_features_selected",
-        "pct_engineered_features_selected",
+        "n_features_created",
+        "frac_created_selected",
+        "n_schema_violations",
         "optuna_best_inner_cv_score",
         "hp_n_estimators",
         "code_sha256",

@@ -8,6 +8,7 @@ import { TERMINAL_RUN_STATUSES, nodeRunBadge } from '@/lib/protocolRun'
 import type { EvaluationArtifact, MetricObservation } from '@/types/experiments'
 import type { TestRun, TestRunResourceUsage } from '@/types/protocols'
 import { ConversationTranscript } from './ConversationTranscript'
+import { useDraggableOverlay } from './useDraggableOverlay'
 
 function outcomeLabel(run: TestRun): string {
   if (run.status === 'finalizing') return 'Calculating metrics…'
@@ -93,6 +94,8 @@ export function TestRunResults({
   title?: string
 }) {
   const [nodeProgressCollapsed, setNodeProgressCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
+  const drag = useDraggableOverlay<HTMLDivElement>({ recomputeKey: collapsed })
   const running = !TERMINAL_RUN_STATUSES.has(run.status)
   const canvasOrder = new Map(Array.from(nodeTypes.keys(), (nodeId, index) => [nodeId, index]))
   const nodeRuns = Object.entries(run.execution_summary.node_runs)
@@ -116,8 +119,12 @@ export function TestRunResults({
   const timestamp = new Date(run.created_at)
 
   return (
-    <Card aria-label={title} className="absolute right-3 bottom-3 z-10 max-h-[calc(100%-1.5rem)] w-[min(44rem,calc(100%-1.5rem))] shadow-xl" size="sm">
-      <CardHeader className="border-b">
+    <Card ref={drag.panelRef} style={drag.style} aria-label={title} className="absolute right-3 bottom-3 z-10 max-h-[calc(100%-1.5rem)] w-[min(44rem,calc(100%-1.5rem))] shadow-xl" size="sm">
+      <CardHeader
+        className={`${collapsed ? '' : 'border-b'} cursor-move touch-none select-none`}
+        aria-label={`Move ${title}`}
+        {...drag.handleProps}
+      >
         <CardTitle className="flex flex-wrap items-center gap-2">
           {title}
           {run.freshness.out_of_date && <Badge className="border-transparent bg-[color:var(--chart-4)]/15 text-[color:var(--chart-4)]">Out of date</Badge>}
@@ -126,9 +133,27 @@ export function TestRunResults({
           <span className={run.status === 'failed' ? 'text-destructive' : run.status === 'completed' ? 'text-[color:var(--chart-3)]' : 'text-[color:var(--card-accent,var(--primary))]'}>{outcomeLabel(run)}</span>
           {run.tested_published_revision && <> · Published revision {run.tested_published_revision.number} · {Number.isNaN(timestamp.valueOf()) ? run.created_at : timestamp.toLocaleString()}</>}
         </CardDescription>
-        <CardAction><Button size="icon" variant="ghost" aria-label="Close Test Run Results" onClick={onClose}><X className="size-4" /></Button></CardAction>
+        <CardAction>
+          <div className="flex items-center gap-1">
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={`${collapsed ? 'Restore' : 'Minimize'} ${title}`}
+              aria-expanded={!collapsed}
+              title={`${collapsed ? 'Restore' : 'Minimize'} ${title}`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={() => {
+                drag.preservePositionOnNextLayout()
+                setCollapsed((value) => !value)
+              }}
+            >
+              {collapsed ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+            </Button>
+            <Button size="icon" variant="ghost" aria-label="Close Test Run Results" onPointerDown={(event) => event.stopPropagation()} onClick={onClose}><X className="size-4" /></Button>
+          </div>
+        </CardAction>
       </CardHeader>
-      <CardContent className="min-h-0 space-y-4 overflow-y-auto">
+      {!collapsed && <CardContent className="min-h-0 space-y-4 overflow-y-auto">
         {run.freshness.out_of_date && (
           <div className="flex gap-2 rounded-lg border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/5 p-3 text-xs text-[color:var(--chart-4)]">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" /><div><p className="font-medium">Out of date</p><p>{staleReason(run.freshness.reasons)}</p></div>
@@ -180,7 +205,7 @@ export function TestRunResults({
         {run.artifacts.length > 0 && <details className="rounded-lg border bg-background/45"><summary className="cursor-pointer px-3 py-2 text-sm font-medium">Evaluation artifacts</summary><div className="space-y-2 border-t p-3">{run.artifacts.map((artifact) => <div key={`${artifact.artifact_key}-${artifact.attempt_id}`}><p className="text-xs font-medium">{artifact.artifact_key} <span className="font-normal text-muted-foreground">· producer {artifact.producer.binding_id}</span></p><pre className="mt-1 overflow-auto rounded bg-muted/60 p-2 font-mono text-[11px] whitespace-pre-wrap">{JSON.stringify(artifact.payload, null, 2)}</pre></div>)}</div></details>}
 
         <section className="space-y-2"><h3 className="text-sm font-medium">Resources</h3><div className="grid grid-cols-3 gap-2"><ResourceGroup label="Task" {...run.resources.task} /><ResourceGroup label="Evaluation" {...run.resources.evaluation} /><ResourceGroup label="Combined" {...run.resources.total} /></div><p className="text-[11px] text-muted-foreground">Unknown cost means the provider did not report pricing; it is never treated as zero.</p></section>
-      </CardContent>
+      </CardContent>}
     </Card>
   )
 }

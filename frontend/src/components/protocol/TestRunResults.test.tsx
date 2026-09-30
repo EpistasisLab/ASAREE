@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { TestRun } from '@/types/protocols'
@@ -59,6 +59,21 @@ describe('TestRunResults', () => {
     expect(screen.getByText('Analyst')).toBeInTheDocument()
     expect(screen.getByText('Agent conversation flow')).toBeInTheDocument()
     expect(screen.getByText('Analyze this.')).toBeInTheDocument()
+  })
+
+  it('minimizes and restores the agent conversation flow', async () => {
+    const user = userEvent.setup()
+    render(<TestRunResults run={testRun({
+      conversation: {
+        state: 'working', entry_agent_id: 'agent-1',
+        messages: [{ message_id: 'message-1', sequence: 1, from_agent_id: 'user', to_agent_id: 'agent-1', parts: [{ kind: 'text', text: 'Analyze this.' }], created_at: '2026-09-16T12:00:00Z' }],
+      },
+    })} onClose={vi.fn()} />)
+
+    await user.click(screen.getByRole('button', { name: 'Minimize Agent conversation flow' }))
+    expect(screen.getByText('Analyze this.').closest('div')).toHaveClass('hidden')
+    await user.click(screen.getByRole('button', { name: 'Restore Agent conversation flow' }))
+    expect(screen.getByText('Analyze this.').closest('div')).not.toHaveClass('hidden')
   })
 
   it('orders executable nodes by the canvas and omits configuration-only nodes', () => {
@@ -210,5 +225,79 @@ describe('TestRunResults', () => {
     expect(refresh).toHaveBeenCalledOnce()
     expect(screen.getByLabelText('Test Run Results')).toBeInTheDocument()
     expect(screen.getByText('Task execution in progress…')).toBeInTheDocument()
+  })
+
+  it('minimizes, restores, and moves the results window', async () => {
+    const user = userEvent.setup()
+    render(<TestRunResults run={testRun()} onClose={vi.fn()} />)
+
+    await user.click(screen.getByRole('button', { name: 'Minimize Test Run Results' }))
+    expect(screen.queryByText('Task execution in progress…')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Restore Test Run Results' }))
+    expect(screen.getByText('Task execution in progress…')).toBeInTheDocument()
+
+    const panel = screen.getByLabelText('Test Run Results')
+    const handle = screen.getByLabelText('Move Test Run Results')
+    fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 140, clientY: 125 })
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+    expect(panel).toHaveStyle({ transform: 'translate3d(40px, 25px, 0)' })
+  })
+
+  it('keeps the drag header inside the canvas when a top-aligned minimized window is restored', async () => {
+    const user = userEvent.setup()
+    render(<TestRunResults run={testRun()} onClose={vi.fn()} />)
+    const panel = screen.getByLabelText('Test Run Results')
+    const handle = screen.getByLabelText('Move Test Run Results')
+    const boundary = document.createElement('div')
+    Object.defineProperty(panel, 'offsetParent', { configurable: true, get: () => boundary })
+    boundary.getBoundingClientRect = () => ({
+      x: 0, y: 0, top: 0, left: 0, right: 1000, bottom: 800, width: 1000, height: 800, toJSON: () => ({}),
+    }) as DOMRect
+    panel.getBoundingClientRect = () => {
+      const minimized = screen.queryByRole('button', { name: 'Restore Test Run Results' }) !== null
+      const match = panel.style.transform.match(/translate3d\((-?\d+)px, (-?\d+)px/)
+      const offsetX = Number(match?.[1] ?? 0)
+      const offsetY = Number(match?.[2] ?? 0)
+      const height = minimized ? 80 : 600
+      const top = (minimized ? 720 : 200) + offsetY
+      const left = 300 + offsetX
+      return { x: left, y: top, top, left, right: left + 700, bottom: top + height, width: 700, height, toJSON: () => ({}) } as DOMRect
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Minimize Test Run Results' }))
+    await waitFor(() => expect(panel).toHaveStyle({ transform: 'translate3d(0px, -520px, 0)' }))
+    fireEvent.pointerDown(handle, { button: 0, pointerId: 1, clientX: 300, clientY: 200 })
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 300, clientY: 0 })
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+    expect(panel).toHaveStyle({ transform: 'translate3d(0px, -720px, 0)' })
+    await user.click(screen.getByRole('button', { name: 'Restore Test Run Results' }))
+
+    await waitFor(() => expect(panel).toHaveStyle({ transform: 'translate3d(0px, -200px, 0)' }))
+  })
+
+  it('minimizes in place instead of dropping to the bottom anchor', async () => {
+    const user = userEvent.setup()
+    render(<TestRunResults run={testRun()} onClose={vi.fn()} />)
+    const panel = screen.getByLabelText('Test Run Results')
+    const boundary = document.createElement('div')
+    Object.defineProperty(panel, 'offsetParent', { configurable: true, get: () => boundary })
+    boundary.getBoundingClientRect = () => ({
+      x: 0, y: 0, top: 0, left: 0, right: 1000, bottom: 800, width: 1000, height: 800, toJSON: () => ({}),
+    }) as DOMRect
+    panel.getBoundingClientRect = () => {
+      const minimized = screen.queryByRole('button', { name: 'Restore Test Run Results' }) !== null
+      const match = panel.style.transform.match(/translate3d\((-?\d+)px, (-?\d+)px/)
+      const offsetX = Number(match?.[1] ?? 0)
+      const offsetY = Number(match?.[2] ?? 0)
+      const height = minimized ? 80 : 600
+      const top = (minimized ? 720 : 200) + offsetY
+      const left = 300 + offsetX
+      return { x: left, y: top, top, left, right: left + 700, bottom: top + height, width: 700, height, toJSON: () => ({}) } as DOMRect
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Minimize Test Run Results' }))
+
+    await waitFor(() => expect(panel).toHaveStyle({ transform: 'translate3d(0px, -520px, 0)' }))
   })
 })

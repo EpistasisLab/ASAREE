@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { Conversation, ConversationMessage } from '@/types/protocols'
+import { useDraggableOverlay } from './useDraggableOverlay'
 
 // The literal id the backend uses for the human on both ends of a
 // conversation: the opening question comes from "user", and the entry agent's
@@ -59,12 +61,16 @@ function MessageBody({ parts }: { parts: ConversationMessage['parts'] }) {
 export function ConversationTranscript({
   conversation,
   agentNames,
+  floating = false,
+  className,
 }: {
   conversation: Conversation
   // Node id -> the label shown on that node's card, so the transcript names
   // agents the way the canvas does. Ids that aren't on the canvas (a node
   // deleted since the run) fall back to the raw id rather than disappearing.
   agentNames: Map<string, string>
+  floating?: boolean
+  className?: string
 }) {
   const nameOf = (id: string) => (id === USER_PARTICIPANT ? 'You' : agentNames.get(id) ?? id)
   const stateLabel = CONVERSATION_STATE_LABEL[conversation.state] ?? conversation.state
@@ -74,33 +80,43 @@ export function ConversationTranscript({
   // watching a run finish. Collapsed keeps the header, which is the part that
   // says a conversation happened at all.
   const [collapsed, setCollapsed] = useState(false)
+  const drag = useDraggableOverlay({ recomputeKey: collapsed })
 
   return (
-    // Positioned by the top-left overlay column in ProtocolCanvas, not by
-    // itself, so it can't collide with the lock badge it shares that corner
-    // with (nor with the MiniMap, whose corner it used to sit in). `min-h-0`
-    // lets it shrink inside that flex column rather than overflowing it, the
-    // scroll lives on the message list below so the header stays put while you
-    // read, and `pointer-events-auto` opts back in to the events that column
-    // waives.
-    <aside className="pointer-events-auto flex min-h-0 w-full flex-col rounded-lg border border-[color:var(--node-label)]/35 bg-card/95 p-3 shadow-[0_0_16px_-6px_var(--node-label)] backdrop-blur">
-      <button
-        type="button"
-        onClick={() => setCollapsed((c) => !c)}
-        className="flex w-full items-center justify-between gap-2 rounded text-left hover:opacity-80"
-        aria-expanded={!collapsed}
-      >
-        <p className="text-sm font-medium text-[color:var(--node-label)]">Agent conversation flow</p>
-        <span className="flex items-center gap-1.5">
+    <aside
+      ref={drag.panelRef}
+      style={floating ? drag.style : undefined}
+      className={cn(
+        'pointer-events-auto flex min-h-0 flex-col rounded-lg border border-[color:var(--node-label)]/35 bg-card/95 p-3 shadow-[0_0_16px_-6px_var(--node-label)] backdrop-blur',
+        floating && 'absolute left-3 z-10 max-h-[55%] w-[min(28rem,calc(100%-1.5rem))]',
+        !floating && 'w-full',
+        className,
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div
+          className={cn('flex min-w-0 flex-1 items-center gap-2', floating && 'cursor-move touch-none select-none')}
+          aria-label={floating ? 'Move Agent conversation flow' : undefined}
+          {...(floating ? drag.handleProps : {})}
+        >
+          <p className="truncate text-sm font-medium text-[color:var(--node-label)]">Agent conversation flow</p>
           <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{stateLabel}</span>
           <span className="text-xs text-muted-foreground">{conversation.messages.length}</span>
-          {collapsed ? (
-            <ChevronUp className="size-3.5 text-muted-foreground" />
-          ) : (
-            <ChevronDown className="size-3.5 text-muted-foreground" />
-          )}
-        </span>
-      </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            drag.preservePositionOnNextLayout()
+            setCollapsed((c) => !c)
+          }}
+          className="shrink-0 cursor-pointer rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label={`${collapsed ? 'Restore' : 'Minimize'} Agent conversation flow`}
+          aria-expanded={!collapsed}
+          title={`${collapsed ? 'Restore' : 'Minimize'} Agent conversation flow`}
+        >
+          {collapsed ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+        </button>
+      </div>
       <div className={collapsed ? 'hidden' : 'mt-2 min-h-0 space-y-2 overflow-y-auto'}>
         {conversation.messages.map((message) => {
           const badge = message.state ? REPLY_BADGE[message.state] : undefined

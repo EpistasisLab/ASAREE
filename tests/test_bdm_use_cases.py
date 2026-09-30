@@ -80,8 +80,16 @@ def test_myocardial_scoring_is_a_deterministic_tool_step() -> None:
         assert "agent-score" not in nodes
         step = nodes["tool-step-score"]
         assert step["type"] == "tool_step"
-        assert step["data"]["config"]["sanitizer"] == "xgboost_hyperparameters"
-        assert step["data"]["config"]["arguments"]["selection_metric"] == "average_precision"
+        config = step["data"]["config"]
+        assert "sanitizer" not in config
+        assert config["arguments"]["selection_metric"] == {"source": "value", "value": "average_precision"}
+        assert config["arguments"]["payload_json"] == {"source": "upstream_payload", "format": "json_string"}
+        assert config["arguments"]["code"] == {"source": "script_code"}
+        assert set(json.loads(config["arguments"]["param_spec_json"]["value"])) == {
+            "n_estimators", "max_depth", "learning_rate", "min_child_weight", "gamma",
+            "subsample", "colsample_bytree", "reg_lambda", "reg_alpha",
+        }
+        assert config["hash_checks"] == {"code_sha256": "code", "payload_sha256": "payload_json"}
         assert [node["id"] for node in topological_order(document["graph"])][-1] == "tool-step-score"
         assert document["design_spec"]["replicates"] == 20
         assert {
@@ -94,6 +102,7 @@ def test_myocardial_scoring_is_a_deterministic_tool_step() -> None:
         assert scoring["config"] == {"node_id": "tool-step-score"}
         assert scoring["outputs"]["test_metrics.average_precision"] == "pr-auc"
         assert scoring["outputs"]["test_metrics.metrics_at_0.5.f1"] == "f1-0-5"
+        assert scoring["outputs"]["n_sanitize_notes"] == "n-schema-violations"
         pipeline = producers["feature-pipeline-source"]
         assert pipeline["producer_id"] == "asaree.feature_pipeline"
         assert set(pipeline["outputs"]) == set(FEATURE_PIPELINE_OUTPUTS)

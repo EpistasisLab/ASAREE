@@ -34,6 +34,7 @@ from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
 
 from asaree_sklearn_core import model, provenance
+from asaree_sklearn_core.hyperparams import DEFAULT_N_TRIALS, parse_param_spec, sanitize_hyperparameter_payload
 
 INSTRUCTIONS = """\
 Fit a classifier from your own script and score it on a held-out split.
@@ -158,6 +159,8 @@ def run_model_script(
     payload_json: str = "",
     workspace_id: str = "",
     slot: str = "",
+    param_spec_json: str = "",
+    default_n_trials: int = DEFAULT_N_TRIALS,
     ctx: Context | None = None,
 ) -> str:
     """Execute an approved modeling script that NEVER sees the test split.
@@ -189,7 +192,19 @@ def run_model_script(
         selection_metric: scores permutation importance ('average_precision' -> PR-AUC
             drop; otherwise ROC-AUC drop).
         payload_json: optional typed hyperparameter payload; bound as ``hp`` (its
-            SHA-256 is returned as payload_sha256).
+            SHA-256 -- of the string exactly as received -- is returned as
+            payload_sha256).
+        param_spec_json: optional closed vocabulary of tunable parameters and
+            their hard bounds, ``{"param": {"low": num, "high": num}, ...}``.
+            When given, payload_json is read as the ``{search_space,
+            fixed_params, n_trials}`` contract and every suggestion outside the
+            spec is dropped (the script's default stands) before binding ``hp``
+            -- so a malformed suggestion still scores. What was dropped comes
+            back as ``sanitize_notes`` / ``n_sanitize_notes``, and the payload
+            actually bound as ``sanitized_payload`` / ``sanitized_payload_sha256``.
+            A missing or non-object payload then scores with all defaults
+            instead of failing.
+        default_n_trials: n_trials used when a sanitized payload gives none.
         workspace_id: Cell workspace id; when omitted, resolved from ambient _meta.
             The matrices are read from the accepted HEAD version on disk.
         slot: Which dataset slot of the cell's workspace to read. Optional --
@@ -208,8 +223,29 @@ def run_model_script(
 
     hp: dict[str, Any] | None = None
     payload_sha256 = ""
+    sanitized: dict[str, Any] = {}
     if payload_json:
         payload_sha256 = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+    if param_spec_json:
+        try:
+            spec = parse_param_spec(param_spec_json)
+        except ValueError as e:
+            return json.dumps({"error": str(e), "code_sha256": code_sha256, "payload_sha256": payload_sha256})
+        try:
+            raw_hp: Any = json.loads(payload_json) if payload_json else None
+        except json.JSONDecodeError:
+            raw_hp = None
+        hp, notes = sanitize_hyperparameter_payload(raw_hp, spec, default_n_trials=default_n_trials)
+        # Hashed the way callers serialize a payload (sorted keys, compact), so
+        # the hash of what was actually bound is comparable across runs.
+        canonical = json.dumps(hp, sort_keys=True, separators=(",", ":"))
+        sanitized = {
+            "sanitized_payload": hp,
+            "sanitized_payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            "sanitize_notes": notes,
+            "n_sanitize_notes": len(notes),
+        }
+    elif payload_json:
         try:
             hp = json.loads(payload_json)
         except json.JSONDecodeError as e:
@@ -307,6 +343,7 @@ def run_model_script(
             "executed_code": code,
             "code_sha256": code_sha256,
             "payload_sha256": payload_sha256,
+            **sanitized,
             "n_train": int(len(X_train)),
             "n_test": int(len(X_test)),
             "n_features": int(X_train.shape[1]),

@@ -68,14 +68,16 @@ critic gates, with these v0.8.0 execution details:
   `name`.
 - **Scoring is a Tool Step, not an agent.** Like the paper's notebook
   (`score_payload`), nothing about the scoring call is left to a model: the
-  `tool-step-score` node takes MLM's approved payload, runs it through the
-  notebook's `sanitize_payload` port (every out-of-vocabulary or out-of-bound
-  suggestion is dropped and noted, so a malformed payload still scores instead
-  of crashing), and calls `run_model_script` directly with the wired Script's
-  code, `random_seed=20260705` and `selection_metric=average_precision`. The
-  step fails unless the tool reports the exact `code_sha256` and
-  `payload_sha256` it sent, and the approved payload is recorded on the
-  replicate *before* the call.
+  generic `tool-step-score` node calls `run_model_script` directly, mapping
+  each argument to a source -- the wired Script's code, MLM's approved payload
+  (as canonical JSON), the replicate's workspace, and fixed values
+  (`random_seed=20260705`, `selection_metric=average_precision`, and the
+  XGBoost search space as `param_spec_json`). `run_model_script` itself runs
+  the notebook's `sanitize_payload` port against that spec (every
+  out-of-vocabulary or out-of-bound suggestion is dropped and noted, so a
+  malformed payload still scores instead of crashing). The step fails unless
+  the tool reports the exact `code_sha256` and `payload_sha256` of what it
+  sent, and what it sent is recorded on the replicate *before* the call.
 - **Iteration budget.** Every Reason + Act pattern allows 12 iterations, the
   notebook's `max_iterations`.
 - **Published execution.** The import helper publishes the localized graph as
@@ -89,7 +91,8 @@ critic gates, with these v0.8.0 execution details:
   (`asaree.tool_step` — e.g. `test_metrics.average_precision`,
   `test_metrics.metrics_at_0.5.f1`): PR-AUC, ROC-AUC, Brier and
   operating-point diagnostics, Optuna/XGBoost decisions, the SHA-256 guards,
-  and `n_schema_violations` (entries the sanitizer dropped). Feature counts
+  and `n_schema_violations` (entries the sanitizer dropped, from the tool's
+  `n_sanitize_notes`). Feature counts
   (`n_features_after_dc/fte/fs`, `n_features_created`,
   `n_engineered_features_selected`, `frac_created_selected`) are computed by
   `asaree.feature_pipeline` from the stage payloads and the raw dataset's

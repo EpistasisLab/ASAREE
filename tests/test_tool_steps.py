@@ -13,16 +13,22 @@ from asaree.services.measurement_engine import parse_measurement_plan
 from asaree.services.tool_steps import (
     canonical_payload_json,
     execute_tool_step,
-    sanitize_xgboost_payload,
     sha256_text,
     validate_tool_step,
 )
 
 SERVER_ID = "b16f01eb-0000-4000-8000-000000000001"
 CODE = "print('model')\n"
+ARGUMENTS = {
+    "code": {"source": "script_code"},
+    "payload_json": {"source": "upstream_payload", "format": "json_string"},
+    "workspace_id": {"source": "workspace_id"},
+    "random_seed": {"source": "value", "value": 7},
+}
+HASH_CHECKS = {"code_sha256": "code", "payload_sha256": "payload_json"}
 
 
-def _graph(*, tool_names=("run_model_script",), with_script=True) -> dict:
+def _graph(*, tool_names=("run_model_script",), with_script=True, arguments=None, hash_checks=None) -> dict:
     nodes = [
         {"id": "gate", "type": "critic_gate", "data": {"config": {}}},
         {
@@ -36,8 +42,8 @@ def _graph(*, tool_names=("run_model_script",), with_script=True) -> dict:
             "data": {
                 "config": {
                     "tool_name": "run_model_script",
-                    "sanitizer": "xgboost_hyperparameters",
-                    "arguments": {"random_seed": 7},
+                    "arguments": ARGUMENTS if arguments is None else arguments,
+                    "hash_checks": HASH_CHECKS if hash_checks is None else hash_checks,
                 }
             },
         },
@@ -52,39 +58,26 @@ def _graph(*, tool_names=("run_model_script",), with_script=True) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
-def test_sanitizer_drops_what_the_script_cannot_run() -> None:
-    clean, notes = sanitize_xgboost_payload(
-        {
-            "search_space": [
-                {"name": "max_depth", "low": 3, "high": 6},
-                {"param": "learning_rate", "low": 0, "high": 0.1},
-                {"param": "subsample", "low": 0.6, "high": 0.9},
-                {"param": "subsample", "low": 0.7, "high": 0.8},
-            ],
-            "fixed_params": {"objective": "binary:logistic", "gamma": 1, "subsample": 0.7},
-            "n_trials": 500,
-        }
-    )
-    assert clean == {
-        "search_space": [{"param": "subsample", "low": 0.6, "high": 0.9}],
-        "fixed_params": {"gamma": 1},
-        "n_trials": 100,
-    }
-    assert len(notes) == 6
-
-
-def test_sanitizer_reduces_trials_when_nothing_is_tuned() -> None:
-    clean, notes = sanitize_xgboost_payload({"search_space": [], "n_trials": 20})
-    assert clean["n_trials"] == 1
-    assert notes
+def _step(graph: dict) -> dict:
+    return next(node for node in graph["nodes"] if node["id"] == "step")
 
 
 def test_validation_requires_the_tool_to_be_enabled_on_the_mcp_node() -> None:
     graph = _graph(tool_names=("other",))
-    step = next(node for node in graph["nodes"] if node["id"] == "step")
-    assert "does not enable" in (validate_tool_step(graph, step) or "")
+    assert "does not enable" in (validate_tool_step(graph, _step(graph)) or "")
     graph = _graph()
-    assert validate_tool_step(graph, next(node for node in graph["nodes"] if node["id"] == "step")) is None
+    assert validate_tool_step(graph, _step(graph)) is None
+
+
+def test_validation_checks_argument_sources_and_hash_checks() -> None:
+    graph = _graph(arguments={"x": {"source": "sanitized"}})
+    assert "no valid source" in (validate_tool_step(graph, _step(graph)) or "")
+    graph = _graph(with_script=False)
+    assert "no Script is wired" in (validate_tool_step(graph, _step(graph)) or "")
+    graph = _graph(hash_checks={"code_sha256": "missing"})
+    assert "not a sent argument" in (validate_tool_step(graph, _step(graph)) or "")
+    graph = _graph(arguments={}, hash_checks={}, with_script=False)
+    assert validate_tool_step(graph, _step(graph)) is None
 
 
 def _patch_call(monkeypatch: pytest.MonkeyPatch, respond) -> list[dict]:
@@ -99,12 +92,13 @@ def _patch_call(monkeypatch: pytest.MonkeyPatch, respond) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_tool_step_sends_the_sanitized_payload_and_records_it_first(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_tool_step_sends_mapped_arguments_and_records_them_first(monkeypatch: pytest.MonkeyPatch) -> None:
     def respond(arguments):
         return False, json.dumps(
             {
-                "code_sha256": sha256_text(arguments["code"].strip()),
+                "code_sha256": sha256_text(arguments["code"]),
                 "payload_sha256": sha256_text(arguments["payload_json"]),
+                "n_sanitize_notes": 3,
                 "test_metrics": {"average_precision": 0.41, "metrics_at_0.5": {"f1": 0.3}},
             }
         )
@@ -117,24 +111,41 @@ async def test_tool_step_sends_the_sanitized_payload_and_records_it_first(monkey
         recorded.append(step)
 
     graph = _graph()
-    upstream = {"status": "completed", "payload": {"search_space": [{"name": "max_depth", "low": 3, "high": 6}]}}
+    payload = {"search_space": [{"name": "max_depth", "low": 3, "high": 6}]}
     node_run = await execute_tool_step(
-        next(node for node in graph["nodes"] if node["id"] == "step"),
+        _step(graph),
         graph=graph,
-        upstream_runs=[upstream],
+        upstream_runs=[{"status": "completed", "payload": payload}],
         workspace_id="ws-1",
         record_provenance=record,
     )
 
     assert node_run["status"] == "completed", node_run["error"]
     sent = calls[0]["arguments"]
-    assert sent["random_seed"] == 7 and sent["workspace_id"] == "ws-1" and sent["code"] == CODE
-    assert json.loads(sent["payload_json"]) == {"search_space": [], "fixed_params": {}, "n_trials": 1}
-    assert recorded[0]["payload_sha256"] == sha256_text(sent["payload_json"])
+    assert sent == {
+        "code": CODE.strip(),
+        "payload_json": canonical_payload_json(payload),
+        "workspace_id": "ws-1",
+        "random_seed": 7,
+    }
+    assert recorded[0]["payload"] == payload
+    assert recorded[0]["arguments"] == {"workspace_id": "ws-1", "random_seed": 7}
+    assert recorded[0]["argument_sha256"]["payload_json"] == sha256_text(sent["payload_json"])
     values = tool_step_values(node_run)
     assert values is not None
     assert values["test_metrics.metrics_at_0.5.f1"] == 0.3
-    assert values["tool_step.n_sanitize_notes"] == 3
+    assert values["n_sanitize_notes"] == 3
+
+
+@pytest.mark.asyncio
+async def test_tool_step_sends_null_when_upstream_has_no_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_call(monkeypatch, lambda arguments: (False, json.dumps({"ok": True})))
+    graph = _graph(hash_checks={})
+    node_run = await execute_tool_step(
+        _step(graph), graph=graph, upstream_runs=[{"output_text": "no json here"}], workspace_id="ws-1"
+    )
+    assert node_run["status"] == "completed"
+    assert calls[0]["arguments"]["payload_json"] == "null"
 
 
 @pytest.mark.asyncio
@@ -148,16 +159,14 @@ async def test_tool_step_fails_when_the_scored_payload_differs(monkeypatch: pyte
     )
     graph = _graph()
     node_run = await execute_tool_step(
-        next(node for node in graph["nodes"] if node["id"] == "step"),
+        _step(graph),
         graph=graph,
         upstream_runs=[{"payload": {"search_space": [], "n_trials": 1}}],
-        workspace_id=None,
+        workspace_id="ws-1",
     )
     assert node_run["status"] == "failed"
-    assert node_run["error"].startswith("Payload guard failed")
-    assert canonical_payload_json(node_run["tool_step"]["payload"]) == canonical_payload_json(
-        {"fixed_params": {}, "n_trials": 1, "search_space": []}
-    )
+    assert "'payload_sha256'" in node_run["error"] and node_run["error"].startswith("Hash check failed")
+    assert node_run["tool_step"]["payload"] == {"search_space": [], "n_trials": 1}
 
 
 def test_feature_pipeline_counts_created_features_against_raw_columns() -> None:

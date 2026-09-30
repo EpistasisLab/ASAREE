@@ -1,20 +1,27 @@
 """Deterministic Tool Step nodes: one MCP tool call in the main flow, no LLM.
 
 A Tool Step is the canvas form of a harness-owned call like the spinal
-notebook's ``score_payload``: it takes the typed payload its upstream node
-handed on, optionally coerces it through a harness sanitizer, and calls one
-MCP tool directly with fixed arguments. Nothing about the call is left to a
-model, so the same approved payload always produces the same call -- which is
-the whole point of scoring through it rather than through an Agent that is
-*asked* to make the call.
+notebook's ``score_payload``: nothing about the call is left to a model, so
+the same upstream payload always produces the same call. It is deliberately
+use-case agnostic -- it knows nothing about any tool's parameters. Each
+argument the node sends names where its value comes from:
 
-Two guards make that checkable after the fact, and both fail the node rather
-than record a result that can't be trusted:
+* ``{"source": "value", "value": ...}`` -- a fixed value.
+* ``{"source": "upstream_payload", "format": "json_string" | "object"}`` --
+  the typed payload the upstream node handed on, either as canonical JSON
+  text or as the object itself. ``null`` when upstream produced none; whether
+  that's acceptable is the tool's call, not the step's.
+* ``{"source": "script_code"}`` -- the wired Script node's source.
+* ``{"source": "workspace_id"}`` -- the experiment replicate's workspace.
 
-* ``code_sha256`` -- when a Script node is wired, the tool must report the
-  hash of exactly that script's stripped source (it executed verbatim).
-* ``payload_sha256`` -- the tool must report the hash of exactly the
-  canonical payload JSON this step sent (nothing rewrote it on the way).
+An argument that isn't mapped isn't sent. Anything a tool needs to do to its
+inputs (e.g. sanitizing a hyperparameter payload) is the tool's own job.
+
+``hash_checks`` (``{result_field: argument_name}``) makes the call checkable
+after the fact: the tool must report, in *result_field*, the SHA-256 of that
+argument exactly as sent -- e.g. that the script it executed is verbatim the
+wired one. A mismatch fails the node rather than record a result that can't be
+trusted.
 """
 
 from __future__ import annotations
@@ -32,28 +39,12 @@ from motoro.services import mcp_service
 
 TOOL_STEP_NODE_TYPES = frozenset({"tool_step"})
 _MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool", "mcp_scikit_learn", "mcp_client_tool"})
-
-# The MI/spinal MLM prompt's closed hyperparameter vocabulary and hard bounds
-# (the notebook's PARAM_SPEC). A Tool Step can override it via
-# ``config.param_spec``; this is the default for the one sanitizer that exists.
-XGBOOST_PARAM_SPEC: dict[str, dict[str, Any]] = {
-    "n_estimators": {"type": "int", "log": False, "low": 100, "high": 1000},
-    "max_depth": {"type": "int", "log": False, "low": 3, "high": 10},
-    "learning_rate": {"type": "float", "log": True, "low": 1e-3, "high": 0.3},
-    "min_child_weight": {"type": "float", "log": False, "low": 1, "high": 20},
-    "gamma": {"type": "float", "log": False, "low": 0, "high": 5},
-    "subsample": {"type": "float", "log": False, "low": 0.5, "high": 1.0},
-    "colsample_bytree": {"type": "float", "log": False, "low": 0.5, "high": 1.0},
-    "reg_lambda": {"type": "float", "log": True, "low": 1e-3, "high": 10},
-    "reg_alpha": {"type": "float", "log": True, "low": 1e-3, "high": 10},
-}
-DEFAULT_N_TRIALS = 30
-XGBOOST_SANITIZER = "xgboost_hyperparameters"
-SANITIZERS = frozenset({XGBOOST_SANITIZER})
+ARGUMENT_SOURCES = frozenset({"value", "upstream_payload", "script_code", "workspace_id"})
+PAYLOAD_FORMATS = frozenset({"json_string", "object"})
 
 
 def canonical_payload_json(payload: Any) -> str:
-    """Deterministic JSON serialization used for both the call and its hash guard."""
+    """Deterministic JSON serialization used for both the call and its hash check."""
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
@@ -63,127 +54,6 @@ def sha256_text(text: str) -> str:
 
 def _is_number(value: Any) -> TypeGuard[int | float]:
     return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(float(value))
-
-
-def _sanitize_n_trials(value: Any, notes: list[str], default: int) -> int:
-    if not _is_number(value):
-        notes.append(f"n_trials was not a number ({value!r}); defaulted to {default}")
-        return default
-    rounded = int(round(float(value)))
-    if rounded < 1:
-        notes.append(f"n_trials {value} < 1; raised to 1")
-        return 1
-    if rounded > 100:
-        notes.append(f"n_trials {value} > 100; capped at 100")
-        return 100
-    return rounded
-
-
-def sanitize_xgboost_payload(
-    payload: Any,
-    param_spec: Mapping[str, Mapping[str, Any]] | None = None,
-    *,
-    default_n_trials: int = DEFAULT_N_TRIALS,
-) -> tuple[dict[str, Any], list[str]]:
-    """Coerce an MLM hyperparameter payload into one the fixed script can run.
-
-    A port of the spinal notebook's ``sanitize_payload``, applied uniformly to
-    every arm: every suggestion the agent was not allowed to make is DROPPED
-    (falling back to the script's default) and noted, so the replicate still
-    scores instead of crashing on e.g. a ``"name"`` key where ``"param"`` was
-    required, a harness-fixed ``objective`` in ``fixed_params``, or a log-scale
-    ``low=0``. Returns ``(clean_payload, notes)``; notes is empty when the
-    payload was already clean.
-    """
-    spec = param_spec or XGBOOST_PARAM_SPEC
-    notes: list[str] = []
-    if not isinstance(payload, Mapping):
-        notes.append(
-            f"payload was not a JSON object ({type(payload).__name__}); scored with all-default hyperparameters"
-        )
-        return {"search_space": [], "fixed_params": {}, "n_trials": default_n_trials}, notes
-
-    def in_bounds(name: str, value: float) -> bool:
-        return float(spec[name]["low"]) <= value <= float(spec[name]["high"])
-
-    clean_search: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    raw_search = payload.get("search_space")
-    if isinstance(raw_search, list):
-        for index, entry in enumerate(raw_search):
-            where = f"search_space[{index}]"
-            if not isinstance(entry, Mapping):
-                notes.append(f"dropped {where}: not an object")
-                continue
-            name = entry.get("param")
-            if name is None:
-                notes.append(
-                    f'dropped {where}: missing the "param" key (keys: {sorted(entry)}) -> that param uses its default'
-                )
-                continue
-            if name not in spec:
-                notes.append(
-                    f"dropped {where}: {name!r} is not a tunable parameter -> not passed to the model "
-                    "(uses its default)"
-                )
-                continue
-            if name in seen:
-                notes.append(f"dropped {where}: {name!r} already tuned earlier (duplicate)")
-                continue
-            low, high = entry.get("low"), entry.get("high")
-            if not _is_number(low) or not _is_number(high):
-                notes.append(f"dropped {where} ({name!r}): non-numeric low/high -> uses its default")
-                continue
-            if low >= high:
-                notes.append(
-                    f"dropped {where} ({name!r}): needs low < high, got low={low}, high={high} -> uses its default"
-                )
-                continue
-            if not in_bounds(name, low) or not in_bounds(name, high):
-                notes.append(
-                    f"dropped {where} ({name!r}): range [{low}, {high}] outside its hard bound "
-                    f"[{spec[name]['low']}, {spec[name]['high']}] -> uses its default"
-                )
-                continue
-            seen.add(name)
-            clean_search.append({"param": name, "low": low, "high": high})
-    elif raw_search is not None:
-        notes.append(f"ignored search_space: not a list ({type(raw_search).__name__})")
-
-    clean_fixed: dict[str, Any] = {}
-    raw_fixed = payload.get("fixed_params")
-    if isinstance(raw_fixed, Mapping):
-        for name, value in raw_fixed.items():
-            if name not in spec:
-                notes.append(
-                    f"dropped fixed_params[{name!r}]: not a settable parameter (harness-fixed or unknown) "
-                    "-> the script's own default stands"
-                )
-                continue
-            if name in seen:
-                notes.append(
-                    f"dropped fixed_params[{name!r}]: already tuned in search_space (cannot be both) "
-                    "-> kept the tuned range"
-                )
-                continue
-            if not _is_number(value):
-                notes.append(f"dropped fixed_params[{name!r}]: non-numeric value {value!r} -> uses its default")
-                continue
-            if not in_bounds(name, value):
-                notes.append(
-                    f"dropped fixed_params[{name!r}]={value}: outside its hard bound "
-                    f"[{spec[name]['low']}, {spec[name]['high']}] -> uses its default"
-                )
-                continue
-            clean_fixed[name] = value
-    elif raw_fixed is not None:
-        notes.append(f"ignored fixed_params: not an object ({type(raw_fixed).__name__})")
-
-    n_trials = _sanitize_n_trials(payload.get("n_trials"), notes, default_n_trials)
-    if not clean_search and n_trials > 1:
-        notes.append(f"no tunable parameters survived; n_trials reduced {n_trials} -> 1")
-        n_trials = 1
-    return {"search_space": clean_search, "fixed_params": clean_fixed, "n_trials": n_trials}, notes
 
 
 _FENCED_BLOCK = re.compile(r"```(?:json)?\s*(.*?)```", re.S | re.I)
@@ -278,31 +148,29 @@ def validate_tool_step(graph: Mapping[str, Any], node: Mapping[str, Any]) -> str
         return "is wired to a disabled MCP Tool"
     if tool_name not in (mcp_config.get("tool_names") or ()):
         return f"calls {tool_name!r}, which its MCP Tool node does not enable"
-    sanitizer = config.get("sanitizer")
-    if sanitizer and sanitizer not in SANITIZERS:
-        return f"names an unknown sanitizer {sanitizer!r}"
-    arguments = config.get("arguments")
-    if arguments is not None and not isinstance(arguments, Mapping):
+    arguments = config.get("arguments") or {}
+    if not isinstance(arguments, Mapping):
         return "has arguments that are not an object"
+    for name, spec in arguments.items():
+        source = spec.get("source") if isinstance(spec, Mapping) else None
+        if source not in ARGUMENT_SOURCES:
+            return f"argument {name!r} has no valid source"
+        if source == "upstream_payload" and spec.get("format", "json_string") not in PAYLOAD_FORMATS:
+            return f"argument {name!r} has an unknown payload format {spec.get('format')!r}"
+        if source == "script_code" and not script_nodes:
+            return f"argument {name!r} takes the Script's code, but no Script is wired"
+    hash_checks = config.get("hash_checks") or {}
+    if not isinstance(hash_checks, Mapping):
+        return "has hash checks that are not an object"
+    for field, argument in hash_checks.items():
+        if argument not in arguments:
+            return f"hash check {field!r} names {argument!r}, which is not a sent argument"
     return None
 
 
-def _call_arguments(
-    config: Mapping[str, Any],
-    *,
-    code: str | None,
-    payload_json: str | None,
-    workspace_id: str | None,
-) -> dict[str, Any]:
-    arguments = dict(config.get("arguments") or {})
-    if code is not None:
-        arguments[str(config.get("code_argument") or "code")] = code
-    if payload_json is not None:
-        arguments[str(config.get("payload_argument") or "payload_json")] = payload_json
-    workspace_argument = config.get("workspace_argument", "workspace_id")
-    if workspace_id and workspace_argument:
-        arguments.setdefault(str(workspace_argument), workspace_id)
-    return arguments
+def _argument_text(value: Any) -> str:
+    """The exact string a hash check hashes: strings as sent, anything else as canonical JSON."""
+    return value if isinstance(value, str) else canonical_payload_json(value)
 
 
 async def execute_tool_step(
@@ -319,8 +187,8 @@ async def execute_tool_step(
     nodes and the ``asaree.tool_step`` metric producer read it like any typed
     handoff) and the step's own provenance under ``tool_step``.
     *record_provenance* is awaited with that provenance BEFORE the call, so a
-    crash or timeout mid-call still leaves the approved payload on record --
-    the notebook's pre-scoring upsert.
+    crash or timeout mid-call still leaves what was sent on record -- the
+    notebook's pre-scoring upsert.
     """
     node_id = str(node.get("id"))
     config = _node_config(node)
@@ -336,44 +204,40 @@ async def execute_tool_step(
     step["server_id"] = mcp_config.get("server_id")
     step["server_name"] = mcp_config.get("server_name")
 
-    code: str | None = None
-    if script_nodes:
-        script_config = _node_config(script_nodes[0])
-        if script_config.get("enabled") is False:
-            return failed("Tool Step's Script is disabled.")
-        code = str(script_config.get("code") or "")
-        if not code.strip():
-            return failed("Tool Step's Script has no code.")
-        step["script_node_id"] = str(script_nodes[0].get("id"))
-        step["code_sha256"] = sha256_text(code.strip())
-
-    payload_json: str | None = None
-    if config.get("payload_argument", "payload_json"):
-        raw_payload = resolve_upstream_payload(upstream_runs)
-        step["raw_payload"] = raw_payload
-        payload: Any = raw_payload
-        if config.get("sanitizer") == XGBOOST_SANITIZER:
-            param_spec = config.get("param_spec") if isinstance(config.get("param_spec"), Mapping) else None
-            default_n_trials = config.get("default_n_trials")
-            payload, notes = sanitize_xgboost_payload(
-                raw_payload,
-                param_spec,
-                default_n_trials=int(default_n_trials) if _is_number(default_n_trials) else DEFAULT_N_TRIALS,
+    arguments: dict[str, Any] = {}
+    # Large or sensitive inputs (script source, upstream payload) are recorded
+    # once by value/hash below rather than again inside `arguments`.
+    recorded_arguments: dict[str, Any] = {}
+    argument_sha256: dict[str, str] = {}
+    for name, spec in (config.get("arguments") or {}).items():
+        source = spec["source"]
+        if source == "value":
+            arguments[name] = spec.get("value")
+            recorded_arguments[name] = arguments[name]
+        elif source == "workspace_id":
+            if not workspace_id:
+                return failed(f"Tool Step argument {name!r} needs a workspace, and this run has none.")
+            arguments[name] = workspace_id
+            recorded_arguments[name] = workspace_id
+        elif source == "script_code":
+            script_config = _node_config(script_nodes[0])
+            if script_config.get("enabled") is False:
+                return failed("Tool Step's Script is disabled.")
+            code = str(script_config.get("code") or "").strip()
+            if not code:
+                return failed("Tool Step's Script has no code.")
+            step["script_node_id"] = str(script_nodes[0].get("id"))
+            arguments[name] = code
+        else:
+            payload = resolve_upstream_payload(upstream_runs)
+            step["payload"] = payload
+            arguments[name] = (
+                payload if spec.get("format", "json_string") == "object" else canonical_payload_json(payload)
             )
-            step["sanitize_notes"] = notes
-        elif raw_payload is None:
-            return failed("Tool Step found no JSON payload in its upstream node's output.")
-        payload_json = canonical_payload_json(payload)
-        step["payload"] = payload
-        step["payload_sha256"] = sha256_text(payload_json)
-
-    arguments = _call_arguments(config, code=code, payload_json=payload_json, workspace_id=workspace_id)
-    # The code and payload are already recorded above, by hash and by value.
-    step["arguments"] = {
-        key: value
-        for key, value in arguments.items()
-        if key not in {config.get("code_argument") or "code", config.get("payload_argument") or "payload_json"}
-    }
+        if source in {"script_code", "upstream_payload"}:
+            argument_sha256[name] = sha256_text(_argument_text(arguments[name]))
+    step["arguments"] = recorded_arguments
+    step["argument_sha256"] = argument_sha256
     if record_provenance is not None:
         await record_provenance(dict(step))
 
@@ -409,19 +273,14 @@ async def execute_tool_step(
         record["payload"] = result
         if result.get("error"):
             return {**record, "status": "failed", "error": f"{config['tool_name']} error: {result['error']}"}
-    if config.get("verify_hashes", True):
-        reported = result if isinstance(result, dict) else {}
-        if "code_sha256" in step and reported.get("code_sha256") != step["code_sha256"]:
+    reported = result if isinstance(result, dict) else {}
+    for field, argument in (config.get("hash_checks") or {}).items():
+        expected = argument_sha256.get(argument) or sha256_text(_argument_text(arguments.get(argument)))
+        if reported.get(field) != expected:
             return {
                 **record,
                 "status": "failed",
-                "error": "Verbatim guard failed: the executed script is not the wired Script.",
-            }
-        if "payload_sha256" in step and reported.get("payload_sha256") != step["payload_sha256"]:
-            return {
-                **record,
-                "status": "failed",
-                "error": "Payload guard failed: the scored payload is not the payload this step sent.",
+                "error": f"Hash check failed: the tool's {field!r} does not match the {argument!r} this step sent.",
             }
     return record
 
@@ -447,17 +306,14 @@ def flatten_paths(document: Any) -> dict[str, Any]:
 
 
 __all__ = [
-    "DEFAULT_N_TRIALS",
-    "SANITIZERS",
+    "ARGUMENT_SOURCES",
+    "PAYLOAD_FORMATS",
     "TOOL_STEP_NODE_TYPES",
-    "XGBOOST_PARAM_SPEC",
-    "XGBOOST_SANITIZER",
     "canonical_payload_json",
     "execute_tool_step",
     "flatten_paths",
     "parse_json_object",
     "resolve_upstream_payload",
-    "sanitize_xgboost_payload",
     "sha256_text",
     "validate_tool_step",
     "wired_tool_sources",

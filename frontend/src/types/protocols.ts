@@ -419,21 +419,26 @@ export function defaultCriticGateNodeData(label = 'Critic Gate'): CriticGateNode
 }
 
 // A "Tool Step" calls one MCP tool directly in the main flow -- no LLM, so the
-// same approved upstream payload always produces the same call. It's the
-// canvas form of the notebook's harness-owned score_payload: the payload its
-// upstream node handed on is (optionally) sanitized, sent as
-// `payload_argument`, and the wired Script's code as `code_argument`, both
-// hash-checked against what the tool reports back (services/tool_steps.py).
-// Its Tool connector takes exactly one MCP Tool node and at most one Script.
+// same upstream payload always produces the same call. Deliberately use-case
+// agnostic: each argument it sends names where its value comes from, and
+// anything the tool needs done to its inputs (e.g. sanitizing) is the tool's
+// job (services/tool_steps.py). Its Tool connector takes exactly one MCP Tool
+// node and at most one Script.
+export type ToolStepArgumentSource =
+  | { source: 'value'; value: unknown }
+  // The upstream node's typed payload -- as canonical JSON text or the object
+  // itself; `null` when upstream produced none.
+  | { source: 'upstream_payload'; format?: 'json_string' | 'object' }
+  | { source: 'script_code' }
+  | { source: 'workspace_id' }
+
 export interface ToolStepNodeConfig {
   tool_name: string
-  // Fixed arguments merged into every call (e.g. random_seed, task_type).
-  arguments: Record<string, unknown>
-  // '' = pass the upstream payload through unchanged.
-  sanitizer: '' | 'xgboost_hyperparameters'
-  verify_hashes: boolean
-  payload_argument?: string
-  code_argument?: string
+  // Only mapped arguments are sent.
+  arguments: Record<string, ToolStepArgumentSource>
+  // result field -> argument name: the tool must report that argument's
+  // SHA-256 (as sent) in that field, or the step fails.
+  hash_checks?: Record<string, string>
   timeout_seconds?: number | null
 }
 
@@ -449,7 +454,7 @@ export function defaultToolStepNodeData(label = 'Tool Step'): ToolStepNodeData {
   return {
     label,
     active: true,
-    config: { tool_name: '', arguments: {}, sanitizer: '', verify_hashes: true },
+    config: { tool_name: '', arguments: {}, hash_checks: {} },
   }
 }
 

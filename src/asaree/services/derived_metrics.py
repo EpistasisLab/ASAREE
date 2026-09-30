@@ -74,15 +74,12 @@ def tool_step_values(node_run: Any) -> dict[str, Any] | None:
     """Every addressable value of a completed Tool Step, by dotted path.
 
     Paths address the tool's parsed result directly (``test_metrics.roc_auc``);
-    ``tool_step.*`` addresses the step's own provenance, plus
-    ``tool_step.n_sanitize_notes`` -- the notebook's schema-violation count.
+    ``tool_step.*`` addresses the step's own provenance.
     """
     if not isinstance(node_run, Mapping) or node_run.get("status") != "completed":
         return None
     result = node_run.get("payload")
-    step = dict(node_run.get("tool_step") or {})
-    if isinstance(step.get("sanitize_notes"), list):
-        step["n_sanitize_notes"] = len(step["sanitize_notes"])
+    step = node_run.get("tool_step") or {}
     values = flatten_paths(result) if isinstance(result, Mapping) else {}
     values.update(flatten_paths({"tool_step": step}))
     return values

@@ -702,13 +702,45 @@
           "config": {
             "tool_name": "run_model_script",
             "arguments": {
-              "random_seed": 20260705,
-              "task_type": "binary",
-              "positive_label": "1",
-              "selection_metric": "average_precision"
+              "code": {
+                "source": "script_code"
+              },
+              "payload_json": {
+                "source": "upstream_payload",
+                "format": "json_string"
+              },
+              "workspace_id": {
+                "source": "workspace_id"
+              },
+              "random_seed": {
+                "source": "value",
+                "value": 20260705
+              },
+              "task_type": {
+                "source": "value",
+                "value": "binary"
+              },
+              "positive_label": {
+                "source": "value",
+                "value": "1"
+              },
+              "selection_metric": {
+                "source": "value",
+                "value": "average_precision"
+              },
+              "param_spec_json": {
+                "source": "value",
+                "value": "{\"n_estimators\":{\"type\":\"int\",\"log\":false,\"low\":100,\"high\":1000},\"max_depth\":{\"type\":\"int\",\"log\":false,\"low\":3,\"high\":10},\"learning_rate\":{\"type\":\"float\",\"log\":true,\"low\":0.001,\"high\":0.3},\"min_child_weight\":{\"type\":\"float\",\"log\":false,\"low\":1,\"high\":20},\"gamma\":{\"type\":\"float\",\"log\":false,\"low\":0,\"high\":5},\"subsample\":{\"type\":\"float\",\"log\":false,\"low\":0.5,\"high\":1.0},\"colsample_bytree\":{\"type\":\"float\",\"log\":false,\"low\":0.5,\"high\":1.0},\"reg_lambda\":{\"type\":\"float\",\"log\":true,\"low\":0.001,\"high\":10},\"reg_alpha\":{\"type\":\"float\",\"log\":true,\"low\":0.001,\"high\":10}}"
+              },
+              "default_n_trials": {
+                "source": "value",
+                "value": 30
+              }
             },
-            "sanitizer": "xgboost_hyperparameters",
-            "verify_hashes": true
+            "hash_checks": {
+              "code_sha256": "code",
+              "payload_sha256": "payload_json"
+            }
           }
         }
       }
@@ -1640,7 +1672,7 @@
       {
         "id": "n-schema-violations",
         "name": "n_schema_violations",
-        "description": "MLM payload entries the scoring sanitizer dropped before the call (0 = the payload was already clean).",
+        "description": "MLM payload entries run_model_script dropped against the Tool Step's param_spec_json before fitting (0 = the payload was already clean).",
         "kind": "custom",
         "valueType": "number",
         "primary": false,
@@ -2242,7 +2274,7 @@
         "direction": "minimize",
         "aggregation": "mean",
         "primary": false,
-        "description": "MLM payload entries the scoring sanitizer dropped before the call (0 = the payload was already clean).",
+        "description": "MLM payload entries run_model_script dropped against the Tool Step's param_spec_json before fitting (0 = the payload was already clean).",
         "unit": "entries"
       }
     ],
@@ -2381,7 +2413,7 @@
           "model_decisions.optuna_best_value": "optuna-best-inner-cv-score",
           "model_decisions.calibration_brier_val": "calibration-brier-val",
           "code_sha256": "code-sha256",
-          "payload_sha256": "payload-sha256",
+          "sanitized_payload_sha256": "payload-sha256",
           "data_sha256": "data-sha256",
           "model_decisions.best_hyperparameters.n_estimators": "hp-n-estimators",
           "model_decisions.best_hyperparameters.max_depth": "hp-max-depth",
@@ -2392,7 +2424,7 @@
           "model_decisions.best_hyperparameters.reg_lambda": "hp-reg-lambda",
           "model_decisions.best_hyperparameters.reg_alpha": "hp-reg-alpha",
           "model_decisions.best_hyperparameters.gamma": "hp-gamma",
-          "tool_step.n_sanitize_notes": "n-schema-violations"
+          "n_sanitize_notes": "n-schema-violations"
         },
         "artifacts": [],
         "config": {

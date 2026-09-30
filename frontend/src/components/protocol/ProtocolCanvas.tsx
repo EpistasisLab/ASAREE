@@ -1875,6 +1875,17 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   }, [])
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null
+  // What's wired into a selected Tool Step's Tool connector: its MCP Tool
+  // node (the callable tools and their server) and any Script node.
+  const toolStepSources =
+    selectedNode?.type === 'tool_step'
+      ? edges
+          .filter((edge) => edge.target === selectedNode.id && edge.targetHandle === 'tool')
+          .map((edge) => nodes.find((node) => node.id === edge.source))
+      : []
+  const toolStepMcpNodes = toolStepSources.filter(
+    (node): node is typeof node & { data: McpToolNodeData } => !!node && MCP_TOOL_NODE_TYPES.includes(node.type ?? ''),
+  )
   // Computed once per selection change, not per FactorBindableField -- an
   // Model/Tool/Memory node's plain label alone doesn't say which agent it
   // belongs to (see bindableFields.ts's own comment), so every inspector
@@ -2228,11 +2239,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           <ToolStepNodeInspector
             key={selectedNode.id}
             node={{ id: selectedNode.id, type: 'tool_step', position: selectedNode.position, data: selectedNode.data as ToolStepNodeData }}
-            toolOptions={edges
-              .filter((edge) => edge.target === selectedNode.id && edge.targetHandle === 'tool')
-              .map((edge) => nodes.find((node) => node.id === edge.source))
-              .filter((node) => MCP_TOOL_NODE_TYPES.includes(node?.type ?? ''))
-              .flatMap((node) => (node!.data as McpToolNodeData).config?.tool_names ?? [])}
+            toolOptions={toolStepMcpNodes.flatMap((node) => node.data.config?.tool_names ?? [])}
+            serverId={toolStepMcpNodes[0]?.data.config?.server_id ?? null}
+            hasScript={toolStepSources.some((node) => node?.type === 'script')}
             nodeRun={latestNodeRuns?.[selectedNode.id]}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}

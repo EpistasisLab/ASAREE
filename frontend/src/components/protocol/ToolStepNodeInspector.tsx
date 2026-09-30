@@ -1,30 +1,97 @@
 import { useState } from 'react'
-import { Cog } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Cog, Plus, X } from 'lucide-react'
+import { mcpServersApi } from '@/api/client'
 import { nodeAccent } from '@/lib/nodeAccent'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { NodeRunOutputPanel } from './NodeRunOutputPanel'
-import type { NodeRunState, ProtocolNode, ToolStepNodeConfig, ToolStepNodeData } from '@/types/protocols'
+import type {
+  NodeRunState,
+  ProtocolNode,
+  ToolStepArgumentSource,
+  ToolStepNodeConfig,
+  ToolStepNodeData,
+} from '@/types/protocols'
 
 const ACCENT = nodeAccent('tool_step')
 
-const SANITIZER_LABELS: Record<string, string> = {
-  none: 'None -- send the payload unchanged',
-  xgboost_hyperparameters: 'XGBoost hyperparameters',
+type SourceKey = 'unset' | 'value' | 'payload_json' | 'payload_object' | 'script_code' | 'workspace_id'
+
+const SOURCE_LABELS: Record<SourceKey, string> = {
+  unset: 'Not sent',
+  value: 'Fixed value',
+  payload_json: 'Upstream payload (JSON text)',
+  payload_object: 'Upstream payload (object)',
+  script_code: "Wired Script's code",
+  workspace_id: 'Workspace ID',
+}
+
+interface SchemaProperty {
+  type?: string
+  description?: string
+}
+
+function sourceKey(argument: ToolStepArgumentSource | undefined): SourceKey {
+  if (!argument) return 'unset'
+  if (argument.source === 'upstream_payload') return argument.format === 'object' ? 'payload_object' : 'payload_json'
+  return argument.source
+}
+
+function argumentFor(key: SourceKey, schemaType: string | undefined): ToolStepArgumentSource | undefined {
+  switch (key) {
+    case 'unset':
+      return undefined
+    case 'value':
+      return { source: 'value', value: schemaType === 'string' ? '' : null }
+    case 'payload_json':
+      return { source: 'upstream_payload', format: 'json_string' }
+    case 'payload_object':
+      return { source: 'upstream_payload', format: 'object' }
+    default:
+      return { source: key }
+  }
+}
+
+function valueText(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  return typeof value === 'string' ? value : JSON.stringify(value)
+}
+
+// A string-typed parameter keeps exactly what was typed; anything else is read
+// as JSON when it parses (so `7` is a number, `true` a boolean), else as text.
+function parseValue(text: string, schemaType: string | undefined): unknown {
+  if (schemaType === 'string') return text
+  if (text.trim() === '') return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
+function schemaProperties(inputSchema: unknown): Record<string, SchemaProperty> | null {
+  if (!inputSchema || typeof inputSchema !== 'object') return null
+  const properties = (inputSchema as { properties?: unknown }).properties
+  return properties && typeof properties === 'object' ? (properties as Record<string, SchemaProperty>) : null
 }
 
 // Same NodeInspectorDialog shell as CriticGateNodeInspector. `toolOptions` is
 // the wired MCP Tool node's own enabled tools: a Tool Step may only call one
 // its MCP node allow-lists (services/tool_steps.py's validate_tool_step), so
-// the picker offers exactly those rather than a free-text name.
+// the picker offers exactly those rather than a free-text name. The argument
+// rows come from the selected tool's own input schema, as its server
+// published it -- nothing here knows any particular tool's parameters.
 export function ToolStepNodeInspector({
   node,
   toolOptions,
+  serverId,
+  hasScript,
   nodeRun,
   onChange,
   onDelete,
@@ -32,35 +99,53 @@ export function ToolStepNodeInspector({
 }: {
   node: (ProtocolNode & { data: ToolStepNodeData }) | null
   toolOptions: string[]
+  serverId: string | null
+  hasScript: boolean
   nodeRun?: NodeRunState
   onChange: (nodeId: string, data: ToolStepNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
-  const [argumentsText, setArgumentsText] = useState(() => JSON.stringify(node?.data.config.arguments ?? {}, null, 2))
-  const [argumentsError, setArgumentsError] = useState<string | null>(null)
+  const serversQuery = useQuery({
+    queryKey: ['mcp-servers'],
+    queryFn: mcpServersApi.list,
+    staleTime: 60_000,
+    enabled: !!serverId,
+  })
+  const [newArgument, setNewArgument] = useState('')
   if (!node) return null
   const data = node.data
   const config = data.config
+  const mapped = config.arguments ?? {}
+  const hashChecks = config.hash_checks ?? {}
   const options = config.tool_name && !toolOptions.includes(config.tool_name) ? [config.tool_name, ...toolOptions] : toolOptions
+  const tool = serversQuery.data
+    ?.find((server) => server.id === serverId)
+    ?.capabilities?.tools?.find((candidate) => candidate.name === config.tool_name)
+  const properties = schemaProperties(tool?.input_schema)
+  // Schema parameters first, in the server's order, then anything mapped that
+  // the schema doesn't list (or all of them when no schema is available).
+  const argumentNames = [
+    ...Object.keys(properties ?? {}),
+    ...Object.keys(mapped).filter((name) => !properties || !(name in properties)),
+  ]
 
   function patchConfig(patch: Partial<ToolStepNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
   }
 
-  function commitArguments(text: string) {
-    setArgumentsText(text)
-    try {
-      const parsed: unknown = JSON.parse(text || '{}')
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        setArgumentsError('Arguments must be a JSON object.')
-        return
-      }
-      setArgumentsError(null)
-      patchConfig({ arguments: parsed as Record<string, unknown> })
-    } catch {
-      setArgumentsError('Not valid JSON yet -- the last valid arguments are kept.')
-    }
+  function setArgument(name: string, argument: ToolStepArgumentSource | undefined) {
+    const next = { ...mapped }
+    if (argument) next[name] = argument
+    else delete next[name]
+    // A hash check on an argument that's no longer sent could never pass.
+    const checks = Object.fromEntries(Object.entries(hashChecks).filter(([, arg]) => arg in next))
+    patchConfig({ arguments: next, hash_checks: checks })
+  }
+
+  function setHashCheck(oldField: string, field: string, argument: string) {
+    const entries = Object.entries(hashChecks).map(([f, a]) => (f === oldField ? [field, argument] : [f, a]))
+    patchConfig({ hash_checks: Object.fromEntries(entries) })
   }
 
   return (
@@ -82,9 +167,8 @@ export function ToolStepNodeInspector({
       <div className="flex h-full gap-4">
         <div className="min-w-0 flex-1 space-y-4 overflow-y-auto">
           <p className="text-xs text-muted-foreground">
-            Calls one MCP tool directly with the upstream node's JSON payload -- no model decides whether or how
-            to call it. A wired Script's code is sent as <span className="font-mono">{config.code_argument || 'code'}</span>,
-            the payload as <span className="font-mono">{config.payload_argument || 'payload_json'}</span>.
+            Calls one MCP tool directly -- no model decides whether or how to call it. Choose where each argument&apos;s
+            value comes from; an argument that isn&apos;t mapped isn&apos;t sent.
           </p>
 
           <div className="space-y-1.5">
@@ -105,60 +189,142 @@ export function ToolStepNodeInspector({
             </Select>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="tool-step-sanitizer">Payload sanitizer</Label>
-            <Select
-              value={config.sanitizer || 'none'}
-              onValueChange={(value) =>
-                patchConfig({ sanitizer: value === 'xgboost_hyperparameters' ? 'xgboost_hyperparameters' : '' })
-              }
-            >
-              <SelectTrigger id="tool-step-sanitizer" className="w-full">
-                <SelectValue>{(value) => SANITIZER_LABELS[value ?? 'none']}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(SANITIZER_LABELS).map(([value, label]) => (
-                  <SelectItem key={value} value={value}>
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              XGBoost hyperparameters drops every suggestion outside the fixed search space (unknown or harness-fixed
-              params, out-of-bound ranges, malformed entries) so the replicate still scores; each drop is recorded as a
-              note on the step.
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="tool-step-arguments">Fixed arguments</Label>
-            <Textarea
-              id="tool-step-arguments"
-              rows={6}
-              className="font-mono text-xs"
-              value={argumentsText}
-              onChange={(e) => commitArguments(e.target.value)}
-            />
-            {argumentsError ? (
-              <p className="text-xs text-destructive">{argumentsError}</p>
-            ) : (
-              <p className="text-xs text-muted-foreground">Sent with every call, e.g. a random seed or the task type.</p>
-            )}
-          </div>
-
-          <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
-            <div>
-              <Label htmlFor="tool-step-verify">Verify hashes</Label>
-              <p className="text-xs text-muted-foreground">
-                Fail the step unless the tool reports the exact script and payload hashes this step sent.
-              </p>
+          {config.tool_name && (
+            <div className="space-y-2">
+              <Label>Arguments</Label>
+              {!properties && (
+                <p className="text-xs text-muted-foreground">
+                  {serversQuery.isLoading
+                    ? 'Loading the tool’s parameters…'
+                    : 'This tool’s parameters aren’t available -- add arguments by name.'}
+                </p>
+              )}
+              {argumentNames.map((name) => {
+                const property = properties?.[name]
+                const argument = mapped[name]
+                const key = sourceKey(argument)
+                const text = argument?.source === 'value' ? valueText(argument.value) : ''
+                return (
+                  <div key={name} className="space-y-1.5 rounded-lg border px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs" title={property?.description ?? name}>
+                        {name}
+                        {property?.type && <span className="text-muted-foreground"> : {property.type}</span>}
+                      </span>
+                      <Select
+                        value={key}
+                        onValueChange={(value) => setArgument(name, argumentFor((value ?? 'unset') as SourceKey, property?.type))}
+                      >
+                        <SelectTrigger className="w-60" aria-label={`Source for ${name}`}>
+                          <SelectValue>{(value) => SOURCE_LABELS[(value ?? 'unset') as SourceKey]}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(Object.keys(SOURCE_LABELS) as SourceKey[]).map((option) => (
+                            <SelectItem key={option} value={option} disabled={option === 'script_code' && !hasScript}>
+                              {SOURCE_LABELS[option]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {key === 'value' &&
+                      (text.length > 60 || text.includes('\n') ? (
+                        <Textarea
+                          rows={4}
+                          className="font-mono text-xs"
+                          aria-label={`Value for ${name}`}
+                          value={text}
+                          onChange={(e) => setArgument(name, { source: 'value', value: parseValue(e.target.value, property?.type) })}
+                        />
+                      ) : (
+                        <Input
+                          className="font-mono text-xs"
+                          aria-label={`Value for ${name}`}
+                          value={text}
+                          onChange={(e) => setArgument(name, { source: 'value', value: parseValue(e.target.value, property?.type) })}
+                        />
+                      ))}
+                  </div>
+                )
+              })}
+              {!properties && (
+                <div className="flex gap-2">
+                  <Input
+                    className="font-mono text-xs"
+                    placeholder="argument name"
+                    value={newArgument}
+                    onChange={(e) => setNewArgument(e.target.value)}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!newArgument.trim() || newArgument.trim() in mapped}
+                    onClick={() => {
+                      setArgument(newArgument.trim(), { source: 'value', value: null })
+                      setNewArgument('')
+                    }}
+                  >
+                    <Plus className="size-3.5" /> Add
+                  </Button>
+                </div>
+              )}
             </div>
-            <Switch
-              id="tool-step-verify"
-              checked={config.verify_hashes ?? true}
-              onCheckedChange={(checked) => patchConfig({ verify_hashes: checked })}
-            />
+          )}
+
+          <div className="space-y-2">
+            <Label>Hash checks</Label>
+            <p className="text-xs text-muted-foreground">
+              Fail the step unless the tool reports, in the named result field, the SHA-256 of an argument exactly as
+              sent -- e.g. proof it ran the wired script verbatim.
+            </p>
+            {Object.entries(hashChecks).map(([field, argument]) => (
+              <div key={field} className="flex items-center gap-2">
+                <Input
+                  className="font-mono text-xs"
+                  aria-label="Result field"
+                  defaultValue={field}
+                  onBlur={(e) => {
+                    const next = e.target.value.trim()
+                    if (next && next !== field && !(next in hashChecks)) setHashCheck(field, next, argument)
+                  }}
+                />
+                <span className="shrink-0 text-xs text-muted-foreground">= sha256 of</span>
+                <Select value={argument} onValueChange={(value) => value && setHashCheck(field, field, value)}>
+                  <SelectTrigger className="w-44 font-mono" aria-label="Argument">
+                    <SelectValue>{(value) => value}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.keys(mapped).map((name) => (
+                      <SelectItem key={name} value={name} className="font-mono">
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Remove hash check ${field}`}
+                  onClick={() =>
+                    patchConfig({ hash_checks: Object.fromEntries(Object.entries(hashChecks).filter(([f]) => f !== field)) })
+                  }
+                >
+                  <X className="size-3.5" />
+                </Button>
+              </div>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={Object.keys(mapped).length === 0}
+              onClick={() => {
+                let field = 'sha256'
+                for (let i = 2; field in hashChecks; i++) field = `sha256_${i}`
+                patchConfig({ hash_checks: { ...hashChecks, [field]: Object.keys(mapped)[0] } })
+              }}
+            >
+              <Plus className="size-3.5" /> Add hash check
+            </Button>
           </div>
 
           <div className="space-y-1.5">

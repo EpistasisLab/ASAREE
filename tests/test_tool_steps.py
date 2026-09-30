@@ -80,6 +80,12 @@ def test_validation_checks_argument_sources_and_hash_checks() -> None:
     assert validate_tool_step(graph, _step(graph)) is None
 
 
+def test_validation_names_the_old_config_format() -> None:
+    graph = _graph()
+    _step(graph)["data"]["config"].update(sanitizer="xgboost_hyperparameters", verify_hashes=True)
+    assert "old Tool Step format" in (validate_tool_step(graph, _step(graph)) or "")
+
+
 def _patch_call(monkeypatch: pytest.MonkeyPatch, respond) -> list[dict]:
     calls: list[dict] = []
 

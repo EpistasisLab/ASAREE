@@ -151,6 +151,11 @@ def validate_tool_step(graph: Mapping[str, Any], node: Mapping[str, Any]) -> str
     arguments = config.get("arguments") or {}
     if not isinstance(arguments, Mapping):
         return "has arguments that are not an object"
+    if "sanitizer" in config or "verify_hashes" in config:
+        return (
+            "uses the old Tool Step format (sanitizer/verify_hashes); re-import the experiment definition "
+            "or re-map its arguments in the Tool Step inspector, then publish"
+        )
     for name, spec in arguments.items():
         source = spec.get("source") if isinstance(spec, Mapping) else None
         if source not in ARGUMENT_SOURCES:

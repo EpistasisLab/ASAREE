@@ -431,7 +431,7 @@
         "id": "tool-model-score",
         "type": "mcp_tool",
         "position": {
-          "x": 2314,
+          "x": 2354,
           "y": 240
         },
         "data": {
@@ -451,7 +451,7 @@
         "id": "script-model",
         "type": "script",
         "position": {
-          "x": 2494,
+          "x": 2534,
           "y": 240
         },
         "data": {

@@ -41,7 +41,7 @@ const CONNECTOR_X: {
 }
 
 // The host cards' own widths: AgentNode is w-72, CriticGateNode/ToolStepNode w-36.
-const HOST_WIDTH: Record<string, number> = { agent: 288, sub_agent: 288, critic_gate: 144, tool_step: 144 }
+const HOST_WIDTH: Record<string, number> = { agent: 288, sub_agent: 288, critic_gate: 144, tool_step: 224 }
 
 // A connector's node is a CircleNode: a 56px circle under a caption that can
 // grow to 96px, with the circle -- where its handle is -- centered in

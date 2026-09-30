@@ -10,20 +10,27 @@ import { connectorLefts } from '../layout'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { ConnectorAddStub } from './ConnectorAddStub'
 import { ConnectorHandleLabel } from './ConnectorHandleLabel'
+import { MainEdgeAddStub } from './MainEdgeAddStub'
 import { NodeFactorBadge } from './NodeFactorBadge'
 import { NodeHoverToolbar } from './NodeHoverToolbar'
 
 const ACCENT = nodeAccent('tool_step')
 const CONNECTOR_LEFT = connectorLefts('tool_step')
 
-// Same compact w-36 card as CriticGateNode: a Tool Step is a main-flow step
-// with one connector (Tool -- one MCP Tool, optionally one Script), not an
-// Agent-sized host.
+// Wider than a Critic Gate (w-56 vs w-36) so the tool call it makes stays
+// legible, but still smaller than an Agent: it hosts one connector (Tool --
+// one MCP Tool, optionally one Script), not an Agent's row of them. Main-flow
+// "+" stubs on both sides, like AgentNode, since it sits in the chain.
 export function ToolStepNode({
   id,
   data,
   selected,
-}: NodeProps & { data: ToolStepNodeData & { runStatus?: NodeRunStatus; runTruncated?: boolean } }) {
+}: NodeProps & { data: ToolStepNodeData & {
+    runStatus?: NodeRunStatus
+    runTruncated?: boolean
+    mainInFull?: boolean
+    mainOutFull?: boolean
+  } }) {
   const isActive = data.active ?? true
   const toolName = data.config?.tool_name
   const summary = !isActive ? 'Step disabled' : toolName ? `${toolName}()` : 'No tool selected'
@@ -34,7 +41,7 @@ export function ToolStepNode({
   return (
     <div
       style={cardAccent(ACCENT)}
-      className={`group relative w-36 rounded-md border bg-card px-2 py-1.5 shadow-[0_0_12px_-6px_var(--card-accent)] ring-1 ring-[color:var(--card-accent)]/40 ${
+      className={`group relative flex min-h-16 w-56 flex-col justify-center rounded-md border bg-card px-2.5 py-2.5 shadow-[0_0_16px_-4px_var(--card-accent)] ring-1 ring-[color:var(--card-accent)]/40 ${
         selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
       } ${isActive ? '' : 'opacity-50'}`}
     >
@@ -56,13 +63,14 @@ export function ToolStepNode({
         title="Input (the upstream node whose payload this step sends)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <div className="flex items-center gap-1.5">
-        <Cog className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
-        <span className="truncate text-xs font-medium" title={data.label}>
+      <MainEdgeAddStub nodeId={id} direction="incoming" full={data.mainInFull} />
+      <div className="flex items-center gap-2">
+        <Cog className="size-4 shrink-0 text-[color:var(--card-accent)]" />
+        <span className="truncate text-sm font-medium" title={data.label}>
           {data.label || 'Tool Step'}
         </span>
       </div>
-      <p className="truncate font-mono text-[0.65rem] text-muted-foreground" title={summary}>
+      <p className="mt-0.5 truncate font-mono text-xs text-muted-foreground" title={summary}>
         {summary}
       </p>
       <Handle
@@ -81,6 +89,7 @@ export function ToolStepNode({
         title="Output (the tool's parsed result)"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
+      <MainEdgeAddStub nodeId={id} direction="outgoing" full={data.mainOutFull} />
     </div>
   )
 }

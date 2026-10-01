@@ -196,6 +196,28 @@ def test_feature_pipeline_counts_created_features_against_raw_columns() -> None:
     }
 
 
+def test_feature_pipeline_measures_the_fte_recipe_like_the_notebook() -> None:
+    recipe = [
+        {"name": "ratio", "op": "ratio", "inputs": ["a", "b"], "params": {}, "rationale": "x"},
+        {"name": "ratio_sq", "op": "power", "inputs": ["ratio"], "params": {"p": 2}, "rationale": "y"},
+    ]
+    config = {"dc_node_id": "dc", "fte_node_id": "fte", "fs_node_id": "fs"}
+
+    def values_for(entries):
+        return feature_pipeline_values(
+            {"fte": {"status": "completed", "payload": {"engineering_recipe": entries}}}, config, None
+        )
+
+    values = values_for(recipe)
+    assert values["n_recipe_ops"] == 2
+    assert values["recipe_depth"] == 2
+    # Order and rationale don't change what was engineered.
+    reordered = [{**entry, "rationale": "changed"} for entry in reversed(recipe)]
+    assert values_for(reordered)["recipe_hash"] == values["recipe_hash"]
+    assert values_for(recipe[:1])["recipe_hash"] != values["recipe_hash"]
+    assert values_for([])["recipe_depth"] == 0
+
+
 def _derived_plan(producer_id: str, outputs: dict, config: dict):
     return parse_measurement_plan(
         {

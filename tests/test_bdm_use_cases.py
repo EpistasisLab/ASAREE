@@ -53,6 +53,11 @@ def test_myocardial_use_cases_normalize_reported_metrics_as_named_observations()
             "agent_loop_iterations",
             "critic_rejections",
             "critic_approvals",
+            "critic_invocations",
+            "critic_rejections_partial",
+            "critic_rejections_full",
+            "revision_rounds",
+            "capped_agent_runs",
         }
 
 

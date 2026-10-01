@@ -97,8 +97,13 @@ critic gates, with these v0.8.0 execution details:
   `n_engineered_features_selected`, `frac_created_selected`) are computed by
   `asaree.feature_pipeline` from the stage payloads and the raw dataset's
   columns, the way the notebook's `process_metrics` does, rather than trusted
-  from an agent's self-report. The remaining agent-stage values come from
-  their Output Parser payloads.
+  from an agent's self-report. The same producer reports the FTE recipe's
+  `n_recipe_ops`, `recipe_depth` and `recipe_hash`. The notebook's critic and
+  control-flow columns come from the built-in runtime producer: critic
+  invocations, rejections split by partial vs. full scope (an unscoped
+  rejection counts as full), revision rounds, and Reason+Act runs that hit
+  their iteration ceiling. The remaining agent-stage values come from their
+  Output Parser payloads.
 - **MLM brief and critic task_brief.** The notebook's `summarize_for_mlm`
   brief is rebuilt in the MLM goal from field references
   (`{{node:agent-fs.selected_features}}` and so on). Each Critic Gate's system

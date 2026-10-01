@@ -301,6 +301,42 @@ async def test_runtime_producer_counts_rejections_and_only_actual_critic_approva
 
 
 @pytest.mark.asyncio
+async def test_runtime_producer_splits_rejections_by_scope_and_counts_null_verdicts_as_rejections() -> None:
+    result = await _evaluate(
+        _facts(
+            runs=[{"run_id": "worker-1", "steps": [], "max_iterations_hit": True}, {"run_id": "worker-2", "steps": []}],
+            critic_reviews=[
+                {"run_id": "critic-1", "approved": False, "rejection_scope": "partial"},
+                {"run_id": "critic-2", "approved": None, "rejection_scope": None},
+                {"run_id": "critic-3", "approved": False, "rejection_scope": "full"},
+                {"run_id": "critic-4", "approved": True, "rejection_scope": None},
+            ],
+            critic_gates=[
+                {"revisions_used": 2, "approved": True, "forced": False},
+                {"revisions_used": 1, "approved": None, "forced": True},
+            ],
+        )
+    )
+
+    values = {key: observation.value for key, observation in result.observations.items()}
+    assert values["critic_invocations"] == 4
+    assert values["critic_rejections"] == 3
+    assert values["critic_approvals"] == 1
+    assert values["critic_rejections_partial"] == 1
+    assert values["critic_rejections_full"] == 2
+    assert values["revision_rounds"] == 3
+    assert values["capped_agent_runs"] == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_producer_reports_zero_critic_activity_when_no_critic_ran() -> None:
+    result = await _evaluate(_facts(critic_gates=[{"revisions_used": 0, "approved": None, "forced": False}]))
+
+    for key in ("critic_invocations", "critic_rejections_partial", "critic_rejections_full", "revision_rounds"):
+        assert result.observations[key].value == 0
+
+
+@pytest.mark.asyncio
 async def test_runtime_producer_marks_duration_unavailable_without_both_boundaries() -> None:
     result = await _evaluate(_facts(completed_at=None))
 
@@ -333,7 +369,8 @@ async def test_runtime_fact_collection_uses_protocol_attribution_not_final_node_
         run.run_metadata = {}
         run.output = None
     attributed[1].run_metadata = {"runtime_role": "critic"}
-    attributed[1].output = OutputEnvelope(payload={"approved": False}).to_json()
+    attributed[1].output = OutputEnvelope(payload={"approved": False, "rejection_scope": "partial"}).to_json()
+    attributed[2].pattern_overrides = {"reason_act_state": {"max_iterations_hit": True}}
     list_call: dict[str, object] = {}
 
     async def fake_list_runs(**kwargs):
@@ -370,7 +407,8 @@ async def test_runtime_fact_collection_uses_protocol_attribution_not_final_node_
     assert list_call["metadata"] == {"protocol_run_id": str(protocol_run_id)}
     assert {run["run_id"] for run in facts["runs"]} == {str(run_id) for run_id in run_ids}
     assert facts["critic_gates"] == [{"approved": None, "forced": True, "revisions_used": 2}]
-    assert facts["critic_reviews"] == [{"approved": False, "run_id": str(run_ids[1])}]
+    assert facts["critic_reviews"] == [{"approved": False, "rejection_scope": "partial", "run_id": str(run_ids[1])}]
+    assert [run["max_iterations_hit"] for run in facts["runs"]] == [False, False, True, False]
     assert facts["runs"][0]["usage"] == {
         "input_tokens": 1,
         "output_tokens": 2,

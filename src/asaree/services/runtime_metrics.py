@@ -161,6 +161,14 @@ def _reported_usage(run: Any, steps: Sequence[Any]) -> dict[str, int | float]:
     return usage
 
 
+def _max_iterations_hit(run: Any) -> bool:
+    """Whether a Reason+Act run was cut off by its iteration ceiling (see
+    ``protocol_execution._truncation_fields`` for why this is read from
+    ``pattern_overrides`` rather than the steps)."""
+    state = (getattr(run, "pattern_overrides", None) or {}).get("reason_act_state")
+    return isinstance(state, Mapping) and bool(state.get("max_iterations_hit"))
+
+
 async def collect_runtime_facts(protocol_run: Any) -> dict[str, Any]:
     """Snapshot every Motoro run causally attributed to one ProtocolRun."""
     # Motoro applies ``limit`` after its exact JSON metadata filter. Passing
@@ -197,14 +205,24 @@ async def collect_runtime_facts(protocol_run: Any) -> dict[str, Any]:
                     }
                     for step in steps
                 ],
+                "max_iterations_hit": _max_iterations_hit(run),
             }
         )
         metadata = getattr(run, "run_metadata", None)
         if isinstance(metadata, Mapping) and metadata.get("runtime_role") == "critic":
             envelope = parse_envelope(getattr(run, "output", None))
             payload = envelope.payload if envelope is not None else None
-            if isinstance(payload, Mapping) and isinstance(payload.get("approved"), bool):
-                critic_reviews.append({"approved": payload["approved"], "run_id": str(run.id)})
+            # Every verdict the gate acted on, including ``approved: null`` --
+            # the revision loop treats anything but ``true`` as a rejection.
+            if isinstance(payload, Mapping):
+                approved = payload.get("approved")
+                critic_reviews.append(
+                    {
+                        "approved": approved if isinstance(approved, bool) else None,
+                        "rejection_scope": payload.get("rejection_scope"),
+                        "run_id": str(run.id),
+                    }
+                )
     gates = []
     for node_run in (protocol_run.node_runs or {}).values():
         if not isinstance(node_run, Mapping) or not any(
@@ -268,6 +286,11 @@ class RuntimeMetricProducer:
         "agent_loop_iterations",
         "critic_rejections",
         "critic_approvals",
+        "critic_invocations",
+        "critic_rejections_partial",
+        "critic_rejections_full",
+        "revision_rounds",
+        "capped_agent_runs",
     )
 
     def capability_for(self, snapshot: ExperimentSnapshot) -> ProducerCapability | None:
@@ -346,24 +369,41 @@ class RuntimeMetricProducer:
         critic_reviews = (
             [review for review in reviews if isinstance(review, Mapping)] if isinstance(reviews, list) else []
         )
+        gates = facts.value.get("critic_gates")
+        critic_gates = [gate for gate in gates if isinstance(gate, Mapping)] if isinstance(gates, list) else []
+        revision_rounds = sum(max(int(gate.get("revisions_used") or 0), 0) for gate in critic_gates)
         if critic_reviews:
-            observations["critic_rejections"] = ProducedObservation.measured(
-                sum(review.get("approved") is False for review in critic_reviews)
-            )
-            observations["critic_approvals"] = ProducedObservation.measured(
-                sum(review.get("approved") is True for review in critic_reviews)
-            )
+            # The gate revises on anything but an explicit approval, so a null
+            # verdict is a rejection here too.
+            rejections = [review for review in critic_reviews if review.get("approved") is not True]
+            partial = sum(review.get("rejection_scope") == "partial" for review in rejections)
+            observations["critic_rejections"] = ProducedObservation.measured(len(rejections))
+            observations["critic_approvals"] = ProducedObservation.measured(len(critic_reviews) - len(rejections))
+            observations["critic_invocations"] = ProducedObservation.measured(len(critic_reviews))
+            # An absent or unrecognized scope revises as "full" (see
+            # _build_revision_instruction), so the partial count is a floor.
+            observations["critic_rejections_partial"] = ProducedObservation.measured(partial)
+            observations["critic_rejections_full"] = ProducedObservation.measured(len(rejections) - partial)
         else:
             # Compatibility for an attempt collected before critic runs were
-            # explicitly role-tagged in Motoro metadata.
-            gates = facts.value.get("critic_gates")
-            critic_gates = [gate for gate in gates if isinstance(gate, Mapping)] if isinstance(gates, list) else []
-            observations["critic_rejections"] = ProducedObservation.measured(
-                sum(max(int(gate.get("revisions_used") or 0), 0) for gate in critic_gates)
-            )
-            observations["critic_approvals"] = ProducedObservation.measured(
-                sum(gate.get("approved") is True and gate.get("forced") is not True for gate in critic_gates)
-            )
+            # explicitly role-tagged in Motoro metadata -- or a run whose gates
+            # never called a critic, where every count is genuinely zero.
+            approvals = sum(gate.get("approved") is True and gate.get("forced") is not True for gate in critic_gates)
+            observations["critic_rejections"] = ProducedObservation.measured(revision_rounds)
+            observations["critic_approvals"] = ProducedObservation.measured(approvals)
+            observations["critic_invocations"] = ProducedObservation.measured(revision_rounds + approvals)
+            if revision_rounds:
+                for key in ("critic_rejections_partial", "critic_rejections_full"):
+                    observations[key] = ProducedObservation.unavailable(
+                        "This attempt did not record each rejection's scope."
+                    )
+            else:
+                observations["critic_rejections_partial"] = ProducedObservation.measured(0)
+                observations["critic_rejections_full"] = ProducedObservation.measured(0)
+        observations["revision_rounds"] = ProducedObservation.measured(revision_rounds)
+        observations["capped_agent_runs"] = ProducedObservation.measured(
+            sum(run.get("max_iterations_hit") is True for run in attributed_runs)
+        )
         return ProducerResult(observations=observations)
 
 

@@ -31,7 +31,7 @@ describe('MetricsEditor autosave', () => {
 
     await user.click(screen.getByRole('button', { name: 'Add metrics' }))
     const dialog = await screen.findByRole('dialog', { name: 'Manage metrics' })
-    const contextual = new Set(['tool_calls', 'tool_error_rate', 'critic_approvals', 'critic_rejections'])
+    const contextual = new Set(['tool_calls', 'tool_error_rate', 'critic_approvals', 'critic_rejections', 'critic_invocations', 'critic_rejections_partial', 'critic_rejections_full', 'revision_rounds'])
     for (const entry of METRIC_CATALOG.filter((candidate) => candidate.kind === 'runtime')) {
       const checkbox = within(dialog).getByRole('checkbox', { name: new RegExp(`^${entry.name}`) })
       if (contextual.has(entry.key)) expect(checkbox).not.toBeChecked()

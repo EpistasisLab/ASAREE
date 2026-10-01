@@ -1679,6 +1679,98 @@
         "primary": false,
         "direction": "neutral",
         "aggregation": "mean"
+      },
+      {
+        "id": "runtime-critic-invocations",
+        "catalogKey": "critic_invocations",
+        "name": "Critic invocations",
+        "description": "Critic-gate reviews run during the run.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "sum",
+        "unit": "reviews"
+      },
+      {
+        "id": "runtime-critic-rejections-partial",
+        "catalogKey": "critic_rejections_partial",
+        "name": "Partial critic rejections",
+        "description": "Rejections scoped to a targeted correction.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "reviews"
+      },
+      {
+        "id": "runtime-critic-rejections-full",
+        "catalogKey": "critic_rejections_full",
+        "name": "Full critic rejections",
+        "description": "Rejections asking the stage to reconsider its approach (includes unscoped ones).",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "reviews"
+      },
+      {
+        "id": "runtime-revision-rounds",
+        "catalogKey": "revision_rounds",
+        "name": "Revision rounds",
+        "description": "Worker reruns triggered by critic rejections.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "rounds"
+      },
+      {
+        "id": "runtime-capped-agent-runs",
+        "catalogKey": "capped_agent_runs",
+        "name": "Capped agent runs",
+        "description": "Reason+Act runs cut off by their iteration ceiling.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "runs"
+      },
+      {
+        "id": "n-recipe-ops",
+        "name": "n_recipe_ops",
+        "description": "Entries in the FTE engineering_recipe.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "ops"
+      },
+      {
+        "id": "recipe-depth",
+        "name": "recipe_depth",
+        "description": "Longest derived-from-derived chain in the FTE recipe (1 by construction when the recipe is non-empty).",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "mean",
+        "unit": "levels"
+      },
+      {
+        "id": "recipe-hash",
+        "name": "recipe_hash",
+        "description": "SHA-256 of the FTE recipe structure (name/op/inputs/params), independent of entry order; groups cells that engineered the same features.",
+        "kind": "custom",
+        "valueType": "opaque",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "none"
       }
     ],
     "coordination_strategy": {
@@ -2285,6 +2377,85 @@
         "aggregation": "mean",
         "primary": false,
         "description": "Decision threshold equal to the observed test-set positive rate."
+      },
+      {
+        "id": "runtime-critic-invocations",
+        "name": "Critic invocations",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Critic-gate reviews run during the run.",
+        "unit": "reviews"
+      },
+      {
+        "id": "runtime-critic-rejections-partial",
+        "name": "Partial critic rejections",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Rejections scoped to a targeted correction.",
+        "unit": "reviews"
+      },
+      {
+        "id": "runtime-critic-rejections-full",
+        "name": "Full critic rejections",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Rejections asking the stage to reconsider its approach (includes unscoped ones).",
+        "unit": "reviews"
+      },
+      {
+        "id": "runtime-revision-rounds",
+        "name": "Revision rounds",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Worker reruns triggered by critic rejections.",
+        "unit": "rounds"
+      },
+      {
+        "id": "runtime-capped-agent-runs",
+        "name": "Capped agent runs",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Reason+Act runs cut off by their iteration ceiling.",
+        "unit": "runs"
+      },
+      {
+        "id": "n-recipe-ops",
+        "name": "n_recipe_ops",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Entries in the FTE engineering_recipe.",
+        "unit": "ops"
+      },
+      {
+        "id": "recipe-depth",
+        "name": "recipe_depth",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "mean",
+        "primary": false,
+        "description": "Longest derived-from-derived chain in the FTE recipe (1 by construction when the recipe is non-empty).",
+        "unit": "levels"
+      },
+      {
+        "id": "recipe-hash",
+        "name": "recipe_hash",
+        "value_type": "opaque",
+        "direction": "neutral",
+        "aggregation": "none",
+        "primary": false,
+        "description": "SHA-256 of the FTE recipe structure (name/op/inputs/params), independent of entry order; groups cells that engineered the same features."
       }
     ],
     "producers": [
@@ -2302,7 +2473,12 @@
           "tool_error_rate": "runtime-tool-error-rate",
           "agent_loop_iterations": "runtime-agent-loop-iterations",
           "critic_rejections": "runtime-critic-rejections",
-          "critic_approvals": "runtime-critic-approvals"
+          "critic_approvals": "runtime-critic-approvals",
+          "critic_invocations": "runtime-critic-invocations",
+          "critic_rejections_partial": "runtime-critic-rejections-partial",
+          "critic_rejections_full": "runtime-critic-rejections-full",
+          "revision_rounds": "runtime-revision-rounds",
+          "capped_agent_runs": "runtime-capped-agent-runs"
         },
         "artifacts": [],
         "config": {}
@@ -2378,7 +2554,10 @@
           "n_features_after_fs": "n-features-after-fs",
           "n_features_created": "n-features-created",
           "n_created_selected": "n-engineered-features-selected",
-          "frac_created_selected": "frac-created-selected"
+          "frac_created_selected": "frac-created-selected",
+          "n_recipe_ops": "n-recipe-ops",
+          "recipe_depth": "recipe-depth",
+          "recipe_hash": "recipe-hash"
         },
         "artifacts": [],
         "config": {

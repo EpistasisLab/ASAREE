@@ -7,6 +7,7 @@ finalization -- nothing is executed here:
   response): the whole result, or one field of it per metric via a projection
   (see ``project_value``).
 * ``asaree.feature_pipeline`` -- feature counts across a DC -> FTE -> FS chain,
+  plus the FTE recipe's size, chain depth and structural hash,
   computed the way the spinal notebook's ``process_metrics`` does rather than
   trusted from an agent's end-of-turn self-report. Only the raw dataset's
   column names are needed beyond the run itself, to tell a created feature
@@ -16,6 +17,8 @@ finalization -- nothing is executed here:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import math
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
@@ -41,6 +44,9 @@ FEATURE_PIPELINE_OUTPUTS = (
     "n_features_created",
     "n_created_selected",
     "frac_created_selected",
+    "n_recipe_ops",
+    "recipe_depth",
+    "recipe_hash",
 )
 _STAGE_NODE_KEYS = ("dc_node_id", "fte_node_id", "fs_node_id")
 _FIELD_DEFAULTS = {
@@ -48,6 +54,7 @@ _FIELD_DEFAULTS = {
     "fte_count_field": "n_features_out",
     "fs_count_field": "n_features_out",
     "selected_field": "selected_features",
+    "recipe_field": "engineering_recipe",
 }
 
 RawColumnsLoader = Callable[[str], Awaitable[frozenset[str] | None]]
@@ -147,6 +154,40 @@ def _is_created_feature(name: Any, raw_columns: frozenset[str]) -> bool:
     return str(name).rsplit("__", 1)[-1] not in raw_columns
 
 
+def recipe_depth(recipe: list[Any]) -> int:
+    """Longest derived-from-derived chain in an FTE recipe: 0 when empty, 1 when
+    every entry builds on source columns, 2 when one consumes another's output.
+    A declared cycle's back-edge counts as a source column so this terminates.
+    """
+    produced = {str(e["name"]): e for e in recipe if isinstance(e, Mapping) and e.get("name")}
+    depth_of: dict[str, int] = {}
+    resolving: set[str] = set()
+
+    def depth(name: str) -> int:
+        if name not in produced or name in resolving:
+            return 0
+        if name not in depth_of:
+            resolving.add(name)
+            inputs = produced[name].get("inputs")
+            inner = [depth(str(i)) for i in inputs] if isinstance(inputs, list) else []
+            depth_of[name] = 1 + max(inner or [0])
+            resolving.discard(name)
+        return depth_of[name]
+
+    return max([depth(name) for name in produced] or [0])
+
+
+def recipe_hash(recipe: list[Any]) -> str:
+    """SHA-256 over a recipe's structure (name/op/inputs/params), independent of
+    entry order and rationale, so cells that engineered the same features match."""
+    canon = sorted(
+        json.dumps({k: e.get(k) for k in ("name", "op", "inputs", "params")}, sort_keys=True, separators=(",", ":"))
+        for e in recipe
+        if isinstance(e, Mapping)
+    )
+    return hashlib.sha256("\n".join(canon).encode("utf-8")).hexdigest()
+
+
 def feature_pipeline_values(
     node_runs: Mapping[str, Any],
     config: Mapping[str, Any],
@@ -180,6 +221,11 @@ def feature_pipeline_values(
         values["n_created_selected"] = created
         if after_fs:
             values["frac_created_selected"] = created / after_fs
+    recipe = fte.get(field["recipe_field"])
+    if isinstance(recipe, list):
+        values["n_recipe_ops"] = len(recipe)
+        values["recipe_depth"] = recipe_depth(recipe)
+        values["recipe_hash"] = recipe_hash(recipe)
     return values
 
 
@@ -325,5 +371,7 @@ __all__ = [
     "output_projection",
     "project_value",
     "projection_issue",
+    "recipe_depth",
+    "recipe_hash",
     "tool_step_values",
 ]

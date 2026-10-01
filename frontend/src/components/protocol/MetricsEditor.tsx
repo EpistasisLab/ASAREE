@@ -27,6 +27,15 @@ import { CustomMetricFlow, MetricNodeLabel, type MetricNodeDisplay } from './Cus
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { useDialogAutosave } from './useDialogAutosave'
 
+const CRITIC_METRIC_KEYS = new Set([
+  'critic_approvals',
+  'critic_rejections',
+  'critic_invocations',
+  'critic_rejections_partial',
+  'critic_rejections_full',
+  'revision_rounds',
+])
+
 function synchronizeMeasurementPlanMetrics(plan: MeasurementPlan | null, metrics: DesignMetric[]) {
   if (!plan) return null
   const definitionsById = new Map(plan.metrics.map((definition) => [definition.id, definition]))
@@ -159,7 +168,7 @@ function MetricsDialog({
   const hasCriticGate = graph?.nodes.some((node) => node.type === 'critic_gate') ?? false
   const canvasCannotProduce = (key: string) =>
     ((key === 'tool_calls' || key === 'tool_error_rate') && !hasValidTool)
-    || ((key === 'critic_approvals' || key === 'critic_rejections') && !hasCriticGate)
+    || (CRITIC_METRIC_KEYS.has(key) && !hasCriticGate)
   const unavailableBuiltInKeys = capabilitiesLoading || capabilitiesUnavailable
     ? []
     : builtInEntries.flatMap((entry) => {
@@ -334,7 +343,7 @@ function MetricsDialog({
                           ? 'Not supported by this runtime.'
                           : (entry.key === 'tool_calls' || entry.key === 'tool_error_rate') && !hasValidTool
                             ? 'Connect an enabled, configured tool to an active Agent to use this metric.'
-                            : (entry.key === 'critic_approvals' || entry.key === 'critic_rejections') && !hasCriticGate
+                            : CRITIC_METRIC_KEYS.has(entry.key) && !hasCriticGate
                               ? 'Add a Critic Gate to the canvas to use this metric.'
                           : undefined
                     const unavailableReasonId = `metric-unavailable-${entry.key}`

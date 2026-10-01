@@ -1603,6 +1603,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       // Tool Step (AddNodePanel restricted to MAIN_FLOW_NODE_TYPES below), positioned at
       // the midpoint of the two nodes the removed edge used to connect.
       const { edgeId, source, target } = pendingEdgeInsert
+      // The first half keeps the split edge's handoff: same sender, so the
+      // narrowed fields still apply. The second half starts at Full output --
+      // the new node has no Output Parser to narrow yet.
+      const handoff = edges.find((e) => e.id === edgeId)?.data?.handoff
       const sourceNode = nodes.find((n) => n.id === source)
       const targetNode = nodes.find((n) => n.id === target)
       const desired =
@@ -1618,7 +1622,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         eds
           .filter((e) => e.id !== edgeId)
           .concat(
-            { id: newNodeId(), source, target: newId },
+            { id: newNodeId(), source, target: newId, ...(handoff ? { data: { handoff } } : {}) },
             { id: newNodeId(), source: newId, target },
             ...(pattern ? [pattern.patternEdge] : []),
           ),

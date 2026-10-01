@@ -538,3 +538,26 @@ def test_a_narrowed_handoff_from_a_sender_without_a_parser_is_refused() -> None:
     }
     with pytest.raises(ProtocolValidationError, match="no Output Parser"):
         validate_prompt_references(graph=graph)
+
+
+def test_a_field_reference_can_narrow_a_list_to_item_keys() -> None:
+    graph = _handoff_graph(None)
+    one, _ = _resolve_prompt_references("Steps: {{node:a.recipe[name]}}", graph, "b", _RUNS)
+    two, _ = _resolve_prompt_references("{{ node:a.recipe[ name , op ] }}", graph, "b", _RUNS)
+    assert one == 'Steps: ["bmi", "pp"]'
+    assert two == '[{"name": "bmi", "op": "ratio"}, {"name": "pp", "op": "diff"}]'
+
+
+def test_item_keys_parse_and_serialize() -> None:
+    (ref,) = pr.iter_references("{{node:a.recipe[name, op]|raw}}")
+    assert (ref.node_id, ref.field, ref.item_keys, ref.raw) == ("a", "recipe", ("name", "op"), True)
+    assert pr.serialize_node_reference("a", field="recipe", item_keys=("name",)) == "{{node:a.recipe[name]}}"
+
+
+def test_item_keys_on_a_field_that_is_not_a_list_are_refused() -> None:
+    graph = _handoff_graph(None)
+    graph["nodes"][2]["data"]["config"]["prompt"] = "{{node:a.notes[x]}}"
+    with pytest.raises(ProtocolValidationError, match="not a list field"):
+        validate_prompt_references(graph=graph)
+    graph["nodes"][2]["data"]["config"]["prompt"] = "{{node:a.recipe[name]}}"
+    validate_prompt_references(graph=graph)

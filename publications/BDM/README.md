@@ -110,10 +110,10 @@ critic gates, with these v0.8.0 execution details:
   `selected_features`, `n_features_out`, `observed_class_distribution`,
   `class_balance_check`, `notes_for_mlm`. The FS prose report doesn't pass.
   The FTE/DC parts, which come from further upstream, are field references in
-  the MLM goal (`{{node:agent-fte.engineering_recipe}}`, `encoding_map`,
-  `notes_for_fte`). One remaining difference: the notebook passes only the
-  recipe's step names, and a prompt reference passes the whole
-  `engineering_recipe`. If FS extracted none of the selected fields, the edge
+  the MLM goal. They're narrowed the same way the notebook narrows them:
+  `{{node:agent-fte.engineering_recipe[name]}}` passes only the step names,
+  `{{node:agent-fte.encoding_map[feature, encoding]}}` passes only those two
+  keys, and DC passes `notes_for_fte`. If FS extracted none of the selected fields, the edge
   falls back to the full FS output. Each Critic Gate's system prompt includes
   the `task_brief`, because the canvas sends a critic only the output it
   reviews.

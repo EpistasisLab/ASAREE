@@ -100,7 +100,8 @@ def test_myocardial_mlm_receives_only_the_notebooks_fs_brief_fields() -> None:
         goal = next(n for n in graph["nodes"] if n["id"] == "agent-mlm")["data"]["config"]["goal"]
         # The edge carries FS's fields; the brief only reaches further back.
         assert "{{node:agent-fs" not in goal
-        assert "{{node:agent-fte.engineering_recipe}}" in goal
+        assert "{{node:agent-fte.engineering_recipe[name]}}" in goal
+        assert "{{node:agent-fte.encoding_map[feature, encoding]}}" in goal
 
 
 def test_myocardial_scoring_is_a_deterministic_tool_step() -> None:

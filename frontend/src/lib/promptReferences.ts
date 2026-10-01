@@ -42,13 +42,15 @@ const PREVIOUS_RE = /\{\{\s*previous\s*(\|\s*raw\s*)?\}\}/i
 /** The storage form. Mirrors `prompt_references._REFERENCE_RE`'s node arm --
  *  deliberately narrow, because anything it does not match must survive
  *  untouched (a prompt may legitimately ask an agent to emit a template). */
-const STORED_RE = /\{\{\s*node:([A-Za-z0-9_-]+)(?:\.([A-Za-z_][A-Za-z0-9_]*))?\s*(\|\s*raw\s*)?\}\}/gi
+const STORED_RE =
+  /\{\{\s*node:([A-Za-z0-9_-]+)(?:\.([A-Za-z_][A-Za-z0-9_]*(?:\[\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*\s*\])?))?\s*(\|\s*raw\s*)?\}\}/gi
 
 /** An Output Parser field name, on its own. Mirrors `prompt_references._FIELD`:
  *  it becomes an attribute on the model Motoro builds from the contract, so it
  *  has to be an identifier -- which is also what makes the display form's
- *  `Name.field` split unambiguous enough to reverse. */
-const FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+ *  `Name.field` split unambiguous enough to reverse. An optional `[key, ...]`
+ *  suffix narrows a list field to those item keys and round-trips verbatim. */
+const FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\[\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*\s*\])?$/
 
 /** The display form: any `{{...}}` that is not obviously the storage form.
  *  Labels contain spaces and punctuation, so this is broad on purpose and the

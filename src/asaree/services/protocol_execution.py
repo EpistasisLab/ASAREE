@@ -24,7 +24,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -2862,28 +2862,32 @@ def _handoff_field_specs(handoff: dict[str, Any]) -> list[tuple[str, list[str]]]
 
 
 def _project_handoff_payload(payload: dict[str, Any], handoff: dict[str, Any]) -> dict[str, Any]:
-    """The part of *payload* a narrowed edge passes on.
-
-    ``item_keys`` narrow a list of objects to those keys: one key yields a list
-    of its values (``engineering_recipe`` -> just the step names), several a
-    list of smaller objects. Anything that is not a list of objects passes
-    through whole, since there is nothing to narrow."""
+    """The part of *payload* a narrowed edge passes on; ``item_keys`` narrow a
+    list field via :func:`_pluck_items`."""
     if handoff.get("mode") == HANDOFF_FIELDS:
         return dict(payload)
     projected: dict[str, Any] = {}
     for name, keys in _handoff_field_specs(handoff):
         if name not in payload:
             continue
-        value = payload[name]
-        if keys and isinstance(value, list):
-            value = [
-                (item.get(keys[0]) if len(keys) == 1 else {k: item[k] for k in keys if k in item})
-                if isinstance(item, dict)
-                else item
-                for item in value
-            ]
-        projected[name] = value
+        projected[name] = _pluck_items(payload[name], keys)
     return projected
+
+
+def _pluck_items(value: Any, keys: Sequence[str]) -> Any:
+    """A list of objects narrowed to *keys*: one key yields a list of its values
+    (``engineering_recipe`` -> just the step names), several a list of smaller
+    objects. Anything that is not a list of objects passes through whole,
+    since there is nothing to narrow. Shared by narrowed edges and
+    ``{{node:X.field[key]}}``."""
+    if not keys or not isinstance(value, list):
+        return value
+    return [
+        (item.get(keys[0]) if len(keys) == 1 else {k: item[k] for k in keys if k in item})
+        if isinstance(item, dict)
+        else item
+        for item in value
+    ]
 
 
 def _handoff_block(text: str, payload: dict[str, Any], handoff: dict[str, Any] | None, *, raw: bool = False) -> str:
@@ -3010,7 +3014,9 @@ def _render_reference(
         # produced nothing -- so this is an empty resolution, recorded like any
         # other, not a failed run.
         payload = (node_runs.get(ref.node_id) or {}).get("payload") or {}
-        rendered = _format_payload_value(payload.get(ref.field)) if ref.field in payload else ""
+        rendered = (
+            _format_payload_value(_pluck_items(payload[ref.field], ref.item_keys)) if ref.field in payload else ""
+        )
         if not rendered:
             unresolved.append(f"{ref.node_id}.{ref.field}")
             return ""
@@ -3169,6 +3175,19 @@ def validate_prompt_references(*, graph: dict[str, Any]) -> None:
                     raise ProtocolValidationError(
                         f"{name}'s {field} references {other!r}.{field_name}, which {other!r}'s Output "
                         f"Parser does not declare. It declares: {', '.join(declared)}."
+                    )
+
+            # Item keys narrow a list of objects, so they only make sense on a
+            # field declared as one; elsewhere they would silently do nothing.
+            for ref in prompt_references.iter_references(prompt):
+                if not ref.item_keys or ref.node_id not in known or ref.node_id not in allowed:
+                    continue
+                contract = _resolve_output_contract(graph, ref.node_id) or {}
+                spec = next((f for f in contract.get("fields") or [] if f.get("name") == ref.field), None)
+                if spec is not None and str(spec.get("type") or "") != "array":
+                    other = _node_display_name(next(n for n in graph["nodes"] if str(n.get("id")) == ref.node_id))
+                    raise ProtocolValidationError(
+                        f"{name}'s {field} narrows {other!r}.{ref.field} to item keys, but it is not a list field."
                     )
 
             if prompt_references.uses(prompt, prompt_references.PREVIOUS) and not _upstream_ids(graph, node_id):

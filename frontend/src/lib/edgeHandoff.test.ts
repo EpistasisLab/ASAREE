@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Edge, Node } from '@xyflow/react'
-import { describeHandoff, handoffPeers, handoffSenderFields } from './promptReferences'
+import { describeHandoff, handoffPeers, handoffSenderFields, toDisplayPrompt, toStoredPrompt } from './promptReferences'
 import { toPersistedGraph } from './protocolGraph'
 import type { ProtocolEdge, ProtocolNode } from '@/types/protocols'
 
@@ -38,5 +38,14 @@ describe('edge handoff', () => {
     const persisted = toPersistedGraph(nodes as unknown as Node[], flowEdges).edges
     expect(persisted.find((e) => e.id === 'gb')?.data).toEqual({ handoff: edges[2].data!.handoff })
     expect(persisted.find((e) => e.id === 'ag')).not.toHaveProperty('data')
+  })
+})
+
+describe('item-key field references', () => {
+  it('round-trip between the stored and display forms', () => {
+    const names = { a: 'Analyst' }
+    const stored = 'Steps: {{node:a.recipe[name, op]}}'
+    expect(toDisplayPrompt(stored, names)).toBe('Steps: {{Analyst.recipe[name, op]}}')
+    expect(toStoredPrompt('Steps: {{Analyst.recipe[name, op]}}', names)).toBe(stored)
   })
 })

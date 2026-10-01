@@ -32,6 +32,34 @@ function renderFlow(graph: ProtocolGraph, onSave = vi.fn(), sourceContext?: Cust
 }
 
 describe('CustomMetricFlow', () => {
+  it('sums a runtime measure over several chosen nodes', async () => {
+    const user = userEvent.setup()
+    const graph = {
+      nodes: [
+        { id: 'agent-dc', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'DC' } },
+        { id: 'gate-dc', type: 'critic_gate', position: { x: 0, y: 0 }, data: { label: 'Critic (DC)' } },
+        { id: 'gate-fs', type: 'critic_gate', position: { x: 0, y: 0 }, data: { label: 'Critic (FS)' } },
+      ],
+      edges: [],
+    } as unknown as ProtocolGraph
+    const onSave = renderFlow(graph)
+
+    await user.click(screen.getByRole('combobox', { name: 'Metric node' }))
+    await user.click(screen.getByRole('option', { name: 'Runs of chosen nodes, Node runtime' }))
+    expect(screen.getByRole('button', { name: 'Add custom metric' })).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: /^Critic \(FS\)/ }))
+    await user.click(screen.getByRole('checkbox', { name: /^Critic \(DC\)/ }))
+    await user.click(screen.getByRole('combobox', { name: 'Runtime measure' }))
+    await user.click(screen.getByRole('option', { name: /^Turns/ }))
+
+    expect(screen.getByRole('textbox', { name: 'Metric name' })).toHaveValue('Turns · Critic (DC) + Critic (FS)')
+    await user.click(screen.getByRole('button', { name: 'Add custom metric' }))
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Turns · Critic (DC) + Critic (FS)' }),
+      { producer: 'node_runtime', nodeIds: ['gate-dc', 'gate-fs'], output: 'agent_loop_iterations' },
+    )
+  })
+
   it('captures an Agent final output as a custom metric source', async () => {
     const user = userEvent.setup()
     const graph = {

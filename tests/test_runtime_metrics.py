@@ -579,3 +579,36 @@ def test_node_runtime_validation_requires_nodes_on_the_canvas() -> None:
     assert [issue.code for issue in validate_runtime_measurement_plan(plan([]), graph=graph).issues] == [
         "node_runtime_nodes_missing"
     ]
+
+
+def test_node_runtime_metric_saved_as_id_and_name_still_validates() -> None:
+    report = validate_runtime_measurement_plan(
+        {
+            "metrics": [
+                {"id": "tokens-dc", "name": "tokens_dc"},
+                {"id": "errors-dc", "name": "tool_errors_dc"},
+            ],
+            "producers": [
+                {
+                    "id": "node-runtime-tokens-dc",
+                    "producer_id": "asaree.node_runtime",
+                    "kind": "runtime",
+                    "outputs": {"total_tokens": "tokens-dc"},
+                    "config": {"node_ids": ["agent-dc"]},
+                },
+                {
+                    "id": "node-runtime-errors-dc",
+                    "producer_id": "asaree.node_runtime",
+                    "kind": "runtime",
+                    "outputs": {"tool_error_rate": "errors-dc"},
+                    "config": {"node_ids": ["agent-dc"]},
+                },
+            ],
+            "inputs": [
+                {"producer_binding_id": binding, "input_key": "facts", "source_key": "attempt.runtime"}
+                for binding in ("node-runtime-tokens-dc", "node-runtime-errors-dc")
+            ],
+        }
+    )
+
+    assert not report.issues

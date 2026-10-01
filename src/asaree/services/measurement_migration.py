@@ -63,6 +63,30 @@ def normalize_experiment_measurement_plan(document: Any, metrics: Any) -> dict[s
         "asaree.feature_pipeline",
     }
     reported_bindings = tuple(binding for binding in plan.producers if binding.producer_id in reported_ids)
+    # A node runtime metric is authored as a custom metric, and a definition
+    # saved down to {id, name} would fail the engine's type check. Its outputs
+    # are all numbers -- counts that sum, plus a rate that averages -- so fill
+    # whatever is missing rather than reject the plan.
+    node_runtime_outputs = {
+        metric_id: output_key
+        for binding in plan.producers
+        if binding.producer_id == "asaree.node_runtime"
+        for output_key, metric_id in binding.outputs.items()
+    }
+    plan = replace(
+        plan,
+        metrics=tuple(
+            replace(
+                metric,
+                value_type=metric.value_type or "number",
+                aggregation=metric.aggregation
+                or ("mean" if node_runtime_outputs[metric.id] == "tool_error_rate" else "sum"),
+            )
+            if metric.id in node_runtime_outputs
+            else metric
+            for metric in plan.metrics
+        ),
+    )
     reported_binding_ids = {binding.id for binding in reported_bindings}
     reported_metric_ids = {metric_id for binding in reported_bindings for metric_id in binding.outputs.values()}
     normalized = replace(

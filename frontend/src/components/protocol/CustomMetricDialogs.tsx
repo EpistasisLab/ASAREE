@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { mcpServersApi, protocolsApi } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -21,6 +22,13 @@ import {
   type FieldProjection,
 } from '@/lib/metricFields'
 import { TOOL_STEP_PRODUCER_ID, toolStepSourceOptions } from '@/lib/toolStepMetrics'
+import {
+  NODE_RUNTIME_OUTPUTS,
+  NODE_RUNTIME_PRODUCER_ID,
+  bindingNodeIds,
+  nodeRuntimeOutput,
+  nodeRuntimeSourceOptions,
+} from '@/lib/nodeRuntimeMetrics'
 import type { CustomMetricProducer, CustomMetricProducerConfig, CustomMetricSourceContext } from '@/lib/customMetrics'
 import type { DesignMetric, MeasurementPlan } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
@@ -28,7 +36,7 @@ import { MetricFieldPicker } from './MetricFieldPicker'
 import { useDialogAutosave, type DialogAutosaveStatus } from './useDialogAutosave'
 
 type Binding = MeasurementPlan['producers'][number] | undefined
-export type MetricNodeDisplay = { label: string; type: 'Agent' | 'Script' | 'MCP Tool' | 'Tool Step' | 'Feature pipeline' }
+export type MetricNodeDisplay = { label: string; type: 'Agent' | 'Script' | 'MCP Tool' | 'Tool Step' | 'Feature pipeline' | 'Node runtime' | 'Critic Gate' }
 
 export function MetricNodeLabel({ display, reason }: { display: MetricNodeDisplay; reason?: string }) {
   return (
@@ -96,6 +104,10 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
   const pythonSources = pythonScriptSourceOptions(graph).filter((source) => !sourceContext || sourceContext.producer === 'python' && source.scriptNodeId === sourceContext.nodeId)
   const mcpSources = mcpToolSourceOptions(graph).filter((source) => !sourceContext || sourceContext.producer === 'mcp' && source.mcpNodeId === sourceContext.nodeId)
   const toolStepSources = toolStepSourceOptions(graph).filter((source) => !sourceContext || sourceContext.producer === 'tool_step' && source.nodeId === sourceContext.nodeId)
+  // Every Agent/Critic Gate stays choosable even from a node-first context:
+  // a stage total often spans several nodes (all the gates, say).
+  const runtimeNodeSources = nodeRuntimeSourceOptions(graph)
+  const offerNodeRuntime = runtimeNodeSources.length > 0 && (!sourceContext || sourceContext.producer === 'node_runtime')
   const initialProducer: CustomMetricProducer | undefined = binding?.producer_id === AGENT_OUTPUT_PRODUCER_ID
     ? 'agent'
     : binding?.producer_id === 'asaree.python_script'
@@ -104,7 +116,9 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
         ? 'mcp'
         : binding?.producer_id === TOOL_STEP_PRODUCER_ID
           ? 'tool_step'
-          : sourceContext?.producer
+          : binding?.producer_id === NODE_RUNTIME_PRODUCER_ID
+            ? 'node_runtime'
+            : sourceContext?.producer
   const initialAgentSource = agentSources.find((source) => source.agentNodeId === binding?.config.agent_node_id)
     ?? (sourceContext?.producer === 'agent' && agentSources.length === 1 ? agentSources[0] : undefined)
   const initialPythonSource = pythonSources.find((source) => source.agentNodeId === binding?.config.agent_node_id && source.scriptNodeId === binding?.config.script_node_id)
@@ -114,6 +128,12 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
   const initialToolStepSource = toolStepSources.find((source) => source.nodeId === binding?.config.node_id)
     ?? (sourceContext?.producer === 'tool_step' && toolStepSources.length === 1 ? toolStepSources[0] : undefined)
   const initialProjection = bindingProjection(binding, metric.id)
+  const initialRuntimeNodeIds = binding?.producer_id === NODE_RUNTIME_PRODUCER_ID
+    ? bindingNodeIds(binding)
+    : sourceContext?.producer === 'node_runtime' ? [sourceContext.nodeId] : []
+  const initialRuntimeOutput = binding?.producer_id === NODE_RUNTIME_PRODUCER_ID
+    ? Object.keys(binding.outputs)[0] ?? 'total_tokens'
+    : 'total_tokens'
   const editing = existingMetrics.some((item) => item.id === metric.id)
   // Ticking several fields creates one metric per field in one pass -- only
   // when creating with an explicit Add button, since autosave needs a single
@@ -125,6 +145,8 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
   const [toolStepNodeId, setToolStepNodeId] = useState(initialToolStepSource?.nodeId ?? '')
   const [producer, setProducer] = useState<CustomMetricProducer | undefined>(initialProducer)
   const [agentNodeId, setAgentNodeId] = useState(initialAgentSource?.agentNodeId ?? '')
+  const [runtimeNodeIds, setRuntimeNodeIds] = useState<string[]>(initialRuntimeNodeIds)
+  const [runtimeOutput, setRuntimeOutput] = useState(initialRuntimeOutput)
   const serversQuery = useQuery({ queryKey: ['mcp-servers'], queryFn: mcpServersApi.list, staleTime: 60_000, enabled: mcpSources.length > 0 })
   const servers = serversQuery.data ?? []
   const [pythonSourceKey, setPythonSourceKey] = useState(initialPythonSource?.key ?? '')
@@ -154,7 +176,8 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
     : mcpSourceDisabledReason(selectedMcpSource)
   const selectedToolStepSource = toolStepSources.find((source) => source.nodeId === toolStepNodeId)
   const toolStepSourceError = !selectedToolStepSource ? 'Choose a Tool Step.' : selectedToolStepSource.disabledReason
-  const selectedMetricNode = selectedAgentSource
+  const runtimeNodeError = runtimeNodeIds.length === 0 ? 'Choose at least one node.' : undefined
+  const selectedMetricNode = producer === 'node_runtime' ? 'node_runtime' : selectedAgentSource
     ? `agent:${selectedAgentSource.agentNodeId}`
     : selectedPythonSource
       ? `python:${selectedPythonSource.key}`
@@ -183,7 +206,8 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
     label: source.label,
     type: 'Tool Step',
   })
-  const selectedNodeDisplay = selectedAgentSource
+  const nodeRuntimeDisplay: MetricNodeDisplay = { label: 'Runs of chosen nodes', type: 'Node runtime' }
+  const selectedNodeDisplay = producer === 'node_runtime' ? nodeRuntimeDisplay : selectedAgentSource
     ? agentNodeDisplay(selectedAgentSource)
     : selectedPythonSource
       ? pythonNodeDisplay(selectedPythonSource)
@@ -195,7 +219,8 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
   const sourceSelected = producer === 'agent' ? Boolean(selectedAgentSource)
     : producer === 'python' ? Boolean(selectedPythonSource)
       : producer === 'mcp' ? Boolean(selectedMcpSource)
-        : producer === 'tool_step' ? Boolean(selectedToolStepSource) : false
+        : producer === 'tool_step' ? Boolean(selectedToolStepSource)
+          : producer === 'node_runtime'
   // Agent and Tool Step outputs are JSON documents, so a metric can record
   // one field of them; Script/MCP Tool metrics record the whole tool result.
   const fieldNodeId = producer === 'agent' ? selectedAgentSource?.agentNodeId : producer === 'tool_step' ? selectedToolStepSource?.nodeId : undefined
@@ -227,9 +252,34 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
         : '')
     }
   }
+  // e.g. "Total tokens · DC", or "Turns · Critic (DC) + Critic (FTE)".
+  function runtimeName(nodeIds: string[], outputKey: string) {
+    const labels = nodeIds.map((id) => runtimeNodeSources.find((source) => source.nodeId === id)?.label ?? id)
+    return labels.length ? `${nodeRuntimeOutput(outputKey)?.label ?? outputKey} · ${labels.join(' + ')}` : ''
+  }
+  function changeRuntime(nodeIds: string[], outputKey: string) {
+    setRuntimeNodeIds(nodeIds)
+    setRuntimeOutput(outputKey)
+    if (!nameTouched) setName(runtimeName(nodeIds, outputKey))
+  }
+  function toggleRuntimeNode(nodeId: string, checked: boolean) {
+    const next = checked
+      ? runtimeNodeSources.map((source) => source.nodeId).filter((id) => id === nodeId || runtimeNodeIds.includes(id))
+      : runtimeNodeIds.filter((id) => id !== nodeId)
+    changeRuntime(next, runtimeOutput)
+  }
   function selectMetricNode(value: string | null) {
     setPicks([])
     if (!nameTouched) setName('')
+    if (value === 'node_runtime') {
+      setProducer('node_runtime')
+      setAgentNodeId('')
+      setPythonSourceKey('')
+      setMcpSourceKey('')
+      setToolStepNodeId('')
+      setToolName('')
+      return
+    }
     const agentSource = agentSources.find((source) => `agent:${source.agentNodeId}` === value)
     const pythonSource = pythonSources.find((source) => `python:${source.key}` === value)
     const mcpSource = mcpSources.find((source) => `mcp:${source.key}` === value)
@@ -255,9 +305,11 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
     mcpSourceKey: initialMcpSource?.key ?? '',
     toolName: typeof binding?.config.tool_name === 'string' ? binding.config.tool_name : '',
     toolStepNodeId: initialToolStepSource?.nodeId ?? '',
+    runtimeNodeIds: initialRuntimeNodeIds,
+    runtimeOutput: initialRuntimeOutput,
     picks: initialProjection ? [initialProjection] : [],
   })
-  const currentSignature = JSON.stringify({ name, producer, agentNodeId, pythonSourceKey, mcpSourceKey, toolName, toolStepNodeId, picks })
+  const currentSignature = JSON.stringify({ name, producer, agentNodeId, pythonSourceKey, mcpSourceKey, toolName, toolStepNodeId, runtimeNodeIds, runtimeOutput, picks })
   const formRef = useRef<HTMLElement>(null)
   useEffect(() => onDirtyChange(currentSignature !== initialSignature), [currentSignature, initialSignature, onDirtyChange])
   useEffect(() => {
@@ -276,7 +328,8 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
     || !producer
     || (producer === 'agent' ? agentSourceError
       : producer === 'tool_step' ? toolStepSourceError
-        : producer === 'python' ? pythonSourceError : mcpSourceError || mcpMappingError),
+        : producer === 'node_runtime' ? runtimeNodeError
+          : producer === 'python' ? pythonSourceError : mcpSourceError || mcpMappingError),
   )
   const nextMetric: DesignMetric = { id: metric.id, name: name.trim(), kind: 'custom' }
   const configFor = (projection: FieldProjection | undefined): CustomMetricProducerConfig | null =>
@@ -288,7 +341,9 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
           ? { producer, source: selectedMcpSource, toolName }
           : producer === 'python'
             ? { producer, sourceKey: pythonSourceKey }
-            : null
+            : producer === 'node_runtime'
+              ? { producer, nodeIds: runtimeNodeIds, output: runtimeOutput }
+              : null
   const nextConfig = configFor(picks[0])
   async function saveAll() {
     if (!manyFields) {
@@ -318,7 +373,7 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
   return <section ref={formRef} aria-label={editing ? `Edit ${metric.name}` : 'Create custom metric'} className="scroll-mt-4 space-y-5 rounded-md border border-primary/30 bg-primary/5 p-4">
     <div>
       <h3 className="text-sm font-semibold">{editing ? `Edit ${metric.name}` : 'Create custom metric'}</h3>
-      <p className="mt-1 text-xs text-muted-foreground">Choose an Agent output, Agent tool result, or Tool Step result to capture and export.</p>
+      <p className="mt-1 text-xs text-muted-foreground">Choose an Agent output, Agent tool result, Tool Step result, or the runtime totals of chosen nodes to capture and export.</p>
     </div>
 
     <fieldset className="space-y-3">
@@ -333,10 +388,11 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
             {pythonSources.map((source) => <MetricNodeOption key={`python:${source.key}`} value={`python:${source.key}`} display={pythonNodeDisplay(source)} reason={pythonSourceDisabledReason(source)} />)}
             {mcpSources.map((source) => <MetricNodeOption key={`mcp:${source.key}`} value={`mcp:${source.key}`} display={mcpNodeDisplay(source)} reason={mcpSourceDisabledReason(source)} />)}
             {toolStepSources.map((source) => <MetricNodeOption key={`tool_step:${source.nodeId}`} value={`tool_step:${source.nodeId}`} display={toolStepNodeDisplay(source)} reason={source.disabledReason} />)}
+            {offerNodeRuntime && <MetricNodeOption value="node_runtime" display={nodeRuntimeDisplay} />}
           </SelectContent>
         </Select>
       </div> : <>
-        <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm">{producer === 'agent' ? 'Agent output' : producer === 'tool_step' ? 'Tool Step' : producer === 'python' ? 'Python Script' : 'MCP Tool'}</p>
+        <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm">{producer === 'agent' ? 'Agent output' : producer === 'tool_step' ? 'Tool Step' : producer === 'node_runtime' ? 'Node runtime' : producer === 'python' ? 'Python Script' : 'MCP Tool'}</p>
         {producer === 'tool_step' && <div className="space-y-1.5"><Label>Tool Step source</Label><p className="rounded-md border bg-muted/30 px-3 py-2 text-sm">{selectedToolStepSource?.label}</p>{toolStepSourceError && <p role="alert" className="text-xs text-destructive">{toolStepSourceError}</p>}</div>}
         {producer === 'agent' && <div className="space-y-1.5"><Label>Agent source</Label><p className="rounded-md border bg-muted/30 px-3 py-2 text-sm">{selectedAgentSource?.label}</p>{agentSourceError && <p role="alert" className="text-xs text-destructive">{agentSourceError}</p>}</div>}
         {producer === 'python' && <div className="space-y-1.5"><Label>Agent to Python Script source</Label>{pythonSources.length === 1 ? <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm">{selectedPythonSource?.label}</p> : <Select value={pythonSourceKey || '__none__'} onValueChange={(value) => setPythonSourceKey(value === '__none__' ? '' : value ?? '')}><SelectTrigger className="w-full" aria-label="Agent to Python Script source" aria-describedby={pythonSourceError ? 'python-flow-source-error' : undefined}><SelectValue>{() => selectedPythonSource?.label ?? 'Select a direct connection…'}</SelectValue></SelectTrigger><SelectContent><SelectItem value="__none__" disabled>Select a direct connection…</SelectItem>{pythonSources.map((source) => { const reason = pythonSourceDisabledReason(source); return <SelectItem key={source.key} value={source.key} disabled={!!reason}>{source.label}{reason ? ` — ${reason}` : ''}</SelectItem> })}</SelectContent></Select>}{pythonSourceError && <p id="python-flow-source-error" role="alert" className="text-xs text-destructive">{pythonSourceError}</p>}</div>}
@@ -344,6 +400,28 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
       </>}
       {producer === 'mcp' && <p role="status" className="text-xs text-muted-foreground">{serversQuery.isPending ? 'Loading registered MCP Servers…' : serversQuery.isError ? 'Registered MCP Servers could not be loaded.' : 'Registered MCP Server availability loaded.'}</p>}
     </fieldset>
+
+    {producer === 'node_runtime' && <fieldset className="space-y-3">
+      <legend className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Runtime total</legend>
+      <div className="space-y-1.5" role="group" aria-label="Nodes to measure">
+        <Label>Nodes</Label>
+        {runtimeNodeSources.map((source) => <label key={source.nodeId} className="flex cursor-pointer items-center gap-2">
+          <Checkbox checked={runtimeNodeIds.includes(source.nodeId)} onCheckedChange={(checked) => toggleRuntimeNode(source.nodeId, checked === true)} />
+          <MetricNodeLabel display={{ label: source.label, type: source.type }} reason={source.disabledReason} />
+        </label>)}
+        {runtimeNodeError && <p role="alert" className="text-xs text-destructive">{runtimeNodeError}</p>}
+      </div>
+      <div className="space-y-1.5">
+        <Label>Measure</Label>
+        <Select value={runtimeOutput} onValueChange={(value) => value && changeRuntime(runtimeNodeIds, value)}>
+          <SelectTrigger className="w-full" aria-label="Runtime measure"><SelectValue>{() => nodeRuntimeOutput(runtimeOutput)?.label ?? runtimeOutput}</SelectValue></SelectTrigger>
+          <SelectContent>
+            {NODE_RUNTIME_OUTPUTS.map((output) => <SelectItem key={output.key} value={output.key}>{output.label}<span className="ml-2 font-mono text-xs text-muted-foreground">{output.key}</span></SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+      <p className="text-xs text-muted-foreground">ASAREE sums every run these nodes launch in a replicate, critic-requested revisions included. A Critic Gate's runs are its critic's reviews.</p>
+    </fieldset>}
 
     {sourceSelected && fieldNodeId && <MetricFieldPicker fields={fields} picks={picks} multi={multiField} status={fieldStatus} onChange={changePicks} />}
 

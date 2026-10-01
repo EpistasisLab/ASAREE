@@ -3,6 +3,7 @@ import type { ProtocolGraph } from '@/types/protocols'
 import { metricCatalogEntry, type MetricCatalogEntry } from './metricCatalog'
 import { AGENT_OUTPUT_PRODUCER_ID } from './agentOutputMetrics'
 import { MCP_TOOL_PRODUCER_ID } from './mcpToolMetrics'
+import { NODE_RUNTIME_PRODUCER_ID } from './nodeRuntimeMetrics'
 import { TOOL_STEP_PRODUCER_ID } from './toolStepMetrics'
 
 export type MetricReadiness = {
@@ -22,12 +23,10 @@ export const OBSERVATION_LABELS: Record<ObservationStatus, string> = {
 
 // Producers ASAREE computes in code from what a run recorded
 // (services/derived_metrics.py). A Tool Step metric is authored through the
-// custom-metric dialog; the feature pipeline and node-scoped runtime totals
-// (runtime_metrics.NodeRuntimeMetricProducer) are declared in the plan document.
-export { TOOL_STEP_PRODUCER_ID }
+// custom-metric dialog; the feature pipeline is declared in the plan document.
+export { NODE_RUNTIME_PRODUCER_ID, TOOL_STEP_PRODUCER_ID }
 export const FEATURE_PIPELINE_PRODUCER_ID = 'asaree.feature_pipeline'
-export const NODE_RUNTIME_PRODUCER_ID = 'asaree.node_runtime'
-export const DERIVED_PRODUCER_IDS = new Set([TOOL_STEP_PRODUCER_ID, FEATURE_PIPELINE_PRODUCER_ID, NODE_RUNTIME_PRODUCER_ID])
+export const DERIVED_PRODUCER_IDS = new Set([TOOL_STEP_PRODUCER_ID, FEATURE_PIPELINE_PRODUCER_ID])
 const FEATURE_PIPELINE_STAGE_KEYS = ['dc_node_id', 'fte_node_id', 'fs_node_id'] as const
 
 const PRODUCER_LABELS: Record<string, string> = {

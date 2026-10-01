@@ -13,6 +13,13 @@ import { mcpToolBindingForMetric, mcpToolSourceOptions } from '@/lib/mcpToolMetr
 import { bindingProjection, projectionLabel } from '@/lib/metricFields'
 import { toolStepBindingForMetric, toolStepSourceOptions } from '@/lib/toolStepMetrics'
 import {
+  NODE_RUNTIME_PRODUCER_ID,
+  bindingNodeIds,
+  nodeRuntimeBindingForMetric,
+  nodeRuntimeOutput,
+  nodeRuntimeSourceOptions,
+} from '@/lib/nodeRuntimeMetrics'
+import {
   DERIVED_PRODUCER_IDS,
   FEATURE_PIPELINE_PRODUCER_ID,
   TOOL_STEP_PRODUCER_ID,
@@ -49,7 +56,10 @@ function synchronizeMeasurementPlanMetrics(plan: MeasurementPlan | null, metrics
       description: metric.description,
       unit: metric.unit,
     }
-    return [metric.kind === 'custom' ? { id: definition.id, name: metric.name } : {
+    // A custom metric's definition is owned by its producer's upsert -- reported
+    // ones are just {id, name}; a node runtime one also carries the value type
+    // and aggregation its output needs -- so keep it rather than rebuild it.
+    return [metric.kind === 'custom' ? { ...definition, name: metric.name } : {
       ...synchronized,
       direction: metric.direction,
       primary: metric.primary,
@@ -78,6 +88,9 @@ function customMetricProducerDisplay(
   }
   if (binding.producer_id === TOOL_STEP_PRODUCER_ID) return { label: nodeLabel(binding.config.node_id), type: 'Tool Step' }
   if (binding.producer_id === FEATURE_PIPELINE_PRODUCER_ID) return { label: 'DC → FTE → FS', type: 'Feature pipeline' }
+  if (binding.producer_id === NODE_RUNTIME_PRODUCER_ID) {
+    return { label: bindingNodeIds(binding).map(nodeLabel).join(' + ') || 'No nodes', type: 'Node runtime' }
+  }
   if (binding.producer_id === 'asaree.mcp_tool') {
     const toolName = typeof binding.config.tool_name === 'string' ? binding.config.tool_name : null
     return {
@@ -163,6 +176,7 @@ function MetricsDialog({
   const hasMcpMetricCandidate = mcpToolSourceOptions(graph).some((source) => !source.disabledReason)
   const hasAgentMetricCandidate = agentOutputSourceOptions(graph).some((source) => !source.disabledReason)
   const hasToolStepMetricCandidate = toolStepSourceOptions(graph).some((source) => !source.disabledReason)
+  const hasNodeRuntimeMetricCandidate = nodeRuntimeSourceOptions(graph).some((source) => !source.disabledReason)
   const canvasMetricKeys = new Set(contextualMetricSuggestions(graph).map((suggestion) => suggestion.key))
   const hasValidTool = canvasMetricKeys.has('tool_error_rate')
   const hasCriticGate = graph?.nodes.some((node) => node.type === 'critic_gate') ?? false
@@ -176,7 +190,7 @@ function MetricsDialog({
       return unavailable ? [entry.key] : []
     })
   const unavailableBuiltInKeySignature = unavailableBuiltInKeys.join('\u0000')
-  const canCreateCustomMetric = hasAgentMetricCandidate || hasPythonMetricCandidate || hasMcpMetricCandidate || hasToolStepMetricCandidate
+  const canCreateCustomMetric = hasAgentMetricCandidate || hasPythonMetricCandidate || hasMcpMetricCandidate || hasToolStepMetricCandidate || hasNodeRuntimeMetricCandidate
   const changedMetrics = metrics.map((metric) => customChanges.find((change) => change.metric.id === metric.id)?.metric ?? metric)
     .concat(customChanges.filter((change) => !metrics.some((metric) => metric.id === change.metric.id)).map((change) => change.metric))
   const customMetricById = new Map(changedMetrics.filter((metric) => metric.kind === 'custom' && metric.id).map((metric) => [metric.id!, metric]))
@@ -195,6 +209,7 @@ function MetricsDialog({
       ?? pythonScriptBindingForMetric(stagedPlan, metricId)
       ?? mcpToolBindingForMetric(stagedPlan, metricId)
       ?? toolStepBindingForMetric(stagedPlan, metricId)
+      ?? nodeRuntimeBindingForMetric(stagedPlan, metricId)
   }
   function stagedReadinessFor(metric: DesignMetric) {
     const local = localMetricReadinessPreview(metric, stagedPlan, graph)
@@ -371,6 +386,9 @@ function MetricsDialog({
                   const selectedPosition = metric.id ? customMetricIds.indexOf(metric.id) : -1
                   const producerDisplay = customMetricProducerDisplay(binding, graph)
                   const projection = bindingProjection(binding, metric.id)
+                  const runtimeOutput = binding?.producer_id === NODE_RUNTIME_PRODUCER_ID
+                    ? nodeRuntimeOutput(Object.keys(binding.outputs)[0])
+                    : undefined
                   return <div key={metric.id} role="listitem" aria-label={`${metric.name}, position ${selectedPosition + 1} of ${customMetricIds.length}`} className="flex flex-wrap items-start gap-2 rounded-md border p-2.5">
                     <span className="min-w-0 flex-1">
                       {producerDisplay
@@ -378,6 +396,7 @@ function MetricsDialog({
                         : <span className="truncate text-sm font-medium">Custom metric</span>}
                       <span className="mt-0.5 block text-xs text-muted-foreground">{metric.name}</span>
                       {projection && <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">{projectionLabel(projection)}</span>}
+                      {runtimeOutput && <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">{runtimeOutput.key}</span>}
                       {!readiness.ready && <span className="mt-1 block text-xs text-[color:var(--chart-4)]">{readiness.detail}</span>}
                     </span>
                     <span className="flex items-center gap-0.5">

@@ -2,18 +2,20 @@ import type { DesignMetric, MeasurementPlan } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 import { upsertAgentOutputMetric } from './agentOutputMetrics'
 import { upsertMcpToolMetric, type McpToolSourceOption } from './mcpToolMetrics'
+import { upsertNodeRuntimeMetric } from './nodeRuntimeMetrics'
 import type { FieldProjection } from './metricFields'
 import { removeMetricFromMeasurementPlan } from './measurementPlan'
 import { pythonScriptSourceOptions, upsertPythonScriptMetric } from './pythonScriptMetrics'
 import { upsertToolStepMetric } from './toolStepMetrics'
 
-export type CustomMetricProducer = 'agent' | 'python' | 'mcp' | 'tool_step'
+export type CustomMetricProducer = 'agent' | 'python' | 'mcp' | 'tool_step' | 'node_runtime'
 
 export type CustomMetricSourceContext =
   | { producer: 'agent'; nodeId: string }
   | { producer: 'python'; nodeId: string }
   | { producer: 'mcp'; nodeId: string }
   | { producer: 'tool_step'; nodeId: string }
+  | { producer: 'node_runtime'; nodeId: string }
 
 // `projection` picks one field of the output; absent records the whole of it.
 export type CustomMetricProducerConfig =
@@ -21,6 +23,7 @@ export type CustomMetricProducerConfig =
   | { producer: 'tool_step'; nodeId: string; projection?: FieldProjection }
   | { producer: 'python'; sourceKey: string }
   | { producer: 'mcp'; source: McpToolSourceOption; toolName: string }
+  | { producer: 'node_runtime'; nodeIds: string[]; output: string }
 
 // The one write interface shared by Manage Metrics and the canvas's
 // node-first custom-metric flow. Keeping producer replacement here prevents
@@ -37,6 +40,9 @@ export function applyCustomMetricChange(
   }
   if (config.producer === 'tool_step') {
     return upsertToolStepMetric(planWithoutPreviousProducer, metric, config.nodeId, config.projection)
+  }
+  if (config.producer === 'node_runtime') {
+    return upsertNodeRuntimeMetric(planWithoutPreviousProducer, metric, config.nodeIds, config.output)
   }
   if (config.producer === 'mcp') {
     return upsertMcpToolMetric(

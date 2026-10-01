@@ -105,11 +105,18 @@ critic gates, with these v0.8.0 execution details:
   their iteration ceiling. The remaining agent-stage values come from their
   Output Parser payloads.
 - **MLM brief and critic task_brief.** The notebook's `summarize_for_mlm`
-  brief is rebuilt in the MLM goal from field references
-  (`{{node:agent-fs.selected_features}}` and so on). Each Critic Gate's system
-  prompt includes the `task_brief`, because the canvas sends a critic only the
-  output it reviews. The MLM still also gets the full FS report automatically
-  from its direct predecessor, so its context is larger than the notebook's.
+  brief is rebuilt in two parts. The edge from Critic (FS) into the MLM is set
+  to **Selected fields** (`edge.data.handoff`, on the edge's hover toolbar):
+  `selected_features`, `n_features_out`, `observed_class_distribution`,
+  `class_balance_check`, `notes_for_mlm`. The FS prose report doesn't pass.
+  The FTE/DC parts, which come from further upstream, are field references in
+  the MLM goal (`{{node:agent-fte.engineering_recipe}}`, `encoding_map`,
+  `notes_for_fte`). One remaining difference: the notebook passes only the
+  recipe's step names, and a prompt reference passes the whole
+  `engineering_recipe`. If FS extracted none of the selected fields, the edge
+  falls back to the full FS output. Each Critic Gate's system prompt includes
+  the `task_brief`, because the canvas sends a critic only the output it
+  reviews.
 
 That `open_workspace(stage=...)` call is deliberately kept: seeding the
 workspace materializes `v0_raw`, but *not* a stage's `.scratch` input, which is

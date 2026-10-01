@@ -1,5 +1,11 @@
 import { ArrowLeft, ArrowRight } from 'lucide-react'
-import { PREVIOUS_TOKEN, referencedSenderIds, usesPreviousToken, type HandoffPeers } from '@/lib/promptReferences'
+import {
+  describeHandoff,
+  PREVIOUS_TOKEN,
+  referencedSenderIds,
+  usesPreviousToken,
+  type HandoffPeers,
+} from '@/lib/promptReferences'
 
 // Who hands off to this agent, and who it hands off to -- split into two
 // components because the Agent inspector puts them at opposite ends of itself:
@@ -37,6 +43,16 @@ export function ReceivesSummary({ peers, prompt }: { peers: HandoffPeers; prompt
               {peers.receives.map((target) => (
                 <span key={target.id} className="flex items-baseline gap-1.5">
                   <span className="break-all">{target.name}</span>
+                  {describeHandoff(target.handoff) && (
+                    // Set on the edge itself (its hover toolbar), so the
+                    // readout says where to change it.
+                    <span
+                      className="rounded-sm bg-primary/10 px-1 py-px text-[0.65rem] text-primary"
+                      title={handoffTitle(target.handoff!)}
+                    >
+                      {describeHandoff(target.handoff)}
+                    </span>
+                  )}
                   {placed.has(target.id) && (
                     // Purely positional, and dim on purpose: it answers "why is
                     // this one not at the bottom with the others", which is
@@ -76,6 +92,16 @@ export function ReceivesSummary({ peers, prompt }: { peers: HandoffPeers; prompt
         ))}
     </div>
   )
+}
+
+function handoffTitle(handoff: NonNullable<HandoffPeers['receives'][number]['handoff']>): string {
+  const what =
+    handoff.mode === 'fields'
+      ? 'only the extracted fields, without the prose'
+      : `only ${(handoff.fields ?? [])
+          .map((f) => (f.item_keys?.length ? `${f.name}[${f.item_keys.join(', ')}]` : f.name))
+          .join(', ')}`
+  return `This connection passes ${what}. Change it from the connection's hover toolbar on the canvas.`
 }
 
 export function SendsSummary({ peers }: { peers: HandoffPeers }) {

@@ -1,4 +1,11 @@
-import type { OutputContract, OutputParserNodeConfig, ProtocolEdge, ProtocolNode } from '@/types/protocols'
+import type {
+  EdgeHandoff,
+  OutputContract,
+  OutputContractField,
+  OutputParserNodeConfig,
+  ProtocolEdge,
+  ProtocolNode,
+} from '@/types/protocols'
 import { isMainEdge } from '@/lib/coordinationStrategy'
 
 /** The reference syntax, on the authoring side.
@@ -98,7 +105,7 @@ function baseName(node: ProtocolNode): string {
  * meant to be: it is the visible cost of duplicate labels, and renaming one of
  * them removes it.
  */
-function displayNames(nodes: ProtocolNode[]): Record<string, string> {
+export function displayNames(nodes: ProtocolNode[]): Record<string, string> {
   const counts = new Map<string, number>()
   for (const node of nodes) {
     const base = baseName(node).toLowerCase()
@@ -139,6 +146,10 @@ function splitDisplayTarget(target: string, isName: (candidate: string) => boole
  * field it may still be carrying.
  */
 function parserFields(nodes: ProtocolNode[], edges: ProtocolEdge[], nodeId: string): string[] {
+  return parserContractFields(nodes, edges, nodeId).map((field) => field.name.trim())
+}
+
+function parserContractFields(nodes: ProtocolNode[], edges: ProtocolEdge[], nodeId: string): OutputContractField[] {
   const byId = new Map(nodes.map((n) => [n.id, n]))
   let wired = false
   for (const edge of edges) {
@@ -148,17 +159,40 @@ function parserFields(nodes: ProtocolNode[], edges: ProtocolEdge[], nodeId: stri
     wired = true
     const config = (source.data as { config?: OutputParserNodeConfig } | undefined)?.config
     if (config?.enabled === false) continue
-    const names = contractFieldNames(config?.output_contract)
-    if (names.length) return names
+    const fields = namedContractFields(config?.output_contract)
+    if (fields.length) return fields
   }
   if (wired) return []
   const legacy = (byId.get(nodeId)?.data as { config?: { output_contract?: OutputContract | null } } | undefined)
     ?.config?.output_contract
-  return contractFieldNames(legacy)
+  return namedContractFields(legacy)
 }
 
-function contractFieldNames(contract: OutputContract | null | undefined): string[] {
-  return (contract?.fields ?? []).map((field) => field.name.trim()).filter(Boolean)
+function namedContractFields(contract: OutputContract | null | undefined): OutputContractField[] {
+  return (contract?.fields ?? []).filter((field) => field.name.trim())
+}
+
+/** The fields a main edge out of *senderId* can pass.
+ *
+ * Mirrors `protocol_execution._handoff_sender_contract_fields`: a Critic Gate
+ * forwards its worker's payload, so an edge out of a gate offers the worker's
+ * parser fields. */
+export function handoffSenderFields(nodes: ProtocolNode[], edges: ProtocolEdge[], senderId: string): OutputContractField[] {
+  const sender = nodes.find((n) => n.id === senderId)
+  if (sender?.type === 'critic_gate') {
+    const worker = edges.find((e) => e.target === senderId && isMainEdge(e))?.source
+    return worker ? parserContractFields(nodes, edges, worker) : []
+  }
+  return parserContractFields(nodes, edges, senderId)
+}
+
+/** Short readout of an edge's handoff -- `null` for the full output, which is
+ *  the default and needs no mention. */
+export function describeHandoff(handoff: EdgeHandoff | undefined): string | null {
+  if (!handoff || handoff.mode === 'full') return null
+  if (handoff.mode === 'fields') return 'fields only'
+  const count = handoff.fields?.length ?? 0
+  return `${count} field${count === 1 ? '' : 's'}`
 }
 
 /** Which nodes *nodeId*'s prompt may reference.
@@ -221,7 +255,10 @@ export function promptReferenceScope(
  *  one would reintroduce exactly the unasked-for platform prose that design
  *  removed. So it is surfaced to the user instead, in the Receives readout,
  *  where a mismatch is something they can act on while wiring. */
-export type HandoffPeer = ReferenceTarget
+export type HandoffPeer = ReferenceTarget & {
+  /** The edge's narrowed handoff (receives only); absent = full output. */
+  handoff?: EdgeHandoff
+}
 
 export interface HandoffPeers {
   /** Direct main-edge predecessors -- the nodes whose output is handed to this
@@ -248,20 +285,27 @@ export function handoffPeers(nodes: ProtocolNode[], edges: ProtocolEdge[], nodeI
   const names = displayNames(nodes)
   if (!nodeId) return { receives: [], sends: [] }
   const known = new Set(nodes.map((n) => n.id))
-  const peers = (pick: (edge: ProtocolEdge) => string, match: (edge: ProtocolEdge) => string) => {
-    const ids: string[] = []
+  const peers = (pick: (edge: ProtocolEdge) => string, match: (edge: ProtocolEdge) => string): HandoffPeer[] => {
+    const edgeById = new Map<string, ProtocolEdge>()
     for (const edge of edges) {
       if (!isMainEdge(edge) || match(edge) !== nodeId) continue
       const id = pick(edge)
-      if (id !== nodeId && known.has(id) && !ids.includes(id)) ids.push(id)
+      if (id !== nodeId && known.has(id) && !edgeById.has(id)) edgeById.set(id, edge)
     }
     // Canvas declaration order, matching the picker -- an edge list's own order
     // is whatever the user happened to draw in.
     return nodes
-      .filter((n) => ids.includes(n.id))
+      .filter((n) => edgeById.has(n.id))
       .map((n) => {
-        const fields = parserFields(nodes, edges, n.id)
-        return { id: n.id, name: names[n.id], ...(fields.length ? { fields } : {}) }
+        // What the edge can carry: a gate forwards its worker's fields.
+        const fields = handoffSenderFields(nodes, edges, n.id).map((field) => field.name.trim())
+        const handoff = edgeById.get(n.id)?.data?.handoff
+        return {
+          id: n.id,
+          name: names[n.id],
+          ...(fields.length ? { fields } : {}),
+          ...(handoff && handoff.mode !== 'full' ? { handoff } : {}),
+        }
       })
   }
   return {

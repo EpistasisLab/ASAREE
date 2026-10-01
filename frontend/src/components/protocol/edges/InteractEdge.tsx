@@ -1,11 +1,15 @@
 import { useState, type CSSProperties } from 'react'
-import { BaseEdge, EdgeToolbar, getBezierPath, useReactFlow, type EdgeProps } from '@xyflow/react'
+import { BaseEdge, EdgeLabelRenderer, EdgeToolbar, getBezierPath, useReactFlow, type EdgeProps } from '@xyflow/react'
 // Trash2, not an X -- the same glyph NodeHoverToolbar's own Delete button
 // uses, so "remove this thing" looks identical whether the thing is a node or
 // an edge. An X here also collided with the two other X's on the canvas
 // (dismissing a panel, unbinding a factor), neither of which deletes anything.
-import { Plus, Trash2 } from 'lucide-react'
+import { Filter, Plus, Trash2 } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { describeHandoff } from '@/lib/promptReferences'
+import type { EdgeHandoff } from '@/types/protocols'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
+import { EdgeHandoffPanel } from './EdgeHandoffPanel'
 
 // Every edge's look is decided here and nowhere else -- no edge in a persisted
 // graph carries its own `style`, and index.css overrides none of xyflow's
@@ -83,12 +87,17 @@ export function InteractEdge({
   markerEnd,
 }: EdgeProps) {
   const [hovered, setHovered] = useState(false)
-  const { setEdges } = useReactFlow()
+  const [handoffOpen, setHandoffOpen] = useState(false)
+  const { setEdges, getNode } = useReactFlow()
   const { requestEdgeInsert } = useProtocolCanvasActions()
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
   const isMainEdge = !sourceHandleId && !targetHandleId
   const isDirectedFlow = data?.directedFlow === true
   const isPatternEdge = targetHandleId === 'architectural_pattern'
+  // "What passes" is only a choice on a main edge into an Agent: a Critic Gate
+  // always reviews the whole answer (validate_edge_handoffs).
+  const canNarrow = isMainEdge && getNode(target)?.type === 'agent'
+  const handoffLabel = describeHandoff((data as { handoff?: EdgeHandoff } | undefined)?.handoff)
 
   return (
     <>
@@ -116,7 +125,19 @@ export function InteractEdge({
       />
       {/* Nothing to put in it for a pattern edge -- no delete (see above) and
           no insert -- so it's skipped entirely rather than rendered empty. */}
-      <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible={hovered && !isPatternEdge}>
+      {/* A narrowed edge says so without hovering -- otherwise "this agent
+          only sees three fields" would be invisible on the canvas. */}
+      {handoffLabel && !hovered && !handoffOpen && (
+        <EdgeLabelRenderer>
+          <div
+            className="pointer-events-none absolute rounded-sm border border-primary/40 bg-card px-1 font-mono text-[0.6rem] text-primary shadow-[0_0_8px_-3px_var(--primary)]"
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+          >
+            {handoffLabel}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+      <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible={(hovered || handoffOpen) && !isPatternEdge}>
         <div
           className="flex items-center gap-1 rounded-md border bg-card px-1 py-0.5 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20"
           onMouseEnter={() => setHovered(true)}
@@ -132,6 +153,25 @@ export function InteractEdge({
             >
               <Plus className="size-3" />
             </button>
+          )}
+          {canNarrow && (
+            <Popover open={handoffOpen} onOpenChange={setHandoffOpen}>
+              <PopoverTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="What passes on this connection"
+                    title={handoffLabel ? `Passes ${handoffLabel}` : 'What passes: full output'}
+                    className={`flex size-5 cursor-pointer items-center justify-center rounded-full hover:bg-primary/10 ${handoffLabel ? 'bg-primary/15 text-primary' : 'text-primary'}`}
+                  />
+                }
+              >
+                <Filter className="size-3" />
+              </PopoverTrigger>
+              <PopoverContent side="bottom" className="w-80">
+                <EdgeHandoffPanel edgeId={id} source={source} />
+              </PopoverContent>
+            </Popover>
           )}
           <button
             type="button"

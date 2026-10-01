@@ -2815,8 +2815,92 @@ def _upstream_context(
         if not text and not payload:
             continue
         label = f"{names[uid]} ({uid})" if names[uid] in ambiguous else names[uid]
-        blocks.append(f"[{label}]\n{_sender_block(str(text or ''), payload)}")
+        handoff = _edge_handoff(graph, uid, node_id)
+        blocks.append(f"[{label}]\n{_handoff_block(str(text or ''), payload, handoff)}")
     return "\n\n".join(blocks)
+
+
+#: What a main edge passes to the agent it feeds -- ``edge.data.handoff.mode``.
+#: Absent means ``full``. There is deliberately no "nothing": an edge that
+#: carried nothing would be the "graph looks wired, nothing flows" outcome
+#: :func:`_upstream_context` exists to rule out.
+HANDOFF_FULL = "full"
+HANDOFF_FIELDS = "fields"
+HANDOFF_SELECTED = "selected"
+HANDOFF_MODES = (HANDOFF_FULL, HANDOFF_FIELDS, HANDOFF_SELECTED)
+
+
+def _edge_handoff(graph: dict[str, Any], source: str, target: str) -> dict[str, Any] | None:
+    """The main edge *source* -> *target*'s narrowed handoff, or ``None`` for
+    the full output (the default, and what anything unrecognised falls back to
+    -- :func:`validate_edge_handoffs` has already refused it at publish)."""
+    for edge in graph.get("edges") or []:
+        if edge.get("source") != source or edge.get("target") != target:
+            continue
+        if edge.get("targetHandle") in _CONNECTOR_HANDLES:
+            continue
+        handoff = (edge.get("data") or {}).get("handoff")
+        if isinstance(handoff, dict) and handoff.get("mode") in (HANDOFF_FIELDS, HANDOFF_SELECTED):
+            return handoff
+        return None
+    return None
+
+
+def _handoff_field_specs(handoff: dict[str, Any]) -> list[tuple[str, list[str]]]:
+    specs: list[tuple[str, list[str]]] = []
+    for spec in handoff.get("fields") or []:
+        if isinstance(spec, str):
+            name, keys = spec, []
+        elif isinstance(spec, dict):
+            name = str(spec.get("name") or "")
+            keys = [str(k).strip() for k in spec.get("item_keys") or [] if str(k).strip()]
+        else:
+            continue
+        if name.strip():
+            specs.append((name.strip(), keys))
+    return specs
+
+
+def _project_handoff_payload(payload: dict[str, Any], handoff: dict[str, Any]) -> dict[str, Any]:
+    """The part of *payload* a narrowed edge passes on.
+
+    ``item_keys`` narrow a list of objects to those keys: one key yields a list
+    of its values (``engineering_recipe`` -> just the step names), several a
+    list of smaller objects. Anything that is not a list of objects passes
+    through whole, since there is nothing to narrow."""
+    if handoff.get("mode") == HANDOFF_FIELDS:
+        return dict(payload)
+    projected: dict[str, Any] = {}
+    for name, keys in _handoff_field_specs(handoff):
+        if name not in payload:
+            continue
+        value = payload[name]
+        if keys and isinstance(value, list):
+            value = [
+                (item.get(keys[0]) if len(keys) == 1 else {k: item[k] for k in keys if k in item})
+                if isinstance(item, dict)
+                else item
+                for item in value
+            ]
+        projected[name] = value
+    return projected
+
+
+def _handoff_block(text: str, payload: dict[str, Any], handoff: dict[str, Any] | None, *, raw: bool = False) -> str:
+    """One sender's contribution as its edge allows: the whole
+    :func:`_sender_block`, or just the (selected) extracted fields.
+
+    A narrowed edge whose sender extracted none of what it asked for falls back
+    to the full output rather than passing nothing -- the notebook's
+    ``summarize_for_mlm`` makes the same call when a payload is missing. Fields
+    only carry no fence (there is no prose to set apart), but the delimiter is
+    still neutralized: the values are model output all the same."""
+    if handoff is None:
+        return _sender_block(text, payload, raw=raw)
+    projected = _project_handoff_payload(payload, handoff)
+    if not projected:
+        return _sender_block(text, payload, raw=raw)
+    return neutralize_delimiters(_payload_fields_line(projected))
 
 
 def _reference_payload(text: str, *, raw: bool) -> str:
@@ -2944,7 +3028,10 @@ def _render_reference(
         if not text and not payload:
             unresolved.append(uid)
             continue
-        block = _sender_block(str(text or ""), payload, raw=ref.raw)
+        # `{{previous}}` stands for the edge, so it passes what the edge
+        # passes; `{{node:X}}` names the node itself and stays whole.
+        handoff = _edge_handoff(graph, uid, node_id) if ref.kind == prompt_references.PREVIOUS else None
+        block = _handoff_block(str(text or ""), payload, handoff, raw=ref.raw)
         # Labelled only where the reference itself cannot say which sender is
         # which: a `{{previous}}` that expanded to several predecessors. A
         # single-node reference needs no label, because the experimenter named
@@ -3019,6 +3106,7 @@ def validate_prompt_references(*, graph: dict[str, Any]) -> None:
     for something the edge does not already give them -- a different position, a
     node further back, one extracted field.
     """
+    validate_edge_handoffs(graph=graph)
     for node in graph.get("nodes") or []:
         node_id = node.get("id")
         if not node_id:
@@ -3088,6 +3176,80 @@ def validate_prompt_references(*, graph: dict[str, Any]) -> None:
                     f"{name}'s {field} uses {{{{previous}}}} but nothing is connected to its input. "
                     "Connect an upstream node, or reference one explicitly."
                 )
+
+
+def _handoff_sender_contract_fields(graph: dict[str, Any], sender_id: str) -> list[dict[str, Any]]:
+    """The fields a main edge out of *sender_id* can pass.
+
+    A Critic Gate forwards its worker's payload (``_handoff_payload``), so an
+    edge out of a gate offers the worker's fields."""
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or []}
+    if (nodes.get(sender_id) or {}).get("type") == "critic_gate":
+        workers = _upstream_ids(graph, sender_id)
+        if not workers:
+            return []
+        sender_id = workers[0]
+    contract = _resolve_output_contract(graph, sender_id)
+    return [
+        spec
+        for spec in (contract or {}).get("fields") or []
+        if isinstance(spec, dict) and str(spec.get("name") or "").strip()
+    ]
+
+
+def validate_edge_handoffs(*, graph: dict[str, Any]) -> None:
+    """Refuse a narrowed main-edge handoff that could never be honoured.
+
+    Called from :func:`validate_prompt_references`, so it lands everywhere that
+    does (publish/plan/run). Only an edge into an Agent may narrow: a Critic
+    Gate has to review the whole answer it gates, and the other node types
+    read their predecessor's payload directly."""
+    nodes = {str(n.get("id")): n for n in graph.get("nodes") or []}
+    for edge in graph.get("edges") or []:
+        if edge.get("targetHandle") in _CONNECTOR_HANDLES:
+            continue
+        handoff = (edge.get("data") or {}).get("handoff")
+        if handoff is None:
+            continue
+        sender = nodes.get(str(edge.get("source"))) or {"id": edge.get("source")}
+        target = nodes.get(str(edge.get("target"))) or {"id": edge.get("target")}
+        where = f"The edge {_node_display_name(sender)} -> {_node_display_name(target)}"
+        mode = handoff.get("mode") if isinstance(handoff, dict) else None
+        if mode not in HANDOFF_MODES:
+            raise ProtocolValidationError(
+                f"{where} has an unknown handoff {mode!r}. Choose Full output, Extracted fields only, or "
+                "Selected fields."
+            )
+        if mode == HANDOFF_FULL:
+            continue
+        if target.get("type") != "agent":
+            raise ProtocolValidationError(
+                f"{where} can only pass the full output: only an Agent can receive a narrowed handoff, "
+                "and a Critic Gate always reviews the whole answer."
+            )
+        declared = {str(spec["name"]).strip(): spec for spec in _handoff_sender_contract_fields(graph, sender["id"])}
+        if not declared:
+            raise ProtocolValidationError(
+                f"{where} passes extracted fields, but {_node_display_name(sender)} has no Output Parser "
+                "declaring any. Connect one, or set the edge back to Full output."
+            )
+        if mode == HANDOFF_FIELDS:
+            continue
+        specs = _handoff_field_specs(handoff)
+        if not specs:
+            raise ProtocolValidationError(f"{where} passes selected fields, but none are selected.")
+        seen: set[str] = set()
+        for name, keys in specs:
+            if name not in declared:
+                raise ProtocolValidationError(
+                    f"{where} passes {name!r}, which the sender's Output Parser does not declare. "
+                    f"It declares: {', '.join(declared)}."
+                )
+            if name in seen:
+                raise ProtocolValidationError(f"{where} selects {name!r} twice.")
+            seen.add(name)
+            if keys and str(declared[name].get("type") or "") != "array":
+                raise ProtocolValidationError(f"{where} narrows {name!r} to item keys, but it is not a list field.")
 
 
 def _resource_catalog(graph: dict[str, Any], node_id: str) -> str:

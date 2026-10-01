@@ -10,7 +10,7 @@ from asaree.services.metrics import (
     design_metrics_from_measurement_plan,
     normalize_metrics,
 )
-from asaree.services.protocol_execution import topological_order
+from asaree.services.protocol_execution import topological_order, validate_prompt_references
 
 BDM = Path(__file__).parents[1] / "publications" / "BDM"
 USE_CASES = sorted(BDM.glob("myocardial-*-v0.8.0.json"))
@@ -77,6 +77,30 @@ def test_myocardial_output_parser_types_match_the_prompted_payloads() -> None:
     assert parsers["output-parser-fte"]["encoding_map"] == "array"
     assert parsers["output-parser-mlm"]["search_space"] == "array"
     assert "output-parser-score" not in parsers
+
+
+def test_myocardial_mlm_receives_only_the_notebooks_fs_brief_fields() -> None:
+    for path in USE_CASES:
+        graph = json.loads(path.read_text())["graph"]
+        validate_prompt_references(graph=graph)
+        edge = next(e for e in graph["edges"] if e["source"] == "gate-fs" and e["target"] == "agent-mlm")
+        assert edge["data"]["handoff"] == {
+            "mode": "selected",
+            "fields": [
+                {"name": name}
+                for name in (
+                    "selected_features",
+                    "n_features_out",
+                    "observed_class_distribution",
+                    "class_balance_check",
+                    "notes_for_mlm",
+                )
+            ],
+        }
+        goal = next(n for n in graph["nodes"] if n["id"] == "agent-mlm")["data"]["config"]["goal"]
+        # The edge carries FS's fields; the brief only reaches further back.
+        assert "{{node:agent-fs" not in goal
+        assert "{{node:agent-fte.engineering_recipe}}" in goal
 
 
 def test_myocardial_scoring_is_a_deterministic_tool_step() -> None:

@@ -39,12 +39,29 @@ export interface ProtocolNode {
     | SingleAgentBaselinePatternNodeData
 }
 
+/** What a main edge passes to the Agent it feeds (`edge.data.handoff`;
+ *  absent = `full`). Mirrors `protocol_execution.HANDOFF_MODES`. There is no
+ *  "nothing": an edge always carries something. */
+export type EdgeHandoffMode = 'full' | 'fields' | 'selected'
+
+export interface EdgeHandoffField {
+  name: string
+  /** Narrows a list of objects to these keys (one key -> a list of values). */
+  item_keys?: string[]
+}
+
+export interface EdgeHandoff {
+  mode: EdgeHandoffMode
+  fields?: EdgeHandoffField[]
+}
+
 export interface ProtocolEdge {
   id: string
   source: string
   target: string
   sourceHandle?: string | null
   targetHandle?: string | null
+  data?: { handoff?: EdgeHandoff }
 }
 
 export type NodeRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled'

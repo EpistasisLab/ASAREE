@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
-import type { AgentNodeData, CriticGateNodeData, McpToolNodeData, Protocol, ProtocolGraph } from '@/types/protocols'
+import type { AgentNodeData, CriticGateNodeData, McpToolNodeData, Protocol, ProtocolEdge, ProtocolGraph } from '@/types/protocols'
 
 // The name the canvas gives a protocol it auto-creates for an experiment.
 // The "[shortid]" suffix is load-bearing: protocol names are unique per owner
@@ -95,12 +95,18 @@ export function toPersistedGraph(nodes: Node[], edges: Edge[]): ProtocolGraph {
       position: n.position,
       data: n.data as AgentNodeData | McpToolNodeData | CriticGateNodeData,
     })),
-    edges: edges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      sourceHandle: e.sourceHandle,
-      targetHandle: e.targetHandle,
-    })),
+    edges: edges.map((e) => {
+      // Only the handoff is persisted from edge data -- the rest of it
+      // (`directedFlow`) is display state the canvas derives on render.
+      const handoff = (e.data as ProtocolEdge['data'])?.handoff
+      return {
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        sourceHandle: e.sourceHandle,
+        targetHandle: e.targetHandle,
+        ...(handoff && handoff.mode !== 'full' ? { data: { handoff } } : {}),
+      }
+    }),
   }
 }

@@ -1753,6 +1753,54 @@
         "unit": "runs"
       },
       {
+        "id": "runtime-agent-runs",
+        "catalogKey": "agent_runs",
+        "name": "Agent runs",
+        "description": "Every agent and critic run the attempt launched, revisions included.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "sum",
+        "unit": "runs"
+      },
+      {
+        "id": "runtime-react-runs",
+        "catalogKey": "react_runs",
+        "name": "Reason+Act runs",
+        "description": "Runs that went through a Reason+Act loop.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "sum",
+        "unit": "runs"
+      },
+      {
+        "id": "runtime-react-turns",
+        "catalogKey": "react_turns",
+        "name": "Reason+Act turns",
+        "description": "Loop iterations reported by Reason+Act runs.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "turns"
+      },
+      {
+        "id": "runtime-react-tool-calls",
+        "catalogKey": "react_tool_calls",
+        "name": "Reason+Act tool calls",
+        "description": "Tool calls counted by Reason+Act loops.",
+        "kind": "runtime",
+        "valueType": "number",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "sum",
+        "unit": "calls"
+      },
+      {
         "id": "runtime-prompt-sha256",
         "catalogKey": "prompt_sha256",
         "name": "Prompt SHA-256",
@@ -2562,6 +2610,46 @@
         "unit": "runs"
       },
       {
+        "id": "runtime-agent-runs",
+        "name": "Agent runs",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Every agent and critic run the attempt launched, revisions included.",
+        "unit": "runs"
+      },
+      {
+        "id": "runtime-react-runs",
+        "name": "Reason+Act runs",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Runs that went through a Reason+Act loop.",
+        "unit": "runs"
+      },
+      {
+        "id": "runtime-react-turns",
+        "name": "Reason+Act turns",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Loop iterations reported by Reason+Act runs.",
+        "unit": "turns"
+      },
+      {
+        "id": "runtime-react-tool-calls",
+        "name": "Reason+Act tool calls",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Tool calls counted by Reason+Act loops.",
+        "unit": "calls"
+      },
+      {
         "id": "runtime-prompt-sha256",
         "name": "Prompt SHA-256",
         "value_type": "opaque",
@@ -2721,6 +2809,10 @@
           "critic_rejections_full": "runtime-critic-rejections-full",
           "revision_rounds": "runtime-revision-rounds",
           "capped_agent_runs": "runtime-capped-agent-runs",
+          "agent_runs": "runtime-agent-runs",
+          "react_runs": "runtime-react-runs",
+          "react_turns": "runtime-react-turns",
+          "react_tool_calls": "runtime-react-tool-calls",
           "prompt_sha256": "runtime-prompt-sha256"
         },
         "artifacts": [],

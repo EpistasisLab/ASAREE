@@ -102,7 +102,11 @@ critic gates, with these v0.8.0 execution details:
   control-flow columns come from the built-in runtime producer: critic
   invocations, rejections split by partial vs. full scope (an unscoped
   rejection counts as full), revision rounds, and Reason+Act runs that hit
-  their iteration ceiling. The same producer reports `prompt_sha256`: a hash of
+  their iteration ceiling (`react_capped_runs`). It also reports
+  `n_agent_runs` (`agent_runs`) and the Reason+Act loop's own counters
+  `react_runs`, `react_turns` and `react_tool_calls`, read from each run's
+  `reason_act_state`; the last two are unavailable when no Reason+Act run took
+  part, as the notebook leaves them null. The same producer reports `prompt_sha256`: a hash of
   the published revision's stage prompts, critic system prompts (which carry
   the review criteria) and Output Parser contracts, with factor values applied.
   The notebook's per-stage `tokens_<stage>` and `n_turns_<stage>` (dc, fte,

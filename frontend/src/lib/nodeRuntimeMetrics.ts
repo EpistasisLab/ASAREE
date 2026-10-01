@@ -27,6 +27,9 @@ export const NODE_RUNTIME_OUTPUTS: NodeRuntimeOutput[] = [
   { key: 'tool_calls', label: 'Tool calls', unit: 'calls', aggregation: 'sum' },
   { key: 'tool_error_rate', label: 'Tool error rate', aggregation: 'mean' },
   { key: 'capped_agent_runs', label: 'Runs that hit the iteration cap', unit: 'runs', aggregation: 'sum' },
+  { key: 'react_runs', label: 'Reason+Act runs', unit: 'runs', aggregation: 'sum' },
+  { key: 'react_turns', label: 'Reason+Act turns', unit: 'turns', aggregation: 'sum' },
+  { key: 'react_tool_calls', label: 'Reason+Act tool calls', unit: 'calls', aggregation: 'sum' },
   { key: 'cost_usd', label: 'Cost', unit: 'USD', aggregation: 'sum' },
 ]
 

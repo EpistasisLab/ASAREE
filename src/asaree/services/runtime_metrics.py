@@ -200,8 +200,24 @@ def _max_iterations_hit(run: Any) -> bool:
     """Whether a Reason+Act run was cut off by its iteration ceiling (see
     ``protocol_execution._truncation_fields`` for why this is read from
     ``pattern_overrides`` rather than the steps)."""
+    state = _reason_act_state(run)
+    return state is not None and bool(state.get("max_iterations_hit"))
+
+
+def _reason_act_state(run: Any) -> Mapping[str, Any] | None:
+    """The loop summary Reason+Act mirrors onto its run; absent on single-pass runs."""
     state = (getattr(run, "pattern_overrides", None) or {}).get("reason_act_state")
-    return isinstance(state, Mapping) and bool(state.get("max_iterations_hit"))
+    return state if isinstance(state, Mapping) and state else None
+
+
+def _reason_act_facts(run: Any) -> dict[str, int] | None:
+    state = _reason_act_state(run)
+    if state is None:
+        return None
+    return {
+        "iterations": int(_number(state.get("iterations")) or 0),
+        "tool_calls": int(_number(state.get("tool_calls")) or 0),
+    }
 
 
 async def collect_runtime_facts(protocol_run: Any) -> dict[str, Any]:
@@ -246,6 +262,9 @@ async def collect_runtime_facts(protocol_run: Any) -> dict[str, Any]:
                     for step in steps
                 ],
                 "max_iterations_hit": _max_iterations_hit(run),
+                # Present (possibly None) on every run so an attempt collected
+                # before this field existed reads as unrecorded, not zero.
+                "reason_act": _reason_act_facts(run),
             }
         )
         if isinstance(metadata, Mapping) and metadata.get("runtime_role") == "critic":
@@ -348,6 +367,24 @@ def _run_observations(runs: Sequence[Mapping[str, Any]]) -> dict[str, ProducedOb
     observations["capped_agent_runs"] = ProducedObservation.measured(
         sum(run.get("max_iterations_hit") is True for run in runs)
     )
+    observations["agent_runs"] = ProducedObservation.measured(len(runs))
+    # The loop's own counters (the notebook's react_* columns), as opposed to
+    # the step-derived turns and tool calls above, which cover every run.
+    if runs and not any("reason_act" in run for run in runs):
+        unrecorded = ProducedObservation.unavailable("This attempt did not record Reason+Act loop state.")
+        for key in ("react_runs", "react_turns", "react_tool_calls"):
+            observations[key] = unrecorded
+        return observations
+    react = [run["reason_act"] for run in runs if isinstance(run.get("reason_act"), Mapping)]
+    observations["react_runs"] = ProducedObservation.measured(len(react))
+    if react:
+        observations["react_turns"] = ProducedObservation.measured(sum(int(r.get("iterations") or 0) for r in react))
+        observations["react_tool_calls"] = ProducedObservation.measured(
+            sum(int(r.get("tool_calls") or 0) for r in react)
+        )
+    else:
+        for key in ("react_turns", "react_tool_calls"):
+            observations[key] = ProducedObservation.unavailable("No Reason+Act run took part in this attempt.")
     return observations
 
 
@@ -374,6 +411,10 @@ class RuntimeMetricProducer:
         "critic_rejections_full",
         "revision_rounds",
         "capped_agent_runs",
+        "agent_runs",
+        "react_runs",
+        "react_turns",
+        "react_tool_calls",
         "prompt_sha256",
     )
 
@@ -483,6 +524,9 @@ class NodeRuntimeMetricProducer:
         "tool_error_rate",
         "agent_loop_iterations",
         "capped_agent_runs",
+        "react_runs",
+        "react_turns",
+        "react_tool_calls",
     )
 
     def capability_for(self, snapshot: ExperimentSnapshot) -> ProducerCapability | None:
@@ -527,7 +571,6 @@ class NodeRuntimeMetricProducer:
             )
         scoped = [run for run in all_runs if run.get("node_id") in node_ids]
         observations = _run_observations(scoped)
-        observations["agent_runs"] = ProducedObservation.measured(len(scoped))
         return ProducerResult(observations=observations)
 
 

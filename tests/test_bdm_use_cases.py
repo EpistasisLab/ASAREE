@@ -59,6 +59,10 @@ def test_myocardial_use_cases_normalize_reported_metrics_as_named_observations()
             "critic_rejections_full",
             "revision_rounds",
             "capped_agent_runs",
+            "agent_runs",
+            "react_runs",
+            "react_turns",
+            "react_tool_calls",
             "prompt_sha256",
         }
         graph_ids = {node["id"] for node in document["graph"]["nodes"]}

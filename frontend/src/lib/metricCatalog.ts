@@ -47,6 +47,10 @@ export const METRIC_CATALOG: readonly MetricCatalogEntry[] = [
   { key: 'revision_rounds', name: 'Revision rounds', shortDescription: 'Worker reruns triggered by critic rejections.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'rounds', category: 'Critics', source: 'Protocol activity' },
   { key: 'prompt_sha256', name: 'Prompt SHA-256', shortDescription: 'Hash of the published stage prompts, critic criteria and output contracts.', kind: 'runtime', valueType: 'opaque', defaultDirection: 'neutral', aggregation: 'none', category: 'Agents', source: 'Protocol activity' },
   { key: 'capped_agent_runs', name: 'Capped agent runs', shortDescription: 'Reason+Act runs cut off by their iteration ceiling.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'runs', category: 'Agents', source: 'Protocol activity' },
+  { key: 'agent_runs', name: 'Agent runs', shortDescription: 'Every agent and critic run the attempt launched, revisions included.', kind: 'runtime', valueType: 'number', defaultDirection: 'neutral', aggregation: 'sum', unit: 'runs', category: 'Agents', source: 'Protocol activity' },
+  { key: 'react_runs', name: 'Reason+Act runs', shortDescription: 'Runs that went through a Reason+Act loop.', kind: 'runtime', valueType: 'number', defaultDirection: 'neutral', aggregation: 'sum', unit: 'runs', category: 'Agents', source: 'Protocol activity' },
+  { key: 'react_turns', name: 'Reason+Act turns', shortDescription: 'Loop iterations reported by Reason+Act runs.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'turns', category: 'Agents', source: 'Protocol activity' },
+  { key: 'react_tool_calls', name: 'Reason+Act tool calls', shortDescription: 'Tool calls counted by Reason+Act loops.', kind: 'runtime', valueType: 'number', defaultDirection: 'neutral', aggregation: 'sum', unit: 'calls', category: 'Agents', source: 'Protocol activity' },
 ]
 
 export const RECOMMENDED_METRIC_KEYS = METRIC_CATALOG.filter((entry) => entry.recommended).map((entry) => entry.key)

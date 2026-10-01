@@ -37,19 +37,33 @@ Reading is scoped to the caller's own skills plus any global system skill
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, Never
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from motoro.schemas.skill import SkillCreate, SkillListResponse, SkillResponse, SkillUpdate
 from motoro.services import skill_service
 from motoro.services.skill_service import SkillFormatError
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 from asaree.deps import CurrentUser
 from asaree.services import skill_sources
 from asaree.services.skill_sources import SkillSourceError
 
 router = APIRouter(prefix="/skills", tags=["skills"])
+
+_SKILL_NAME_CONSTRAINT = "uq_skills_owner_name_active"
+
+
+def _raise_skill_write_http_error(exc: SkillFormatError | IntegrityError) -> Never:
+    if isinstance(exc, SkillFormatError):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if _SKILL_NAME_CONSTRAINT in str(exc.orig):
+        raise HTTPException(
+            status_code=409,
+            detail="A skill with this name is already registered to your account.",
+        ) from exc
+    raise exc
 
 
 def _readable(skill: Any, user: Any) -> bool:
@@ -79,8 +93,8 @@ async def create_skill_endpoint(body: SkillCreate, user: CurrentUser) -> SkillRe
             body=body.body,
             owner_id=user.id,
         )
-    except SkillFormatError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (SkillFormatError, IntegrityError) as exc:
+        _raise_skill_write_http_error(exc)
     return SkillResponse.model_validate(skill)
 
 
@@ -112,8 +126,8 @@ async def upload_skill_endpoint(
                 owner_id=user.id,
                 source_filename=file.filename,
             )
-    except SkillFormatError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (SkillFormatError, IntegrityError) as exc:
+        _raise_skill_write_http_error(exc)
     return SkillResponse.model_validate(skill)
 
 
@@ -157,8 +171,8 @@ async def upload_skill_folder_endpoint(
     folder = (files[0].filename or "").replace("\\", "/").split("/")[0] if files else None
     try:
         skill = await skill_service.create_skill_from_bundle(payload, owner_id=user.id, source_filename=folder)
-    except SkillFormatError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (SkillFormatError, IntegrityError) as exc:
+        _raise_skill_write_http_error(exc)
     return SkillResponse.model_validate(skill)
 
 
@@ -180,8 +194,8 @@ async def replace_skill_folder_endpoint(
     payload = await _folder_payload(files)
     try:
         skill = await skill_service.update_skill_from_bundle(skill_id, payload)
-    except SkillFormatError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (SkillFormatError, IntegrityError) as exc:
+        _raise_skill_write_http_error(exc)
     assert skill is not None
     return SkillResponse.model_validate(skill)
 
@@ -259,8 +273,10 @@ async def create_skill_from_url_endpoint(body: SkillUrlRequest, user: CurrentUse
         # tail of it beats a 500 on an otherwise valid skill.
         provenance = f"{source.label}@{source.ref}"[:255]
         skill = await skill_service.create_skill_from_bundle(bundle, owner_id=user.id, source_filename=provenance)
-    except (SkillSourceError, SkillFormatError) as exc:
+    except SkillSourceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (SkillFormatError, IntegrityError) as exc:
+        _raise_skill_write_http_error(exc)
     return SkillResponse.model_validate(skill)
 
 
@@ -300,8 +316,8 @@ async def update_skill_endpoint(skill_id: uuid.UUID, body: SkillUpdate, user: Cu
         raise HTTPException(status_code=404, detail="No such skill")
     try:
         skill = await skill_service.update_skill(skill_id, name=body.name, description=body.description, body=body.body)
-    except SkillFormatError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (SkillFormatError, IntegrityError) as exc:
+        _raise_skill_write_http_error(exc)
     assert skill is not None  # existence already checked above
     return SkillResponse.model_validate(skill)
 
@@ -318,8 +334,8 @@ async def replace_skill_markdown_endpoint(
         raise HTTPException(status_code=404, detail="No such skill")
     try:
         skill = await skill_service.update_skill_from_markdown(skill_id, _decode(await file.read()))
-    except SkillFormatError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (SkillFormatError, IntegrityError) as exc:
+        _raise_skill_write_http_error(exc)
     assert skill is not None
     return SkillResponse.model_validate(skill)
 

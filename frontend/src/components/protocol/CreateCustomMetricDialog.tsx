@@ -6,6 +6,7 @@ import { applyCustomMetricChange, type CustomMetricProducerConfig, type CustomMe
 import { makeCustomMetric, normalizeDesignMetrics } from '@/lib/metricCatalog'
 import { mcpToolBindingForMetric } from '@/lib/mcpToolMetrics'
 import { pythonScriptBindingForMetric } from '@/lib/pythonScriptMetrics'
+import { toolStepBindingForMetric } from '@/lib/toolStepMetrics'
 import type { ProtocolGraph } from '@/types/protocols'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { CustomMetricFlow } from './CustomMetricDialogs'
@@ -40,6 +41,7 @@ export function CreateCustomMetricDialog({
   const existingBinding = agentOutputBindingForMetric(experiment?.measurement_plan ?? null, metricId)
     ?? pythonScriptBindingForMetric(experiment?.measurement_plan ?? null, metricId)
     ?? mcpToolBindingForMetric(experiment?.measurement_plan ?? null, metricId)
+    ?? toolStepBindingForMetric(experiment?.measurement_plan ?? null, metricId)
   const [draft] = useState(() => makeCustomMetric({ name: '' }))
   const flushAutosaveRef = useRef<(() => void) | null>(null)
   const createMutation = useMutation({
@@ -91,6 +93,7 @@ export function CreateCustomMetricDialog({
               metric={existingMetric ?? draft}
               binding={existingBinding}
               graph={graph}
+              protocolId={protocolId}
               existingMetrics={existingMetrics}
               sourceContext={sourceContext}
               submitting={createMutation.isPending}

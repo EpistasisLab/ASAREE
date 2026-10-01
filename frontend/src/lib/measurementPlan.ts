@@ -3,6 +3,7 @@ import type { ProtocolGraph } from '@/types/protocols'
 import { metricCatalogEntry, type MetricCatalogEntry } from './metricCatalog'
 import { AGENT_OUTPUT_PRODUCER_ID } from './agentOutputMetrics'
 import { MCP_TOOL_PRODUCER_ID } from './mcpToolMetrics'
+import { TOOL_STEP_PRODUCER_ID } from './toolStepMetrics'
 
 export type MetricReadiness = {
   ready: boolean
@@ -20,9 +21,9 @@ export const OBSERVATION_LABELS: Record<ObservationStatus, string> = {
 }
 
 // Producers ASAREE computes in code from what a run recorded
-// (services/derived_metrics.py). Declared in the plan document, not authored
-// through the custom-metric dialog, which only knows the three capture kinds.
-export const TOOL_STEP_PRODUCER_ID = 'asaree.tool_step'
+// (services/derived_metrics.py). A Tool Step metric is authored through the
+// custom-metric dialog; the feature pipeline is declared in the plan document.
+export { TOOL_STEP_PRODUCER_ID }
 export const FEATURE_PIPELINE_PRODUCER_ID = 'asaree.feature_pipeline'
 export const DERIVED_PRODUCER_IDS = new Set([TOOL_STEP_PRODUCER_ID, FEATURE_PIPELINE_PRODUCER_ID])
 const FEATURE_PIPELINE_STAGE_KEYS = ['dc_node_id', 'fte_node_id', 'fs_node_id'] as const
@@ -43,7 +44,13 @@ export function removeMetricFromMeasurementPlan(
   if (!plan || !metricId) return plan
   const producers = plan.producers.flatMap((producer) => {
     const outputs = Object.fromEntries(Object.entries(producer.outputs).filter(([, id]) => id !== metricId))
-    return Object.keys(outputs).length ? [{ ...producer, outputs }] : []
+    if (!Object.keys(outputs).length) return []
+    // A field projection belongs to its output key, so it leaves with it.
+    const projections = producer.config.projections
+    const config = projections && typeof projections === 'object'
+      ? { ...producer.config, projections: Object.fromEntries(Object.entries(projections).filter(([key]) => key in outputs)) }
+      : producer.config
+    return [{ ...producer, outputs, config }]
   })
   const producerIds = new Set(producers.map((producer) => producer.id))
   return {

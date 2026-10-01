@@ -3,9 +3,9 @@
 Two producers, both deterministic reads of ``ProtocolRun.node_runs`` at
 finalization -- nothing is executed here:
 
-* ``asaree.tool_step`` -- scalar fields of a Tool Step's parsed result (e.g. a
-  scoring call's ``test_metrics``), one metric per dotted path. This is what
-  replaces capturing the whole scoring response as one opaque value.
+* ``asaree.tool_step`` -- a Tool Step's parsed result (e.g. a scoring call's
+  response): the whole result, or one field of it per metric via a projection
+  (see ``project_value``).
 * ``asaree.feature_pipeline`` -- feature counts across a DC -> FTE -> FS chain,
   computed the way the spinal notebook's ``process_metrics`` does rather than
   trusted from an agent's end-of-turn self-report. Only the raw dataset's
@@ -52,6 +52,56 @@ _FIELD_DEFAULTS = {
 
 RawColumnsLoader = Callable[[str], Awaitable[frozenset[str] | None]]
 
+# A projection picks one field out of a producer's JSON output:
+# ``config.projections[output_key] = {"path": "a.b", "transform": "length"?}``.
+# The path is an exact key of ``flatten_paths`` (result keys may contain dots,
+# e.g. ``metrics_at_0.5``), and ``length`` -- the only transform -- turns a
+# list or object into its size. An output with no projection records the
+# producer's whole output.
+PROJECTION_TRANSFORMS = frozenset({"length"})
+
+
+def output_projection(binding: ProducerBinding, output_key: str) -> Mapping[str, Any] | None:
+    projections = binding.config.get("projections")
+    projection = projections.get(output_key) if isinstance(projections, Mapping) else None
+    return projection if isinstance(projection, Mapping) else None
+
+
+def project_value(paths: Mapping[str, Any], projection: Mapping[str, Any]) -> tuple[Any, str | None]:
+    """``(value, error)`` for one projection over a ``flatten_paths`` mapping."""
+    path = projection.get("path")
+    if not isinstance(path, str) or path not in paths:
+        return None, f"No value for {path!r} was recorded."
+    value = paths[path]
+    if projection.get("transform") == "length":
+        if isinstance(value, list | Mapping):
+            return len(value), None
+        return None, f"{path!r} is not a list or object, so it has no length."
+    return _json_safe(value)
+
+
+def projection_issue(binding: ProducerBinding) -> tuple[str, str, str] | None:
+    """``(code, message, config key)`` when a binding's projections are malformed."""
+    projections = binding.config.get("projections")
+    if projections is None:
+        return None
+    if not isinstance(projections, Mapping):
+        return "reported_projections_invalid", "Field projections must be keyed by producer output.", "projections"
+    for output_key, projection in projections.items():
+        if (
+            output_key not in binding.outputs
+            or not isinstance(projection, Mapping)
+            or not isinstance(projection.get("path"), str)
+            or not projection["path"]
+            or projection.get("transform") not in {None, *PROJECTION_TRANSFORMS}
+        ):
+            return (
+                "reported_projection_invalid",
+                f"The field projection for {output_key!r} needs an output, a path, and an optional 'length'.",
+                f"projections.{output_key}",
+            )
+    return None
+
 
 def _is_number(value: Any) -> TypeGuard[int | float]:
     return isinstance(value, int | float) and not isinstance(value, bool)
@@ -68,6 +118,14 @@ def _completed_payload(node_run: Any) -> dict[str, Any] | None:
     if not isinstance(node_run, Mapping) or node_run.get("status") != "completed":
         return None
     return resolve_upstream_payload([node_run])
+
+
+def _tool_step_result(node_run: Any) -> Any:
+    """The whole result of a completed Tool Step: its parsed JSON, else its text."""
+    if not isinstance(node_run, Mapping) or node_run.get("status") != "completed":
+        return None
+    payload = node_run.get("payload")
+    return payload if payload is not None else node_run.get("output_text")
 
 
 def tool_step_values(node_run: Any) -> dict[str, Any] | None:
@@ -172,8 +230,11 @@ async def collect_derived_observations(
     raw_columns_loader: RawColumnsLoader = load_dataset_raw_columns,
 ) -> list[MetricObservation]:
     """One observation per output of a derived producer binding."""
+    whole: Any = None
     if binding.producer_id == TOOL_STEP_PRODUCER_ID:
-        values = tool_step_values(node_runs.get(str(binding.config.get("node_id") or "")))
+        node_run = node_runs.get(str(binding.config.get("node_id") or ""))
+        values = tool_step_values(node_run)
+        whole = _tool_step_result(node_run)
         missing_source = "The Tool Step did not complete."
         source = "tool_step_result"
     else:
@@ -196,8 +257,13 @@ async def collect_derived_observations(
         if metric is None:
             continue
         error: str | None
+        projection = output_projection(binding, output_key) if binding.producer_id == TOOL_STEP_PRODUCER_ID else None
         if values is None:
             value, error = None, missing_source
+        elif projection is not None:
+            value, error = project_value(values, projection)
+        elif binding.producer_id == TOOL_STEP_PRODUCER_ID:
+            value, error = _json_safe(whole)
         elif output_key not in values:
             value, error = None, f"No value for {output_key!r} was recorded."
         else:
@@ -248,6 +314,7 @@ def derived_binding_issue(binding: ProducerBinding, graph: Mapping[str, Any]) ->
 
 __all__ = [
     "DERIVED_PRODUCER_IDS",
+    "PROJECTION_TRANSFORMS",
     "FEATURE_PIPELINE_OUTPUTS",
     "FEATURE_PIPELINE_PRODUCER_ID",
     "TOOL_STEP_PRODUCER_ID",
@@ -255,5 +322,8 @@ __all__ = [
     "derived_binding_issue",
     "feature_pipeline_values",
     "load_dataset_raw_columns",
+    "output_projection",
+    "project_value",
+    "projection_issue",
     "tool_step_values",
 ]

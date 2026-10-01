@@ -82,12 +82,7 @@ def normalize_experiment_measurement_plan(document: Any, metrics: Any) -> dict[s
             for metric in plan.metrics
         ),
         producers=tuple(
-            replace(
-                binding,
-                kind="reported",
-                artifacts=(),
-                config={key: value for key, value in binding.config.items() if key != "projections"},
-            )
+            replace(binding, kind="reported", artifacts=())
             if binding.id in reported_binding_ids
             else binding
             for binding in plan.producers

@@ -162,7 +162,7 @@ export function AgentNode({
           <Handle
             type="target"
             position={Position.Left}
-            title="Connect to another agent (or a Critic Gate)"
+            title="Connect another step (or a Critic Gate)"
             className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
           />
           <ConnectorHandleLabel side="left" top="calc(50% - 11px)">Agent</ConnectorHandleLabel>
@@ -438,7 +438,7 @@ export function AgentNode({
           <Handle
             type="source"
             position={Position.Right}
-            title="Connect to another agent (or a Critic Gate)"
+            title="Connect another step (or a Critic Gate)"
             className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
           />
           <ConnectorHandleLabel side="right" top="calc(50% - 11px)">Agent</ConnectorHandleLabel>

@@ -1,5 +1,6 @@
 import type { DesignMetric, MeasurementPlan } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
+import { projectionConfig, type FieldProjection } from './metricFields'
 
 export const AGENT_OUTPUT_PRODUCER_ID = 'asaree.agent_output'
 
@@ -29,6 +30,7 @@ export function upsertAgentOutputMetric(
   plan: MeasurementPlan | null,
   metric: DesignMetric,
   agentNodeId: string,
+  projection?: FieldProjection,
 ): MeasurementPlan {
   if (!metric.id) throw new Error('An Agent output metric needs a stable id.')
   const current = plan ?? { metrics: [], producers: [], inputs: [] }
@@ -49,7 +51,7 @@ export function upsertAgentOutputMetric(
         kind: 'reported',
         outputs: { value: metric.id },
         artifacts: [],
-        config: { agent_node_id: agentNodeId },
+        config: { agent_node_id: agentNodeId, ...projectionConfig(projection) },
       },
     ],
     inputs: current.inputs.filter((input) => input.producer_binding_id !== bindingId),

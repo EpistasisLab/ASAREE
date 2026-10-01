@@ -285,6 +285,10 @@ function datasetIdsInGraph(nodes: Node[], factors: DesignFactor[] = EMPTY_FACTOR
 // callable capability of its own, so it shares Tool's slot rather than
 // getting a dedicated one. Dataset used to share it too, but now has its
 // own slot -- what an agent operates ON, not a capability it operates WITH.
+// What MainEdgeAddStub and an edge's insert button can add: the main-flow
+// steps, i.e. an Agent's turn or a Tool Step's fixed call.
+const MAIN_FLOW_NODE_TYPES = ['agent', 'tool_step']
+
 const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; title: string }> = {
   model: { allowedTypes: MODEL_NODE_TYPES, title: 'Add Model' },
   tool: { allowedTypes: [MCP_SERVER_BROWSE, 'script'], title: 'Add Tool' },
@@ -1570,9 +1574,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       return
     }
     if (pendingMainEdgeAdd) {
-      // Always an Agent -- AddNodePanel is restricted to ['agent'] for this
-      // request (see the allowedTypes prop below), matching what
-      // MainEdgeAddStub is for. Positioned left/right of the origin (main
+      // An Agent or a Tool Step -- AddNodePanel is restricted to
+      // MAIN_FLOW_NODE_TYPES for this request (see the allowedTypes prop
+      // below), the only main-flow steps MainEdgeAddStub can add. Positioned left/right of the origin (main
       // flow is left-to-right) rather than below it, unlike a connector add.
       const { nodeId: originId, direction } = pendingMainEdgeAdd
       const originNode = nodes.find((n) => n.id === originId)
@@ -1581,22 +1585,22 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
       const position = findFreePosition(nodes.map((n) => n.position), desired)
       const newId = newNodeId()
-      const newNode: Node = { id: newId, type: 'agent', position, data: defaultDataFor('agent') }
+      const newNode: Node = { id: newId, type: nodeType, position, data: dataOverride ?? defaultDataFor(nodeType) }
       const mainEdge: Edge =
         direction === 'outgoing'
           ? { id: newNodeId(), source: originId, target: newId }
           : { id: newNodeId(), source: newId, target: originId }
-      const { patternNode, patternEdge } = agentDefaultPattern(newId, position, nodes.map((n) => n.position))
-      setNodes((nds) => nds.concat(newNode, patternNode))
-      setEdges((eds) => eds.concat(mainEdge, patternEdge))
+      const pattern = nodeType === 'agent' ? agentDefaultPattern(newId, position, nodes.map((n) => n.position)) : null
+      setNodes((nds) => nds.concat(newNode, ...(pattern ? [pattern.patternNode] : [])))
+      setEdges((eds) => eds.concat(mainEdge, ...(pattern ? [pattern.patternEdge] : [])))
       setPendingMainEdgeAdd(null)
       setAddPanelOpen(false)
       setSelectedNodeId(newId)
       return
     }
     if (pendingEdgeInsert) {
-      // Splits the original edge into origin->newAgent->target -- always an
-      // Agent (AddNodePanel restricted to ['agent'] below), positioned at
+      // Splits the original edge into origin->new->target -- an Agent or a
+      // Tool Step (AddNodePanel restricted to MAIN_FLOW_NODE_TYPES below), positioned at
       // the midpoint of the two nodes the removed edge used to connect.
       const { edgeId, source, target } = pendingEdgeInsert
       const sourceNode = nodes.find((n) => n.id === source)
@@ -1607,16 +1611,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
       const position = findFreePosition(nodes.map((n) => n.position), desired)
       const newId = newNodeId()
-      const newNode: Node = { id: newId, type: 'agent', position, data: defaultDataFor('agent') }
-      const { patternNode, patternEdge } = agentDefaultPattern(newId, position, nodes.map((n) => n.position))
-      setNodes((nds) => nds.concat(newNode, patternNode))
+      const newNode: Node = { id: newId, type: nodeType, position, data: dataOverride ?? defaultDataFor(nodeType) }
+      const pattern = nodeType === 'agent' ? agentDefaultPattern(newId, position, nodes.map((n) => n.position)) : null
+      setNodes((nds) => nds.concat(newNode, ...(pattern ? [pattern.patternNode] : [])))
       setEdges((eds) =>
         eds
           .filter((e) => e.id !== edgeId)
           .concat(
             { id: newNodeId(), source, target: newId },
             { id: newNodeId(), source: newId, target },
-            patternEdge,
+            ...(pattern ? [pattern.patternEdge] : []),
           ),
       )
       setPendingEdgeInsert(null)
@@ -2190,16 +2194,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               pendingConnectorAdd
                 ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].allowedTypes
                 : pendingMainEdgeAdd || pendingEdgeInsert
-                  ? ['agent']
+                  ? MAIN_FLOW_NODE_TYPES
                   : undefined
             }
             title={
               pendingConnectorAdd
                 ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].title
                 : pendingMainEdgeAdd
-                  ? 'Connect an agent'
+                  ? 'Connect a step'
                   : pendingEdgeInsert
-                    ? 'Insert an agent'
+                    ? 'Insert a step'
                     : undefined
             }
           />

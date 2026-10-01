@@ -219,8 +219,16 @@ def _derived_plan(producer_id: str, outputs: dict, config: dict):
 async def test_tool_step_producer_writes_numbers_and_reports_missing_paths() -> None:
     plan = _derived_plan(
         "asaree.tool_step",
-        {"test_metrics.average_precision": "pr_auc", "test_metrics.nan": "nan", "absent": "absent"},
-        {"node_id": "step"},
+        {"pr_auc": "pr_auc", "nan": "nan", "absent": "absent", "n_metrics": "n_metrics", "whole": "whole"},
+        {
+            "node_id": "step",
+            "projections": {
+                "pr_auc": {"path": "test_metrics.average_precision"},
+                "nan": {"path": "test_metrics.nan"},
+                "absent": {"path": "absent"},
+                "n_metrics": {"path": "test_metrics", "transform": "length"},
+            },
+        },
     )
     node_runs = {
         "step": {
@@ -240,6 +248,8 @@ async def test_tool_step_producer_writes_numbers_and_reports_missing_paths() -> 
     assert by_id["pr_auc"].value == 0.41 and by_id["pr_auc"].status == "measured"
     assert by_id["nan"].status == "unavailable"
     assert by_id["absent"].status == "unavailable"
+    assert by_id["n_metrics"].value == 2
+    assert by_id["whole"].value == node_runs["step"]["payload"], "no projection records the whole result"
     assert derived_binding_issue(plan.producers[0], _graph()) is None
     assert derived_binding_issue(plan.producers[0], {"nodes": [], "edges": []})[0] == "tool_step_missing"
 

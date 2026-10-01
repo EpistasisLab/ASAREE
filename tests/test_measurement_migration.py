@@ -16,7 +16,7 @@ def test_legacy_declarations_are_not_migrated_into_measurement_plans() -> None:
     assert normalize_experiment_measurement_plan(None, metrics) == {"metrics": [], "producers": [], "inputs": []}
 
 
-def test_reported_metrics_drop_scalar_semantics_and_projections() -> None:
+def test_reported_metrics_drop_scalar_semantics_but_keep_projections() -> None:
     plan = normalize_experiment_measurement_plan(
         {
             "metrics": [
@@ -47,7 +47,10 @@ def test_reported_metrics_drop_scalar_semantics_and_projections() -> None:
     )
 
     assert plan["metrics"][0] == {"id": "pr-auc", "name": "pr_auc"}
-    assert plan["producers"][0]["config"] == {"agent_node_id": "agent"}
+    assert plan["producers"][0]["config"] == {
+        "agent_node_id": "agent",
+        "projections": {"pr_auc": {"path": "test_metrics.average_precision"}},
+    }
 
 
 def test_historical_values_and_artifacts_gain_legacy_unknown_provenance() -> None:

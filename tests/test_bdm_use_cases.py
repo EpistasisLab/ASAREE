@@ -33,7 +33,7 @@ def test_myocardial_use_cases_normalize_reported_metrics_as_named_observations()
             producer for producer in normalized_plan["producers"] if producer["id"] == "model-evaluation-source"
         )
         reported_metric_ids = set(reported["outputs"].values())
-        assert "projections" not in reported["config"]
+        assert reported["config"]["projections"]["pr_auc"] == {"path": "test_metrics.average_precision"}
         assert all(
             set(metric) <= {"id", "name"}
             for metric in normalized_plan["metrics"]
@@ -68,7 +68,8 @@ def test_myocardial_output_parser_types_match_the_prompted_payloads() -> None:
     assert parsers["output-parser-dc"]["imputation"] == "array"
     assert parsers["output-parser-fte"]["engineering_recipe"] == "array"
     assert parsers["output-parser-fs"]["class_balance_check"] == "string"
-    assert parsers["output-parser-fs"]["n_engineered_features_selected"] == "integer"
+    assert "n_engineered_features_selected" not in parsers["output-parser-fs"]
+    assert parsers["output-parser-fte"]["encoding_map"] == "array"
     assert parsers["output-parser-mlm"]["search_space"] == "array"
     assert "output-parser-score" not in parsers
 
@@ -86,8 +87,15 @@ def test_myocardial_scoring_is_a_deterministic_tool_step() -> None:
         assert config["arguments"]["payload_json"] == {"source": "upstream_payload", "format": "json_string"}
         assert config["arguments"]["code"] == {"source": "script_code"}
         assert set(json.loads(config["arguments"]["param_spec_json"]["value"])) == {
-            "n_estimators", "max_depth", "learning_rate", "min_child_weight", "gamma",
-            "subsample", "colsample_bytree", "reg_lambda", "reg_alpha",
+            "n_estimators",
+            "max_depth",
+            "learning_rate",
+            "min_child_weight",
+            "gamma",
+            "subsample",
+            "colsample_bytree",
+            "reg_lambda",
+            "reg_alpha",
         }
         assert config["hash_checks"] == {"code_sha256": "code", "payload_sha256": "payload_json"}
         assert [node["id"] for node in topological_order(document["graph"])][-1] == "tool-step-score"
@@ -99,10 +107,13 @@ def test_myocardial_scoring_is_a_deterministic_tool_step() -> None:
         producers = {producer["id"]: producer for producer in document["measurement_plan"]["producers"]}
         scoring = producers["model-evaluation-source"]
         assert scoring["producer_id"] == "asaree.tool_step"
-        assert scoring["config"] == {"node_id": "tool-step-score"}
-        assert scoring["outputs"]["test_metrics.average_precision"] == "pr-auc"
-        assert scoring["outputs"]["test_metrics.metrics_at_0.5.f1"] == "f1-0-5"
-        assert scoring["outputs"]["n_sanitize_notes"] == "n-schema-violations"
+        assert scoring["config"]["node_id"] == "tool-step-score"
+        projections = scoring["config"]["projections"]
+        assert set(projections) == set(scoring["outputs"])
+        assert scoring["outputs"]["pr_auc"] == "pr-auc"
+        assert projections["pr_auc"] == {"path": "test_metrics.average_precision"}
+        assert projections["f1_at_0_5"] == {"path": "test_metrics.metrics_at_0.5.f1"}
+        assert projections["n_schema_violations"] == {"path": "n_sanitize_notes"}
         pipeline = producers["feature-pipeline-source"]
         assert pipeline["producer_id"] == "asaree.feature_pipeline"
         assert set(pipeline["outputs"]) == set(FEATURE_PIPELINE_OUTPUTS)

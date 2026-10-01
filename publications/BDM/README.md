@@ -99,6 +99,12 @@ critic gates, with these v0.8.0 execution details:
   columns, the way the notebook's `process_metrics` does, rather than trusted
   from an agent's self-report. The remaining agent-stage values come from
   their Output Parser payloads.
+- **MLM brief and critic task_brief.** The notebook's `summarize_for_mlm`
+  brief is rebuilt in the MLM goal from field references
+  (`{{node:agent-fs.selected_features}}` and so on). Each Critic Gate's system
+  prompt includes the `task_brief`, because the canvas sends a critic only the
+  output it reviews. The MLM still also gets the full FS report automatically
+  from its direct predecessor, so its context is larger than the notebook's.
 
 That `open_workspace(stage=...)` call is deliberately kept: seeding the
 workspace materializes `v0_raw`, but *not* a stage's `.scratch` input, which is

@@ -23,6 +23,9 @@ from asaree.services.derived_metrics import (
     TOOL_STEP_PRODUCER_ID,
     collect_derived_observations,
     derived_binding_issue,
+    output_projection,
+    project_value,
+    projection_issue,
 )
 from asaree.services.measurement_engine import (
     MeasurementEvaluation,
@@ -35,6 +38,7 @@ from asaree.services.measurement_engine import (
     preserved_binding_severity,
 )
 from asaree.services.protocol_graph import directly_connected_tool_pair, node_map
+from asaree.services.tool_steps import flatten_paths, parse_json_object
 
 AGENT_OUTPUT_PRODUCER_ID = "asaree.agent_output"
 PYTHON_SCRIPT_PRODUCER_ID = "asaree.python_script"
@@ -164,6 +168,12 @@ async def collect_reported_metrics(
             and (node_run.get("status") == "completed" or "last_successful_output_text" in node_run)
             and successful_output is not None
         )
+        # Field projections read the Agent's typed output: its Output Parser
+        # payload, else a JSON object in its final answer.
+        structured = node_run.get("payload") if agent_output_available and isinstance(node_run, Mapping) else None
+        if agent_output_available and not isinstance(structured, Mapping):
+            structured = parse_json_object(successful_output)
+        structured_paths = flatten_paths(structured) if isinstance(structured, Mapping) else {}
         call = (
             None if binding.producer_id == AGENT_OUTPUT_PRODUCER_ID else await _last_matching_call(run, binding, graph)
         )
@@ -188,19 +198,20 @@ async def collect_reported_metrics(
                 ),
             },
         )
-        for _output_key, metric_id in binding.outputs.items():
+        for output_key, metric_id in binding.outputs.items():
             metric = metrics.get(metric_id)
             if metric is None:
                 continue
-            raw_value = (
-                successful_output
-                if agent_output_available
-                else call.get("result")
-                if call is not None
-                else None
-            )
-            value = raw_value
-            observation_error = None
+            projection = output_projection(binding, output_key) if agent_output_available else None
+            value: Any
+            observation_error: str | None
+            if projection is not None:
+                value, observation_error = project_value(structured_paths, projection)
+            else:
+                value = (
+                    successful_output if agent_output_available else call.get("result") if call is not None else None
+                )
+                observation_error = None
             observations.append(
                 MetricObservation(
                     metric_id=metric.id,
@@ -321,6 +332,9 @@ async def validate_reported_measurement_plan(
                         f"{path}.outputs.{output_key}",
                     )
                 )
+        if projected := projection_issue(binding):
+            code, message, key = projected
+            issues.append(ValidationIssue(code, message, f"{path}.config.{key}"))
         if binding.producer_id in DERIVED_PRODUCER_IDS:
             if derived := derived_binding_issue(binding, graph):
                 code, message, key = derived

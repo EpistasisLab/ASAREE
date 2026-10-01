@@ -3,10 +3,10 @@
 
     ASAREE_BASE_URL=http://localhost:8000 ASAREE_API_KEY=... \
         uv run --with ./sdk python publications/BDM/import_use_case.py \
-        [myocardial-anthropic-v0.8.0.json]
+        [myocardial-anthropic.json]
 
 The API-side equivalent of README.md's GUI walkthrough, for rebuilding the
-experiment from scratch repeatedly. It accepts the v0.8.0 provider variants
+experiment from scratch repeatedly. It accepts the provider variants
 and defaults to Azure Foundry.
 Idempotent: run it again and it updates the existing experiment rather than
 creating a second copy.
@@ -35,7 +35,7 @@ from asaree_client.exceptions import AsareeNotFoundError
 
 HERE = Path(__file__).resolve().parent
 
-DEFAULT_USE_CASE_FILE = HERE / "myocardial-azure-foundry-v0.8.0.json"
+DEFAULT_USE_CASE_FILE = HERE / "myocardial-azure-foundry.json"
 DATA_FILE = HERE / "mi_ZSN.csv"
 DICTIONARY_FILE = HERE / "dict_ZSN.json"
 

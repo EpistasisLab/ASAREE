@@ -22,10 +22,12 @@ export const OBSERVATION_LABELS: Record<ObservationStatus, string> = {
 
 // Producers ASAREE computes in code from what a run recorded
 // (services/derived_metrics.py). A Tool Step metric is authored through the
-// custom-metric dialog; the feature pipeline is declared in the plan document.
+// custom-metric dialog; the feature pipeline and node-scoped runtime totals
+// (runtime_metrics.NodeRuntimeMetricProducer) are declared in the plan document.
 export { TOOL_STEP_PRODUCER_ID }
 export const FEATURE_PIPELINE_PRODUCER_ID = 'asaree.feature_pipeline'
-export const DERIVED_PRODUCER_IDS = new Set([TOOL_STEP_PRODUCER_ID, FEATURE_PIPELINE_PRODUCER_ID])
+export const NODE_RUNTIME_PRODUCER_ID = 'asaree.node_runtime'
+export const DERIVED_PRODUCER_IDS = new Set([TOOL_STEP_PRODUCER_ID, FEATURE_PIPELINE_PRODUCER_ID, NODE_RUNTIME_PRODUCER_ID])
 const FEATURE_PIPELINE_STAGE_KEYS = ['dc_node_id', 'fte_node_id', 'fs_node_id'] as const
 
 const PRODUCER_LABELS: Record<string, string> = {
@@ -35,6 +37,7 @@ const PRODUCER_LABELS: Record<string, string> = {
   [MCP_TOOL_PRODUCER_ID]: 'MCP Tool',
   [TOOL_STEP_PRODUCER_ID]: 'Tool Step',
   [FEATURE_PIPELINE_PRODUCER_ID]: 'Feature pipeline',
+  [NODE_RUNTIME_PRODUCER_ID]: 'Node runtime',
 }
 
 export function removeMetricFromMeasurementPlan(
@@ -140,6 +143,12 @@ export function localMetricReadinessPreview(
     ))
     if (missing) return { ready: false, producer, detail: `The ${missing.split('_')[0].toUpperCase()} Agent is unavailable.` }
     return { ready: true, producer, detail: 'Computed from the stage payloads after execution.' }
+  }
+  if (binding.producer_id === NODE_RUNTIME_PRODUCER_ID) {
+    const nodeIds = Array.isArray(binding.config.node_ids) ? binding.config.node_ids.map(String) : []
+    if (nodeIds.length === 0) return { ready: false, producer, detail: 'No node is selected to measure.' }
+    const missing = nodeIds.filter((id) => !graph?.nodes.some((node) => node.id === id))
+    if (missing.length) return { ready: false, producer, detail: `Node ${missing.join(', ')} is not on the canvas.` }
   }
   if (binding.kind === 'reported') {
     const graphNodes = graph?.nodes ?? []

@@ -13,9 +13,9 @@ protocol shape, on a dataset anyone can download.
 
 | File | |
 | --- | --- |
-| `myocardial-azure-foundry-v0.8.0.json` | The experiment, wired to **Azure Foundry** — what `import_use_case.py` imports by default |
-| `myocardial-anthropic-v0.8.0.json` | The same, wired to **Anthropic** |
-| `myocardial-openai-v0.8.0.json` | The same, wired to **OpenAI** |
+| `myocardial-azure-foundry.json` | The experiment, wired to **Azure Foundry** — what `import_use_case.py` imports by default |
+| `myocardial-anthropic.json` | The same, wired to **Anthropic** |
+| `myocardial-openai.json` | The same, wired to **OpenAI** |
 | `mi_ZSN.csv` | The dataset — 1700 admissions × 111 features, target `mi_ZSN` |
 | `dict_ZSN.json` | The data dictionary for those 111 columns |
 | `stats/` | The paper's analysis scripts and outputs for the spinal runs (not part of this walkthrough) |
@@ -28,9 +28,9 @@ have:
 
 | File | Model factor | Effort factor | Design size |
 | --- | --- | --- | --- |
-| `myocardial-anthropic-v0.8.0.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 160 replicates |
-| `myocardial-openai-v0.8.0.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 8 cells / 160 replicates |
-| `myocardial-azure-foundry-v0.8.0.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 160 replicates |
+| `myocardial-anthropic.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 160 replicates |
+| `myocardial-openai.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 8 cells / 160 replicates |
+| `myocardial-azure-foundry.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 160 replicates |
 
 All three are 2 × 2 × 2 designs (model × effort × critic on/off) at 20
 replicates, with the smaller/larger model of a family at the middle and top of
@@ -102,7 +102,14 @@ critic gates, with these v0.8.0 execution details:
   control-flow columns come from the built-in runtime producer: critic
   invocations, rejections split by partial vs. full scope (an unscoped
   rejection counts as full), revision rounds, and Reason+Act runs that hit
-  their iteration ceiling. The remaining agent-stage values come from their
+  their iteration ceiling. The same producer reports `prompt_sha256`: a hash of
+  the published revision's stage prompts, critic system prompts (which carry
+  the review criteria) and Output Parser contracts, with factor values applied.
+  The notebook's per-stage `tokens_<stage>` and `n_turns_<stage>` (dc, fte,
+  fs, mlm, critic) come from `asaree.node_runtime`: one binding per stage, each
+  listing the canvas nodes that make it up in `config.node_ids` (the critic
+  stage lists all four gates), summing every run those nodes launched,
+  revisions included. The remaining agent-stage values come from their
   Output Parser payloads.
 - **MLM brief and critic task_brief.** The notebook's `summarize_for_mlm`
   brief is rebuilt in two parts. The edge from Critic (FS) into the MLM is set
@@ -163,7 +170,7 @@ provider file that matches the credential you will use:
 
 ```bash
 uv run --with ./sdk python publications/BDM/import_use_case.py \
-  publications/BDM/myocardial-openai-v0.8.0.json
+  publications/BDM/myocardial-openai.json
 ```
 
 The helper registers and splits the dataset, maps deployment-specific dataset

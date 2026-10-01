@@ -11,9 +11,10 @@ from asaree.services.metrics import (
     normalize_metrics,
 )
 from asaree.services.protocol_execution import topological_order, validate_prompt_references
+from asaree.services.runtime_metrics import validate_runtime_measurement_plan
 
 BDM = Path(__file__).parents[1] / "publications" / "BDM"
-USE_CASES = sorted(BDM.glob("myocardial-*-v0.8.0.json"))
+USE_CASES = sorted(BDM.glob("myocardial-*.json"))
 
 
 def test_myocardial_use_cases_normalize_reported_metrics_as_named_observations() -> None:
@@ -58,7 +59,23 @@ def test_myocardial_use_cases_normalize_reported_metrics_as_named_observations()
             "critic_rejections_full",
             "revision_rounds",
             "capped_agent_runs",
+            "prompt_sha256",
         }
+        graph_ids = {node["id"] for node in document["graph"]["nodes"]}
+        stages = {
+            producer["id"]: producer
+            for producer in plan["producers"]
+            if producer["producer_id"] == "asaree.node_runtime"
+        }
+        assert set(stages) == {f"runtime-{stage}" for stage in ("dc", "fte", "fs", "mlm", "critic")}
+        assert stages["runtime-critic"]["config"]["node_ids"] == ["gate-dc", "gate-fte", "gate-fs", "gate-mlm"]
+        for stage, producer in stages.items():
+            assert set(producer["config"]["node_ids"]) <= graph_ids
+            assert set(producer["outputs"]) == {"total_tokens", "agent_loop_iterations"}
+            assert {"producer_binding_id": stage, "input_key": "facts", "source_key": "attempt.runtime"} in plan[
+                "inputs"
+            ]
+        assert not validate_runtime_measurement_plan(plan, graph=document["graph"]).issues
 
 
 def test_myocardial_output_parser_types_match_the_prompted_payloads() -> None:

@@ -45,6 +45,7 @@ export const METRIC_CATALOG: readonly MetricCatalogEntry[] = [
   { key: 'critic_rejections_partial', name: 'Partial critic rejections', shortDescription: 'Rejections scoped to a targeted correction.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'reviews', category: 'Critics', source: 'Protocol activity' },
   { key: 'critic_rejections_full', name: 'Full critic rejections', shortDescription: 'Rejections asking the stage to reconsider its approach (includes unscoped ones).', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'reviews', category: 'Critics', source: 'Protocol activity' },
   { key: 'revision_rounds', name: 'Revision rounds', shortDescription: 'Worker reruns triggered by critic rejections.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'rounds', category: 'Critics', source: 'Protocol activity' },
+  { key: 'prompt_sha256', name: 'Prompt SHA-256', shortDescription: 'Hash of the published stage prompts, critic criteria and output contracts.', kind: 'runtime', valueType: 'opaque', defaultDirection: 'neutral', aggregation: 'none', category: 'Agents', source: 'Protocol activity' },
   { key: 'capped_agent_runs', name: 'Capped agent runs', shortDescription: 'Reason+Act runs cut off by their iteration ceiling.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'runs', category: 'Agents', source: 'Protocol activity' },
 ]
 

@@ -38,6 +38,10 @@ def test_frontend_metric_catalog_matches_the_backend_contract() -> None:
             ("aggregation", "aggregation"),
             ("unit", "unit"),
         ):
+            if backend_field not in entry:
+                # Unitless (an opaque hash); the frontend must not invent one.
+                assert f"{frontend_field}:" not in line
+                continue
             assert f"{frontend_field}: '{entry[backend_field]}'" in line
     assert {key for key, line in frontend_lines.items() if "recommended: true" in line} == set(
         RECOMMENDED_RUNTIME_METRIC_KEYS

@@ -11,29 +11,29 @@
     "expected_positive_rate": 0.232,
     "primary_scientific_outcome": "average precision on a held-out stratified test split"
   },
-  "name": "Myocardial Infarction Use Case (Anthropic)",
+  "name": "Myocardial Infarction Use Case (Azure Foundry)",
   "description": "MI-DC -> MI-FTE -> MI-FS -> MI-MLM -> Score: four agents in series on the UCI Myocardial Infarction Complications (ZSN) dataset, each handing a versioned dataset workspace to the next behind a Critic Gate, then a deterministic Score Tool Step that sanitizes MI-MLM's approved payload and runs the fixed scoring script directly (no model in the call, SHA-256 guarded -- the notebook's score_payload). The pipeline's methodology (cleaning, feature engineering, selection, hyperparameter planning, scoring) and the critics' review criteria are dataset-agnostic; everything dataset-specific lives in each worker's own task_brief block. Three facts are stated there rather than left for an agent to discover cold: (1) the dataset carries an explicit ID column (role=id, 1..1700, all-unique) that must be dropped as a non-feature record identifier; (2) every feature is RAW -- a mix of integer/real/binary/ordinal/categorical types with real missingness -- so DC's and FTE's inspect-first instructions do real work here; (3) the column names are short Russian-derived codes (nr11, np01, zab_leg_01), not descriptive English, so every column's meaning must be resolved via get_data_dictionary rather than guessed from its name. expected_positive_rate (0.232) is 394 positive of 1700. See README.md in this directory for how to import and run this.",
   "graph": {
     "nodes": [
       {
         "id": "llm-shared",
-        "type": "model_anthropic",
+        "type": "model_azure_foundry",
         "position": {
           "x": 1140,
           "y": 680
         },
         "data": {
-          "label": "Anthropic (shared)",
+          "label": "Azure Foundry (shared)",
           "config": {
-            "provider": "anthropic",
+            "provider": "azure_foundry",
             "model": "claude-sonnet-5",
             "temperature": null,
             "effort": "medium",
             "max_tokens": 128000
           },
           "factor_bindings": {
-            "config.model": "Anthropic:Model",
-            "config.effort": "Anthropic:Effort"
+            "config.model": "Azure Foundry:Model",
+            "config.effort": "Azure Foundry:Effort"
           }
         }
       },
@@ -982,28 +982,28 @@
   "design_spec": {
     "factors": [
       {
-        "name": "Anthropic:Model",
+        "name": "Azure Foundry:Model",
         "levels": [
           "claude-sonnet-5",
           "claude-opus-5"
         ],
-        "level_type": "string",
         "level_labels": [
-          "claude-sonnet-5",
-          "claude-opus-5"
-        ]
+          "sonnet-5",
+          "opus-5"
+        ],
+        "level_type": "string"
       },
       {
-        "name": "Anthropic:Effort",
+        "name": "Azure Foundry:Effort",
         "levels": [
           "medium",
           "xhigh"
         ],
-        "level_type": "string",
         "level_labels": [
           "medium",
           "xhigh"
-        ]
+        ],
+        "level_type": "string"
       },
       {
         "name": "Critic enabled",
@@ -1753,6 +1753,127 @@
         "unit": "runs"
       },
       {
+        "id": "runtime-prompt-sha256",
+        "catalogKey": "prompt_sha256",
+        "name": "Prompt SHA-256",
+        "description": "Hash of the published stage prompts, critic criteria and output contracts.",
+        "kind": "runtime",
+        "valueType": "opaque",
+        "primary": false,
+        "direction": "neutral",
+        "aggregation": "none"
+      },
+      {
+        "id": "tokens-dc",
+        "name": "tokens_dc",
+        "description": "Input plus output tokens across every run of the DC stage, revisions included.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "tokens"
+      },
+      {
+        "id": "n-turns-dc",
+        "name": "n_turns_dc",
+        "description": "Agent-loop turns across every run of the DC stage, revisions included.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "turns"
+      },
+      {
+        "id": "tokens-fte",
+        "name": "tokens_fte",
+        "description": "Input plus output tokens across every run of the FTE stage, revisions included.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "tokens"
+      },
+      {
+        "id": "n-turns-fte",
+        "name": "n_turns_fte",
+        "description": "Agent-loop turns across every run of the FTE stage, revisions included.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "turns"
+      },
+      {
+        "id": "tokens-fs",
+        "name": "tokens_fs",
+        "description": "Input plus output tokens across every run of the FS stage, revisions included.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "tokens"
+      },
+      {
+        "id": "n-turns-fs",
+        "name": "n_turns_fs",
+        "description": "Agent-loop turns across every run of the FS stage, revisions included.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "turns"
+      },
+      {
+        "id": "tokens-mlm",
+        "name": "tokens_mlm",
+        "description": "Input plus output tokens across every run of the MLM stage, revisions included.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "tokens"
+      },
+      {
+        "id": "n-turns-mlm",
+        "name": "n_turns_mlm",
+        "description": "Agent-loop turns across every run of the MLM stage, revisions included.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "turns"
+      },
+      {
+        "id": "tokens-critic",
+        "name": "tokens_critic",
+        "description": "Input plus output tokens across every run of the four critic gates, revisions included.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "tokens"
+      },
+      {
+        "id": "n-turns-critic",
+        "name": "n_turns_critic",
+        "description": "Agent-loop turns across every run of the four critic gates, revisions included.",
+        "kind": "custom",
+        "valueType": "number",
+        "primary": false,
+        "direction": "minimize",
+        "aggregation": "sum",
+        "unit": "turns"
+      },
+      {
         "id": "n-recipe-ops",
         "name": "n_recipe_ops",
         "description": "Entries in the FTE engineering_recipe.",
@@ -2441,6 +2562,115 @@
         "unit": "runs"
       },
       {
+        "id": "runtime-prompt-sha256",
+        "name": "Prompt SHA-256",
+        "value_type": "opaque",
+        "direction": "neutral",
+        "aggregation": "none",
+        "primary": false,
+        "description": "Hash of the published stage prompts, critic criteria and output contracts."
+      },
+      {
+        "id": "tokens-dc",
+        "name": "tokens_dc",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Input plus output tokens across every run of the DC stage, revisions included.",
+        "unit": "tokens"
+      },
+      {
+        "id": "n-turns-dc",
+        "name": "n_turns_dc",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Agent-loop turns across every run of the DC stage, revisions included.",
+        "unit": "turns"
+      },
+      {
+        "id": "tokens-fte",
+        "name": "tokens_fte",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Input plus output tokens across every run of the FTE stage, revisions included.",
+        "unit": "tokens"
+      },
+      {
+        "id": "n-turns-fte",
+        "name": "n_turns_fte",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Agent-loop turns across every run of the FTE stage, revisions included.",
+        "unit": "turns"
+      },
+      {
+        "id": "tokens-fs",
+        "name": "tokens_fs",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Input plus output tokens across every run of the FS stage, revisions included.",
+        "unit": "tokens"
+      },
+      {
+        "id": "n-turns-fs",
+        "name": "n_turns_fs",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Agent-loop turns across every run of the FS stage, revisions included.",
+        "unit": "turns"
+      },
+      {
+        "id": "tokens-mlm",
+        "name": "tokens_mlm",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Input plus output tokens across every run of the MLM stage, revisions included.",
+        "unit": "tokens"
+      },
+      {
+        "id": "n-turns-mlm",
+        "name": "n_turns_mlm",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Agent-loop turns across every run of the MLM stage, revisions included.",
+        "unit": "turns"
+      },
+      {
+        "id": "tokens-critic",
+        "name": "tokens_critic",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Input plus output tokens across every run of the four critic gates, revisions included.",
+        "unit": "tokens"
+      },
+      {
+        "id": "n-turns-critic",
+        "name": "n_turns_critic",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Agent-loop turns across every run of the four critic gates, revisions included.",
+        "unit": "turns"
+      },
+      {
         "id": "n-recipe-ops",
         "name": "n_recipe_ops",
         "value_type": "number",
@@ -2490,10 +2720,89 @@
           "critic_rejections_partial": "runtime-critic-rejections-partial",
           "critic_rejections_full": "runtime-critic-rejections-full",
           "revision_rounds": "runtime-revision-rounds",
-          "capped_agent_runs": "runtime-capped-agent-runs"
+          "capped_agent_runs": "runtime-capped-agent-runs",
+          "prompt_sha256": "runtime-prompt-sha256"
         },
         "artifacts": [],
         "config": {}
+      },
+      {
+        "id": "runtime-dc",
+        "producer_id": "asaree.node_runtime",
+        "kind": "runtime",
+        "outputs": {
+          "total_tokens": "tokens-dc",
+          "agent_loop_iterations": "n-turns-dc"
+        },
+        "artifacts": [],
+        "config": {
+          "node_ids": [
+            "agent-dc"
+          ]
+        }
+      },
+      {
+        "id": "runtime-fte",
+        "producer_id": "asaree.node_runtime",
+        "kind": "runtime",
+        "outputs": {
+          "total_tokens": "tokens-fte",
+          "agent_loop_iterations": "n-turns-fte"
+        },
+        "artifacts": [],
+        "config": {
+          "node_ids": [
+            "agent-fte"
+          ]
+        }
+      },
+      {
+        "id": "runtime-fs",
+        "producer_id": "asaree.node_runtime",
+        "kind": "runtime",
+        "outputs": {
+          "total_tokens": "tokens-fs",
+          "agent_loop_iterations": "n-turns-fs"
+        },
+        "artifacts": [],
+        "config": {
+          "node_ids": [
+            "agent-fs"
+          ]
+        }
+      },
+      {
+        "id": "runtime-mlm",
+        "producer_id": "asaree.node_runtime",
+        "kind": "runtime",
+        "outputs": {
+          "total_tokens": "tokens-mlm",
+          "agent_loop_iterations": "n-turns-mlm"
+        },
+        "artifacts": [],
+        "config": {
+          "node_ids": [
+            "agent-mlm"
+          ]
+        }
+      },
+      {
+        "id": "runtime-critic",
+        "producer_id": "asaree.node_runtime",
+        "kind": "runtime",
+        "outputs": {
+          "total_tokens": "tokens-critic",
+          "agent_loop_iterations": "n-turns-critic"
+        },
+        "artifacts": [],
+        "config": {
+          "node_ids": [
+            "gate-dc",
+            "gate-fte",
+            "gate-fs",
+            "gate-mlm"
+          ]
+        }
       },
       {
         "id": "dc-report-source",
@@ -2764,6 +3073,31 @@
     "inputs": [
       {
         "producer_binding_id": "runtime",
+        "input_key": "facts",
+        "source_key": "attempt.runtime"
+      },
+      {
+        "producer_binding_id": "runtime-dc",
+        "input_key": "facts",
+        "source_key": "attempt.runtime"
+      },
+      {
+        "producer_binding_id": "runtime-fte",
+        "input_key": "facts",
+        "source_key": "attempt.runtime"
+      },
+      {
+        "producer_binding_id": "runtime-fs",
+        "input_key": "facts",
+        "source_key": "attempt.runtime"
+      },
+      {
+        "producer_binding_id": "runtime-mlm",
+        "input_key": "facts",
+        "source_key": "attempt.runtime"
+      },
+      {
+        "producer_binding_id": "runtime-critic",
         "input_key": "facts",
         "source_key": "attempt.runtime"
       }

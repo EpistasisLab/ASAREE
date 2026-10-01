@@ -154,6 +154,15 @@ METRIC_CATALOG: tuple[MetricCatalogEntry, ...] = (
         "unit": "rounds",
     },
     {
+        "key": "prompt_sha256",
+        "name": "Prompt SHA-256",
+        "shortDescription": "Hash of the published stage prompts, critic criteria and output contracts.",
+        "kind": "runtime",
+        "valueType": "opaque",
+        "defaultDirection": "neutral",
+        "aggregation": "none",
+    },
+    {
         "key": "capped_agent_runs",
         "name": "Capped agent runs",
         "shortDescription": "Reason+Act runs cut off by their iteration ceiling.",

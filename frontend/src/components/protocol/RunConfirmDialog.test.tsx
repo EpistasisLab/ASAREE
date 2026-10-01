@@ -80,4 +80,44 @@ describe('RunConfirmDialog', () => {
 
     expect(screen.queryByText(/stopped at this iteration limit/)).not.toBeInTheDocument()
   })
+
+  it('offers only publish-and-run for a canvas that was never published', () => {
+    render(
+      <RunConfirmDialog
+        scope={{ type: 'replicate', label: 'Replicate 1' }}
+        nodes={[]}
+        edges={[]}
+        queryClient={new QueryClient()}
+        publishedRevision={null}
+        onPublishAndRun={vi.fn()}
+        confirmLabel="Run replicate"
+        onCancel={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('Canvas has not been published')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Publish & Run replicate' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /published v/ })).not.toBeInTheDocument()
+  })
+
+  it('names the chosen action on both publish choices', () => {
+    render(
+      <RunConfirmDialog
+        scope={{ type: 'replicate', label: 'Replicate 1' }}
+        nodes={[]}
+        edges={[]}
+        queryClient={new QueryClient()}
+        hasUnpublishedChanges
+        publishedRevision={3}
+        onPublishAndRun={vi.fn()}
+        confirmLabel="Run all cells"
+        onCancel={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Run all cells (published v3)' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Publish & Run all cells' })).toBeInTheDocument()
+  })
 })

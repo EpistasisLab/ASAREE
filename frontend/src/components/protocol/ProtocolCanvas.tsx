@@ -2395,7 +2395,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 : null
           }
           onPublishAndRun={() => publishAndRunMutation.mutate()}
-          confirmLabel={pendingRunConfirm.type === 'graph' ? 'Start Test Run' : undefined}
+          confirmLabel={pendingRunConfirm.type === 'graph' ? 'Test Run' : undefined}
         />
       )}
       {factorPickerNodeId && (

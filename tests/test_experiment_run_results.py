@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from asaree.services.csv_export import result_rows_schema, result_rows_to_csv
 from asaree.services.experiment_run_results import (
     _aggregate_metric_values,
+    _attempt_metric_values,
     _declared_metric_aggregations,
     _declared_metric_directions,
     _declared_runtime_metrics,
@@ -20,6 +21,36 @@ from asaree.services.experiment_run_results import (
     _sum,
     _usage,
 )
+
+
+def test_attempt_metric_values_include_measured_node_runtime_observations() -> None:
+    stored = {
+        "metric_values": {"pr_auc": 0.72},
+        "measurement": {
+            "observations": [
+                {
+                    "metric_name": "tokens_dc",
+                    "status": "measured",
+                    "value": 1200,
+                    "producer": {"producer_id": "asaree.node_runtime", "kind": "runtime"},
+                },
+                {
+                    "metric_name": "n_turns_critic",
+                    "status": "measured",
+                    "value": 0,
+                    "producer": {"producer_id": "asaree.node_runtime", "kind": "runtime"},
+                },
+                {
+                    "metric_name": "tokens_critic",
+                    "status": "unavailable",
+                    "value": None,
+                    "producer": {"producer_id": "asaree.node_runtime", "kind": "runtime"},
+                },
+            ]
+        },
+    }
+
+    assert _attempt_metric_values(stored) == {"pr_auc": 0.72, "tokens_dc": 1200, "n_turns_critic": 0}
 
 
 def test_usage_normalizes_provider_token_names_and_derives_total() -> None:

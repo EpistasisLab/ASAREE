@@ -84,6 +84,34 @@ def _normalize_metric_values(values: dict[str, Any] | None) -> dict[str, Any]:
     return {key: int(value) if isinstance(value, bool) else value for key, value in (values or {}).items()}
 
 
+def _attempt_metric_values(stored: dict[str, Any]) -> dict[str, Any]:
+    """Project score values plus measured node-scoped runtime observations.
+
+    Runtime observations stay out of the replicate's persisted scoring values.
+    Node-scoped runtime metrics have no equivalent fixed execution column, so
+    Results reads them from the immutable attempt measurement document.
+    """
+    raw_values = stored.get("metric_values")
+    projected = _normalize_metric_values(raw_values if isinstance(raw_values, dict) else None)
+    measurement = stored.get("measurement")
+    observations = measurement.get("observations") if isinstance(measurement, dict) else None
+    for observation in observations if isinstance(observations, list) else []:
+        if not isinstance(observation, dict) or observation.get("status") != "measured":
+            continue
+        producer = observation.get("producer")
+        name = observation.get("metric_name")
+        if (
+            not isinstance(producer, dict)
+            or producer.get("producer_id") != "asaree.node_runtime"
+            or not isinstance(name, str)
+        ):
+            continue
+        value = observation.get("value")
+        if value is not None:
+            projected.setdefault(name, int(value) if isinstance(value, bool) else value)
+    return projected
+
+
 def _merge_legacy_facets(
     metric_values: dict[str, Any],
     raw_artifacts: Any,
@@ -457,11 +485,10 @@ async def summarize_experiment_run_results(
     ) -> tuple[dict[str, Any], dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
         """The immutable score/evaluation facts recorded by this attempt."""
         stored = protocol_run.attempt_result if isinstance(protocol_run.attempt_result, dict) else {}
-        metric_values = stored.get("metric_values")
         evaluation = stored.get("metric_evaluation")
         observations, artifacts = measurement_facets(stored.get("measurement"))
         return (
-            _normalize_metric_values(metric_values if isinstance(metric_values, dict) else None),
+            _attempt_metric_values(stored),
             dict(evaluation) if isinstance(evaluation, dict) else None,
             observations,
             artifacts,

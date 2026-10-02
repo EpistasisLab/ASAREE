@@ -133,6 +133,10 @@ def test_myocardial_scoring_is_a_deterministic_tool_step() -> None:
         step = nodes["tool-step-score"]
         assert step["type"] == "tool_step"
         config = step["data"]["config"]
+        script = nodes["script-model"]["data"]["config"]["code"]
+        compile(script, path.name, "exec")
+        assert '"reg_alpha": 0.0' in script
+        assert '_fixed.update(hp["fixed_params"])' in script
         assert "sanitizer" not in config
         assert config["arguments"]["selection_metric"] == {"source": "value", "value": "average_precision"}
         assert config["arguments"]["payload_json"] == {"source": "upstream_payload", "format": "json_string"}
@@ -150,7 +154,7 @@ def test_myocardial_scoring_is_a_deterministic_tool_step() -> None:
         }
         assert config["hash_checks"] == {"code_sha256": "code", "payload_sha256": "payload_json"}
         assert [node["id"] for node in topological_order(document["graph"])][-1] == "tool-step-score"
-        assert document["design_spec"]["replicates"] == 20
+        assert document["design_spec"]["replicates"] == 10
         assert {
             node["data"]["config"]["max_iterations"] for node in nodes.values() if node["type"] == "pattern_reason_act"
         } == {12}

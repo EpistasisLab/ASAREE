@@ -15,6 +15,8 @@ import {
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
   type ProtocolGraph,
+  type ProtocolRun,
+  type TestRun,
 } from '@/types/protocols'
 import { ProtocolCanvas } from './ProtocolCanvas'
 
@@ -42,6 +44,58 @@ function renderCanvas(graph: ProtocolGraph, experimentId: string | null = null) 
     </QueryClientProvider>,
   )
   return { client, ...result }
+}
+
+function protocolRun(overrides: Partial<ProtocolRun> = {}): ProtocolRun {
+  return {
+    id: 'production-run',
+    protocol_id: 'protocol-1',
+    status: 'running',
+    node_runs: {},
+    conversation: null,
+    error: null,
+    replicate_label: 'replicate-1',
+    replicate_result_id: 'replicate-result-1',
+    factor_values: {},
+    design_revision_id: 'design-revision-1',
+    protocol_revision_id: 'protocol-revision-1',
+    target_node_id: null,
+    cancel_requested_at: null,
+    created_at: '2026-10-01T12:00:00Z',
+    updated_at: '2026-10-01T12:00:00Z',
+    observations: [],
+    artifacts: [],
+    ...overrides,
+  }
+}
+
+function testRun(overrides: Partial<TestRun> = {}): TestRun {
+  return {
+    id: 'test-run',
+    protocol_id: 'protocol-1',
+    status: 'completed',
+    error: null,
+    protocol_revision_id: 'protocol-revision-1',
+    created_at: '2026-09-30T12:00:00Z',
+    updated_at: '2026-09-30T12:01:00Z',
+    observations: [],
+    artifacts: [],
+    conversation: null,
+    tested_published_revision: null,
+    freshness: { out_of_date: false, reasons: [] },
+    resources: {
+      task: { duration_seconds: null, cost_usd: null },
+      evaluation: { duration_seconds: null, cost_usd: null },
+      total: { duration_seconds: null, cost_usd: null },
+    },
+    execution_summary: {
+      node_runs: {},
+      started_at: null,
+      completed_at: '2026-09-30T12:01:00Z',
+      cancel_requested_at: null,
+    },
+    ...overrides,
+  }
 }
 
 describe('ProtocolCanvas connector adds', () => {
@@ -337,6 +391,41 @@ describe('ProtocolCanvas connector adds', () => {
     expect(await screen.findByText('Writer:Active')).toBeInTheDocument()
     expect(screen.getByText('Levels: false, true')).toBeInTheDocument()
     expect(screen.queryByText('Bind to a field on the canvas')).not.toBeInTheDocument()
+  })
+
+  it('keeps the Test Run label when a production replicate is running', async () => {
+    const run = protocolRun()
+    vi.mocked(protocolsApi.listRuns).mockResolvedValue([run])
+    vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
+
+    renderCanvas({ nodes: [], edges: [] })
+
+    await screen.findByRole('button', { name: 'Stop' })
+    expect(screen.getByRole('button', { name: 'Test Run' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Test Run running…' })).not.toBeInTheDocument()
+  })
+
+  it('stops the active production replicate instead of a completed Test Run', async () => {
+    const user = userEvent.setup()
+    const run = protocolRun()
+    vi.mocked(protocolsApi.listRuns).mockResolvedValue([run])
+    vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
+    vi.spyOn(protocolsApi, 'getLatestTestRun').mockResolvedValue(testRun())
+    const cancelRun = vi.spyOn(protocolsApi, 'cancelRun').mockResolvedValue({
+      ...run,
+      cancel_requested_at: '2026-10-01T12:00:30Z',
+    })
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue({
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    })
+
+    renderCanvas({ nodes: [], edges: [] }, 'experiment-1')
+
+    await user.click(await screen.findByRole('button', { name: 'Stop' }))
+    expect(cancelRun).toHaveBeenCalledWith('protocol-1', 'production-run')
   })
 
 })

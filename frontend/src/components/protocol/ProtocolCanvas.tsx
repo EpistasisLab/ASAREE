@@ -744,11 +744,26 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     setRunId(latest.id)
   }, [protocolRunsQuery.data, runId])
 
-  const isRunning =
-    testRunMutation.isPending ||
-    runNodeMutation.isPending ||
-    (!!testRunQuery.data && !TERMINAL_RUN_STATUSES.has(testRunQuery.data.status)) ||
-    (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
+  const activeTestRun = testRunQuery.data && !TERMINAL_RUN_STATUSES.has(testRunQuery.data.status)
+    ? {
+        id: testRunQuery.data.id,
+        createdAt: testRunQuery.data.created_at,
+        cancelRequested: !!testRunQuery.data.execution_summary.cancel_requested_at,
+      }
+    : null
+  const activeProtocolRun = runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status)
+    ? {
+        id: runQuery.data.id,
+        createdAt: runQuery.data.created_at,
+        cancelRequested: !!runQuery.data.cancel_requested_at,
+      }
+    : null
+  const testRunIsRunning = testRunMutation.isPending || !!activeTestRun
+  const protocolRunIsRunning = runNodeMutation.isPending || !!activeProtocolRun
+  const isRunning = testRunIsRunning || protocolRunIsRunning
+  const cancellableRun = activeTestRun && activeProtocolRun
+    ? activeTestRun.createdAt >= activeProtocolRun.createdAt ? activeTestRun : activeProtocolRun
+    : activeTestRun ?? activeProtocolRun
 
   // Stop button -- only raises cancel_requested_at; run_protocol's own node
   // loop (polled between nodes, not mid-node) is what actually honors it.
@@ -756,13 +771,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // tick, so cancel_requested_at (and the "Stopping…" label below) appears
   // right away instead of up to RUN_POLL_MS late.
   const cancelMutation = useMutation({
-    mutationFn: () => protocolsApi.cancelRun(protocolId, testRunQuery.data?.id ?? runId!),
+    mutationFn: () => protocolsApi.cancelRun(protocolId, cancellableRun!.id),
     onSuccess: () => {
       runQuery.refetch()
       testRunQuery.refetch()
     },
   })
-  const cancelRequested = !!testRunQuery.data?.execution_summary.cancel_requested_at || !!runQuery.data?.cancel_requested_at
+  const cancelRequested = !!cancellableRun?.cancelRequested
   const runResultLabel = runQuery.data?.target_node_id ? 'Play Results' : 'Latest Run'
   const runResultTitle = runQuery.data?.replicate_label ? `Cell Run · ${runQuery.data.replicate_label}` : runResultLabel
 
@@ -2084,7 +2099,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={cancelRequested || cancelMutation.isPending}
+                disabled={!cancellableRun || cancelRequested || cancelMutation.isPending}
                 onClick={() => cancelMutation.mutate()}
               >
                 <Square className="size-4" />
@@ -2119,7 +2134,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               title="Start a Test Run for this canvas, with no factor values substituted in"
             >
               <Play className="size-4" />
-              {isRunning ? 'Test Run running…' : 'Test Run'}
+              {testRunIsRunning ? 'Test Run running…' : 'Test Run'}
             </Button>
             {testRunQuery.data && !testResultsOpen && (
               <ReopenTestRunResultsButton detail={describeRun('Test Run', testRunQuery.data)} onOpen={() => setTestResultsOpen(true)} refresh={() => { testRunQuery.refetch() }} />

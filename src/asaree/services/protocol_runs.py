@@ -327,8 +327,19 @@ async def update_node_run(
 ) -> ProtocolRun | None:
     """Shallow-merge *patch* into ``node_runs[node_id]`` -- the same
     read-modify-write idiom ``upsert_replicate`` uses for its JSONB columns, one
-    level deeper (merging into one key of the blob, not the blob itself)."""
-    run = await get_protocol_run(db, protocol_run_id)
+    level deeper (merging into one key of the blob, not the blob itself).
+
+    The row is locked for the merge: a supervisor's parallel workers each write
+    their own key concurrently, and an unlocked read-modify-write let one
+    worker's stale snapshot overwrite a sibling's finished status."""
+    run = (
+        await db.execute(
+            select(ProtocolRun)
+            .where(ProtocolRun.id == protocol_run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     if run is None:
         return None
     node_runs = dict(run.node_runs or {})

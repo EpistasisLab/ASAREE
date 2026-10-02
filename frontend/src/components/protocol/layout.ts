@@ -15,7 +15,11 @@ const NODE_HEIGHT = 90
 // because the markup and the placement code drifted apart. See AgentNode's
 // own comment for WHY these x-positions are what they are (the hover toolbar
 // owns the middle of the card, so all four top-edge slots live in the margins).
-const CONNECTOR_X: { agent: Record<ConnectorSlot, number>; critic_gate: Partial<Record<ConnectorSlot, number>> } = {
+const CONNECTOR_X: {
+  agent: Record<ConnectorSlot, number>
+  critic_gate: Partial<Record<ConnectorSlot, number>>
+  tool_step: Partial<Record<ConnectorSlot, number>>
+} = {
   agent: {
     architectural_pattern: 0.05,
     skill: 0.18,
@@ -33,10 +37,11 @@ const CONNECTOR_X: { agent: Record<ConnectorSlot, number>; critic_gate: Partial<
     output_parser: 0.95,
   },
   critic_gate: { model: 0.5 },
+  tool_step: { tool: 0.5 },
 }
 
-// The host cards' own widths: AgentNode is w-72, CriticGateNode w-36.
-const HOST_WIDTH: Record<string, number> = { agent: 288, sub_agent: 288, critic_gate: 144 }
+// The host cards' own widths: AgentNode is w-72, CriticGateNode/ToolStepNode w-36.
+const HOST_WIDTH: Record<string, number> = { agent: 288, sub_agent: 288, critic_gate: 144, tool_step: 224 }
 
 // A connector's node is a CircleNode: a 56px circle under a caption that can
 // grow to 96px, with the circle -- where its handle is -- centered in
@@ -54,7 +59,7 @@ export const SUB_AGENT_CHILD_OFFSET_Y = 320
 /** The `left` style for each of a host card's connectors, as a percentage
  * string — for the `<Handle>`, its caption and its "+" stub, which must all
  * sit at the same x. */
-export function connectorLefts(host: 'agent' | 'critic_gate'): Record<ConnectorSlot, string> {
+export function connectorLefts(host: 'agent' | 'critic_gate' | 'tool_step'): Record<ConnectorSlot, string> {
   const table = CONNECTOR_X[host]
   const slots = Object.keys(CONNECTOR_X.agent) as ConnectorSlot[]
   return Object.fromEntries(slots.map((slot) => [slot, `${(table[slot] ?? 0.5) * 100}%`])) as Record<ConnectorSlot, string>
@@ -67,7 +72,10 @@ export function connectorLefts(host: 'agent' | 'critic_gate'): Record<ConnectorS
 export function connectorNodeOffsetX(hostType: string | undefined, slot: ConnectorSlot): number {
   if (slot === 'sub_agents') return 0
   const canonicalHost = hostType === 'sub_agent' ? 'agent' : hostType
-  const table = canonicalHost === 'agent' || canonicalHost === 'critic_gate' ? CONNECTOR_X[canonicalHost] : undefined
+  const table =
+    canonicalHost === 'agent' || canonicalHost === 'critic_gate' || canonicalHost === 'tool_step'
+      ? CONNECTOR_X[canonicalHost]
+      : undefined
   const width = HOST_WIDTH[hostType ?? ''] ?? HOST_WIDTH.agent
   return (table?.[slot] ?? 0.5) * width - NEW_NODE_HALF_WIDTH
 }
@@ -156,7 +164,8 @@ type TidyEdge = { source: string; target: string; targetHandle?: string | null }
  * already knows) and one of two correct y's. A layout library would have to be
  * fought to honor that and would price in a dependency for the privilege. */
 export function tidyLayout(nodes: TidyNode[], edges: TidyEdge[]): Map<string, XYPosition> {
-  const isHost = (n: TidyNode) => n.type === 'agent' || n.type === 'sub_agent' || n.type === 'critic_gate'
+  const isHost = (n: TidyNode) =>
+    n.type === 'agent' || n.type === 'sub_agent' || n.type === 'critic_gate' || n.type === 'tool_step'
   const hosts = nodes.filter(isHost)
   // A connector edge carries a targetHandle (the slot it feeds); a main-flow
   // edge between two hosts doesn't. So the presence of a handle is what

@@ -199,11 +199,10 @@ export function ConnectMcpServerDialog({
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
-            {/* Unique across the whole deployment, not just this account --
-                worth saying, since the 409 that enforces it is otherwise a
-                surprise. */}
+            {/* User-created names are unique within this account. A system
+                server with the same name also reserves it for every account. */}
             <p className="text-xs text-muted-foreground">
-              How this connection is identified everywhere else. Must not already be taken.
+              How this connection is identified elsewhere. Must be unique within your account.
             </p>
           </div>
 

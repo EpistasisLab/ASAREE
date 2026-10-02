@@ -27,6 +27,10 @@ The forms, all of them:
     fragment. Only legal when the referenced node has an Output Parser
     declaring that field, which is checked at design time -- a typo'd field
     name is a wiring mistake, not an empty resolution.
+``{{node:<id>.<field>[<key>, ...]}}``
+    A list-of-objects field narrowed to those item keys -- one key gives a list
+    of its values (``engineering_recipe[name]`` -> the step names), several give
+    smaller objects. Only legal on a field declared as an array.
 ``{{previous}}``
     Every direct main-edge predecessor's output, fenced. Survives rewiring,
     which a hardcoded id does not, so it is the right default for "just give me
@@ -88,6 +92,11 @@ _REFERENCE_RE = re.compile(
     + _ID
     + r"(?:\."
     + _FIELD
+    + r"(?:\[\s*(?P<keys>"
+    + _FIELD
+    + r"(?:\s*,\s*"
+    + _FIELD
+    + r")*)\s*\])?"
     + r")?"
     + r"|"
     + "|".join(_BARE_TOKENS)
@@ -120,6 +129,9 @@ class PromptReference:
     reference to that node, so everything asking "which senders does this
     prompt name" keeps working without knowing fields exist."""
 
+    item_keys: tuple[str, ...] = ()
+    """``[key, ...]`` after the field: narrow each list item to these keys."""
+
 
 def _reference_from(match: re.Match[str]) -> PromptReference:
     target = match.group("target")
@@ -129,9 +141,10 @@ def _reference_from(match: re.Match[str]) -> PromptReference:
         # case, because node ids are case-sensitive identifiers and lowercasing
         # one would turn a valid reference into a missing node. Same for the
         # field, which is an attribute name on the extracted model.
-        rest = target[len(NODE_PREFIX) :]
+        rest = target[len(NODE_PREFIX) :].split("[", 1)[0]
         node_id, _, field = rest.partition(".")
-        return PromptReference(match.group(0), "node", node_id, bool(match.group("modifier")), field)
+        keys = tuple(k.strip() for k in (match.group("keys") or "").split(",") if k.strip())
+        return PromptReference(match.group(0), "node", node_id, bool(match.group("modifier")), field, keys)
     return PromptReference(match.group(0), lowered, "", bool(match.group("modifier")))
 
 
@@ -199,8 +212,12 @@ def substitute(text: str, render: Callable[[PromptReference], str]) -> str:
     return _REFERENCE_RE.sub(lambda m: render(_reference_from(m)), text or "")
 
 
-def serialize_node_reference(node_id: str, *, field: str = "", raw: bool = False) -> str:
+def serialize_node_reference(
+    node_id: str, *, field: str = "", raw: bool = False, item_keys: tuple[str, ...] = ()
+) -> str:
     """The stored form for a node reference. The picker's output, and the one
     place the spelling is defined -- callers must not build it by hand."""
     suffix = f".{field}" if field else ""
+    if field and item_keys:
+        suffix += f"[{', '.join(item_keys)}]"
     return f"{{{{{NODE_PREFIX}{node_id}{suffix}{'|raw' if raw else ''}}}}}"

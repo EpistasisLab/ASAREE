@@ -10,13 +10,38 @@ import { AGENT_OUTPUT_PRODUCER_ID, agentOutputBindingForMetric, agentOutputSourc
 import { applyCustomMetricChange, type CustomMetricProducerConfig } from '@/lib/customMetrics'
 import { pythonScriptBindingForMetric, pythonScriptSourceOptions } from '@/lib/pythonScriptMetrics'
 import { mcpToolBindingForMetric, mcpToolSourceOptions } from '@/lib/mcpToolMetrics'
-import { localMetricReadinessPreview, removeMetricFromMeasurementPlan, upsertRuntimeMetric } from '@/lib/measurementPlan'
+import { bindingProjection, projectionLabel } from '@/lib/metricFields'
+import { toolStepBindingForMetric, toolStepSourceOptions } from '@/lib/toolStepMetrics'
+import {
+  NODE_RUNTIME_PRODUCER_ID,
+  bindingNodeIds,
+  nodeRuntimeBindingForMetric,
+  nodeRuntimeOutput,
+  nodeRuntimeSourceOptions,
+} from '@/lib/nodeRuntimeMetrics'
+import {
+  DERIVED_PRODUCER_IDS,
+  FEATURE_PIPELINE_PRODUCER_ID,
+  TOOL_STEP_PRODUCER_ID,
+  localMetricReadinessPreview,
+  removeMetricFromMeasurementPlan,
+  upsertRuntimeMetric,
+} from '@/lib/measurementPlan'
 import { METRIC_CATALOG, makeCatalogMetric, makeCustomMetric, normalizeDesignMetrics, type MetricCatalogEntry } from '@/lib/metricCatalog'
 import type { ProtocolGraph } from '@/types/protocols'
 import type { DesignMetric, MeasurementPlan } from '@/types/experiments'
 import { CustomMetricFlow, MetricNodeLabel, type MetricNodeDisplay } from './CustomMetricDialogs'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { useDialogAutosave } from './useDialogAutosave'
+
+const CRITIC_METRIC_KEYS = new Set([
+  'critic_approvals',
+  'critic_rejections',
+  'critic_invocations',
+  'critic_rejections_partial',
+  'critic_rejections_full',
+  'revision_rounds',
+])
 
 function synchronizeMeasurementPlanMetrics(plan: MeasurementPlan | null, metrics: DesignMetric[]) {
   if (!plan) return null
@@ -25,13 +50,19 @@ function synchronizeMeasurementPlanMetrics(plan: MeasurementPlan | null, metrics
     const definition = metric.id ? definitionsById.get(metric.id) : undefined
     if (!definition) return []
     definitionsById.delete(definition.id)
-    return [{
+    const synchronized = {
       ...definition,
       name: metric.name,
-      direction: metric.direction,
-      primary: metric.primary,
       description: metric.description,
       unit: metric.unit,
+    }
+    // A custom metric's definition is owned by its producer's upsert -- reported
+    // ones are just {id, name}; a node runtime one also carries the value type
+    // and aggregation its output needs -- so keep it rather than rebuild it.
+    return [metric.kind === 'custom' ? { ...definition, name: metric.name } : {
+      ...synchronized,
+      direction: metric.direction,
+      primary: metric.primary,
     }]
   })
   return { ...plan, metrics: [...orderedDefinitions, ...definitionsById.values()] }
@@ -54,6 +85,11 @@ function customMetricProducerDisplay(
   if (binding.producer_id === AGENT_OUTPUT_PRODUCER_ID) return { label: agent, type: 'Agent' }
   if (binding.producer_id === 'asaree.python_script') {
     return { label: `${agent}:${nodeLabel(binding.config.script_node_id)}`, type: 'Script' }
+  }
+  if (binding.producer_id === TOOL_STEP_PRODUCER_ID) return { label: nodeLabel(binding.config.node_id), type: 'Tool Step' }
+  if (binding.producer_id === FEATURE_PIPELINE_PRODUCER_ID) return { label: 'DC → FTE → FS', type: 'Feature pipeline' }
+  if (binding.producer_id === NODE_RUNTIME_PRODUCER_ID) {
+    return { label: bindingNodeIds(binding).map(nodeLabel).join(' + ') || 'No nodes', type: 'Node runtime' }
   }
   if (binding.producer_id === 'asaree.mcp_tool') {
     const toolName = typeof binding.config.tool_name === 'string' ? binding.config.tool_name : null
@@ -79,6 +115,7 @@ function MetricsDialog({
   metrics,
   measurementPlan,
   graph,
+  protocolId,
   metricIssueById,
 }: {
   open: boolean
@@ -94,6 +131,7 @@ function MetricsDialog({
   metrics: DesignMetric[]
   measurementPlan: MeasurementPlan | null
   graph: ProtocolGraph | undefined
+  protocolId?: string
   metricIssueById: Map<string, string>
 }) {
   const selectedKeySignature = selectedKeys.join('\u0000')
@@ -137,12 +175,14 @@ function MetricsDialog({
   const hasPythonMetricCandidate = pythonScriptSourceOptions(graph).some((source) => !source.disabledReason)
   const hasMcpMetricCandidate = mcpToolSourceOptions(graph).some((source) => !source.disabledReason)
   const hasAgentMetricCandidate = agentOutputSourceOptions(graph).some((source) => !source.disabledReason)
+  const hasToolStepMetricCandidate = toolStepSourceOptions(graph).some((source) => !source.disabledReason)
+  const hasNodeRuntimeMetricCandidate = nodeRuntimeSourceOptions(graph).some((source) => !source.disabledReason)
   const canvasMetricKeys = new Set(contextualMetricSuggestions(graph).map((suggestion) => suggestion.key))
   const hasValidTool = canvasMetricKeys.has('tool_error_rate')
   const hasCriticGate = graph?.nodes.some((node) => node.type === 'critic_gate') ?? false
   const canvasCannotProduce = (key: string) =>
     ((key === 'tool_calls' || key === 'tool_error_rate') && !hasValidTool)
-    || ((key === 'critic_approvals' || key === 'critic_rejections') && !hasCriticGate)
+    || (CRITIC_METRIC_KEYS.has(key) && !hasCriticGate)
   const unavailableBuiltInKeys = capabilitiesLoading || capabilitiesUnavailable
     ? []
     : builtInEntries.flatMap((entry) => {
@@ -150,7 +190,7 @@ function MetricsDialog({
       return unavailable ? [entry.key] : []
     })
   const unavailableBuiltInKeySignature = unavailableBuiltInKeys.join('\u0000')
-  const canCreateCustomMetric = hasAgentMetricCandidate || hasPythonMetricCandidate || hasMcpMetricCandidate
+  const canCreateCustomMetric = hasAgentMetricCandidate || hasPythonMetricCandidate || hasMcpMetricCandidate || hasToolStepMetricCandidate || hasNodeRuntimeMetricCandidate
   const changedMetrics = metrics.map((metric) => customChanges.find((change) => change.metric.id === metric.id)?.metric ?? metric)
     .concat(customChanges.filter((change) => !metrics.some((metric) => metric.id === change.metric.id)).map((change) => change.metric))
   const customMetricById = new Map(changedMetrics.filter((metric) => metric.kind === 'custom' && metric.id).map((metric) => [metric.id!, metric]))
@@ -168,6 +208,8 @@ function MetricsDialog({
     return agentOutputBindingForMetric(stagedPlan, metricId)
       ?? pythonScriptBindingForMetric(stagedPlan, metricId)
       ?? mcpToolBindingForMetric(stagedPlan, metricId)
+      ?? toolStepBindingForMetric(stagedPlan, metricId)
+      ?? nodeRuntimeBindingForMetric(stagedPlan, metricId)
   }
   function stagedReadinessFor(metric: DesignMetric) {
     const local = localMetricReadinessPreview(metric, stagedPlan, graph)
@@ -316,7 +358,7 @@ function MetricsDialog({
                           ? 'Not supported by this runtime.'
                           : (entry.key === 'tool_calls' || entry.key === 'tool_error_rate') && !hasValidTool
                             ? 'Connect an enabled, configured tool to an active Agent to use this metric.'
-                            : (entry.key === 'critic_approvals' || entry.key === 'critic_rejections') && !hasCriticGate
+                            : CRITIC_METRIC_KEYS.has(entry.key) && !hasCriticGate
                               ? 'Add a Critic Gate to the canvas to use this metric.'
                           : undefined
                     const unavailableReasonId = `metric-unavailable-${entry.key}`
@@ -336,37 +378,44 @@ function MetricsDialog({
           <section className="min-w-0 space-y-3 p-4 md:overflow-y-auto" aria-labelledby="metric-section-custom">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div><h3 id="metric-section-custom" className="text-sm font-semibold">Custom metrics</h3><p className="mt-1 text-xs text-muted-foreground">Create metrics from eligible nodes on this canvas.</p></div>
-                  {!customMetricDraft && <Button type="button" size="sm" disabled={disabled || !canCreateCustomMetric} onClick={() => setCustomMetricDraft(makeCustomMetric({ name: '', description: '' }))}>Create custom metric</Button>}
+                  {!customMetricDraft && <Button type="button" size="sm" disabled={disabled || !canCreateCustomMetric} onClick={() => setCustomMetricDraft(makeCustomMetric({ name: '' }))}>Create custom metric</Button>}
                 </div>
                 {visibleCustomMetrics.length > 0 && <div className="space-y-2" role="list">{visibleCustomMetrics.map((metric) => {
                   const binding = stagedBindingForMetric(metric.id)
                   const readiness = stagedReadinessFor(metric)
                   const selectedPosition = metric.id ? customMetricIds.indexOf(metric.id) : -1
                   const producerDisplay = customMetricProducerDisplay(binding, graph)
+                  const projection = bindingProjection(binding, metric.id)
+                  const runtimeOutput = binding?.producer_id === NODE_RUNTIME_PRODUCER_ID
+                    ? nodeRuntimeOutput(Object.keys(binding.outputs)[0])
+                    : undefined
                   return <div key={metric.id} role="listitem" aria-label={`${metric.name}, position ${selectedPosition + 1} of ${customMetricIds.length}`} className="flex flex-wrap items-start gap-2 rounded-md border p-2.5">
                     <span className="min-w-0 flex-1">
                       {producerDisplay
                         ? <MetricNodeLabel display={producerDisplay} />
                         : <span className="truncate text-sm font-medium">Custom metric</span>}
                       <span className="mt-0.5 block text-xs text-muted-foreground">{metric.name}</span>
+                      {projection && <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">{projectionLabel(projection)}</span>}
+                      {runtimeOutput && <span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground">{runtimeOutput.key}</span>}
                       {!readiness.ready && <span className="mt-1 block text-xs text-[color:var(--chart-4)]">{readiness.detail}</span>}
                     </span>
                     <span className="flex items-center gap-0.5">
                       <Button type="button" variant="ghost" size="icon-sm" aria-label={`Move ${metric.name} up in staged order`} disabled={disabled || selectedPosition === 0} onClick={() => moveStagedCustomMetric(metric, -1)}><ArrowUp className="size-3.5" /></Button>
                       <Button type="button" variant="ghost" size="icon-sm" aria-label={`Move ${metric.name} down in staged order`} disabled={disabled || selectedPosition === customMetricIds.length - 1} onClick={() => moveStagedCustomMetric(metric, 1)}><ArrowDown className="size-3.5" /></Button>
                     </span>
-                    {binding && metric.valueType === 'opaque' && <Button type="button" variant="ghost" size="sm" aria-label={`Edit ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricDraft(metric)}>Edit</Button>}
+                    {binding && (binding.producer_id === TOOL_STEP_PRODUCER_ID || !DERIVED_PRODUCER_IDS.has(binding.producer_id)) && <Button type="button" variant="ghost" size="sm" aria-label={`Edit ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricDraft(metric)}>Edit</Button>}
                     <Button type="button" variant="ghost" size="icon-sm" aria-label={`Delete ${metric.name}`} disabled={disabled} onClick={() => setCustomMetricPendingDelete(metric)}><Trash2 className="size-3.5 text-destructive" /></Button>
                   </div>
                 })}</div>}
                 <p role="status" aria-label="Staged metric order update" aria-live="polite" className="sr-only">{stagedOrderAnnouncement}</p>
                 {visibleCustomMetrics.length === 0 && !customMetricDraft && <p className="rounded-md border border-dashed px-3 py-3 text-xs text-muted-foreground">No custom metrics yet.</p>}
-                {!canCreateCustomMetric && !customMetricDraft && <p role="note" className="mt-2 rounded-md border border-dashed px-3 py-3 text-xs text-muted-foreground">Create custom metrics from an enabled Agent, Script, or configured MCP Tool.</p>}
+                {!canCreateCustomMetric && !customMetricDraft && <p role="note" className="mt-2 rounded-md border border-dashed px-3 py-3 text-xs text-muted-foreground">Create custom metrics from an enabled Agent, Tool Step, Script, or configured MCP Tool.</p>}
                 {customMetricDraft && <CustomMetricFlow
                   key={customMetricDraft.id}
                   metric={customMetricDraft}
                   binding={stagedBindingForMetric(customMetricDraft.id)}
                   graph={graph}
+                  protocolId={protocolId}
                   existingMetrics={stagedMetrics}
                   onCancel={() => { setCustomMetricDraft(undefined); setCustomMetricDirty(false) }}
                   onDirtyChange={setCustomMetricDirty}
@@ -401,11 +450,13 @@ export function MetricsEditor({
   metrics,
   measurementPlan,
   graph,
+  protocolId,
   onChange,
   onApplyMetrics,
   disabled = false,
 }: {
   experimentId?: string
+  protocolId?: string
   metrics: DesignMetric[]
   measurementPlan: MeasurementPlan | null
   graph: ProtocolGraph | undefined
@@ -502,7 +553,7 @@ export function MetricsEditor({
       ...nextPlan,
       metrics: nextPlan.metrics.map((definition) => {
         const designMetric = byId.get(definition.id)
-        return designMetric ? { ...definition, primary: designMetric.primary } : definition
+        return designMetric?.kind === 'runtime' ? { ...definition, primary: designMetric.primary } : definition
       }),
     }
     return { metrics: nextMetrics, measurementPlan: synchronizedPlan }
@@ -539,6 +590,7 @@ export function MetricsEditor({
         metrics={normalized}
         measurementPlan={measurementPlan}
         graph={graph}
+        protocolId={protocolId}
         metricIssueById={serverIssueByMetricId}
         onApply={async (selectedKeys, customChanges, customMetricIds) => {
           let draft = builtInDraft(selectedKeys)

@@ -3,6 +3,8 @@ import type { ProtocolGraph } from '@/types/protocols'
 import { metricCatalogEntry, type MetricCatalogEntry } from './metricCatalog'
 import { AGENT_OUTPUT_PRODUCER_ID } from './agentOutputMetrics'
 import { MCP_TOOL_PRODUCER_ID } from './mcpToolMetrics'
+import { NODE_RUNTIME_PRODUCER_ID } from './nodeRuntimeMetrics'
+import { TOOL_STEP_PRODUCER_ID } from './toolStepMetrics'
 
 export type MetricReadiness = {
   ready: boolean
@@ -19,11 +21,22 @@ export const OBSERVATION_LABELS: Record<ObservationStatus, string> = {
   not_applicable: 'Not applicable',
 }
 
+// Producers ASAREE computes in code from what a run recorded
+// (services/derived_metrics.py). A Tool Step metric is authored through the
+// custom-metric dialog; the feature pipeline is declared in the plan document.
+export { NODE_RUNTIME_PRODUCER_ID, TOOL_STEP_PRODUCER_ID }
+export const FEATURE_PIPELINE_PRODUCER_ID = 'asaree.feature_pipeline'
+export const DERIVED_PRODUCER_IDS = new Set([TOOL_STEP_PRODUCER_ID, FEATURE_PIPELINE_PRODUCER_ID])
+const FEATURE_PIPELINE_STAGE_KEYS = ['dc_node_id', 'fte_node_id', 'fs_node_id'] as const
+
 const PRODUCER_LABELS: Record<string, string> = {
   'asaree.runtime': 'ASAREE runtime',
   'asaree.python_script': 'Python Script',
   [AGENT_OUTPUT_PRODUCER_ID]: 'Agent output',
   [MCP_TOOL_PRODUCER_ID]: 'MCP Tool',
+  [TOOL_STEP_PRODUCER_ID]: 'Tool Step',
+  [FEATURE_PIPELINE_PRODUCER_ID]: 'Feature pipeline',
+  [NODE_RUNTIME_PRODUCER_ID]: 'Node runtime',
 }
 
 export function removeMetricFromMeasurementPlan(
@@ -33,7 +46,13 @@ export function removeMetricFromMeasurementPlan(
   if (!plan || !metricId) return plan
   const producers = plan.producers.flatMap((producer) => {
     const outputs = Object.fromEntries(Object.entries(producer.outputs).filter(([, id]) => id !== metricId))
-    return Object.keys(outputs).length ? [{ ...producer, outputs }] : []
+    if (!Object.keys(outputs).length) return []
+    // A field projection belongs to its output key, so it leaves with it.
+    const projections = producer.config.projections
+    const config = projections && typeof projections === 'object'
+      ? { ...producer.config, projections: Object.fromEntries(Object.entries(projections).filter(([key]) => key in outputs)) }
+      : producer.config
+    return [{ ...producer, outputs, config }]
   })
   const producerIds = new Set(producers.map((producer) => producer.id))
   return {
@@ -111,6 +130,25 @@ export function localMetricReadinessPreview(
     if (agent.data.active === false) return { ready: false, producer, detail: 'The Agent is disabled.' }
     return { ready: true, producer, detail: 'The Agent final output will be captured after execution.' }
   }
+  if (binding.producer_id === TOOL_STEP_PRODUCER_ID) {
+    const step = graph?.nodes.find((node) => node.id === binding.config.node_id && node.type === 'tool_step')
+    if (!step) return { ready: false, producer, detail: 'The Tool Step is unavailable.' }
+    if (step.data.active === false) return { ready: false, producer, detail: 'The Tool Step is disabled.' }
+    return { ready: true, producer, detail: "The Tool Step's result will be read after execution." }
+  }
+  if (binding.producer_id === FEATURE_PIPELINE_PRODUCER_ID) {
+    const missing = FEATURE_PIPELINE_STAGE_KEYS.find((key) => !graph?.nodes.some(
+      (node) => node.id === binding.config[key] && (node.type === 'agent' || node.type === 'sub_agent'),
+    ))
+    if (missing) return { ready: false, producer, detail: `The ${missing.split('_')[0].toUpperCase()} Agent is unavailable.` }
+    return { ready: true, producer, detail: 'Computed from the stage payloads after execution.' }
+  }
+  if (binding.producer_id === NODE_RUNTIME_PRODUCER_ID) {
+    const nodeIds = Array.isArray(binding.config.node_ids) ? binding.config.node_ids.map(String) : []
+    if (nodeIds.length === 0) return { ready: false, producer, detail: 'No node is selected to measure.' }
+    const missing = nodeIds.filter((id) => !graph?.nodes.some((node) => node.id === id))
+    if (missing.length) return { ready: false, producer, detail: `Node ${missing.join(', ')} is not on the canvas.` }
+  }
   if (binding.kind === 'reported') {
     const graphNodes = graph?.nodes ?? []
     const graphEdges = graph?.edges ?? []
@@ -157,6 +195,7 @@ export function localMetricReadinessPreview(
 }
 
 export function metricMetadata(metric: DesignMetric): string {
+  if (metric.kind === 'custom') return 'captured output'
   const catalog = metricCatalogEntry(metric.catalogKey)
   const unit = metric.unit || catalog?.unit || 'unitless'
   const aggregation = metric.valueType === 'boolean' ? 'rate' : (metric.aggregation ?? catalog?.aggregation ?? 'mean')

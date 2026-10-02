@@ -420,15 +420,13 @@ def result_rows_schema(
                     {
                         "name": key,
                         "role": "reported" if key in reported_keys else "outcome",
-                        "value_type": (
-                            "string"
-                            if key in script_columns
-                            else (metric_types or {}).get(key, "opaque" if key in reported_keys else "number")
-                        ),
                         **(
                             {}
                             if key in reported_keys
-                            else {"cell_aggregation": (metric_aggregations or {}).get(key, "mean")}
+                            else {
+                                "value_type": (metric_types or {}).get(key, "number"),
+                                "cell_aggregation": (metric_aggregations or {}).get(key, "mean"),
+                            }
                         ),
                     },
                     *(

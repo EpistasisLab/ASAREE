@@ -84,6 +84,34 @@ def _normalize_metric_values(values: dict[str, Any] | None) -> dict[str, Any]:
     return {key: int(value) if isinstance(value, bool) else value for key, value in (values or {}).items()}
 
 
+def _attempt_metric_values(stored: dict[str, Any]) -> dict[str, Any]:
+    """Project score values plus measured node-scoped runtime observations.
+
+    Runtime observations stay out of the replicate's persisted scoring values.
+    Node-scoped runtime metrics have no equivalent fixed execution column, so
+    Results reads them from the immutable attempt measurement document.
+    """
+    raw_values = stored.get("metric_values")
+    projected = _normalize_metric_values(raw_values if isinstance(raw_values, dict) else None)
+    measurement = stored.get("measurement")
+    observations = measurement.get("observations") if isinstance(measurement, dict) else None
+    for observation in observations if isinstance(observations, list) else []:
+        if not isinstance(observation, dict) or observation.get("status") != "measured":
+            continue
+        producer = observation.get("producer")
+        name = observation.get("metric_name")
+        if (
+            not isinstance(producer, dict)
+            or producer.get("producer_id") != "asaree.node_runtime"
+            or not isinstance(name, str)
+        ):
+            continue
+        value = observation.get("value")
+        if value is not None:
+            projected.setdefault(name, int(value) if isinstance(value, bool) else value)
+    return projected
+
+
 def _merge_legacy_facets(
     metric_values: dict[str, Any],
     raw_artifacts: Any,
@@ -95,8 +123,8 @@ def _merge_legacy_facets(
 ) -> LegacyResultFacets:
     """Add compatibility facts without duplicating current measurements.
 
-    Opaque reported metrics are JSON values, which legacy migration also
-    recognizes as non-scalar historical data. A matching current observation
+    Reported metrics may contain arbitrary JSON values, which legacy migration
+    also recognizes as non-scalar historical data. A matching current observation
     is authoritative, so it must not leave a duplicate ``legacy_values``
     entry that would hide the declared Results column.
     """
@@ -139,6 +167,7 @@ def _primary_metric(design_spec: dict[str, Any] | None) -> tuple[str | None, str
     for metric in metrics:
         if (
             isinstance(metric, dict)
+            and metric.get("kind") == "runtime"
             and metric.get("primary")
             and isinstance(metric.get("name"), str)
             and metric.get("valueType", "number") in {"number", "boolean"}
@@ -178,7 +207,7 @@ def _declared_metric_types(design_spec: dict[str, Any] | None) -> dict[str, str]
     types: dict[str, str] = {}
     for metric in normalize_metrics((design_spec or {}).get("metrics")):
         key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric.get("name")
-        if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
+        if isinstance(key, str) and metric.get("valueType") in {"number", "boolean"}:
             types[key] = metric["valueType"]
     return types
 
@@ -188,7 +217,7 @@ def _declared_metric_aggregations(design_spec: dict[str, Any] | None) -> dict[st
     aggregations: dict[str, str] = {}
     for metric in normalize_metrics((design_spec or {}).get("metrics")):
         key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric.get("name")
-        if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
+        if isinstance(key, str) and metric.get("valueType") in {"number", "boolean"}:
             aggregations[key] = metric["aggregation"]
     return aggregations
 
@@ -198,7 +227,7 @@ def _declared_metric_directions(design_spec: dict[str, Any] | None) -> dict[str,
     directions: dict[str, str] = {}
     for metric in normalize_metrics((design_spec or {}).get("metrics")):
         key = metric.get("catalogKey") if metric["kind"] == "runtime" else metric.get("name")
-        if isinstance(key, str) and metric["valueType"] in {"number", "boolean"}:
+        if isinstance(key, str) and metric.get("valueType") in {"number", "boolean"}:
             directions[key] = metric["direction"]
     return directions
 
@@ -456,11 +485,10 @@ async def summarize_experiment_run_results(
     ) -> tuple[dict[str, Any], dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
         """The immutable score/evaluation facts recorded by this attempt."""
         stored = protocol_run.attempt_result if isinstance(protocol_run.attempt_result, dict) else {}
-        metric_values = stored.get("metric_values")
         evaluation = stored.get("metric_evaluation")
         observations, artifacts = measurement_facets(stored.get("measurement"))
         return (
-            _normalize_metric_values(metric_values if isinstance(metric_values, dict) else None),
+            _attempt_metric_values(stored),
             dict(evaluation) if isinstance(evaluation, dict) else None,
             observations,
             artifacts,

@@ -108,7 +108,7 @@ def test_measurement_plan_document_round_trips_in_normalized_collections() -> No
         **document,
         "metrics": [{key: value for key, value in document["metrics"][0].items() if key != "primary"}],
     }
-    assert normalize_measurement_plan(without_primary)["metrics"][0]["primary"] is False
+    assert "primary" not in normalize_measurement_plan(without_primary)["metrics"][0]
 
     multiple_primary = {
         **document,

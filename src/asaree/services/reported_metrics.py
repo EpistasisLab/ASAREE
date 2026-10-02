@@ -7,7 +7,6 @@ output or the last matching call already present in its immutable run trace.
 
 from __future__ import annotations
 
-import json
 import uuid
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -18,6 +17,16 @@ from motoro.schemas.llm import flatten_tool_call_records
 from motoro.services import mcp_service
 
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.derived_metrics import (
+    DERIVED_PRODUCER_IDS,
+    FEATURE_PIPELINE_PRODUCER_ID,
+    TOOL_STEP_PRODUCER_ID,
+    collect_derived_observations,
+    derived_binding_issue,
+    output_projection,
+    project_value,
+    projection_issue,
+)
 from asaree.services.measurement_engine import (
     MeasurementEvaluation,
     MeasurementPlan,
@@ -26,64 +35,20 @@ from asaree.services.measurement_engine import (
     ProducerProvenance,
     ValidationIssue,
     ValidationReport,
-    is_scalar_value,
     preserved_binding_severity,
 )
 from asaree.services.protocol_graph import directly_connected_tool_pair, node_map
+from asaree.services.tool_steps import flatten_paths, parse_json_object
 
 AGENT_OUTPUT_PRODUCER_ID = "asaree.agent_output"
 PYTHON_SCRIPT_PRODUCER_ID = "asaree.python_script"
 MCP_TOOL_PRODUCER_ID = "asaree.mcp_tool"
-REPORTED_PRODUCER_IDS = frozenset({AGENT_OUTPUT_PRODUCER_ID, PYTHON_SCRIPT_PRODUCER_ID, MCP_TOOL_PRODUCER_ID})
+REPORTED_PRODUCER_IDS = frozenset(
+    {AGENT_OUTPUT_PRODUCER_ID, PYTHON_SCRIPT_PRODUCER_ID, MCP_TOOL_PRODUCER_ID, *DERIVED_PRODUCER_IDS}
+)
 MCP_TOOL_NODE_TYPES = frozenset({"mcp_tool", "mcp_scikit_learn", "mcp_client_tool"})
 _SCRIPT_SERVER = "asaree-script"
 _SCRIPT_TOOL = "run_wired_script"
-
-
-def _structured_value(value: Any) -> Any:
-    """Decode a JSON transport string while preserving already-typed values."""
-    if not isinstance(value, str):
-        return value
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError:
-        return value
-
-
-def _project_reported_value(value: Any, projection: Any) -> tuple[Any, str | None]:
-    """Select one typed value from a reported JSON document.
-
-    Projection paths use dot-separated object keys (and integer list indexes).
-    ``length`` is intentionally the only transform: it covers collection counts
-    without turning measurement plans into an expression language.
-    """
-    if not isinstance(projection, Mapping):
-        return None, "The reported metric projection is invalid."
-    path = projection.get("path")
-    if not isinstance(path, str):
-        return None, "The reported metric projection has no path."
-    current = _structured_value(value)
-    segments = (
-        [part.replace("~1", "/").replace("~0", "~") for part in path.removeprefix("/").split("/")]
-        if path.startswith("/")
-        else [part for part in path.split(".") if part]
-    )
-    for segment in segments:
-        if isinstance(current, Mapping) and segment in current:
-            current = current[segment]
-        elif isinstance(current, Sequence) and not isinstance(current, str):
-            try:
-                current = current[int(segment)]
-            except (ValueError, IndexError):
-                return None, f"Reported metric path {path!r} is unavailable."
-        else:
-            return None, f"Reported metric path {path!r} is unavailable."
-    transform = projection.get("transform")
-    if transform is None:
-        return current, None
-    if transform == "length" and isinstance(current, Mapping | Sequence) and not isinstance(current, str):
-        return len(current), None
-    return None, f"Reported metric transform {transform!r} cannot be applied."
 
 
 def _tool_matches(recorded: Any, configured: str) -> bool:
@@ -184,14 +149,16 @@ async def collect_reported_metrics(
     for binding in plan.producers:
         if binding.producer_id not in REPORTED_PRODUCER_IDS:
             continue
+        if binding.producer_id in DERIVED_PRODUCER_IDS:
+            observations.extend(
+                await collect_derived_observations(
+                    binding, metrics, node_runs=run.node_runs or {}, graph=graph, attempt_id=attempt_id
+                )
+            )
+            continue
         node_run = (run.node_runs or {}).get(str(binding.config.get("agent_node_id") or ""))
         successful_output = (
             node_run.get("last_successful_output_text", node_run.get("output_text"))
-            if isinstance(node_run, Mapping)
-            else None
-        )
-        structured_agent_output = (
-            node_run.get("last_successful_payload", node_run.get("payload"))
             if isinstance(node_run, Mapping)
             else None
         )
@@ -199,8 +166,14 @@ async def collect_reported_metrics(
             binding.producer_id == AGENT_OUTPUT_PRODUCER_ID
             and isinstance(node_run, Mapping)
             and (node_run.get("status") == "completed" or "last_successful_output_text" in node_run)
-            and (successful_output is not None or structured_agent_output is not None)
+            and successful_output is not None
         )
+        # Field projections read the Agent's typed output: its Output Parser
+        # payload, else a JSON object in its final answer.
+        structured = node_run.get("payload") if agent_output_available and isinstance(node_run, Mapping) else None
+        if agent_output_available and not isinstance(structured, Mapping):
+            structured = parse_json_object(successful_output)
+        structured_paths = flatten_paths(structured) if isinstance(structured, Mapping) else {}
         call = (
             None if binding.producer_id == AGENT_OUTPUT_PRODUCER_ID else await _last_matching_call(run, binding, graph)
         )
@@ -225,37 +198,25 @@ async def collect_reported_metrics(
                 ),
             },
         )
-        projections = binding.config.get("projections")
-        projections = projections if isinstance(projections, Mapping) else {}
         for output_key, metric_id in binding.outputs.items():
             metric = metrics.get(metric_id)
             if metric is None:
                 continue
-            raw_value = (
-                structured_agent_output
-                if agent_output_available and output_key in projections and structured_agent_output is not None
-                else successful_output
-                if agent_output_available
-                else call.get("result")
-                if call is not None
-                else None
-            )
-            value, projection_error = (
-                _project_reported_value(raw_value, projections[output_key])
-                if output_key in projections
-                else (raw_value, None)
-            )
-            type_error = (
-                None
-                if projection_error is not None or not measured or is_scalar_value(value, metric.value_type)
-                else f"Projected value does not match declared type {metric.value_type!r}."
-            )
-            observation_error = projection_error or type_error
+            projection = output_projection(binding, output_key) if agent_output_available else None
+            value: Any
+            observation_error: str | None
+            if projection is not None:
+                value, observation_error = project_value(structured_paths, projection)
+            else:
+                value = (
+                    successful_output if agent_output_available else call.get("result") if call is not None else None
+                )
+                observation_error = None
             observations.append(
                 MetricObservation(
                     metric_id=metric.id,
                     metric_name=metric.name,
-                    value_type=metric.value_type,
+                    value_type=None,
                     value=value if observation_error is None else None,
                     status="measured" if measured and observation_error is None else "unavailable",
                     error=(
@@ -361,39 +322,31 @@ async def validate_reported_measurement_plan(
         if binding.producer_id not in REPORTED_PRODUCER_IDS:
             continue
         path = f"producers[{index}]"
-        raw_projections = binding.config.get("projections")
-        projections = raw_projections if isinstance(raw_projections, Mapping) else {}
-        if raw_projections is not None and not isinstance(raw_projections, Mapping):
-            issues.append(
-                ValidationIssue(
-                    "reported_projections_invalid",
-                    "Reported metric projections must be an object keyed by producer output.",
-                    f"{path}.config.projections",
-                )
-            )
         for output_key, metric_id in binding.outputs.items():
             metric = metrics.get(metric_id)
-            projection = projections.get(output_key)
-            if metric is not None and metric.value_type != "opaque" and projection is None:
+            if metric is not None and metric.value_type is not None:
                 issues.append(
                     ValidationIssue(
-                        "reported_projection_missing",
-                        f"Scalar reported metric {metric.name!r} requires a structured field projection.",
+                        "reported_metric_semantics_not_supported",
+                        f"Custom metric {metric.name!r} captures the producer output without value semantics.",
                         f"{path}.outputs.{output_key}",
                     )
                 )
-            if projection is not None and (
-                not isinstance(projection, Mapping)
-                or not isinstance(projection.get("path"), str)
-                or projection.get("transform") not in {None, "length"}
-            ):
+        if projected := projection_issue(binding):
+            code, message, key = projected
+            issues.append(ValidationIssue(code, message, f"{path}.config.{key}"))
+        if binding.producer_id in DERIVED_PRODUCER_IDS:
+            if derived := derived_binding_issue(binding, graph):
+                code, message, key = derived
                 issues.append(
                     ValidationIssue(
-                        "reported_projection_invalid",
-                        "A reported metric projection needs a path and an optional supported transform.",
-                        f"{path}.config.projections.{output_key}",
+                        code,
+                        message,
+                        f"{path}.{key}" if key == "outputs" else f"{path}.config.{key}",
+                        preserved_binding_severity(binding.id, preserved_binding_ids),
                     )
                 )
+            continue
         if agent_issue := _agent_issue(binding, index, graph, preserved_binding_ids):
             issues.append(agent_issue)
         if binding.producer_id == AGENT_OUTPUT_PRODUCER_ID:
@@ -523,10 +476,12 @@ async def validate_reported_measurement_plan(
 
 __all__ = [
     "AGENT_OUTPUT_PRODUCER_ID",
+    "FEATURE_PIPELINE_PRODUCER_ID",
     "MCP_TOOL_NODE_TYPES",
     "MCP_TOOL_PRODUCER_ID",
     "PYTHON_SCRIPT_PRODUCER_ID",
     "REPORTED_PRODUCER_IDS",
+    "TOOL_STEP_PRODUCER_ID",
     "collect_reported_metrics",
     "resolve_reported_metric_graph",
     "validate_reported_measurement_plan",

@@ -1,9 +1,10 @@
 # Myocardial infarction use case
 
-A complete, runnable ASAREE experiment: five agents in series
-(**DC → FTE → FS → MLM → Score**) build a binary classifier for chronic heart
-failure after a myocardial infarction, each one handing a versioned dataset
-workspace to the next, each (except Score) behind an optional critic gate.
+A complete, runnable ASAREE experiment: four agents in series
+(**DC → FTE → FS → MLM**) build a binary classifier for chronic heart failure
+after a myocardial infarction, each one handing a versioned dataset workspace
+to the next behind an optional critic gate, and a deterministic **Score** Tool
+Step evaluates MLM's approved hyperparameter payload on the held-out split.
 
 It's the public counterpart of the spinal-surgery use case in the paper — same
 protocol shape, on a dataset anyone can download.
@@ -12,9 +13,9 @@ protocol shape, on a dataset anyone can download.
 
 | File | |
 | --- | --- |
-| `myocardial-azure-foundry-v0.8.0.json` | The experiment, wired to **Azure Foundry** — what `import_use_case.py` imports by default |
-| `myocardial-anthropic-v0.8.0.json` | The same, wired to **Anthropic** |
-| `myocardial-openai-v0.8.0.json` | The same, wired to **OpenAI** |
+| `myocardial-azure-foundry.json` | The experiment, wired to **Azure Foundry** — what `import_use_case.py` imports by default |
+| `myocardial-anthropic.json` | The same, wired to **Anthropic** |
+| `myocardial-openai.json` | The same, wired to **OpenAI** |
 | `mi_ZSN.csv` | The dataset — 1700 admissions × 111 features, target `mi_ZSN` |
 | `dict_ZSN.json` | The data dictionary for those 111 columns |
 | `stats/` | The paper's analysis scripts and outputs for the spinal runs (not part of this walkthrough) |
@@ -27,11 +28,11 @@ have:
 
 | File | Model factor | Effort factor | Design size |
 | --- | --- | --- | --- |
-| `myocardial-anthropic-v0.8.0.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 80 replicates |
-| `myocardial-openai-v0.8.0.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 8 cells / 80 replicates |
-| `myocardial-azure-foundry-v0.8.0.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 80 replicates |
+| `myocardial-anthropic.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 160 replicates |
+| `myocardial-openai.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 8 cells / 160 replicates |
+| `myocardial-azure-foundry.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 160 replicates |
 
-All three are 2 × 2 × 2 designs (model × effort × critic on/off) at 10
+All three are 2 × 2 × 2 designs (model × effort × critic on/off) at 20
 replicates, with the smaller/larger model of a family at the middle and top of
 its provider's effort ladder. The two ladders aren't the same length: OpenAI's
 `reasoning_effort` stops at `high`, so `high` is that variant's counterpart to
@@ -64,21 +65,69 @@ critic gates, with these v0.8.0 execution details:
   workspace before the agent's first turn, and a wired Script reaches
   `run_model_script` as a path in ambient `_meta` — so DC/FTE/FS call a bare
   `open_workspace(stage=...)` instead of passing `experiment_id`/`cell_label`/
-  `name`, and Score calls `run_model_script` with **no** `code` argument
-  instead of retyping the wired script.
+  `name`.
+- **Scoring is a Tool Step, not an agent.** Like the paper's notebook
+  (`score_payload`), nothing about the scoring call is left to a model: the
+  generic `tool-step-score` node calls `run_model_script` directly, mapping
+  each argument to a source -- the wired Script's code, MLM's approved payload
+  (as canonical JSON), the replicate's workspace, and fixed values
+  (`random_seed=20260705`, `selection_metric=average_precision`, and the
+  XGBoost search space as `param_spec_json`). `run_model_script` itself runs
+  the notebook's `sanitize_payload` port against that spec (every
+  out-of-vocabulary or out-of-bound suggestion is dropped and noted, so a
+  malformed payload still scores instead of crashing). The step fails unless
+  the tool reports the exact `code_sha256` and `payload_sha256` of what it
+  sent, and what it sent is recorded on the replicate *before* the call.
+- **Iteration budget.** Every Reason + Act pattern allows 12 iterations, the
+  notebook's `max_iterations`.
 - **Published execution.** The import helper publishes the localized graph as
   an immutable protocol revision before generating or running replicates.
 - **Visible output contracts.** Each agent's declared output shape lives in a
   connected Output Parser node rather than the legacy hidden
   `config.output_contract` field. The contracts and runtime behavior are
   unchanged; the canvas now exposes where each structured payload is defined.
-- **Declared measurements.** The complete held-out scoring response is retained
-  as an opaque provenance record, while typed projections expose PR-AUC (the
-  primary metric), ROC-AUC, Brier and operating-point diagnostics, pipeline
-  feature counts, Optuna/XGBoost decisions, SHA-256 guards, and the built-in
-  runtime metrics as analysis-ready Results and CSV columns. Agent-stage values
-  come from their connected Output Parser payloads; scoring values come from
-  MI-Score's exact `asaree-sklearn-model.run_model_script` call.
+- **Declared measurements.** Each scoring value is its own numeric metric,
+  read by exact dotted path from the Tool Step's result
+  (`asaree.tool_step` — e.g. `test_metrics.average_precision`,
+  `test_metrics.metrics_at_0.5.f1`): PR-AUC, ROC-AUC, Brier and
+  operating-point diagnostics, Optuna/XGBoost decisions, the SHA-256 guards,
+  and `n_schema_violations` (entries the sanitizer dropped, from the tool's
+  `n_sanitize_notes`). Feature counts
+  (`n_features_after_dc/fte/fs`, `n_features_created`,
+  `n_engineered_features_selected`, `frac_created_selected`) are computed by
+  `asaree.feature_pipeline` from the stage payloads and the raw dataset's
+  columns, the way the notebook's `process_metrics` does, rather than trusted
+  from an agent's self-report. The same producer reports the FTE recipe's
+  `n_recipe_ops`, `recipe_depth` and `recipe_hash`. The notebook's critic and
+  control-flow columns come from the built-in runtime producer: critic
+  invocations, rejections split by partial vs. full scope (an unscoped
+  rejection counts as full), revision rounds, and Reason+Act runs that hit
+  their iteration ceiling (`react_capped_runs`). It also reports
+  `n_agent_runs` (`agent_runs`) and the Reason+Act loop's own counters
+  `react_runs`, `react_turns` and `react_tool_calls`, read from each run's
+  `reason_act_state`; the last two are unavailable when no Reason+Act run took
+  part, as the notebook leaves them null. The same producer reports `prompt_sha256`: a hash of
+  the published revision's stage prompts, critic system prompts (which carry
+  the review criteria) and Output Parser contracts, with factor values applied.
+  The notebook's per-stage `tokens_<stage>` and `n_turns_<stage>` (dc, fte,
+  fs, mlm, critic) come from `asaree.node_runtime`: one binding per stage, each
+  listing the canvas nodes that make it up in `config.node_ids` (the critic
+  stage lists all four gates), summing every run those nodes launched,
+  revisions included. The remaining agent-stage values come from their
+  Output Parser payloads.
+- **MLM brief and critic task_brief.** The notebook's `summarize_for_mlm`
+  brief is rebuilt in two parts. The edge from Critic (FS) into the MLM is set
+  to **Selected fields** (`edge.data.handoff`, on the edge's hover toolbar):
+  `selected_features`, `n_features_out`, `observed_class_distribution`,
+  `class_balance_check`, `notes_for_mlm`. The FS prose report doesn't pass.
+  The FTE/DC parts, which come from further upstream, are field references in
+  the MLM goal. They're narrowed the same way the notebook narrows them:
+  `{{node:agent-fte.engineering_recipe[name]}}` passes only the step names,
+  `{{node:agent-fte.encoding_map[feature, encoding]}}` passes only those two
+  keys, and DC passes `notes_for_fte`. If FS extracted none of the selected fields, the edge
+  falls back to the full FS output. Each Critic Gate's system prompt includes
+  the `task_brief`, because the canvas sends a critic only the output it
+  reviews.
 
 That `open_workspace(stage=...)` call is deliberately kept: seeding the
 workspace materializes `v0_raw`, but *not* a stage's `.scratch` input, which is
@@ -125,7 +174,7 @@ provider file that matches the credential you will use:
 
 ```bash
 uv run --with ./sdk python publications/BDM/import_use_case.py \
-  publications/BDM/myocardial-openai-v0.8.0.json
+  publications/BDM/myocardial-openai.json
 ```
 
 The helper registers and splits the dataset, maps deployment-specific dataset
@@ -180,8 +229,8 @@ built from the train half; the test half is only touched by the final model
 script. Re-splitting at a different seed overwrites rather than accumulating.
 
 **7. Inspect the generated design.** The **Design** and **Cells** tabs show
-2 × 2 × 2 factor combinations = **8 cells**, with 10 replicates per cell
-(**80 replicates** total). The imported canvas is already published.
+2 × 2 × 2 factor combinations = **8 cells**, with 20 replicates per cell
+(**160 replicates** total). The imported canvas is already published.
 
 **8. Run.** Two ways:
 
@@ -194,8 +243,8 @@ results land in **Cells** and **Results**.
 
 ## Cost
 
-Generating the grid is free — cells and replicates are rows until a run starts — but 80 runs
-of a five-agent pipeline, half of them at the top of the effort ladder, is a
+Generating the grid is free — cells and replicates are rows until a run starts — but 160 runs
+of a four-agent pipeline, half of them at the top of the effort ladder, is a
 real bill. Run one cell
 first. If you only want a smoke test, lower **Replicates** on the Design tab and
 regenerate before running; ASAREE opens a new design revision when the change

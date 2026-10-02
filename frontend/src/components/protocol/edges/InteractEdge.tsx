@@ -1,11 +1,15 @@
 import { useState, type CSSProperties } from 'react'
-import { BaseEdge, EdgeToolbar, getBezierPath, useReactFlow, type EdgeProps } from '@xyflow/react'
+import { BaseEdge, EdgeLabelRenderer, EdgeToolbar, getBezierPath, useReactFlow, type EdgeProps } from '@xyflow/react'
 // Trash2, not an X -- the same glyph NodeHoverToolbar's own Delete button
 // uses, so "remove this thing" looks identical whether the thing is a node or
 // an edge. An X here also collided with the two other X's on the canvas
 // (dismissing a panel, unbinding a factor), neither of which deletes anything.
-import { Plus, Trash2 } from 'lucide-react'
+import { Filter, Plus, Trash2 } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { describeHandoff } from '@/lib/promptReferences'
+import type { EdgeHandoff } from '@/types/protocols'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
+import { EdgeHandoffPanel } from './EdgeHandoffPanel'
 
 // Every edge's look is decided here and nowhere else -- no edge in a persisted
 // graph carries its own `style`, and index.css overrides none of xyflow's
@@ -27,22 +31,22 @@ import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 // A solid edge is deliberately not one relationship: between two Agent nodes it
 // is BOTH the left-to-right pipeline edge a normal run walks AND the "these two
 // may consult each other" edge a Peer Collaboration run reads (undirected). The
-// experiment's coordination strategy picks which. Sequential Agent-to-Agent
-// edges get a heavier stroke and an arrow from source to target; under the
-// collaboration strategies the same relationship stays undirected. An earlier
-// pass captioned peer edges "can consult"; it read as clutter on a canvas where
-// most solid edges qualify, and the Design tab already says which strategy is
-// in force.
+// experiment's coordination strategy picks which. Sequential and Critic Gate
+// main-flow edges get a heavier stroke and an arrow from source to target;
+// under the collaboration strategies the same relationship stays undirected.
+// An earlier pass captioned peer edges "can consult"; it read as clutter on a
+// canvas where most solid edges qualify, and the Design tab already says which
+// strategy is in force.
 //
 // Note the dashes are NOT the same statement as MemoryNode's dashed ring,
 // which means "not yet functional"; here they only mean "connector, not
 // pipeline". Nothing currently renders both, but don't add a third meaning.
 const EDGE_STROKE = 'color-mix(in oklch, var(--muted-foreground), transparent 30%)'
 
-function edgeStyle(isMainEdge: boolean, isSequentialAgentFlow: boolean, hovered: boolean): CSSProperties {
+function edgeStyle(isMainEdge: boolean, isDirectedFlow: boolean, hovered: boolean): CSSProperties {
   return {
     stroke: hovered ? 'var(--primary)' : EDGE_STROKE,
-    strokeWidth: isSequentialAgentFlow ? (hovered ? 3.5 : 3) : hovered ? 2.5 : 2,
+    strokeWidth: isDirectedFlow ? (hovered ? 3.5 : 3) : hovered ? 2.5 : 2,
     strokeDasharray: isMainEdge ? undefined : '6 4',
     filter: hovered ? 'drop-shadow(0 0 5px var(--primary))' : undefined,
     transition: 'stroke 120ms ease, stroke-width 120ms ease',
@@ -83,12 +87,17 @@ export function InteractEdge({
   markerEnd,
 }: EdgeProps) {
   const [hovered, setHovered] = useState(false)
-  const { setEdges } = useReactFlow()
+  const [handoffOpen, setHandoffOpen] = useState(false)
+  const { setEdges, getNode } = useReactFlow()
   const { requestEdgeInsert } = useProtocolCanvasActions()
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
   const isMainEdge = !sourceHandleId && !targetHandleId
-  const isSequentialAgentFlow = data?.sequentialAgentFlow === true
+  const isDirectedFlow = data?.directedFlow === true
   const isPatternEdge = targetHandleId === 'architectural_pattern'
+  // "What passes" is only a choice on a main edge into an Agent: a Critic Gate
+  // always reviews the whole answer (validate_edge_handoffs).
+  const canNarrow = isMainEdge && getNode(target)?.type === 'agent'
+  const handoffLabel = describeHandoff((data as { handoff?: EdgeHandoff } | undefined)?.handoff)
 
   return (
     <>
@@ -97,7 +106,7 @@ export function InteractEdge({
       <BaseEdge
         id={id}
         path={edgePath}
-        style={{ ...edgeStyle(isMainEdge, isSequentialAgentFlow, hovered), ...style }}
+        style={{ ...edgeStyle(isMainEdge, isDirectedFlow, hovered), ...style }}
         markerEnd={markerEnd}
         interactionWidth={24}
       />
@@ -116,7 +125,19 @@ export function InteractEdge({
       />
       {/* Nothing to put in it for a pattern edge -- no delete (see above) and
           no insert -- so it's skipped entirely rather than rendered empty. */}
-      <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible={hovered && !isPatternEdge}>
+      {/* A narrowed edge says so without hovering -- otherwise "this agent
+          only sees three fields" would be invisible on the canvas. */}
+      {handoffLabel && !hovered && !handoffOpen && (
+        <EdgeLabelRenderer>
+          <div
+            className="pointer-events-none absolute rounded-sm border border-primary/40 bg-card px-1 font-mono text-[0.6rem] text-primary shadow-[0_0_8px_-3px_var(--primary)]"
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+          >
+            {handoffLabel}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+      <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible={(hovered || handoffOpen) && !isPatternEdge}>
         <div
           className="flex items-center gap-1 rounded-md border bg-card px-1 py-0.5 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20"
           onMouseEnter={() => setHovered(true)}
@@ -132,6 +153,25 @@ export function InteractEdge({
             >
               <Plus className="size-3" />
             </button>
+          )}
+          {canNarrow && (
+            <Popover open={handoffOpen} onOpenChange={setHandoffOpen}>
+              <PopoverTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="What passes on this connection"
+                    title={handoffLabel ? `Passes ${handoffLabel}` : 'What passes: full output'}
+                    className={`flex size-5 cursor-pointer items-center justify-center rounded-full hover:bg-primary/10 ${handoffLabel ? 'bg-primary/15 text-primary' : 'text-primary'}`}
+                  />
+                }
+              >
+                <Filter className="size-3" />
+              </PopoverTrigger>
+              <PopoverContent side="bottom" className="w-80">
+                <EdgeHandoffPanel edgeId={id} source={source} />
+              </PopoverContent>
+            </Popover>
           )}
           <button
             type="button"

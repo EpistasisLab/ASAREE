@@ -48,6 +48,10 @@ const NODE_ACCENTS: Record<string, string> = {
   // Kind fourteen, added rather than moved: nothing above changed hue to make
   // room for it (see index.css's --node-9 for why the slot is where it is).
   output_parser: 'var(--node-9)',
+  // Kind fifteen. Hue is full (see index.css's --node-9), so this one moves to
+  // the chroma axis instead: a near-neutral steel, the only unsaturated node
+  // on the canvas -- which fits the one kind with no model in it at all.
+  tool_step: 'var(--node-11)',
 }
 
 /** The accent color for a canvas node kind — pass the same key the node card

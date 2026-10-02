@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { FileJson, Upload } from 'lucide-react'
+import { Upload } from 'lucide-react'
 import { ApiError, experimentsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { FileDropInput } from '@/components/protocol/FileDropInput'
 import type { DesignSpec, MeasurementPlan } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 
@@ -89,9 +90,8 @@ export function CreateExperimentFromFileDialog({
   const [definition, setDefinition] = useState<ImportedDefinition | null>(null)
   const [name, setName] = useState('')
   const [nameEdited, setNameEdited] = useState(false)
-  const [fileName, setFileName] = useState<string | null>(null)
+  const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
 
   const experimentsQuery = useQuery({
@@ -150,9 +150,8 @@ export function CreateExperimentFromFileDialog({
     setDefinition(null)
     setName('')
     setNameEdited(false)
-    setFileName(null)
+    setFile(null)
     setFileError(null)
-    if (inputRef.current) inputRef.current.value = ''
   }
 
   function handleOpenChange(next: boolean) {
@@ -160,23 +159,21 @@ export function CreateExperimentFromFileDialog({
     onOpenChange(next)
   }
 
-  async function handleFileSelected(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    event.target.value = '' // selecting the same file again should still parse it
+  async function handleFileSelected(file: File | null) {
     if (!file) return
     importMutation.reset()
     setFileError(null)
     try {
       const parsed = parseDefinition(await file.text())
       setDefinition(parsed)
-      setFileName(file.name)
+      setFile(file)
       setNameEdited(false)
       // If the names request has not completed yet, the effect above fills in
       // the collision-safe name as soon as it does.
       setName(nextAvailableExperimentName(parsed.sourceName, existingNames))
     } catch (error) {
       setDefinition(null)
-      setFileName(null)
+      setFile(null)
       setName('')
       setFileError(error instanceof Error ? error.message : 'Could not read this file as JSON.')
     }
@@ -197,18 +194,13 @@ export function CreateExperimentFromFileDialog({
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="experiment-definition-file">Experiment definition</Label>
-            <Input
-              ref={inputRef}
+            <FileDropInput
               id="experiment-definition-file"
-              type="file"
               accept="application/json,.json"
-              onChange={(event) => void handleFileSelected(event)}
+              file={file}
+              onChange={(next) => void handleFileSelected(next)}
+              placeholder="Drop a JSON file or click to browse"
             />
-            {fileName && (
-              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <FileJson className="size-3.5" /> {fileName}
-              </p>
-            )}
           </div>
           {definition && (
             <div className="space-y-1.5">

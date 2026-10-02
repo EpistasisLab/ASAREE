@@ -38,23 +38,22 @@ def test_frontend_metric_catalog_matches_the_backend_contract() -> None:
             ("aggregation", "aggregation"),
             ("unit", "unit"),
         ):
+            if backend_field not in entry:
+                # Unitless (an opaque hash); the frontend must not invent one.
+                assert f"{frontend_field}:" not in line
+                continue
             assert f"{frontend_field}: '{entry[backend_field]}'" in line
     assert {key for key, line in frontend_lines.items() if "recommended: true" in line} == set(
         RECOMMENDED_RUNTIME_METRIC_KEYS
     )
 
 
-def test_legacy_metric_is_normalized_as_an_opaque_display_only_custom_metric() -> None:
+def test_legacy_metric_is_normalized_as_a_named_custom_observation() -> None:
     legacy = [{"name": "Accuracy", "primary": True, "direction": "maximize"}]
     first = normalize_metrics(legacy)
     second = normalize_metrics(legacy)
     assert first[0]["id"] == second[0]["id"]
-    assert first[0]["kind"] == "custom"
-    assert first[0]["description"] == "Legacy metric declaration for Accuracy."
-    assert first[0]["valueType"] == "opaque"
-    assert first[0]["direction"] == "neutral"
-    assert first[0]["aggregation"] == "none"
-    assert first[0]["primary"] is False
+    assert first[0] == {"id": first[0]["id"], "name": "Accuracy", "kind": "custom"}
 
 
 def test_legacy_metric_id_is_stable_when_an_unrelated_declaration_is_inserted() -> None:
@@ -73,7 +72,7 @@ def test_normalization_preserves_an_explicitly_primary_less_metric_set() -> None
         ]
     )
 
-    assert [metric["primary"] for metric in normalized] == [False, False]
+    assert all("primary" not in metric for metric in normalized)
 
 
 def test_normalization_rejects_multiple_primary_metrics() -> None:
@@ -169,7 +168,7 @@ def test_design_metrics_are_derived_from_a_caller_supplied_plan() -> None:
     ]
 
 
-def test_explicit_scalar_custom_metric_values_are_type_checked() -> None:
+def test_custom_metric_values_are_preserved_without_type_checks() -> None:
     metrics = [
         {"name": "Passed", "kind": "custom", "valueType": "boolean", "primary": True},
         {"name": "Score", "kind": "custom", "valueType": "number", "primary": False},
@@ -178,26 +177,22 @@ def test_explicit_scalar_custom_metric_values_are_type_checked() -> None:
         "Passed": True,
         "Score": 0.8,
     }
-    with pytest.raises(ValueError, match="must be Boolean"):
-        validate_metric_values(metrics, {"Passed": 1})
-    with pytest.raises(ValueError, match="finite number"):
-        validate_metric_values(metrics, {"Score": {"grade": "A"}})
+    assert validate_metric_values(metrics, {"Passed": 1, "Score": {"grade": "A"}}) == {
+        "Passed": 1,
+        "Score": {"grade": "A"},
+    }
 
 
-def test_explicit_custom_boolean_declarations_remain_scalar() -> None:
+def test_explicit_custom_semantics_are_removed() -> None:
     metrics = normalize_metrics(
         [{"name": "Passed", "kind": "custom", "valueType": "boolean", "aggregation": "sum", "primary": True}]
     )
-    assert metrics[0]["valueType"] == "boolean"
-    assert metrics[0]["aggregation"] == "mean"
-    assert metrics[0]["primary"] is True
+    assert metrics[0] == {"id": metrics[0]["id"], "name": "Passed", "kind": "custom"}
 
 
-def test_custom_draft_without_an_explicit_scalar_type_remains_opaque() -> None:
+def test_custom_draft_has_no_value_semantics() -> None:
     metrics = normalize_metrics([{"name": "Reviewer report", "kind": "custom", "primary": True}])
-    assert metrics[0]["valueType"] == "opaque"
-    assert metrics[0]["aggregation"] == "none"
-    assert metrics[0]["primary"] is False
+    assert metrics[0] == {"id": metrics[0]["id"], "name": "Reviewer report", "kind": "custom"}
 
 
 def test_duplicate_custom_labels_remain_persistable_drafts() -> None:

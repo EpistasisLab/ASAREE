@@ -32,8 +32,8 @@ export function MainEdgeAddStub({
     <button
       type="button"
       onClick={handleClick}
-      aria-label={isOutgoing ? 'Connect to another agent' : 'Connect an agent that feeds this one'}
-      title="Connect to another agent"
+      aria-label={isOutgoing ? 'Connect another step' : 'Connect a step that feeds this one'}
+      title="Connect another step"
       className={`group absolute top-1/2 flex -translate-y-1/2 cursor-pointer items-center p-1.5 ${
         isOutgoing ? '-right-11' : '-left-11 flex-row-reverse'
       }`}

@@ -12,6 +12,7 @@ const NODE_TYPE_NAMES: Record<string, string> = {
   agent: 'Agent',
   sub_agent: 'Sub-Agent',
   critic_gate: 'Critic Gate',
+  tool_step: 'Tool Step',
   dataset: 'Dataset',
   model_anthropic: 'Anthropic',
   model_openai: 'OpenAI',

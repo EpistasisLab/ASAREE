@@ -22,6 +22,18 @@ const SINGLE_CAPACITY_SLOTS = new Set([
   'output_parser',
 ])
 
+// A Tool Step calls exactly one MCP tool and passes at most one Script's code,
+// so its Tool slot takes one of each (services/tool_steps.py's
+// validate_tool_step) -- unlike an Agent's, which is an open allow-list.
+function toolStepAccepts(source: Node, targetId: string, nodes: Node[], edges: Edge[]): boolean {
+  const sourceIsScript = source.type === 'script'
+  return !edges.some((edge) => {
+    if (edge.target !== targetId || edge.targetHandle !== 'tool') return false
+    const wired = nodes.find((node) => node.id === edge.source)
+    return (wired?.type === 'script') === sourceIsScript
+  })
+}
+
 export function isProtocolConnectionValid(
   connection: Edge | Connection,
   nodes: Node[],
@@ -52,7 +64,7 @@ export function isProtocolConnectionValid(
     case 'tool':
       return (
         (MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') || sourceNode.type === 'script') &&
-        targetIsAgentLike
+        (targetIsAgentLike || (targetNode.type === 'tool_step' && toolStepAccepts(sourceNode, targetNode.id, nodes, edges)))
       )
     case 'memory':
       return sourceNode.type === 'memory' && targetIsAgentLike

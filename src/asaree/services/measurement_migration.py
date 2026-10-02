@@ -55,27 +55,60 @@ def normalize_experiment_measurement_plan(document: Any, metrics: Any) -> dict[s
                 if isinstance(producer, dict) and producer.get("kind") == "deterministic_evaluator":
                     producer["kind"] = "reported"
     plan = parse_measurement_plan(migrated_document) if migrated_document is not None else MeasurementPlan((), (), ())
-    reported_ids = {"asaree.agent_output", "asaree.python_script", "asaree.mcp_tool"}
+    reported_ids = {
+        "asaree.agent_output",
+        "asaree.python_script",
+        "asaree.mcp_tool",
+        "asaree.tool_step",
+        "asaree.feature_pipeline",
+    }
     reported_bindings = tuple(binding for binding in plan.producers if binding.producer_id in reported_ids)
+    # A node runtime metric is authored as a custom metric, and a definition
+    # saved down to {id, name} would fail the engine's type check. Its outputs
+    # are all numbers -- counts that sum, plus a rate that averages -- so fill
+    # whatever is missing rather than reject the plan.
+    node_runtime_outputs = {
+        metric_id: output_key
+        for binding in plan.producers
+        if binding.producer_id == "asaree.node_runtime"
+        for output_key, metric_id in binding.outputs.items()
+    }
+    plan = replace(
+        plan,
+        metrics=tuple(
+            replace(
+                metric,
+                value_type=metric.value_type or "number",
+                aggregation=metric.aggregation
+                or ("mean" if node_runtime_outputs[metric.id] == "tool_error_rate" else "sum"),
+            )
+            if metric.id in node_runtime_outputs
+            else metric
+            for metric in plan.metrics
+        ),
+    )
     reported_binding_ids = {binding.id for binding in reported_bindings}
     reported_metric_ids = {metric_id for binding in reported_bindings for metric_id in binding.outputs.values()}
-    projected_metric_ids = {
-        metric_id
-        for binding in reported_bindings
-        for output_key, metric_id in binding.outputs.items()
-        if isinstance(binding.config.get("projections"), Mapping)
-        and output_key in binding.config["projections"]
-    }
     normalized = replace(
         plan,
         metrics=tuple(
-            replace(metric, value_type="opaque", direction="neutral", aggregation="none", primary=False)
-            if metric.id in reported_metric_ids and metric.id not in projected_metric_ids
+            replace(
+                metric,
+                value_type=None,
+                direction=None,
+                aggregation=None,
+                primary=None,
+                description=None,
+                unit=None,
+            )
+            if metric.id in reported_metric_ids
             else metric
             for metric in plan.metrics
         ),
         producers=tuple(
-            replace(binding, kind="reported", artifacts=()) if binding.id in reported_binding_ids else binding
+            replace(binding, kind="reported", artifacts=())
+            if binding.id in reported_binding_ids
+            else binding
             for binding in plan.producers
         ),
         inputs=tuple(item for item in plan.inputs if item.producer_binding_id not in reported_binding_ids),

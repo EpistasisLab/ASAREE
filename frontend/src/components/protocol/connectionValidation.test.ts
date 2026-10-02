@@ -68,4 +68,18 @@ describe('isProtocolConnectionValid', () => {
 
     expect(isProtocolConnectionValid(connection, [target, firstSource, secondSource], [existingEdge], false)).toBe(true)
   })
+
+  it('lets a Tool Step take one MCP Tool and one Script, and nothing more', () => {
+    const step: Node = { id: 'step', type: 'tool_step', position: { x: 0, y: 0 }, data: {} }
+    const mcp: Node = { id: 'mcp', type: 'mcp_tool', position: { x: 0, y: 0 }, data: {} }
+    const script: Node = { id: 'script', type: 'script', position: { x: 0, y: 0 }, data: {} }
+    const otherMcp: Node = { id: 'mcp-2', type: 'mcp_tool', position: { x: 0, y: 0 }, data: {} }
+    const nodes = [step, mcp, script, otherMcp]
+    const wired: Edge[] = [{ id: 'e1', source: 'mcp', target: 'step', targetHandle: 'tool' }]
+    const toStep = (source: string): Connection => ({ source, sourceHandle: null, target: 'step', targetHandle: 'tool' })
+
+    expect(isProtocolConnectionValid(toStep('mcp'), nodes, [], false)).toBe(true)
+    expect(isProtocolConnectionValid(toStep('script'), nodes, wired, false)).toBe(true)
+    expect(isProtocolConnectionValid(toStep('mcp-2'), nodes, wired, false)).toBe(false)
+  })
 })

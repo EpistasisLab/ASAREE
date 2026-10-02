@@ -76,7 +76,7 @@ from asaree.services.protocols import (
     list_protocols,
     sync_protocol_names_to_experiment,
 )
-from asaree.services.runtime_metrics import RuntimeMetricProducer
+from asaree.services.runtime_metrics import NodeRuntimeMetricProducer, RuntimeMetricProducer
 
 # For a Content-Disposition filename only -- never touches the experiment's
 # own stored name, just what the browser offers to save the download as.
@@ -625,7 +625,7 @@ def _measurement_capability_outputs(experiment_id: uuid.UUID) -> dict[str, list[
         experiment_id=str(experiment_id),
         inputs={"attempt.runtime": MeasurementInput(value_type="runtime_facts", value={})},
     )
-    capabilities = MeasurementEngine([RuntimeMetricProducer()]).list_capabilities(snapshot)
+    capabilities = MeasurementEngine([RuntimeMetricProducer(), NodeRuntimeMetricProducer()]).list_capabilities(snapshot)
     return {capability.producer_id: sorted(capability.scalar_outputs) for capability in capabilities}
 
 

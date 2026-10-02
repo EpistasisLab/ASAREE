@@ -22,6 +22,8 @@ from asaree.services import prompt_references as pr
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
     _build_system_prompt,
+    _resolve_prompt_references,
+    _upstream_context,
     referenceable_node_ids,
     validate_prompt_references,
 )
@@ -366,8 +368,6 @@ def test_an_out_of_scope_field_reference_reports_the_scope_problem_first() -> No
         _validate("{{node:side.n_rows}}")
 
 
-
-
 # ----------------------------------------------------------------------
 # The System prompt field
 # ----------------------------------------------------------------------
@@ -414,8 +414,6 @@ def test_a_system_prompt_resolves_its_references() -> None:
     assert "{{node:a}}" not in rendered
 
 
-
-
 def test_no_system_prompt_returns_none_so_the_caller_keeps_its_own_default() -> None:
     """Not the empty string: what an unset System prompt becomes is
     ``_run_agent_node``'s decision, and answering it here too would give two
@@ -438,3 +436,128 @@ def test_an_empty_system_prompt_reference_is_reported_not_raised() -> None:
         unresolved_out=unresolved,
     )
     assert unresolved == ["a"]
+
+
+# ----------------------------------------------------------------------
+# Edge handoff: what a main edge passes
+# ----------------------------------------------------------------------
+
+
+def _handoff_graph(handoff: dict[str, Any] | None, *, gate: bool = False) -> dict[str, Any]:
+    """Analyst (parser: notes, recipe[array]) -> [Gate ->] Builder."""
+    parser = _parser("p", "a", "notes")
+    parser["node"]["data"]["config"]["output_contract"]["fields"].append({"name": "recipe", "type": "array"})
+    nodes = [_agent("a", "Analyst"), parser["node"], _agent("b", "Builder")]
+    edges = [parser["edge"]]
+    if gate:
+        nodes.append({"id": "g", "type": "critic_gate", "data": {"label": "Gate", "config": {}}})
+        edges += [_edge("a", "g"), _edge("g", "b")]
+    else:
+        edges.append(_edge("a", "b"))
+    if handoff is not None:
+        edges[-1]["data"] = {"handoff": handoff}
+    return {"nodes": nodes, "edges": edges}
+
+
+_RUNS = {
+    "a": {
+        "output_text": "Long prose report.",
+        "payload": {"notes": "keep age", "recipe": [{"name": "bmi", "op": "ratio"}, {"name": "pp", "op": "diff"}]},
+    }
+}
+
+
+def test_an_edge_with_no_handoff_passes_the_full_output() -> None:
+    context = _upstream_context(_handoff_graph(None), "b", _RUNS)
+    assert "Long prose report." in context
+    assert 'notes="keep age"' in context
+
+
+def test_fields_only_drops_the_prose() -> None:
+    context = _upstream_context(_handoff_graph({"mode": "fields"}), "b", _RUNS)
+    assert "Long prose report." not in context
+    assert context.startswith("[Analyst]\nStructured fields: notes=")
+    assert '"op": "ratio"' in context
+
+
+def test_selected_fields_pass_only_those_and_item_keys_narrow_a_list() -> None:
+    handoff = {"mode": "selected", "fields": [{"name": "recipe", "item_keys": ["name"]}]}
+    context = _upstream_context(_handoff_graph(handoff), "b", _RUNS)
+    assert context == '[Analyst]\nStructured fields: recipe=["bmi", "pp"]'
+
+
+def test_several_item_keys_keep_smaller_objects() -> None:
+    handoff = {"mode": "selected", "fields": [{"name": "recipe", "item_keys": ["name", "op"]}]}
+    context = _upstream_context(_handoff_graph(handoff), "b", _RUNS)
+    assert '{"name": "bmi", "op": "ratio"}' in context
+
+
+def test_a_narrowed_edge_with_nothing_extracted_falls_back_to_the_full_output() -> None:
+    runs = {"a": {"output_text": "Long prose report.", "payload": {}}}
+    context = _upstream_context(_handoff_graph({"mode": "selected", "fields": [{"name": "notes"}]}), "b", runs)
+    assert "Long prose report." in context
+
+
+def test_previous_passes_what_the_edge_passes_but_a_node_reference_stays_whole() -> None:
+    graph = _handoff_graph({"mode": "selected", "fields": [{"name": "notes"}]})
+    previous, _ = _resolve_prompt_references("{{previous}}", graph, "b", _RUNS)
+    whole, _ = _resolve_prompt_references("{{node:a}}", graph, "b", _RUNS)
+    assert previous == 'Structured fields: notes="keep age"'
+    assert "Long prose report." in whole
+
+
+def test_a_gates_outgoing_edge_offers_its_workers_fields() -> None:
+    validate_prompt_references(graph=_handoff_graph({"mode": "selected", "fields": [{"name": "notes"}]}, gate=True))
+
+
+def test_an_edge_into_a_critic_gate_must_pass_the_full_output() -> None:
+    graph = _handoff_graph(None, gate=True)
+    graph["edges"][1]["data"] = {"handoff": {"mode": "fields"}}
+    with pytest.raises(ProtocolValidationError, match="only pass the full output"):
+        validate_prompt_references(graph=graph)
+
+
+@pytest.mark.parametrize(
+    ("handoff", "message"),
+    [
+        ({"mode": "nothing"}, "unknown handoff"),
+        ({"mode": "selected", "fields": []}, "none are selected"),
+        ({"mode": "selected", "fields": [{"name": "n_rows"}]}, "does not declare"),
+        ({"mode": "selected", "fields": [{"name": "notes", "item_keys": ["x"]}]}, "not a list field"),
+    ],
+)
+def test_an_impossible_handoff_is_refused_at_publish(handoff: dict[str, Any], message: str) -> None:
+    with pytest.raises(ProtocolValidationError, match=message):
+        validate_prompt_references(graph=_handoff_graph(handoff))
+
+
+def test_a_narrowed_handoff_from_a_sender_without_a_parser_is_refused() -> None:
+    graph = {
+        "nodes": [_agent("a"), _agent("b")],
+        "edges": [{**_edge("a", "b"), "data": {"handoff": {"mode": "fields"}}}],
+    }
+    with pytest.raises(ProtocolValidationError, match="no Output Parser"):
+        validate_prompt_references(graph=graph)
+
+
+def test_a_field_reference_can_narrow_a_list_to_item_keys() -> None:
+    graph = _handoff_graph(None)
+    one, _ = _resolve_prompt_references("Steps: {{node:a.recipe[name]}}", graph, "b", _RUNS)
+    two, _ = _resolve_prompt_references("{{ node:a.recipe[ name , op ] }}", graph, "b", _RUNS)
+    assert one == 'Steps: ["bmi", "pp"]'
+    assert two == '[{"name": "bmi", "op": "ratio"}, {"name": "pp", "op": "diff"}]'
+
+
+def test_item_keys_parse_and_serialize() -> None:
+    (ref,) = pr.iter_references("{{node:a.recipe[name, op]|raw}}")
+    assert (ref.node_id, ref.field, ref.item_keys, ref.raw) == ("a", "recipe", ("name", "op"), True)
+    assert pr.serialize_node_reference("a", field="recipe", item_keys=("name",)) == "{{node:a.recipe[name]}}"
+
+
+def test_item_keys_on_a_field_that_is_not_a_list_are_refused() -> None:
+    graph = _handoff_graph(None)
+    graph["nodes"][2]["data"]["config"]["prompt"] = "{{node:a.notes[x]}}"
+    with pytest.raises(ProtocolValidationError, match="not a list field"):
+        validate_prompt_references(graph=graph)
+    graph["nodes"][2]["data"]["config"]["prompt"] = "{{node:a.recipe[name]}}"
+    validate_prompt_references(graph=graph)

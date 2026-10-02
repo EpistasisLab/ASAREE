@@ -21,11 +21,17 @@ from asaree.services.measurement_migration import normalize_experiment_measureme
 from asaree.services.metrics import normalize_metrics
 from asaree.services.reported_metrics import (
     AGENT_OUTPUT_PRODUCER_ID,
+    FEATURE_PIPELINE_PRODUCER_ID,
     MCP_TOOL_PRODUCER_ID,
     PYTHON_SCRIPT_PRODUCER_ID,
+    TOOL_STEP_PRODUCER_ID,
     validate_reported_measurement_plan,
 )
-from asaree.services.runtime_metrics import RuntimeMetricProducer, validate_runtime_measurement_plan
+from asaree.services.runtime_metrics import (
+    NodeRuntimeMetricProducer,
+    RuntimeMetricProducer,
+    validate_runtime_measurement_plan,
+)
 
 _PRODUCER_PATH = re.compile(r"^producers\[(\d+)\]")
 _OUTPUT_PATH = re.compile(r"^producers\[(\d+)\]\.outputs\.([^\.]+)$")
@@ -121,20 +127,21 @@ async def validate_experiment_measurement_plan(
                 )
             )
             continue
-        selected_semantics = (
-            str(metric.get("name") or metric_id),
-            metric.get("valueType", "number"),
-            metric.get("direction", "maximize"),
-            "rate" if metric.get("valueType") == "boolean" else metric.get("aggregation", "mean"),
-            bool(metric.get("primary")),
-        )
-        declared_semantics = (
-            declared.name,
-            declared.value_type,
-            declared.direction,
-            declared.aggregation,
-            declared.primary,
-        )
+        selected_semantics = (str(metric.get("name") or metric_id),)
+        declared_semantics = (declared.name,)
+        if metric.get("kind") == "runtime":
+            selected_semantics += (
+                metric.get("valueType", "number"),
+                metric.get("direction", "maximize"),
+                "rate" if metric.get("valueType") == "boolean" else metric.get("aggregation", "mean"),
+                bool(metric.get("primary")),
+            )
+            declared_semantics += (
+                declared.value_type,
+                declared.direction,
+                declared.aggregation,
+                bool(declared.primary),
+            )
         if selected_semantics != declared_semantics:
             reconciliation_issues.append(
                 ValidationIssue(
@@ -159,9 +166,12 @@ async def validate_experiment_measurement_plan(
         return structural_report
     supported_producers = {
         RuntimeMetricProducer.producer_id: "runtime",
+        NodeRuntimeMetricProducer.producer_id: "runtime",
         AGENT_OUTPUT_PRODUCER_ID: "reported",
         PYTHON_SCRIPT_PRODUCER_ID: "reported",
         MCP_TOOL_PRODUCER_ID: "reported",
+        TOOL_STEP_PRODUCER_ID: "reported",
+        FEATURE_PIPELINE_PRODUCER_ID: "reported",
     }
     producer_issues = []
     for index, binding in enumerate(plan.producers):
@@ -201,7 +211,9 @@ async def validate_experiment_measurement_plan(
         if allow_preserved_bindings
         else set()
     )
-    issues = list(validate_runtime_measurement_plan(plan, preserved_binding_ids=preserved_binding_ids).issues)
+    issues = list(
+        validate_runtime_measurement_plan(plan, preserved_binding_ids=preserved_binding_ids, graph=graph).issues
+    )
     reported_report = await validate_reported_measurement_plan(
         plan,
         graph,

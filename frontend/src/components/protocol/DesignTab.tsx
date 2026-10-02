@@ -792,7 +792,7 @@ export function DesignTab({
             created from Script or MCP Tool nodes.
           </InfoTooltip>
         </Label>
-        <MetricsEditor experimentId={experiment.id} metrics={metrics} measurementPlan={measurementPlan} graph={graphQuery.data as ProtocolGraph | undefined} onChange={(nextMetrics, nextPlan) => { setMetrics(nextMetrics); setMeasurementPlan(nextPlan) }} onApplyMetrics={applyMetrics} disabled={isLocked} />
+        <MetricsEditor experimentId={experiment.id} protocolId={protocolId} metrics={metrics} measurementPlan={measurementPlan} graph={graphQuery.data as ProtocolGraph | undefined} onChange={(nextMetrics, nextPlan) => { setMetrics(nextMetrics); setMeasurementPlan(nextPlan) }} onApplyMetrics={applyMetrics} disabled={isLocked} />
       </div>
 
       <div className="space-y-1.5 rounded-md border bg-muted/30 px-3 py-2">

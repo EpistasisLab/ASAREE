@@ -14,10 +14,6 @@ def _plan(producer_id: str, config: dict) -> object:
                 {
                     "id": "quality",
                     "name": "Quality",
-                    "value_type": "opaque",
-                    "direction": "neutral",
-                    "aggregation": "none",
-                    "primary": False,
                 }
             ],
             "producers": [
@@ -206,21 +202,21 @@ async def test_agent_output_projection_reads_the_structured_parser_payload() -> 
                 {
                     "id": "feature-count",
                     "name": "n_engineered_features",
-                    "value_type": "number",
-                    "direction": "neutral",
-                    "aggregation": "mean",
-                }
+                },
+                {"id": "summary", "name": "summary"},
+                {"id": "missing", "name": "missing"},
             ],
             "producers": [
                 {
                     "id": "fte-output",
                     "producer_id": "asaree.agent_output",
                     "kind": "reported",
-                    "outputs": {"feature_count": "feature-count"},
+                    "outputs": {"feature_count": "feature-count", "summary": "summary", "missing": "missing"},
                     "config": {
                         "agent_node_id": "agent",
                         "projections": {
-                            "feature_count": {"path": "engineering_recipe", "transform": "length"}
+                            "feature_count": {"path": "engineering_recipe", "transform": "length"},
+                            "missing": {"path": "absent"},
                         },
                     },
                 }
@@ -242,12 +238,42 @@ async def test_agent_output_projection_reads_the_structured_parser_payload() -> 
 
     result = await collect_reported_metrics(run, plan, {"nodes": [], "edges": []})
 
-    assert result.observations[0].status == "measured"
-    assert result.observations[0].value == 2
+    by_id = {observation.metric_id: observation for observation in result.observations}
+    assert by_id["feature-count"].status == "measured" and by_id["feature-count"].value == 2
+    assert by_id["summary"].value == "summary", "no projection records the whole final output"
+    assert by_id["missing"].status == "unavailable"
 
 
 @pytest.mark.asyncio
-async def test_mcp_projection_supports_json_pointer_keys_containing_dots(
+async def test_agent_output_projection_falls_back_to_json_in_the_final_answer() -> None:
+    plan = parse_measurement_plan(
+        {
+            "metrics": [{"id": "threshold", "name": "threshold"}],
+            "producers": [
+                {
+                    "id": "dc-output",
+                    "producer_id": "asaree.agent_output",
+                    "kind": "reported",
+                    "outputs": {"threshold": "threshold"},
+                    "config": {"agent_node_id": "agent", "projections": {"threshold": {"path": "a.b"}}},
+                }
+            ],
+            "inputs": [],
+        }
+    )
+    run = SimpleNamespace(
+        id=uuid4(),
+        replicate_result_id=None,
+        node_runs={"agent": {"status": "completed", "output_text": 'Done.\n```json\n{"a": {"b": 0.3}}\n```'}},
+    )
+
+    result = await collect_reported_metrics(run, plan, {"nodes": [], "edges": []})
+
+    assert result.observations[0].value == 0.3
+
+
+@pytest.mark.asyncio
+async def test_mcp_metric_captures_the_complete_tool_result_without_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     plan = parse_measurement_plan(
@@ -272,9 +298,7 @@ async def test_mcp_projection_supports_json_pointer_keys_containing_dots(
                         "mcp_node_id": "mcp",
                         "server_id": str(uuid4()),
                         "tool_name": "score",
-                        "projections": {
-                            "accuracy": {"path": "/test_metrics/metrics_at_0.5/accuracy"}
-                        },
+                        "projections": {"accuracy": {"path": "/test_metrics/metrics_at_0.5/accuracy"}},
                     },
                 }
             ],
@@ -304,7 +328,8 @@ async def test_mcp_projection_supports_json_pointer_keys_containing_dots(
     result = await collect_reported_metrics(run, plan, {"nodes": [], "edges": []})
 
     assert result.observations[0].status == "measured"
-    assert result.observations[0].value == 0.81
+    assert result.observations[0].value == '{"test_metrics":{"metrics_at_0.5":{"accuracy":0.81}}}'
+    assert result.observations[0].value_type is None
 
 
 @pytest.mark.asyncio
@@ -374,7 +399,7 @@ async def test_agent_output_plan_requires_an_active_agent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scalar_reported_metric_requires_a_projection() -> None:
+async def test_reported_metric_rejects_value_semantics() -> None:
     plan = parse_measurement_plan(
         {
             "metrics": [
@@ -404,8 +429,33 @@ async def test_scalar_reported_metric_requires_a_projection() -> None:
         {"nodes": [{"id": "agent", "type": "agent", "data": {}}]},
     )
 
-    assert [issue.code for issue in report.issues] == ["reported_projection_missing"]
+    assert [issue.code for issue in report.issues] == ["reported_metric_semantics_not_supported"]
 
 
 async def _async_value(value):
     return value
+
+
+@pytest.mark.asyncio
+async def test_malformed_projection_is_a_validation_issue() -> None:
+    plan = parse_measurement_plan(
+        {
+            "metrics": [{"id": "quality", "name": "Quality"}],
+            "producers": [
+                {
+                    "id": "agent-output",
+                    "producer_id": "asaree.agent_output",
+                    "kind": "reported",
+                    "outputs": {"value": "quality"},
+                    "config": {"agent_node_id": "agent", "projections": {"value": {"path": "a", "transform": "sum"}}},
+                }
+            ],
+            "inputs": [],
+        }
+    )
+
+    report = await validate_reported_measurement_plan(
+        plan, {"nodes": [{"id": "agent", "type": "agent", "data": {}}], "edges": []}
+    )
+
+    assert [issue.code for issue in report.issues] == ["reported_projection_invalid"]

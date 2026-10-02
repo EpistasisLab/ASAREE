@@ -152,6 +152,13 @@
     /* Sub-Agent uses a bright electric blue for stronger contrast with the
        Agent's emerald while remaining in the same cool-hued agent family. */
     --node-10: oklch(0.8 0.17 220);
+    /* Tool Step (kind fifteen) -- the different axis --node-9's comment
+       anticipated: lightness plus chroma. Every other node is saturated and
+       sits at 0.66-0.88 lightness, so a near-white chrome reads as its own
+       kind without claiming a hue -- fitting for the canvas's only
+       deterministic, model-free step. A dimmer steel (0.86/0.025) was tried
+       first and read as washed-out rather than distinct. */
+    --node-11: oklch(0.95 0.015 240);
     /* Connector captions (Pattern/Skill/Dataset/Knowledge/Model/Memory/Tool on
        AgentNode and CriticGateNode). One fixed yellow rather than the host
        node's own accent: these sit outside the card on the canvas backdrop,

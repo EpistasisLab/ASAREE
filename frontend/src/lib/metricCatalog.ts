@@ -41,6 +41,16 @@ export const METRIC_CATALOG: readonly MetricCatalogEntry[] = [
   { key: 'agent_loop_iterations', name: 'Agent-loop iterations', shortDescription: 'Distinct Agent reasoning-loop iterations in the run.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'iterations', category: 'Agents', source: 'Protocol activity' },
   { key: 'critic_rejections', name: 'Critic rejections', shortDescription: 'Rejected critic-gate reviews during the run.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'reviews', category: 'Critics', source: 'Protocol activity' },
   { key: 'critic_approvals', name: 'Critic approvals', shortDescription: 'Critic gates ending in an actual approval.', kind: 'runtime', valueType: 'number', defaultDirection: 'neutral', aggregation: 'sum', unit: 'reviews', category: 'Critics', source: 'Protocol activity' },
+  { key: 'critic_invocations', name: 'Critic invocations', shortDescription: 'Critic-gate reviews run during the run.', kind: 'runtime', valueType: 'number', defaultDirection: 'neutral', aggregation: 'sum', unit: 'reviews', category: 'Critics', source: 'Protocol activity' },
+  { key: 'critic_rejections_partial', name: 'Partial critic rejections', shortDescription: 'Rejections scoped to a targeted correction.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'reviews', category: 'Critics', source: 'Protocol activity' },
+  { key: 'critic_rejections_full', name: 'Full critic rejections', shortDescription: 'Rejections asking the stage to reconsider its approach (includes unscoped ones).', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'reviews', category: 'Critics', source: 'Protocol activity' },
+  { key: 'revision_rounds', name: 'Revision rounds', shortDescription: 'Worker reruns triggered by critic rejections.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'rounds', category: 'Critics', source: 'Protocol activity' },
+  { key: 'prompt_sha256', name: 'Prompt SHA-256', shortDescription: 'Hash of the published stage prompts, critic criteria and output contracts.', kind: 'runtime', valueType: 'opaque', defaultDirection: 'neutral', aggregation: 'none', category: 'Agents', source: 'Protocol activity' },
+  { key: 'capped_agent_runs', name: 'Capped agent runs', shortDescription: 'Reason+Act runs cut off by their iteration ceiling.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'runs', category: 'Agents', source: 'Protocol activity' },
+  { key: 'agent_runs', name: 'Agent runs', shortDescription: 'Every agent and critic run the attempt launched, revisions included.', kind: 'runtime', valueType: 'number', defaultDirection: 'neutral', aggregation: 'sum', unit: 'runs', category: 'Agents', source: 'Protocol activity' },
+  { key: 'react_runs', name: 'Reason+Act runs', shortDescription: 'Runs that went through a Reason+Act loop.', kind: 'runtime', valueType: 'number', defaultDirection: 'neutral', aggregation: 'sum', unit: 'runs', category: 'Agents', source: 'Protocol activity' },
+  { key: 'react_turns', name: 'Reason+Act turns', shortDescription: 'Loop iterations reported by Reason+Act runs.', kind: 'runtime', valueType: 'number', defaultDirection: 'minimize', aggregation: 'sum', unit: 'turns', category: 'Agents', source: 'Protocol activity' },
+  { key: 'react_tool_calls', name: 'Reason+Act tool calls', shortDescription: 'Tool calls counted by Reason+Act loops.', kind: 'runtime', valueType: 'number', defaultDirection: 'neutral', aggregation: 'sum', unit: 'calls', category: 'Agents', source: 'Protocol activity' },
 ]
 
 export const RECOMMENDED_METRIC_KEYS = METRIC_CATALOG.filter((entry) => entry.recommended).map((entry) => entry.key)
@@ -66,25 +76,28 @@ export function normalizeDesignMetrics(metrics: DesignMetric[] | undefined): Des
     const catalog = metricCatalogEntry(raw.catalogKey)
     if (raw.kind && !['runtime', 'custom'].includes(raw.kind)) return []
     const kind = raw.kind ?? catalog?.kind ?? 'custom'
-    const scalarCustom = kind === 'custom' && raw.kind === 'custom' && (raw.valueType === 'number' || raw.valueType === 'boolean')
-    return [{
+    const id = typeof raw.id === 'string' && raw.id ? raw.id : legacyId(raw)
+    const name = raw.name.trim()
+    if (kind === 'custom') return [{ id, name, kind }]
+    const metric: DesignMetric = {
       ...raw,
-      id: typeof raw.id === 'string' && raw.id ? raw.id : legacyId(raw),
+      id,
       catalogKey: catalog ? catalog.key : raw.catalogKey,
-      name: raw.name.trim(),
+      name,
       description: typeof raw.description === 'string' && raw.description.trim()
         ? raw.description.trim()
         : catalog?.shortDescription ?? `Legacy metric declaration for ${raw.name.trim()}.`,
       kind,
-      valueType: kind === 'custom' && !scalarCustom ? 'opaque' : raw.valueType ?? catalog?.valueType ?? 'number',
-      direction: kind === 'custom' && !scalarCustom ? 'neutral' : raw.direction === 'maximize' || raw.direction === 'minimize' || raw.direction === 'neutral'
+      valueType: raw.valueType ?? catalog?.valueType ?? 'number',
+      direction: raw.direction === 'maximize' || raw.direction === 'minimize' || raw.direction === 'neutral'
         ? raw.direction
         : (catalog?.defaultDirection ?? 'maximize'),
-      aggregation: kind === 'custom' && !scalarCustom ? 'none' : raw.valueType === 'boolean' ? 'mean' : (raw.aggregation === 'sum' ? 'sum' : raw.aggregation === 'none' ? 'none' : (catalog?.aggregation ?? 'mean')),
-      primary: kind === 'custom' && !scalarCustom ? false : Boolean(raw.primary),
+      aggregation: raw.valueType === 'boolean' ? 'mean' : (raw.aggregation === 'sum' ? 'sum' : raw.aggregation === 'none' ? 'none' : (catalog?.aggregation ?? 'mean')),
+      primary: Boolean(raw.primary),
       unit: raw.unit ?? catalog?.unit,
       scoring: undefined,
-    }]
+    }
+    return [metric]
   })
 }
 
@@ -103,17 +116,11 @@ export function makeCatalogMetric(entry: MetricCatalogEntry, isPrimary: boolean)
   }
 }
 
-export function makeCustomMetric(input: { name: string; description: string; unit?: string }): DesignMetric {
+export function makeCustomMetric(input: { name: string }): DesignMetric {
   return {
     id: newMetricId(),
     name: input.name.trim(),
-    description: input.description.trim(),
     kind: 'custom',
-    valueType: 'opaque',
-    direction: 'neutral',
-    aggregation: 'none',
-    primary: false,
-    unit: input.unit?.trim() || undefined,
   }
 }
 

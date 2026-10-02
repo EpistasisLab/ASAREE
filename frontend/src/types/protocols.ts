@@ -26,6 +26,7 @@ export interface ProtocolNode {
     | AgentNodeData
     | McpToolNodeData
     | CriticGateNodeData
+    | ToolStepNodeData
     | ModelNodeData
     | MemoryNodeData
     | OutputParserNodeData
@@ -38,12 +39,29 @@ export interface ProtocolNode {
     | SingleAgentBaselinePatternNodeData
 }
 
+/** What a main edge passes to the Agent it feeds (`edge.data.handoff`;
+ *  absent = `full`). Mirrors `protocol_execution.HANDOFF_MODES`. There is no
+ *  "nothing": an edge always carries something. */
+export type EdgeHandoffMode = 'full' | 'fields' | 'selected'
+
+export interface EdgeHandoffField {
+  name: string
+  /** Narrows a list of objects to these keys (one key -> a list of values). */
+  item_keys?: string[]
+}
+
+export interface EdgeHandoff {
+  mode: EdgeHandoffMode
+  fields?: EdgeHandoffField[]
+}
+
 export interface ProtocolEdge {
   id: string
   source: string
   target: string
   sourceHandle?: string | null
   targetHandle?: string | null
+  data?: { handoff?: EdgeHandoff }
 }
 
 export type NodeRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled'
@@ -414,6 +432,46 @@ export function defaultCriticGateNodeData(label = 'Critic Gate'): CriticGateNode
       enabled: true,
       max_revisions: 1, // matches the notebook's own MAX_REVISIONS
     },
+  }
+}
+
+// A "Tool Step" calls one MCP tool directly in the main flow -- no LLM, so the
+// same upstream payload always produces the same call. Deliberately use-case
+// agnostic: each argument it sends names where its value comes from, and
+// anything the tool needs done to its inputs (e.g. sanitizing) is the tool's
+// job (services/tool_steps.py). Its Tool connector takes exactly one MCP Tool
+// node and at most one Script.
+export type ToolStepArgumentSource =
+  | { source: 'value'; value: unknown }
+  // The upstream node's typed payload -- as canonical JSON text or the object
+  // itself; `null` when upstream produced none.
+  | { source: 'upstream_payload'; format?: 'json_string' | 'object' }
+  | { source: 'script_code' }
+  | { source: 'workspace_id' }
+
+export interface ToolStepNodeConfig {
+  tool_name: string
+  // Only mapped arguments are sent.
+  arguments: Record<string, ToolStepArgumentSource>
+  // result field -> argument name: the tool must report that argument's
+  // SHA-256 (as sent) in that field, or the step fails.
+  hash_checks?: Record<string, string>
+  timeout_seconds?: number | null
+}
+
+export interface ToolStepNodeData {
+  label: string
+  active?: boolean
+  config: ToolStepNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultToolStepNodeData(label = 'Tool Step'): ToolStepNodeData {
+  return {
+    label,
+    active: true,
+    config: { tool_name: '', arguments: {}, hash_checks: {} },
   }
 }
 

@@ -33,6 +33,7 @@ import {
   defaultAnthropicModelNodeData,
   defaultAzureFoundryModelNodeData,
   defaultCriticGateNodeData,
+  defaultToolStepNodeData,
   defaultDatasetNodeData,
   defaultLocalModelNodeData,
   defaultMcpToolNodeData,
@@ -47,6 +48,7 @@ import {
 import type {
   AgentNodeData,
   CriticGateNodeData,
+  ToolStepNodeData,
   DatasetNodeData,
   ModelNodeData,
   McpToolNodeData,
@@ -75,6 +77,7 @@ import { AgentNodeInspector } from './AgentNodeInspector'
 import { agentTracedLabel, factorBoundField, revealsHiddenMcpServers, toolFactorServerId, unboundBindableFields, type UnboundField } from './bindableFields'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
+import { ToolStepNodeInspector } from './ToolStepNodeInspector'
 import { DatasetNodeInspector } from './DatasetNodeInspector'
 import { DeleteNodeConfirmDialog } from './DeleteNodeConfirmDialog'
 import { DEFAULT_ZOOM } from './constants'
@@ -110,7 +113,7 @@ import {
 } from './ProtocolCanvasContext'
 import { ReasonActPatternNodeInspector } from './ReasonActPatternNodeInspector'
 import { RunConfirmDialog } from './RunConfirmDialog'
-import { ReopenTestRunResultsButton, TestRunResults } from './TestRunResults'
+import { describeRun, ReopenTestRunResultsButton, TestRunResults } from './TestRunResults'
 import type { RunScope } from './runSummary'
 import { ScriptNodeInspector } from './ScriptNodeInspector'
 import { SingleAgentBaselinePatternNodeInspector } from './SingleAgentBaselinePatternNodeInspector'
@@ -122,10 +125,10 @@ import { OkfDocumentNodeInspector } from './OkfDocumentNodeInspector'
 import { SkillBrowserPanel } from './SkillBrowserPanel'
 import { SKILL_BROWSE, nodeDataForSkill } from './skillCatalog'
 import { SkillNodeInspector } from './SkillNodeInspector'
-import { ConversationTranscript } from './ConversationTranscript'
 import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
+import { ToolStepNode } from './nodes/ToolStepNode'
 import { DatasetNode } from './nodes/DatasetNode'
 import { ModelNode } from './nodes/ModelNode'
 import { McpClientToolNode } from './nodes/McpClientToolNode'
@@ -167,6 +170,7 @@ const NODE_TYPES = {
   // that distinguishes it. Same data, same inspector.
   mcp_client_tool: McpClientToolNode,
   critic_gate: CriticGateNode,
+  tool_step: ToolStepNode,
   // All five LLM provider types render through the same component -- it
   // derives icon/accent/placeholder from data.config.provider, not from
   // which of these five keys it was registered under.
@@ -217,6 +221,7 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   // it.
   if (nodeType === 'mcp_tool') return defaultMcpToolNodeData()
   if (nodeType === 'critic_gate') return defaultCriticGateNodeData()
+  if (nodeType === 'tool_step') return defaultToolStepNodeData()
   if (nodeType === 'model_anthropic') return defaultAnthropicModelNodeData()
   if (nodeType === 'model_openai') return defaultOpenAiModelNodeData()
   if (nodeType === 'model_azure_foundry') return defaultAzureFoundryModelNodeData()
@@ -280,6 +285,10 @@ function datasetIdsInGraph(nodes: Node[], factors: DesignFactor[] = EMPTY_FACTOR
 // callable capability of its own, so it shares Tool's slot rather than
 // getting a dedicated one. Dataset used to share it too, but now has its
 // own slot -- what an agent operates ON, not a capability it operates WITH.
+// What MainEdgeAddStub and an edge's insert button can add: the main-flow
+// steps, i.e. an Agent's turn or a Tool Step's fixed call.
+const MAIN_FLOW_NODE_TYPES = ['agent', 'tool_step']
+
 const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; title: string }> = {
   model: { allowedTypes: MODEL_NODE_TYPES, title: 'Add Model' },
   tool: { allowedTypes: [MCP_SERVER_BROWSE, 'script'], title: 'Add Tool' },
@@ -543,7 +552,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // the scope it confirms even exists.
   const [runId, setRunId] = useState<string | null>(null)
   const [testResultsOpen, setTestResultsOpen] = useState(false)
-  const [playResultsOpen, setPlayResultsOpen] = useState(false)
+  const [runResultsOpen, setRunResultsOpen] = useState(false)
   const paneRef = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, fitView } = useReactFlow()
 
@@ -635,7 +644,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     mutationFn: () => protocolsApi.testRun(protocolId),
     onSuccess: (run) => {
       setRunId(run.id)
-      setPlayResultsOpen(false)
+      setRunResultsOpen(false)
       setTestResultsOpen(true)
       queryClient.setQueryData(['protocols', protocolId, 'test-run'], run)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
@@ -652,7 +661,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     onSuccess: (run) => {
       setRunId(run.id)
       setTestResultsOpen(false)
-      setPlayResultsOpen(true)
+      setRunResultsOpen(true)
     },
   })
 
@@ -680,7 +689,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
   })
 
-  const playResult: TestRun | null = runQuery.data?.target_node_id ? {
+  // Any run the Test Run panel isn't already showing -- a node Play, a cell run,
+  // or one started from the SDK/notebook -- gets its own results panel, so a
+  // conversation is only ever shown inside a titled panel saying which run it
+  // belongs to, never as a bare transcript next to an unrelated Test Run.
+  const runResult: TestRun | null = runQuery.data && runQuery.data.id !== testRunQuery.data?.id ? {
     id: runQuery.data.id,
     protocol_id: runQuery.data.protocol_id,
     status: runQuery.data.status,
@@ -731,11 +744,26 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     setRunId(latest.id)
   }, [protocolRunsQuery.data, runId])
 
-  const isRunning =
-    testRunMutation.isPending ||
-    runNodeMutation.isPending ||
-    (!!testRunQuery.data && !TERMINAL_RUN_STATUSES.has(testRunQuery.data.status)) ||
-    (!!runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status))
+  const activeTestRun = testRunQuery.data && !TERMINAL_RUN_STATUSES.has(testRunQuery.data.status)
+    ? {
+        id: testRunQuery.data.id,
+        createdAt: testRunQuery.data.created_at,
+        cancelRequested: !!testRunQuery.data.execution_summary.cancel_requested_at,
+      }
+    : null
+  const activeProtocolRun = runQuery.data && !TERMINAL_RUN_STATUSES.has(runQuery.data.status)
+    ? {
+        id: runQuery.data.id,
+        createdAt: runQuery.data.created_at,
+        cancelRequested: !!runQuery.data.cancel_requested_at,
+      }
+    : null
+  const testRunIsRunning = testRunMutation.isPending || !!activeTestRun
+  const protocolRunIsRunning = runNodeMutation.isPending || !!activeProtocolRun
+  const isRunning = testRunIsRunning || protocolRunIsRunning
+  const cancellableRun = activeTestRun && activeProtocolRun
+    ? activeTestRun.createdAt >= activeProtocolRun.createdAt ? activeTestRun : activeProtocolRun
+    : activeTestRun ?? activeProtocolRun
 
   // Stop button -- only raises cancel_requested_at; run_protocol's own node
   // loop (polled between nodes, not mid-node) is what actually honors it.
@@ -743,14 +771,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // tick, so cancel_requested_at (and the "Stopping…" label below) appears
   // right away instead of up to RUN_POLL_MS late.
   const cancelMutation = useMutation({
-    mutationFn: () => protocolsApi.cancelRun(protocolId, testRunQuery.data?.id ?? runId!),
+    mutationFn: () => protocolsApi.cancelRun(protocolId, cancellableRun!.id),
     onSuccess: () => {
       runQuery.refetch()
       testRunQuery.refetch()
     },
   })
-  const cancelRequested = !!testRunQuery.data?.execution_summary.cancel_requested_at || !!runQuery.data?.cancel_requested_at
-  const showStandaloneConversation = !!runQuery.data?.conversation && runQuery.data.id !== testRunQuery.data?.id
+  const cancelRequested = !!cancellableRun?.cancelRequested
+  const runResultLabel = runQuery.data?.target_node_id ? 'Play Results' : 'Latest Run'
+  const runResultTitle = runQuery.data?.replicate_label ? `Cell Run · ${runQuery.data.replicate_label}` : runResultLabel
 
   // A connected execution-pattern node must never be deletable directly
   // (Backspace/Delete key, NodeHoverToolbar's trash icon -- both go through
@@ -1013,6 +1042,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // find on the canvas. A superset is harmless for the transcript, whose
   // speaker ids are always agents.
   const nodeNames = useMemo(() => nodeDisplayNames(nodes), [nodes])
+  const runResultKind = runQuery.data?.target_node_id
+    ? `Play of ${nodeNames.get(runQuery.data.target_node_id) ?? runQuery.data.target_node_id}`
+    : runQuery.data?.replicate_label ? 'Cell run' : 'Graph run'
   const nodeTypes = useMemo(() => new Map(nodes.map((node) => [node.id, node.type ?? ''])), [nodes])
 
   // The experiment's declared coordination strategy, which decides what the
@@ -1025,6 +1057,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const isPeerCollaboration = coordinationSlug === 'peer_collaboration'
   const isSupervisor = coordinationSlug === 'supervisor_architecture'
   const isSequential = coordinationSlug === 'sequential'
+  const isDirectedFlow = isSequential || coordinationSlug === 'critic_gate'
 
   // React Flow normally calls isValidConnection before this handler, but the
   // mutation boundary enforces the same rule defensively so another caller
@@ -1039,18 +1072,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   }, [experimentLocked, isSequential, nodes, setEdges])
 
   const renderedEdges = useMemo<Edge[]>(() => {
-    if (!isSequential) return edges
-    const agentIds = new Set(nodes.filter((node) => node.type === 'agent').map((node) => node.id))
+    if (!isDirectedFlow) return edges
     return edges.map((edge) => {
-      const isAgentFlow =
-        !edge.sourceHandle &&
-        !edge.targetHandle &&
-        agentIds.has(edge.source) &&
-        agentIds.has(edge.target)
-      if (!isAgentFlow) return edge
+      if (edge.sourceHandle || edge.targetHandle) return edge
       return {
         ...edge,
-        data: { ...edge.data, sequentialAgentFlow: true },
+        data: { ...edge.data, directedFlow: true },
         markerEnd: {
           type: MarkerType.ArrowClosed,
           width: 12,
@@ -1059,7 +1086,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         },
       }
     })
-  }, [edges, isSequential, nodes])
+  }, [edges, isDirectedFlow])
 
   // Which main-flow sides are already taken. Only consulted under
   // 'sequential', where the chain rule caps each side at one edge
@@ -1295,7 +1322,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ? producer.config.script_node_id
         : producer.producer_id === 'asaree.mcp_tool'
           ? producer.config.mcp_node_id
-          : undefined
+          : producer.producer_id === 'asaree.tool_step'
+            ? producer.config.node_id
+            : undefined
       if (typeof nodeId !== 'string' || !nodeId) continue
       const metrics = bindings.get(nodeId) ?? new Map<string, { id: string; name: string }>()
       for (const metricId of Object.values(producer.outputs)) {
@@ -1560,9 +1589,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       return
     }
     if (pendingMainEdgeAdd) {
-      // Always an Agent -- AddNodePanel is restricted to ['agent'] for this
-      // request (see the allowedTypes prop below), matching what
-      // MainEdgeAddStub is for. Positioned left/right of the origin (main
+      // An Agent or a Tool Step -- AddNodePanel is restricted to
+      // MAIN_FLOW_NODE_TYPES for this request (see the allowedTypes prop
+      // below), the only main-flow steps MainEdgeAddStub can add. Positioned left/right of the origin (main
       // flow is left-to-right) rather than below it, unlike a connector add.
       const { nodeId: originId, direction } = pendingMainEdgeAdd
       const originNode = nodes.find((n) => n.id === originId)
@@ -1571,24 +1600,28 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
       const position = findFreePosition(nodes.map((n) => n.position), desired)
       const newId = newNodeId()
-      const newNode: Node = { id: newId, type: 'agent', position, data: defaultDataFor('agent') }
+      const newNode: Node = { id: newId, type: nodeType, position, data: dataOverride ?? defaultDataFor(nodeType) }
       const mainEdge: Edge =
         direction === 'outgoing'
           ? { id: newNodeId(), source: originId, target: newId }
           : { id: newNodeId(), source: newId, target: originId }
-      const { patternNode, patternEdge } = agentDefaultPattern(newId, position, nodes.map((n) => n.position))
-      setNodes((nds) => nds.concat(newNode, patternNode))
-      setEdges((eds) => eds.concat(mainEdge, patternEdge))
+      const pattern = nodeType === 'agent' ? agentDefaultPattern(newId, position, nodes.map((n) => n.position)) : null
+      setNodes((nds) => nds.concat(newNode, ...(pattern ? [pattern.patternNode] : [])))
+      setEdges((eds) => eds.concat(mainEdge, ...(pattern ? [pattern.patternEdge] : [])))
       setPendingMainEdgeAdd(null)
       setAddPanelOpen(false)
       setSelectedNodeId(newId)
       return
     }
     if (pendingEdgeInsert) {
-      // Splits the original edge into origin->newAgent->target -- always an
-      // Agent (AddNodePanel restricted to ['agent'] below), positioned at
+      // Splits the original edge into origin->new->target -- an Agent or a
+      // Tool Step (AddNodePanel restricted to MAIN_FLOW_NODE_TYPES below), positioned at
       // the midpoint of the two nodes the removed edge used to connect.
       const { edgeId, source, target } = pendingEdgeInsert
+      // The first half keeps the split edge's handoff: same sender, so the
+      // narrowed fields still apply. The second half starts at Full output --
+      // the new node has no Output Parser to narrow yet.
+      const handoff = edges.find((e) => e.id === edgeId)?.data?.handoff
       const sourceNode = nodes.find((n) => n.id === source)
       const targetNode = nodes.find((n) => n.id === target)
       const desired =
@@ -1597,16 +1630,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           : screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
       const position = findFreePosition(nodes.map((n) => n.position), desired)
       const newId = newNodeId()
-      const newNode: Node = { id: newId, type: 'agent', position, data: defaultDataFor('agent') }
-      const { patternNode, patternEdge } = agentDefaultPattern(newId, position, nodes.map((n) => n.position))
-      setNodes((nds) => nds.concat(newNode, patternNode))
+      const newNode: Node = { id: newId, type: nodeType, position, data: dataOverride ?? defaultDataFor(nodeType) }
+      const pattern = nodeType === 'agent' ? agentDefaultPattern(newId, position, nodes.map((n) => n.position)) : null
+      setNodes((nds) => nds.concat(newNode, ...(pattern ? [pattern.patternNode] : [])))
       setEdges((eds) =>
         eds
           .filter((e) => e.id !== edgeId)
           .concat(
-            { id: newNodeId(), source, target: newId },
+            { id: newNodeId(), source, target: newId, ...(handoff ? { data: { handoff } } : {}) },
             { id: newNodeId(), source: newId, target },
-            patternEdge,
+            ...(pattern ? [pattern.patternEdge] : []),
           ),
       )
       setPendingEdgeInsert(null)
@@ -1867,6 +1900,17 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   }, [])
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) ?? null
+  // What's wired into a selected Tool Step's Tool connector: its MCP Tool
+  // node (the callable tools and their server) and any Script node.
+  const toolStepSources =
+    selectedNode?.type === 'tool_step'
+      ? edges
+          .filter((edge) => edge.target === selectedNode.id && edge.targetHandle === 'tool')
+          .map((edge) => nodes.find((node) => node.id === edge.source))
+      : []
+  const toolStepMcpNodes = toolStepSources.filter(
+    (node): node is typeof node & { data: McpToolNodeData } => !!node && MCP_TOOL_NODE_TYPES.includes(node.type ?? ''),
+  )
   // Computed once per selection change, not per FactorBindableField -- an
   // Model/Tool/Memory node's plain label alone doesn't say which agent it
   // belongs to (see bindableFields.ts's own comment), so every inspector
@@ -1908,6 +1952,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | AgentNodeData
       | McpToolNodeData
       | CriticGateNodeData
+      | ToolStepNodeData
       | ModelNodeData
       | MemoryNodeData
       | OutputParserNodeData
@@ -2054,7 +2099,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={cancelRequested || cancelMutation.isPending}
+                disabled={!cancellableRun || cancelRequested || cancelMutation.isPending}
                 onClick={() => cancelMutation.mutate()}
               >
                 <Square className="size-4" />
@@ -2089,13 +2134,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               title="Start a Test Run for this canvas, with no factor values substituted in"
             >
               <Play className="size-4" />
-              {isRunning ? 'Test Run running…' : 'Test Run'}
+              {testRunIsRunning ? 'Test Run running…' : 'Test Run'}
             </Button>
             {testRunQuery.data && !testResultsOpen && (
-              <ReopenTestRunResultsButton onOpen={() => setTestResultsOpen(true)} refresh={() => { testRunQuery.refetch() }} />
+              <ReopenTestRunResultsButton detail={describeRun('Test Run', testRunQuery.data)} onOpen={() => setTestResultsOpen(true)} refresh={() => { testRunQuery.refetch() }} />
             )}
-            {playResult && !playResultsOpen && (
-              <ReopenTestRunResultsButton label="Play Results" onOpen={() => setPlayResultsOpen(true)} refresh={() => { runQuery.refetch() }} />
+            {runResult && !runResultsOpen && (
+              <ReopenTestRunResultsButton label={runResultLabel} detail={describeRun(runResultKind, runResult)} onOpen={() => setRunResultsOpen(true)} refresh={() => { runQuery.refetch() }} />
             )}
             <Button
               size="icon"
@@ -2123,28 +2168,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           {testResultsOpen && testRunQuery.data && (
             <TestRunResults run={testRunQuery.data} nodeNames={nodeNames} nodeTypes={nodeTypes} onClose={() => setTestResultsOpen(false)} />
           )}
-          {playResultsOpen && playResult && (
-            <TestRunResults title="Play Results" run={playResult} nodeNames={nodeNames} nodeTypes={nodeTypes} onClose={() => setPlayResultsOpen(false)} />
+          {runResultsOpen && runResult && (
+            <TestRunResults title={runResultTitle} kind={runResultKind} run={runResult} nodeNames={nodeNames} nodeTypes={nodeTypes} onClose={() => setRunResultsOpen(false)} />
           )}
-          {/* One top-left column rather than two independently-positioned
-              overlays: the lock badge and the transcript are both anchored
-              here, and stacking them is what keeps them from landing on top of
-              each other. `items-start` so each stays its own natural width.
-              Top-LEFT because bottom-right is the MiniMap's corner and
-              top-right is the Add/menu buttons'. The column itself is
-              `pointer-events-none` so the empty space it reserves stays part of
-              the canvas -- panning and node drags must still work under it --
-              and each child turns events back on for itself. */}
-          {(experimentLocked || showStandaloneConversation) && (
-            <div className="pointer-events-none absolute top-3 left-3 z-10 flex max-h-[55%] w-[min(28rem,calc(100%-1.5rem))] flex-col items-start gap-2">
-              {experimentLocked && (
-                <div className="pointer-events-auto inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary/30 bg-background/95 px-2.5 py-1.5 text-xs font-medium shadow-sm">
-                  <Lock className="size-3.5" /> Canvas locked
-                </div>
-              )}
-              {showStandaloneConversation && runQuery.data?.conversation && (
-                <ConversationTranscript conversation={runQuery.data.conversation} agentNames={nodeNames} />
-              )}
+          {experimentLocked && (
+            <div className="pointer-events-auto absolute top-3 left-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-background/95 px-2.5 py-1.5 text-xs font-medium shadow-sm">
+              <Lock className="size-3.5" /> Canvas locked
             </div>
           )}
         </div>
@@ -2184,16 +2213,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               pendingConnectorAdd
                 ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].allowedTypes
                 : pendingMainEdgeAdd || pendingEdgeInsert
-                  ? ['agent']
+                  ? MAIN_FLOW_NODE_TYPES
                   : undefined
             }
             title={
               pendingConnectorAdd
                 ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].title
                 : pendingMainEdgeAdd
-                  ? 'Connect an agent'
+                  ? 'Connect a step'
                   : pendingEdgeInsert
-                    ? 'Insert an agent'
+                    ? 'Insert a step'
                     : undefined
             }
           />
@@ -2210,6 +2239,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           <CriticGateNodeInspector
             node={{ id: selectedNode.id, type: 'critic_gate', position: selectedNode.position, data: selectedNode.data as CriticGateNodeData }}
             experimentId={experimentId}
+            nodeRun={latestNodeRuns?.[selectedNode.id]}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'tool_step' ? (
+          <ToolStepNodeInspector
+            key={selectedNode.id}
+            node={{ id: selectedNode.id, type: 'tool_step', position: selectedNode.position, data: selectedNode.data as ToolStepNodeData }}
+            toolOptions={toolStepMcpNodes.flatMap((node) => node.data.config?.tool_names ?? [])}
+            serverId={toolStepMcpNodes[0]?.data.config?.server_id ?? null}
+            hasScript={toolStepSources.some((node) => node?.type === 'script')}
             nodeRun={latestNodeRuns?.[selectedNode.id]}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
@@ -2377,7 +2418,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 : null
           }
           onPublishAndRun={() => publishAndRunMutation.mutate()}
-          confirmLabel={pendingRunConfirm.type === 'graph' ? 'Start Test Run' : undefined}
+          confirmLabel={pendingRunConfirm.type === 'graph' ? 'Test Run' : undefined}
         />
       )}
       {factorPickerNodeId && (

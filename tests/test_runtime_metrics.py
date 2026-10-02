@@ -9,7 +9,9 @@ from motoro.schemas.output import OutputEnvelope
 
 from asaree.services.measurement_engine import CompletedReplicate, MeasurementInput, ProducerBinding
 from asaree.services.runtime_metrics import (
+    NodeRuntimeMetricProducer,
     RuntimeMetricProducer,
+    authored_prompt_sha256,
     collect_runtime_facts,
     validate_runtime_measurement_plan,
 )
@@ -301,6 +303,74 @@ async def test_runtime_producer_counts_rejections_and_only_actual_critic_approva
 
 
 @pytest.mark.asyncio
+async def test_runtime_producer_splits_rejections_by_scope_and_counts_null_verdicts_as_rejections() -> None:
+    result = await _evaluate(
+        _facts(
+            runs=[{"run_id": "worker-1", "steps": [], "max_iterations_hit": True}, {"run_id": "worker-2", "steps": []}],
+            critic_reviews=[
+                {"run_id": "critic-1", "approved": False, "rejection_scope": "partial"},
+                {"run_id": "critic-2", "approved": None, "rejection_scope": None},
+                {"run_id": "critic-3", "approved": False, "rejection_scope": "full"},
+                {"run_id": "critic-4", "approved": True, "rejection_scope": None},
+            ],
+            critic_gates=[
+                {"revisions_used": 2, "approved": True, "forced": False},
+                {"revisions_used": 1, "approved": None, "forced": True},
+            ],
+        )
+    )
+
+    values = {key: observation.value for key, observation in result.observations.items()}
+    assert values["critic_invocations"] == 4
+    assert values["critic_rejections"] == 3
+    assert values["critic_approvals"] == 1
+    assert values["critic_rejections_partial"] == 1
+    assert values["critic_rejections_full"] == 2
+    assert values["revision_rounds"] == 3
+    assert values["capped_agent_runs"] == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_producer_reports_agent_runs_and_reason_act_counters() -> None:
+    result = await _evaluate(
+        _facts(
+            runs=[
+                {"run_id": "dc", "steps": [], "reason_act": {"iterations": 3, "tool_calls": 5}},
+                {"run_id": "fte", "steps": [], "reason_act": {"iterations": 12, "tool_calls": 20}},
+                {"run_id": "critic", "steps": [], "reason_act": None},
+            ]
+        )
+    )
+
+    values = {key: observation.value for key, observation in result.observations.items()}
+    assert values["agent_runs"] == 3
+    assert values["react_runs"] == 2
+    assert values["react_turns"] == 15
+    assert values["react_tool_calls"] == 25
+
+
+@pytest.mark.asyncio
+async def test_reason_act_counters_are_unavailable_without_a_reason_act_run_or_its_record() -> None:
+    single_pass = await _evaluate(_facts(runs=[{"run_id": "mlm", "steps": [], "reason_act": None}]))
+    unrecorded = await _evaluate(_facts(runs=[{"run_id": "old", "steps": []}]))
+
+    assert single_pass.observations["react_runs"].value == 0
+    assert single_pass.observations["react_turns"].status == "unavailable"
+    assert single_pass.observations["react_tool_calls"].status == "unavailable"
+    assert unrecorded.observations["agent_runs"].value == 1
+    for key in ("react_runs", "react_turns", "react_tool_calls"):
+        assert unrecorded.observations[key].status == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_runtime_producer_reports_zero_critic_activity_when_no_critic_ran() -> None:
+    result = await _evaluate(_facts(critic_gates=[{"revisions_used": 0, "approved": None, "forced": False}]))
+
+    for key in ("critic_invocations", "critic_rejections_partial", "critic_rejections_full", "revision_rounds"):
+        assert result.observations[key].value == 0
+
+
+@pytest.mark.asyncio
 async def test_runtime_producer_marks_duration_unavailable_without_both_boundaries() -> None:
     result = await _evaluate(_facts(completed_at=None))
 
@@ -333,7 +403,10 @@ async def test_runtime_fact_collection_uses_protocol_attribution_not_final_node_
         run.run_metadata = {}
         run.output = None
     attributed[1].run_metadata = {"runtime_role": "critic"}
-    attributed[1].output = OutputEnvelope(payload={"approved": False}).to_json()
+    attributed[1].output = OutputEnvelope(payload={"approved": False, "rejection_scope": "partial"}).to_json()
+    attributed[2].pattern_overrides = {
+        "reason_act_state": {"max_iterations_hit": True, "iterations": 4, "tool_calls": 6}
+    }
     list_call: dict[str, object] = {}
 
     async def fake_list_runs(**kwargs):
@@ -370,7 +443,9 @@ async def test_runtime_fact_collection_uses_protocol_attribution_not_final_node_
     assert list_call["metadata"] == {"protocol_run_id": str(protocol_run_id)}
     assert {run["run_id"] for run in facts["runs"]} == {str(run_id) for run_id in run_ids}
     assert facts["critic_gates"] == [{"approved": None, "forced": True, "revisions_used": 2}]
-    assert facts["critic_reviews"] == [{"approved": False, "run_id": str(run_ids[1])}]
+    assert facts["critic_reviews"] == [{"approved": False, "rejection_scope": "partial", "run_id": str(run_ids[1])}]
+    assert [run["max_iterations_hit"] for run in facts["runs"]] == [False, False, True, False]
+    assert [run["reason_act"] for run in facts["runs"]] == [None, None, {"iterations": 4, "tool_calls": 6}, None]
     assert facts["runs"][0]["usage"] == {
         "input_tokens": 1,
         "output_tokens": 2,
@@ -415,3 +490,160 @@ async def test_runtime_fact_collection_keeps_missing_cost_and_partial_usage_unav
     assert facts["runs"][0]["usage"] == {"input_tokens": 8, "cache_read_tokens": 3}
     assert facts["runs"][1]["cost_usd"] is None
     assert facts["runs"][1]["usage"] == {}
+
+
+def _prompt_graph(goal: str = "Clean the data.") -> dict[str, object]:
+    return {
+        "nodes": [
+            {
+                "id": "a",
+                "type": "agent",
+                "position": {"x": 0, "y": 0},
+                "data": {"config": {"goal": goal, "model": "x"}},
+            },
+            {"id": "g", "type": "critic_gate", "data": {"config": {"system_prompt": "Checklist: ..."}}},
+            {"id": "d", "type": "dataset", "data": {"config": {"goal": "not a prompt"}}},
+        ],
+        "edges": [],
+    }
+
+
+def test_prompt_hash_covers_prompt_text_only() -> None:
+    base = authored_prompt_sha256(_prompt_graph())
+    moved = _prompt_graph()
+    moved["nodes"] = list(reversed(moved["nodes"]))  # type: ignore[call-overload]
+    moved["nodes"][-1]["position"] = {"x": 500, "y": 9}  # type: ignore[index]
+    moved["nodes"][-1]["data"]["config"]["model"] = "y"  # type: ignore[index]
+
+    assert base is not None and len(base) == 64
+    assert authored_prompt_sha256(moved) == base
+    assert authored_prompt_sha256(_prompt_graph("Clean the data!")) != base
+    assert authored_prompt_sha256({"nodes": [], "edges": []}) is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_producer_reports_the_prompt_hash_from_facts() -> None:
+    measured = await _evaluate(_facts(prompt_sha256="ab" * 32))
+    missing = await _evaluate(_facts())
+
+    assert measured.observations["prompt_sha256"].value == "ab" * 32
+    assert missing.observations["prompt_sha256"].status == "unavailable"
+
+
+async def _evaluate_nodes(facts: dict[str, object], node_ids: list[str]):
+    adapter = NodeRuntimeMetricProducer()
+    return await adapter.evaluate(
+        ProducerBinding(
+            id="runtime-stage",
+            producer_id=adapter.producer_id,
+            kind="runtime",
+            outputs={key: key for key in adapter.output_keys},
+            config={"node_ids": node_ids},
+        ),
+        {"facts": MeasurementInput(value_type="runtime_facts", value=facts)},
+        CompletedReplicate(replicate_id="replicate-1", attempt_id="attempt-1"),
+    )
+
+
+def _stage_run(run_id: str, node_id: str | None, tokens: int, iterations: int) -> dict[str, object]:
+    return {
+        "run_id": run_id,
+        "node_id": node_id,
+        "usage": {"total_tokens": tokens},
+        "steps": [{"iteration": index, "tool_call": None, "llm_call": None} for index in range(iterations)],
+        "max_iterations_hit": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_node_runtime_producer_sums_only_the_chosen_nodes_runs() -> None:
+    facts = _facts(
+        runs=[
+            _stage_run("dc-1", "agent-dc", 100, 3),
+            _stage_run("dc-revision", "agent-dc", 50, 2),
+            _stage_run("fte-1", "agent-fte", 400, 5),
+            _stage_run("critic-dc", "gate-dc", 7, 1),
+            _stage_run("critic-fte", "gate-fte", 9, 1),
+        ]
+    )
+
+    dc = await _evaluate_nodes(facts, ["agent-dc"])
+    critics = await _evaluate_nodes(facts, ["gate-dc", "gate-fte"])
+    absent = await _evaluate_nodes(facts, ["agent-mlm"])
+
+    assert dc.observations["total_tokens"].value == 150
+    assert dc.observations["agent_loop_iterations"].value == 5
+    assert dc.observations["agent_runs"].value == 2
+    assert critics.observations["total_tokens"].value == 16
+    assert absent.observations["agent_runs"].value == 0
+    assert absent.observations["total_tokens"].status == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_node_runtime_producer_is_unavailable_for_facts_without_node_attribution() -> None:
+    legacy = _stage_run("dc-1", None, 100, 3)
+    del legacy["node_id"]
+
+    result = await _evaluate_nodes(_facts(runs=[legacy]), ["agent-dc"])
+
+    assert {observation.status for observation in result.observations.values()} == {"unavailable"}
+
+
+def test_node_runtime_validation_requires_nodes_on_the_canvas() -> None:
+    def plan(node_ids: list[str]) -> dict[str, object]:
+        return {
+            "metrics": [{"id": "tokens-dc", "name": "tokens_dc", "value_type": "number", "aggregation": "sum"}],
+            "producers": [
+                {
+                    "id": "runtime-dc",
+                    "producer_id": "asaree.node_runtime",
+                    "kind": "runtime",
+                    "outputs": {"total_tokens": "tokens-dc"},
+                    "config": {"node_ids": node_ids},
+                }
+            ],
+            "inputs": [{"producer_binding_id": "runtime-dc", "input_key": "facts", "source_key": "attempt.runtime"}],
+        }
+
+    graph = {"nodes": [{"id": "agent-dc", "type": "agent"}], "edges": []}
+
+    assert not validate_runtime_measurement_plan(plan(["agent-dc"]), graph=graph).issues
+    assert [issue.code for issue in validate_runtime_measurement_plan(plan(["gone"]), graph=graph).issues] == [
+        "node_runtime_node_unavailable"
+    ]
+    assert [issue.code for issue in validate_runtime_measurement_plan(plan([]), graph=graph).issues] == [
+        "node_runtime_nodes_missing"
+    ]
+
+
+def test_node_runtime_metric_saved_as_id_and_name_still_validates() -> None:
+    report = validate_runtime_measurement_plan(
+        {
+            "metrics": [
+                {"id": "tokens-dc", "name": "tokens_dc"},
+                {"id": "errors-dc", "name": "tool_errors_dc"},
+            ],
+            "producers": [
+                {
+                    "id": "node-runtime-tokens-dc",
+                    "producer_id": "asaree.node_runtime",
+                    "kind": "runtime",
+                    "outputs": {"total_tokens": "tokens-dc"},
+                    "config": {"node_ids": ["agent-dc"]},
+                },
+                {
+                    "id": "node-runtime-errors-dc",
+                    "producer_id": "asaree.node_runtime",
+                    "kind": "runtime",
+                    "outputs": {"tool_error_rate": "errors-dc"},
+                    "config": {"node_ids": ["agent-dc"]},
+                },
+            ],
+            "inputs": [
+                {"producer_binding_id": binding, "input_key": "facts", "source_key": "attempt.runtime"}
+                for binding in ("node-runtime-tokens-dc", "node-runtime-errors-dc")
+            ],
+        }
+    )
+
+    assert not report.issues

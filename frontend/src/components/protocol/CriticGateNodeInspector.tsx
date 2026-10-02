@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { ShieldCheck } from 'lucide-react'
 import { nodeAccent } from '@/lib/nodeAccent'
 import { Input } from '@/components/ui/input'
@@ -9,9 +10,12 @@ import { EditableNodeTitle } from './EditableNodeTitle'
 import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { NodeRunOutputPanel } from './NodeRunOutputPanel'
+import { RESIZE_HANDLE_CLASSNAME, useResizablePane } from './useResizablePane'
 import type { CriticGateNodeConfig, CriticGateNodeData, NodeRunState, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = nodeAccent('critic_gate')
+const MIN_CONFIG_WIDTH = 380
+const RESIZE_GUTTER_WIDTH = 16
 
 // Same fixed-size NodeInspectorDialog shell as AgentNodeInspector/
 // McpToolNodeInspector (see that file), but with a deliberately smaller
@@ -36,6 +40,18 @@ export function CriticGateNodeInspector({
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
+  const columnsRef = useRef<HTMLDivElement>(null)
+  const outputPane = useResizablePane({
+    storageKey: 'asaree:critic-gate-output-pane-width',
+    defaultWidth: 384,
+    minWidth: 280,
+    maxWidth: 760,
+    side: 'right',
+    resolveMaxWidth: () =>
+      (columnsRef.current?.clientWidth ?? Number.POSITIVE_INFINITY) - MIN_CONFIG_WIDTH - RESIZE_GUTTER_WIDTH,
+    recomputeKey: node?.id ?? '',
+  })
+
   if (!node) return null
   const data = node.data
   const config = data.config
@@ -71,8 +87,8 @@ export function CriticGateNodeInspector({
       onDelete={() => onDelete(node.id)}
       onClose={onClose}
     >
-      <div className="flex h-full gap-4">
-        <div className="min-w-0 flex-1 space-y-4 overflow-y-auto">
+      <div ref={columnsRef} className="flex h-full">
+        <div className="min-w-0 flex-1 space-y-4 overflow-y-auto pr-4">
           <FactorBindableField
               experimentId={experimentId}
               fieldPath="config.enabled"
@@ -138,9 +154,18 @@ export function CriticGateNodeInspector({
             </div>
         </div>
 
-        <div className="w-96 shrink-0 space-y-3 overflow-y-auto border-l pl-4">
+        <div
+          role="separator"
+          aria-label="Resize output panel"
+          aria-orientation="vertical"
+          title="Drag to resize output panel"
+          className={RESIZE_HANDLE_CLASSNAME}
+          {...outputPane.handleProps}
+        />
+
+        <div className="min-w-0 shrink-0 space-y-3 overflow-y-auto pl-4" style={{ width: outputPane.width }}>
           <p className="text-sm font-semibold">Output</p>
-          <NodeRunOutputPanel nodeRun={nodeRun} />
+          <NodeRunOutputPanel nodeRun={nodeRun} resizableOutput />
         </div>
       </div>
     </NodeInspectorDialog>

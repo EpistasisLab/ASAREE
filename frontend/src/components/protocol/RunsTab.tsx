@@ -398,20 +398,17 @@ export function RunAllCellsButton({
     (pendingReplicateCount === 0 && previouslyRunCells.length === 0) ||
     regenerationRequired ||
     unboundFactors.length > 0 ||
-    bindingDiscrepancies.length > 0 ||
-    !protocol.published_revision_id
+    bindingDiscrepancies.length > 0
   const blockedTitle = regenerationRequired
     ? 'Design changed — review and regenerate before running the experiment.'
     : unboundFactors.length > 0
       ? `Rebind or remove: ${unboundFactors.join(', ')}.`
       : bindingDiscrepancies.length > 0
         ? 'Canvas values and generated factor levels disagree. Resolve the warning in Runs before starting.'
-      : !protocol?.published_revision_id
-        ? 'Publish a valid canvas before running cells.'
-        : replicates.length === 0
-          ? 'Generate design first — there are no cells to run yet.'
-          : pendingReplicateCount === 0 && previouslyRunCells.length === 0
-            ? 'All selected replicates are already running.'
+      : replicates.length === 0
+        ? 'Generate design first — there are no cells to run yet.'
+        : pendingReplicateCount === 0 && previouslyRunCells.length === 0
+          ? 'All selected replicates are already running.'
           : undefined
   const runnableReplicateCount = pendingReplicateCount + selectedReruns.size
   const actionLabel = label ?? (hasCompletedRun ? 'Re-run all cells' : 'Run all cells')
@@ -658,15 +655,13 @@ function RunReplicateButton({
       runMutation.mutate()
     },
   })
-  const runBlocked = !protocol || regenerationRequired || unboundFactors.length > 0 || bindingDiscrepancies.length > 0 || !protocol.published_revision_id
+  const runBlocked = !protocol || regenerationRequired || unboundFactors.length > 0 || bindingDiscrepancies.length > 0
   const blockedTitle = regenerationRequired
     ? 'Design changed — review and regenerate before running this replicate.'
     : unboundFactors.length > 0
       ? `Rebind or remove: ${unboundFactors.join(', ')}.`
       : bindingDiscrepancies.length > 0
         ? 'Canvas values and generated factor levels disagree. Resolve the warning in Runs before starting.'
-      : !protocol?.published_revision_id
-        ? 'Publish a valid canvas before running replicates.'
         : undefined
   const errorMessage = runMutation.error instanceof ApiError && typeof runMutation.error.detail === 'string'
     ? runMutation.error.detail

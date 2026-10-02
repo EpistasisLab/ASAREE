@@ -191,6 +191,7 @@ export function CreateCredentialDialog({
               <Label htmlFor="credential-api-key">API key{apiKeyOptional && ' (optional)'}</Label>
               <PasswordInput
                 id="credential-api-key"
+                placeholder={existing ? '**********' : undefined}
                 value={apiKey}
                 onChange={(e) => {
                   setApiKey(e.target.value)

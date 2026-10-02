@@ -77,6 +77,11 @@ export function RunConfirmDialog({
   confirmError?: string | null
 }) {
   const summary = summarizeRun(nodes, edges, scope)
+  // A never-published canvas has no snapshot to fall back on, so publishing is
+  // the only way forward; a published one with edits offers both choices.
+  const neverPublished = publishedRevision === null && !!onPublishAndRun
+  const needsPublishChoice = (hasUnpublishedChanges || neverPublished) && !!onPublishAndRun
+  const actionLabel = confirmLabel ?? 'Run'
   const allIssues = findNodeConfigIssues(nodes, edges, queryClient, truncatedCaps)
   // A node-scoped run only ever touches that node plus its own directly
   // wired dependencies -- an issue on some unrelated node elsewhere on the
@@ -163,11 +168,13 @@ export function RunConfirmDialog({
         {additionalContent}
         {confirmError && <p className="text-sm text-destructive">{confirmError}</p>}
 
-        {hasUnpublishedChanges && (
+        {needsPublishChoice && (
           <div className="space-y-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm">
-            <p className="font-medium">Canvas has unpublished changes</p>
+            <p className="font-medium">{neverPublished ? 'Canvas has not been published' : 'Canvas has unpublished changes'}</p>
             <p className="text-xs text-muted-foreground">
-              This run will use published canvas v{publishedRevision}. Publish the latest canvas first to run the changes you are viewing.
+              {neverPublished
+                ? 'Runs always use a published canvas. Publish the canvas you are viewing to run it.'
+                : `This run will use published canvas v${publishedRevision}. Publish the latest canvas first to run the changes you are viewing.`}
             </p>
             {publishError && <p className="text-xs text-destructive">{publishError}</p>}
           </div>
@@ -205,13 +212,15 @@ export function RunConfirmDialog({
           <Button variant="outline" onClick={onCancel}>
             Cancel
           </Button>
-          {hasUnpublishedChanges ? (
+          {needsPublishChoice ? (
             <>
-              <Button variant="outline" disabled={isPublishing || isConfirming || confirmDisabled} onClick={onConfirm}>
-                Test Run published v{publishedRevision}
-              </Button>
+              {!neverPublished && (
+                <Button variant="outline" disabled={isPublishing || isConfirming || confirmDisabled} onClick={onConfirm}>
+                  {actionLabel} (published v{publishedRevision})
+                </Button>
+              )}
               <Button disabled={isPublishing || isConfirming || confirmDisabled} onClick={onPublishAndRun}>
-                {isPublishing ? 'Publishing…' : 'Publish & Test Run'}
+                {isPublishing ? 'Publishing…' : isConfirming ? 'Starting…' : `Publish & ${actionLabel}`}
               </Button>
             </>
           ) : (

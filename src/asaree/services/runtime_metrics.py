@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
 import uuid
 from collections.abc import Mapping, Sequence
@@ -42,9 +44,11 @@ from asaree.services.measurement_engine import (
     ValidationIssue,
     ValidationReport,
     parse_measurement_plan,
+    preserved_binding_severity,
 )
 from asaree.services.measurement_migration import normalize_experiment_measurement_plan
 from asaree.services.metrics import design_metrics_from_measurement_plan
+from asaree.services.protocol_graph import node_map
 from asaree.services.protocol_runs import (
     TERMINAL_PROTOCOL_RUN_STATUSES,
     get_cancel_requested_at,
@@ -58,7 +62,7 @@ from asaree.services.reported_metrics import (
 
 _SUM_OR_MEAN: set[MetricAggregation] = {"sum", "mean"}
 _RATE_AGGREGATIONS: set[MetricAggregation] = {"mean", "rate", "pooled"}
-_SUPPORTED_PRODUCER_IDS = frozenset({"asaree.runtime", *REPORTED_PRODUCER_IDS})
+_SUPPORTED_PRODUCER_IDS = frozenset({"asaree.runtime", "asaree.node_runtime", *REPORTED_PRODUCER_IDS})
 
 
 def _merge_evaluations(
@@ -161,6 +165,61 @@ def _reported_usage(run: Any, steps: Sequence[Any]) -> dict[str, int | float]:
     return usage
 
 
+#: Node types whose authored text is a prompt the run sent to a model: the
+#: stage agents, the critics (their system prompts carry the review criteria),
+#: and the Output Parser contracts that shape what each stage returns.
+_PROMPT_NODE_TYPES = frozenset({"agent", "critic_gate", "output_parser"})
+_PROMPT_CONFIG_KEYS = ("system_prompt", "goal", "prompt", "output_contract")
+
+
+def authored_prompt_sha256(graph: Mapping[str, Any]) -> str | None:
+    """SHA-256 over the authored prompts of the graph a replicate ran.
+
+    The notebook's ``prompt_sha256``: tamper evidence that the stage prompts and
+    review criteria are the ones the experiment claims. Computed from the
+    factor-resolved published revision, so a prompt bound to a factor hashes
+    per cell, and a canvas edit after publishing cannot change it. Canonical
+    JSON sorted by node id, so moving a node or reordering the graph is not a
+    prompt change. ``None`` when the graph has no prompt text at all."""
+    entries = []
+    for node in graph.get("nodes") or []:
+        if not isinstance(node, Mapping) or node.get("type") not in _PROMPT_NODE_TYPES:
+            continue
+        config = (node.get("data") or {}).get("config") or {}
+        fields = {key: config[key] for key in _PROMPT_CONFIG_KEYS if config.get(key)}
+        if fields:
+            entries.append({"id": str(node.get("id")), "type": node.get("type"), **fields})
+    if not entries:
+        return None
+    entries.sort(key=lambda entry: entry["id"])
+    canonical = json.dumps(entries, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _max_iterations_hit(run: Any) -> bool:
+    """Whether a Reason+Act run was cut off by its iteration ceiling (see
+    ``protocol_execution._truncation_fields`` for why this is read from
+    ``pattern_overrides`` rather than the steps)."""
+    state = _reason_act_state(run)
+    return state is not None and bool(state.get("max_iterations_hit"))
+
+
+def _reason_act_state(run: Any) -> Mapping[str, Any] | None:
+    """The loop summary Reason+Act mirrors onto its run; absent on single-pass runs."""
+    state = (getattr(run, "pattern_overrides", None) or {}).get("reason_act_state")
+    return state if isinstance(state, Mapping) and state else None
+
+
+def _reason_act_facts(run: Any) -> dict[str, int] | None:
+    state = _reason_act_state(run)
+    if state is None:
+        return None
+    return {
+        "iterations": int(_number(state.get("iterations")) or 0),
+        "tool_calls": int(_number(state.get("tool_calls")) or 0),
+    }
+
+
 async def collect_runtime_facts(protocol_run: Any) -> dict[str, Any]:
     """Snapshot every Motoro run causally attributed to one ProtocolRun."""
     # Motoro applies ``limit`` after its exact JSON metadata filter. Passing
@@ -178,9 +237,14 @@ async def collect_runtime_facts(protocol_run: Any) -> dict[str, Any]:
     runs = []
     critic_reviews = []
     for run, steps in zip(ordered, step_results, strict=True):
+        metadata = getattr(run, "run_metadata", None)
+        node_id = metadata.get("node_id") if isinstance(metadata, Mapping) else None
         runs.append(
             {
                 "run_id": str(run.id),
+                # The canvas node that launched the run -- a critic run carries
+                # its gate's id -- so a node-scoped binding can split totals.
+                "node_id": str(node_id) if node_id is not None else None,
                 # Same v0.6 normalization issue as token usage: 0.0 is also
                 # the fallback when pricing was unavailable. Prefer an
                 # unavailable observation to a false claim that the run was
@@ -197,14 +261,26 @@ async def collect_runtime_facts(protocol_run: Any) -> dict[str, Any]:
                     }
                     for step in steps
                 ],
+                "max_iterations_hit": _max_iterations_hit(run),
+                # Present (possibly None) on every run so an attempt collected
+                # before this field existed reads as unrecorded, not zero.
+                "reason_act": _reason_act_facts(run),
             }
         )
-        metadata = getattr(run, "run_metadata", None)
         if isinstance(metadata, Mapping) and metadata.get("runtime_role") == "critic":
             envelope = parse_envelope(getattr(run, "output", None))
             payload = envelope.payload if envelope is not None else None
-            if isinstance(payload, Mapping) and isinstance(payload.get("approved"), bool):
-                critic_reviews.append({"approved": payload["approved"], "run_id": str(run.id)})
+            # Every verdict the gate acted on, including ``approved: null`` --
+            # the revision loop treats anything but ``true`` as a rejection.
+            if isinstance(payload, Mapping):
+                approved = payload.get("approved")
+                critic_reviews.append(
+                    {
+                        "approved": approved if isinstance(approved, bool) else None,
+                        "rejection_scope": payload.get("rejection_scope"),
+                        "run_id": str(run.id),
+                    }
+                )
     gates = []
     for node_run in (protocol_run.node_runs or {}).values():
         if not isinstance(node_run, Mapping) or not any(
@@ -250,6 +326,68 @@ def _duration(facts: Mapping[str, Any]) -> ProducedObservation:
     return ProducedObservation.measured(max(0.0, (completion - start).total_seconds()))
 
 
+def _run_observations(runs: Sequence[Mapping[str, Any]]) -> dict[str, ProducedObservation]:
+    """Observations that are plain sums over a set of attributed Motoro runs."""
+    observations = {
+        key: _sum_reported(runs, key)
+        for key in (
+            "cost_usd",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "cache_read_tokens",
+            "cache_creation_tokens",
+            "thinking_tokens",
+        )
+    }
+    tool_attempts: list[Mapping[str, Any]] = []
+    iterations: set[tuple[str, int]] = set()
+    for run in runs:
+        run_id = str(run.get("run_id") or "")
+        steps = run.get("steps")
+        if not isinstance(steps, list):
+            continue
+        for step in steps:
+            if not isinstance(step, Mapping):
+                continue
+            tool_attempts.extend(_tool_attempts(step.get("tool_call")))
+            iteration = step.get("iteration")
+            if run_id and isinstance(iteration, int) and not isinstance(iteration, bool):
+                iterations.add((run_id, iteration))
+
+    observations["tool_calls"] = ProducedObservation.measured(len(tool_attempts))
+    if tool_attempts:
+        failed = sum(call.get("success") is not True for call in tool_attempts)
+        observations["tool_error_rate"] = ProducedObservation.measured(failed / len(tool_attempts))
+    else:
+        observations["tool_error_rate"] = ProducedObservation.unavailable(
+            "Tool error rate is undefined because no tool calls were attempted."
+        )
+    observations["agent_loop_iterations"] = ProducedObservation.measured(len(iterations))
+    observations["capped_agent_runs"] = ProducedObservation.measured(
+        sum(run.get("max_iterations_hit") is True for run in runs)
+    )
+    observations["agent_runs"] = ProducedObservation.measured(len(runs))
+    # The loop's own counters (the notebook's react_* columns), as opposed to
+    # the step-derived turns and tool calls above, which cover every run.
+    if runs and not any("reason_act" in run for run in runs):
+        unrecorded = ProducedObservation.unavailable("This attempt did not record Reason+Act loop state.")
+        for key in ("react_runs", "react_turns", "react_tool_calls"):
+            observations[key] = unrecorded
+        return observations
+    react = [run["reason_act"] for run in runs if isinstance(run.get("reason_act"), Mapping)]
+    observations["react_runs"] = ProducedObservation.measured(len(react))
+    if react:
+        observations["react_turns"] = ProducedObservation.measured(sum(int(r.get("iterations") or 0) for r in react))
+        observations["react_tool_calls"] = ProducedObservation.measured(
+            sum(int(r.get("tool_calls") or 0) for r in react)
+        )
+    else:
+        for key in ("react_turns", "react_tool_calls"):
+            observations[key] = ProducedObservation.unavailable("No Reason+Act run took part in this attempt.")
+    return observations
+
+
 class RuntimeMetricProducer:
     """Compute runtime observations from a previously collected attempt snapshot."""
 
@@ -268,6 +406,16 @@ class RuntimeMetricProducer:
         "agent_loop_iterations",
         "critic_rejections",
         "critic_approvals",
+        "critic_invocations",
+        "critic_rejections_partial",
+        "critic_rejections_full",
+        "revision_rounds",
+        "capped_agent_runs",
+        "agent_runs",
+        "react_runs",
+        "react_turns",
+        "react_tool_calls",
+        "prompt_sha256",
     )
 
     def capability_for(self, snapshot: ExperimentSnapshot) -> ProducerCapability | None:
@@ -277,6 +425,7 @@ class RuntimeMetricProducer:
             key: ScalarOutputCapability(value_type="number", aggregations=_SUM_OR_MEAN) for key in self.output_keys
         }
         scalar_outputs["tool_error_rate"] = ScalarOutputCapability(value_type="number", aggregations=_RATE_AGGREGATIONS)
+        scalar_outputs["prompt_sha256"] = ScalarOutputCapability(value_type="opaque", aggregations={"none"})
         return ProducerCapability(
             producer_id=self.producer_id,
             kind="runtime",
@@ -303,80 +452,181 @@ class RuntimeMetricProducer:
         runs = facts.value.get("runs")
         attributed_runs = [run for run in runs if isinstance(run, Mapping)] if isinstance(runs, list) else []
 
-        observations = {
-            key: _sum_reported(attributed_runs, key)
-            for key in (
-                "cost_usd",
-                "input_tokens",
-                "output_tokens",
-                "total_tokens",
-                "cache_read_tokens",
-                "cache_creation_tokens",
-                "thinking_tokens",
-            )
-        }
+        observations = _run_observations(attributed_runs)
         observations["duration_seconds"] = _duration(facts.value)
-
-        tool_attempts: list[Mapping[str, Any]] = []
-        iterations: set[tuple[str, int]] = set()
-        for run in attributed_runs:
-            run_id = str(run.get("run_id") or "")
-            steps = run.get("steps")
-            if not isinstance(steps, list):
-                continue
-            for step in steps:
-                if not isinstance(step, Mapping):
-                    continue
-                tool_attempts.extend(_tool_attempts(step.get("tool_call")))
-                iteration = step.get("iteration")
-                if run_id and isinstance(iteration, int) and not isinstance(iteration, bool):
-                    iterations.add((run_id, iteration))
-
-        observations["tool_calls"] = ProducedObservation.measured(len(tool_attempts))
-        if tool_attempts:
-            failed = sum(call.get("success") is not True for call in tool_attempts)
-            observations["tool_error_rate"] = ProducedObservation.measured(failed / len(tool_attempts))
-        else:
-            observations["tool_error_rate"] = ProducedObservation.unavailable(
-                "Tool error rate is undefined because no tool calls were attempted."
-            )
-        observations["agent_loop_iterations"] = ProducedObservation.measured(len(iterations))
 
         reviews = facts.value.get("critic_reviews")
         critic_reviews = (
             [review for review in reviews if isinstance(review, Mapping)] if isinstance(reviews, list) else []
         )
+        gates = facts.value.get("critic_gates")
+        critic_gates = [gate for gate in gates if isinstance(gate, Mapping)] if isinstance(gates, list) else []
+        revision_rounds = sum(max(int(gate.get("revisions_used") or 0), 0) for gate in critic_gates)
         if critic_reviews:
-            observations["critic_rejections"] = ProducedObservation.measured(
-                sum(review.get("approved") is False for review in critic_reviews)
-            )
-            observations["critic_approvals"] = ProducedObservation.measured(
-                sum(review.get("approved") is True for review in critic_reviews)
-            )
+            # The gate revises on anything but an explicit approval, so a null
+            # verdict is a rejection here too.
+            rejections = [review for review in critic_reviews if review.get("approved") is not True]
+            partial = sum(review.get("rejection_scope") == "partial" for review in rejections)
+            observations["critic_rejections"] = ProducedObservation.measured(len(rejections))
+            observations["critic_approvals"] = ProducedObservation.measured(len(critic_reviews) - len(rejections))
+            observations["critic_invocations"] = ProducedObservation.measured(len(critic_reviews))
+            # An absent or unrecognized scope revises as "full" (see
+            # _build_revision_instruction), so the partial count is a floor.
+            observations["critic_rejections_partial"] = ProducedObservation.measured(partial)
+            observations["critic_rejections_full"] = ProducedObservation.measured(len(rejections) - partial)
         else:
             # Compatibility for an attempt collected before critic runs were
-            # explicitly role-tagged in Motoro metadata.
-            gates = facts.value.get("critic_gates")
-            critic_gates = [gate for gate in gates if isinstance(gate, Mapping)] if isinstance(gates, list) else []
-            observations["critic_rejections"] = ProducedObservation.measured(
-                sum(max(int(gate.get("revisions_used") or 0), 0) for gate in critic_gates)
-            )
-            observations["critic_approvals"] = ProducedObservation.measured(
-                sum(gate.get("approved") is True and gate.get("forced") is not True for gate in critic_gates)
-            )
+            # explicitly role-tagged in Motoro metadata -- or a run whose gates
+            # never called a critic, where every count is genuinely zero.
+            approvals = sum(gate.get("approved") is True and gate.get("forced") is not True for gate in critic_gates)
+            observations["critic_rejections"] = ProducedObservation.measured(revision_rounds)
+            observations["critic_approvals"] = ProducedObservation.measured(approvals)
+            observations["critic_invocations"] = ProducedObservation.measured(revision_rounds + approvals)
+            if revision_rounds:
+                for key in ("critic_rejections_partial", "critic_rejections_full"):
+                    observations[key] = ProducedObservation.unavailable(
+                        "This attempt did not record each rejection's scope."
+                    )
+            else:
+                observations["critic_rejections_partial"] = ProducedObservation.measured(0)
+                observations["critic_rejections_full"] = ProducedObservation.measured(0)
+        observations["revision_rounds"] = ProducedObservation.measured(revision_rounds)
+        prompt_sha = facts.value.get("prompt_sha256")
+        observations["prompt_sha256"] = (
+            ProducedObservation.measured(prompt_sha)
+            if isinstance(prompt_sha, str)
+            else ProducedObservation.unavailable("This attempt's published protocol revision has no prompt text.")
+        )
         return ProducerResult(observations=observations)
 
 
+class NodeRuntimeMetricProducer:
+    """Runtime totals over only the Motoro runs launched by chosen canvas nodes.
+
+    The notebook's per-stage ``tokens_<stage>`` / ``n_turns_<stage>`` columns:
+    ``config.node_ids`` names the nodes a stage is made of -- one Agent, or
+    every Critic Gate for a "critic" stage -- and every attempt each of them
+    made counts, revisions included. A separate producer rather than a scoped
+    ``asaree.runtime`` binding so the built-in runtime metrics stay one
+    unscoped binding with one metric per output."""
+
+    producer_id = "asaree.node_runtime"
+    output_keys = (
+        "agent_runs",
+        "cost_usd",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cache_read_tokens",
+        "cache_creation_tokens",
+        "thinking_tokens",
+        "tool_calls",
+        "tool_error_rate",
+        "agent_loop_iterations",
+        "capped_agent_runs",
+        "react_runs",
+        "react_turns",
+        "react_tool_calls",
+    )
+
+    def capability_for(self, snapshot: ExperimentSnapshot) -> ProducerCapability | None:
+        if not any(value.value_type == "runtime_facts" for value in snapshot.inputs.values()):
+            return None
+        scalar_outputs = {
+            key: ScalarOutputCapability(value_type="number", aggregations=_SUM_OR_MEAN) for key in self.output_keys
+        }
+        scalar_outputs["tool_error_rate"] = ScalarOutputCapability(value_type="number", aggregations=_RATE_AGGREGATIONS)
+        return ProducerCapability(
+            producer_id=self.producer_id,
+            kind="runtime",
+            version="1",
+            inputs={"facts": "runtime_facts"},
+            scalar_outputs=scalar_outputs,
+        )
+
+    async def evaluate(
+        self,
+        binding: ProducerBinding,
+        inputs: dict[str, MeasurementInput],
+        attempt: CompletedReplicate,
+    ) -> ProducerResult:
+        del attempt
+        facts = inputs.get("facts")
+        if facts is None or not isinstance(facts.value, Mapping):
+            raise ValueError("node runtime producer requires a runtime_facts input")
+        collection_error = facts.value.get("collection_error")
+        if isinstance(collection_error, str):
+            return ProducerResult(
+                observations={key: ProducedObservation.failed(collection_error) for key in binding.outputs}
+            )
+        node_ids = set(binding_node_ids(binding.config))
+        runs = facts.value.get("runs")
+        all_runs = [run for run in runs if isinstance(run, Mapping)] if isinstance(runs, list) else []
+        if all_runs and not any("node_id" in run for run in all_runs):
+            return ProducerResult(
+                observations={
+                    key: ProducedObservation.unavailable("This attempt did not record which node launched each run.")
+                    for key in binding.outputs
+                }
+            )
+        scoped = [run for run in all_runs if run.get("node_id") in node_ids]
+        observations = _run_observations(scoped)
+        return ProducerResult(observations=observations)
+
+
+def binding_node_ids(config: Mapping[str, Any]) -> list[str]:
+    node_ids = config.get("node_ids")
+    if not isinstance(node_ids, list):
+        return []
+    return [node_id for node_id in node_ids if isinstance(node_id, str) and node_id]
+
+
+_RUNTIME_PRODUCER_IDS = frozenset({RuntimeMetricProducer.producer_id, NodeRuntimeMetricProducer.producer_id})
+
+
+def _node_scope_issues(
+    declared: MeasurementPlan,
+    graph: Mapping[str, Any] | None,
+    preserved_binding_ids: set[str] | None,
+) -> list[ValidationIssue]:
+    issues = []
+    nodes = node_map(graph) if graph is not None else None
+    for index, binding in enumerate(declared.producers):
+        if binding.producer_id != NodeRuntimeMetricProducer.producer_id:
+            continue
+        path = f"producers[{index}].config.node_ids"
+        node_ids = binding_node_ids(binding.config)
+        severity = preserved_binding_severity(binding.id, preserved_binding_ids, has_preserved_value=bool(node_ids))
+        if not node_ids:
+            issues.append(ValidationIssue("node_runtime_nodes_missing", "Choose at least one node to measure.", path))
+            continue
+        missing = [node_id for node_id in node_ids if nodes is not None and node_id not in nodes]
+        if missing:
+            issues.append(
+                ValidationIssue(
+                    "node_runtime_node_unavailable",
+                    f"Measured node(s) {', '.join(missing)} are not on the canvas.",
+                    path,
+                    severity,
+                )
+            )
+    return issues
+
+
 def validate_runtime_measurement_plan(
-    document: Any, *, preserved_binding_ids: set[str] | None = None
+    document: Any,
+    *,
+    preserved_binding_ids: set[str] | None = None,
+    graph: Mapping[str, Any] | None = None,
 ) -> ValidationReport:
-    """Validate the runtime-producer slice of a complete measurement plan."""
+    """Validate the runtime-producer slice of a complete measurement plan.
+
+    ``graph``, when given, is checked against node-scoped bindings' node ids."""
     if not document:
         return ValidationReport(())
     declared = parse_measurement_plan(normalize_experiment_measurement_plan(document, ()))
-    bindings = tuple(
-        binding for binding in declared.producers if binding.producer_id == RuntimeMetricProducer.producer_id
-    )
+    scope_issues = _node_scope_issues(declared, graph, preserved_binding_ids)
+    bindings = tuple(binding for binding in declared.producers if binding.producer_id in _RUNTIME_PRODUCER_IDS)
     if not bindings:
         return ValidationReport(())
     binding_ids = {binding.id for binding in bindings}
@@ -393,7 +643,9 @@ def validate_runtime_measurement_plan(
             **{item.source_key: MeasurementInput(value_type="runtime_facts", value={}) for item in plan.inputs},
         },
     )
-    report = MeasurementEngine([RuntimeMetricProducer()]).validate(plan, snapshot, require_primary=False)
+    report = MeasurementEngine([RuntimeMetricProducer(), NodeRuntimeMetricProducer()]).validate(
+        plan, snapshot, require_primary=False
+    )
     producer_path = re.compile(r"^producers\[(\d+)\]")
     input_path = re.compile(r"^inputs\[(\d+)\]")
 
@@ -417,7 +669,7 @@ def validate_runtime_measurement_plan(
             return replace(issue, path=input_path.sub(f"inputs[{full_index}]", issue.path, count=1))
         return issue
 
-    return ValidationReport(tuple(restore_full_plan_path(issue) for issue in report.issues))
+    return ValidationReport((*scope_issues, *(restore_full_plan_path(issue) for issue in report.issues)))
 
 
 async def finalize_attempt_measurement(
@@ -560,9 +812,7 @@ async def finalize_attempt_measurement(
         if "*" not in unavailable_outputs.get(binding.id, {})
         and any(output_key not in unavailable_outputs.get(binding.id, {}) for output_key in binding.outputs)
     )
-    runtime_bindings = tuple(
-        binding for binding in ready_bindings if binding.producer_id == RuntimeMetricProducer.producer_id
-    )
+    runtime_bindings = tuple(binding for binding in ready_bindings if binding.producer_id in _RUNTIME_PRODUCER_IDS)
     runtime_binding_ids = {binding.id for binding in runtime_bindings}
     runtime_metric_ids = {metric_id for binding in runtime_bindings for metric_id in binding.outputs.values()}
     runtime_plan = replace(
@@ -582,6 +832,7 @@ async def finalize_attempt_measurement(
                 "protocol_run_id": str(run.id),
                 "collection_error": f"{type(exc).__name__}: {exc}",
             }
+        facts["prompt_sha256"] = authored_prompt_sha256(measurement_graph)
         task_completed_at = (run.attempt_result or {}).get("task_completed_at")
         if isinstance(task_completed_at, str):
             # Runtime duration is task execution only. Evaluation has its own
@@ -602,7 +853,7 @@ async def finalize_attempt_measurement(
     )
     adapters: list[MeasurementProducerAdapter] = []
     if has_runtime:
-        adapters.append(RuntimeMetricProducer())
+        adapters.extend((RuntimeMetricProducer(), NodeRuntimeMetricProducer()))
     settings = get_settings()
     # Persist a claim before collecting runtime facts. A concurrent finalizer
     # blocks on this row lock, then observes the durable claim and returns
@@ -688,7 +939,9 @@ async def finalize_attempt_measurement(
 
 
 __all__ = [
+    "NodeRuntimeMetricProducer",
     "RuntimeMetricProducer",
+    "authored_prompt_sha256",
     "collect_runtime_facts",
     "finalize_attempt_measurement",
     "validate_runtime_measurement_plan",

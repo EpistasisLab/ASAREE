@@ -36,8 +36,8 @@ describe('displayFactorLevel', () => {
   })
 })
 
-describe('reported scalar metrics', () => {
-  it('preserves an explicitly typed custom metric and uses it as primary', () => {
+describe('custom metric observations', () => {
+  it('removes imported value semantics and does not use a custom metric as primary', () => {
     const metrics = normalizeDesignMetrics([{
       id: 'pr-auc',
       name: 'pr_auc',
@@ -49,16 +49,17 @@ describe('reported scalar metrics', () => {
     }])
     const experiment = { design_spec: { metrics } } as Experiment
 
-    expect(metrics[0]).toMatchObject({ valueType: 'number', direction: 'maximize', primary: true })
-    expect(primaryMetric(experiment)).toEqual({ key: 'pr_auc', direction: 'maximize', valueType: 'number' })
+    expect(metrics[0]).toEqual({ id: 'pr-auc', name: 'pr_auc', kind: 'custom' })
+    expect(primaryMetric(experiment)).toBeNull()
   })
 
-  it('keeps an ordinary custom draft opaque and non-primary', () => {
-    expect(normalizeDesignMetrics([{
+  it('keeps only the identity and label of a custom draft', () => {
+    const metric = normalizeDesignMetrics([{
       name: 'Reviewer report',
       kind: 'custom',
       direction: 'maximize',
       primary: true,
-    }])[0]).toMatchObject({ valueType: 'opaque', direction: 'neutral', primary: false })
+    }])[0]
+    expect(metric).toEqual({ id: metric.id, name: 'Reviewer report', kind: 'custom' })
   })
 })

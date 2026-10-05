@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import exists, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.dataset import RegisteredDataset
@@ -18,8 +19,54 @@ from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.design_revisions import get_current_revision
+from asaree.services.protocol_runs import TERMINAL_PROTOCOL_RUN_STATUSES
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_ROW_PROJECTION_FIELDS = frozenset({"workspace_id", "metric_values", "artifacts"})
+
+
+async def project_row_attempt(
+    db: AsyncSession, *, row_result_id: uuid.UUID, run_id: uuid.UUID, fields: dict
+) -> bool:
+    """Atomically update a row slot only while ``run_id`` still owns it.
+
+    The update is scoped through the owning cell and both pinned revisions.
+    The caller cannot use an arbitrary row UUID to project into another
+    experiment, and an earlier current-attempt read is never authorization.
+    """
+    if not isinstance(fields, dict) or not fields or fields.keys() - _ROW_PROJECTION_FIELDS:
+        raise ValueError("invalid_row_projection_fields")
+    if not isinstance(row_result_id, uuid.UUID) or not isinstance(run_id, uuid.UUID):
+        raise ValueError("invalid_row_scope")
+
+    valid_scope = exists(
+        select(FactorialRowResult.id)
+        .join(
+            FactorialReplicateResult,
+            FactorialReplicateResult.id == FactorialRowResult.replicate_result_id,
+        )
+        .join(FactorialCell, FactorialCell.id == FactorialReplicateResult.cell_id)
+        .join(ProtocolRevision, ProtocolRevision.id == FactorialRowResult.protocol_revision_id)
+        .join(Protocol, Protocol.id == ProtocolRevision.protocol_id)
+        .join(ProtocolRun, ProtocolRun.id == run_id)
+        .where(
+            FactorialRowResult.id == row_result_id,
+            FactorialRowResult.run_id == run_id,
+            ProtocolRun.row_result_id == FactorialRowResult.id,
+            ProtocolRun.replicate_result_id == FactorialReplicateResult.id,
+            ProtocolRun.design_revision_id == FactorialCell.design_revision_id,
+            ProtocolRun.protocol_revision_id == FactorialRowResult.protocol_revision_id,
+            ProtocolRun.protocol_id == Protocol.id,
+            Protocol.experiment_id == FactorialCell.experiment_id,
+        )
+    )
+    result = await db.execute(
+        update(FactorialRowResult)
+        .where(FactorialRowResult.id == row_result_id, valid_scope)
+        .values(**fields)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == 1
 
 
 async def _revision_id(
@@ -187,9 +234,55 @@ async def ensure_row_result(
         raw_sha256=raw_sha256,
         row_index=row_index,
     )
-    db.add(result)
-    await db.flush()
-    return result
+    # A concurrent planner can allocate the same identity after our lookup.
+    # Isolate the insert in a savepoint so a uniqueness race does not poison
+    # unrelated work in the caller's transaction.
+    try:
+        async with db.begin_nested():
+            db.add(result)
+            await db.flush()
+        return result
+    except IntegrityError:
+        existing = (
+            await db.execute(
+                select(FactorialRowResult).where(
+                    FactorialRowResult.replicate_result_id == replicate_result_id,
+                    FactorialRowResult.protocol_revision_id == protocol_revision_id,
+                    FactorialRowResult.dataset_id == dataset_id,
+                    FactorialRowResult.raw_sha256 == raw_sha256,
+                    FactorialRowResult.row_index == row_index,
+                )
+            )
+        ).scalar_one()
+        return existing
+
+
+async def claim_row_attempt(
+    db: AsyncSession,
+    *,
+    row_result_id: uuid.UUID,
+    expected_run_id: uuid.UUID | None,
+    create_kwargs: dict,
+) -> ProtocolRun | None:
+    """Atomically claim the latest-attempt slot for a row execution."""
+    slot = await db.scalar(
+        select(FactorialRowResult)
+        .where(FactorialRowResult.id == row_result_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if slot is None or slot.run_id != expected_run_id:
+        return None
+    if expected_run_id is not None:
+        previous = await db.get(ProtocolRun, expected_run_id, populate_existing=True)
+        if previous is None or previous.status not in TERMINAL_PROTOCOL_RUN_STATUSES:
+            return None
+        if previous.status not in {"failed", "cancelled"}:
+            return None
+    from asaree.services.protocol_runs import create_protocol_run
+
+    # The locked slot defines the identity, even when callers include it in kwargs.
+    return await create_protocol_run(db, **{**create_kwargs, "row_result_id": row_result_id})
 
 
 async def list_row_attempts(
@@ -225,4 +318,11 @@ async def list_row_attempts(
     )
 
 
-__all__ = ["ensure_row_result", "get_row_result", "list_row_attempts", "list_row_results"]
+__all__ = [
+    "claim_row_attempt",
+    "ensure_row_result",
+    "get_row_result",
+    "list_row_attempts",
+    "list_row_results",
+    "project_row_attempt",
+]

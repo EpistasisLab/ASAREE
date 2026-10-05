@@ -55,13 +55,21 @@ export interface EdgeHandoff {
   fields?: EdgeHandoffField[]
 }
 
+export type DatasetInput =
+  | { mode: 'whole_dataset' }
+  | { mode: 'per_row'; columns: string[] }
+
 export interface ProtocolEdge {
   id: string
   source: string
   target: string
   sourceHandle?: string | null
   targetHandle?: string | null
-  data?: { handoff?: EdgeHandoff }
+  data?: {
+    handoff?: EdgeHandoff
+    dataset_input?: DatasetInput
+    [key: string]: unknown
+  }
 }
 
 export type NodeRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled'

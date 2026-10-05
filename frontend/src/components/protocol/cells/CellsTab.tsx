@@ -52,7 +52,7 @@ function CellsBody({ experiment, cells }: { experiment: Experiment; cells: Repli
  * API. The table is mounted in exactly one of the two places at a time, so
  * there's never a second copy carrying its own divergent sort/page state.
  */
-export function CellsTab({ experiment }: { experiment: Experiment }) {
+export function CellsTab({ experiment, perRow = false }: { experiment: Experiment; perRow?: boolean }) {
   const [fullscreen, setFullscreen] = useState(false)
   // null = the current design. Set from DesignHistory to inspect a superseded
   // revision's cells; owned here so the heatmap, the table, the scored tally
@@ -113,7 +113,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
     )
   }
 
-  const cells = replicatesQuery.data
+  const cells = perRow ? replicatesQuery.data?.map(replicate => ({ ...replicate, metric_values: null })) : replicatesQuery.data
   const cellCount = cells ? groupReplicatesIntoCells(cells).length : 0
   const scoredReplicates = cells?.filter((replicate) => replicate.metric_values).length ?? 0
   const viewingHistory = revisionId !== null
@@ -138,7 +138,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
       </p>
     )
   } else {
-    body = <CellsBody experiment={experiment} cells={cells} />
+    body = perRow ? <div className="space-y-3"><p className="text-xs text-muted-foreground">Per-row observations are available in Results. Parent scores and heatmaps do not apply to this publication.</p><div className="overflow-x-auto"><CellsTable experiment={experiment} cells={cells} /></div></div> : <CellsBody experiment={experiment} cells={cells} />
   }
 
   // A superseded revision is a record of what was, not something to keep
@@ -165,7 +165,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
             Cells — <span className="font-mono text-muted-foreground">{cellCount} {cellCount === 1 ? 'cell' : 'cells'} · {scoredReplicates}/{cells?.length ?? 0} replicates scored</span>
           </p>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => void handleDownloadCsv()}>
+            <Button disabled={perRow} variant="outline" size="sm" onClick={() => void handleDownloadCsv()}>
               <Download className="size-3.5" /> Download CSV
             </Button>
             <Button variant="outline" size="icon-sm" aria-label="Exit fullscreen" onClick={() => setFullscreen(false)}>
@@ -189,7 +189,7 @@ export function CellsTab({ experiment }: { experiment: Experiment }) {
           {cellCount} {cellCount === 1 ? 'cell' : 'cells'} · {scoredReplicates}/{cells?.length ?? 0} replicates scored
         </span>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon-sm" aria-label="Download replicates CSV" onClick={() => void handleDownloadCsv()}>
+          <Button disabled={perRow} variant="outline" size="icon-sm" aria-label="Download replicates CSV" onClick={() => void handleDownloadCsv()}>
             <Download className="size-3.5" />
           </Button>
           <Button variant="outline" size="sm" onClick={() => setFullscreen(true)}>

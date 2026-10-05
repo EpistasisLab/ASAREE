@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ChevronDown, ChevronRight, CircleDollarSign, Clock3, Coins, Cpu, Download, ExternalLink, Trophy, X } from 'lucide-react'
-import { experimentsApi } from '@/api/client'
+import { experimentsApi, protocolsApi, type ResultsScope } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -12,6 +12,7 @@ import { displayFactorLevel, formatMetricLabel, formatMetricValue } from '@/lib/
 import { OBSERVATION_LABELS } from '@/lib/measurementPlan'
 import { sanitizeFilename } from '@/lib/utils'
 import type { DesignMetric, EvaluationArtifact, Experiment, HistoricalRun, MetricObservation, ObsoleteRun, ResultCell, ResultNodeRun, ResultReplicate, SupersededRun } from '@/types/experiments'
+import { DatasetRowDetail, DatasetRowResults } from './DatasetRowResults'
 import { InfoTooltip } from './InfoTooltip'
 import { ReceivedPromptPanel, RunStepTrace, UnresolvedReferencesNote } from './NodeRunOutputPanel'
 
@@ -417,6 +418,7 @@ function latestObsoleteRun(replicate: ResultReplicate | null): ObsoleteRun | nul
 export type ResultsSelection =
   | { type: 'cell'; cellLabel: string }
   | { type: 'replicate'; replicateLabel: string }
+  | { type: 'row'; rowResultId: string; scope: ResultsScope }
 
 function resultsMetricKey(metric: DesignMetric): string {
   return metric.kind === 'runtime' && metric.catalogKey ? metric.catalogKey : metric.name
@@ -450,12 +452,17 @@ export function ResultsInspectorPanel({
 }) {
   const [expandedObsoleteRuns, setExpandedObsoleteRuns] = useState<Set<string>>(() => new Set())
   const resultsQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'run-results'],
-    queryFn: () => experimentsApi.getRunResults(experimentId),
+    queryKey: ['experiments', experimentId, 'run-results', selection?.type === 'row' ? selection.scope : null],
+    queryFn: () => experimentsApi.getRunResults(experimentId, selection?.type === 'row' ? selection.scope : undefined),
     enabled: selection !== null,
     refetchInterval: 5000,
   })
   if (!selection) return null
+  if (selection.type === 'row') {
+    const row = resultsQuery.data?.row_results?.find(item => item.row_result_id === selection.rowResultId)
+    if (!row) return <aside className="absolute inset-0 z-20 bg-card p-3"><Button onClick={onClose}>Close</Button><p role="alert">{resultsQuery.isLoading ? 'Loading row…' : 'Row unavailable in this scope.'}</p></aside>
+    return <DatasetRowDetail key={row.row_result_id} row={row} onClose={onClose} />
+  }
 
   const replicate = selection.type === 'replicate'
     ? resultsQuery.data?.replicates.find((candidate) => candidate.replicate_label === selection.replicateLabel) ?? null
@@ -597,11 +604,13 @@ export function ResultsInspectorPanel({
 }
 
 export function ResultsTab({
+  protocolId,
   experimentId,
   experimentName,
   experiment,
   onSelectResult,
 }: {
+  protocolId?: string
   experimentId: string
   experimentName: string
   experiment: Experiment
@@ -610,9 +619,21 @@ export function ResultsTab({
   const [metricPreference, setMetricPreference] = useState<string | null>(null)
   const [expandedResultCells, setExpandedResultCells] = useState<Set<string>>(() => new Set())
   const [downloading, setDownloading] = useState(false)
-  const resultsQuery = useQuery({ queryKey: ['experiments', experimentId, 'run-results'], queryFn: () => experimentsApi.getRunResults(experimentId), refetchInterval: 5000 })
+  const [designRevisionId, setDesignRevisionId] = useState<string>('')
+  const [protocolRevisionId, setProtocolRevisionId] = useState<string>('')
+  const designs = useQuery({ queryKey: ['experiments', experimentId, 'design-revisions'], queryFn: () => experimentsApi.listDesignRevisions(experimentId), enabled: !!protocolId })
+  const publications = useQuery({ queryKey: ['protocols', protocolId, 'revisions'], queryFn: () => protocolsApi.listRevisions(protocolId!), enabled: !!protocolId })
+  const scope: ResultsScope = { protocol_id: protocolId, design_revision_id: designRevisionId || undefined, protocol_revision_id: protocolRevisionId || undefined }
+  const scopeControls = protocolId ? <div className="flex flex-wrap gap-2 p-3 text-xs">
+    <label>Design<select aria-label="Results design revision" className="ml-2 rounded border bg-background p-1 font-mono" value={designRevisionId} onChange={event => setDesignRevisionId(event.target.value)}><option value="">Current</option>{designs.data?.map(revision => <option key={revision.id} value={revision.id}>Revision {revision.revision}</option>)}</select></label>
+    <label>Publication<select aria-label="Results published revision" className="ml-2 rounded border bg-background p-1 font-mono" value={protocolRevisionId} onChange={event => setProtocolRevisionId(event.target.value)}><option value="">Current</option>{publications.data?.map(revision => <option key={revision.id} value={revision.id}>Revision {revision.revision}</option>)}</select></label>
+    {(designRevisionId || protocolRevisionId) && <p>Read-only historical scope</p>}
+  </div> : null
+  const resultsQuery = useQuery({ queryKey: ['experiments', experimentId, 'run-results', scope], queryFn: () => experimentsApi.getRunResults(experimentId, scope), refetchInterval: 5000 })
   if (resultsQuery.isLoading) return <div className="space-y-3 p-3"><Skeleton className="h-20 w-full" /><Skeleton className="h-36 w-full" /></div>
-  if (resultsQuery.isError || !resultsQuery.data) return <p className="p-3 text-sm text-muted-foreground">Could not load this experiment’s results.</p>
+  if (resultsQuery.isError || !resultsQuery.data) return <>{scopeControls}<p role="alert" className="p-3 text-sm text-destructive">{resultsQuery.error?.message ?? 'Could not load this experiment’s results.'}</p></>
+
+  if (resultsQuery.data.consumption_mode === 'per_row') return <>{scopeControls}<DatasetRowResults results={resultsQuery.data} experiment={experiment} scope={scope} onInspect={rowResultId => onSelectResult({ type: 'row', rowResultId, scope })} /></>
 
   const { overview, cells, replicates, metric_types: metricTypes, metric_aggregations: metricAggregations, metric_directions: metricDirections, primary_metric: primaryMetric, primary_metric_direction: primaryMetricDirection } = resultsQuery.data
   const metricKeys = orderedResultsMetricKeys(resultsQuery.data.metric_keys, experiment)
@@ -652,7 +673,7 @@ export function ResultsTab({
   async function downloadResults() {
     setDownloading(true)
     try {
-      const blob = await experimentsApi.downloadRunResultsCsv(experimentId)
+      const blob = await experimentsApi.downloadRunResultsCsv(experimentId, scope)
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
@@ -666,6 +687,7 @@ export function ResultsTab({
 
   return (
     <div className="space-y-4 p-3">
+      {scopeControls}
       <section className="space-y-2">
         {metricKeys.length > 0 && (
           <div className="flex items-center justify-end gap-2">

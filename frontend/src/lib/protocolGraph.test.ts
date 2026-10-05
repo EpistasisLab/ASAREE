@@ -29,3 +29,10 @@ describe('mergeProtocolSaveIntoCache', () => {
     })
   })
 })
+
+it('preserves dataset input and unrelated metadata through canvas serialization', async () => {
+  const { toPersistedGraph } = await import('./protocolGraph')
+  const graph = toPersistedGraph([], [{ id: 'edge', source: 'd', target: 'a', targetHandle: 'dataset', data: { directedFlow: false, custom: 'keep', dataset_input: { mode: 'per_row', columns: ['question'] } } }])
+  expect(graph.edges[0].data).toEqual({ custom: 'keep', dataset_input: { mode: 'per_row', columns: ['question'] } })
+  expect(JSON.parse(JSON.stringify(graph))).toEqual(graph)
+})

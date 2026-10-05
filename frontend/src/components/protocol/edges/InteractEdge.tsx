@@ -4,11 +4,13 @@ import { BaseEdge, EdgeLabelRenderer, EdgeToolbar, getBezierPath, useReactFlow, 
 // uses, so "remove this thing" looks identical whether the thing is a node or
 // an edge. An X here also collided with the two other X's on the canvas
 // (dismissing a panel, unbinding a factor), neither of which deletes anything.
-import { Filter, Plus, Trash2 } from 'lucide-react'
+import { Filter, Plus, Settings2, Trash2 } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { describeHandoff } from '@/lib/promptReferences'
 import type { EdgeHandoff } from '@/types/protocols'
 import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
+import { Button } from '@/components/ui/button'
+import { DatasetInputPanel } from './DatasetInputPanel'
 import { EdgeHandoffPanel } from './EdgeHandoffPanel'
 
 // Every edge's look is decided here and nowhere else -- no edge in a persisted
@@ -87,15 +89,17 @@ export function InteractEdge({
   markerEnd,
 }: EdgeProps) {
   const [hovered, setHovered] = useState(false)
+  const [datasetOpen, setDatasetOpen] = useState(false)
   const [handoffOpen, setHandoffOpen] = useState(false)
   const { setEdges, getNode } = useReactFlow()
-  const { requestEdgeInsert } = useProtocolCanvasActions()
+  const { requestEdgeInsert, experimentLocked } = useProtocolCanvasActions()
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
   const isMainEdge = !sourceHandleId && !targetHandleId
   const isDirectedFlow = data?.directedFlow === true
   const isPatternEdge = targetHandleId === 'architectural_pattern'
   // "What passes" is only a choice on a main edge into an Agent: a Critic Gate
   // always reviews the whole answer (validate_edge_handoffs).
+  const canConfigureDataset = getNode(source)?.type === 'dataset' && getNode(target)?.type === 'agent' && ['dataset', 'resource', 'tool'].includes(targetHandleId ?? '')
   const canNarrow = isMainEdge && getNode(target)?.type === 'agent'
   const handoffLabel = describeHandoff((data as { handoff?: EdgeHandoff } | undefined)?.handoff)
 
@@ -137,7 +141,7 @@ export function InteractEdge({
           </div>
         </EdgeLabelRenderer>
       )}
-      <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible={(hovered || handoffOpen) && !isPatternEdge}>
+      <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible={(hovered || handoffOpen || datasetOpen) && !isPatternEdge}>
         <div
           className="flex items-center gap-1 rounded-md border bg-card px-1 py-0.5 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20"
           onMouseEnter={() => setHovered(true)}
@@ -154,6 +158,10 @@ export function InteractEdge({
               <Plus className="size-3" />
             </button>
           )}
+          {canConfigureDataset && <Popover open={datasetOpen} onOpenChange={setDatasetOpen}>
+            <PopoverTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Dataset input settings" disabled={experimentLocked} />}><Settings2 className="size-3" /></PopoverTrigger>
+            <PopoverContent side="bottom" className="w-80"><DatasetInputPanel edgeId={id} source={source} disabled={experimentLocked} /></PopoverContent>
+          </Popover>}
           {canNarrow && (
             <Popover open={handoffOpen} onOpenChange={setHandoffOpen}>
               <PopoverTrigger

@@ -12,6 +12,7 @@ import { factorBindingDiscrepancies, type FactorBindingDiscrepancy } from '@/lib
 import { protocolForExperimentQueryKey } from '@/lib/protocolGraph'
 import type { Experiment, ResultCell, ResultReplicate, Trial } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
+import { DatasetRowRuns } from './DatasetRowRuns'
 import { RunConfirmDialog } from './RunConfirmDialog'
 import { WarningBadge } from './nodes/WarningBadge'
 
@@ -729,12 +730,14 @@ export function RunsTab({
   regenerationRequired,
   unboundFactors,
   onViewResult,
+  onViewRowResult,
 }: {
   experimentId: string
   designSpec: Experiment['design_spec']
   protocol: Protocol | undefined
   regenerationRequired: boolean
   unboundFactors: string[]
+  onViewRowResult?: (rowId: string) => void
   onViewResult: (replicateLabel: string) => void
 }) {
   const [expandedCells, setExpandedCells] = useState<Set<string>>(() => new Set())
@@ -751,10 +754,17 @@ export function RunsTab({
     refetchInterval: 3000,
   })
   const resultsQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'run-results'],
-    queryFn: () => experimentsApi.getRunResults(experimentId),
+    queryKey: ['experiments', experimentId, 'run-results', protocol?.id, protocol?.published_revision_id],
+    queryFn: () => experimentsApi.getRunResults(experimentId, { protocol_id: protocol?.id }),
     refetchInterval: 5000,
   })
+
+  if (protocol && resultsQuery.data?.consumption_mode === 'per_row') {
+    return <DatasetRowRuns results={resultsQuery.data} protocol={protocol} blocked={regenerationRequired || unboundFactors.length > 0 || factorBindingDiscrepancies(designSpec, protocol.graph).length > 0} onInspect={onViewRowResult} />
+  }
+
+  if (protocol && resultsQuery.isLoading) return <Skeleton className="m-3 h-16" />
+  if (protocol && resultsQuery.isError) return <p role="alert" className="p-3 text-xs text-destructive">Could not load the published execution scope.</p>
 
   if (replicatesQuery.isLoading) {
     return (

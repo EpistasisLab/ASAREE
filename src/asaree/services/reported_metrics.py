@@ -167,6 +167,7 @@ async def collect_reported_metrics(
             and isinstance(node_run, Mapping)
             and (node_run.get("status") == "completed" or "last_successful_output_text" in node_run)
             and successful_output is not None
+            and node_run.get("final_output_available", True)
         )
         # Field projections read the Agent's typed output: its Output Parser
         # payload, else a JSON object in its final answer.
@@ -234,7 +235,7 @@ async def collect_reported_metrics(
                 )
             )
     return MeasurementEvaluation(
-        replicate_id=str(run.replicate_result_id or run.id),
+        replicate_id=str(getattr(run, "row_result_id", None) or run.replicate_result_id or run.id),
         attempt_id=attempt_id,
         observations=tuple(observations),
         artifacts=(),

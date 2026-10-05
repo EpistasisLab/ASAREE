@@ -333,6 +333,18 @@ async def test_mcp_metric_captures_the_complete_tool_result_without_projection(
 
 
 @pytest.mark.asyncio
+async def test_absent_provider_output_is_unavailable_despite_empty_handoff() -> None:
+    run = SimpleNamespace(
+        id=uuid4(), replicate_result_id=None,
+        node_runs={"agent": {"status": "completed", "output_text": "", "final_output_available": False}},
+    )
+    result = await collect_reported_metrics(
+        run, _plan("asaree.agent_output", {"agent_node_id": "agent"}), {"nodes": [], "edges": []},
+    )
+    assert result.observations[0].status == "unavailable"
+
+
+@pytest.mark.asyncio
 async def test_agent_output_report_is_unavailable_when_agent_did_not_complete() -> None:
     run = SimpleNamespace(
         id=uuid4(),

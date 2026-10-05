@@ -1,3 +1,4 @@
+import type { DatasetRowIdentity, DatasetRowSnapshot, NodeRunState, Conversation, ProtocolRun } from './protocols'
 export interface DesignFactor {
   name: string
   levels: unknown[]
@@ -458,7 +459,62 @@ export interface RunResultsOverview {
   reported_cost_count: number
 }
 
+export interface RowAttempt {
+  run_id: string
+  status: ProtocolRun['status']
+  error: string | null
+  started_at: string | null
+  completed_at: string | null
+  workspace_id: string | null
+  attempt_result: Record<string, unknown> | null
+  node_runs: Record<string, NodeRunState>
+  conversation: Conversation | null
+  dataset_row: DatasetRowSnapshot | null
+  protocol_revision_id: string | null
+  design_revision_id: string | null
+  current: boolean
+}
+
+export interface RowResult {
+  row_result_id: string
+  cell_id: string
+  cell_label: string
+  factor_values: Record<string, unknown>
+  replicate_result_id: string
+  replicate_label: string
+  replicate_number: number
+  dataset_row: DatasetRowIdentity
+  design_revision_id: string
+  protocol_revision_id: string
+  status: ProtocolRun['status']
+  workspace_id: string | null
+  metric_values: Record<string, unknown> | null
+  measurement: { observations: MetricObservation[]; artifacts: EvaluationArtifact[] } | null
+  artifacts: Record<string, unknown> | null
+  latest_attempt: RowAttempt | null
+  attempts: RowAttempt[]
+}
+
+export interface RowSummary {
+  cell_count: number
+  parent_replicate_count: number
+  row_count: number | null
+  expected: number | null
+  planned: number
+  pending: number
+  running: number
+  completed: number
+  failed: number
+  cancelled: number
+  scored: number
+  missing_reported: number
+  metric_coverage: Record<string, Record<string, number>>
+}
+
 export interface ExperimentRunResults {
+  consumption_mode?: 'whole_dataset' | 'per_row'
+  row_results?: RowResult[]
+  row_summary?: RowSummary | null
   overview: RunResultsOverview
   metric_keys: string[]
   metric_types: Record<string, 'number' | 'boolean'>

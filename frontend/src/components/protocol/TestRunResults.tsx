@@ -34,7 +34,7 @@ function formatObservationValue(observation: MetricObservation): string {
   if (typeof observation.value === 'boolean') return observation.value ? 'Yes' : 'No'
   if (typeof observation.value === 'number') return new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 }).format(observation.value)
   if (typeof observation.value === 'string') return observation.value
-  return observation.value == null ? '—' : JSON.stringify(observation.value)
+  return JSON.stringify(observation.value)
 }
 
 function staleReason(reasons: TestRun['freshness']['reasons']): string {
@@ -159,6 +159,7 @@ export function TestRunResults({
         </CardAction>
       </CardHeader>
       {!collapsed && <CardContent className="min-h-0 space-y-4 overflow-y-auto">
+        {run.dataset_row && <p className="break-all font-mono text-xs">Source row {run.dataset_row.row_index + 1} · {run.dataset_row.dataset_id} · {run.dataset_row.raw_sha256}</p>}
         {run.freshness.out_of_date && (
           <div className="flex gap-2 rounded-lg border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/5 p-3 text-xs text-[color:var(--chart-4)]">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" /><div><p className="font-medium">Out of date</p><p>{staleReason(run.freshness.reasons)}</p></div>

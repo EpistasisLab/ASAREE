@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import exists, select, update
 from sqlalchemy.exc import IntegrityError
@@ -64,7 +65,7 @@ async def project_row_attempt(
         update(FactorialRowResult)
         .where(FactorialRowResult.id == row_result_id, valid_scope)
         .values(**fields)
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session="fetch")
     )
     return result.rowcount == 1
 
@@ -282,7 +283,14 @@ async def claim_row_attempt(
     from asaree.services.protocol_runs import create_protocol_run
 
     # The locked slot defines the identity, even when callers include it in kwargs.
-    return await create_protocol_run(db, **{**create_kwargs, "row_result_id": row_result_id})
+    run = await create_protocol_run(db, **{**create_kwargs, "row_result_id": row_result_id})
+    # PostgreSQL's ``now()`` is fixed at transaction start. A retry commonly
+    # happens in the same transaction as its failed predecessor, so give it
+    # its actual creation time and retain the documented created_at/id history
+    # ordering instead of letting a random UUID decide which attempt is latest.
+    run.created_at = datetime.now(UTC)
+    await db.flush()
+    return run
 
 
 async def list_row_attempts(

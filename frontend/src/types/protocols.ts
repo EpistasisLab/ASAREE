@@ -138,7 +138,27 @@ export interface Conversation {
   messages: ConversationMessage[]
 }
 
+export interface DatasetRowIdentity {
+  dataset_id: string
+  raw_sha256: string
+  row_index: number
+}
+
+export interface DatasetRowSnapshot extends DatasetRowIdentity {
+  columns: string[]
+  values: Record<string, string>
+}
+
+export interface DatasetRowSchema {
+  dataset_id: string
+  raw_sha256: string
+  row_count: number
+  columns: string[]
+}
+
 export interface ProtocolRun {
+  dataset_row?: DatasetRowSnapshot | null
+  row_result_id?: string | null
   id: string
   protocol_id: string
   // `limit_reached` is conversation-mode only: the agents were still talking
@@ -182,6 +202,7 @@ export interface TestRunResourceUsage {
 }
 
 export interface TestRun {
+  dataset_row?: DatasetRowSnapshot | null
   id: string
   protocol_id: string
   status: ProtocolRun['status']
@@ -212,6 +233,7 @@ export interface TestRun {
 // `<output of "Name">` placeholder wherever upstream output would go. Nothing
 // is created; this is a rendering, not a resource.
 export interface PromptPreview {
+  dataset_row?: DatasetRowSnapshot | null
   text: string
 }
 
@@ -227,6 +249,8 @@ export interface ProtocolRevision {
 // not-yet-completed replicate. skipped is how many replicates already had
 // metrics or a completed run and were left alone (resume semantics).
 export interface CellRunBatch {
+  consumption_mode?: 'whole_dataset' | 'per_row'
+  row_result_ids?: string[]
   protocol_run_ids: string[]
   replicate_labels: string[]
   skipped: number

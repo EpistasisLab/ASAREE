@@ -124,6 +124,9 @@ class AgentMessenger:
         entry_agent_id: str,
         workspace_id: str | None = None,
         stage_plan: Any = None,
+        row_source: Any = None,
+        row_plan: dict[str, Any] | None = None,
+        dataset_row: dict[str, Any] | None = None,
     ) -> None:
         #: The *revision* graph -- capability: who each peer is and how it runs.
         #: Authorization reads the live draft graph instead, on every call.
@@ -136,6 +139,9 @@ class AgentMessenger:
         #: consulted mid-conversation seeds into the same pipeline as everyone
         #: else. ``None`` means "whatever this cell already stages through".
         self._stage_plan = stage_plan
+        self._row_source = row_source
+        self._row_plan = row_plan or {}
+        self._dataset_row = dataset_row
         self._entry_agent_id = entry_agent_id
         self._sequence = 0
         #: Canvas node ids of the agents whose turns are currently on the stack,
@@ -526,6 +532,8 @@ class AgentMessenger:
             self._owner_id,
             protocol_run_id=self._protocol_run_id,
             stage_plan=self._stage_plan,
+            row_source=self._row_source,
+            row_bindings=self._row_plan.get("bindings"),
         )
         # A configured Output Parser still defines a consulted worker's reply
         # contract. Return its compact payload to the parent and retain the
@@ -542,6 +550,7 @@ class AgentMessenger:
             available_agents=await resolve_available_agents(self._graph, to_agent_id, owner_id=self._owner_id),
             agent_messenger=self,
             unsplit_dataset=dataset.unsplit_name,
+            row_input_context=(ambient_meta.get("row_inputs") or [None])[0],
         )
         # The canvas shows a consulted peer as a node that ran, because it did.
         # A peer consulted twice keeps only its latest turn here; the full
@@ -585,6 +594,9 @@ async def execute_conversation(
     ambient_meta: dict[str, Any] | None = None,
     stage_plan: Any = None,
     unsplit_dataset: str = "",
+    dataset_row: dict[str, Any] | None = None,
+    row_source: Any = None,
+    row_plan: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
     """The conversation itself: seed the transcript, run the entry agent, map
     its outcome to a terminal conversation state, checkpoint.
@@ -615,6 +627,9 @@ async def execute_conversation(
         entry_agent_id=entry_agent_id,
         workspace_id=workspace_id,
         stage_plan=stage_plan,
+        row_source=row_source,
+        row_plan=row_plan,
+        dataset_row=dataset_row,
     )
     messenger.append(
         from_agent_id=USER_PARTICIPANT,
@@ -635,6 +650,8 @@ async def execute_conversation(
             owner_id,
             protocol_run_id=protocol_run_id,
             stage_plan=stage_plan,
+            row_source=row_source,
+            row_bindings=(row_plan or {}).get("bindings"),
         )
         unsplit_dataset = unsplit_dataset or entry_dataset.unsplit_name
 
@@ -653,6 +670,7 @@ async def execute_conversation(
             available_agents=await resolve_available_agents(graph, entry_agent_id, owner_id=owner_id),
             agent_messenger=messenger,
             unsplit_dataset=unsplit_dataset,
+            row_input_context=(ambient_meta.get("row_inputs") or [None])[0],
         )
 
     cancelled = error == _AGENT_CANCELLED
@@ -777,6 +795,9 @@ async def execute_supervisor_architecture(
     experiment_id: uuid.UUID | None = None,
     effective_cell_label: str | None = None,
     stage_plan: Any = None,
+    dataset_row: dict[str, Any] | None = None,
+    row_source: Any = None,
+    row_plan: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Run one cell as a supervisor dispatching to workers.
 
@@ -818,6 +839,9 @@ async def execute_supervisor_architecture(
         entry_agent_id=roles.supervisor,
         workspace_id=workspace_id,
         stage_plan=stage_plan,
+        row_source=row_source,
+        row_plan=row_plan,
+        dataset_row=dataset_row,
     )
     started_at = time.monotonic()
     deadline = _MAX_SUPERVISOR_TURN_DURATION.total_seconds() * roles.execution_budget
@@ -879,6 +903,8 @@ async def execute_supervisor_architecture(
             protocol_run_id=protocol_run_id,
             slot_prefix=slot_prefix,
             stage_plan=stage_plan,
+            row_source=row_source,
+            row_bindings=(row_plan or {}).get("bindings"),
         )
         prompt = _build_user_input(
             nodes[node_id],
@@ -905,6 +931,7 @@ async def execute_supervisor_architecture(
                 workspace_id=workspace_id,
                 ambient_meta=ambient_meta,
                 unsplit_dataset=dataset.unsplit_name,
+                row_input_context=(ambient_meta.get("row_inputs") or [None])[0],
             )
         run: dict[str, Any] = {
             "status": "cancelled" if error == _AGENT_CANCELLED else ("failed" if error else "completed"),

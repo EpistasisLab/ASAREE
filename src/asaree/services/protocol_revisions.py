@@ -34,6 +34,14 @@ async def publish_protocol(
     db: AsyncSession, protocol: Protocol, *, owner_id: uuid.UUID | None = None
 ) -> ProtocolRevision:
     """Freeze the protocol's current draft as its next production revision."""
+    protocol = (
+        await db.execute(
+            select(Protocol)
+            .where(Protocol.id == protocol.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
     plan = resolve_dataset_row_plan(protocol.graph)
     if plan is not None:
         if owner_id is None:

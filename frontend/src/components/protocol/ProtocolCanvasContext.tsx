@@ -54,6 +54,7 @@ export interface EdgeInsertRequest {
 }
 
 interface ProtocolCanvasActions {
+  experimentLocked?: boolean
   // Opens the "+" side panel filtered to whatever node type(s) fill this
   // slot (today always exactly one per slot, but the panel-based flow
   // is deliberately a picker rather than instant-creating, so this

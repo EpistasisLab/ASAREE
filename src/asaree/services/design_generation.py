@@ -24,8 +24,11 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from asaree.models.experiment import ResearchExperiment
+from asaree.models.experiment_design_revision import ExperimentDesignRevision
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.services.coordination import coordination_strategy_slug
 from asaree.services.design_revisions import get_current_revision, supersede_and_create
@@ -385,6 +388,16 @@ async def generate_design_cells(
     practice) — it never affects which combinations/replicates are generated
     or their (deterministic) cell_label.
     """
+    experiment = (
+        await db.execute(
+            select(ResearchExperiment)
+            .where(ResearchExperiment.id == experiment_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if experiment is None:
+        raise DesignValidationError("Experiment not found")
     # An empty factor declaration is a meaningful replacement when an
     # existing design's final factor was removed: it retires every current
     # cell into history and leaves an empty current revision.  Do not call
@@ -393,7 +406,17 @@ async def generate_design_cells(
     planned = _planned_replicates(factors, replicates) if factors else []
     planned_labels = {label for label, _, _ in planned}
 
-    current = await get_current_revision(db, experiment_id)
+    current = (
+        await db.execute(
+            select(ExperimentDesignRevision)
+            .where(
+                ExperimentDesignRevision.experiment_id == experiment_id,
+                ExperimentDesignRevision.superseded_at.is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     existing = (
         {
             replicate.replicate_label: replicate

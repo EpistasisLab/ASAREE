@@ -256,10 +256,12 @@ export function ExperimentSidePanel({
                   protocol={protocol}
                   regenerationRequired={regenerationRequired}
                   unboundFactors={unboundFactors}
+                  onViewRowResult={rowResultId => { onResultSelection({ type: 'row', rowResultId, scope: { protocol_id: protocol?.id } }); openPanel('results') }}
                   onViewResult={viewReplicateResult}
                 />
               ) : (
                 <ResultsTab
+                  protocolId={protocol?.id}
                   experimentId={experiment.id}
                   experimentName={experiment.name}
                   experiment={experiment}

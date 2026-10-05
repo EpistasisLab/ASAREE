@@ -13,17 +13,26 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
-from math import isfinite
+from math import isfinite, prod
 from typing import Any
 
 from motoro.runner import get_run
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from asaree.models.dataset import RegisteredDataset
+from asaree.models.experiment_design_revision import ExperimentDesignRevision
+from asaree.models.factorial_cell import FactorialCell
+from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.models.factorial_row_result import FactorialRowResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.dataset_row_csv import DatasetRowCsvError, read_row_source
+from asaree.services.dataset_row_inputs import resolve_dataset_row_plan
+from asaree.services.dataset_row_workspaces import row_attempt_workspace_id
 from asaree.services.factorial_cells import list_replicates
+from asaree.services.factorial_row_results import list_row_results
 from asaree.services.measurement_migration import LegacyResultFacets, legacy_measurement_facets
 from asaree.services.metrics import normalize_metrics
 from asaree.services.protocol_runs import list_experiment_trials
@@ -346,18 +355,384 @@ async def _agent_runs_by_id(run_ids: set[uuid.UUID]) -> dict[uuid.UUID, Any]:
     }
 
 
-async def summarize_experiment_run_results(
-    db: AsyncSession, *, experiment_id: uuid.UUID, design_spec: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    """Build a current-design results scorecard plus cell/replicate detail.
+class RunResultsProjectionError(ValueError):
+    """A requested Results selector does not belong to the experiment."""
 
-    The summary intentionally excludes obsolete results from metric and usage
-    aggregates.  They remain visible in the returned replicate list so people
-    can inspect history without allowing an older canvas to influence today's
-    comparison.
+
+def _reported_metric_ids(design_spec: dict[str, Any] | None) -> list[str]:
+    return [
+        metric["id"]
+        for metric in normalize_metrics((design_spec or {}).get("metrics"))
+        if metric.get("kind") == "custom" and isinstance(metric.get("id"), str)
+    ]
+
+
+async def _source_row_count(
+    db: AsyncSession, *, dataset_id: uuid.UUID | None, raw_sha256: str | None
+) -> int | None:
+    if dataset_id is None or not isinstance(raw_sha256, str):
+        return None
+    dataset = await db.get(RegisteredDataset, dataset_id)
+    if dataset is None:
+        return None
+    try:
+        source = read_row_source(
+            dataset_id=str(dataset.id),
+            raw_path=dataset.raw_path,
+            raw_sha256=dataset.raw_sha256,
+            expected_sha256=raw_sha256,
+        )
+    except DatasetRowCsvError:
+        return None
+    return len(source.rows)
+
+
+async def _summarize_row_results(
+    db: AsyncSession,
+    *,
+    experiment_id: uuid.UUID,
+    design_spec: dict[str, Any] | None,
+    protocol_revision: ProtocolRevision,
+    design_revision: ExperimentDesignRevision | None,
+    row_plan: dict[str, Any],
+) -> dict[str, Any]:
+    revision_id = design_revision.id if design_revision is not None else None
+    protocol_revision_id = protocol_revision.id
+    cells = list(
+        (
+            await db.execute(
+                select(FactorialCell).where(
+                    FactorialCell.experiment_id == experiment_id,
+                    *([FactorialCell.design_revision_id == revision_id] if revision_id else []),
+                )
+            )
+        ).scalars().all()
+    ) if revision_id else []
+    replicates = list(
+        (
+            await db.execute(
+                select(FactorialReplicateResult)
+                .join(FactorialCell, FactorialReplicateResult.cell_id == FactorialCell.id)
+                .where(
+                    FactorialCell.experiment_id == experiment_id,
+                    FactorialCell.design_revision_id == revision_id,
+                )
+            )
+        ).scalars().all()
+    ) if revision_id else []
+    slots = await list_row_results(
+        db,
+        experiment_id=experiment_id,
+        design_revision_id=revision_id,
+        protocol_revision_id=protocol_revision_id,
+    ) if revision_id else []
+    attempts: dict[uuid.UUID, list[ProtocolRun]] = defaultdict(list)
+    if slots:
+        run_rows = (
+            await db.execute(
+                select(ProtocolRun)
+                .join(FactorialRowResult, ProtocolRun.row_result_id == FactorialRowResult.id)
+                .join(FactorialReplicateResult, FactorialRowResult.replicate_result_id == FactorialReplicateResult.id)
+                .join(FactorialCell, FactorialReplicateResult.cell_id == FactorialCell.id)
+                .where(
+                    ProtocolRun.row_result_id.in_([slot.id for slot in slots]),
+                    FactorialCell.experiment_id == experiment_id,
+                    FactorialCell.design_revision_id == revision_id,
+                    FactorialRowResult.protocol_revision_id == protocol_revision_id,
+                )
+                .order_by(ProtocolRun.created_at, ProtocolRun.id)
+            )
+        ).scalars().all()
+        for run in run_rows:
+            if run.row_result_id is not None:
+                attempts[run.row_result_id].append(run)
+
+    replicate_by_id = {replicate.id: replicate for replicate in replicates}
+    cell_by_id = {cell.id: cell for cell in cells}
+    declared_ids = _reported_metric_ids(design_spec)
+    coverage = {
+        metric_id: {"measured": 0, "unavailable": 0, "failed": 0, "cancelled": 0, "other": 0}
+        for metric_id in declared_ids
+    }
+    row_results: list[dict[str, Any]] = []
+    counts = {key: 0 for key in ("pending", "running", "completed", "failed", "cancelled")}
+    scored = missing_reported = 0
+    dataset_ids = {slot.dataset_id for slot in slots}
+    source_dataset_id = min(dataset_ids, key=str) if dataset_ids else None
+    source_sha = next((slot.raw_sha256 for slot in slots), None)
+    if source_dataset_id is None:
+        try:
+            source_dataset_id = uuid.UUID(str(row_plan.get("driver_dataset_id")))
+        except (ValueError, TypeError, AttributeError):
+            source_dataset_id = None
+    if source_sha is None and source_dataset_id is not None:
+        source_registration = await db.get(RegisteredDataset, source_dataset_id)
+        source_sha = source_registration.raw_sha256 if source_registration is not None else None
+    row_count = await _source_row_count(db, dataset_id=source_dataset_id, raw_sha256=source_sha) if source_sha else None
+
+    for slot in slots:
+        parent = replicate_by_id.get(slot.replicate_result_id)
+        cell = cell_by_id.get(parent.cell_id) if parent is not None else None
+        history = attempts.get(slot.id, [])
+        latest = history[-1] if history else None
+        current_run = next((run for run in history if run.id == slot.run_id), None)
+        status = current_run.status if current_run is not None else "pending"
+        if status in {"running", "finalizing"}:
+            counts["running"] += 1
+        elif status == "completed":
+            counts["completed"] += 1
+        elif status in {"failed", "limit_reached"}:
+            counts["failed"] += 1
+        elif status == "cancelled":
+            counts["cancelled"] += 1
+        else:
+            counts["pending"] += 1
+
+        attempt_measurement = None
+        if latest is not None and isinstance(latest.attempt_result, dict):
+            attempt_measurement = latest.attempt_result.get("measurement")
+        measurement = attempt_measurement
+        if not isinstance(measurement, dict) and isinstance(slot.artifacts, dict):
+            measurement = slot.artifacts.get("measurement")
+        observations = (
+            attempt_measurement.get("observations")
+            if isinstance(attempt_measurement, dict) and isinstance(attempt_measurement.get("observations"), list)
+            else []
+        )
+        by_metric = {
+            observation.get("metric_id"): observation
+            for observation in observations
+            if isinstance(observation, dict) and isinstance(observation.get("metric_id"), str)
+        }
+        all_measured = bool(declared_ids) and all(
+            by_metric.get(metric_id, {}).get("status") == "measured" for metric_id in declared_ids
+        )
+        truncated = any(
+            isinstance(node, dict) and isinstance(node.get("truncation"), dict)
+            for node in (latest.node_runs or {}).values()
+        ) if latest is not None else False
+        if status == "completed":
+            if declared_ids and not all_measured:
+                missing_reported += 1
+            if declared_ids and all_measured and not truncated:
+                scored += 1
+        for metric_id in declared_ids:
+            observation = by_metric.get(metric_id)
+            observation_status = observation.get("status") if observation is not None else "unavailable"
+            bucket = observation_status if observation_status in coverage[metric_id] else "other"
+            coverage[metric_id][bucket] += 1
+
+        row_results.append(
+            {
+                "row_result_id": str(slot.id),
+                "cell_id": str(cell.id) if cell else str(parent.cell_id) if parent else "",
+                "cell_label": cell.cell_label if cell else "",
+                "factor_values": (cell.factor_values or {}) if cell else {},
+                "replicate_result_id": str(parent.id) if parent else str(slot.replicate_result_id),
+                "replicate_label": parent.replicate_label if parent else "",
+                "replicate_number": parent.replicate_number if parent else 0,
+                "dataset_row": {
+                    "dataset_id": str(slot.dataset_id),
+                    "raw_sha256": slot.raw_sha256,
+                    "row_index": slot.row_index,
+                },
+                "design_revision_id": str(revision_id) if revision_id else "",
+                "protocol_revision_id": str(protocol_revision_id),
+                "status": status,
+                "workspace_id": slot.workspace_id,
+                "metric_values": slot.metric_values,
+                "measurement": measurement,
+                "artifacts": slot.artifacts,
+                "latest_attempt": _row_attempt_payload(latest, current=latest.id == slot.run_id) if latest else None,
+                "attempts": [_row_attempt_payload(run, current=run.id == slot.run_id) for run in history],
+            }
+        )
+
+    # Before the first row plan, retain the design's forecast while planned stays
+    # the number of persisted slots (zero).
+    actual_cells = len(cells)
+    actual_parents = len(replicates)
+    forecast_parents = actual_parents
+    spec = design_revision.design_spec if design_revision is not None else design_spec
+    factors = (spec or {}).get("factors") if isinstance(spec, dict) else None
+    if actual_cells == 0 and isinstance(factors, list) and factors:
+        sizes = [
+            len(factor.get("levels"))
+            for factor in factors
+            if isinstance(factor, dict) and isinstance(factor.get("levels"), list)
+        ]
+        if len(sizes) == len(factors):
+            forecast_parents = prod(sizes) * max(1, int((spec or {}).get("replicates") or 1))
+    expected = row_count * forecast_parents if row_count is not None else None
+    row_summary = {
+        "cell_count": actual_cells,
+        "parent_replicate_count": actual_parents,
+        "row_count": row_count,
+        "expected": expected,
+        "planned": len(slots),
+        **counts,
+        "scored": scored,
+        "missing_reported": missing_reported,
+        "metric_coverage": coverage,
+    }
+    # Keep compatibility keys, but no cell rollups or outcome scorecard exists
+    # for row-mode runs.
+    return {
+        "consumption_mode": "per_row",
+        "row_results": row_results,
+        "row_summary": row_summary,
+        "overview": {
+            "total_replicates": actual_parents,
+            "completed_replicates": counts["completed"],
+            "running_replicates": counts["running"],
+            "queued_replicates": counts["pending"],
+            "failed_replicates": counts["failed"],
+            "not_started_replicates": 0,
+        },
+        "metric_keys": [],
+        "metric_types": {},
+        "metric_aggregations": {},
+        "metric_directions": {},
+        "primary_metric": None,
+        "primary_metric_direction": None,
+        "cells": [],
+        "replicates": [],
+    }
+
+
+def _row_attempt_payload(run: ProtocolRun, *, current: bool) -> dict[str, Any]:
+    return {
+        "run_id": str(run.id),
+        "status": run.status,
+        "error": run.error,
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+        "workspace_id": row_attempt_workspace_id(run.id),
+        "attempt_result": run.attempt_result,
+        "node_runs": run.node_runs,
+        "conversation": run.conversation,
+        "dataset_row": run.dataset_row,
+        "protocol_revision_id": str(run.protocol_revision_id) if run.protocol_revision_id else None,
+        "design_revision_id": str(run.design_revision_id) if run.design_revision_id else None,
+        "current": current,
+    }
+
+
+async def summarize_experiment_run_results(
+    db: AsyncSession,
+    *,
+    experiment_id: uuid.UUID,
+    design_spec: dict[str, Any] | None = None,
+    protocol_id: uuid.UUID | None = None,
+    design_revision_id: uuid.UUID | None = None,
+    protocol_revision_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """Build whole-dataset scorecards or scoped per-row Results projections.
+
+    Whole-dataset rollups preserve their existing aggregate behavior. Row mode
+    returns stable slots and their immutable attempt histories without combining
+    values across rows.
     """
-    replicates = await list_replicates(db, experiment_id=experiment_id)
-    trials = await list_experiment_trials(db, experiment_id=experiment_id)
+    protocols = list(
+        (await db.execute(select(Protocol).where(Protocol.experiment_id == experiment_id))).scalars().all()
+    )
+    if protocol_id is not None:
+        protocol = next((item for item in protocols if item.id == protocol_id), None)
+        if protocol is None:
+            raise RunResultsProjectionError("protocol_not_found")
+    elif len(protocols) > 1:
+        raise RunResultsProjectionError("ambiguous_protocol")
+    else:
+        protocol = protocols[0] if protocols else None
+
+    if design_revision_id is not None:
+        revision = await db.scalar(
+            select(ExperimentDesignRevision).where(
+                ExperimentDesignRevision.id == design_revision_id,
+                ExperimentDesignRevision.experiment_id == experiment_id,
+            )
+        )
+        if revision is None:
+            raise RunResultsProjectionError("design_revision_not_found")
+    else:
+        revision = await db.scalar(
+            select(ExperimentDesignRevision).where(
+                ExperimentDesignRevision.experiment_id == experiment_id,
+                ExperimentDesignRevision.superseded_at.is_(None),
+            )
+        )
+    if design_revision_id is not None and revision is not None:
+        design_spec = revision.design_spec
+
+    published = None
+    if protocol is not None:
+        if protocol_revision_id is not None:
+            published = await db.scalar(
+                select(ProtocolRevision).where(
+                    ProtocolRevision.id == protocol_revision_id,
+                    ProtocolRevision.protocol_id == protocol.id,
+                )
+            )
+            if published is None:
+                raise RunResultsProjectionError("protocol_revision_not_found")
+        elif protocol.published_revision_id is not None:
+            published = await db.get(ProtocolRevision, protocol.published_revision_id)
+    elif protocol_revision_id is not None:
+        raise RunResultsProjectionError("protocol_revision_not_found")
+
+    graph = published.graph if published is not None and isinstance(published.graph, dict) else {}
+    row_plan = resolve_dataset_row_plan(graph) if published is not None else None
+    if row_plan is not None:
+        return await _summarize_row_results(
+            db,
+            experiment_id=experiment_id,
+            design_spec=design_spec,
+            protocol_revision=published,
+            design_revision=revision,
+            row_plan=row_plan,
+        )
+
+    selected_revision_id = revision.id if revision is not None else None
+    replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=selected_revision_id)
+    trials = await list_experiment_trials(
+        db, experiment_id=experiment_id, revision_id=selected_revision_id
+    )
+    current_trial_run_ids = {trial.run_id for trial in trials if trial.run_id is not None}
+    excluded_trial_run_ids: set[uuid.UUID] = set()
+    if current_trial_run_ids:
+        excluded_trial_run_ids = set(
+            (
+                await db.execute(
+                    select(ProtocolRun.id).where(
+                        ProtocolRun.id.in_(current_trial_run_ids),
+                        ProtocolRun.row_result_id.is_not(None),
+                    )
+                )
+            ).scalars().all()
+        )
+        if protocol_id is not None or protocol_revision_id is not None:
+            compatible = set(
+                (
+                    await db.execute(
+                        select(ProtocolRun.id).where(
+                            ProtocolRun.id.in_(current_trial_run_ids),
+                            ProtocolRun.row_result_id.is_(None),
+                            *([ProtocolRun.protocol_id == protocol_id] if protocol_id is not None else []),
+                            *(
+                                [ProtocolRun.protocol_revision_id == protocol_revision_id]
+                                if protocol_revision_id is not None
+                                else []
+                            ),
+                        )
+                    )
+                ).scalars().all()
+            )
+            excluded_trial_run_ids.update(current_trial_run_ids - compatible)
+    for trial in trials:
+        if trial.run_id in excluded_trial_run_ids:
+            trial.run_id = None
+            trial.status = "not_started"
+            trial.error = None
     trials_by_label = {trial.replicate_label: trial for trial in trials}
     protocol_run_ids = {trial.run_id for trial in trials if trial.run_id is not None}
     # The replicate row points to its latest ProtocolRun, but every earlier
@@ -368,7 +743,14 @@ async def summarize_experiment_run_results(
             select(ProtocolRun, Protocol.published_revision_id, ProtocolRevision.published_at)
             .join(Protocol, ProtocolRun.protocol_id == Protocol.id)
             .outerjoin(ProtocolRevision, Protocol.published_revision_id == ProtocolRevision.id)
-            .where(Protocol.experiment_id == experiment_id, ProtocolRun.replicate_label.is_not(None))
+            .where(
+                Protocol.experiment_id == experiment_id,
+                ProtocolRun.replicate_label.is_not(None),
+                ProtocolRun.row_result_id.is_(None),
+                *([ProtocolRun.protocol_id == protocol.id] if protocol is not None else []),
+                *([ProtocolRun.protocol_revision_id == protocol_revision_id] if protocol_revision_id else []),
+                *([ProtocolRun.design_revision_id == design_revision_id] if design_revision_id else []),
+            )
         )
     ).all()
     history_by_label: defaultdict[str, list[tuple[ProtocolRun, bool]]] = defaultdict(list)
@@ -692,6 +1074,9 @@ async def summarize_experiment_run_results(
     }
     primary_metric, primary_metric_direction = _primary_metric(design_spec)
     return {
+        "consumption_mode": "whole_dataset",
+        "row_results": [],
+        "row_summary": None,
         "overview": overview,
         "metric_keys": sorted(metric_keys),
         "metric_types": {key: metric_types.get(key, "number") for key in sorted(metric_keys)},

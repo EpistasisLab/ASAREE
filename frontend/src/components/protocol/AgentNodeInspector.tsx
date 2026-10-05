@@ -67,6 +67,7 @@ export function AgentNodeInspector({
   handoffPeers,
   wiredOutputParserLabel,
   fetchPromptPreview,
+  previewGraph,
   nodeRun,
   onChange,
   onDelete,
@@ -90,7 +91,8 @@ export function AgentNodeInspector({
   // Assembles the real prompt server-side against the live canvas. A callback
   // rather than an id pair because the graph it posts is the unsaved one on
   // screen, which only ProtocolCanvas holds.
-  fetchPromptPreview: (nodeId: string) => Promise<PromptPreview>
+  previewGraph?: import('@/types/protocols').ProtocolGraph
+  fetchPromptPreview: (nodeId: string, rowIndex?: number) => Promise<PromptPreview>
   nodeRun?: NodeRunState
   onChange: (nodeId: string, data: AgentNodeData) => void
   onDelete: (nodeId: string) => void
@@ -228,8 +230,10 @@ export function AgentNodeInspector({
                 // The panel holds the last text it assembled; on a node switch
                 // that text describes the previous node, so it starts over.
                 key={node.id}
-                signature={JSON.stringify(data)}
-                fetchPreview={() => fetchPromptPreview(node.id)}
+                signature={JSON.stringify({ data, graph: previewGraph })}
+                graph={previewGraph}
+                nodeId={node.id}
+                fetchPreview={rowIndex => fetchPromptPreview(node.id, rowIndex)}
               />
               {/* Below the design-time preview, because it supersedes it: a
                   placeholder proves nothing about a run that actually happened. */}

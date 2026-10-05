@@ -6,6 +6,7 @@ import hashlib
 import os
 import uuid
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -170,3 +171,65 @@ async def test_whole_dataset_batch_response_keeps_legacy_mode(row_batch, monkeyp
     result = await create_cell_runs_endpoint(protocol.id, ctx["user"], db)
     assert result.consumption_mode == "whole_dataset"
     assert result.row_result_ids == []
+
+
+@pytest.mark.asyncio
+async def test_parent_selection_expands_every_source_row(row_batch, monkeypatch: pytest.MonkeyPatch) -> None:
+    db, ctx = row_batch
+    queued: list[uuid.UUID] = []
+
+    async def enqueue(run_id: uuid.UUID) -> None:
+        queued.append(run_id)
+
+    monkeypatch.setattr(protocol_api, "enqueue_protocol_run", enqueue)
+    dataset_id = uuid.UUID(
+        ctx["revision"].graph["nodes"][0]["data"]["config"]["dataset_id"]
+    )
+    dataset = await db.get(RegisteredDataset, dataset_id)
+    assert dataset is not None
+    raw = b"question,answer\nq1,a1\nq2,a2\nq3,a3\n"
+    Path(dataset.raw_path).write_bytes(raw)
+    dataset.raw_sha256 = hashlib.sha256(raw).hexdigest()
+    await upsert_replicate(
+        db,
+        experiment_id=ctx["protocol"].experiment_id,
+        replicate_label="second-parent",
+        fields={"factor_values": {}},
+    )
+
+    result = await create_cell_runs_endpoint(
+        ctx["protocol"].id,
+        ctx["user"],
+        db,
+        CellRunBatchRequest(replicate_labels=["batch-parent", "second-parent"]),
+    )
+    assert len(result.protocol_run_ids) == 6
+    assert len(result.row_result_ids) == 6
+    # Parents with identical cell labels and replicate numbers are ordered by
+    # their persistent UUID, not their display labels or insertion order.
+    assert sorted(result.replicate_labels) == ["batch-parent"] * 3 + ["second-parent"] * 3
+    assert len(set(result.replicate_labels[:3])) == 1
+    assert len(set(result.replicate_labels[3:])) == 1
+    assert result.skipped == 0
+    assert len(queued) == 6
+
+
+@pytest.mark.asyncio
+async def test_new_publication_has_separate_row_slots(row_batch, monkeypatch: pytest.MonkeyPatch) -> None:
+    db, ctx = row_batch
+
+    async def enqueue(_run_id: uuid.UUID) -> None:
+        return None
+
+    monkeypatch.setattr(protocol_api, "enqueue_protocol_run", enqueue)
+    protocol = ctx["protocol"]
+    first = await create_cell_runs_endpoint(protocol.id, ctx["user"], db)
+    protocol.graph = deepcopy(protocol.graph)
+    protocol.graph["nodes"][1]["data"]["system_prompt"] = "published again"
+    next_revision = await publish_protocol(db, protocol, owner_id=ctx["user"].id)
+    protocol.published_revision_id = next_revision.id
+
+    second = await create_cell_runs_endpoint(protocol.id, ctx["user"], db)
+    assert first.protocol_revision_id != second.protocol_revision_id
+    assert len(second.protocol_run_ids) == 30
+    assert len(set(first.row_result_ids).intersection(second.row_result_ids)) == 0

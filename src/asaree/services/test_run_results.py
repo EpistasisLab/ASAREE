@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
+from uuid import UUID
 
 from motoro.runner import list_runs
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +34,8 @@ class TestRunResourceSummary:
 
 @dataclass(frozen=True)
 class TestRunResultProjection:
+    dataset_row: dict[str, Any] | None
+    protocol_revision_id: UUID | None
     observations: list[dict[str, Any]]
     artifacts: list[dict[str, Any]]
     tested_published_revision: ProtocolRevision | None
@@ -143,6 +146,8 @@ async def project_test_run_result(
         freshness_reasons.append("measurement_plan")
 
     return TestRunResultProjection(
+        dataset_row=run.dataset_row,
+        protocol_revision_id=run.protocol_revision_id,
         observations=observations,
         artifacts=artifacts,
         tested_published_revision=tested_revision,

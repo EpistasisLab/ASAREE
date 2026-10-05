@@ -29,7 +29,7 @@ import type {
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
 import type { McpOAuthAuthorization, McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
-import type { CellRunBatch, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
+import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
 
@@ -181,6 +181,28 @@ export const tokenApi = {
   revoke: (id: string) => request<void>(`/auth/me/tokens/${id}`, { method: 'DELETE' }),
 }
 
+export interface ResultsScope {
+  protocol_id?: string
+  design_revision_id?: string
+  protocol_revision_id?: string
+}
+
+export interface RowSelection { row_index?: number | null }
+
+function scopeQuery(scope?: ResultsScope): string {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(scope ?? {})) if (value !== undefined) params.set(key, value)
+  return params.size ? `?${params}` : ''
+}
+
+function rowSelection(options?: RowSelection): RowSelection | undefined {
+  const index = options?.row_index
+  if (index !== undefined && index !== null && (!Number.isInteger(index) || index < 0)) {
+    throw new RangeError('Source row must be a nonnegative integer')
+  }
+  return options
+}
+
 export const experimentsApi = {
   list: (opts?: { includeArchived?: boolean }) =>
     request<Experiment[]>(opts?.includeArchived ? '/experiments?include_archived=true' : '/experiments'),
@@ -255,7 +277,8 @@ export const experimentsApi = {
   // anywhere in the experiment (see services.csv_export.replicates_to_csv) --
   // a Blob, not JSON, so callers hand it straight to URL.createObjectURL.
   downloadReplicatesCsv: (id: string) => requestBlob(`/experiments/${id}/replicates.csv`),
-  downloadRunResultsCsv: (id: string) => requestBlob(`/experiments/${id}/run-results.csv`),
+  downloadRunResultsCsv: (id: string, scope?: ResultsScope) => requestBlob(`/experiments/${id}/run-results.csv${scopeQuery(scope)}`),
+  getRunResultsSchema: (id: string, scope?: ResultsScope) => request<Record<string, unknown>>(`/experiments/${id}/run-results.schema.json${scopeQuery(scope)}`),
   // Materializes one cell per combination and its replicate-result children.
   // declared factors, returning the current design's replicates. If the new design
   // isn't the same set of cells as the current one, the current design
@@ -275,7 +298,7 @@ export const experimentsApi = {
   getResults: (id: string) => request<ExperimentResults>(`/experiments/${id}/results`),
   // A current-design scorecard and the per-cell/per-replicate evidence behind
   // it. Unlike getResults(), no balanced-factorial assumptions are required.
-  getRunResults: (id: string) => request<ExperimentRunResults>(`/experiments/${id}/run-results`),
+  getRunResults: (id: string, scope?: ResultsScope) => request<ExperimentRunResults>(`/experiments/${id}/run-results${scopeQuery(scope)}`),
 }
 
 export const protocolsApi = {
@@ -292,20 +315,21 @@ export const protocolsApi = {
   // status "pending"; poll getRun for progress. cellLabel runs that one
   // already-generated cell for real (its own factor_values substituted in)
   // instead of today's ad-hoc, un-substituted whole-graph run.
-  run: (id: string, cellLabel?: string | null) =>
-    request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST', body: { replicate_label: cellLabel ?? null } }),
-  testRun: (id: string) => request<TestRun>(`/protocols/${id}/test-runs`, { method: 'POST' }),
+  run: (id: string, cellLabel?: string | null, options?: RowSelection) =>
+    request<ProtocolRun>(`/protocols/${id}/runs`, { method: 'POST', body: { replicate_label: cellLabel ?? null, ...rowSelection(options) } }),
+  testRun: (id: string, options?: RowSelection) => request<TestRun>(`/protocols/${id}/test-runs`, { method: 'POST', body: rowSelection(options) }),
   getLatestTestRun: (id: string) => request<TestRun>(`/protocols/${id}/test-runs/latest`),
   // The per-node Play icon -- 422 if the node has upstream input or isn't a
   // runnable Agent (see validate_single_node_runnable). Same polling shape
   // as a plain run (getRun), just with node_runs carrying only this one key.
-  runNode: (id: string, nodeId: string) => request<ProtocolRun>(`/protocols/${id}/nodes/${nodeId}/run`, { method: 'POST' }),
+  runNode: (id: string, nodeId: string, options?: RowSelection) => request<ProtocolRun>(`/protocols/${id}/nodes/${nodeId}/run`, { method: 'POST', body: rowSelection(options) }),
   // Read-only despite the POST: the graph goes in the body because the canvas
   // being previewed is the one on screen, including edits autosave hasn't
   // flushed yet. Creates no run of any kind. 422 for a node that isn't an
   // agent, since only an agent is ever given a prompt.
-  promptPreview: (id: string, nodeId: string, graph: ProtocolGraph) =>
-    request<PromptPreview>(`/protocols/${id}/nodes/${nodeId}/prompt-preview`, { method: 'POST', body: { graph } }),
+  promptPreview: (id: string, nodeId: string, graph: ProtocolGraph, options?: RowSelection) =>
+    request<PromptPreview>(`/protocols/${id}/nodes/${nodeId}/prompt-preview`, { method: 'POST', body: { graph, ...rowSelection(options) } }),
+  listRevisions: (id: string) => request<ProtocolRevision[]>(`/protocols/${id}/revisions`),
   getRevision: (id: string, revisionId: string) => request<ProtocolRevision>(`/protocols/${id}/revisions/${revisionId}`),
   getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
   // Queued work is cancelled immediately. Active work raises
@@ -316,19 +340,21 @@ export const protocolsApi = {
   // "Run all cells" -- 422 if there's no linked experiment or the graph
   // doesn't have exactly one final node; fans out one ProtocolRun per pending
   // replicate. The optional list explicitly re-runs selected completed rows.
-  runCells: (id: string, options?: { replicateLabels?: string[]; rerunReplicateLabels?: string[] }) =>
+  runCells: (id: string, options?: { replicateLabels?: string[]; rerunReplicateLabels?: string[]; retry_row_result_ids?: string[] }) =>
     request<CellRunBatch>(`/protocols/${id}/cell-runs`, {
       method: 'POST',
       body: options
         ? {
             replicate_labels: options.replicateLabels,
-            rerun_replicate_labels: options.rerunReplicateLabels ?? [],
+            rerun_replicate_labels: options.retry_row_result_ids ? undefined : options.rerunReplicateLabels ?? [],
+            retry_row_result_ids: options.retry_row_result_ids,
           }
         : undefined,
     }),
 }
 
 export const datasetsApi = {
+  getRowSchema: (id: string) => request<DatasetRowSchema>(`/datasets/${id}/row-schema`),
   // Owner-scoped, same convention as mcpServersApi.list -- backs the canvas's
   // dataset browser (DatasetBrowserPanel) and the Dataset node inspector's
   // read-out of whichever dataset the node is bound to.

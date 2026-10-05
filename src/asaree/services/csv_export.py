@@ -385,8 +385,12 @@ def result_rows_schema(
     metric_types: dict[str, str] | None = None,
     metric_aggregations: dict[str, str] | None = None,
     design_spec: dict[str, Any] | None = None,
+    *,
+    consumption_mode: str = "whole_dataset",
 ) -> dict[str, Any]:
     """Machine-readable companion metadata for a Results analysis CSV."""
+    if consumption_mode == "per_row":
+        return _row_results_schema(rows, design_spec)
     factor_columns, metric_keys, script_columns = _result_csv_layout(rows, design_spec)
     metadata_fields = _result_metadata_fields(rows)
     reported_keys = {
@@ -481,7 +485,189 @@ def result_rows_schema(
     }
 
 
-def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, Any] | None = None) -> str:
+def _row_metric_layout(
+    rows: Sequence[dict[str, Any]], design_spec: dict[str, Any] | None
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    metrics: dict[str, str] = {}
+    for metric in (design_spec or {}).get("metrics", []):
+        if isinstance(metric, dict) and metric.get("kind") == "custom":
+            metric_id, name = metric.get("id"), metric.get("name")
+            if isinstance(metric_id, str) and isinstance(name, str):
+                metrics[metric_id] = name
+    for row in rows:
+        measurement = row.get("measurement")
+        observations = measurement.get("observations") if isinstance(measurement, dict) else []
+        for observation in observations or []:
+            if isinstance(observation, dict) and isinstance(observation.get("metric_id"), str):
+                metrics.setdefault(
+                    observation["metric_id"],
+                    str(observation.get("metric_name") or observation["metric_id"]),
+                )
+    row_factors = _factor_columns(rows, reserved=_ROW_FIXED_FIELDS, design_spec=design_spec)
+    reserved = {*_ROW_FIXED_FIELDS, *(column for column, _, _, _ in row_factors)}
+    output: list[tuple[str, str]] = []
+    for metric_id, name in sorted(metrics.items(), key=lambda item: (item[1], item[0])):
+        base = name
+        suffix = 2
+        while any(candidate in reserved for candidate in (base, base + "__status", base + "__producer")):
+            base = f"{name}_{suffix}"
+            suffix += 1
+        column = base
+        reserved.update((column, column + "__status", column + "__producer"))
+        output.append((metric_id, column))
+    provenance = [
+        (metric_id, column + suffix)
+        for metric_id, column in output
+        for suffix in ("__status", "__producer")
+    ]
+    return output, provenance
+
+
+_ROW_FIXED_FIELDS = [
+    "row_result_id",
+    "cell_id",
+    "cell_label",
+    "replicate_result_id",
+    "replicate_label",
+    "replicate_number",
+    "dataset_id",
+    "raw_sha256",
+    "row_index",
+    "protocol_revision_id",
+    "design_revision_id",
+    "run_id",
+    "status",
+    "workspace_id",
+]
+
+
+def _row_results_schema(
+    rows: Sequence[dict[str, Any]], design_spec: dict[str, Any] | None
+) -> dict[str, Any]:
+    metrics, _ = _row_metric_layout(rows, design_spec)
+    factor_columns = _factor_columns(rows, reserved=_ROW_FIXED_FIELDS, design_spec=design_spec)
+    metadata = [
+        {
+            "name": field,
+            "role": "row_identity",
+            **({"value_type": "integer", "zero_based": True} if field == "row_index" else {}),
+        }
+        for field in _ROW_FIXED_FIELDS
+    ]
+    factor_schema = [
+        {"name": col, "role": "factor", "source_factor": key, "encoding": kind}
+        for col, key, kind, _ in factor_columns
+    ]
+    metric_schema = []
+    for metric_id, column in metrics:
+        metric_schema.append(
+            {
+                "name": column,
+                "role": "reported",
+                "metric_id": metric_id,
+                "value_type": "json",
+                "display_export_only": True,
+                "aggregation": None,
+            }
+        )
+        metric_schema.append(
+            {"name": column + "__status", "role": "observation_status", "metric_id": metric_id}
+        )
+        metric_schema.append(
+            {
+                "name": column + "__producer",
+                "role": "producer_provenance",
+                "metric_id": metric_id,
+                "value_type": "json",
+            }
+        )
+    return {
+        "schema_version": 5,
+        "row_unit": "row_execution",
+        "consumption_mode": "per_row",
+        "coverage_semantics": (
+            "One row per stable dataset row slot; pending, failed, cancelled, and unavailable slots are "
+            "included. Attempts are not separate rows."
+        ),
+        "row_identity": metadata,
+        "columns": [*metadata, *factor_schema, *metric_schema],
+    }
+
+
+def _row_results_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, Any] | None) -> str:
+    metric_columns, _ = _row_metric_layout(rows, design_spec)
+    factors = _factor_columns(rows, reserved=_ROW_FIXED_FIELDS, design_spec=design_spec)
+    fields = [
+        *_ROW_FIXED_FIELDS,
+        *(col for col, _, _, _ in factors),
+        *(name for _, name in metric_columns),
+        *(name + suffix for _, name in metric_columns for suffix in ("__status", "__producer")),
+    ]
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for source in rows:
+        dataset = source.get("dataset_row") or {}
+        attempt = source.get("latest_attempt") or {}
+        row = {key: source.get(key, "") for key in _ROW_FIXED_FIELDS}
+        row.update(dataset)
+        row["run_id"] = attempt.get("run_id") or ""
+        row["workspace_id"] = attempt.get("workspace_id") or source.get("workspace_id") or ""
+        values = source.get("metric_values") or {}
+        measurement = source.get("measurement")
+        observations = measurement.get("observations") if isinstance(measurement, dict) else []
+        by_id = {obs.get("metric_id"): obs for obs in observations or [] if isinstance(obs, dict)}
+        by_name = {obs.get("metric_name"): obs for obs in observations or [] if isinstance(obs, dict)}
+        for col, factor_key, kind, labels in factors:
+            value = (source.get("factor_values") or {}).get(factor_key)
+            if kind == "categorical":
+                row[col] = (labels or {}).get(_factor_level_key(value), "")
+            elif kind == "boolean" and value is not None:
+                row[col] = int(value)
+            else:
+                row[col] = value if value is not None else ""
+        for metric_id, column in metric_columns:
+            declared_name = next(
+                (
+                    metric.get("name")
+                    for metric in (design_spec or {}).get("metrics", [])
+                    if isinstance(metric, dict) and metric.get("id") == metric_id
+                ),
+                None,
+            )
+            obs = by_id.get(metric_id) or by_name.get(declared_name)
+            status = obs.get("status", "unavailable") if obs else "unavailable"
+            raw_value = (
+                obs.get("value")
+                if obs and status == "measured"
+                else values.get(column, values.get(obs.get("metric_name") if obs else ""))
+            )
+            row[column] = (
+                json.dumps(raw_value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+                if status == "measured"
+                else ""
+            )
+            row[column + "__status"] = status
+            row[column + "__producer"] = (
+                json.dumps(
+                    obs.get("producer") if obs else None,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                if obs
+                else ""
+            )
+        writer.writerow(row)
+    return output.getvalue()
+
+
+def result_rows_to_csv(
+    rows: Sequence[dict[str, Any]],
+    design_spec: dict[str, Any] | None = None,
+    *,
+    consumption_mode: str = "whole_dataset",
+) -> str:
     """Export the enriched Results response as an analysis-ready CSV.
 
     Unlike :func:`replicates_to_csv`, this receives the read-only Results
@@ -491,6 +677,8 @@ def result_rows_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, An
     become their short persisted level labels rather than raw prompt or
     configuration payloads.
     """
+    if consumption_mode == "per_row":
+        return _row_results_to_csv(rows, design_spec)
     factor_columns, metric_keys, script_columns = _result_csv_layout(rows, design_spec)
     declared_custom_metric_names = {
         metric["name"]

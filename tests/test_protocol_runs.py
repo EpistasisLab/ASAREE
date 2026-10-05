@@ -166,6 +166,7 @@ def test_test_run_response_accepts_projected_resource_usage() -> None:
         status="pending",
         error=None,
         protocol_revision_id=None,
+        dataset_row=None,
         created_at=now,
         updated_at=now,
         observations=[],

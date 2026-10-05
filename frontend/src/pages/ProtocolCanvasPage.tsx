@@ -108,7 +108,8 @@ function TopBarStat({ icon: Icon, value, title, accent }: { icon: LucideIcon; va
 // Same design_type gate the Cells tab uses -- cells/metric_values are a
 // factorial concept, so a future non-factorial experiment gets no chips
 // rather than a nonsensical "0/0 scored".
-function TopBarStats({ experiment, cells, obsoleteRunCount = 0 }: { experiment: Experiment; cells: Replicate[] | undefined; obsoleteRunCount?: number }) {
+function TopBarStats({ experiment, cells, obsoleteRunCount = 0, rowSummary }: { experiment: Experiment; cells: Replicate[] | undefined; obsoleteRunCount?: number; rowSummary?: import('@/types/experiments').RowSummary | null }) {
+  if (rowSummary) return <TopBarStat icon={Target} value={`${rowSummary.cell_count} cells / ${rowSummary.parent_replicate_count} replicates / ${rowSummary.row_count ?? '?'} rows / ${rowSummary.expected ?? '?'} executions`} title={`${rowSummary.completed} completed · ${rowSummary.missing_reported} missing reported`} accent="var(--primary)" />
   if (experiment.design_type !== 'factorial' || !cells) return null
   const scored = cells.filter((c) => c.metric_values).length
   const cellCount = groupReplicatesIntoCells(cells).length
@@ -259,8 +260,8 @@ export function ProtocolCanvasPage() {
     enabled: !!experimentId,
   })
   const runResultsQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'run-results'],
-    queryFn: () => experimentsApi.getRunResults(experimentId!),
+    queryKey: ['experiments', experimentId, 'run-results', protocolQuery.data?.id, protocolQuery.data?.published_revision_id],
+    queryFn: () => experimentsApi.getRunResults(experimentId!, { protocol_id: protocolQuery.data?.id }),
     enabled: !!experimentId,
     refetchInterval: 5000,
   })
@@ -286,7 +287,7 @@ export function ProtocolCanvasPage() {
           </Link>
           {experimentQuery.data && <EditableExperimentName experiment={experimentQuery.data} />}
           {experimentQuery.data?.locked_at && <span className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary"><Lock className="size-3" /> Locked</span>}
-          {experimentQuery.data && <TopBarStats experiment={experimentQuery.data} cells={replicatesQuery.data} obsoleteRunCount={runResultsQuery.data?.overview.obsolete_replicates ?? 0} />}
+          {experimentQuery.data && <TopBarStats experiment={experimentQuery.data} cells={runResultsQuery.data ? replicatesQuery.data : undefined} rowSummary={runResultsQuery.data?.row_summary} obsoleteRunCount={runResultsQuery.data?.overview.obsolete_replicates ?? 0} />}
           <div className="flex-1" />
           {protocolQuery.data && experimentId && (
             <>

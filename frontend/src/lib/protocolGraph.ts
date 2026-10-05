@@ -96,16 +96,18 @@ export function toPersistedGraph(nodes: Node[], edges: Edge[]): ProtocolGraph {
       data: n.data as AgentNodeData | McpToolNodeData | CriticGateNodeData,
     })),
     edges: edges.map((e) => {
-      // Only the handoff is persisted from edge data -- the rest of it
-      // (`directedFlow`) is display state the canvas derives on render.
-      const handoff = (e.data as ProtocolEdge['data'])?.handoff
+      // Preserve saved input settings and other authored metadata; display
+      // bookkeeping is reconstructed when the canvas loads.
+      const data = { ...e.data } as NonNullable<ProtocolEdge['data']>
+      delete data.directedFlow
+      if (data.handoff?.mode === 'full') delete data.handoff
       return {
         id: e.id,
         source: e.source,
         target: e.target,
         sourceHandle: e.sourceHandle,
         targetHandle: e.targetHandle,
-        ...(handoff && handoff.mode !== 'full' ? { data: { handoff } } : {}),
+        ...(Object.keys(data).length ? { data } : {}),
       }
     }),
   }

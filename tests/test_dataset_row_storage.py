@@ -28,7 +28,7 @@ from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.models.user import User
-from asaree.security.passwords import hash_password
+from asaree.services.users import create_user, get_user_by_email, set_password
 
 
 @pytest_asyncio.fixture
@@ -41,15 +41,14 @@ async def storage_graph() -> AsyncIterator[tuple[AsyncSession, dict[str, uuid.UU
         for name in ("user", "dataset", "experiment", "design", "cell", "replicate", "protocol", "protocol_revision")
     }
     async with sessions() as db:
-        db.add(
-            User(
-                id=ids["user"],
-                email="test@test.com",
-                hashed_password=hash_password("test"),
-                display_name="Row test",
-            )
-        )
-        await db.flush()
+        user = await get_user_by_email(db, "test@test.com")
+        if user is None:
+            user = await create_user(db, email="test@test.com", password="Test1234", display_name="Row test")
+        else:
+            await set_password(db, user, new_password="Test1234")
+            user.display_name = "Row test"
+            user.is_active = True
+        ids["user"] = user.id
         db.add_all(
             [
                 RegisteredDataset(id=ids["dataset"], name=f"row-{ids['dataset']}", owner_id=ids["user"]),

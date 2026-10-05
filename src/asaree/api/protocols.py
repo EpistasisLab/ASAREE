@@ -22,6 +22,7 @@ from asaree.services.experiment_measurements import (
     validate_experiment_measurement_plan,
 )
 from asaree.services.experiments import get_experiment
+from asaree.services.dataset_row_inputs import resolve_dataset_row_plan
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
@@ -105,6 +106,8 @@ class ProtocolRunResponse(BaseModel):
     error: str | None
     replicate_label: str | None
     replicate_result_id: uuid.UUID | None
+    row_result_id: uuid.UUID | None = None
+    dataset_row: dict[str, Any] | None = None
     factor_values: dict[str, Any] | None
     design_revision_id: uuid.UUID | None
     protocol_revision_id: uuid.UUID | None
@@ -118,11 +121,14 @@ class ProtocolRunResponse(BaseModel):
     observations: list[dict[str, Any]] = Field(default_factory=list)
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
+
 def _protocol_run_response(run: Any) -> ProtocolRunResponse:
     response = ProtocolRunResponse.model_validate(run)
     measurement = (run.attempt_result or {}).get("measurement") if isinstance(run.attempt_result, dict) else None
     return response.model_copy(
         update={
+            "row_result_id": run.row_result_id,
+            "dataset_row": run.dataset_row,
             "observations": list(measurement.get("observations") or []) if isinstance(measurement, dict) else [],
             "artifacts": list(measurement.get("artifacts") or []) if isinstance(measurement, dict) else [],
         }
@@ -226,6 +232,7 @@ class ProtocolRevisionResponse(BaseModel):
     graph: dict[str, Any]
     published_at: datetime
 
+
 class CreateProtocolRunRequest(BaseModel):
     # Omitted/null -- today's ad-hoc, un-substituted whole-graph run. Set --
     # runs that one already-generated replicate for real, its cell's factor_values
@@ -258,6 +265,8 @@ class CellRunBatchResponse(BaseModel):
     skipped: int
     protocol_revision_id: uuid.UUID
     protocol_revision: int
+    consumption_mode: str = "whole_dataset"
+    row_result_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class PromptPreviewRequest(BaseModel):
@@ -587,6 +596,10 @@ async def create_cell_runs_endpoint(
         skipped=skipped,
         protocol_revision_id=revision.id,
         protocol_revision=revision.revision,
+        consumption_mode=(
+            "per_row" if resolve_dataset_row_plan(revision.graph) is not None else "whole_dataset"
+        ),
+        row_result_ids=[r.row_result_id for r in runs if r.row_result_id is not None],
     )
 
 

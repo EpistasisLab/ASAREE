@@ -54,11 +54,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.config import get_settings
 from asaree.models.database import get_session
+from asaree.models.dataset import RegisteredDataset
+from asaree.models.experiment import ResearchExperiment
+from asaree.models.protocol import Protocol
+from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services import prompt_references
 from asaree.services.agent_cards import AgentCard, build_agent_card
 from asaree.services.coordination import coordination_strategy_slug
+from asaree.services.dataset_row_csv import DatasetRowCsvError, project_row, read_row_source
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
+from asaree.services.dataset_row_planning import enumerate_row_candidates
 from asaree.services.dataset_workspaces import (
     WorkspaceSeedError,
     fetch_owned_registration,
@@ -76,6 +82,7 @@ from asaree.services.experiment_measurements import (
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
+from asaree.services.factorial_row_results import ensure_row_result, list_row_attempts
 from asaree.services.protocol_revisions import get_revision
 from asaree.services.protocol_runs import (
     TERMINAL_PROTOCOL_RUN_STATUSES,
@@ -4520,6 +4527,129 @@ async def plan_cell_runs(
             f"Current {impact.current_cell_count} cells/{impact.current_replicate_count} replicates, "
             f"proposed {impact.proposed_cell_count} cells/{impact.proposed_replicate_count} replicates."
         )
+
+    # A row batch is pinned to an immutable published revision. Validate the
+    # complete ownership/scope relationship and the caller-supplied snapshot
+    # before the shared current-design parents can create any row slots.
+    revision = await db.get(ProtocolRevision, protocol_revision_id) if protocol_revision_id else None
+    protocol = await db.get(Protocol, protocol_id)
+    if (
+        revision is not None
+        and protocol is not None
+        and revision.protocol_id == protocol_id
+        and protocol.owner_id == owner_id
+        and protocol.experiment_id == experiment_id
+        and protocol.published_revision_id == revision.id
+        and revision.graph == graph
+    ):
+        try:
+            original_row_plan = resolve_dataset_row_plan(revision.graph, design_spec)
+        except DatasetRowInputError as exc:
+            raise ProtocolValidationError(str(exc)) from exc
+        if original_row_plan is not None:
+            if rerun_replicate_labels:
+                raise ProtocolValidationError("Row executions cannot be rerun through the cell batch; use row retry.")
+            registration = (
+                await db.execute(
+                    select(RegisteredDataset).where(
+                        RegisteredDataset.id == uuid.UUID(original_row_plan["driver_dataset_id"]),
+                        RegisteredDataset.owner_id == owner_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            experiment_owner = await db.scalar(
+                select(ResearchExperiment.owner_id).where(ResearchExperiment.id == experiment_id)
+            )
+            if registration is None or experiment_owner != owner_id:
+                raise ProtocolValidationError("Registered row source is unavailable.")
+            try:
+                source = read_row_source(
+                    dataset_id=str(registration.id),
+                    raw_path=registration.raw_path,
+                    raw_sha256=registration.raw_sha256,
+                )
+            except DatasetRowCsvError as exc:
+                raise ProtocolValidationError(str(exc)) from exc
+            parents = await list_replicates(db, experiment_id=experiment_id)
+            labels = {parent.replicate_label for parent in parents}
+            requested_labels = labels if replicate_labels is None else replicate_labels
+            unknown = requested_labels - labels
+            if unknown:
+                raise ProtocolValidationError(f"Unknown replicate label(s): {', '.join(sorted(unknown))}.")
+            selected_parents = [parent for parent in parents if parent.replicate_label in requested_labels]
+            parent_values = [
+                {
+                    "replicate_result_id": str(parent.id),
+                    "cell_id": str(parent.cell_id),
+                    "cell_label": parent.cell_label,
+                    "replicate_label": parent.replicate_label,
+                    "replicate_number": parent.replicate_number,
+                    "design_revision_id": str(parent.design_revision_id),
+                    "factor_values": parent.factor_values or {},
+                }
+                for parent in selected_parents
+            ]
+            try:
+                candidates = enumerate_row_candidates(
+                    parents=parent_values,
+                    source=source,
+                    graph=revision.graph,
+                    design_spec=design_spec,
+                    protocol_revision_id=str(revision.id),
+                )
+                planned = []
+                for candidate in candidates:
+                    patched_graph = apply_factor_bindings(revision.graph, candidate["factor_values"])
+                    patched_plan = resolve_dataset_row_plan(patched_graph, design_spec)
+                    if patched_plan is None or patched_plan["driver_dataset_id"] != str(registration.id):
+                        raise DatasetRowInputError("driver_mismatch", "factor substitution changed the row driver")
+                    columns = list(dict.fromkeys(
+                        column for binding in patched_plan["bindings"] for column in binding["columns"]
+                    ))
+                    view = project_row(source, row_index=candidate["dataset_row"]["row_index"], columns=columns)
+                    planned.append((candidate, view))
+            except (DatasetRowInputError, DatasetRowCsvError) as exc:
+                raise ProtocolValidationError(str(exc)) from exc
+
+            created: list[ProtocolRun] = []
+            skipped = 0
+            for candidate, view in planned:
+                row_result = await ensure_row_result(
+                    db,
+                    experiment_id=experiment_id,
+                    design_revision_id=uuid.UUID(candidate["design_revision_id"]),
+                    protocol_revision_id=revision.id,
+                    replicate_result_id=uuid.UUID(candidate["replicate_result_id"]),
+                    dataset_id=registration.id,
+                    raw_sha256=source.raw_sha256,
+                    row_index=candidate["dataset_row"]["row_index"],
+                )
+                attempts = await list_row_attempts(
+                    db,
+                    experiment_id=experiment_id,
+                    row_result_id=row_result.id,
+                    design_revision_id=uuid.UUID(candidate["design_revision_id"]),
+                    protocol_revision_id=revision.id,
+                )
+                if attempts:
+                    skipped += 1
+                    continue
+                run = await create_protocol_run(
+                    db,
+                    protocol_id=protocol_id,
+                    owner_id=owner_id,
+                    replicate_label=candidate["replicate_label"],
+                    factor_values=candidate["factor_values"],
+                    replicate_result_id=uuid.UUID(candidate["replicate_result_id"]),
+                    design_revision_id=uuid.UUID(candidate["design_revision_id"]),
+                    protocol_revision_id=revision.id,
+                    row_result_id=row_result.id,
+                    dataset_row=view,
+                )
+                created.append(run)
+            return created, skipped
+    elif resolve_dataset_row_plan(revision.graph if revision is not None else graph, design_spec) is not None:
+        raise ProtocolValidationError("Published protocol revision does not match the requested protocol and graph.")
 
     # Current design only -- list_replicates scopes to the experiment's current
     # revision, so a superseded design's replicates are neither counted nor run.

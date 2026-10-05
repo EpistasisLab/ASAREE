@@ -19,10 +19,13 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.experiment import ResearchExperiment
+from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.models.factorial_row_result import FactorialRowResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.design_revisions import get_current_revision
 from asaree.services.factorial_cells import get_replicate, list_replicates
 from asaree.services.measurement_engine import MeasurementEvaluation, normalize_measurement_plan
 from asaree.services.measurement_migration import normalize_experiment_measurement_plan
@@ -86,6 +89,8 @@ async def create_protocol_run(
     target_node_id: str | None = None,
     design_revision_id: uuid.UUID | None = None,
     protocol_revision_id: uuid.UUID | None = None,
+    row_result_id: uuid.UUID | None = None,
+    dataset_row: dict[str, Any] | None = None,
     is_test_run: bool = False,
 ) -> ProtocolRun:
     """``replicate_label``/``factor_values``/``design_revision_id`` are set together
@@ -97,6 +102,29 @@ async def create_protocol_run(
     ``target_node_id`` is set only for a single-node "Play" run (see
     ``ProtocolRun`` model's own comment) -- mutually exclusive with
     replicate_label/factor_values in practice, though nothing enforces that here."""
+    if dataset_row is not None:
+        _validate_dataset_row_snapshot(dataset_row)
+    row_slot: FactorialRowResult | None = None
+    if row_result_id is not None:
+        if (
+            dataset_row is None
+            or replicate_result_id is None
+            or design_revision_id is None
+            or protocol_revision_id is None
+        ):
+            raise ValueError("invalid_row_scope")
+        row_slot, parent, cell = await _validate_row_attempt(
+            db,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            row_result_id=row_result_id,
+            replicate_result_id=replicate_result_id,
+            replicate_label=replicate_label,
+            factor_values=factor_values,
+            design_revision_id=design_revision_id,
+            protocol_revision_id=protocol_revision_id,
+            dataset_row=dataset_row,
+        )
     measurement_plan_snapshot: dict[str, Any] | None = None
     reference_values: dict[str, Any] = {}
     protocol = await db.get(Protocol, protocol_id)
@@ -129,6 +157,8 @@ async def create_protocol_run(
         replicate_label=replicate_label,
         factor_values=factor_values,
         replicate_result_id=replicate_result_id,
+        row_result_id=row_result_id,
+        dataset_row=dataset_row,
         target_node_id=target_node_id,
         design_revision_id=design_revision_id,
         protocol_revision_id=protocol_revision_id,
@@ -140,12 +170,35 @@ async def create_protocol_run(
                     else {}
                 ),
                 **({"reference_values": reference_values} if reference_values else {}),
+                **(
+                    {
+                        "row_provenance": {
+                            "row_result_id": str(row_result_id) if row_result_id is not None else None,
+                            "replicate_result_id": (
+                                str(replicate_result_id) if replicate_result_id is not None else None
+                            ),
+                            "design_revision_id": str(design_revision_id) if design_revision_id is not None else None,
+                            "protocol_revision_id": str(protocol_revision_id),
+                            "dataset_row": dict(dataset_row),
+                        }
+                    }
+                    if dataset_row is not None
+                    else {}
+                ),
             }
             or None
         ),
     )
     db.add(run)
     await db.flush()
+    if row_slot is not None:
+        row_slot.run_id = run.id
+        row_slot.workspace_id = None
+        row_slot.metric_values = None
+        row_slot.artifacts = None
+        await db.flush()
+        await db.refresh(run)
+        return run
     if replicate_result_id is not None:
         # A planned run is a new attempt for this stable replicate slot. Its
         # result projection must immediately become "latest attempt only" --
@@ -174,6 +227,89 @@ async def create_protocol_run(
             await db.flush()
     await db.refresh(run)
     return run
+
+
+def _validate_dataset_row_snapshot(snapshot: dict[str, Any]) -> None:
+    import re
+
+    if not isinstance(snapshot, dict) or set(snapshot) != {
+        "dataset_id",
+        "raw_sha256",
+        "row_index",
+        "columns",
+        "values",
+    }:
+        raise ValueError("invalid_dataset_row_snapshot")
+    try:
+        uuid.UUID(snapshot["dataset_id"])
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValueError("invalid_dataset_row_snapshot") from exc
+    if (
+        not isinstance(snapshot["dataset_id"], str)
+        or not isinstance(snapshot["raw_sha256"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", snapshot["raw_sha256"]) is None
+        or isinstance(snapshot["row_index"], bool)
+        or not isinstance(snapshot["row_index"], int)
+        or snapshot["row_index"] < 0
+        or not isinstance(snapshot["columns"], list)
+        or not snapshot["columns"]
+        or any(not isinstance(column, str) or not column for column in snapshot["columns"])
+        or len(set(snapshot["columns"])) != len(snapshot["columns"])
+        or not isinstance(snapshot["values"], dict)
+        or set(snapshot["values"]) != set(snapshot["columns"])
+        or any(not isinstance(value, str) for value in snapshot["values"].values())
+    ):
+        raise ValueError("invalid_dataset_row_snapshot")
+
+
+async def _validate_row_attempt(
+    db: AsyncSession,
+    *,
+    protocol_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    row_result_id: uuid.UUID,
+    replicate_result_id: uuid.UUID,
+    replicate_label: str | None,
+    factor_values: dict[str, Any] | None,
+    design_revision_id: uuid.UUID,
+    protocol_revision_id: uuid.UUID,
+    dataset_row: dict[str, Any],
+) -> tuple[FactorialRowResult, FactorialReplicateResult, FactorialCell]:
+    statement = (
+        select(FactorialRowResult, FactorialReplicateResult, FactorialCell)
+        .join(FactorialReplicateResult, FactorialReplicateResult.id == FactorialRowResult.replicate_result_id)
+        .join(FactorialCell, FactorialCell.id == FactorialReplicateResult.cell_id)
+        .where(FactorialRowResult.id == row_result_id)
+    )
+    result = (await db.execute(statement)).one_or_none()
+    if result is None:
+        raise ValueError("invalid_row_scope")
+    slot, parent, cell = result
+    current = await get_current_revision(db, cell.experiment_id)
+    revision = await db.get(ProtocolRevision, protocol_revision_id)
+    protocol = await db.get(Protocol, protocol_id)
+    experiment = await db.get(ResearchExperiment, cell.experiment_id)
+    if (
+        cell.design_revision_id != design_revision_id
+        or current is None
+        or current.id != design_revision_id
+        or parent.id != replicate_result_id
+        or parent.replicate_label != replicate_label
+        or dict(cell.factor_values or {}) != dict(factor_values or {})
+        or slot.protocol_revision_id != protocol_revision_id
+        or slot.dataset_id != uuid.UUID(dataset_row["dataset_id"])
+        or slot.raw_sha256 != dataset_row["raw_sha256"]
+        or slot.row_index != dataset_row["row_index"]
+        or revision is None
+        or revision.protocol_id != protocol_id
+        or protocol is None
+        or protocol.experiment_id != cell.experiment_id
+        or protocol.owner_id != owner_id
+        or experiment is None
+        or experiment.owner_id != owner_id
+    ):
+        raise ValueError("invalid_row_scope")
+    return slot, parent, cell
 
 
 async def create_test_run(

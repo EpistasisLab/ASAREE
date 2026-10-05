@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import asaree.models.dataset  # noqa: F401
 import asaree.models.experiment  # noqa: F401
@@ -16,11 +17,23 @@ from asaree.models.database import dispose_engine, get_session
 from asaree.models.dataset import RegisteredDataset
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.user import User
-from asaree.security.passwords import hash_password
 from asaree.services.dataset_row_csv import DatasetRowCsvError
 from asaree.services.dataset_row_inputs import DatasetRowInputError
 from asaree.services.protocol_revisions import publish_protocol
 from asaree.services.protocols import create_protocol, delete_protocol, update_protocol
+from asaree.services.users import create_user, get_user_by_email, set_password
+
+
+async def _row_test_user(
+    db: AsyncSession, *, email: str, display_name: str
+) -> tuple[User, bool]:
+    user = await get_user_by_email(db, email)
+    if user is None:
+        return await create_user(db, email=email, password="Test1234", display_name=display_name), True
+    await set_password(db, user, new_password="Test1234")
+    user.display_name = display_name
+    user.is_active = True
+    return user, False
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -31,28 +44,20 @@ async def _dispose_engine() -> AsyncIterator[None]:
 
 @pytest.mark.asyncio
 async def test_row_publication_revisions_and_source_validation(tmp_path: Path) -> None:
-    owner_id = uuid.uuid4()
-    other_owner_id = uuid.uuid4()
     dataset_id = uuid.uuid4()
     csv_path = tmp_path / "rows.csv"
     contents = b"question,answer\nfirst,one\nsecond,two\n"
     csv_path.write_bytes(contents)
     digest = hashlib.sha256(contents).hexdigest()
     async with get_session() as db:
-        owner = User(
-            id=owner_id,
-            email="test@test.com",
-            hashed_password=hash_password("test"),
-            display_name="Row Publisher",
+        owner, owner_created = await _row_test_user(
+            db, email="test@test.com", display_name="Row Publisher"
         )
-        other = User(
-            id=other_owner_id,
-            email="other@test.com",
-            hashed_password=hash_password("test"),
-            display_name="Other Publisher",
+        other, other_created = await _row_test_user(
+            db, email="other@test.com", display_name="Other Publisher"
         )
-        db.add_all([owner, other])
-        await db.flush()
+        owner_id = owner.id
+        other_owner_id = other.id
         dataset = RegisteredDataset(
             id=dataset_id,
             name="cohort",
@@ -161,5 +166,7 @@ async def test_row_publication_revisions_and_source_validation(tmp_path: Path) -
         await delete_protocol(db, protocol.id)
         await db.delete(dataset)
         await db.delete(other_dataset)
-        await db.delete(owner)
-        await db.delete(other)
+        if owner_created:
+            await db.delete(owner)
+        if other_created:
+            await db.delete(other)

@@ -21,7 +21,10 @@ One unique factor combination together with all its planned replicates.
 _Avoid_: Condition, treatment (accepted in prose, never in code)
 
 **Replicate**:
-One run of one cell. Counts of pending/run/scored are replicate counts, never cell counts.
+One execution unit planned under a cell. A row-mode parent Replicate owns one Row execution per original row; counts of pending/run/scored are replicate counts, never cell or row counts. Rows are neither factors nor extra stochastic replicates.
+
+**Row execution**:
+One complete protocol execution for a (cell, original dataset row, replicate) tuple.
 
 **Primary metric**:
 The optional declared metric Results uses to rank cells. An editable experiment may have none; when declared, it must be unique.
@@ -113,4 +116,4 @@ An agent node with its critic gate. `approved` and `revisions_used` are recorded
 _Avoid_: Reviewer, supervisor
 
 **Attempt**:
-One ProtocolRun for a replicate; later attempts supersede earlier ones but every attempt's own facts stay immutable.
+One ProtocolRun under either a whole-dataset Replicate or a stable row slot; later attempts supersede earlier ones but every attempt's own facts stay immutable. A run may also retain a nullable dataset-row snapshot when no row slot exists, as for previews.

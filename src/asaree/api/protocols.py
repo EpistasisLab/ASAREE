@@ -368,15 +368,6 @@ async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, d
     """Make the current autosaved canvas the immutable version future runs use."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
     published = await get_published_revision(db, protocol)
-    if published is not None and is_draft_published(protocol, published):
-        return await _protocol_response(db, protocol)
-    if protocol.experiment_id:
-        experiment = await get_experiment(db, protocol.experiment_id)
-        if experiment is not None and experiment.locked_at is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="Experiment is locked. Unlock it before publishing a changed canvas.",
-            )
     try:
         # Strategy before shape: the acyclic requirement is a pipeline
         # requirement, and a peer_collaboration canvas isn't run as one -- see
@@ -401,7 +392,23 @@ async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, d
                 raise ProtocolValidationError("; ".join(issue.message for issue in blocking_issues))
     except (ProtocolValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await publish_protocol(db, protocol)
+    if published is not None and is_draft_published(protocol, published):
+        try:
+            await publish_protocol(db, protocol, owner_id=user.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return await _protocol_response(db, protocol)
+    if protocol.experiment_id:
+        experiment = await get_experiment(db, protocol.experiment_id)
+        if experiment is not None and experiment.locked_at is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Experiment is locked. Unlock it before publishing a changed canvas.",
+            )
+    try:
+        await publish_protocol(db, protocol, owner_id=user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await _protocol_response(db, protocol)
 
 

@@ -58,6 +58,7 @@ from asaree.models.protocol_run import ProtocolRun
 from asaree.services import prompt_references
 from asaree.services.agent_cards import AgentCard, build_agent_card
 from asaree.services.coordination import coordination_strategy_slug
+from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 from asaree.services.dataset_workspaces import (
     WorkspaceSeedError,
     fetch_owned_registration,
@@ -1047,6 +1048,10 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
     unreachable are appended in declaration order, since with the sort's
     premise gone there is no order left to claim.
     """
+    try:
+        resolve_dataset_row_plan(graph)
+    except DatasetRowInputError as exc:
+        raise ProtocolValidationError(str(exc)) from exc
     _, downstream, _ = _adjacency(graph)
     nodes, ordered, complete = _kahn_order(graph)
     if not nodes:

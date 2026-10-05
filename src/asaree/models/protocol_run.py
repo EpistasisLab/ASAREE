@@ -93,6 +93,15 @@ class ProtocolRun(Base, TimestampMixin):
         nullable=True,
         index=True,
     )
+    # Stable row slot for row-mode attempts. Preview runs may carry dataset_row
+    # without a slot; legacy and whole-dataset attempts leave both null.
+    row_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("factorial_row_results.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    dataset_row: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # Which design revision this run's cell belonged to when it was planned
     # (null for a plain graph run, same as replicate_label). Without it, a result
     # arriving after the user regenerated the design would be written against

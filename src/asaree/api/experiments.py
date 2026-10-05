@@ -569,7 +569,7 @@ async def import_experiment_definition_endpoint(
                     allow_preserved_bindings=False,
                 )
             if published_graph is not None:
-                await publish_protocol(db, protocol)
+                await publish_protocol(db, protocol, owner_id=user.id)
                 if graph != published_graph:
                     protocol.graph = graph
                     await db.flush()

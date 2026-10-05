@@ -13,7 +13,6 @@ from typing import Any
 
 from asaree.services.dataset_row_csv import RowSource
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
-from asaree.services.protocol_execution import apply_factor_bindings
 
 
 def enumerate_row_candidates(
@@ -29,6 +28,10 @@ def enumerate_row_candidates(
     Earlier graph and measurement validation remains the caller's
     responsibility. No database access, scheduling, or input mutation occurs.
     """
+    # Imported lazily to keep this pure helper independent at module import
+    # time: protocol_execution calls us while it is itself being imported.
+    from asaree.services.protocol_execution import apply_factor_bindings
+
     if not source.rows:
         raise DatasetRowInputError("empty_source", "row source must contain at least one data row")
 

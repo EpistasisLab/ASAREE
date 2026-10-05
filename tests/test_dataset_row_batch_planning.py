@@ -1,0 +1,172 @@
+"""PostgreSQL integration coverage for row-mode production batches."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import uuid
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+import asaree.api.protocols as protocol_api
+from asaree.api.protocols import CellRunBatchRequest, create_cell_runs_endpoint
+from asaree.models.dataset import RegisteredDataset
+from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.models.protocol_run import ProtocolRun
+from asaree.services.experiments import create_experiment
+from asaree.services.factorial_cells import upsert_replicate
+from asaree.services.protocol_revisions import publish_protocol
+from asaree.services.protocols import create_protocol
+from asaree.services.users import get_user_by_email
+
+
+@pytest_asyncio.fixture
+async def row_batch(tmp_path: Path) -> AsyncIterator[tuple[AsyncSession, dict]]:
+    engine = create_async_engine(os.environ["ASAREE_PRODUCT_DATABASE_URL"])
+    async with engine.begin() as connection:
+        sessions = async_sessionmaker(bind=connection, expire_on_commit=False)
+        async with sessions() as db:
+            user = await get_user_by_email(db, "test@test.com")
+            assert user is not None, "run scripts/seed_row_test_users.py before row database tests"
+            raw = b"question,answer\n" + b"prompt,response\n" * 30
+            raw_path = tmp_path / "batch.csv"
+            raw_path.write_bytes(raw)
+            dataset_id = uuid.uuid4()
+            dataset = RegisteredDataset(
+                id=dataset_id,
+                name=f"batch-{dataset_id}",
+                owner_id=user.id,
+                raw_path=str(raw_path),
+                raw_sha256=hashlib.sha256(raw).hexdigest(),
+            )
+            db.add(dataset)
+            experiment = await create_experiment(
+                db,
+                name=f"row-batch-{uuid.uuid4()}",
+                owner_id=user.id,
+                design_spec={"factors": [], "metrics": []},
+            )
+            await upsert_replicate(
+                db,
+                experiment_id=experiment.id,
+                replicate_label="batch-parent",
+                fields={"factor_values": {}},
+            )
+            graph = {
+                "nodes": [
+                    {
+                        "id": "dataset",
+                        "type": "dataset",
+                        "data": {
+                            "config": {"dataset_id": str(dataset_id), "dataset_name": dataset.name}
+                        },
+                    },
+                    {"id": "agent", "type": "agent", "data": {}},
+                    {"id": "model", "type": "model_openai", "data": {"config": {}}},
+                ],
+                "edges": [
+                    {
+                        "id": "dataset-agent",
+                        "source": "dataset",
+                        "target": "agent",
+                        "targetHandle": "dataset",
+                        "data": {"dataset_input": {"mode": "per_row", "columns": ["question"]}},
+                    },
+                    {
+                        "id": "model-agent",
+                        "source": "model",
+                        "target": "agent",
+                        "targetHandle": "model",
+                    },
+                ],
+            }
+            protocol = await create_protocol(
+                db,
+                name=f"row-protocol-{uuid.uuid4()}",
+                owner_id=user.id,
+                experiment_id=experiment.id,
+                graph=graph,
+            )
+            revision = await publish_protocol(db, protocol, owner_id=user.id)
+            protocol.published_revision_id = revision.id
+            await db.flush()
+            yield db, {"user": user, "protocol": protocol, "revision": revision}
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_batch_persists_each_original_row_once(row_batch, monkeypatch: pytest.MonkeyPatch) -> None:
+    db, ctx = row_batch
+    queued: list[uuid.UUID] = []
+
+    async def enqueue(run_id: uuid.UUID) -> None:
+        queued.append(run_id)
+
+    monkeypatch.setattr(protocol_api, "enqueue_protocol_run", enqueue)
+    first = await create_cell_runs_endpoint(
+        ctx["protocol"].id, ctx["user"], db, CellRunBatchRequest()
+    )
+    assert len(first.protocol_run_ids) == 30
+    assert len(first.row_result_ids) == 30
+    assert first.replicate_labels == ["batch-parent"] * 30
+    assert first.consumption_mode == "per_row"
+    assert first.skipped == 0
+    failed_run = await db.get(ProtocolRun, first.protocol_run_ids[0])
+    completed_run = await db.get(ProtocolRun, first.protocol_run_ids[1])
+    assert failed_run is not None and completed_run is not None
+    failed_run.status = "failed"
+    completed_run.status = "completed"
+    parent = await db.scalar(
+        select(FactorialReplicateResult).where(FactorialReplicateResult.replicate_label == "batch-parent")
+    )
+    assert parent is not None and parent.run_id is None and parent.metric_values is None
+
+    second = await create_cell_runs_endpoint(
+        ctx["protocol"].id, ctx["user"], db, CellRunBatchRequest()
+    )
+    assert second.protocol_run_ids == []
+    assert second.row_result_ids == []
+    assert second.skipped == 30
+    assert len(queued) == 30
+    assert await db.scalar(
+        select(func.count()).select_from(ProtocolRun).where(
+            ProtocolRun.protocol_id == ctx["protocol"].id,
+            ProtocolRun.is_test_run.is_(False),
+        )
+    ) == 30
+
+
+@pytest.mark.asyncio
+async def test_whole_dataset_batch_response_keeps_legacy_mode(row_batch, monkeypatch: pytest.MonkeyPatch) -> None:
+    db, ctx = row_batch
+    async def enqueue(_run_id: uuid.UUID) -> None:
+        return None
+
+    monkeypatch.setattr(protocol_api, "enqueue_protocol_run", enqueue)
+    protocol = ctx["protocol"]
+    protocol.graph = {
+        "nodes": [
+            {"id": "agent", "type": "agent", "data": {}},
+            {"id": "model", "type": "model_openai", "data": {"config": {}}},
+        ],
+        "edges": [
+            {
+                "id": "model-agent",
+                "source": "model",
+                "target": "agent",
+                "targetHandle": "model",
+            }
+        ],
+    }
+    revision = await publish_protocol(db, protocol, owner_id=ctx["user"].id)
+    protocol.published_revision_id = revision.id
+    # This regression checks response mode only; the row parent is still valid
+    # for the existing whole-dataset planner path.
+    result = await create_cell_runs_endpoint(protocol.id, ctx["user"], db)
+    assert result.consumption_mode == "whole_dataset"
+    assert result.row_result_ids == []

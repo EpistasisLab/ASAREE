@@ -27,6 +27,7 @@ const CONNECTOR_X: {
     knowledge: 0.9,
     model: 0.08,
     sub_agents: 0.32,
+    persona: 0.45,
     memory: 0.58,
     tool: 0.8,
     // Added after the other seven, and placed after Tool rather than among

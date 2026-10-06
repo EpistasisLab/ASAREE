@@ -610,7 +610,6 @@ export function ResultsTab({
   experiment,
   onSelectResult,
   versionId,
-  versionControls,
 }: {
   protocolId?: string
   experimentId: string
@@ -618,18 +617,16 @@ export function ResultsTab({
   experiment: Experiment
   onSelectResult: (selection: ResultsSelection) => void
   versionId?: string
-  versionControls?: React.ReactNode
 }) {
   const [metricPreference, setMetricPreference] = useState<string | null>(null)
   const [expandedResultCells, setExpandedResultCells] = useState<Set<string>>(() => new Set())
   const [downloading, setDownloading] = useState(false)
   const scope: ResultsScope = { protocol_id: protocolId, protocol_revision_id: versionId || undefined }
-  const scopeControls = versionControls
   const resultsQuery = useQuery({ queryKey: ['experiments', experimentId, 'run-results', scope], queryFn: () => experimentsApi.getRunResults(experimentId, scope), refetchInterval: 5000 })
   if (resultsQuery.isLoading) return <div className="space-y-3 p-3"><Skeleton className="h-20 w-full" /><Skeleton className="h-36 w-full" /></div>
-  if (resultsQuery.isError || !resultsQuery.data) return <>{scopeControls}<p role="alert" className="p-3 text-sm text-destructive">{resultsQuery.error?.message ?? 'Could not load this experiment’s results.'}</p></>
+  if (resultsQuery.isError || !resultsQuery.data) return <p role="alert" className="p-3 text-sm text-destructive">{resultsQuery.error?.message ?? 'Could not load this experiment’s results.'}</p>
 
-  if (resultsQuery.data.consumption_mode === 'per_row') return <>{scopeControls}<DatasetRowResults results={resultsQuery.data} experiment={experiment} scope={scope} onInspect={rowResultId => onSelectResult({ type: 'row', rowResultId, scope })} /></>
+  if (resultsQuery.data.consumption_mode === 'per_row') return <DatasetRowResults results={resultsQuery.data} experiment={experiment} scope={scope} onInspect={rowResultId => onSelectResult({ type: 'row', rowResultId, scope })} />
 
   const { overview, cells, replicates, metric_types: metricTypes, metric_aggregations: metricAggregations, metric_directions: metricDirections, primary_metric: primaryMetric, primary_metric_direction: primaryMetricDirection } = resultsQuery.data
   const metricKeys = orderedResultsMetricKeys(resultsQuery.data.metric_keys, experiment)
@@ -683,7 +680,6 @@ export function ResultsTab({
 
   return (
     <div className="space-y-4 p-3">
-      {scopeControls}
       <section className="space-y-2">
         {metricKeys.length > 0 && (
           <div className="flex items-center justify-end gap-2">

@@ -72,7 +72,6 @@ export function ExperimentSidePanel({
   unboundFactors,
   onResultSelection,
   version,
-  versionControls,
   viewingHistory = false,
   onDraftBusyChange,
 }: {
@@ -88,7 +87,6 @@ export function ExperimentSidePanel({
   unboundFactors: string[]
   onResultSelection: (selection: ResultsSelection | null) => void
   version?: ProtocolRevision
-  versionControls?: React.ReactNode
   viewingHistory?: boolean
   onDraftBusyChange?: (busy: boolean) => void
 }) {
@@ -255,7 +253,6 @@ export function ExperimentSidePanel({
             </div>
           ) : (
             <div className="min-h-0 flex-1 overflow-y-auto">
-              {versionControls}
               <div className={activeTab === 'design' && !viewingHistory ? '' : 'hidden'}>
                 <DesignTab
                   experiment={draftExperiment ?? experiment}

@@ -282,7 +282,15 @@ export function ProtocolCanvasPage() {
     ? unboundFactorNames(experimentQuery.data.design_spec, protocolQuery.data.graph)
     : []
   const versionsQuery = useQuery({ queryKey: ['protocols', protocolQuery.data?.id, 'revisions'], queryFn: () => protocolsApi.listRevisions(protocolQuery.data!.id), enabled: !!protocolQuery.data?.id })
-  const version = versionsQuery.data?.find(item => item.id === versionId)
+  const experimentVersions = versionsQuery.data?.filter(item => item.experiment_snapshot != null)
+  const hasChanges = !!protocolQuery.data?.has_unpublished_changes || draftBusy
+  const publishedVersion = protocolQuery.data?.published_revision
+  const editableVersionLabel = !publishedVersion ? 'Not published'
+    : hasChanges ? 'Unpublished changes' : `Version ${publishedVersion}`
+  const historicalOptions = experimentVersions?.filter(item =>
+    hasChanges || item.id !== protocolQuery.data?.published_revision_id || item.id === versionId,
+  )
+  const version = experimentVersions?.find(item => item.id === versionId)
   const displayedExperiment = experimentQuery.data && version?.experiment_snapshot
     ? { ...experimentQuery.data, ...version.experiment_snapshot } : experimentQuery.data
   const resultsVersion = version ?? versionsQuery.data?.find(item => item.id === protocolQuery.data?.published_revision_id)
@@ -296,7 +304,6 @@ export function ProtocolCanvasPage() {
     run_id: row.run_id, workspace_id: null, artifacts: null,
     created_at: row.updated_at, updated_at: row.updated_at,
   }))
-  const versionControls = <div className="space-y-2 p-3 text-xs"><label className="flex flex-wrap items-center gap-2">Experiment version<select aria-label="Experiment version" className="min-w-0 rounded border bg-background p-2 font-mono" value={versionId} onChange={event => { setVersionId(event.target.value); setResultSelection(null) }}><option value="">Draft · latest published results</option>{versionsQuery.data?.map(item => <option key={item.id} value={item.id}>{item.experiment_snapshot ? 'Version' : 'Legacy canvas'} {item.revision} · {new Date(item.published_at).toLocaleDateString()}</option>)}</select></label>{version && <p className="text-muted-foreground">Canvas, design, and results show this saved version. Read-only.</p>}{versionsQuery.isError && <p role="alert" className="text-destructive">Could not load experiment versions.</p>}</div>
 
   return (
     <div className="flex h-svh flex-col bg-muted/30">
@@ -312,14 +319,33 @@ export function ProtocolCanvasPage() {
           {experimentQuery.data && (versionId ? <span className="text-lg font-semibold">{experimentQuery.data.name}</span> : <EditableExperimentName experiment={experimentQuery.data} />)}
           {experimentQuery.data?.locked_at && <span className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary"><Lock className="size-3" /> Locked</span>}
           {!versionId && resultsExperiment && <TopBarStats experiment={resultsExperiment} cells={resultReplicates} rowSummary={runResultsQuery.data?.row_summary} obsoleteRunCount={runResultsQuery.data?.overview.obsolete_replicates ?? 0} />}
-          <div className="flex-1" />
-          {protocolQuery.data && experimentId && !versionId && (
-            <>
-              <ProtocolPublicationControl protocol={protocolQuery.data} experimentId={experimentId} draftBusy={draftBusy} />
-            </>
-          )}
         </div>
-        {versionId && <div className="flex items-center justify-between rounded border border-primary/40 bg-primary/10 px-3 py-2 text-xs"><span>Viewing {version?.experiment_snapshot ? 'experiment version' : 'legacy canvas'} {version?.revision ?? '…'} · read-only</span><Button variant="outline" size="sm" onClick={() => { setVersionId(''); setResultSelection(null) }}>Return to draft</Button></div>}
+        <div className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border bg-card px-3 py-2 text-xs" aria-label="Experiment version controls">
+          <label className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="font-medium">Experiment version</span>
+            <select
+              aria-label="Experiment version"
+              className="min-w-0 max-w-full rounded border bg-background p-2 font-mono"
+              value={versionId}
+              disabled={!protocolQuery.data || versionsQuery.isLoading}
+              onChange={event => { setVersionId(event.target.value); setResultSelection(null) }}
+            >
+              <option value="">{editableVersionLabel}</option>
+              {historicalOptions?.map(item => <option key={item.id} value={item.id}>Version {item.revision} · {new Date(item.published_at).toLocaleDateString()}</option>)}
+            </select>
+          </label>
+          <p className="text-muted-foreground">{versionId ? 'Canvas, Design, Runs, and Results show this saved version · read-only.'
+            : !publishedVersion ? 'Publish the experiment to create its first version.'
+              : hasChanges ? `Changes are not published. Runs and Results use version ${publishedVersion}.`
+                : 'Canvas, Design, Runs, and Results use this published version.'}</p>
+          {versionsQuery.isError && <p role="alert" className="text-destructive">Could not load experiment versions.</p>}
+          {protocolQuery.data && experimentId && !versionId && (
+            <div className="ml-auto">
+              <ProtocolPublicationControl protocol={protocolQuery.data} experimentId={experimentId} draftBusy={draftBusy} />
+            </div>
+          )}
+          {versionId && <Button className="ml-auto" variant="outline" size="sm" onClick={() => { setVersionId(''); setResultSelection(null) }}>Return to experiment</Button>}
+        </div>
 
         <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
           <ExperimentSidePanel
@@ -329,7 +355,6 @@ export function ProtocolCanvasPage() {
             version={version}
             viewingHistory={!!versionId}
             onDraftBusyChange={setDraftBusy}
-            versionControls={versionControls}
             protocolId={protocolQuery.data?.id}
             protocol={protocolQuery.data}
             canvasRef={canvasRef}

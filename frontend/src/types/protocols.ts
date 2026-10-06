@@ -241,6 +241,10 @@ export interface ProtocolRevision {
   id: string
   protocol_id: string
   revision: number
+  name?: string | null
+  note?: string | null
+  run_count?: number
+  result_count?: number
   graph: ProtocolGraph
   published_at: string
   experiment_snapshot?: {

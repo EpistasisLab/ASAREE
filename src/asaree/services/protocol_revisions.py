@@ -35,7 +35,8 @@ async def get_published_revision(db: AsyncSession, protocol: Protocol) -> Protoc
 
 
 async def publish_protocol(
-    db: AsyncSession, protocol: Protocol, *, owner_id: uuid.UUID | None = None
+    db: AsyncSession, protocol: Protocol, *, owner_id: uuid.UUID | None = None,
+    name: str | None = None, note: str | None = None,
 ) -> ProtocolRevision:
     """Freeze canvas, experiment settings, and generated design as one version."""
     protocol = (
@@ -160,6 +161,8 @@ async def publish_protocol(
     revision = ProtocolRevision(
         protocol_id=protocol.id,
         revision=(highest or 0) + 1,
+        name=name,
+        note=note,
         graph=copy.deepcopy(protocol.graph),
         experiment_snapshot=experiment_settings(experiment) if experiment is not None else None,
         design_revision_id=design.id if design is not None else None,

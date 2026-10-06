@@ -309,7 +309,7 @@ export const protocolsApi = {
     request<Protocol[]>(experimentId ? `/protocols?experiment_id=${experimentId}` : '/protocols'),
   update: (id: string, data: { name?: string; description?: string | null; graph?: ProtocolGraph }) =>
     request<Protocol>(`/protocols/${id}`, { method: 'PATCH', body: data }),
-  publish: (id: string) => request<Protocol>(`/protocols/${id}/publish`, { method: 'POST' }),
+  publish: (id: string, annotations?: { name?: string | null; note?: string | null }) => request<Protocol>(`/protocols/${id}/publish`, { method: 'POST', body: annotations }),
   remove: (id: string) => request<void>(`/protocols/${id}`, { method: 'DELETE' }),
   // 422 if the graph is empty or has a cycle -- returns immediately with
   // status "pending"; poll getRun for progress. cellLabel runs that one
@@ -331,6 +331,7 @@ export const protocolsApi = {
     request<PromptPreview>(`/protocols/${id}/nodes/${nodeId}/prompt-preview`, { method: 'POST', body: { graph, ...rowSelection(options) } }),
   listRevisions: (id: string) => request<ProtocolRevision[]>(`/protocols/${id}/revisions`),
   getRevision: (id: string, revisionId: string) => request<ProtocolRevision>(`/protocols/${id}/revisions/${revisionId}`),
+  updateRevision: (id: string, revisionId: string, annotations: { name?: string | null; note?: string | null }) => request<ProtocolRevision>(`/protocols/${id}/revisions/${revisionId}`, { method: 'PATCH', body: annotations }),
   getRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}`),
   // Queued work is cancelled immediately. Active work raises
   // cancel_requested_at, which its executor honors at a safe interruption

@@ -6,12 +6,14 @@ import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
 import { ExperimentVersionCanvas } from '@/components/protocol/ExperimentVersionView'
+import { ExperimentVersionHistory } from '@/components/protocol/ExperimentVersionHistory'
 import { ProtocolCanvas, type ProtocolCanvasHandle } from '@/components/protocol/ProtocolCanvas'
 import { ResultsInspectorPanel, type ResultsSelection } from '@/components/protocol/ResultsTab'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { bestMetric, formatMetricLabel, groupReplicatesIntoCells, metricValueSuffix, replicatesStatusAccent, scaledMetricValue } from '@/lib/experiment'
@@ -146,6 +148,8 @@ function TopBarStats({ experiment, cells, obsoleteRunCount = 0, rowSummary }: { 
 function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { protocol: Protocol; experimentId: string; draftBusy: boolean }) {
   const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [versionName, setVersionName] = useState('')
+  const [versionNote, setVersionNote] = useState('')
   const trialsQuery = useQuery({
     queryKey: ['experiments', experimentId, 'runs'],
     queryFn: () => experimentsApi.listTrials(experimentId),
@@ -159,7 +163,7 @@ function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { pro
     mutationFn: async () => {
       const live = queryClient.getQueryData<{ nodes: Node[]; edges: Edge[] }>(protocolGraphQueryKey(protocol.id))
       if (live) await protocolsApi.update(protocol.id, { graph: toPersistedGraph(live.nodes, live.edges) })
-      return protocolsApi.publish(protocol.id)
+      return protocolsApi.publish(protocol.id, { name: versionName.trim() || null, note: versionNote.trim() || null })
     },
     onSuccess: (published) => {
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
@@ -167,6 +171,8 @@ function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { pro
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'run-results'] })
       queryClient.invalidateQueries({ queryKey: ['protocols', protocol.id, 'revisions'] })
       setConfirmOpen(false)
+      setVersionName('')
+      setVersionNote('')
     },
   })
   const status = protocol.published_revision
@@ -176,8 +182,8 @@ function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { pro
     : 'Experiment draft · not published'
   const error = publishMutation.error instanceof ApiError && typeof publishMutation.error.detail === 'string' ? publishMutation.error.detail : null
   function requestPublish() {
-    if (affectedReplicateCount > 0) setConfirmOpen(true)
-    else publishMutation.mutate()
+    publishMutation.reset()
+    setConfirmOpen(true)
   }
   return (
     <>
@@ -198,7 +204,7 @@ function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { pro
           </Button>
         )}
       </div>
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <Dialog open={confirmOpen} onOpenChange={open => { if (!publishMutation.isPending) setConfirmOpen(open) }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Publish a new experiment version?</DialogTitle>
@@ -207,8 +213,13 @@ function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { pro
             Publish the canvas and design settings together as a new experiment version. Future runs will use it.
           </p>
           <p className="text-xs text-muted-foreground">Existing runs and results remain available under their earlier experiment version.</p>
+          {affectedReplicateCount > 0 && <p className="text-xs text-muted-foreground">{affectedReplicateCount} existing replicate runs will remain under the earlier version.</p>}
+          <label className="space-y-1 text-sm">Version name (optional)<Input maxLength={120} placeholder="Higher critic threshold" value={versionName} onChange={event => setVersionName(event.target.value)} /></label>
+          <label className="space-y-1 text-sm">Version note (optional)<Textarea maxLength={4000} placeholder="What changed, and why?" value={versionNote} onChange={event => setVersionNote(event.target.value)} /></label>
+          {!protocol.has_unpublished_changes && <p className="text-xs text-muted-foreground">An unchanged experiment keeps its version and existing name and note. Edit those in version history.</p>}
+          {publishMutation.isError && <p role="alert" className="text-xs text-destructive">{error || 'Could not publish the experiment. Try again.'}</p>}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+            <Button variant="outline" disabled={publishMutation.isPending} onClick={() => setConfirmOpen(false)}>Cancel</Button>
             <Button onClick={() => publishMutation.mutate()} disabled={publishMutation.isPending}>
               {publishMutation.isPending ? 'Publishing…' : 'Publish experiment'}
             </Button>
@@ -233,8 +244,10 @@ export function ProtocolCanvasPage() {
   const canvasRef = useRef<ProtocolCanvasHandle>(null)
   const [resultSelection, setResultSelection] = useState<ResultsSelection | null>(null)
   const [versionId, setVersionId] = useState('')
+  const [versionBrowserOpen, setVersionBrowserOpen] = useState(false)
+  const [versionSearch, setVersionSearch] = useState('')
   const [draftBusy, setDraftBusy] = useState(false)
-  useEffect(() => { setVersionId(''); setResultSelection(null) }, [experimentId])
+  useEffect(() => { setVersionId(''); setResultSelection(null); setVersionBrowserOpen(false); setVersionSearch('') }, [experimentId])
 
   const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
@@ -283,15 +296,10 @@ export function ProtocolCanvasPage() {
   const unboundFactors = experimentQuery.data && protocolQuery.data
     ? unboundFactorNames(experimentQuery.data.design_spec, protocolQuery.data.graph)
     : []
-  const versionsQuery = useQuery({ queryKey: ['protocols', protocolQuery.data?.id, 'revisions'], queryFn: () => protocolsApi.listRevisions(protocolQuery.data!.id), enabled: !!protocolQuery.data?.id })
-  const experimentVersions = versionsQuery.data?.filter(item => item.experiment_snapshot != null)
+  const versionsQuery = useQuery({ queryKey: ['protocols', protocolQuery.data?.id, 'revisions'], queryFn: () => protocolsApi.listRevisions(protocolQuery.data!.id), enabled: !!protocolQuery.data?.id, refetchInterval: versionBrowserOpen ? 5000 : false })
+  const experimentVersions = versionsQuery.data?.filter(item => item.experiment_snapshot != null).sort((a, b) => b.revision - a.revision)
   const hasChanges = !!protocolQuery.data?.has_unpublished_changes || draftBusy
   const publishedVersion = protocolQuery.data?.published_revision
-  const editableVersionLabel = !publishedVersion ? 'Not published'
-    : hasChanges ? 'Unpublished changes' : `Version ${publishedVersion}`
-  const historicalOptions = experimentVersions?.filter(item =>
-    hasChanges || item.id !== protocolQuery.data?.published_revision_id || item.id === versionId,
-  )
   const version = experimentVersions?.find(item => item.id === versionId)
   const displayedExperiment = experimentQuery.data && version?.experiment_snapshot
     ? { ...experimentQuery.data, ...version.experiment_snapshot } : experimentQuery.data
@@ -323,19 +331,7 @@ export function ProtocolCanvasPage() {
           {!versionId && resultsExperiment && <TopBarStats experiment={resultsExperiment} cells={resultReplicates} rowSummary={runResultsQuery.data?.row_summary} obsoleteRunCount={runResultsQuery.data?.overview.obsolete_replicates ?? 0} />}
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border bg-card px-3 py-2 text-xs" aria-label="Experiment version controls">
-          <label className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="font-medium">Experiment version</span>
-            <select
-              aria-label="Experiment version"
-              className="min-w-0 max-w-full rounded border bg-background p-2 font-mono"
-              value={versionId}
-              disabled={!protocolQuery.data || versionsQuery.isLoading}
-              onChange={event => { setVersionId(event.target.value); setResultSelection(null) }}
-            >
-              <option value="">{editableVersionLabel}</option>
-              {historicalOptions?.map(item => <option key={item.id} value={item.id}>Version {item.revision} · {new Date(item.published_at).toLocaleDateString()}</option>)}
-            </select>
-          </label>
+          <Button variant="ghost" size="sm" disabled={!experimentVersions?.length} onClick={() => { setVersionSearch(''); setVersionBrowserOpen(true) }}>Version history</Button>
           <p className="text-muted-foreground">{versionId ? 'Canvas, Design, Runs, and Results show this saved version · read-only.'
             : !publishedVersion ? 'Publish the experiment to create its first version.'
               : hasChanges ? `Changes are not published. Runs and Results use version ${publishedVersion}.`
@@ -348,6 +344,12 @@ export function ProtocolCanvasPage() {
           )}
           {versionId && <Button className="ml-auto" variant="outline" size="sm" onClick={() => { setVersionId(''); setResultSelection(null) }}>Return to experiment</Button>}
         </div>
+        <Dialog open={versionBrowserOpen} onOpenChange={setVersionBrowserOpen}>
+          <DialogContent className="sm:max-w-xl">
+            <DialogHeader><DialogTitle>Browse experiment versions</DialogTitle></DialogHeader>
+            {protocolQuery.data && <ExperimentVersionHistory versions={experimentVersions ?? []} protocolId={protocolQuery.data.id} publishedId={protocolQuery.data.published_revision_id} selectedId={versionId} search={versionSearch} onSearch={setVersionSearch} onSelect={id => { setVersionId(id); setResultSelection(null); setVersionBrowserOpen(false) }} />}
+          </DialogContent>
+        </Dialog>
 
         <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
           <ExperimentSidePanel

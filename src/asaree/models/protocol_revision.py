@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,6 +30,9 @@ class ProtocolRevision(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("protocols.id", ondelete="CASCADE"), nullable=False
     )
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Editable annotations; the published experiment definition remains frozen.
+    name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
     graph: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     # An experiment publication freezes the declaration alongside its canvas.
     # Null means a legacy canvas-only publication; never invent its settings.

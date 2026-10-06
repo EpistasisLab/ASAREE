@@ -14,12 +14,14 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
-from sqlalchemy import select
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from sqlalchemy import cast, func, or_, select
+from sqlalchemy.dialects.postgresql import JSONPATH
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.models.dataset import RegisteredDataset
 from asaree.models.protocol_revision import ProtocolRevision
+from asaree.models.protocol_run import ProtocolRun
 from asaree.services.dataset_row_csv import DatasetRowCsvError, project_row, read_row_source
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 from asaree.services.experiment_measurements import (
@@ -231,12 +233,28 @@ async def _test_run_response(db: DbSession, run: Any, protocol: Any, experiment:
     )
 
 
+class VersionAnnotationsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, max_length=120)
+    note: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("name", "note")
+    @classmethod
+    def trim_annotation(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+
 class ProtocolRevisionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     protocol_id: uuid.UUID
     revision: int
+    name: str | None = None
+    note: str | None = None
+    run_count: int = 0
+    result_count: int = 0
     graph: dict[str, Any]
     published_at: datetime
     experiment_snapshot: dict[str, Any] | None = None
@@ -401,7 +419,10 @@ async def update_protocol_endpoint(
 
 
 @router.post("/{protocol_id}/publish", response_model=ProtocolResponse)
-async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ProtocolResponse:
+async def publish_protocol_endpoint(
+    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession,
+    body: VersionAnnotationsRequest | None = None,
+) -> ProtocolResponse:
     """Make the current autosaved canvas the immutable version future runs use."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
     published = await get_published_revision(db, protocol)
@@ -446,7 +467,7 @@ async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, d
                 detail="Experiment is locked. Unlock it before publishing a changed canvas.",
             )
     try:
-        await publish_protocol(db, protocol, owner_id=user.id)
+        await publish_protocol(db, protocol, owner_id=user.id, **(body.model_dump() if body else {}))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await _protocol_response(db, protocol)
@@ -461,7 +482,42 @@ async def list_protocol_revisions_endpoint(
         select(ProtocolRevision).where(ProtocolRevision.protocol_id == protocol_id)
         .order_by(ProtocolRevision.revision.desc())
     )
-    return [ProtocolRevisionResponse.model_validate(revision) for revision in revisions]
+    counts = await _version_run_counts(db, protocol_id, user.id)
+    return [_version_response(revision, counts.get(revision.id, (0, 0))) for revision in revisions]
+
+
+async def _version_run_counts(
+    db: DbSession, protocol_id: uuid.UUID, owner_id: uuid.UUID,
+) -> dict[uuid.UUID, tuple[int, int]]:
+    # Count execution attempts with recorded scores/observations, never a
+    # design's mutable latest-results projection shared by several versions.
+    has_result = or_(
+        (func.jsonb_typeof(ProtocolRun.attempt_result["metric_values"]) == "object")
+        & (ProtocolRun.attempt_result["metric_values"] != {}),
+        func.jsonb_path_exists(
+            ProtocolRun.attempt_result,
+            cast('$.measurement.observations[*] ? (@.status == "measured" && @.value != null)', JSONPATH),
+        ),
+    )
+    rows = await db.execute(
+        select(
+            ProtocolRun.protocol_revision_id,
+            func.count(ProtocolRun.id),
+            func.count(ProtocolRun.id).filter(has_result),
+        ).where(
+            ProtocolRun.protocol_id == protocol_id, ProtocolRun.owner_id == owner_id,
+            ProtocolRun.protocol_revision_id.is_not(None),
+            ProtocolRun.is_test_run.is_(False), ProtocolRun.target_node_id.is_(None),
+        ).group_by(ProtocolRun.protocol_revision_id)
+    )
+    return {revision_id: (run_count, result_count) for revision_id, run_count, result_count in rows}
+
+
+def _version_response(revision: ProtocolRevision, counts: tuple[int, int]) -> ProtocolRevisionResponse:
+    return ProtocolRevisionResponse.model_validate(revision).model_copy(update={
+        "graph": normalize_protocol_graph(revision.graph),
+        "run_count": counts[0], "result_count": counts[1],
+    })
 
 
 @router.get("/{protocol_id}/revisions/{revision_id}", response_model=ProtocolRevisionResponse)
@@ -472,15 +528,24 @@ async def get_protocol_revision_endpoint(
     revision = await get_revision(db, revision_id)
     if revision is None or revision.protocol_id != protocol_id:
         raise HTTPException(status_code=404, detail="No such protocol revision")
-    return ProtocolRevisionResponse(
-        id=revision.id,
-        protocol_id=revision.protocol_id,
-        revision=revision.revision,
-        graph=normalize_protocol_graph(revision.graph),
-        published_at=revision.published_at,
-        experiment_snapshot=revision.experiment_snapshot,
-        design_revision_id=revision.design_revision_id,
-    )
+    counts = await _version_run_counts(db, protocol_id, user.id)
+    return _version_response(revision, counts.get(revision.id, (0, 0)))
+
+
+@router.patch("/{protocol_id}/revisions/{revision_id}", response_model=ProtocolRevisionResponse)
+async def update_protocol_revision_endpoint(
+    protocol_id: uuid.UUID, revision_id: uuid.UUID, body: VersionAnnotationsRequest,
+    user: CurrentUser, db: DbSession,
+) -> ProtocolRevisionResponse:
+    await _get_owned_protocol(db, protocol_id, user)
+    revision = await get_revision(db, revision_id)
+    if revision is None or revision.protocol_id != protocol_id:
+        raise HTTPException(status_code=404, detail="No such protocol revision")
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(revision, key, value)
+    await db.flush()
+    counts = await _version_run_counts(db, protocol_id, user.id)
+    return _version_response(revision, counts.get(revision.id, (0, 0)))
 
 
 @router.delete("/{protocol_id}", status_code=204)

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, it, vi } from 'vitest'
 import { experimentsApi, protocolsApi } from '@/api/client'
@@ -33,14 +33,16 @@ it('switches canvas and design together and preserves local draft edits on retur
   render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/experiments/e/protocol']}><Routes><Route path="/experiments/:experimentId/protocol" element={<ProtocolCanvasPage />} /></Routes></MemoryRouter></QueryClientProvider>)
   const draft = await screen.findByRole('textbox', { name: 'Draft canvas' })
   await screen.findByText('Results design: Published')
-  const selector = screen.getByRole('combobox', { name: 'Experiment version' })
-  expect(selector.closest('[aria-label="Experiment version controls"]')).toBeInTheDocument()
-  expect(screen.getByLabelText('Experiment panels')).not.toContainElement(selector)
-  expect(screen.getAllByRole('option')).toHaveLength(3)
-  expect(screen.queryByRole('option', { name: /Legacy|Version 0/ })).not.toBeInTheDocument()
-  expect(screen.getByRole('option', { name: 'Unpublished changes' })).toBeInTheDocument()
+  const historyButton = screen.getByRole('button', { name: 'Version history' })
+  expect(historyButton.closest('[aria-label="Experiment version controls"]')).toBeInTheDocument()
+  expect(screen.getByLabelText('Experiment panels')).not.toContainElement(historyButton)
+  expect(screen.queryByRole('combobox', { name: 'Experiment version' })).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Experiment version')).not.toBeInTheDocument()
   fireEvent.change(draft, { target: { value: 'Local edit' } })
-  fireEvent.change(screen.getByRole('combobox', { name: 'Experiment version' }), { target: { value: 'v1' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Version history' }))
+  expect(await screen.findByRole('button', { name: 'View Version 1' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'View Version 0' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'View Version 1' }))
   expect(screen.getByText('Saved canvas 1')).toBeInTheDocument()
   expect(screen.getByText('Historical design: Original')).toBeInTheDocument()
   expect(screen.getByText('Results design: Original')).toBeInTheDocument()
@@ -52,7 +54,38 @@ it('switches canvas and design together and preserves local draft edits on retur
   await act(async () => {
     client.setQueryData(['protocols', 'for-experiment', 'e'], { ...protocol, has_unpublished_changes: false })
   })
-  expect(await screen.findByRole('option', { name: 'Version 2' })).toBeInTheDocument()
-  expect(screen.getAllByRole('option')).toHaveLength(2)
-  expect(screen.queryByRole('option', { name: 'Unpublished changes' })).not.toBeInTheDocument()
+  await waitFor(() => expect(screen.getByText('Published v2')).toBeInTheDocument())
+
+  // The API order need not be newest first, and old selections remain reachable.
+  await act(async () => {
+    client.setQueryData(['protocols', 'p', 'revisions'], Array.from({ length: 9 }, (_, index) => ({
+      ...versions[0], id: `v${index + 1}`, revision: index + 1, published_at: `2026-01-0${index + 1}`,
+    })))
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Version history' }))
+  const search = await screen.findByRole('textbox', { name: 'Search versions' })
+  expect(screen.getAllByRole('button', { name: /^View Version/ }).map(button => button.textContent)).toEqual(['View Version 2', 'View Version 9', 'View Version 8', 'View Version 7', 'View Version 6', 'View Version 5', 'View Version 4', 'View Version 3', 'View Version 1'])
+  fireEvent.change(search, { target: { value: 'no match' } })
+  expect(screen.getByText('No versions match your search.')).toBeInTheDocument()
+  fireEvent.change(search, { target: { value: '2026-01-01' } })
+  expect(screen.getByText('1 of 9 versions · newest first')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'View Version 1' }))
+  expect(screen.getByText('Saved canvas 1')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Version history' }))
+  expect(await screen.findByRole('textbox', { name: 'Search versions' })).toHaveValue('')
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+  expect(screen.getByText('Saved canvas 1')).toBeInTheDocument()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Return to experiment' }))
+  await act(async () => {
+    client.setQueryData(['protocols', 'for-experiment', 'e'], { ...protocol, has_unpublished_changes: true })
+  })
+  const publish = vi.spyOn(protocolsApi, 'publish').mockResolvedValue({ ...protocol, published_revision: 10, published_revision_id: 'v10', has_unpublished_changes: false })
+  fireEvent.click(await screen.findByRole('button', { name: 'Publish experiment' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Publish a new experiment version?' })
+  expect(publish).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByRole('textbox', { name: 'Version name (optional)' }), { target: { value: 'Higher threshold' } })
+  fireEvent.change(screen.getByRole('textbox', { name: 'Version note (optional)' }), { target: { value: 'Reduce false positives' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Publish experiment' }))
+  await waitFor(() => expect(publish).toHaveBeenCalledWith('p', { name: 'Higher threshold', note: 'Reduce false positives' }))
 })

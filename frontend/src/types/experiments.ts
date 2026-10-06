@@ -512,6 +512,7 @@ export interface RowSummary {
 }
 
 export interface ExperimentRunResults {
+  row_cells?: RowCell[]
   consumption_mode?: 'whole_dataset' | 'per_row'
   row_results?: RowResult[]
   row_summary?: RowSummary | null
@@ -524,6 +525,14 @@ export interface ExperimentRunResults {
   primary_metric_direction: 'maximize' | 'minimize' | null
   cells: ResultCell[]
   replicates: ResultReplicate[]
+}
+
+export interface RowCell {
+  cell_id: string
+  cell_label: string
+  factor_values: Record<string, unknown>
+  replicate_count: number
+  replicates?: Array<{ replicate_result_id: string; replicate_label: string; replicate_number: number }>
 }
 
 export interface Replicate {

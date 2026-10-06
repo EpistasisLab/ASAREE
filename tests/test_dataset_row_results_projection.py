@@ -196,6 +196,9 @@ async def test_row_projection_counts_attempts_and_preserves_slots(row_results_se
     summary = results["row_summary"]
     assert results["consumption_mode"] == "per_row"
     assert results["cells"] == [] and results["replicates"] == []
+    assert len(results["row_cells"]) == 2
+    assert {cell["cell_id"] for cell in results["row_cells"]} == {str(cell.id) for cell in ctx["cells"]}
+    assert all(cell["replicate_count"] == 1 for cell in results["row_cells"])
     assert results["primary_metric"] is None and results["primary_metric_direction"] is None
     assert len(results["row_results"]) == 30
     assert summary == {

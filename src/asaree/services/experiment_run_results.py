@@ -580,6 +580,19 @@ async def _summarize_row_results(
     return {
         "consumption_mode": "per_row",
         "row_results": row_results,
+        "row_cells": [
+            {
+                "cell_id": str(cell.id), "cell_label": cell.cell_label,
+                "factor_values": cell.factor_values or {},
+                "replicate_count": sum(parent.cell_id == cell.id for parent in replicates),
+                "replicates": [
+                    {"replicate_result_id": str(parent.id), "replicate_label": parent.replicate_label,
+                     "replicate_number": parent.replicate_number}
+                    for parent in replicates if parent.cell_id == cell.id
+                ],
+            }
+            for cell in sorted(cells, key=lambda cell: cell.cell_label)
+        ],
         "row_summary": row_summary,
         "overview": {
             "total_replicates": actual_parents,

@@ -42,3 +42,36 @@ it('paginates dense rows, maximizes with Escape, and exports the selected scope'
  expect(csv).toHaveBeenCalledWith('e', scope)
  await screen.findByRole('button', { name: 'Download CSV' })
 })
+
+it('shows generated cells with no outcomes and filters executions by cell identity', () => {
+ const results = {
+  row_cells: [
+   { cell_id: 'a', cell_label: 'Prompt:short', factor_values: { Prompt: 'short' }, replicate_count: 1 },
+   { cell_id: 'b', cell_label: 'Prompt:long', factor_values: { Prompt: 'long' }, replicate_count: 1 },
+  ],
+  row_results: [
+   { row_result_id: 'slot-a', cell_id: 'a', cell_label: 'Prompt:short', factor_values: { Prompt: 'short' }, dataset_row: { row_index: 0 }, replicate_number: 1, status: 'completed', latest_attempt: { run_id: 'run-a' } },
+  ],
+ } as unknown as ExperimentRunResults
+ render(<DatasetRowResults results={results} experiment={{ id: 'e' } as Experiment} scope={{}} onInspect={vi.fn()} />)
+ fireEvent.click(screen.getByRole('button', { name: 'View cell Prompt:long' }))
+ expect(screen.queryByRole('button', { name: 'Inspect row' })).not.toBeInTheDocument()
+ expect(screen.getByText('No row executions planned for this cell.')).toBeInTheDocument()
+ fireEvent.click(screen.getByRole('button', { name: 'All cells' }))
+ expect(screen.getByRole('button', { name: 'Inspect row' })).toBeInTheDocument()
+})
+
+it('filters row outcomes to the selected replicate', () => {
+ const results = {
+  row_cells: [{ cell_id: 'a', cell_label: 'a', factor_values: {}, replicate_count: 2, replicates: [1, 2].map(number => ({ replicate_result_id: `parent-${number}`, replicate_label: `a-${number}`, replicate_number: number })) }],
+  row_results: [1, 2].map(number => ({ row_result_id: `slot-${number}`, cell_id: 'a', cell_label: 'a', factor_values: {}, replicate_result_id: `parent-${number}`, replicate_number: number, dataset_row: { row_index: 0 }, status: 'completed', latest_attempt: { run_id: `run-${number}` } })),
+ } as unknown as ExperimentRunResults
+ const inspect = vi.fn()
+ render(<DatasetRowResults results={results} experiment={{ id: 'e' } as Experiment} scope={{}} onInspect={inspect} />)
+ fireEvent.click(screen.getByRole('button', { name: 'View cell a' }))
+ expect(screen.getAllByRole('button', { name: 'View results' })).toHaveLength(1)
+ fireEvent.click(screen.getByRole('button', { name: 'View a replicate 2' }))
+ expect(screen.getAllByRole('button', { name: 'Inspect row' })).toHaveLength(1)
+ fireEvent.click(screen.getByRole('button', { name: 'Inspect row' }))
+ expect(inspect).toHaveBeenCalledWith('slot-2')
+})

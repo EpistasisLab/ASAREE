@@ -1080,6 +1080,7 @@ class RunResultsResponse(BaseModel):
     replicates: list[dict[str, Any]]
     consumption_mode: str
     row_results: list[dict[str, Any]]
+    row_cells: list[dict[str, Any]] = Field(default_factory=list)
     row_summary: dict[str, Any] | None
 
 

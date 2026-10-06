@@ -263,7 +263,7 @@ export function ExperimentSidePanel({
                   onDraftBusyChange={onDraftBusyChange}
                 />
               </div>
-              {viewingHistory && !version ? <p role="status" className="p-3 text-xs text-muted-foreground">The selected version is unavailable. Return to draft to continue.</p> : activeTab === 'design' && version ? <ExperimentVersionDesign version={version} /> : activeTab === 'runs' && version ? <ExperimentVersionRuns protocolId={protocol?.id} experimentId={experiment.id} version={version} onSelectResult={onResultSelection} /> : activeTab === 'runs' ? (
+              {viewingHistory && !version ? <p role="status" className="p-3 text-xs text-muted-foreground">The selected version is unavailable. Return to draft to continue.</p> : activeTab === 'design' && version ? <ExperimentVersionDesign version={version} /> : activeTab === 'runs' && version ? <ExperimentVersionRuns key={version.id} protocolId={protocol?.id} experimentId={experiment.id} version={version} onSelectResult={onResultSelection} /> : activeTab === 'runs' ? (
                 <RunsTab
                   experimentId={experiment.id}
                   designSpec={experiment.design_spec}

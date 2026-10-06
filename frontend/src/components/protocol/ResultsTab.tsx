@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, ChevronDown, ChevronRight, CircleDollarSign, Clock3, Coins, Cpu, Download, ExternalLink, Trophy, X } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, CircleDollarSign, Clock3, Coins, Cpu, Trophy, X } from 'lucide-react'
 import { experimentsApi, type ResultsScope } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -10,10 +10,11 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { displayFactorLevel, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
 import { OBSERVATION_LABELS } from '@/lib/measurementPlan'
-import { sanitizeFilename } from '@/lib/utils'
 import type { DesignMetric, EvaluationArtifact, Experiment, HistoricalRun, MetricObservation, ObsoleteRun, ResultCell, ResultNodeRun, ResultReplicate, SupersededRun } from '@/types/experiments'
 import { DatasetRowDetail, DatasetRowResults } from './DatasetRowResults'
+import { ResultsPanel, ResultsScorecard as Scorecard } from './ResultsPanel'
 import { InfoTooltip } from './InfoTooltip'
+import { CellCard, ReplicateRow } from './CellPresentation'
 import { ReceivedPromptPanel, RunStepTrace, UnresolvedReferencesNote } from './NodeRunOutputPanel'
 
 function formatNumber(value: number | null, maximumFractionDigits = 0): string {
@@ -193,19 +194,6 @@ function nodeStatusClass(status: string): string {
   if (status === 'failed' || status === 'cancelled') return 'border-transparent bg-destructive/10 text-destructive'
   if (status === 'running' || status === 'queued') return 'border-transparent bg-primary/10 text-primary'
   return 'border-transparent bg-muted text-muted-foreground'
-}
-
-function Scorecard({ label, help, value, note, icon: Icon }: { label: string; help: string; value: string; note?: string; icon: typeof Coins }) {
-  return (
-    <div className="rounded-md border bg-card px-2.5 py-2 transition-colors hover:bg-muted/30">
-      <div className="flex items-center justify-between gap-2 text-muted-foreground">
-        <span className="flex items-center gap-1 text-xs">{label}<InfoTooltip>{help}</InfoTooltip></span>
-        <Icon className="size-3.5" aria-hidden="true" />
-      </div>
-      <p className="mt-1 truncate text-base font-medium tabular-nums" title={value}>{value}</p>
-      {note && <p className="mt-0.5 text-[11px] text-muted-foreground">{note}</p>}
-    </div>
-  )
 }
 
 function usageSummarizesMetric(
@@ -620,7 +608,6 @@ export function ResultsTab({
 }) {
   const [metricPreference, setMetricPreference] = useState<string | null>(null)
   const [expandedResultCells, setExpandedResultCells] = useState<Set<string>>(() => new Set())
-  const [downloading, setDownloading] = useState(false)
   const scope: ResultsScope = { protocol_id: protocolId, protocol_revision_id: versionId || undefined }
   const resultsQuery = useQuery({ queryKey: ['experiments', experimentId, 'run-results', scope], queryFn: () => experimentsApi.getRunResults(experimentId, scope), refetchInterval: 5000 })
   if (resultsQuery.isLoading) return <div className="space-y-3 p-3"><Skeleton className="h-20 w-full" /><Skeleton className="h-36 w-full" /></div>
@@ -663,25 +650,9 @@ export function ResultsTab({
   const bestCell = metricKey && rankable ? sortedCells.find((cell) => typeof cell.metric_means[metricKey] === 'number') ?? null : null
   const directionLabel = selectedDirection === 'minimize' ? 'Lowest' : 'Highest'
 
-  async function downloadResults() {
-    setDownloading(true)
-    try {
-      const blob = await experimentsApi.downloadRunResultsCsv(experimentId, scope)
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${sanitizeFilename(experimentName, 'experiment')}-results.csv`
-      link.click()
-      URL.revokeObjectURL(url)
-    } finally {
-      setDownloading(false)
-    }
-  }
-
   return (
-    <div className="space-y-4 p-3">
-      <section className="space-y-2">
-        {metricKeys.length > 0 && (
+    <ResultsPanel experimentId={experimentId} experimentName={experimentName} scope={scope}
+      controls={metricKeys.length > 0 && (
           <div className="flex items-center justify-end gap-2">
             <span className="text-xs text-muted-foreground">Inspect metric</span>
             <Select value={metricKey ?? undefined} onValueChange={(value) => setMetricPreference(value ?? null)}>
@@ -692,8 +663,7 @@ export function ResultsTab({
             </Select>
           </div>
         )}
-        <Card size="sm" className="flex-row items-start justify-between gap-3 border-primary/25 bg-primary/5 p-3">
-          {bestCell && metricKey ? (
+      summary={bestCell && metricKey ? (
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 text-xs font-medium text-primary"><Trophy className="size-3.5" /> Best current result</div>
               <p className="mt-1 text-2xl font-semibold tracking-tight tabular-nums">{formatResultMetricValue(metricKey, bestCell.metric_means[metricKey], metricTypes)}</p>
@@ -705,25 +675,21 @@ export function ResultsTab({
           ) : (
             <div><p className="text-sm font-medium">Results are arriving</p><p className="mt-1 text-xs text-muted-foreground">Complete a run with reported metrics to rank conditions here.</p></div>
           )}
-          <div className="flex shrink-0 gap-1.5">
-            <Button variant="outline" size="xs" disabled={downloading} onClick={() => void downloadResults()}>{downloading ? 'Preparing…' : <><Download className="size-3" /> Download CSV</>}</Button>
-          </div>
-        </Card>
-        <div className="mt-2 grid grid-cols-2 gap-2">
-          <Scorecard label="Replicates" help="Completed replicates out of the current experiment design. Running and failed attempts are shown below." value={`${overview.completed_replicates}/${overview.total_replicates}`} note={`${overview.running_replicates} running · ${overview.failed_replicates} failed`} icon={ChevronRight} />
+      scorecards={<>
+<Scorecard label="Replicates" help="Completed replicates out of the current experiment design. Running and failed attempts are shown below." value={`${overview.completed_replicates}/${overview.total_replicates}`} note={`${overview.running_replicates} running · ${overview.failed_replicates} failed`} icon={ChevronRight} />
           <Scorecard label="Cost $ (USD)" help="Total estimated provider cost across current, non-obsolete runs. Some providers may not report a cost." value={formatCurrency(overview.total_cost_usd)} note={overview.agent_run_count ? `${overview.reported_cost_count}/${overview.agent_run_count} calls reported` : 'No agent calls yet'} icon={CircleDollarSign} />
           <Scorecard label="Total tokens" help="Combined input and output tokens reported across current runs. Missing provider usage stays unreported rather than becoming zero." value={formatNumber(overview.total_tokens)} note={overview.agent_run_count ? `${overview.reported_usage_count}/${overview.agent_run_count} calls reported` : 'No agent calls yet'} icon={Coins} />
           <Scorecard label="Run time" help="Total wall-clock duration across current results. Runs may overlap, so this is not elapsed calendar time." value={formatDuration(overview.total_duration_seconds)} note="Across current results" icon={Clock3} />
-        </div>
-        {overview.obsolete_replicates > 0 && <div className="mt-2 flex gap-2 rounded-md border border-[color:var(--chart-4)]/50 bg-[color:var(--chart-4)]/10 px-2.5 py-2 text-xs text-foreground"><AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--chart-4)]" /><span>{overview.obsolete_replicates} run{overview.obsolete_replicates === 1 ? '' : 's'} used an older canvas version and are excluded from current totals.</span></div>}
-      </section>
-      <section className="space-y-2">
+      </>}
+      notice={overview.obsolete_replicates > 0 && <div className="mt-2 flex gap-2 rounded-md border border-[color:var(--chart-4)]/50 bg-[color:var(--chart-4)]/10 px-2.5 py-2 text-xs text-foreground"><AlertTriangle className="mt-0.5 size-4 shrink-0 text-[color:var(--chart-4)]" /><span>{overview.obsolete_replicates} run{overview.obsolete_replicates === 1 ? '' : 's'} used an older canvas version and are excluded from current totals.</span></div>}
+      comparison={
+<section className="space-y-2">
         <div><h2 className="flex items-center gap-1 text-sm font-medium">{rankable ? 'Cell ranking' : 'Cell comparison'}<InfoTooltip>{rankable ? 'Cells are ranked by the selected metric using current, non-obsolete replicates only.' : 'Metrics are shown for comparison without ordering cells or naming a winner.'}</InfoTooltip></h2><p className="text-xs text-muted-foreground">Current replicates only{rankable && isBinaryMetric(metricKey, metricTypes) ? ' · ranked by pass rate' : rankable && metricKey === primaryMetric ? ` · ${primaryMetricDirection === 'minimize' ? 'lower is better' : 'higher is better'}` : ''}</p></div>
         {metricKeys.length === 0 ? <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">No scalar metrics are declared or reported yet. Run details and provider usage are still available below.</p> : <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[34rem] text-left text-xs"><thead className="border-b bg-muted/40 text-muted-foreground"><tr><th className="w-10 px-2.5 py-2 font-medium"><span className="flex items-center gap-1">{rankable ? 'Rank' : '—'}{rankable && <InfoTooltip>Rank among conditions with a measured value for the selected metric.</InfoTooltip>}</span></th><th className="px-2.5 py-2 font-medium"><span className="flex items-center gap-1">Condition<InfoTooltip>The factor levels used for this group of replicates.</InfoTooltip></span></th><th className="px-2.5 py-2 text-right font-medium">{metricKey ? metricDisplayLabel(metricKey, metricTypes, metricAggregations) : ''}</th><th className="px-2.5 py-2 text-right font-medium">Cost</th><th className="px-2.5 py-2 text-right font-medium">Duration</th><th className="px-2.5 py-2 text-right font-medium"><span className="inline-flex items-center gap-1">Runs<InfoTooltip>Completed current replicates out of all generated replicates for this condition.</InfoTooltip></span></th></tr></thead><tbody>{sortedCells.map((cell, index) => { const value = metricKey ? cell.metric_means[metricKey] : undefined; const measured = typeof value === 'number'; const ranked = rankable && measured; const note = measured && metricKey ? binaryMetricNote(metricKey, value, cell.metric_counts[metricKey], metricTypes) : null; const missingSummary = missingObservationSummary(replicatesByCell.get(cell.cell_label) ?? [], selectedMetricId, metricKey); return <tr key={cell.cell_label} className={`border-b last:border-b-0 ${index === 0 && ranked ? 'bg-primary/5' : 'hover:bg-muted/30'}`}><td className="px-2.5 py-2.5 font-medium text-muted-foreground">{ranked ? index + 1 : '—'}</td><td className="max-w-0 px-2.5 py-2.5"><p className="truncate font-medium text-foreground" title={factorSummary(cell.factor_values, experiment.design_spec)}>{factorSummary(cell.factor_values, experiment.design_spec)}</p>{cell.obsolete_count > 0 && <span className="text-[11px] text-[color:var(--chart-4)]">{cell.obsolete_count} obsolete</span>}</td><td className={`px-2.5 py-2.5 text-right font-medium tabular-nums ${index === 0 && ranked ? 'text-primary' : ''}`}>{measured ? <><span>{formatResultMetricValue(metricKey!, value, metricTypes)}</span>{note && <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">{note}</span>}{missingSummary && <span className="mt-0.5 block text-[10px] font-normal text-[color:var(--chart-4)]">{missingSummary}</span>}</> : <span className="font-normal text-muted-foreground">{missingSummary ?? 'No measured observations'}</span>}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{formatCurrency(cell.cost_usd)}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{formatDuration(cell.duration_seconds)}</td><td className="px-2.5 py-2.5 text-right tabular-nums text-muted-foreground">{cell.current_completed_count}/{cell.replicate_count}</td></tr> })}</tbody></table></div>}
       </section>
-      <section className="space-y-2">
-        <div><h2 className="flex items-center gap-1 text-sm font-medium">Cell results<InfoTooltip>Each card groups replicates that share the same experimental factor levels. Expand one to compare individual runs.</InfoTooltip></h2><p className="text-xs text-muted-foreground">Expand a condition to inspect its replicates, metrics, usage, outputs, and node activity.</p></div>
-        <div className="space-y-2">
+      }
+      cells={
+<div className="space-y-2">
           {sortedCells.map((cell) => {
             const expanded = expandedResultCells.has(cell.cell_label)
             const cellReplicates = replicatesByCell.get(cell.cell_label) ?? []
@@ -749,35 +715,19 @@ export function ResultsTab({
               return left.replicate_number - right.replicate_number
             })
             return (
-              <div key={cell.cell_label} className={`overflow-hidden rounded-lg border bg-card transition-shadow ${expanded ? 'border-primary/35 shadow-[0_0_18px_-14px_var(--primary)]' : 'hover:border-muted-foreground/30'}`}>
-                <div className="flex items-center gap-2 px-3 py-3">
-                  <button
-                    type="button"
-                    onClick={() => setExpandedResultCells((current) => {
-                      const next = new Set(current)
-                      if (next.has(cell.cell_label)) next.delete(cell.cell_label)
-                      else next.add(cell.cell_label)
-                      return next
-                    })}
-                    aria-expanded={expanded}
-                    aria-controls={replicateListId}
-                    className="flex min-w-0 flex-1 items-center gap-3 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <ChevronDown className={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="min-w-0 flex-1 truncate text-sm font-medium" title={factorSummary(cell.factor_values, experiment.design_spec)}>{factorSummary(cell.factor_values, experiment.design_spec)}</p>
-                        <Badge variant="outline" className="shrink-0 border-[color:var(--chart-2)] text-[color:var(--chart-2)]" title="Total generated replicates for this condition">{cell.replicate_count} {cell.replicate_count === 1 ? 'replicate' : 'replicates'}</Badge>
-                        {cell.obsolete_count > 0 && <Badge variant="outline" className="shrink-0 border-[color:var(--chart-4)]/60 text-[color:var(--chart-4)]">{cell.obsolete_count} obsolete {cell.obsolete_count === 1 ? 'run' : 'runs'}</Badge>}
-                      </div>
-                      <p className="mt-1 text-xs text-muted-foreground"><span className="font-medium text-foreground">{cell.current_completed_count}/{cell.replicate_count}</span> current runs complete</p>
-                    </div>
-                    {metric !== undefined && <span className="shrink-0 rounded-md border border-primary/20 bg-primary/5 px-2 py-1 text-right"><span className="block max-w-28 truncate text-[10px] text-muted-foreground" title={metricDisplayLabel(metricKey!, metricTypes, metricAggregations)}>{metricDisplayLabel(metricKey!, metricTypes, metricAggregations)}</span><span className="block text-sm font-semibold tabular-nums text-primary">{formatResultMetricValue(metricKey!, metric, metricTypes)}</span>{binaryMetricNote(metricKey!, metric, cell.metric_counts[metricKey!], metricTypes) && <span className="mt-0.5 block text-[10px] text-muted-foreground">{binaryMetricNote(metricKey!, metric, cell.metric_counts[metricKey!], metricTypes)}</span>}</span>}
-                  </button>
-                  <Button variant="outline" size="xs" className="shrink-0" title="Open a detailed view of this condition and its run timeline" onClick={() => onSelectResult({ type: 'cell', cellLabel: cell.cell_label })}>View results</Button>
-                </div>
-                {expanded && (
-                  <div id={replicateListId} className="border-t bg-muted/15 px-3 py-3">
+              <CellCard key={cell.cell_label} label={cell.cell_label} results expanded={expanded}
+                listId={replicateListId} conditions={[factorSummary(cell.factor_values, experiment.design_spec)]}
+                replicateCount={cell.replicate_count}
+                onToggle={() => setExpandedResultCells(current => {
+                  const next = new Set(current)
+                  if (next.has(cell.cell_label)) next.delete(cell.cell_label)
+                  else next.add(cell.cell_label)
+                  return next
+                })}
+                progress={<><span className="font-medium text-foreground">{cell.current_completed_count}/{cell.replicate_count}</span> current runs complete</>}
+                badges={cell.obsolete_count > 0 && <Badge variant="outline" className="shrink-0 border-[color:var(--chart-4)]/60 text-[color:var(--chart-4)]">{cell.obsolete_count} obsolete {cell.obsolete_count === 1 ? 'run' : 'runs'}</Badge>}
+                metric={metric !== undefined && <span className="shrink-0 rounded-md border border-primary/20 bg-primary/5 px-2 py-1 text-right"><span className="block max-w-28 truncate text-[10px] text-muted-foreground" title={metricDisplayLabel(metricKey!, metricTypes, metricAggregations)}>{metricDisplayLabel(metricKey!, metricTypes, metricAggregations)}</span><span className="block text-sm font-semibold tabular-nums text-primary">{formatResultMetricValue(metricKey!, metric, metricTypes)}</span>{binaryMetricNote(metricKey!, metric, cell.metric_counts[metricKey!], metricTypes) && <span className="mt-0.5 block text-[10px] text-muted-foreground">{binaryMetricNote(metricKey!, metric, cell.metric_counts[metricKey!], metricTypes)}</span>}</span>}
+                actions={<Button variant="outline" size="xs" className="shrink-0" title="Open a detailed view of this condition and its run timeline" onClick={() => onSelectResult({ type: 'cell', cellLabel: cell.cell_label })}>View results</Button>}>
                     {cellReplicates.length === 0 ? <p className="text-sm text-muted-foreground">No replicate results are available for this cell.</p> : (
                       <>
                         {metricKey && replicateMetricTotal !== null && (
@@ -795,23 +745,20 @@ export function ResultsTab({
                           const observation = observationForMetric(replicate, selectedMetricId, metricKey)
                           const value = numericMetricValue(replicate, metricKey)
                           return (
-                          <li key={replicate.replicate_label}>
-                            <button type="button" onClick={() => onSelectResult({ type: 'replicate', replicateLabel: replicate.replicate_label })} className="flex w-full items-center gap-2 rounded-md border bg-background px-2.5 py-2 text-left transition-colors hover:border-primary/30 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                              <div className="min-w-0 flex-1"><p className="text-sm font-medium">Replicate {replicate.replicate_number}</p><p className="mt-0.5 text-xs text-muted-foreground">{replicate.cost_usd !== null ? formatCurrency(replicate.cost_usd) : 'Cost not reported'}{replicate.duration_seconds !== null ? ` · ${formatDuration(replicate.duration_seconds)}` : ''}</p></div>
-                              <div className="flex shrink-0 items-center gap-2">{value !== null && <span className="text-xs font-medium tabular-nums">{formatResultMetricValue(metricKey!, value, metricTypes, true)}</span>}{observation ? <Badge variant="outline" className={observation.status === 'failed' ? 'border-destructive/50 text-destructive' : ''} title={observation.error ?? undefined}>{OBSERVATION_LABELS[observation.status]}</Badge> : evaluationStatusLabel(replicate) && <span className="text-[11px] text-muted-foreground">{evaluationStatusLabel(replicate)}</span>}<Badge className={statusClass(replicate.status, replicate.obsolete)}>{statusLabel(replicate.status, replicate.obsolete)}</Badge><ExternalLink className="size-3.5 text-muted-foreground" /></div>
-                            </button>
-                          </li>
+                          <ReplicateRow key={replicate.replicate_label} number={replicate.replicate_number} results
+                            onView={() => onSelectResult({ type: 'replicate', replicateLabel: replicate.replicate_label })}
+                            detail={<>{replicate.cost_usd !== null ? formatCurrency(replicate.cost_usd) : 'Cost not reported'}{replicate.duration_seconds !== null ? ` · ${formatDuration(replicate.duration_seconds)}` : ''}</>}
+                            status={<>{value !== null && <span className="text-xs font-medium tabular-nums">{formatResultMetricValue(metricKey!, value, metricTypes, true)}</span>}{observation ? <Badge variant="outline" className={observation.status === 'failed' ? 'border-destructive/50 text-destructive' : ''} title={observation.error ?? undefined}>{OBSERVATION_LABELS[observation.status]}</Badge> : evaluationStatusLabel(replicate) && <span className="text-[11px] text-muted-foreground">{evaluationStatusLabel(replicate)}</span>}<Badge className={statusClass(replicate.status, replicate.obsolete)}>{statusLabel(replicate.status, replicate.obsolete)}</Badge></>}
+                          />
                         )})}
                         </ul>
                       </>
                     )}
-                  </div>
-                )}
-              </div>
+              </CellCard>
             )
           })}
         </div>
-      </section>
-    </div>
+      }
+    />
   )
 }

@@ -10,6 +10,7 @@ import { experimentsApi } from '@/api/client'
 import { datasetRowBindings } from '@/lib/datasetRows'
 import { Button } from '@/components/ui/button'
 import type { ResultsSelection } from './ResultsTab'
+import { DatasetRowCells } from './DatasetRowCells'
 
 // Historical graphs have no editing callbacks or autosave effects. Keep them
 // outside ProtocolCanvas so browsing can never write into the draft cache.
@@ -49,12 +50,14 @@ export function ExperimentVersionDesign({ version }: { version: ProtocolRevision
 }
 
 export function ExperimentVersionRuns({ experimentId, protocolId, version, onSelectResult }: { experimentId: string; protocolId?: string; version: ProtocolRevision; onSelectResult: (selection: ResultsSelection) => void }) {
+  const [selectedCellId, setSelectedCellId] = useState('')
+  const [selectedReplicateId, setSelectedReplicateId] = useState('')
   const scope = { protocol_id: protocolId, protocol_revision_id: version.id }
   const query = useQuery({ queryKey: ['experiments', experimentId, 'run-results', protocolId, version.id], queryFn: () => experimentsApi.getRunResults(experimentId, scope), refetchInterval: 5000 })
   if (query.isLoading) return <p role="status" className="p-3 text-xs">Loading version runs…</p>
   if (!query.data) return <p role="alert" className="p-3 text-xs text-destructive">Could not load version runs.</p>
   const rows = query.data.consumption_mode === 'per_row'
-    ? (query.data.row_results ?? []).map(row => ({ key: row.row_result_id, label: `${row.replicate_label} · row ${row.dataset_row.row_index}`, status: row.status, runId: row.latest_attempt?.run_id, selection: { type: 'row' as const, rowResultId: row.row_result_id, scope } }))
+    ? (query.data.row_results ?? []).filter(row => (!selectedCellId || row.cell_id === selectedCellId) && (!selectedReplicateId || row.replicate_result_id === selectedReplicateId)).map(row => ({ key: row.row_result_id, label: `${row.replicate_label} · row ${row.dataset_row.row_index + 1}`, status: row.status, runId: row.latest_attempt?.run_id, selection: { type: 'row' as const, rowResultId: row.row_result_id, scope } }))
     : query.data.replicates.map(row => ({ key: row.replicate_label, label: row.replicate_label, status: row.status, runId: row.run_id, selection: { type: 'replicate' as const, replicateLabel: row.replicate_label, scope } }))
-  return <div className="space-y-3 p-3"><p className="text-xs text-muted-foreground">Runs for experiment version {version.revision}. Return to draft to launch new runs.</p>{!rows.length && <p className="text-xs">No runs planned for this version.</p>}<div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b"><th className="p-2">Replicate</th><th className="p-2">Status</th><th className="p-2">Details</th></tr></thead><tbody>{rows.map(row => <tr key={row.key} className="border-b"><td className="break-all p-2 font-mono">{row.label}</td><td className="p-2">{row.status.replaceAll('_', ' ')}</td><td className="p-2"><Button size="sm" variant="outline" disabled={!row.runId} onClick={() => onSelectResult(row.selection)}>Inspect</Button></td></tr>)}</tbody></table></div></div>
+  return <div className="space-y-3 p-3"><p className="text-xs text-muted-foreground">Runs for experiment version {version.revision}. Select the current experiment to launch new runs.</p>{query.data.consumption_mode === 'per_row' && <DatasetRowCells designSpec={version.experiment_snapshot?.design_spec} results={query.data} selectedCellId={selectedCellId} onSelect={cellId => { setSelectedCellId(cellId); setSelectedReplicateId('') }} onSelectReplicate={(cellId, replicateId) => { setSelectedCellId(cellId); setSelectedReplicateId(replicateId) }} />}{!rows.length && <p className="text-xs">No runs planned for this version.</p>}<div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b"><th className="p-2">Replicate</th><th className="p-2">Status</th><th className="p-2">Details</th></tr></thead><tbody>{rows.map(row => <tr key={row.key} className="border-b"><td className="break-all p-2 font-mono">{row.label}</td><td className="p-2">{row.status.replaceAll('_', ' ')}</td><td className="p-2"><Button size="sm" variant="outline" disabled={!row.runId} onClick={() => onSelectResult(row.selection)}>Inspect</Button></td></tr>)}</tbody></table></div></div>
 }

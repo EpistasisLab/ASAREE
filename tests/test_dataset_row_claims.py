@@ -55,6 +55,41 @@ async def test_claim_retry_forwards_row_result_id_once(monkeypatch, include_row_
     assert create_kwargs == original_kwargs
 
 
+@pytest.mark.parametrize(
+    ("status", "allow_completed", "stale", "claimed"),
+    [
+        ("completed", False, False, False),
+        ("completed", True, False, True),
+        ("limit_reached", True, False, True),
+        ("limit_reached", False, False, False),
+        ("failed", False, False, True),
+        ("cancelled", False, False, True),
+        ("pending", True, False, False),
+        ("running", True, False, False),
+        ("finalizing", True, False, False),
+        ("completed", True, True, False),
+    ],
+)
+async def test_claim_requires_explicit_rerun_and_terminal_current_attempt(
+    monkeypatch, status, allow_completed, stale, claimed,
+) -> None:
+    slot_id, previous_run_id = uuid.uuid4(), uuid.uuid4()
+    db = AsyncMock(spec=AsyncSession)
+    db.scalar.return_value = FactorialRowResult(
+        id=slot_id, run_id=uuid.uuid4() if stale else previous_run_id,
+    )
+    db.get.return_value = ProtocolRun(id=previous_run_id, status=status)
+    create_run = AsyncMock(return_value=ProtocolRun(id=uuid.uuid4(), row_result_id=slot_id))
+    monkeypatch.setattr("asaree.services.protocol_runs.create_protocol_run", create_run)
+    run = await claim_row_attempt(
+        db, row_result_id=slot_id, expected_run_id=previous_run_id,
+        allow_completed=allow_completed,
+        create_kwargs={"protocol_id": uuid.uuid4(), "owner_id": uuid.uuid4()},
+    )
+    assert (run is create_run.return_value) is claimed
+    assert create_run.await_count == int(claimed)
+
+
 @pytest_asyncio.fixture
 async def row_batch(tmp_path: Path) -> AsyncIterator[tuple[AsyncSession, dict]]:
     """Create row-batch setup committed for independently locking sessions."""
@@ -194,3 +229,49 @@ async def test_claim_waits_for_committed_claim_and_never_duplicates(row_batch) -
         )
     assert count == 1
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_explicit_row_rerun_preserves_slots_and_history_and_skips_active(row_batch, monkeypatch) -> None:
+    db, ctx = row_batch
+    monkeypatch.setattr(protocol_api, "enqueue_protocol_run", AsyncMock())
+    first = await create_cell_runs_endpoint(ctx["protocol"].id, ctx["user"], db, CellRunBatchRequest())
+    assert len(first.protocol_run_ids) == 30
+    for index, run_id in enumerate(first.protocol_run_ids):
+        run = await db.get(ProtocolRun, run_id)
+        assert run is not None
+        run.status = "running" if index == 0 else "completed"
+        run.attempt_result = {"output": f"original-{index}"}
+        slot = await db.get(FactorialRowResult, first.row_result_ids[index])
+        assert slot is not None
+        slot.metric_values = {"score": index}
+    await db.commit()
+
+    # Ordinary batches continue to skip previous attempts.
+    ordinary = await create_cell_runs_endpoint(ctx["protocol"].id, ctx["user"], db, CellRunBatchRequest())
+    assert ordinary.protocol_run_ids == []
+    rerun = await create_cell_runs_endpoint(
+        ctx["protocol"].id, ctx["user"], db,
+        CellRunBatchRequest(replicate_labels=["batch-parent"], rerun_replicate_labels=["batch-parent"]),
+    )
+    assert len(rerun.protocol_run_ids) == 29
+    assert set(rerun.row_result_ids) == set(first.row_result_ids[1:])
+    for index, slot_id in enumerate(first.row_result_ids):
+        slot = await db.get(FactorialRowResult, slot_id, populate_existing=True)
+        assert slot is not None
+        attempts = list((await db.scalars(select(ProtocolRun).where(ProtocolRun.row_result_id == slot_id))).all())
+        assert len(attempts) == (1 if index == 0 else 2)
+        original = next(attempt for attempt in attempts if attempt.id == first.protocol_run_ids[index])
+        assert original.attempt_result == {"output": f"original-{index}"}
+        if index == 0:
+            assert slot.run_id == original.id
+        else:
+            assert slot.run_id != original.id
+            assert slot.metric_values is None
+
+    # A second request sees active latest attempts and never creates duplicates.
+    duplicate = await create_cell_runs_endpoint(
+        ctx["protocol"].id, ctx["user"], db,
+        CellRunBatchRequest(replicate_labels=["batch-parent"], rerun_replicate_labels=["batch-parent"]),
+    )
+    assert duplicate.protocol_run_ids == []

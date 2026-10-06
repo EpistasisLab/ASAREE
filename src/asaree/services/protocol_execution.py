@@ -4773,8 +4773,6 @@ async def plan_cell_runs(
         except DatasetRowInputError as exc:
             raise ProtocolValidationError(str(exc)) from exc
         if original_row_plan is not None:
-            if rerun_replicate_labels:
-                raise ProtocolValidationError("Row executions cannot be rerun through the cell batch; use row retry.")
             retry_targets = None
             if retry_row_result_ids is not None:
                 if current_design is None:
@@ -4908,6 +4906,9 @@ async def plan_cell_runs(
             unknown = requested_labels - labels
             if unknown:
                 raise ProtocolValidationError(f"Unknown replicate label(s): {', '.join(sorted(unknown))}.")
+            requested_reruns = rerun_replicate_labels or set()
+            if requested_reruns - requested_labels:
+                raise ProtocolValidationError("Rerun replicates must belong to the selected batch.")
             selected_parents = [parent for parent in parents if parent.replicate_label in requested_labels]
             parent_values = [
                 {
@@ -4957,12 +4958,14 @@ async def plan_cell_runs(
                     raw_sha256=source.raw_sha256,
                     row_index=candidate["dataset_row"]["row_index"],
                 )
-                claims.append((row_result.id, candidate, view))
-            for row_result_id, candidate, view in sorted(claims, key=lambda item: item[0].int):
+                expected_run_id = row_result.run_id if candidate["replicate_label"] in requested_reruns else None
+                claims.append((row_result.id, candidate, view, expected_run_id))
+            for row_result_id, candidate, view, expected_run_id in sorted(claims, key=lambda item: item[0].int):
                 run = await claim_row_attempt(
                     db,
                     row_result_id=row_result_id,
-                    expected_run_id=None,
+                    expected_run_id=expected_run_id,
+                    allow_completed=candidate["replicate_label"] in requested_reruns,
                     create_kwargs={
                         "protocol_id": protocol_id,
                         "owner_id": owner_id,
@@ -4978,7 +4981,7 @@ async def plan_cell_runs(
                     skipped += 1
                 else:
                     created.append(run)
-            candidate_order = {row_id: index for index, (row_id, _, _) in enumerate(claims)}
+            candidate_order = {row_id: index for index, (row_id, _, _, _) in enumerate(claims)}
             created.sort(key=lambda run: candidate_order[run.row_result_id])
             return created, skipped
     elif resolve_dataset_row_plan(revision.graph if revision is not None else graph, design_spec) is not None:

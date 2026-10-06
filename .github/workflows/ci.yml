@@ -113,6 +113,9 @@ jobs:
       - name: Migrate ASAREE schema
         run: uv run python -m asaree.migrations upgrade --url "$ASAREE_PRODUCT_DATABASE_URL"
 
+      - name: Seed row-test users
+        run: uv run python scripts/seed_row_test_users.py
+
       # The whole suite, on purpose: 769 tests in ~13s locally, so there is no
       # slow tier worth splitting out.
       - name: Pytest

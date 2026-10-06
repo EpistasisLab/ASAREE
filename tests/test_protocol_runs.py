@@ -641,14 +641,19 @@ async def test_list_experiment_trials_marks_runs_obsolete_after_a_new_canvas_pub
             experiment_id=experiment_id,
         )
         protocol_id = protocol.id
-        first_revision = await publish_protocol(db, protocol)
-
         await upsert_replicate(
             db,
             experiment_id=experiment_id,
             replicate_label="legacy-cell",
             fields={"factor_values": {"x": 1}},
         )
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="current-cell",
+            fields={"factor_values": {"x": 2}},
+        )
+        first_revision = await publish_protocol(db, protocol)
         legacy_run = await create_protocol_run(
             db,
             protocol_id=protocol_id,
@@ -677,12 +682,6 @@ async def test_list_experiment_trials_marks_runs_obsolete_after_a_new_canvas_pub
         second_revision = await publish_protocol(db, protocol)
         assert second_revision.id != first_revision.id
 
-        await upsert_replicate(
-            db,
-            experiment_id=experiment_id,
-            replicate_label="current-cell",
-            fields={"factor_values": {"x": 2}},
-        )
         current_run = await create_protocol_run(
             db,
             protocol_id=protocol_id,

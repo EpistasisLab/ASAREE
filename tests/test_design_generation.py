@@ -21,7 +21,7 @@ from asaree.services.design_generation import (
     generate_design_cells,
     replicate_label_for,
 )
-from asaree.services.experiments import create_experiment
+from asaree.services.experiments import create_experiment, delete_experiment
 from asaree.services.factorial_cells import list_factorial_cells, list_replicates, split_replicate_label
 
 _FACTORS = [{"name": "tier", "levels": ["small", "large"]}, {"name": "effort", "levels": ["low", "high"]}]
@@ -64,7 +64,7 @@ async def test_publishing_freezes_design_and_expansion_preserves_version_results
     from asaree.models.protocol_run import ProtocolRun
     from asaree.services.experiment_run_results import summarize_experiment_run_results
     from asaree.services.protocol_revisions import publish_protocol
-    from asaree.services.protocols import create_protocol
+    from asaree.services.protocols import create_protocol, delete_protocol
 
     async with get_session() as db:
         spec = {"factors": [{"name": "arm", "levels": ["a", "b"]}], "replicates": 1}
@@ -118,6 +118,8 @@ async def test_publishing_freezes_design_and_expansion_preserves_version_results
         third = await publish_protocol(db, protocol)
         assert third.design_revision_id != first.design_revision_id
         assert first.experiment_snapshot["design_spec"]["factors"][0]["levels"] == ["a", "b"]
+        await delete_protocol(db, protocol.id)
+        await delete_experiment(db, experiment.id)
 
 
 def test_generate_design_rejects_empty_factors() -> None:

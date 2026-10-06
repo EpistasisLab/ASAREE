@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, Atom, BookMarked, Bot, Braces, BrainCircuit, Cloud, Code2, Cog, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
+import { ArrowRight, Atom, BookMarked, Bot, Braces, BrainCircuit, Cloud, Code2, Cog, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, User, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DATASET_BROWSE } from './datasetCatalog'
@@ -131,6 +131,13 @@ const NODE_CATALOG = [
     label: 'Skills',
     description: 'Browse your Agent Skills -- instructions an Agent opens when their description matches the task',
     icon: ScrollText,
+  },
+  {
+    type: 'persona',
+    category: 'agents',
+    label: 'Persona',
+    description: 'Configure OCEAN personality traits for experimental manipulation',
+    icon: User,
   },
   // Not a node type either -- picking this opens the OKF bundle browser
   // (OkfBundleBrowserPanel), same reasoning as MCP Servers and Skills above.

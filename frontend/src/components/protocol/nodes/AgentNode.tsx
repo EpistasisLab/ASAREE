@@ -288,6 +288,21 @@ export function AgentNode({
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.skill} side="top">Skill</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="skill" left={CONNECTOR_LEFT.skill} side="top" alwaysVisible />
+      {/* Persona -- personality trait configuration (OCEAN framework) for
+          experimental manipulation. Three modes: Library (validated personas),
+          Text (direct input), or File (.md upload). Persona text prepends to
+          system_prompt. One at a time (not repeatable like Skill), since
+          combining personas would create undefined trait conflicts. */}
+      <Handle
+        type="target"
+        id="persona"
+        position={Position.Top}
+        style={{ left: CONNECTOR_LEFT.persona }}
+        title="Persona -- personality traits (OCEAN framework) for this agent"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
+      <ConnectorHandleLabel left={CONNECTOR_LEFT.persona} side="top">Persona</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="persona" left={CONNECTOR_LEFT.persona} side="top" />
       {/* Dataset -- the data an agent works ON, as opposed to the Tool
           connector's "capabilities it works WITH". UNCAPPED, like
           Skill/Knowledge/Tool: a cell's workspace holds one dataset per named

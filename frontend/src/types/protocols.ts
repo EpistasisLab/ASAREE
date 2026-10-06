@@ -33,6 +33,7 @@ export interface ProtocolNode {
     | DatasetNodeData
     | ScriptNodeData
     | SkillNodeData
+    | PersonaNodeData
     | OkfBundleNodeData
     | OkfDocumentNodeData
     | ReasonActPatternNodeData
@@ -699,6 +700,46 @@ export interface SkillNodeData {
 // builds it from the skill picked in the browser, since a node whose whole
 // identity is one skill would be meaningless without it -- same as the
 // server-dedicated MCP node types.
+
+// A "Persona" node. Configures an agent's personality traits for experimental
+// manipulation (OCEAN framework). Three modes: (1) Library - select validated
+// personas (Analyst, Explorer, Critic, etc.), (2) Text - direct input, (3) File
+// - upload .md skill file. Persona text prepends to agent's system_prompt.
+// Unlike Memory (which is dashed/no runtime effect), Persona has real runtime
+// effect via _resolve_persona_configs in protocol_execution.py.
+export interface PersonaNodeConfig {
+  // Which mode: library selection, direct text, or file upload
+  mode: 'library' | 'text' | 'file'
+  // Library mode: persona_id from registered personas (e.g., "analyst_v1")
+  persona_id?: string | null
+  // Text mode: direct persona prompt text
+  persona_text?: string | null
+  // File mode: path to uploaded .md file with persona definition
+  persona_file?: string | null
+  // Display metadata from library (cached to avoid fetch on render)
+  persona_label?: string | null
+  persona_description?: string | null
+  // Absent means enabled, matching other connector conventions
+  enabled?: boolean
+}
+
+export interface PersonaNodeData {
+  label: string
+  config: PersonaNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultPersonaNodeData(label = 'Persona'): PersonaNodeData {
+  return {
+    label,
+    config: {
+      mode: 'text',
+      persona_text: '',
+      enabled: true,
+    },
+  }
+}
 
 // An "OKF Bundle" node. Names a registered OKF bundle: a directory of Markdown
 // concept files (Open Knowledge Format) that the wired agent can read from and

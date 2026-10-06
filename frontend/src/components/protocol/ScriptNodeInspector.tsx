@@ -108,7 +108,11 @@ export function ScriptNodeInspector({
               Code
               {trigger}
             </Label>
-            <PythonCodeEditor value={config.code} onChange={(code) => patchConfig({ code })} rows={16} resizable />
+            <PythonCodeEditor
+              value={config.code}
+              onChange={(code) => patchConfig({ code })}
+              height="max(12rem, calc(100vh - 22rem))"
+            />
           </div>
         )}
       </FactorBindableField>

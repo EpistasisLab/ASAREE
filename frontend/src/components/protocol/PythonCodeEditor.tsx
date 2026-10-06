@@ -62,13 +62,15 @@ export function PythonCodeEditor({
   onChange,
   rows = 16,
   resizable = false,
+  height: editorHeight,
 }: {
   value: string
   onChange: (value: string) => void
   rows?: number
   resizable?: boolean
+  height?: string
 }) {
-  const height = `${rows * 1.35}em`
+  const height = editorHeight ?? `${rows * 1.35}em`
 
   return (
     <div
@@ -80,6 +82,9 @@ export function PythonCodeEditor({
       title={resizable ? 'Drag the lower-right corner to resize the code editor' : undefined}
     >
       <CodeMirror
+        // CodeMirror renders an extra wrapper around .cm-editor. Give that
+        // wrapper a height so the editor stays bounded and scrolls when resized.
+        className={resizable ? 'h-full' : undefined}
         value={value}
         onChange={onChange}
         theme={editorTheme}

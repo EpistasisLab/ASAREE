@@ -66,6 +66,7 @@ from asaree.services.protocols import (
     list_protocols,
     update_protocol,
 )
+from asaree.services.skill_factors import test_skill_factor_values
 from asaree.services.test_run_results import FreshnessReason, project_test_run_result
 from asaree.worker.enqueue import enqueue_protocol_run
 
@@ -275,12 +276,23 @@ class TestRunRequest(BaseModel):
     """Optional original Dataset row selection for a row-mode Test Run."""
 
     row_index: StrictInt | None = Field(default=None, ge=0)
+    skill_selections: dict[str, str] | None = None
 
 
 class NodePlayRequest(BaseModel):
     """Optional original Dataset row selection for an eligible node Play."""
 
     row_index: StrictInt | None = Field(default=None, ge=0)
+    skill_selections: dict[str, str] | None = None
+
+
+async def _node_test_skill_values(
+    graph: dict[str, Any], body: NodePlayRequest | None, owner_id: uuid.UUID, node_id: str
+) -> dict[str, Any]:
+    try:
+        return await test_skill_factor_values(graph, body.skill_selections if body else None, owner_id, node_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class CellRunBatchRequest(BaseModel):
@@ -436,7 +448,9 @@ async def publish_protocol_endpoint(
         validate_stage_plan(design_spec)
         validate_prompt_references(graph=protocol.graph)
         topological_order(protocol.graph, require_acyclic=not is_conversation_strategy(design_spec))
-        validate_factor_bindings(design_spec, protocol.graph)
+        # An incomplete skill comparison can still be published for a selected
+        # test. Generation and production planning enforce complete choices.
+        validate_factor_bindings(design_spec, protocol.graph, complete_skills=False)
         if experiment is not None:
             report = await validate_experiment_measurement_plan(
                 db,
@@ -662,6 +676,9 @@ async def create_test_run_endpoint(
             owner_id=user.id,
             protocol_revision_id=revision.id,
             dataset_row=dataset_row,
+            factor_values=await test_skill_factor_values(
+                revision.graph, body.skill_selections if body else None, user.id
+            ),
         )
     except (ProtocolValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -751,6 +768,7 @@ async def run_single_node_endpoint(
         target_node_id=node_id,
         protocol_revision_id=revision.id,
         dataset_row=dataset_row,
+        factor_values=await _node_test_skill_values(revision.graph, body, user.id, node_id),
     )
     await db.commit()
     await enqueue_protocol_run(run.id)

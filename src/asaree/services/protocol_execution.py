@@ -100,6 +100,7 @@ from asaree.services.protocol_runs import (
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
 from asaree.services.runtime_metrics import finalize_attempt_measurement
+from asaree.services.skill_factors import validate_skill_factors
 from asaree.services.system_mcp_servers import (
     DATASET_DICTIONARY_AGENT_TOOLS,
     EDA_SERVER_NAME,
@@ -2031,14 +2032,20 @@ def _resolve_skill_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]
     resolved ``skill_id`` is skipped, matching ``_resolve_tool_config``."""
     nodes, _downstream, _upstream = _adjacency(graph)
     skill_ids: list[str] = []
+    agent_data = (nodes.get(node_id) or {}).get("data") or {}
+    selection = (
+        agent_data.get("skill_selection") if (agent_data.get("factor_bindings") or {}).get("skill_selection") else None
+    )
     for edge in _edges_with_handle(graph, node_id, "skill", direction="incoming"):
         source = nodes.get(edge["source"])
         if source is None or source.get("type") not in _SKILL_NODE_TYPES:
             continue
         skill_node_config = (source.get("data") or {}).get("config") or {}
-        if not skill_node_config.get("enabled", True):
+        if selection is None and not skill_node_config.get("enabled", True):
             continue
         skill_id = skill_node_config.get("skill_id")
+        if selection is not None and skill_id not in selection:
+            continue
         if skill_id and str(skill_id) not in skill_ids:
             skill_ids.append(str(skill_id))
     return {"skill_ids": skill_ids} if skill_ids else {}
@@ -4725,6 +4732,7 @@ async def plan_cell_runs(
             )
     try:
         validate_factor_bindings(design_spec, graph)
+        await validate_skill_factors(design_spec, graph, owner_id)
     except ValueError as exc:
         raise ProtocolValidationError(str(exc)) from exc
     measurement_report = await validate_experiment_measurement_plan(
@@ -5111,6 +5119,7 @@ async def plan_single_replicate_run(
             )
     try:
         validate_factor_bindings(design_spec, graph)
+        await validate_skill_factors(design_spec, graph, owner_id)
     except ValueError as exc:
         raise ProtocolValidationError(str(exc)) from exc
     measurement_report = await validate_experiment_measurement_plan(
@@ -5289,8 +5298,8 @@ async def _run_single_node(
     dataset_row: dict[str, Any] | None = None,
 ) -> None:
     """The canvas's per-node Play run: one Agent node, no upstream, no gated
-    pair, no factor substitution, no coordination-strategy check -- none of
-    those concepts apply to a single node run in isolation. A deliberately
+    pair and no coordination-strategy check. A preview skill choice has
+    already been substituted in the supplied graph. A deliberately
     separate path from the main topological walk below, not a special case
     bolted onto it."""
     try:
@@ -5521,6 +5530,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 return
 
     if target_node_id:
+        if factor_values:
+            graph = apply_factor_bindings(graph, factor_values)
         await _run_single_node(
             protocol_run_id,
             protocol_id=protocol_id,

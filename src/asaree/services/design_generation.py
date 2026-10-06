@@ -30,10 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.experiment_design_revision import ExperimentDesignRevision
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.services.coordination import coordination_strategy_slug
 from asaree.services.design_revisions import get_current_revision, supersede_and_create
 from asaree.services.factorial_cells import list_replicates, upsert_replicate
+from asaree.services.skill_factors import validate_skill_factors
 
 
 class DesignValidationError(ValueError):
@@ -283,7 +285,14 @@ async def get_design_impact(
 ) -> DesignImpact:
     """Compare the declared factorial matrix to its materialized revision."""
     material = material_design_spec(design_spec)
-    planned = _planned_replicates(material["factors"], material["replicates"]) if material["factors"] else []
+    incomplete_skills = any(
+        factor.get("level_type") == "skill_selection" and len(factor.get("levels") or []) < 2
+        for factor in material["factors"]
+    )
+    planned = (
+        _planned_replicates(material["factors"], material["replicates"])
+        if material["factors"] and not incomplete_skills else []
+    )
     planned_labels = {label for label, _, _ in planned}
     planned_cell_keys = {_cell_key(combo, label) for label, combo, _ in planned}
     current = await get_current_revision(db, experiment_id)
@@ -404,6 +413,12 @@ async def generate_design_cells(
     ).scalar_one_or_none()
     if experiment is None:
         raise DesignValidationError("Experiment not found")
+    if any(factor.get("level_type") == "skill_selection" for factor in factors):
+        protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == experiment_id))
+        try:
+            await validate_skill_factors({"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id)
+        except ValueError as exc:
+            raise DesignValidationError(str(exc)) from exc
     # An empty factor declaration is a meaningful replacement when an
     # existing design's final factor was removed: it retires every current
     # cell into history and leaves an empty current revision.  Do not call

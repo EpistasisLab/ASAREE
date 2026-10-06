@@ -16,7 +16,8 @@ const ACCENT = nodeAccent('skill')
 
 export function SkillNode({ id, data, selected }: NodeProps & { data: SkillNodeData }) {
   const { updateNodeData } = useReactFlow()
-  const enabled = data.config?.enabled ?? true
+  const controlled = !!data.skillFactorControlled
+  const enabled = controlled || (data.config?.enabled ?? true)
 
   return (
     <CircleNode
@@ -32,7 +33,7 @@ export function SkillNode({ id, data, selected }: NodeProps & { data: SkillNodeD
       factorCount={boundFactorCount(data)}
       dimmed={!enabled}
       isActive={enabled}
-      onToggleActive={() => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
+      onToggleActive={controlled ? undefined : () => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
     />
   )
 }

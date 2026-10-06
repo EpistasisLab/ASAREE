@@ -96,7 +96,7 @@ export function NodeHoverToolbar({
         // ProtocolCanvasPage.tsx).
         <span title={runAlone.canRun ? undefined : "Has upstream input -- can't run alone yet"}>
           <ToolbarIconButton
-            label="Run this node's own configuration as currently set -- never a bound factor's level"
+            label="Run this node's configuration; choose a skill level in the run dialog"
             disabled={!runAlone.canRun}
             onClick={() => runAlone.canRun && runAlone.onRun()}
           >

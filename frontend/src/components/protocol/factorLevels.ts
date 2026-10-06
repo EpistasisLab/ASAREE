@@ -21,6 +21,7 @@ export type LevelType =
   | 'script_config'
   | 'dataset_config'
   | 'tool_names'
+  | 'skill_selection'
 
 export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   string: 'String',
@@ -33,6 +34,7 @@ export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   script_config: 'Script',
   dataset_config: 'Dataset',
   tool_names: 'Tools allowed',
+  skill_selection: 'Skills as levels',
 }
 
 // Whether a level of this kind is a structured value (an object, or -- for
@@ -47,7 +49,8 @@ export function isStructuredLevelType(type: LevelType): boolean {
     type === 'pattern' ||
     type === 'script_config' ||
     type === 'dataset_config' ||
-    type === 'tool_names'
+    type === 'tool_names' ||
+    type === 'skill_selection'
   )
 }
 

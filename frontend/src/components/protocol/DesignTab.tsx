@@ -9,9 +9,10 @@ import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
+import { ApiError, experimentsApi, protocolsApi, skillsApi } from '@/api/client'
 import { coordinationStrategyIssues } from '@/lib/coordinationStrategy'
 import { unboundFactorNames } from '@/lib/factorBindings'
+import { skillFactorIssues } from '@/lib/skillFactors'
 import { promptReferenceScope } from '@/lib/promptReferences'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import {
@@ -256,6 +257,7 @@ function FactorsEditor({
   const editMutation = useMutation({
     mutationFn: async ({ oldName, next }: { oldName: string; next: DesignFactor }) => {
       const fresh = await experimentsApi.get(experiment.id)
+      if (next.name !== oldName && (fresh.design_spec?.factors ?? []).some((factor) => factor.name === next.name)) throw new Error('A factor with this name already exists.')
       const nextFactors = (fresh.design_spec?.factors ?? []).map((f) => (f.name === oldName ? next : f))
       await experimentsApi.update(experiment.id, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
       return { oldName, next }
@@ -296,6 +298,7 @@ function FactorsEditor({
             variant="ghost"
             size="icon-sm"
             aria-label="Remove factor"
+            title={factor.level_type === 'skill_selection' ? 'Remove factor and enable all connected skills' : 'Remove factor'}
             disabled={disabled || deleteMutation.isPending}
             onClick={() => deleteMutation.mutate(factor.name)}
           >
@@ -490,6 +493,8 @@ export function DesignTab({
     ? ({ nodes: graphQuery.data.nodes, edges: graphQuery.data.edges } as unknown as ProtocolGraph)
     : undefined
   const unboundFactors = unboundFactorNames(experiment.design_spec, draftGraph)
+  const skillLibrary = useQuery({ queryKey: ['skills'], queryFn: () => skillsApi.list(), enabled: factors.some((factor) => factor.level_type === 'skill_selection') })
+  const skillIssues = skillFactorIssues(draftGraph, factors, skillLibrary.data ? new Set(skillLibrary.data.map((skill) => skill.id)) : undefined)
   const impact = impactQuery.data
 
   // A design-time mirror of the backend's own strategy validation, so an
@@ -858,13 +863,14 @@ export function DesignTab({
             Unbound factor{unboundFactors.length === 1 ? '' : 's'}: {unboundFactors.join(', ')}. Rebind on the canvas or remove from this design.
           </p>
         )}
+        {skillIssues.map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
         <Button
           size="sm"
           disabled={
             generateMutation.isPending ||
             isAutosavingMetadata ||
             !canGenerate ||
-            unboundFactors.length > 0
+            unboundFactors.length > 0 || skillIssues.length > 0 || (factors.some((factor) => factor.level_type === 'skill_selection') && !skillLibrary.isSuccess)
           }
           onClick={() => generateMutation.mutate()}
         >

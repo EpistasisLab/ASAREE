@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { datasetsApi, experimentsApi, protocolsApi } from '@/api/client'
+import { datasetsApi, experimentsApi, protocolsApi, skillsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import {
   defaultAgentNodeData,
@@ -141,6 +141,37 @@ describe('ProtocolCanvas connector adds', () => {
       created_at: '',
       updated_at: '',
     }))
+  })
+
+  it('creates a connector skill factor and preserves the connected skill nodes', async () => {
+    const experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    vi.spyOn(skillsApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        ...['a', 'b'].map((id) => ({ id, type: 'skill', position: { x: 100, y: 0 }, data: { label: `Skill ${id}`, config: { skill_id: id, skill_name: `Skill ${id}` } } })),
+      ],
+      edges: ['a', 'b'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'skill' })),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-agent"] button.bg-chart-2')
+    expect(makeFactor).not.toBeNull()
+    fireEvent.click(makeFactor!)
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Skills', level_type: 'skill_selection', levels: [['a'], ['b']], level_labels: ['Skill a', 'Skill b'] }] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ skill_selection: 'Writer:Skills' })
+      expect(persisted?.nodes.filter((node) => node.type === 'skill')).toHaveLength(2)
+    })
   })
 
   it.each([null, 1])('selects a draft row for Publish & Test Run with published version %s', async publishedRevision => {

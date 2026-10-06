@@ -22,6 +22,7 @@ export interface DesignFactor {
     | 'script_config'
     | 'dataset_config'
     | 'tool_names'
+    | 'skill_selection'
 }
 
 export interface DesignMetric {

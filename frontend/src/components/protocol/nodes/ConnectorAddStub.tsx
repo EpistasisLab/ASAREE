@@ -1,6 +1,8 @@
 import type { MouseEvent } from 'react'
 import { useNodeConnections } from '@xyflow/react'
 import { Plus } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { FACTOR_TRIGGER_CLASSNAME } from '../factorLevels'
 import { CONNECTOR_SLOT_LABELS, useProtocolCanvasActions, type ConnectorSlot } from '../ProtocolCanvasContext'
 
 // The affordance for an empty sub-connector: a short stub line ending
@@ -21,15 +23,19 @@ export function ConnectorAddStub({
   left,
   side = 'bottom',
   alwaysVisible = false,
+  factorName,
+  factorLevelCount,
 }: {
   nodeId: string
   slot: ConnectorSlot
   left?: string
   side?: 'bottom' | 'right' | 'top'
   alwaysVisible?: boolean
+  factorName?: string
+  factorLevelCount?: number
 }) {
   const connections = useNodeConnections({ id: nodeId, handleType: 'target', handleId: slot })
-  const { requestConnectorAdd } = useProtocolCanvasActions()
+  const { requestConnectorAdd, requestSkillFactor, experimentLocked } = useProtocolCanvasActions()
 
   if (connections.length > 0 && !alwaysVisible) return null
 
@@ -58,6 +64,16 @@ export function ConnectorAddStub({
   // node, so the line needs to be its LAST child to land in the same
   // "closest to the node" spot.
   return (
+    <div
+      className={side === 'right' ? 'group/stub absolute top-1/2 -right-11 -translate-y-1/2' : side === 'top' ? 'group/stub absolute -top-11 -translate-x-1/2' : 'group/stub absolute -bottom-11 -translate-x-1/2'}
+      style={side !== 'right' ? { left } : undefined}
+    >
+      {slot === 'skill' && requestSkillFactor && !experimentLocked && <Button
+        size="xs"
+        className={`pointer-events-none absolute bottom-full left-1/2 z-20 -translate-x-1/2 opacity-0 group-hover/stub:pointer-events-auto group-hover/stub:opacity-100 group-focus-within/stub:pointer-events-auto group-focus-within/stub:opacity-100 ${FACTOR_TRIGGER_CLASSNAME}`}
+        onClick={(event) => { event.stopPropagation(); requestSkillFactor(nodeId) }}
+      >{factorName ? 'Edit factor' : 'Make factor'}</Button>}
+      {factorName && <span className="pointer-events-none absolute bottom-[calc(100%+1.5rem)] left-1/2 -translate-x-1/2 whitespace-nowrap rounded border border-chart-2 bg-card px-1 font-mono text-[9px] text-chart-2" title={factorName}>Skills · {factorLevelCount ?? 0} levels</span>}
     <button
       type="button"
       onClick={handleClick}
@@ -65,12 +81,9 @@ export function ConnectorAddStub({
       title={`Add ${CONNECTOR_SLOT_LABELS[slot]}`}
       className={
         side === 'right'
-          ? 'group absolute top-1/2 -right-11 flex -translate-y-1/2 cursor-pointer items-center p-1.5'
-          : side === 'top'
-            ? 'group absolute -top-11 flex -translate-x-1/2 cursor-pointer flex-col items-center p-1.5'
-            : 'group absolute -bottom-11 flex -translate-x-1/2 cursor-pointer flex-col items-center p-1.5'
+          ? 'group flex cursor-pointer items-center p-1.5'
+          : 'group flex cursor-pointer flex-col items-center p-1.5'
       }
-      style={side !== 'right' ? { left } : undefined}
     >
       {side === 'right' ? (
         <>
@@ -89,5 +102,6 @@ export function ConnectorAddStub({
         </>
       )}
     </button>
+    </div>
   )
 }

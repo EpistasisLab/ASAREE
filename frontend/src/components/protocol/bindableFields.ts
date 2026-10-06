@@ -444,6 +444,7 @@ export function agentTracedLabel(node: Node, edges: Edge[], nodes: Node[]): stri
 export function unboundBindableFields(nodes: Node[], edges: Edge[]): UnboundField[] {
   const result: UnboundField[] = []
   for (const node of nodes) {
+    if (node.type === 'skill' && edges.some((edge) => edge.source === node.id && edge.targetHandle === 'skill' && (nodes.find((target) => target.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.skill_selection)) continue
     const bindings = (node.data as { factor_bindings?: Record<string, string> })?.factor_bindings ?? {}
     const label = agentTracedLabel(node, edges, nodes)
     const wholeConfigBound = !!bindings.config

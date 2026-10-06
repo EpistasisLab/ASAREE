@@ -287,7 +287,7 @@ export function AgentNode({
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.skill} side="top">Skill</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="skill" left={CONNECTOR_LEFT.skill} side="top" alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="skill" left={CONNECTOR_LEFT.skill} side="top" alwaysVisible factorName={data.factor_bindings?.skill_selection} factorLevelCount={data.skillFactorLevelCount as number | undefined} />
       {/* Dataset -- the data an agent works ON, as opposed to the Tool
           connector's "capabilities it works WITH". UNCAPPED, like
           Skill/Knowledge/Tool: a cell's workspace holds one dataset per named

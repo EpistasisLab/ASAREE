@@ -326,6 +326,7 @@ async def create_test_run(
     owner_id: uuid.UUID,
     protocol_revision_id: uuid.UUID,
     dataset_row: dict[str, Any] | None = None,
+    factor_values: dict[str, Any] | None = None,
 ) -> ProtocolRun:
     """Create the experiment's next canvas validation attempt.
 
@@ -352,6 +353,7 @@ async def create_test_run(
         protocol_revision_id=protocol_revision_id,
         dataset_row=dataset_row,
         is_test_run=True,
+        factor_values=factor_values,
     )
     experiment.latest_test_run_id = run.id
     await db.flush()

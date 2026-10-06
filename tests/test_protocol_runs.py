@@ -695,6 +695,16 @@ async def test_list_experiment_trials_marks_runs_obsolete_after_a_new_canvas_pub
             replicate_label="current-cell",
             fields={"run_id": current_run.id},
         )
+        trials = await list_experiment_trials(db, experiment_id=experiment_id)
+        by_label = {trial.replicate_label: trial for trial in trials}
+        assert by_label["legacy-cell"].status == "not_started"
+        assert by_label["legacy-cell"].run_id is None
+        assert by_label["legacy-cell"].obsolete is False
+        assert by_label["current-cell"].status == "completed"
+        # Exercise the canvas-only legacy compatibility path. Unified experiment
+        # versions instead expose earlier runs through version history.
+        first_revision.experiment_snapshot = None
+        second_revision.experiment_snapshot = None
 
     async with get_session() as db:
         trials = await list_experiment_trials(db, experiment_id=experiment_id)

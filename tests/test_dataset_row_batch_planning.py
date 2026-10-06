@@ -27,7 +27,7 @@ from asaree.services.users import get_user_by_email
 
 
 @pytest_asyncio.fixture
-async def row_batch(tmp_path: Path) -> AsyncIterator[tuple[AsyncSession, dict]]:
+async def row_batch(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator[tuple[AsyncSession, dict]]:
     engine = create_async_engine(os.environ["ASAREE_PRODUCT_DATABASE_URL"])
     async with engine.begin() as connection:
         sessions = async_sessionmaker(bind=connection, expire_on_commit=False)
@@ -58,6 +58,13 @@ async def row_batch(tmp_path: Path) -> AsyncIterator[tuple[AsyncSession, dict]]:
                 replicate_label="batch-parent",
                 fields={"factor_values": {}},
             )
+            if getattr(request, "param", None) == "two_parents":
+                await upsert_replicate(
+                    db,
+                    experiment_id=experiment.id,
+                    replicate_label="second-parent",
+                    fields={"factor_values": {}},
+                )
             graph = {
                 "nodes": [
                     {
@@ -174,6 +181,7 @@ async def test_whole_dataset_batch_response_keeps_legacy_mode(row_batch, monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("row_batch", ["two_parents"], indirect=True)
 async def test_parent_selection_expands_every_source_row(row_batch, monkeypatch: pytest.MonkeyPatch) -> None:
     db, ctx = row_batch
     queued: list[uuid.UUID] = []
@@ -190,13 +198,6 @@ async def test_parent_selection_expands_every_source_row(row_batch, monkeypatch:
     raw = b"question,answer\nq1,a1\nq2,a2\nq3,a3\n"
     Path(dataset.raw_path).write_bytes(raw)
     dataset.raw_sha256 = hashlib.sha256(raw).hexdigest()
-    await upsert_replicate(
-        db,
-        experiment_id=ctx["protocol"].experiment_id,
-        replicate_label="second-parent",
-        fields={"factor_values": {}},
-    )
-
     result = await create_cell_runs_endpoint(
         ctx["protocol"].id,
         ctx["user"],

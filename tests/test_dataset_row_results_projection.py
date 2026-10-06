@@ -271,11 +271,12 @@ async def test_row_projection_counts_attempts_and_preserves_slots(row_results_se
     assert source_missing["row_summary"]["expected"] is None
     assert len(source_missing["row_results"]) == 30
 
-    no_metrics = await summarize_experiment_run_results(
+    # A caller's draft metric override cannot alter a published version's results.
+    draft_override = await summarize_experiment_run_results(
         db, experiment_id=ctx["experiment"].id, design_spec={"metrics": []}
     )
-    assert no_metrics["row_summary"]["scored"] == 0
-    assert no_metrics["row_summary"]["metric_coverage"] == {}
+    assert draft_override["row_summary"]["scored"] == 25
+    assert draft_override["row_summary"]["metric_coverage"] == retried["row_summary"]["metric_coverage"]
 
 
 @pytest.mark.asyncio
@@ -374,8 +375,11 @@ async def test_row_results_selectors_forecast_and_whole_scorecard(row_results_se
 
 
 @pytest.mark.asyncio
-async def test_preplanning_forecast_uses_verified_source(row_results_setup) -> None:
+async def test_legacy_preplanning_forecast_uses_verified_source(row_results_setup) -> None:
     db, ctx = row_results_setup
+    # Canvas-only legacy publications have no frozen experiment settings and
+    # retain the preplanning forecast from the supplied design declaration.
+    ctx["publication"].experiment_snapshot = None
     # Remove the planned cells, but retain the declaration and verified source.
     for cell in ctx["cells"]:
         await db.delete(cell)

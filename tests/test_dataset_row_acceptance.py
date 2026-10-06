@@ -174,6 +174,7 @@ async def test_five_cells_three_rows_two_replicates_and_one_failed_row_retry(tmp
         async with sessions.begin() as db:
             user = await get_user_by_email(db, "test@test.com")
             assert user is not None
+            user_id = user.id
             dataset = RegisteredDataset(
                 id=uuid.uuid4(),
                 name=f"acceptance-{uuid.uuid4()}",
@@ -273,11 +274,11 @@ async def test_five_cells_three_rows_two_replicates_and_one_failed_row_retry(tmp
                 db, name=f"acceptance-{uuid.uuid4()}", owner_id=user.id, experiment_id=experiment.id, graph=graph
             )
             protocol_id = protocol.id
-            revision = await publish_protocol(db, protocol, owner_id=user.id)
-            protocol.published_revision_id = revision.id
             parents = await generate_design_cells(
                 db, experiment_id=experiment.id, factors=design["factors"], replicates=2, design_spec=design
             )
+            revision = await publish_protocol(db, protocol, owner_id=user.id)
+            protocol.published_revision_id = revision.id
             assert len(parents) == 10
             assert (
                 await db.scalar(
@@ -285,7 +286,6 @@ async def test_five_cells_three_rows_two_replicates_and_one_failed_row_retry(tmp
                 )
                 == 5
             )
-            user_id = user.id
         async with sessions() as db:
             user = await get_user_by_email(db, "test@test.com")
             batch = await api.create_cell_runs_endpoint(protocol_id, user, db)

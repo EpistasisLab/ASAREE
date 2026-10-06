@@ -42,8 +42,8 @@ export function OkfDocumentBrowserPanel({
   const documents = documentsQuery.data ?? []
 
   return (
-    <div className="flex w-80 shrink-0 flex-col gap-3 border-l p-4">
-      <div className="flex items-center justify-between">
+    <div className="flex min-h-0 w-80 shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
+      <div className="flex shrink-0 items-center justify-between">
         <div className="flex min-w-0 items-center gap-1.5">
           <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
             <ArrowLeft className="size-4" />
@@ -74,7 +74,7 @@ export function OkfDocumentBrowserPanel({
       ) : documents.length === 0 ? (
         <p className="py-4 text-center text-sm text-muted-foreground">No documents uploaded yet.</p>
       ) : (
-        <div className="flex flex-col gap-1.5">
+        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-1">
           {documents.map((document) => {
             const filename = document.path?.split('/').filter(Boolean).pop() ?? null
             // Title first, filename as the fallback: `title` is required at

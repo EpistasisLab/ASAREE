@@ -49,6 +49,7 @@ export function RunConfirmDialog({
   additionalContent,
   confirmLabel,
   confirmDisabled = false,
+  publishDisabled = confirmDisabled,
   isConfirming = false,
   confirmError = null,
 }: {
@@ -73,6 +74,7 @@ export function RunConfirmDialog({
   additionalContent?: ReactNode
   confirmLabel?: string
   confirmDisabled?: boolean
+  publishDisabled?: boolean
   isConfirming?: boolean
   confirmError?: string | null
 }) {
@@ -219,7 +221,7 @@ export function RunConfirmDialog({
                   {actionLabel} (published v{publishedRevision})
                 </Button>
               )}
-              <Button disabled={isPublishing || isConfirming || confirmDisabled} onClick={onPublishAndRun}>
+              <Button disabled={isPublishing || isConfirming || publishDisabled} onClick={onPublishAndRun}>
                 {isPublishing ? 'Publishing…' : isConfirming ? 'Starting…' : `Publish & ${actionLabel}`}
               </Button>
             </>

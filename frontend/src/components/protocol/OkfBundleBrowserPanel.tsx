@@ -48,8 +48,8 @@ export function OkfBundleBrowserPanel({
   const bundles = bundlesQuery.data ?? []
 
   return (
-    <div className="flex w-80 shrink-0 flex-col gap-3 border-l p-4">
-      <div className="flex items-center justify-between">
+    <div className="flex min-h-0 w-80 shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
+      <div className="flex shrink-0 items-center justify-between">
         <div className="flex min-w-0 items-center gap-1.5">
           <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
             <ArrowLeft className="size-4" />
@@ -81,7 +81,7 @@ export function OkfBundleBrowserPanel({
       ) : bundles.length === 0 ? (
         <p className="py-4 text-center text-sm text-muted-foreground">No bundles registered yet.</p>
       ) : (
-        <div className="flex flex-col gap-1.5">
+        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-1">
           {bundles.map((bundle) => {
             const folder = bundle.path?.split('/').filter(Boolean).pop() ?? bundle.name
             const broken = bundle.status !== 'connected'

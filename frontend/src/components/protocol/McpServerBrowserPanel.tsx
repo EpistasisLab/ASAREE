@@ -55,8 +55,8 @@ export function McpServerBrowserPanel({
   )
 
   return (
-    <div className="flex w-80 shrink-0 flex-col gap-3 border-l p-4">
-      <div className="flex items-center justify-between">
+    <div className="flex min-h-0 w-80 shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
+      <div className="flex shrink-0 items-center justify-between">
         <div className="flex min-w-0 items-center gap-1.5">
           <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
             <ArrowLeft className="size-4" />
@@ -67,7 +67,7 @@ export function McpServerBrowserPanel({
           <X className="size-4" />
         </Button>
       </div>
-      <Input autoFocus placeholder="Search servers…" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <Input className="shrink-0" autoFocus placeholder="Search servers…" value={query} onChange={(e) => setQuery(e.target.value)} />
 
       {/* Outside the loading/error/empty branches below on purpose: connecting
           a server is exactly what you want to do when the list failed to load
@@ -75,7 +75,7 @@ export function McpServerBrowserPanel({
       <button
         type="button"
         onClick={() => setConnectOpen(true)}
-        className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2.5 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/30 transition-colors hover:bg-primary/10"
+        className="flex shrink-0 cursor-pointer items-start gap-2.5 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2.5 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/30 transition-colors hover:bg-primary/10"
       >
         <Plug className="mt-0.5 size-4 shrink-0 text-primary" />
         <div className="min-w-0 flex-1">
@@ -107,7 +107,7 @@ export function McpServerBrowserPanel({
           {servers.length === 0 ? 'No MCP servers available.' : 'No matching servers.'}
         </p>
       ) : (
-        <div className="flex flex-col gap-1.5">
+        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-1">
           {filtered.map((server) => {
             const preset = presetForServer(server)
             const toolCount = server.capabilities?.tools?.length ?? 0

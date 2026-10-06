@@ -582,25 +582,25 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // draft differs, this mutation lets the confirmation dialog make the
   // user's intended choice explicit: publish the draft, then run it.
   const publishAndRunMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({ scope, rowIndex }: { scope: RunScope; rowIndex: number }) => {
+      if (draftRow.error) throw new Error(draftRow.error)
       await protocolsApi.update(protocolId, { graph: toPersistedGraph(nodes, edges) })
-      return protocolsApi.publish(protocolId)
+      const published = await protocolsApi.publish(protocolId)
+      return { published, scope, rowIndex }
     },
-    onSuccess: async (published) => {
+    onSuccess: async ({ published, scope, rowIndex }) => {
       queryClient.invalidateQueries({ queryKey: ['protocols', protocolId, 'revisions'] })
       if (published.experiment_id) {
         queryClient.setQueryData(protocolForExperimentQueryKey(published.experiment_id), published)
       }
       const revision = await protocolsApi.getRevision(protocolId, published.published_revision_id!)
-      const binding = rowBindingForNode(revision.graph, pendingRunConfirm?.type === 'node' ? pendingRunConfirm.nodeId : undefined)
+      const binding = rowBindingForNode(revision.graph, scope.type === 'node' ? scope.nodeId : undefined)
       queryClient.setQueryData(['protocols', protocolId, 'row-publication', published.published_revision], published)
       queryClient.setQueryData(['protocols', protocolId, 'row-published-graph', published.published_revision_id], revision)
-      // The new publication can change the driver. A new source begins at its
-      // first row, then later selections use that publication's verified schema.
-      if (pendingRunConfirm?.type === 'node') {
-        await protocolsApi.runNode(protocolId, pendingRunConfirm.nodeId, binding ? { row_index: 0 } : undefined).then(run => { setRunId(run.id); setRunResultsOpen(true); setTestResultsOpen(false) })
+      if (scope.type === 'node') {
+        await protocolsApi.runNode(protocolId, scope.nodeId, binding ? { row_index: rowIndex } : undefined).then(run => { setRunId(run.id); setRunResultsOpen(true); setTestResultsOpen(false) })
       } else {
-        await protocolsApi.testRun(protocolId, binding ? { row_index: 0 } : undefined).then(run => { setRunId(run.id); setTestResultsOpen(true); setRunResultsOpen(false); queryClient.setQueryData(['protocols', protocolId, 'test-run'], run) })
+        await protocolsApi.testRun(protocolId, binding ? { row_index: rowIndex } : undefined).then(run => { setRunId(run.id); setTestResultsOpen(true); setRunResultsOpen(false); queryClient.setQueryData(['protocols', protocolId, 'test-run'], run) })
       }
       setPendingRunConfirm(null)
     },
@@ -614,7 +614,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // experiment with a design still runs from the Runs tab.
   const publishedProtocolQuery = useQuery({ queryKey: ['protocols', protocolId, 'row-publication', publishedRevision], queryFn: () => protocolsApi.get(protocolId) })
   const publishedGraphQuery = useQuery({ queryKey: ['protocols', protocolId, 'row-published-graph', publishedProtocolQuery.data?.published_revision_id], queryFn: () => protocolsApi.getRevision(protocolId, publishedProtocolQuery.data!.published_revision_id!), enabled: !!publishedProtocolQuery.data?.published_revision_id })
-  const publishedRow = useDatasetRowSelection(publishedGraphQuery.data?.graph, publishedProtocolQuery.data?.published_revision_id ?? '')
+  const pendingNodeId = pendingRunConfirm?.type === 'node' ? pendingRunConfirm.nodeId : undefined
+  const publishedRow = useDatasetRowSelection(publishedGraphQuery.data?.graph, publishedProtocolQuery.data?.published_revision_id ?? '', pendingNodeId)
+  const draftRow = useDatasetRowSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, `draft:${protocolId}`, pendingNodeId)
+  const showDraftInputs = hasUnpublishedChanges || publishedRevision === null
   const pendingHasRow = !!publishedGraphQuery.data && !!rowBindingForNode(publishedGraphQuery.data.graph, pendingRunConfirm?.type === 'node' ? pendingRunConfirm.nodeId : undefined)
   const publishedSourceError = publishedGraphQuery.isError || publishedProtocolQuery.isError ? 'Published row source unavailable.' : publishedProtocolQuery.isLoading || (!!publishedProtocolQuery.data?.published_revision_id && publishedGraphQuery.isLoading) ? 'Loading published inputs…' : null
 
@@ -2406,10 +2409,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 ? 'Could not publish the latest canvas.'
                 : null
           }
-          onPublishAndRun={() => publishAndRunMutation.mutate()}
+          onPublishAndRun={() => publishAndRunMutation.mutate({ scope: pendingRunConfirm, rowIndex: draftRow.rowIndex })}
           confirmLabel={pendingRunConfirm.type === 'graph' ? 'Test Run' : undefined}
           confirmDisabled={!!publishedSourceError || (pendingHasRow && !!publishedRow.error)}
-          additionalContent={pendingHasRow ? <div className="space-y-2"><p className="text-xs">Published source{hasUnpublishedChanges ? ' (canvas has unpublished edits)' : ''}</p><DatasetRowSelector rowIndex={publishedRow.rowIndex} onChange={publishedRow.setRowIndex} rowCount={publishedRow.schema?.row_count ?? 0} disabled={!publishedRow.schema || !publishedRow.schema.row_count} />{publishedRow.error && <p role="alert" className="text-xs text-destructive">{publishedRow.error}</p>}</div> : publishedSourceError ? <p role="alert">{publishedSourceError}</p> : undefined}
+          publishDisabled={!!draftRow.error}
+          additionalContent={(pendingHasRow || (publishedRevision !== null && publishedSourceError) || (showDraftInputs && draftRow.binding)) ? <div className="space-y-3">
+            {publishedRevision !== null && (pendingHasRow ? <div className="space-y-2"><p className="text-xs">Published source · run published v{publishedRevision}</p><DatasetRowSelector rowIndex={publishedRow.rowIndex} onChange={publishedRow.setRowIndex} rowCount={publishedRow.schema?.row_count ?? 0} disabled={publishAndRunMutation.isPending || !publishedRow.schema || !publishedRow.schema.row_count} />{publishedRow.error && <p role="alert" className="text-xs text-destructive">{publishedRow.error}</p>}</div> : publishedSourceError ? <p role="alert">{publishedSourceError}</p> : null)}
+            {showDraftInputs && draftRow.binding && <div className="space-y-2"><p className="text-xs">Draft source · publish and run</p><DatasetRowSelector rowIndex={draftRow.rowIndex} onChange={draftRow.setRowIndex} rowCount={draftRow.schema?.row_count ?? 0} disabled={publishAndRunMutation.isPending || !draftRow.schema || !draftRow.schema.row_count} />{draftRow.error && <p role="alert" className="text-xs text-destructive">{draftRow.error}</p>}</div>}
+          </div> : undefined}
         />
       )}
       {factorPickerNodeId && (

@@ -64,8 +64,8 @@ export function DatasetBrowserPanel({
   )
 
   return (
-    <div className="flex w-80 shrink-0 flex-col gap-3 border-l p-4">
-      <div className="flex items-center justify-between">
+    <div className="flex min-h-0 w-80 shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
+      <div className="flex shrink-0 items-center justify-between">
         <div className="flex min-w-0 items-center gap-1.5">
           <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
             <ArrowLeft className="size-4" />
@@ -77,7 +77,7 @@ export function DatasetBrowserPanel({
         </Button>
       </div>
 
-      <Input autoFocus placeholder="Search datasets…" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <Input className="shrink-0" autoFocus placeholder="Search datasets…" value={query} onChange={(e) => setQuery(e.target.value)} />
       {/* Outside every branch below, same as SkillBrowserPanel's: an empty or
           failed list is exactly when you most need the way to add one. */}
       <Button variant="outline" size="sm" onClick={() => setRegisterDialogOpen(true)}>
@@ -96,7 +96,7 @@ export function DatasetBrowserPanel({
           {datasets.length === 0 ? 'No datasets registered yet.' : 'No matching datasets.'}
         </p>
       ) : (
-        <div className="flex flex-col gap-1.5">
+        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-1">
           {filtered.map((dataset) => (
             // Same metrics as SkillBrowserPanel's rows (px-3 py-2.5, text-sm,
             // three single-line rows) so every browser reads as one list style.

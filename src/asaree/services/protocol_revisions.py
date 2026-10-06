@@ -10,6 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.dataset import RegisteredDataset
+from asaree.models.experiment import ResearchExperiment
+from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
@@ -17,6 +19,8 @@ from asaree.models.protocol_run import ProtocolRun
 from asaree.services.dataset_row_csv import DatasetRowCsvError, read_row_source
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 from asaree.services.datasets import get_dataset_by_name
+from asaree.services.design_revisions import get_current_revision
+from asaree.services.experiment_versions import experiment_settings, publication_matches_experiment
 from asaree.services.protocol_graph_schema import functional_protocol_graph_hash
 
 
@@ -33,7 +37,7 @@ async def get_published_revision(db: AsyncSession, protocol: Protocol) -> Protoc
 async def publish_protocol(
     db: AsyncSession, protocol: Protocol, *, owner_id: uuid.UUID | None = None
 ) -> ProtocolRevision:
-    """Freeze the protocol's current draft as its next production revision."""
+    """Freeze canvas, experiment settings, and generated design as one version."""
     protocol = (
         await db.execute(
             select(Protocol)
@@ -42,6 +46,12 @@ async def publish_protocol(
             .execution_options(populate_existing=True)
         )
     ).scalar_one()
+    experiment = (
+        await db.scalar(select(ResearchExperiment).where(ResearchExperiment.id == protocol.experiment_id)
+                        .with_for_update().execution_options(populate_existing=True))
+        if protocol.experiment_id is not None else None
+    )
+    design = await get_current_revision(db, experiment.id) if experiment is not None else None
     plan = resolve_dataset_row_plan(protocol.graph)
     if plan is not None:
         if owner_id is None:
@@ -129,8 +139,18 @@ async def publish_protocol(
             if missing:
                 raise DatasetRowCsvError("invalid_columns", "selected columns are not present in the registered CSV")
     published = await get_published_revision(db, protocol)
-    if published is not None and is_draft_published(protocol, published):
+    unchanged = (
+        is_draft_published(protocol, published) and await publication_matches_experiment(db, protocol, published)
+    )
+    if published is not None and unchanged:
         return published
+    if experiment is not None and experiment.locked_at is not None:
+        raise ValueError("Experiment is locked. Unlock it before publishing a changed experiment.")
+    if experiment is not None:
+        from asaree.services.design_generation import get_design_impact
+        impact = await get_design_impact(db, experiment_id=experiment.id, design_spec=experiment.design_spec)
+        if impact.regeneration_required:
+            raise ValueError("Generate cells for the draft design before publishing the experiment.")
 
     highest = (
         await db.execute(
@@ -141,6 +161,8 @@ async def publish_protocol(
         protocol_id=protocol.id,
         revision=(highest or 0) + 1,
         graph=copy.deepcopy(protocol.graph),
+        experiment_snapshot=experiment_settings(experiment) if experiment is not None else None,
+        design_revision_id=design.id if design is not None else None,
         published_at=datetime.now(UTC),
     )
     db.add(revision)
@@ -155,6 +177,7 @@ async def publish_protocol(
         await db.execute(
             select(ProtocolRun, FactorialReplicateResult)
             .join(FactorialReplicateResult, FactorialReplicateResult.run_id == ProtocolRun.id)
+            .join(FactorialCell, FactorialReplicateResult.cell_id == FactorialCell.id)
             .where(ProtocolRun.protocol_id == protocol.id)
         )
     ).all()

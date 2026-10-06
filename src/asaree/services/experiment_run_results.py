@@ -553,7 +553,7 @@ async def _summarize_row_results(
     actual_cells = len(cells)
     actual_parents = len(replicates)
     forecast_parents = actual_parents
-    spec = design_revision.design_spec if design_revision is not None else design_spec
+    spec = design_spec
     factors = (spec or {}).get("factors") if isinstance(spec, dict) else None
     if actual_cells == 0 and isinstance(factors, list) and factors:
         sizes = [
@@ -680,10 +680,20 @@ async def summarize_experiment_run_results(
     elif protocol_revision_id is not None:
         raise RunResultsProjectionError("protocol_revision_not_found")
 
+    versioned = published is not None and published.experiment_snapshot is not None
+    if versioned:
+        if design_revision_id is not None and design_revision_id != published.design_revision_id:
+            raise RunResultsProjectionError("design_does_not_belong_to_experiment_version")
+        revision = (
+            await db.get(ExperimentDesignRevision, published.design_revision_id)
+            if published.design_revision_id else None
+        )
+        design_spec = published.experiment_snapshot.get("design_spec")
+        protocol_revision_id = published.id
     graph = published.graph if published is not None and isinstance(published.graph, dict) else {}
     row_plan = resolve_dataset_row_plan(graph) if published is not None else None
     if row_plan is not None:
-        return await _summarize_row_results(
+        projection = await _summarize_row_results(
             db,
             experiment_id=experiment_id,
             design_spec=design_spec,
@@ -691,12 +701,17 @@ async def summarize_experiment_run_results(
             design_revision=revision,
             row_plan=row_plan,
         )
+        projection["selected_design_spec"] = design_spec
+        return projection
 
     selected_revision_id = revision.id if revision is not None else None
-    replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=selected_revision_id)
-    trials = await list_experiment_trials(
-        db, experiment_id=experiment_id, revision_id=selected_revision_id
+    replicates = (
+        [] if versioned and revision is None else
+        await list_replicates(db, experiment_id=experiment_id, revision_id=selected_revision_id)
     )
+    trials = ([] if versioned and revision is None else await list_experiment_trials(
+        db, experiment_id=experiment_id, revision_id=selected_revision_id
+    ))
     current_trial_run_ids = {trial.run_id for trial in trials if trial.run_id is not None}
     excluded_trial_run_ids: set[uuid.UUID] = set()
     if current_trial_run_ids:
@@ -755,7 +770,7 @@ async def summarize_experiment_run_results(
     ).all()
     history_by_label: defaultdict[str, list[tuple[ProtocolRun, bool]]] = defaultdict(list)
     for historical_run, current_revision_id, current_published_at in history_rows:
-        obsolete = current_revision_id is not None and (
+        obsolete = not versioned and current_revision_id is not None and (
             (
                 historical_run.protocol_revision_id is not None
                 and historical_run.protocol_revision_id != current_revision_id
@@ -768,6 +783,14 @@ async def summarize_experiment_run_results(
         )
         history_by_label[historical_run.replicate_label or ""].append((historical_run, obsolete))
         protocol_run_ids.add(historical_run.id)
+    if versioned:
+        for trial in trials:
+            matching = history_by_label.get(trial.replicate_label, [])
+            latest = max((item[0] for item in matching), key=lambda run: (run.created_at, str(run.id)), default=None)
+            trial.run_id = latest.id if latest else None
+            trial.status = latest.status if latest else "not_started"
+            trial.error = latest.error if latest else None
+            trial.obsolete = False
     protocol_runs_by_id: dict[uuid.UUID, ProtocolRun] = {}
     if protocol_run_ids:
         result = await db.execute(select(ProtocolRun).where(ProtocolRun.id.in_(protocol_run_ids)))
@@ -933,20 +956,20 @@ async def summarize_experiment_run_results(
             metric_values = (
                 snapshot_metrics
                 if "metric_values" in stored_attempt
-                else _normalize_metric_values(replicate.metric_values)
+                else {} if versioned else _normalize_metric_values(replicate.metric_values)
             )
             metric_evaluation = snapshot_evaluation or (
                 (replicate.artifacts or {}).get("metric_evaluation")
-                if isinstance((replicate.artifacts or {}).get("metric_evaluation"), dict)
+                if not versioned and isinstance((replicate.artifacts or {}).get("metric_evaluation"), dict)
                 else None
             )
-            if not metric_observations and not evaluation_artifacts:
+            if not versioned and not metric_observations and not evaluation_artifacts:
                 metric_observations, evaluation_artifacts = measurement_facets(
                     (replicate.artifacts or {}).get("measurement")
                 )
             facets = _merge_legacy_facets(
                 metric_values,
-                replicate.artifacts,
+                stored_attempt.get("artifacts") if versioned else replicate.artifacts,
                 metric_observations,
                 evaluation_artifacts,
                 metrics=(design_spec or {}).get("metrics"),
@@ -959,7 +982,7 @@ async def summarize_experiment_run_results(
             metric_values, metric_evaluation = {}, None
             metric_observations, evaluation_artifacts = [], []
             legacy_values = []
-            if latest_run is None and (replicate.metric_values or replicate.artifacts):
+            if latest_run is None and not versioned and (replicate.metric_values or replicate.artifacts):
                 metric_values = _normalize_metric_values(replicate.metric_values)
                 facets = _merge_legacy_facets(
                     metric_values,
@@ -1075,6 +1098,7 @@ async def summarize_experiment_run_results(
     primary_metric, primary_metric_direction = _primary_metric(design_spec)
     return {
         "consumption_mode": "whole_dataset",
+        "selected_design_spec": design_spec,
         "row_results": [],
         "row_summary": None,
         "overview": overview,

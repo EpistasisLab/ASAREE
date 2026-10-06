@@ -12,6 +12,10 @@ factor-combination cell and compares the recorded outcomes.
 A factorial study comparing agent protocol conditions. Owns the design declaration, the protocol canvas, and all runs.
 _Avoid_: Project, study, trial
 
+**Experiment version**:
+A published snapshot of an experiment's canvas, design settings, and measurement configuration. Runs and results belong to the version that produced them; subsequent edits form the experiment's draft.
+_Avoid_: Canvas version, independent design/publication versions
+
 **Factor**:
 A declared experimental variable with discrete levels, bound to at least one canvas field before cells can run.
 _Avoid_: Parameter, variable
@@ -108,7 +112,7 @@ The draft editable graph. Production runs never read it directly.
 _Avoid_: Workflow, pipeline
 
 **Published revision**:
-The immutable protocol snapshot a run executes; created by publishing the canvas.
+The immutable published snapshot a run executes; for an experiment it includes the canvas and experiment settings together.
 _Avoid_: Protocol version
 
 **Gated pair**:

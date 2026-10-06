@@ -84,7 +84,7 @@ async def test_stale_parent_metric_does_not_rank_row_mode_and_legacy_export_is_b
 
 
 @pytest.mark.asyncio
-async def test_historical_whole_publication_keeps_legacy_analysis_and_export(row_results_setup) -> None:
+async def test_historical_whole_publication_ignores_later_draft_scores(row_results_setup) -> None:
     db, ctx = row_results_setup
     ctx["protocol"].graph = {"nodes": [{"id": "agent", "type": "agent", "data": {}}], "edges": []}
     from asaree.services.protocol_revisions import publish_protocol
@@ -113,9 +113,12 @@ async def test_historical_whole_publication_keeps_legacy_analysis_and_export(row
         ctx["experiment"].id, ctx["user"], db,
         protocol_id=ctx["protocol"].id, protocol_revision_id=whole.id,
     )
-    assert analyzed.available is True
+    # This publication captured no factorial declaration. Later draft edits
+    # and parent scores cannot manufacture historical analysis or results.
+    assert analyzed.available is False
     exported = await export_replicates_csv_endpoint(
         ctx["experiment"].id, ctx["user"], db,
         protocol_id=ctx["protocol"].id, protocol_revision_id=whole.id,
     )
     assert exported.media_type == "text/csv"
+    assert "0.71" not in exported.body.decode()

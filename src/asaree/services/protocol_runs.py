@@ -26,6 +26,7 @@ from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.design_revisions import get_current_revision
+from asaree.services.experiment_versions import version_design_spec, version_measurement_plan
 from asaree.services.factorial_cells import get_replicate, list_replicates
 from asaree.services.measurement_engine import MeasurementEvaluation, normalize_measurement_plan
 from asaree.services.measurement_migration import normalize_experiment_measurement_plan
@@ -129,6 +130,7 @@ async def create_protocol_run(
     measurement_plan_snapshot: dict[str, Any] | None = None
     reference_values: dict[str, Any] = {}
     protocol = await db.get(Protocol, protocol_id)
+    publication = await db.get(ProtocolRevision, protocol_revision_id) if protocol_revision_id else None
     if protocol is not None and protocol.experiment_id is not None:
         experiment = await db.get(ResearchExperiment, protocol.experiment_id)
         if experiment is not None:
@@ -138,6 +140,8 @@ async def create_protocol_run(
             effective_design_spec = (
                 experiment.locked_design_spec if experiment.locked_at is not None else experiment.design_spec
             )
+            effective_design_spec = version_design_spec(publication, effective_design_spec)
+            effective_plan = version_measurement_plan(publication, effective_plan)
             attempt_plan = normalize_experiment_measurement_plan(
                 effective_plan,
                 (effective_design_spec or {}).get("metrics"),
@@ -145,6 +149,8 @@ async def create_protocol_run(
             if attempt_plan["metrics"]:
                 measurement_plan_snapshot = normalize_measurement_plan(attempt_plan)
             task_brief = experiment.task_brief if isinstance(experiment.task_brief, dict) else {}
+            if publication is not None and isinstance(publication.experiment_snapshot, dict):
+                task_brief = publication.experiment_snapshot.get("task_brief") or {}
             declared_references = task_brief.get("reference_values")
             if isinstance(declared_references, dict):
                 reference_values = dict(declared_references)
@@ -880,15 +886,20 @@ async def list_experiment_trials(
     # the result stale by comparing the run's creation time to the current
     # published revision's timestamp.
     current_revisions: dict[uuid.UUID, tuple[uuid.UUID | None, datetime | None]] = {}
+    versioned_protocols: set[uuid.UUID] = set()
     if protocol_ids:
         result = await db.execute(
-            select(Protocol.id, Protocol.published_revision_id, ProtocolRevision.published_at)
+            select(Protocol.id, Protocol.published_revision_id, ProtocolRevision.published_at,
+                   ProtocolRevision.experiment_snapshot)
             .outerjoin(ProtocolRevision, Protocol.published_revision_id == ProtocolRevision.id)
             .where(Protocol.id.in_(protocol_ids))
         )
+        rows = result.all()
         current_revisions = {
-            protocol_id: (revision_id, published_at) for protocol_id, revision_id, published_at in result.all()
+            protocol_id: (revision_id, published_at)
+            for protocol_id, revision_id, published_at, _ in rows
         }
+        versioned_protocols = {protocol_id for protocol_id, _, _, snapshot in rows if snapshot is not None}
 
     trials = []
     for replicate in replicates:
@@ -908,11 +919,16 @@ async def list_experiment_trials(
                 or (run.protocol_revision_id is None and published_at is not None and run.created_at < published_at)
             )
         )
+        prior_version = bool(run and run.protocol_id in versioned_protocols and obsolete)
+        if prior_version:
+            # Earlier executions are inspected under their experiment version.
+            run = None
+            obsolete = False
         if run is not None:
             status = run.status
             error = run.error
             updated_at = run.updated_at
-        elif replicate.metric_values:
+        elif replicate.metric_values and not prior_version:
             status, error, updated_at = "completed", None, replicate.updated_at
         else:
             status, error, updated_at = "not_started", None, replicate.updated_at
@@ -920,11 +936,11 @@ async def list_experiment_trials(
             ExperimentTrial(
                 replicate_label=replicate.replicate_label,
                 factor_values=replicate.factor_values or {},
-                metric_values=replicate.metric_values or {},
+                metric_values={} if prior_version else replicate.metric_values or {},
                 status=status,
-                run_id=replicate.run_id,
+                run_id=run.id if run is not None else None,
                 obsolete=obsolete,
-                truncated=bool((replicate.artifacts or {}).get("truncation")),
+                truncated=not prior_version and bool((replicate.artifacts or {}).get("truncation")),
                 error=error,
                 updated_at=updated_at,
             )

@@ -26,6 +26,7 @@ from asaree.services.experiment_measurements import (
     blocking_measurement_plan_issues,
     validate_experiment_measurement_plan,
 )
+from asaree.services.experiment_versions import publication_matches_experiment, version_design_spec
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.protocol_execution import (
@@ -238,6 +239,8 @@ class ProtocolRevisionResponse(BaseModel):
     revision: int
     graph: dict[str, Any]
     published_at: datetime
+    experiment_snapshot: dict[str, Any] | None = None
+    design_revision_id: uuid.UUID | None = None
 
 
 class CreateProtocolRunRequest(BaseModel):
@@ -320,7 +323,9 @@ async def _protocol_response(db: DbSession, protocol: Any) -> ProtocolResponse:
         graph=normalize_protocol_graph(protocol.graph),
         published_revision_id=published.id if published else None,
         published_revision=published.revision if published else None,
-        has_unpublished_changes=not is_draft_published(protocol, published),
+        has_unpublished_changes=not (
+            is_draft_published(protocol, published) and await publication_matches_experiment(db, protocol, published)
+        ),
         created_at=protocol.created_at,
         updated_at=protocol.updated_at,
     )
@@ -424,7 +429,10 @@ async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, d
                 raise ProtocolValidationError("; ".join(issue.message for issue in blocking_issues))
     except (ProtocolValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if published is not None and is_draft_published(protocol, published):
+    if (
+        published is not None and is_draft_published(protocol, published)
+        and await publication_matches_experiment(db, protocol, published)
+    ):
         try:
             await publish_protocol(db, protocol, owner_id=user.id)
         except ValueError as exc:
@@ -470,6 +478,8 @@ async def get_protocol_revision_endpoint(
         revision=revision.revision,
         graph=normalize_protocol_graph(revision.graph),
         published_at=revision.published_at,
+        experiment_snapshot=revision.experiment_snapshot,
+        design_revision_id=revision.design_revision_id,
     )
 
 
@@ -541,16 +551,17 @@ async def create_test_run_endpoint(
     revision = await _require_published_revision(db, protocol)
     try:
         experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
-        validate_coordination_strategy(experiment.design_spec if experiment is not None else None, graph=revision.graph)
-        validate_stage_plan(experiment.design_spec if experiment is not None else None)
+        published_design = version_design_spec(revision, experiment.design_spec if experiment is not None else None)
+        validate_coordination_strategy(published_design, graph=revision.graph)
+        validate_stage_plan(published_design)
         validate_prompt_references(graph=revision.graph)
         topological_order(
             revision.graph,
-            require_acyclic=not is_conversation_strategy(experiment.design_spec if experiment else None),
+            require_acyclic=not is_conversation_strategy(published_design),
         )
         dataset_row = None
         try:
-            row_plan = resolve_dataset_row_plan(revision.graph, experiment.design_spec if experiment else None)
+            row_plan = resolve_dataset_row_plan(revision.graph, published_design)
         except DatasetRowInputError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         row_index = body.row_index if body is not None else None

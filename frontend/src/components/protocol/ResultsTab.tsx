@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ChevronDown, ChevronRight, CircleDollarSign, Clock3, Coins, Cpu, Download, ExternalLink, Trophy, X } from 'lucide-react'
-import { experimentsApi, protocolsApi, type ResultsScope } from '@/api/client'
+import { experimentsApi, type ResultsScope } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -416,8 +416,8 @@ function latestObsoleteRun(replicate: ResultReplicate | null): ObsoleteRun | nul
 }
 
 export type ResultsSelection =
-  | { type: 'cell'; cellLabel: string }
-  | { type: 'replicate'; replicateLabel: string }
+  | { type: 'cell'; cellLabel: string; scope?: ResultsScope }
+  | { type: 'replicate'; replicateLabel: string; scope?: ResultsScope }
   | { type: 'row'; rowResultId: string; scope: ResultsScope }
 
 function resultsMetricKey(metric: DesignMetric): string {
@@ -452,8 +452,8 @@ export function ResultsInspectorPanel({
 }) {
   const [expandedObsoleteRuns, setExpandedObsoleteRuns] = useState<Set<string>>(() => new Set())
   const resultsQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'run-results', selection?.type === 'row' ? selection.scope : null],
-    queryFn: () => experimentsApi.getRunResults(experimentId, selection?.type === 'row' ? selection.scope : undefined),
+    queryKey: ['experiments', experimentId, 'run-results', selection?.scope],
+    queryFn: () => experimentsApi.getRunResults(experimentId, selection?.scope),
     enabled: selection !== null,
     refetchInterval: 5000,
   })
@@ -504,7 +504,7 @@ export function ResultsInspectorPanel({
               <Tabs defaultValue="current" className="flex min-h-0 flex-1 flex-col">
                 <TabsList className="w-full rounded-md border bg-muted/50 p-1">
                   <TabsTrigger value="current" className="px-3 data-active:border-primary/30 data-active:bg-primary data-active:text-primary-foreground">Current</TabsTrigger>
-                  <TabsTrigger value="obsolete" className="px-3 data-active:border-primary/30 data-active:bg-primary data-active:text-primary-foreground">Obsolete{obsoleteRuns.length > 0 ? ` (${obsoleteRuns.length})` : ''}</TabsTrigger>
+                  {obsoleteRuns.length > 0 && <TabsTrigger value="obsolete" className="px-3 data-active:border-primary/30 data-active:bg-primary data-active:text-primary-foreground">Earlier versions ({obsoleteRuns.length})</TabsTrigger>}
                   <TabsTrigger value="previous" className="px-3 data-active:border-primary/30 data-active:bg-primary data-active:text-primary-foreground">Prior attempts{supersededRuns.length > 0 ? ` (${supersededRuns.length})` : ''}</TabsTrigger>
                 </TabsList>
                 <TabsContent value="current" className="mt-3 flex min-h-0 flex-1 flex-col">
@@ -609,26 +609,22 @@ export function ResultsTab({
   experimentName,
   experiment,
   onSelectResult,
+  versionId,
+  versionControls,
 }: {
   protocolId?: string
   experimentId: string
   experimentName: string
   experiment: Experiment
   onSelectResult: (selection: ResultsSelection) => void
+  versionId?: string
+  versionControls?: React.ReactNode
 }) {
   const [metricPreference, setMetricPreference] = useState<string | null>(null)
   const [expandedResultCells, setExpandedResultCells] = useState<Set<string>>(() => new Set())
   const [downloading, setDownloading] = useState(false)
-  const [designRevisionId, setDesignRevisionId] = useState<string>('')
-  const [protocolRevisionId, setProtocolRevisionId] = useState<string>('')
-  const designs = useQuery({ queryKey: ['experiments', experimentId, 'design-revisions'], queryFn: () => experimentsApi.listDesignRevisions(experimentId), enabled: !!protocolId })
-  const publications = useQuery({ queryKey: ['protocols', protocolId, 'revisions'], queryFn: () => protocolsApi.listRevisions(protocolId!), enabled: !!protocolId })
-  const scope: ResultsScope = { protocol_id: protocolId, design_revision_id: designRevisionId || undefined, protocol_revision_id: protocolRevisionId || undefined }
-  const scopeControls = protocolId ? <div className="flex flex-wrap gap-2 p-3 text-xs">
-    <label>Design<select aria-label="Results design revision" className="ml-2 rounded border bg-background p-1 font-mono" value={designRevisionId} onChange={event => setDesignRevisionId(event.target.value)}><option value="">Current</option>{designs.data?.map(revision => <option key={revision.id} value={revision.id}>Revision {revision.revision}</option>)}</select></label>
-    <label>Publication<select aria-label="Results published revision" className="ml-2 rounded border bg-background p-1 font-mono" value={protocolRevisionId} onChange={event => setProtocolRevisionId(event.target.value)}><option value="">Current</option>{publications.data?.map(revision => <option key={revision.id} value={revision.id}>Revision {revision.revision}</option>)}</select></label>
-    {(designRevisionId || protocolRevisionId) && <p>Read-only historical scope</p>}
-  </div> : null
+  const scope: ResultsScope = { protocol_id: protocolId, protocol_revision_id: versionId || undefined }
+  const scopeControls = versionControls
   const resultsQuery = useQuery({ queryKey: ['experiments', experimentId, 'run-results', scope], queryFn: () => experimentsApi.getRunResults(experimentId, scope), refetchInterval: 5000 })
   if (resultsQuery.isLoading) return <div className="space-y-3 p-3"><Skeleton className="h-20 w-full" /><Skeleton className="h-36 w-full" /></div>
   if (resultsQuery.isError || !resultsQuery.data) return <>{scopeControls}<p role="alert" className="p-3 text-sm text-destructive">{resultsQuery.error?.message ?? 'Could not load this experiment’s results.'}</p></>

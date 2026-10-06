@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { experimentsApi, protocolsApi } from '@/api/client'
+import { experimentsApi } from '@/api/client'
 import type { Experiment, ExperimentRunResults } from '@/types/experiments'
 import { ResultsInspectorPanel, ResultsTab } from './ResultsTab'
 afterEach(() => vi.restoreAllMocks())
@@ -20,15 +20,9 @@ it('preserves failed attempt output while inspecting the latest row', async () =
  expect(experimentsApi.getRunResults).toHaveBeenCalledWith('e', scope)
 })
 
-it('history selectors request their exact design and publication scope', async () => {
- vi.spyOn(experimentsApi, 'listDesignRevisions').mockResolvedValue([{ id: 'design-old', revision: 1 }] as never)
- vi.spyOn(protocolsApi, 'listRevisions').mockResolvedValue([{ id: 'publication-old', revision: 1 }] as never)
+it('a selected experiment version requests one publication scope without independent design controls', async () => {
  const results = vi.spyOn(experimentsApi, 'getRunResults').mockResolvedValue({ consumption_mode: 'per_row', row_results: [], row_summary: null } as unknown as ExperimentRunResults)
- render(<QueryClientProvider client={new QueryClient()}><ResultsTab protocolId="p" experimentId="e" experimentName="Rows" experiment={{} as Experiment} onSelectResult={vi.fn()} /></QueryClientProvider>)
- await screen.findByRole('combobox', { name: 'Results design revision' })
- await waitFor(() => expect(screen.getAllByText('Revision 1')).toHaveLength(2))
- fireEvent.change(screen.getByRole('combobox', { name: 'Results design revision' }), { target: { value: 'design-old' } })
- fireEvent.change(await screen.findByRole('combobox', { name: 'Results published revision' }), { target: { value: 'publication-old' } })
- await waitFor(() => expect(results).toHaveBeenLastCalledWith('e', { protocol_id: 'p', design_revision_id: 'design-old', protocol_revision_id: 'publication-old' }))
- expect(await screen.findByText('Read-only historical scope')).toBeInTheDocument()
+ render(<QueryClientProvider client={new QueryClient()}><ResultsTab protocolId="p" versionId="publication-old" experimentId="e" experimentName="Rows" experiment={{} as Experiment} onSelectResult={vi.fn()} /></QueryClientProvider>)
+ await waitFor(() => expect(results).toHaveBeenLastCalledWith('e', { protocol_id: 'p', protocol_revision_id: 'publication-old' }))
+ expect(screen.queryByRole('combobox', { name: 'Results design revision' })).not.toBeInTheDocument()
 })

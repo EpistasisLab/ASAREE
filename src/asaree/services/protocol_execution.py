@@ -4696,7 +4696,9 @@ async def plan_cell_runs(
         raise ProtocolValidationError("This protocol has no linked experiment to run replicates for.")
     # Strategy first, so its own message wins over a pipeline requirement that
     # may not apply to this canvas at all -- see is_conversation_strategy.
-    design_spec = experiment.design_spec
+    publication = await db.get(ProtocolRevision, protocol_revision_id) if protocol_revision_id else None
+    from asaree.services.experiment_versions import version_design_spec, version_measurement_plan
+    design_spec = version_design_spec(publication, experiment.design_spec)
     measurement_plan = (
         experiment.locked_measurement_plan
         if experiment is not None and experiment.locked_at is not None
@@ -4704,6 +4706,12 @@ async def plan_cell_runs(
         if experiment is not None
         else None
     )
+    measurement_plan = version_measurement_plan(publication, measurement_plan)
+    if publication is not None and publication.experiment_snapshot is not None:
+        from asaree.services.design_revisions import get_current_revision
+        generated = await get_current_revision(db, experiment_id)
+        if publication.design_revision_id != (generated.id if generated else None):
+            raise ProtocolValidationError("Publish the generated draft design before running this experiment.")
     validate_coordination_strategy(design_spec, graph=graph)
     validate_stage_plan(design_spec)
     validate_prompt_references(graph=graph)
@@ -5071,6 +5079,9 @@ async def plan_single_replicate_run(
     # Same order and same reason as plan_cell_runs above.
     experiment = await get_experiment(db, experiment_id)
     design_spec = experiment.design_spec if experiment is not None else None
+    publication = await db.get(ProtocolRevision, protocol_revision_id) if protocol_revision_id else None
+    from asaree.services.experiment_versions import version_design_spec, version_measurement_plan
+    design_spec = version_design_spec(publication, design_spec)
     measurement_plan = (
         experiment.locked_measurement_plan
         if experiment is not None and experiment.locked_at is not None
@@ -5078,6 +5089,12 @@ async def plan_single_replicate_run(
         if experiment is not None
         else None
     )
+    measurement_plan = version_measurement_plan(publication, measurement_plan)
+    if publication is not None and publication.experiment_snapshot is not None:
+        from asaree.services.design_revisions import get_current_revision
+        generated = await get_current_revision(db, experiment_id)
+        if publication.design_revision_id != (generated.id if generated else None):
+            raise ProtocolValidationError("Publish the generated draft design before running this experiment.")
     validate_coordination_strategy(design_spec, graph=graph)
     validate_stage_plan(design_spec)
     validate_prompt_references(graph=graph)
@@ -5292,7 +5309,13 @@ async def _run_single_node(
         workspace_id = row_attempt_workspace_id(protocol_run_id)
     async with get_session() as db:
         experiment = await get_experiment(db, experiment_id) if experiment_id else None
-    single_design_spec = experiment.design_spec if experiment is not None else None
+        single_run = await db.get(ProtocolRun, protocol_run_id)
+        single_publication = (
+            await db.get(ProtocolRevision, single_run.protocol_revision_id)
+            if single_run is not None and single_run.protocol_revision_id else None
+        )
+    from asaree.services.experiment_versions import version_design_spec
+    single_design_spec = version_design_spec(single_publication, experiment.design_spec if experiment else None)
     ambient_meta, node_dataset = await _node_run_context(
         graph,
         node["id"],
@@ -5352,6 +5375,7 @@ async def _run_single_node(
 
 
 async def run_protocol(protocol_run_id: uuid.UUID) -> None:
+    revision = None
     row_mode = False
     row_context_mode = False
     dataset_row = None
@@ -5424,6 +5448,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         target_node_id = run.target_node_id
         experiment = await get_experiment(db, experiment_id) if experiment_id else None
         design_spec = experiment.design_spec if experiment is not None else None
+        from asaree.services.experiment_versions import version_design_spec
+        design_spec = version_design_spec(revision, design_spec)
         # The stage plan comes from the PINNED revision's snapshot, not from the
         # live design_spec: a plan edit made while this replicate was queued
         # would otherwise stage a cell through a pipeline its own design never
@@ -5431,7 +5457,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         # pre-existing behaviour; the plan is singled out because it is the one
         # design field that writes durable, versioned artifacts to disk.
         pinned_spec = design_spec
-        if design_revision_id is not None:
+        if design_revision_id is not None and (revision is None or revision.experiment_snapshot is None):
             pinned = await get_design_revision(db, design_revision_id)
             if pinned is not None and pinned.design_spec is not None:
                 pinned_spec = pinned.design_spec

@@ -1,10 +1,11 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ReactFlowProvider } from '@xyflow/react'
 import { AlertTriangle, Lock, Target, Trophy, type LucideIcon } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
+import { ExperimentVersionCanvas } from '@/components/protocol/ExperimentVersionView'
 import { ProtocolCanvas, type ProtocolCanvasHandle } from '@/components/protocol/ProtocolCanvas'
 import { ResultsInspectorPanel, type ResultsSelection } from '@/components/protocol/ResultsTab'
 import { Button } from '@/components/ui/button'
@@ -19,9 +20,12 @@ import {
   applyExperimentRenameToProtocolCache,
   generatedProtocolName,
   protocolForExperimentQueryKey,
+  protocolGraphQueryKey,
+  toPersistedGraph,
 } from '@/lib/protocolGraph'
 import type { Experiment, Replicate } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
+import type { Node, Edge } from '@xyflow/react'
 
 // Click-to-rename, the pattern for anything created with a placeholder name:
 // no gate before creating, edit the name in place once you're looking at what
@@ -139,7 +143,7 @@ function TopBarStats({ experiment, cells, obsoleteRunCount = 0, rowSummary }: { 
   )
 }
 
-function ProtocolPublicationControl({ protocol, experimentId }: { protocol: Protocol; experimentId: string }) {
+function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { protocol: Protocol; experimentId: string; draftBusy: boolean }) {
   const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const trialsQuery = useQuery({
@@ -152,10 +156,16 @@ function ProtocolPublicationControl({ protocol, experimentId }: { protocol: Prot
   // become stale against, so do not overstate the impact in this warning.
   const affectedReplicateCount = (trialsQuery.data ?? []).filter((trial) => !!trial.run_id && !trial.obsolete).length
   const publishMutation = useMutation({
-    mutationFn: () => protocolsApi.publish(protocol.id),
+    mutationFn: async () => {
+      const live = queryClient.getQueryData<{ nodes: Node[]; edges: Edge[] }>(protocolGraphQueryKey(protocol.id))
+      if (live) await protocolsApi.update(protocol.id, { graph: toPersistedGraph(live.nodes, live.edges) })
+      return protocolsApi.publish(protocol.id)
+    },
     onSuccess: (published) => {
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'runs'] })
+      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'run-results'] })
+      queryClient.invalidateQueries({ queryKey: ['protocols', protocol.id, 'revisions'] })
       setConfirmOpen(false)
     },
   })
@@ -163,7 +173,7 @@ function ProtocolPublicationControl({ protocol, experimentId }: { protocol: Prot
     ? protocol.has_unpublished_changes
       ? `Draft changes · production uses v${protocol.published_revision}`
       : `Published v${protocol.published_revision}`
-    : 'No published canvas'
+    : 'Experiment draft · not published'
   const error = publishMutation.error instanceof ApiError && typeof publishMutation.error.detail === 'string' ? publishMutation.error.detail : null
   function requestPublish() {
     if (affectedReplicateCount > 0) setConfirmOpen(true)
@@ -172,33 +182,33 @@ function ProtocolPublicationControl({ protocol, experimentId }: { protocol: Prot
   return (
     <>
       <div className="flex items-center gap-2">
-        <span className="font-mono text-xs text-muted-foreground" title="Production runs use the immutable published canvas revision.">
+        <span className="font-mono text-xs text-muted-foreground" title="Production runs use the published experiment’s canvas and design settings together.">
           {status}
         </span>
         {error && <span className="max-w-56 truncate text-xs text-destructive" title={error}>{error}</span>}
         <Button
           size="sm"
           variant="outline"
-          disabled={!protocol.has_unpublished_changes || publishMutation.isPending || trialsQuery.isLoading}
+          disabled={draftBusy || publishMutation.isPending || trialsQuery.isLoading}
+          title={draftBusy ? 'Save or generate the pending Design changes before publishing.' : 'Publish the saved canvas and Design together. An unchanged experiment keeps its existing version.'}
           onClick={requestPublish}
         >
-          {publishMutation.isPending ? 'Publishing…' : 'Publish canvas'}
+          {publishMutation.isPending ? 'Publishing…' : 'Publish experiment'}
         </Button>
       </div>
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Publish a new canvas version?</DialogTitle>
+            <DialogTitle>Publish a new experiment version?</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Publishing this draft changes the canvas version used by future runs. {affectedReplicateCount}{' '}
-            previously run replicate{affectedReplicateCount === 1 ? '' : 's'} will be marked obsolete because{affectedReplicateCount === 1 ? ' it was' : ' they were'} run against the current version.
+            Publish the canvas and design settings together as a new experiment version. Future runs will use it.
           </p>
-          <p className="text-xs text-muted-foreground">The results remain available for comparison; they are not deleted.</p>
+          <p className="text-xs text-muted-foreground">Existing runs and results remain available under their earlier experiment version.</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
             <Button onClick={() => publishMutation.mutate()} disabled={publishMutation.isPending}>
-              {publishMutation.isPending ? 'Publishing…' : 'Publish and mark obsolete'}
+              {publishMutation.isPending ? 'Publishing…' : 'Publish experiment'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -220,6 +230,9 @@ export function ProtocolCanvasPage() {
   // needs to be imperative rather than a plain prop.
   const canvasRef = useRef<ProtocolCanvasHandle>(null)
   const [resultSelection, setResultSelection] = useState<ResultsSelection | null>(null)
+  const [versionId, setVersionId] = useState('')
+  const [draftBusy, setDraftBusy] = useState(false)
+  useEffect(() => { setVersionId(''); setResultSelection(null) }, [experimentId])
 
   const experimentQuery = useQuery({
     queryKey: ['experiments', experimentId],
@@ -254,11 +267,6 @@ export function ProtocolCanvasPage() {
     enabled: !!experimentId,
   })
 
-  const replicatesQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'replicates'],
-    queryFn: () => experimentsApi.listReplicates(experimentId!),
-    enabled: !!experimentId,
-  })
   const runResultsQuery = useQuery({
     queryKey: ['experiments', experimentId, 'run-results', protocolQuery.data?.id, protocolQuery.data?.published_revision_id],
     queryFn: () => experimentsApi.getRunResults(experimentId!, { protocol_id: protocolQuery.data?.id }),
@@ -273,6 +281,22 @@ export function ProtocolCanvasPage() {
   const unboundFactors = experimentQuery.data && protocolQuery.data
     ? unboundFactorNames(experimentQuery.data.design_spec, protocolQuery.data.graph)
     : []
+  const versionsQuery = useQuery({ queryKey: ['protocols', protocolQuery.data?.id, 'revisions'], queryFn: () => protocolsApi.listRevisions(protocolQuery.data!.id), enabled: !!protocolQuery.data?.id })
+  const version = versionsQuery.data?.find(item => item.id === versionId)
+  const displayedExperiment = experimentQuery.data && version?.experiment_snapshot
+    ? { ...experimentQuery.data, ...version.experiment_snapshot } : experimentQuery.data
+  const resultsVersion = version ?? versionsQuery.data?.find(item => item.id === protocolQuery.data?.published_revision_id)
+  const resultsExperiment = experimentQuery.data && resultsVersion?.experiment_snapshot
+    ? { ...experimentQuery.data, ...resultsVersion.experiment_snapshot } : displayedExperiment
+  const resultReplicates: Replicate[] | undefined = runResultsQuery.data?.replicates.map(row => ({
+    id: row.replicate_label, cell_id: row.cell_label, cell_label: row.cell_label,
+    replicate_label: row.replicate_label, replicate_number: row.replicate_number,
+    design_revision_id: resultsVersion?.design_revision_id ?? '',
+    factor_values: row.factor_values, metric_values: Object.keys(row.metric_values).length ? row.metric_values : null,
+    run_id: row.run_id, workspace_id: null, artifacts: null,
+    created_at: row.updated_at, updated_at: row.updated_at,
+  }))
+  const versionControls = <div className="space-y-2 p-3 text-xs"><label className="flex flex-wrap items-center gap-2">Experiment version<select aria-label="Experiment version" className="min-w-0 rounded border bg-background p-2 font-mono" value={versionId} onChange={event => { setVersionId(event.target.value); setResultSelection(null) }}><option value="">Draft · latest published results</option>{versionsQuery.data?.map(item => <option key={item.id} value={item.id}>{item.experiment_snapshot ? 'Version' : 'Legacy canvas'} {item.revision} · {new Date(item.published_at).toLocaleDateString()}</option>)}</select></label>{version && <p className="text-muted-foreground">Canvas, design, and results show this saved version. Read-only.</p>}{versionsQuery.isError && <p role="alert" className="text-destructive">Could not load experiment versions.</p>}</div>
 
   return (
     <div className="flex h-svh flex-col bg-muted/30">
@@ -285,20 +309,27 @@ export function ProtocolCanvasPage() {
           <Link to="/experiments" className="text-sm text-muted-foreground hover:underline">
             ← Experiments
           </Link>
-          {experimentQuery.data && <EditableExperimentName experiment={experimentQuery.data} />}
+          {experimentQuery.data && (versionId ? <span className="text-lg font-semibold">{experimentQuery.data.name}</span> : <EditableExperimentName experiment={experimentQuery.data} />)}
           {experimentQuery.data?.locked_at && <span className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary"><Lock className="size-3" /> Locked</span>}
-          {experimentQuery.data && <TopBarStats experiment={experimentQuery.data} cells={runResultsQuery.data ? replicatesQuery.data : undefined} rowSummary={runResultsQuery.data?.row_summary} obsoleteRunCount={runResultsQuery.data?.overview.obsolete_replicates ?? 0} />}
+          {!versionId && resultsExperiment && <TopBarStats experiment={resultsExperiment} cells={resultReplicates} rowSummary={runResultsQuery.data?.row_summary} obsoleteRunCount={runResultsQuery.data?.overview.obsolete_replicates ?? 0} />}
           <div className="flex-1" />
-          {protocolQuery.data && experimentId && (
+          {protocolQuery.data && experimentId && !versionId && (
             <>
-              <ProtocolPublicationControl protocol={protocolQuery.data} experimentId={experimentId} />
+              <ProtocolPublicationControl protocol={protocolQuery.data} experimentId={experimentId} draftBusy={draftBusy} />
             </>
           )}
         </div>
+        {versionId && <div className="flex items-center justify-between rounded border border-primary/40 bg-primary/10 px-3 py-2 text-xs"><span>Viewing {version?.experiment_snapshot ? 'experiment version' : 'legacy canvas'} {version?.revision ?? '…'} · read-only</span><Button variant="outline" size="sm" onClick={() => { setVersionId(''); setResultSelection(null) }}>Return to draft</Button></div>}
 
         <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
           <ExperimentSidePanel
-            experiment={experimentQuery.data}
+            experiment={displayedExperiment}
+            draftExperiment={experimentQuery.data}
+            resultsExperiment={resultsExperiment}
+            version={version}
+            viewingHistory={!!versionId}
+            onDraftBusyChange={setDraftBusy}
+            versionControls={versionControls}
             protocolId={protocolQuery.data?.id}
             protocol={protocolQuery.data}
             canvasRef={canvasRef}
@@ -315,6 +346,7 @@ export function ProtocolCanvasPage() {
             <p className="text-sm text-muted-foreground">Could not load this experiment's protocol.</p>
           ) : (
             <Card className="relative flex-1 overflow-hidden p-0">
+              <div className={versionId ? 'hidden' : 'h-full'}>
               <ReactFlowProvider>
                 <ProtocolCanvas
                   key={protocolQuery.data.id}
@@ -327,7 +359,9 @@ export function ProtocolCanvasPage() {
                   experimentLocked={!!experimentQuery.data?.locked_at}
                 />
               </ReactFlowProvider>
-              {experimentId && experimentQuery.data && <ResultsInspectorPanel experimentId={experimentId} experiment={experimentQuery.data} selection={resultSelection} onClose={() => setResultSelection(null)} />}
+              </div>
+              {versionId && <ReactFlowProvider>{version ? <ExperimentVersionCanvas key={version.id} version={version} /> : <p role="status" className="p-3 text-sm text-muted-foreground">{versionsQuery.isError ? 'Could not load this experiment version. Return to draft to continue.' : 'Loading experiment version…'}</p>}</ReactFlowProvider>}
+              {experimentId && resultsExperiment && <ResultsInspectorPanel experimentId={experimentId} experiment={resultsExperiment} selection={resultSelection} onClose={() => setResultSelection(null)} />}
             </Card>
           )}
         </div>

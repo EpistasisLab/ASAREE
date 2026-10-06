@@ -59,6 +59,67 @@ def test_generate_design_is_the_cross_product() -> None:
     assert {"tier": "large", "effort": "high"} in combos
 
 
+@pytest.mark.asyncio
+async def test_publishing_freezes_design_and_expansion_preserves_version_results(owner_id):
+    from asaree.models.protocol_run import ProtocolRun
+    from asaree.services.experiment_run_results import summarize_experiment_run_results
+    from asaree.services.protocol_revisions import publish_protocol
+    from asaree.services.protocols import create_protocol
+
+    async with get_session() as db:
+        spec = {"factors": [{"name": "arm", "levels": ["a", "b"]}], "replicates": 1}
+        experiment = await create_experiment(
+            db, name=f"versions-{uuid.uuid4()}", owner_id=owner_id, design_spec=spec,
+        )
+        spec = experiment.design_spec
+        protocol = await create_protocol(
+            db, name="Version test", owner_id=owner_id, experiment_id=experiment.id,
+            graph={"nodes": [], "edges": []},
+        )
+        parents = await generate_design_cells(
+            db, experiment_id=experiment.id, factors=spec["factors"], design_spec=spec,
+        )
+        first = await publish_protocol(db, protocol)
+        assert (await publish_protocol(db, protocol)).id == first.id
+        first_parent_ids = [parent.id for parent in parents]
+        attempt = ProtocolRun(
+            protocol_id=protocol.id, owner_id=owner_id, status="completed",
+            protocol_revision_id=first.id, design_revision_id=first.design_revision_id,
+            replicate_label=parents[0].replicate_label, replicate_result_id=parents[0].id,
+            attempt_result={"metric_values": {"total_tokens": 42}},
+        )
+        db.add(attempt)
+        await db.flush()
+        parents[0].run_id = attempt.id
+        parents[0].metric_values = {"total_tokens": 42}
+        experiment.hypothesis = "Updated hypothesis"
+        second = await publish_protocol(db, protocol)
+        assert second.id != first.id
+        assert second.design_revision_id == first.design_revision_id
+        assert first.experiment_snapshot["hypothesis"] is None
+        old_results = await summarize_experiment_run_results(
+            db, experiment_id=experiment.id, design_spec=spec,
+            protocol_id=protocol.id, protocol_revision_id=first.id,
+        )
+        assert old_results["replicates"][0]["run_id"] == str(attempt.id)
+        assert old_results["replicates"][0]["metric_values"]["total_tokens"] == 42
+        current_results = await summarize_experiment_run_results(
+            db, experiment_id=experiment.id, design_spec=spec, protocol_id=protocol.id,
+        )
+        assert all(row["run_id"] is None for row in current_results["replicates"])
+        expanded = {**spec, "factors": [{"name": "arm", "levels": ["a", "b", "c"]}]}
+        experiment.design_spec = expanded
+        new_parents = await generate_design_cells(
+            db, experiment_id=experiment.id, factors=expanded["factors"], design_spec=expanded,
+        )
+        assert len(new_parents) == 3
+        assert set(first_parent_ids).isdisjoint(parent.id for parent in new_parents)
+        assert len(await list_replicates(db, experiment_id=experiment.id, revision_id=first.design_revision_id)) == 2
+        third = await publish_protocol(db, protocol)
+        assert third.design_revision_id != first.design_revision_id
+        assert first.experiment_snapshot["design_spec"]["factors"][0]["levels"] == ["a", "b"]
+
+
 def test_generate_design_rejects_empty_factors() -> None:
     with pytest.raises(DesignValidationError, match="non-empty list"):
         generate_design([])

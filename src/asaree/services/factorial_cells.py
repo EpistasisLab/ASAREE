@@ -169,6 +169,11 @@ async def upsert_replicate(
             db, experiment_id=experiment_id, cell_label=cell_label, revision_id=revision_id
         )
     if cell is None:
+        from asaree.models.protocol_revision import ProtocolRevision
+        if await db.scalar(select(ProtocolRevision.id).where(
+            ProtocolRevision.design_revision_id == revision_id
+        ).limit(1)):
+            raise ValueError("Generate a draft design before adding cells to a published experiment version.")
         cell = FactorialCell(
             experiment_id=experiment_id,
             design_revision_id=revision_id,
@@ -180,12 +185,22 @@ async def upsert_replicate(
     if "factor_values" in fields:
         merged_factors = dict(cell.factor_values or {})
         merged_factors.update(supplied_factors)
+        from asaree.models.protocol_revision import ProtocolRevision
+        if merged_factors != (cell.factor_values or {}) and await db.scalar(select(ProtocolRevision.id).where(
+            ProtocolRevision.design_revision_id == revision_id
+        ).limit(1)):
+            raise ValueError("Published experiment cell factors are immutable. Generate a draft design first.")
         cell.factor_values = merged_factors
 
     replicate = await get_replicate(
         db, experiment_id=experiment_id, replicate_label=replicate_label, revision_id=revision_id
     )
     if replicate is None:
+        from asaree.models.protocol_revision import ProtocolRevision
+        if await db.scalar(select(ProtocolRevision.id).where(
+            ProtocolRevision.design_revision_id == revision_id
+        ).limit(1)):
+            raise ValueError("Generate a draft design before adding replicates to a published experiment version.")
         replicate = FactorialReplicateResult(
             cell=cell,
             replicate_number=replicate_number,

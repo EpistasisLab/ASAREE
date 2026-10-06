@@ -129,21 +129,7 @@ import { SkillBrowserPanel } from './SkillBrowserPanel'
 import { SKILL_BROWSE, nodeDataForSkill } from './skillCatalog'
 import { SkillNodeInspector } from './SkillNodeInspector'
 import { InteractEdge } from './edges/InteractEdge'
-import { AgentNode } from './nodes/AgentNode'
-import { CriticGateNode } from './nodes/CriticGateNode'
-import { ToolStepNode } from './nodes/ToolStepNode'
-import { DatasetNode } from './nodes/DatasetNode'
-import { ModelNode } from './nodes/ModelNode'
-import { McpClientToolNode } from './nodes/McpClientToolNode'
-import { McpToolNode } from './nodes/McpToolNode'
-import { MemoryNode } from './nodes/MemoryNode'
-import { OutputParserNode } from './nodes/OutputParserNode'
-import { ReasonActPatternNode } from './nodes/ReasonActPatternNode'
-import { ScriptNode } from './nodes/ScriptNode'
-import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatternNode'
-import { OkfBundleNode } from './nodes/OkfBundleNode'
-import { OkfDocumentNode } from './nodes/OkfDocumentNode'
-import { SkillNode } from './nodes/SkillNode'
+import { NODE_TYPES } from "./protocolNodeTypes"
 import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 import {
   MODEL_NODE_TYPES,
@@ -160,38 +146,6 @@ import {
 // every other slot's source below it.
 const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'dataset', 'knowledge'])
 
-const NODE_TYPES = {
-  agent: AgentNode,
-  sub_agent: AgentNode,
-  // Both MCP-tool types render through the same component (as the five LLM
-  // provider types do) -- they carry identical data and differ only in
-  // whether their server was picked in the browser or in a dropdown.
-  mcp_tool: McpToolNode,
-  mcp_scikit_learn: McpToolNode,
-  // The exception to "both MCP-tool types render the same": a client tool has
-  // its own icon and hue, since where its server came from is the one thing
-  // that distinguishes it. Same data, same inspector.
-  mcp_client_tool: McpClientToolNode,
-  critic_gate: CriticGateNode,
-  tool_step: ToolStepNode,
-  // All five LLM provider types render through the same component -- it
-  // derives icon/accent/placeholder from data.config.provider, not from
-  // which of these five keys it was registered under.
-  model_anthropic: ModelNode,
-  model_openai: ModelNode,
-  model_azure_foundry: ModelNode,
-  model_openrouter: ModelNode,
-  model_local: ModelNode,
-  memory: MemoryNode,
-  output_parser: OutputParserNode,
-  dataset: DatasetNode,
-  skill: SkillNode,
-  okf_bundle: OkfBundleNode,
-  okf_document: OkfDocumentNode,
-  script: ScriptNode,
-  pattern_reason_act: ReasonActPatternNode,
-  pattern_single_agent_baseline: SingleAgentBaselinePatternNode,
-}
 // Every edge (plain or connector) renders through InteractEdge -- no edge
 // ever has an explicit `type`, so overriding xyflow's own built-in
 // "default" key covers all of them, matching how none of them are wired
@@ -628,8 +582,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // draft differs, this mutation lets the confirmation dialog make the
   // user's intended choice explicit: publish the draft, then run it.
   const publishAndRunMutation = useMutation({
-    mutationFn: () => protocolsApi.publish(protocolId),
+    mutationFn: async () => {
+      await protocolsApi.update(protocolId, { graph: toPersistedGraph(nodes, edges) })
+      return protocolsApi.publish(protocolId)
+    },
     onSuccess: async (published) => {
+      queryClient.invalidateQueries({ queryKey: ['protocols', protocolId, 'revisions'] })
       if (published.experiment_id) {
         queryClient.setQueryData(protocolForExperimentQueryKey(published.experiment_id), published)
       }

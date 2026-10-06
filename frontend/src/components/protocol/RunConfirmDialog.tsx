@@ -108,7 +108,7 @@ export function RunConfirmDialog({
         <div className="space-y-2 text-sm">
           {scope.type === 'all-cells' && (
             <p>
-              The published canvas will run each pending replicate across {scope.cellCount}{' '}
+              The published experiment will run each pending replicate across {scope.cellCount}{' '}
               {scope.cellCount === 1 ? 'cell' : 'cells'}.
               {scope.replicateCount > scope.pendingReplicateCount
                 ? ` ${scope.replicateCount - scope.pendingReplicateCount} previously completed replicates will be skipped.`
@@ -117,7 +117,7 @@ export function RunConfirmDialog({
           )}
           {scope.type === 'selected-cells' && (
             <p>
-              The published canvas will run {scope.pendingReplicateCount + scope.rerunReplicateCount} replicate
+              The published experiment will run {scope.pendingReplicateCount + scope.rerunReplicateCount} replicate
               {scope.pendingReplicateCount + scope.rerunReplicateCount === 1 ? '' : 's'} across {scope.cellCount}{' '}
               {scope.cellCount === 1 ? 'cell' : 'cells'}.
               {scope.replicateCount - scope.pendingReplicateCount - scope.rerunReplicateCount > 0
@@ -132,7 +132,7 @@ export function RunConfirmDialog({
           </p>
           <dl className="space-y-1 text-xs text-muted-foreground">
             <div>
-              <dt className="inline font-medium text-foreground">Canvas version: </dt>
+              <dt className="inline font-medium text-foreground">Experiment version: </dt>
               <dd className="inline">{publishedRevision === null ? 'not published' : `Published v${publishedRevision}`}</dd>
             </div>
             <div>
@@ -170,11 +170,11 @@ export function RunConfirmDialog({
 
         {needsPublishChoice && (
           <div className="space-y-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm">
-            <p className="font-medium">{neverPublished ? 'Canvas has not been published' : 'Canvas has unpublished changes'}</p>
+            <p className="font-medium">{neverPublished ? 'Experiment has not been published' : 'Experiment has unpublished changes'}</p>
             <p className="text-xs text-muted-foreground">
               {neverPublished
-                ? 'Runs always use a published canvas. Publish the canvas you are viewing to run it.'
-                : `This run will use published canvas v${publishedRevision}. Publish the latest canvas first to run the changes you are viewing.`}
+                ? 'Publish the experiment to freeze its canvas and design settings before running.'
+                : `This run will use experiment version ${publishedRevision}. Publish the draft experiment first to run your changes.`}
             </p>
             {publishError && <p className="text-xs text-destructive">{publishError}</p>}
           </div>

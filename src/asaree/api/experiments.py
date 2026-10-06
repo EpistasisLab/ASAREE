@@ -12,6 +12,7 @@ import re
 import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
@@ -988,7 +989,7 @@ async def analyze_factorial_endpoint(
             status_code=422,
             detail=f"{body.primary_metric!r} is not the experiment's declared primary metric.",
         )
-    replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=design_revision_id)
+    replicates = selection["replicates"]
     try:
         analysis = (
             analyze_binary_factorial
@@ -1053,13 +1054,16 @@ async def _factorial_analysis_selection(
     except RunResultsProjectionError as exc:
         status = 422 if str(exc) == "ambiguous_protocol" else 404
         raise HTTPException(status_code=status, detail=str(exc)) from exc
-    design_spec = experiment.design_spec
-    if design_revision_id is not None:
-        revision = await get_revision(db, design_revision_id)
-        if revision is None or revision.experiment_id != experiment.id:
-            raise HTTPException(status_code=404, detail="design_revision_not_found")
-        design_spec = revision.design_spec
-    return {"consumption_mode": projection["consumption_mode"], "design_spec": design_spec}
+    replicates = [SimpleNamespace(
+        replicate_label=row["replicate_label"], cell_label=row["cell_label"],
+        factor_values=row["factor_values"], metric_values=row["metric_values"],
+        run_id=row.get("run_id"), workspace_id=row.get("workspace_id"),
+        artifacts={"metric_evaluation": row.get("metric_evaluation")},
+    ) for row in projection["replicates"]]
+    return {
+        "consumption_mode": projection["consumption_mode"],
+        "design_spec": projection["selected_design_spec"], "replicates": replicates,
+    }
 
 
 class RunResultsResponse(BaseModel):
@@ -1096,7 +1100,7 @@ async def get_experiment_results_endpoint(
     )
     if selection["consumption_mode"] == "per_row":
         return ResultsResponse(**_row_analysis_unavailable())
-    replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=design_revision_id)
+    replicates = selection["replicates"]
     result = analyze_experiment_design(selection["design_spec"], replicates, consumption_mode="whole_dataset")
     return ResultsResponse(**result)
 
@@ -1150,7 +1154,8 @@ async def export_run_results_csv_endpoint(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     row_mode = results["consumption_mode"] == "per_row"
     csv_text = result_rows_to_csv(
-        results["row_results"] if row_mode else results["replicates"], experiment.design_spec,
+        results["row_results"] if row_mode else results["replicates"],
+        results.get("selected_design_spec", experiment.design_spec),
         consumption_mode=results["consumption_mode"],
     )
     filename = _UNSAFE_FILENAME_CHAR.sub("_", experiment.name.strip()) or "experiment"
@@ -1183,7 +1188,8 @@ async def get_run_results_schema_endpoint(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return result_rows_schema(
         results["row_results"] if results["consumption_mode"] == "per_row" else results["replicates"],
-        results["metric_types"], results["metric_aggregations"], experiment.design_spec,
+        results["metric_types"], results["metric_aggregations"],
+        results.get("selected_design_spec", experiment.design_spec),
         consumption_mode=results["consumption_mode"],
     )
 
@@ -1214,7 +1220,12 @@ async def upsert_replicate_endpoint(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-    replicate = await upsert_replicate(db, experiment_id=experiment_id, replicate_label=replicate_label, fields=fields)
+    try:
+        replicate = await upsert_replicate(
+            db, experiment_id=experiment_id, replicate_label=replicate_label, fields=fields
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ReplicateResponse.model_validate(replicate)
 
 
@@ -1262,8 +1273,8 @@ async def export_replicates_csv_endpoint(
             "href": f"/experiments/{experiment_id}/run-results.csv",
             "link_text": "run-results.csv",
         })
-    replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=design_revision_id)
-    csv_text = replicates_to_csv(replicates_that_ran(replicates), design_spec=experiment.design_spec)
+    replicates = selection["replicates"]
+    csv_text = replicates_to_csv(replicates_that_ran(replicates), design_spec=selection["design_spec"])
     filename = _UNSAFE_FILENAME_CHAR.sub("_", experiment.name.strip()) or "experiment"
     return Response(
         content=csv_text,

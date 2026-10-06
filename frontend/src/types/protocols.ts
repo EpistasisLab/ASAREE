@@ -243,6 +243,14 @@ export interface ProtocolRevision {
   revision: number
   graph: ProtocolGraph
   published_at: string
+  experiment_snapshot?: {
+    hypothesis: string | null
+    design_type: string
+    design_spec: import('./experiments').Experiment['design_spec']
+    measurement_plan: import('./experiments').MeasurementPlan | null
+    task_brief: Record<string, unknown> | null
+  } | null
+  design_revision_id?: string | null
 }
 
 // One "run all cells" trigger fans out into these -- one ProtocolRun per

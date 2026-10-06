@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { displayFactorLevel, factorValueKey, groupReplicatesIntoCells, type ExperimentalCell } from '@/lib/experiment'
 import { factorBindingDiscrepancies, type FactorBindingDiscrepancy } from '@/lib/factorBindings'
-import { protocolForExperimentQueryKey } from '@/lib/protocolGraph'
+import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import type { Experiment, ResultCell, ResultReplicate, Trial } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
 import { DatasetRowRuns } from './DatasetRowRuns'
@@ -257,8 +257,13 @@ export function RunAllCellsButton({
   }
 
   const publishAndRunMutation = useMutation({
-    mutationFn: () => protocolsApi.publish(protocol!.id),
+    mutationFn: async () => {
+      const live = queryClient.getQueryData<{ nodes: Node[]; edges: Edge[] }>(protocolGraphQueryKey(protocol!.id))
+      if (live) await protocolsApi.update(protocol!.id, { graph: toPersistedGraph(live.nodes, live.edges) })
+      return protocolsApi.publish(protocol!.id)
+    },
     onSuccess: (published) => {
+      queryClient.invalidateQueries({ queryKey: ['protocols', protocol!.id, 'revisions'] })
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
       beginRun()
     },
@@ -650,8 +655,13 @@ function RunReplicateButton({
     },
   })
   const publishAndRunMutation = useMutation({
-    mutationFn: () => protocolsApi.publish(protocol!.id),
+    mutationFn: async () => {
+      const live = queryClient.getQueryData<{ nodes: Node[]; edges: Edge[] }>(protocolGraphQueryKey(protocol!.id))
+      if (live) await protocolsApi.update(protocol!.id, { graph: toPersistedGraph(live.nodes, live.edges) })
+      return protocolsApi.publish(protocol!.id)
+    },
     onSuccess: (published) => {
+      queryClient.invalidateQueries({ queryKey: ['protocols', protocol!.id, 'revisions'] })
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
       runMutation.mutate()
     },

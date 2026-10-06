@@ -31,6 +31,17 @@ class ProtocolRevision(Base, TimestampMixin):
     )
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     graph: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # An experiment publication freezes the declaration alongside its canvas.
+    # Null means a legacy canvas-only publication; never invent its settings.
+    experiment_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    design_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        # Defer the check so deleting an experiment can cascade through both
+        # its designs and publications in either order. Direct deletion of a
+        # published design is refused by the service and by this FK at commit.
+        UUID(as_uuid=True), ForeignKey(
+            "experiment_design_revisions.id", deferrable=True, initially="DEFERRED"
+        ), nullable=True
+    )
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

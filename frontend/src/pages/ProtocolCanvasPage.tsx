@@ -186,15 +186,17 @@ function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { pro
           {status}
         </span>
         {error && <span className="max-w-56 truncate text-xs text-destructive" title={error}>{error}</span>}
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={draftBusy || publishMutation.isPending || trialsQuery.isLoading}
-          title={draftBusy ? 'Save or generate the pending Design changes before publishing.' : 'Publish the saved canvas and Design together. An unchanged experiment keeps its existing version.'}
-          onClick={requestPublish}
-        >
-          {publishMutation.isPending ? 'Publishing…' : 'Publish experiment'}
-        </Button>
+        {(protocol.has_unpublished_changes || draftBusy) && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={draftBusy || publishMutation.isPending || trialsQuery.isLoading}
+            title={draftBusy ? 'Save or generate the pending Design changes before publishing.' : 'Publish the saved canvas and Design together. An unchanged experiment keeps its existing version.'}
+            onClick={requestPublish}
+          >
+            {publishMutation.isPending ? 'Publishing…' : 'Publish experiment'}
+          </Button>
+        )}
       </div>
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent className="sm:max-w-md">

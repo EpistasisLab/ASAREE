@@ -6,6 +6,7 @@ export type ConnectorSlot =
   | 'memory'
   | 'architectural_pattern'
   | 'skill'
+  | 'persona'
   | 'dataset'
   | 'knowledge'
   | 'output_parser'
@@ -22,6 +23,7 @@ export const CONNECTOR_SLOT_LABELS: Record<ConnectorSlot, string> = {
   memory: 'Memory',
   architectural_pattern: 'Architectural Pattern',
   skill: 'Skill',
+  persona: 'Persona',
   dataset: 'Dataset',
   knowledge: 'Knowledge',
   output_parser: 'Output Parser',

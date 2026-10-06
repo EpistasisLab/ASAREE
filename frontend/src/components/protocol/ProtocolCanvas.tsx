@@ -41,6 +41,7 @@ import {
   defaultOpenAiModelNodeData,
   defaultOpenRouterModelNodeData,
   defaultOutputParserNodeData,
+  defaultPersonaNodeData,
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
   defaultSingleAgentBaselinePatternNodeData,
@@ -65,6 +66,7 @@ import type {
   ScriptNodeData,
   SingleAgentBaselinePatternNodeData,
   SkillNodeData,
+  PersonaNodeData,
   TestRun,
 } from '@/types/protocols'
 import type { Dataset } from '@/types/datasets'
@@ -125,6 +127,7 @@ import { OkfDocumentNodeInspector } from './OkfDocumentNodeInspector'
 import { SkillBrowserPanel } from './SkillBrowserPanel'
 import { SKILL_BROWSE, nodeDataForSkill } from './skillCatalog'
 import { SkillNodeInspector } from './SkillNodeInspector'
+import { PersonaNodeInspector } from './PersonaNodeInspector'
 import { InteractEdge } from './edges/InteractEdge'
 import { AgentNode } from './nodes/AgentNode'
 import { CriticGateNode } from './nodes/CriticGateNode'
@@ -141,6 +144,7 @@ import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatte
 import { OkfBundleNode } from './nodes/OkfBundleNode'
 import { OkfDocumentNode } from './nodes/OkfDocumentNode'
 import { SkillNode } from './nodes/SkillNode'
+import { PersonaNode } from './nodes/PersonaNode'
 import { ProtocolCanvasMenu } from './ProtocolCanvasMenu'
 import {
   MODEL_NODE_TYPES,
@@ -183,6 +187,7 @@ const NODE_TYPES = {
   output_parser: OutputParserNode,
   dataset: DatasetNode,
   skill: SkillNode,
+  persona: PersonaNode,
   okf_bundle: OkfBundleNode,
   okf_document: OkfDocumentNode,
   script: ScriptNode,
@@ -231,6 +236,7 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'output_parser') return defaultOutputParserNodeData()
   if (nodeType === 'dataset') return defaultDatasetNodeData()
   if (nodeType === 'script') return defaultScriptNodeData()
+  if (nodeType === 'persona') return defaultPersonaNodeData()
   if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData()
   if (nodeType === 'pattern_single_agent_baseline') return defaultSingleAgentBaselinePatternNodeData()
   return defaultAgentNodeData(nodeType === 'sub_agent' ? 'Sub-Agent' : 'Agent')
@@ -296,6 +302,7 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   output_parser: { allowedTypes: ['output_parser'], title: 'Add Output Parser' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
+  persona: { allowedTypes: ['persona'], title: 'Add Persona' },
   dataset: { allowedTypes: [DATASET_BROWSE], title: 'Add Dataset' },
   // The one slot with two entries in its panel: knowledge arrives either as a
   // folder already on the server (bundle) or as a file the user uploads
@@ -2295,6 +2302,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : selectedNode?.type === 'skill' ? (
           <SkillNodeInspector
             node={{ id: selectedNode.id, type: 'skill', position: selectedNode.position, data: selectedNode.data as SkillNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
+          />
+        ) : selectedNode?.type === 'persona' ? (
+          <PersonaNodeInspector
+            node={{ id: selectedNode.id, type: 'persona', position: selectedNode.position, data: selectedNode.data as PersonaNodeData }}
             experimentId={experimentId}
             factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}

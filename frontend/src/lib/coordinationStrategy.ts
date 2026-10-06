@@ -14,6 +14,7 @@ export const CONNECTOR_HANDLES = new Set([
   'memory',
   'architectural_pattern',
   'skill',
+  'persona',
   'dataset',
   'resource',
   'knowledge',

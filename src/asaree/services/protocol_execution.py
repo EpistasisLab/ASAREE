@@ -241,6 +241,7 @@ _CONNECTOR_HANDLES = frozenset(
         "dataset",
         "resource",
         "skill",
+        "persona",
         "knowledge",
         "output_parser",
         "sub_agents",
@@ -307,9 +308,14 @@ _SCRIPT_NODE_TYPES = frozenset({"script"})
 # alongside model/tool/memory/pattern, resolved by Motoro into the run's own
 # skill index (_resolve_skill_config below), not folded into the prompt by
 # ASAREE. Repeatable and uncapped, like Tool -- carrying five skills is the
-# normal case, since level-1 metadata is ~100 tokens each and a body only
+# normal case, since level-1 metadata is~100 tokens each and a body only
 # loads when the model asks for it.
 _SKILL_NODE_TYPES = frozenset({"skill"})
+# A Persona node configures OCEAN personality traits for experimental
+# manipulation. Unlike Skills (which pass ids to Motoro), Personas prepend
+# text directly to system_prompt. NOT repeatable (one persona only) since
+# combining personas creates undefined trait conflicts.
+_PERSONA_NODE_TYPES = frozenset({"persona"})
 # An OKF Bundle node names one registered OKF bundle -- a directory of
 # markdown concepts the user pointed ASAREE at, served by its own MCP server
 # process (see asaree.services.okf_bundles for why it's a server per bundle
@@ -409,6 +415,7 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "dataset" for t in _DATASET_NODE_TYPES},
     **{t: "tool" for t in _SCRIPT_NODE_TYPES},
     **{t: "skill" for t in _SKILL_NODE_TYPES},
+    **{t: "persona" for t in _PERSONA_NODE_TYPES},
     **{t: "knowledge" for t in _KNOWLEDGE_NODE_TYPES},
     **{t: "output_parser" for t in _OUTPUT_PARSER_NODE_TYPES},
     **{t: "sub_agents" for t in _SUB_AGENT_NODE_TYPES},
@@ -1979,6 +1986,46 @@ def _resolve_skill_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]
         if skill_id and str(skill_id) not in skill_ids:
             skill_ids.append(str(skill_id))
     return {"skill_ids": skill_ids} if skill_ids else {}
+
+
+def _resolve_persona_config(graph: dict[str, Any], node_id: str) -> str:
+    """Persona text from the ONE Persona node wired into this agent's Persona
+    connector -- ``""`` when none is connected.
+
+    Unlike Skills (which pass ids to Motoro for progressive disclosure), Personas
+    prepend text directly to system_prompt for OCEAN trait manipulation. Three
+    modes: library (persona_id from validated library), text (direct input), or
+    file (uploaded .md). Only ONE persona allowed (connector is not repeatable):
+    multiple personas would create undefined trait conflicts. A node with
+    ``enabled: False`` or no resolved text is skipped."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    for edge in _edges_with_handle(graph, node_id, "persona", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") != "persona":
+            continue
+        persona_config = (source.get("data") or {}).get("config") or {}
+        if not persona_config.get("enabled", True):
+            continue
+
+        mode = persona_config.get("mode", "library")
+
+        if mode == "library":
+            # Library mode: use persona_text field (populated from library selection)
+            persona_text = persona_config.get("persona_text", "")
+        elif mode == "text":
+            # Text mode: direct input
+            persona_text = persona_config.get("persona_text", "")
+        elif mode == "file":
+            # File mode: would read from persona_file path
+            # TODO: implement file reading once persona upload endpoint exists
+            persona_text = persona_config.get("persona_text", "")
+        else:
+            persona_text = ""
+
+        if persona_text:
+            return str(persona_text).strip()
+
+    return ""
 
 
 def _is_peer_edge(edge: dict[str, Any], nodes: dict[str, dict[str, Any]]) -> bool:
@@ -4057,7 +4104,15 @@ async def _run_agent_node(
     # resolution needs `node_runs`, which this function does not have. Falling
     # back to the raw field keeps the call sites that have nothing to resolve
     # against (a single-node run) working unchanged.
-    resolved_system_prompt = system_prompt or config.get("system_prompt") or _default_system_prompt(label, "Agent")
+    base_system_prompt = system_prompt or config.get("system_prompt") or _default_system_prompt(label, "Agent")
+
+    # Prepend persona text if a Persona node is wired. Personas configure OCEAN
+    # personality traits for experimental manipulation (see PersonaNodeData).
+    persona_text = _resolve_persona_config(graph, node["id"])
+    if persona_text:
+        resolved_system_prompt = f"{persona_text}\n\n{base_system_prompt}"
+    else:
+        resolved_system_prompt = base_system_prompt
 
     agent = await _sync_durable_agent(
         name=agent_name,

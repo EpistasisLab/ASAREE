@@ -52,6 +52,8 @@ const NODE_ACCENTS: Record<string, string> = {
   // the chroma axis instead: a near-neutral steel, the only unsaturated node
   // on the canvas -- which fits the one kind with no model in it at all.
   tool_step: 'var(--node-11)',
+  // Kind sixteen: persona nodes for OCEAN trait configuration
+  persona: 'var(--node-12)',
 }
 
 /** The accent color for a canvas node kind — pass the same key the node card

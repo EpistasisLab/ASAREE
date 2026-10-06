@@ -17,7 +17,7 @@ describe('RunConfirmDialog', () => {
       />,
     )
 
-    expect(screen.getByText('Canvas version:')).toBeInTheDocument()
+    expect(screen.getByText('Experiment version:')).toBeInTheDocument()
     expect(screen.getByText('Published v7')).toBeInTheDocument()
   })
 
@@ -96,7 +96,7 @@ describe('RunConfirmDialog', () => {
       />,
     )
 
-    expect(screen.getByText('Canvas has not been published')).toBeInTheDocument()
+    expect(screen.getByText('Experiment has not been published')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Publish & Run replicate' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /published v/ })).not.toBeInTheDocument()
   })

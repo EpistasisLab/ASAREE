@@ -12,6 +12,10 @@ factor-combination cell and compares the recorded outcomes.
 A factorial study comparing agent protocol conditions. Owns the design declaration, the protocol canvas, and all runs.
 _Avoid_: Project, study, trial
 
+**Experiment version**:
+A published snapshot of an experiment's canvas, design settings, and measurement configuration. Runs and results belong to the version that produced them; subsequent edits form the experiment's draft.
+_Avoid_: Canvas version, independent design/publication versions
+
 **Factor**:
 A declared experimental variable with discrete levels, bound to at least one canvas field before cells can run.
 _Avoid_: Parameter, variable
@@ -21,7 +25,10 @@ One unique factor combination together with all its planned replicates.
 _Avoid_: Condition, treatment (accepted in prose, never in code)
 
 **Replicate**:
-One run of one cell. Counts of pending/run/scored are replicate counts, never cell counts.
+One execution unit planned under a cell. A row-mode parent Replicate owns one Row execution per original row; counts of pending/run/scored are replicate counts, never cell or row counts. Rows are neither factors nor extra stochastic replicates.
+
+**Row execution**:
+One complete protocol execution for a (cell, original dataset row, replicate) tuple.
 
 **Primary metric**:
 The optional declared metric Results uses to rank cells. An editable experiment may have none; when declared, it must be unique.
@@ -105,7 +112,7 @@ The draft editable graph. Production runs never read it directly.
 _Avoid_: Workflow, pipeline
 
 **Published revision**:
-The immutable protocol snapshot a run executes; created by publishing the canvas.
+The immutable published snapshot a run executes; for an experiment it includes the canvas and experiment settings together.
 _Avoid_: Protocol version
 
 **Gated pair**:
@@ -113,4 +120,4 @@ An agent node with its critic gate. `approved` and `revisions_used` are recorded
 _Avoid_: Reviewer, supervisor
 
 **Attempt**:
-One ProtocolRun for a replicate; later attempts supersede earlier ones but every attempt's own facts stay immutable.
+One ProtocolRun under either a whole-dataset Replicate or a stable row slot; later attempts supersede earlier ones but every attempt's own facts stay immutable. A run may also retain a nullable dataset-row snapshot when no row slot exists, as for previews.

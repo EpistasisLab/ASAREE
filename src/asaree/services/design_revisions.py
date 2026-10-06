@@ -32,6 +32,7 @@ from asaree.models.experiment import ResearchExperiment
 from asaree.models.experiment_design_revision import ExperimentDesignRevision
 from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.models.protocol_revision import ProtocolRevision
 
 
 class DesignRevisionError(ValueError):
@@ -139,6 +140,8 @@ async def delete_revision(db: AsyncSession, revision_id: uuid.UUID) -> None:
             "This is the experiment's current design. Regenerate the design to replace it, "
             "or delete the experiment to remove it entirely."
         )
+    if await db.scalar(select(ProtocolRevision.id).where(ProtocolRevision.design_revision_id == revision.id).limit(1)):
+        raise DesignRevisionError("This design belongs to a published experiment version and must be retained.")
     await db.delete(revision)
     await db.flush()
 

@@ -55,13 +55,21 @@ export interface EdgeHandoff {
   fields?: EdgeHandoffField[]
 }
 
+export type DatasetInput =
+  | { mode: 'whole_dataset' }
+  | { mode: 'per_row'; columns: string[] }
+
 export interface ProtocolEdge {
   id: string
   source: string
   target: string
   sourceHandle?: string | null
   targetHandle?: string | null
-  data?: { handoff?: EdgeHandoff }
+  data?: {
+    handoff?: EdgeHandoff
+    dataset_input?: DatasetInput
+    [key: string]: unknown
+  }
 }
 
 export type NodeRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled'
@@ -130,7 +138,27 @@ export interface Conversation {
   messages: ConversationMessage[]
 }
 
+export interface DatasetRowIdentity {
+  dataset_id: string
+  raw_sha256: string
+  row_index: number
+}
+
+export interface DatasetRowSnapshot extends DatasetRowIdentity {
+  columns: string[]
+  values: Record<string, string>
+}
+
+export interface DatasetRowSchema {
+  dataset_id: string
+  raw_sha256: string
+  row_count: number
+  columns: string[]
+}
+
 export interface ProtocolRun {
+  dataset_row?: DatasetRowSnapshot | null
+  row_result_id?: string | null
   id: string
   protocol_id: string
   // `limit_reached` is conversation-mode only: the agents were still talking
@@ -174,6 +202,7 @@ export interface TestRunResourceUsage {
 }
 
 export interface TestRun {
+  dataset_row?: DatasetRowSnapshot | null
   id: string
   protocol_id: string
   status: ProtocolRun['status']
@@ -204,6 +233,7 @@ export interface TestRun {
 // `<output of "Name">` placeholder wherever upstream output would go. Nothing
 // is created; this is a rendering, not a resource.
 export interface PromptPreview {
+  dataset_row?: DatasetRowSnapshot | null
   text: string
 }
 
@@ -211,14 +241,28 @@ export interface ProtocolRevision {
   id: string
   protocol_id: string
   revision: number
+  name?: string | null
+  note?: string | null
+  run_count?: number
+  result_count?: number
   graph: ProtocolGraph
   published_at: string
+  experiment_snapshot?: {
+    hypothesis: string | null
+    design_type: string
+    design_spec: import('./experiments').Experiment['design_spec']
+    measurement_plan: import('./experiments').MeasurementPlan | null
+    task_brief: Record<string, unknown> | null
+  } | null
+  design_revision_id?: string | null
 }
 
 // One "run all cells" trigger fans out into these -- one ProtocolRun per
 // not-yet-completed replicate. skipped is how many replicates already had
 // metrics or a completed run and were left alone (resume semantics).
 export interface CellRunBatch {
+  consumption_mode?: 'whole_dataset' | 'per_row'
+  row_result_ids?: string[]
   protocol_run_ids: string[]
   replicate_labels: string[]
   skipped: number

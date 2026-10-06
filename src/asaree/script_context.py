@@ -31,6 +31,10 @@ class TrainingInput:
     mode: str
     slot: str | None = None
     workspace_version: str | None = None
+    dataset_id: str | None = None
+    raw_sha256: str | None = None
+    row_index: int | None = None
+    columns: tuple[str, ...] | None = None
 
 
 def _manifest() -> dict[str, Any]:
@@ -71,6 +75,12 @@ def training_inputs() -> tuple[TrainingInput, ...]:
                 workspace_version=(
                     str(item["workspace_version"]) if item.get("workspace_version") is not None else None
                 ),
+                dataset_id=str(item["dataset_id"]) if item.get("dataset_id") is not None else None,
+                raw_sha256=str(item["raw_sha256"]) if item.get("raw_sha256") is not None else None,
+                row_index=int(item["row_index"]) if item.get("row_index") is not None else None,
+                columns=tuple(str(column) for column in item["columns"])
+                if isinstance(item.get("columns"), list)
+                else None,
             )
         )
     return tuple(resolved)

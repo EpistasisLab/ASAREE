@@ -19,3 +19,4 @@ sdk/src/asaree_client/_version.py
 # Private local planning and agent guidance
 docs/
 issues/
+tasks/

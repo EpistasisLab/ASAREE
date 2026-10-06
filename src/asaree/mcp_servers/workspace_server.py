@@ -31,6 +31,7 @@ from asaree_workspace_core import (
     Stage,
     Workspace,
     WorkspaceError,
+    ambient_value_from_ctx,
     dataset_slot,
     make_workspace_id,
     provenance,
@@ -387,6 +388,64 @@ async def open_workspace(
             lineage, target column and HEAD without you naming anything. The
             response echoes the slot to pass to later staging calls.
     """
+    row_inputs = ambient_value_from_ctx("row_inputs", ctx)
+    dataset_row = ambient_value_from_ctx("dataset_row", ctx)
+    if isinstance(row_inputs, list):
+        if dataset_row and isinstance(dataset_row, dict):
+            context_item = next((item for item in row_inputs if isinstance(item, dict) and
+                                 item.get("mode") in {"workspace", "raw_unsplit"} and
+                                 (item.get("slot") == slot if slot else bool(name) and item.get("name") == name)), None)
+            if context_item is not None:
+                if experiment_id or cell_label or stage or target_column:
+                    return json.dumps({"error": "row workspace override is not authorized"})
+                if context_item.get("mode") == "raw_unsplit":
+                    return json.dumps({"workspace_id": str(resolve_workspace_id_from_ctx("", ctx)),
+                                       "dataset_mode": "raw_unsplit", "dataset_name": context_item["name"],
+                                       "data_path": context_item["path"],
+                                       "target_column": context_item["target_column"]})
+                return json.dumps({"workspace_id": str(resolve_workspace_id_from_ctx("", ctx)),
+                                   "dataset_mode": "workspace", "dataset_name": context_item["name"],
+                                   "slot": context_item.get("slot"),
+                                   "workspace_version": context_item.get("workspace_version")})
+            bound_name = str(dataset_row.get("dataset_name") or "")
+            bound_id = str(dataset_row.get("dataset_id") or "")
+            if experiment_id or cell_label or stage or slot or target_column or (name and name != bound_name):
+                return json.dumps({"error": "row workspace is fixed to the authorized Agent view"})
+            if name and name != bound_name:
+                return json.dumps({"error": "dataset is not authorized for this row view"})
+            entries = [item for item in row_inputs if isinstance(item, dict) and item.get("mode") == "per_row"]
+            if len(entries) != 1:
+                return json.dumps({"error": "no authorized row driver is bound"})
+            item = entries[0]
+            if item.get("dataset_id") != bound_id:
+                return json.dumps({"error": "row driver does not match authorized snapshot"})
+            return json.dumps({
+                "workspace_id": str(resolve_workspace_id_from_ctx("", ctx)),
+                "dataset_mode": "per_row", "dataset_id": bound_id,
+                "raw_sha256": str(dataset_row.get("raw_sha256") or ""),
+                "row_index": int(dataset_row.get("row_index")),
+                "columns": list(item.get("columns") or []), "data_path": str(item.get("path") or ""),
+                "target_column": str(item.get("target_column") or ""),
+            })
+        # A row-mode Agent without a driver can open only an explicitly bound
+        # whole-context slot; it cannot ask the global registry to resolve a name.
+        if experiment_id or cell_label or target_column or stage:
+            return json.dumps({"error": "row workspace override is not authorized"})
+        if slot or name:
+            item = next((item for item in row_inputs if isinstance(item, dict) and
+                         (item.get("slot") == slot if slot else item.get("name") == name)), None)
+            if item is None or item.get("mode") not in {"workspace", "raw_unsplit"}:
+                return json.dumps({"error": "dataset or slot is not authorized for this Agent"})
+            if item.get("mode") == "raw_unsplit":
+                return json.dumps({"workspace_id": str(resolve_workspace_id_from_ctx("", ctx)),
+                                   "dataset_mode": "raw_unsplit", "dataset_name": item["name"],
+                                   "data_path": item["path"], "target_column": item["target_column"]})
+            if item.get("mode") == "workspace":
+                return json.dumps({"workspace_id": str(resolve_workspace_id_from_ctx("", ctx)),
+                                   "dataset_mode": "workspace", "dataset_name": item["name"],
+                                   "slot": item.get("slot"), "workspace_version": item.get("workspace_version")})
+            return json.dumps({"error": "dataset view is not authorized for this Agent"})
+        return json.dumps({"error": "no authorized row driver is bound"})
     # Both halves of the workspace id, or neither: a half-specified pair would
     # have to be reconciled against the ambient id, and there is no sensible
     # answer when they disagree.
@@ -512,6 +571,19 @@ def workspace_status(workspace_id: str = "", ctx: Context[Any, Any, Any] | None 
         workspace_id: ``"{experiment_id}/{cell_label}"``. Optional — resolved from
             the ambient request ``_meta`` when omitted.
     """
+    row_inputs = ambient_value_from_ctx("row_inputs", ctx)
+    if isinstance(row_inputs, list):
+        try:
+            bound = resolve_workspace_id_from_ctx("", ctx)
+            if workspace_id.strip() and workspace_id.strip() != bound:
+                return json.dumps({"error": "workspace override is not authorized for this Agent"})
+        except WorkspaceError as e:
+            return json.dumps({"error": f"workspace: {e}"})
+        return json.dumps({"workspace_id": bound, "dataset_mode": "per_row",
+                           "inputs": [{"name": item.get("name"), "mode": item.get("mode"),
+                                       "slot": item.get("slot"), "path": item.get("path"),
+                                       "columns": item.get("columns"), "target_column": item.get("target_column")}
+                                      for item in row_inputs if isinstance(item, dict)]})
     try:
         wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
         ws = Workspace(wid)

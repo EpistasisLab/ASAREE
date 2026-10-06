@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { experimentsApi } from '@/api/client'
@@ -78,6 +78,18 @@ function orderedMetricsFixture() {
 }
 
 describe('results measurement states', () => {
+  it('uses the shared maximize controls for whole-dataset results', async () => {
+    const { orderedExperiment, results } = orderedMetricsFixture()
+    vi.mocked(experimentsApi.getRunResults).mockResolvedValue(results)
+    renderWithQuery(<ResultsTab experimentId="experiment-1" experimentName="Measurement UX" experiment={orderedExperiment} onSelectResult={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Maximize Results' }))
+    expect(document.body.style.overflow).toBe('hidden')
+    expect(screen.getByRole('button', { name: 'Restore Results' })).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(document.body.style.overflow).not.toBe('hidden')
+    expect(screen.getByRole('button', { name: 'Download CSV' })).toBeInTheDocument()
+  })
+
   it('shows explicit units for cost and duration in an individual replicate result', async () => {
     const replicate = {
       replicate_label: 'replicate-1', replicate_number: 1, cell_label: 'model_a', factor_values: { model: 'a' },

@@ -19,10 +19,14 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.experiment import ResearchExperiment
+from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.models.factorial_row_result import FactorialRowResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.design_revisions import get_current_revision
+from asaree.services.experiment_versions import version_design_spec, version_measurement_plan
 from asaree.services.factorial_cells import get_replicate, list_replicates
 from asaree.services.measurement_engine import MeasurementEvaluation, normalize_measurement_plan
 from asaree.services.measurement_migration import normalize_experiment_measurement_plan
@@ -86,6 +90,9 @@ async def create_protocol_run(
     target_node_id: str | None = None,
     design_revision_id: uuid.UUID | None = None,
     protocol_revision_id: uuid.UUID | None = None,
+    row_result_id: uuid.UUID | None = None,
+    dataset_row: dict[str, Any] | None = None,
+    snapshot_only_row: bool = False,
     is_test_run: bool = False,
 ) -> ProtocolRun:
     """``replicate_label``/``factor_values``/``design_revision_id`` are set together
@@ -97,9 +104,33 @@ async def create_protocol_run(
     ``target_node_id`` is set only for a single-node "Play" run (see
     ``ProtocolRun`` model's own comment) -- mutually exclusive with
     replicate_label/factor_values in practice, though nothing enforces that here."""
+    if dataset_row is not None:
+        _validate_dataset_row_snapshot(dataset_row)
+    row_slot: FactorialRowResult | None = None
+    if row_result_id is not None:
+        if (
+            dataset_row is None
+            or replicate_result_id is None
+            or design_revision_id is None
+            or protocol_revision_id is None
+        ):
+            raise ValueError("invalid_row_scope")
+        row_slot, parent, cell = await _validate_row_attempt(
+            db,
+            protocol_id=protocol_id,
+            owner_id=owner_id,
+            row_result_id=row_result_id,
+            replicate_result_id=replicate_result_id,
+            replicate_label=replicate_label,
+            factor_values=factor_values,
+            design_revision_id=design_revision_id,
+            protocol_revision_id=protocol_revision_id,
+            dataset_row=dataset_row,
+        )
     measurement_plan_snapshot: dict[str, Any] | None = None
     reference_values: dict[str, Any] = {}
     protocol = await db.get(Protocol, protocol_id)
+    publication = await db.get(ProtocolRevision, protocol_revision_id) if protocol_revision_id else None
     if protocol is not None and protocol.experiment_id is not None:
         experiment = await db.get(ResearchExperiment, protocol.experiment_id)
         if experiment is not None:
@@ -109,6 +140,8 @@ async def create_protocol_run(
             effective_design_spec = (
                 experiment.locked_design_spec if experiment.locked_at is not None else experiment.design_spec
             )
+            effective_design_spec = version_design_spec(publication, effective_design_spec)
+            effective_plan = version_measurement_plan(publication, effective_plan)
             attempt_plan = normalize_experiment_measurement_plan(
                 effective_plan,
                 (effective_design_spec or {}).get("metrics"),
@@ -116,6 +149,8 @@ async def create_protocol_run(
             if attempt_plan["metrics"]:
                 measurement_plan_snapshot = normalize_measurement_plan(attempt_plan)
             task_brief = experiment.task_brief if isinstance(experiment.task_brief, dict) else {}
+            if publication is not None and isinstance(publication.experiment_snapshot, dict):
+                task_brief = publication.experiment_snapshot.get("task_brief") or {}
             declared_references = task_brief.get("reference_values")
             if isinstance(declared_references, dict):
                 reference_values = dict(declared_references)
@@ -126,9 +161,11 @@ async def create_protocol_run(
         status="pending",
         is_test_run=is_test_run,
         node_runs={},
-        replicate_label=replicate_label,
-        factor_values=factor_values,
-        replicate_result_id=replicate_result_id,
+        replicate_label=None if snapshot_only_row else replicate_label,
+        factor_values=None if snapshot_only_row else factor_values,
+        replicate_result_id=None if snapshot_only_row else replicate_result_id,
+        row_result_id=row_result_id,
+        dataset_row=dataset_row,
         target_node_id=target_node_id,
         design_revision_id=design_revision_id,
         protocol_revision_id=protocol_revision_id,
@@ -140,12 +177,35 @@ async def create_protocol_run(
                     else {}
                 ),
                 **({"reference_values": reference_values} if reference_values else {}),
+                **(
+                    {
+                        "row_provenance": {
+                            "row_result_id": str(row_result_id) if row_result_id is not None else None,
+                            "replicate_result_id": (
+                                str(replicate_result_id) if replicate_result_id is not None else None
+                            ),
+                            "design_revision_id": str(design_revision_id) if design_revision_id is not None else None,
+                            "protocol_revision_id": str(protocol_revision_id),
+                            "dataset_row": dict(dataset_row),
+                        }
+                    }
+                    if dataset_row is not None
+                    else {}
+                ),
             }
             or None
         ),
     )
     db.add(run)
     await db.flush()
+    if row_slot is not None:
+        row_slot.run_id = run.id
+        row_slot.workspace_id = None
+        row_slot.metric_values = None
+        row_slot.artifacts = None
+        await db.flush()
+        await db.refresh(run)
+        return run
     if replicate_result_id is not None:
         # A planned run is a new attempt for this stable replicate slot. Its
         # result projection must immediately become "latest attempt only" --
@@ -176,8 +236,96 @@ async def create_protocol_run(
     return run
 
 
+def _validate_dataset_row_snapshot(snapshot: dict[str, Any]) -> None:
+    import re
+
+    if not isinstance(snapshot, dict) or set(snapshot) != {
+        "dataset_id",
+        "raw_sha256",
+        "row_index",
+        "columns",
+        "values",
+    }:
+        raise ValueError("invalid_dataset_row_snapshot")
+    try:
+        uuid.UUID(snapshot["dataset_id"])
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValueError("invalid_dataset_row_snapshot") from exc
+    if (
+        not isinstance(snapshot["dataset_id"], str)
+        or not isinstance(snapshot["raw_sha256"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", snapshot["raw_sha256"]) is None
+        or isinstance(snapshot["row_index"], bool)
+        or not isinstance(snapshot["row_index"], int)
+        or snapshot["row_index"] < 0
+        or not isinstance(snapshot["columns"], list)
+        or not snapshot["columns"]
+        or any(not isinstance(column, str) or not column for column in snapshot["columns"])
+        or len(set(snapshot["columns"])) != len(snapshot["columns"])
+        or not isinstance(snapshot["values"], dict)
+        or set(snapshot["values"]) != set(snapshot["columns"])
+        or any(not isinstance(value, str) for value in snapshot["values"].values())
+    ):
+        raise ValueError("invalid_dataset_row_snapshot")
+
+
+async def _validate_row_attempt(
+    db: AsyncSession,
+    *,
+    protocol_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    row_result_id: uuid.UUID,
+    replicate_result_id: uuid.UUID,
+    replicate_label: str | None,
+    factor_values: dict[str, Any] | None,
+    design_revision_id: uuid.UUID,
+    protocol_revision_id: uuid.UUID,
+    dataset_row: dict[str, Any],
+) -> tuple[FactorialRowResult, FactorialReplicateResult, FactorialCell]:
+    statement = (
+        select(FactorialRowResult, FactorialReplicateResult, FactorialCell)
+        .join(FactorialReplicateResult, FactorialReplicateResult.id == FactorialRowResult.replicate_result_id)
+        .join(FactorialCell, FactorialCell.id == FactorialReplicateResult.cell_id)
+        .where(FactorialRowResult.id == row_result_id)
+    )
+    result = (await db.execute(statement)).one_or_none()
+    if result is None:
+        raise ValueError("invalid_row_scope")
+    slot, parent, cell = result
+    current = await get_current_revision(db, cell.experiment_id)
+    revision = await db.get(ProtocolRevision, protocol_revision_id)
+    protocol = await db.get(Protocol, protocol_id)
+    experiment = await db.get(ResearchExperiment, cell.experiment_id)
+    if (
+        cell.design_revision_id != design_revision_id
+        or current is None
+        or current.id != design_revision_id
+        or parent.id != replicate_result_id
+        or parent.replicate_label != replicate_label
+        or dict(cell.factor_values or {}) != dict(factor_values or {})
+        or slot.protocol_revision_id != protocol_revision_id
+        or slot.dataset_id != uuid.UUID(dataset_row["dataset_id"])
+        or slot.raw_sha256 != dataset_row["raw_sha256"]
+        or slot.row_index != dataset_row["row_index"]
+        or revision is None
+        or revision.protocol_id != protocol_id
+        or protocol is None
+        or protocol.experiment_id != cell.experiment_id
+        or protocol.owner_id != owner_id
+        or experiment is None
+        or experiment.owner_id != owner_id
+    ):
+        raise ValueError("invalid_row_scope")
+    return slot, parent, cell
+
+
 async def create_test_run(
-    db: AsyncSession, *, protocol_id: uuid.UUID, owner_id: uuid.UUID, protocol_revision_id: uuid.UUID
+    db: AsyncSession,
+    *,
+    protocol_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    protocol_revision_id: uuid.UUID,
+    dataset_row: dict[str, Any] | None = None,
 ) -> ProtocolRun:
     """Create the experiment's next canvas validation attempt.
 
@@ -202,6 +350,7 @@ async def create_test_run(
         protocol_id=protocol_id,
         owner_id=owner_id,
         protocol_revision_id=protocol_revision_id,
+        dataset_row=dataset_row,
         is_test_run=True,
     )
     experiment.latest_test_run_id = run.id
@@ -301,9 +450,18 @@ async def list_stale_protocol_runs(
 async def set_status(
     db: AsyncSession, protocol_run_id: uuid.UUID, *, status: str, error: str | None = None
 ) -> ProtocolRun | None:
-    run = await get_protocol_run(db, protocol_run_id)
+    run = (
+        await db.execute(
+            select(ProtocolRun)
+            .where(ProtocolRun.id == protocol_run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     if run is None:
         return None
+    if run.status in TERMINAL_PROTOCOL_RUN_STATUSES:
+        return run
     now = datetime.now(UTC)
     _apply_status(run, status=status, error=error, now=now)
     attempt_result = dict(run.attempt_result or {})
@@ -381,10 +539,33 @@ async def update_attempt_result(
     an earlier attempt's values.  Other callers may add independently named
     result facets without overwriting the stored node timeline.
     """
-    run = await get_protocol_run(db, protocol_run_id)
+    run = (
+        await db.execute(
+            select(ProtocolRun)
+            .where(ProtocolRun.id == protocol_run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     if run is None:
         return None
     result = dict(run.attempt_result or {})
+    if "measurement" in result and any(
+        key in fields
+        for key in (
+            "measurement",
+            "metric_values",
+            "row_provenance",
+            "metric_evaluation",
+            "evaluation_summary",
+            "evaluation_claimed_at",
+            "task_completed_at",
+            "evaluation_started_at",
+            "evaluation_completed_at",
+            "evaluation_state",
+        )
+    ):
+        raise ValueError("immutable_attempt_result")
     result.update(fields)
     run.attempt_result = result
     await db.flush()
@@ -399,6 +580,75 @@ def _required_metric_was_measured(evaluation: MeasurementEvaluation, metric_id: 
     )
 
 
+@dataclass(frozen=True)
+class MeasurementSubject:
+    """Stable identity and current result projection for one attempt."""
+
+    subject_id: str
+    replicate: FactorialReplicateResult | None = None
+    row: FactorialRowResult | None = None
+    is_current: bool = False
+
+
+def measurement_subject_id(run: ProtocolRun) -> str:
+    """The MeasurementEvaluation ``replicate_id`` compatibility field's subject."""
+    attempt_result = run.attempt_result if isinstance(run.attempt_result, Mapping) else {}
+    provenance = attempt_result.get("row_provenance")
+    row_id = run.row_result_id or (provenance.get("row_result_id") if isinstance(provenance, Mapping) else None)
+    return str(row_id or run.replicate_result_id or run.id)
+
+
+async def resolve_measurement_subject(
+    db: AsyncSession,
+    run: ProtocolRun,
+    *,
+    experiment_id: uuid.UUID,
+) -> MeasurementSubject:
+    """Resolve the row slot or whole-dataset replicate projection for an attempt."""
+    if run.row_result_id is not None:
+        if run.replicate_result_id is None or run.replicate_label is None:
+            raise ValueError("measurement evaluation row is outside the run's design scope")
+        replicate = await get_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label=run.replicate_label,
+            revision_id=run.design_revision_id,
+        )
+        row = await db.get(FactorialRowResult, run.row_result_id)
+        if (
+            replicate is None
+            or replicate.id != run.replicate_result_id
+            or row is None
+            or row.replicate_result_id != replicate.id
+            or row.protocol_revision_id != run.protocol_revision_id
+        ):
+            raise ValueError("measurement evaluation row is outside the run's design scope")
+        return MeasurementSubject(
+            subject_id=str(row.id),
+            row=row,
+            is_current=row.run_id == run.id,
+        )
+
+    if run.replicate_result_id is None:
+        # Preview snapshot-only runs intentionally have no durable result slot.
+        return MeasurementSubject(subject_id=str(run.id))
+    if run.replicate_label is None:
+        raise ValueError("measurement evaluation run is not scoped to an experiment replicate")
+    replicate = await get_replicate(
+        db,
+        experiment_id=experiment_id,
+        replicate_label=run.replicate_label,
+        revision_id=run.design_revision_id,
+    )
+    if replicate is None or replicate.id != run.replicate_result_id:
+        raise ValueError("measurement evaluation replicate is outside the run's design scope")
+    return MeasurementSubject(
+        subject_id=str(replicate.id),
+        replicate=replicate,
+        is_current=replicate.run_id == run.id,
+    )
+
+
 async def record_measurement_evaluation(
     db: AsyncSession,
     protocol_run_id: uuid.UUID,
@@ -409,20 +659,27 @@ async def record_measurement_evaluation(
     """Freeze one engine result on its attempt and update only its current projection.
 
     A later attempt writes its own ``ProtocolRun.attempt_result`` and may replace
-    the replicate projection, but it never edits this attempt's document.
+    the current row or replicate projection, but it never edits this attempt's document.
     """
-    run = await get_protocol_run(db, protocol_run_id)
+    run = (
+        await db.execute(
+            select(ProtocolRun)
+            .where(ProtocolRun.id == protocol_run_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     if run is None:
         return None
     if evaluation.attempt_id != str(run.id):
         raise ValueError("measurement evaluation attempt does not match the protocol run")
-    expected_subject_id = str(run.replicate_result_id or run.id)
+    expected_subject_id = measurement_subject_id(run)
     if evaluation.replicate_id != expected_subject_id:
         raise ValueError("measurement evaluation replicate does not match the protocol run")
 
     attempt_result = dict(run.attempt_result or {})
     if "measurement" in attempt_result:
-        raise ValueError("measurement evaluation is immutable once recorded")
+        raise ValueError("immutable_attempt_result")
     document = evaluation.to_document()
     attempt_result["measurement"] = document
     attempt_result["evaluation_completed_at"] = datetime.now(UTC).isoformat()
@@ -441,23 +698,71 @@ async def record_measurement_evaluation(
 
     # Canvas Test Runs and per-node Play runs retain the immutable measurement
     # document on the run itself; neither projects into a factorial replicate.
-    if run.is_test_run or run.target_node_id is not None:
+    if run.is_test_run or run.target_node_id is not None or (
+        run.dataset_row is not None and run.row_result_id is None
+        and run.replicate_result_id is None
+        and not (attempt_result.get("row_provenance") or {}).get("row_result_id")
+    ):
         await db.flush()
         await db.refresh(run)
         return run
 
     protocol = await db.get(Protocol, run.protocol_id)
-    if protocol is None or protocol.experiment_id is None or run.replicate_label is None:
+    if protocol is None or protocol.experiment_id is None:
+        raise ValueError("measurement evaluation run is not scoped to an experiment")
+    if (
+        run.row_result_id is None
+        and run.replicate_result_id is None
+        and run.dataset_row is None
+    ):
         raise ValueError("measurement evaluation run is not scoped to an experiment replicate")
-    replicate = await get_replicate(
-        db,
-        experiment_id=protocol.experiment_id,
-        replicate_label=run.replicate_label,
-        revision_id=run.design_revision_id,
+    attempt_provenance = attempt_result.get("row_provenance")
+    is_row_execution = (
+        run.row_result_id is not None
+        or run.dataset_row is not None
+        or isinstance(attempt_provenance, Mapping)
     )
-    if replicate is None or replicate.id != run.replicate_result_id:
-        raise ValueError("measurement evaluation replicate is outside the run's design scope")
-    if replicate.run_id == run.id:
+    if is_row_execution:
+        # A deleted or superseded row slot does not invalidate this run's own
+        # immutable facts. Projection authorization happens atomically below.
+        if not isinstance(attempt_provenance, Mapping):
+            raise ValueError("measurement evaluation row is outside the run's design scope")
+        provenance_row_id = attempt_provenance.get("row_result_id")
+        if not isinstance(provenance_row_id, str):
+            raise ValueError("measurement evaluation row is outside the run's design scope")
+        if run.row_result_id is not None and provenance_row_id != str(run.row_result_id):
+            raise ValueError("measurement evaluation row is outside the run's design scope")
+        subject = MeasurementSubject(subject_id=provenance_row_id)
+    else:
+        subject = await resolve_measurement_subject(db, run, experiment_id=protocol.experiment_id)
+    if not is_row_execution and subject.row is None and subject.replicate is None:
+        await db.flush()
+        await db.refresh(run)
+        return run
+    if is_row_execution and run.row_result_id is None:
+        # The row FK uses SET NULL when its slot is deleted. Its provenance
+        # still proves this attempt was row-scoped, so retain its facts without
+        # ever redirecting projection to the parent replicate.
+        await db.flush()
+        await db.refresh(run)
+        return run
+    if is_row_execution:
+        from asaree.services.factorial_row_results import project_row_attempt
+
+        projection: dict[str, Any] = {"artifacts": {"measurement": evaluation.to_document()}}
+        # Keep observed values on the immutable attempt even when execution
+        # did not finish, but only a completed, non-truncated row execution is
+        # eligible for the latest scored projection.
+        if (
+            run.status == "completed"
+            and measured_values
+            and required_metric_measured
+            and node_run_truncation(run.node_runs) is None
+        ):
+            projection["metric_values"] = measured_values
+        await project_row_attempt(db, row_result_id=run.row_result_id, run_id=run.id, fields=projection)
+    elif subject.replicate is not None and subject.is_current:
+        replicate = subject.replicate
         artifacts = dict(replicate.artifacts or {})
         artifacts["measurement"] = evaluation.to_document()
         replicate.artifacts = artifacts
@@ -581,15 +886,20 @@ async def list_experiment_trials(
     # the result stale by comparing the run's creation time to the current
     # published revision's timestamp.
     current_revisions: dict[uuid.UUID, tuple[uuid.UUID | None, datetime | None]] = {}
+    versioned_protocols: set[uuid.UUID] = set()
     if protocol_ids:
         result = await db.execute(
-            select(Protocol.id, Protocol.published_revision_id, ProtocolRevision.published_at)
+            select(Protocol.id, Protocol.published_revision_id, ProtocolRevision.published_at,
+                   ProtocolRevision.experiment_snapshot)
             .outerjoin(ProtocolRevision, Protocol.published_revision_id == ProtocolRevision.id)
             .where(Protocol.id.in_(protocol_ids))
         )
+        rows = result.all()
         current_revisions = {
-            protocol_id: (revision_id, published_at) for protocol_id, revision_id, published_at in result.all()
+            protocol_id: (revision_id, published_at)
+            for protocol_id, revision_id, published_at, _ in rows
         }
+        versioned_protocols = {protocol_id for protocol_id, _, _, snapshot in rows if snapshot is not None}
 
     trials = []
     for replicate in replicates:
@@ -609,11 +919,16 @@ async def list_experiment_trials(
                 or (run.protocol_revision_id is None and published_at is not None and run.created_at < published_at)
             )
         )
+        prior_version = bool(run and run.protocol_id in versioned_protocols and obsolete)
+        if prior_version:
+            # Earlier executions are inspected under their experiment version.
+            run = None
+            obsolete = False
         if run is not None:
             status = run.status
             error = run.error
             updated_at = run.updated_at
-        elif replicate.metric_values:
+        elif replicate.metric_values and not prior_version:
             status, error, updated_at = "completed", None, replicate.updated_at
         else:
             status, error, updated_at = "not_started", None, replicate.updated_at
@@ -621,11 +936,11 @@ async def list_experiment_trials(
             ExperimentTrial(
                 replicate_label=replicate.replicate_label,
                 factor_values=replicate.factor_values or {},
-                metric_values=replicate.metric_values or {},
+                metric_values={} if prior_version else replicate.metric_values or {},
                 status=status,
-                run_id=replicate.run_id,
+                run_id=run.id if run is not None else None,
                 obsolete=obsolete,
-                truncated=bool((replicate.artifacts or {}).get("truncation")),
+                truncated=not prior_version and bool((replicate.artifacts or {}).get("truncation")),
                 error=error,
                 updated_at=updated_at,
             )

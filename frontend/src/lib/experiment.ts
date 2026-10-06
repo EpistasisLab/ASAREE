@@ -91,6 +91,17 @@ export interface FactorSpec {
   level_labels?: string[]
 }
 
+export function displayFactorCondition(name: string, value: unknown, designSpec: Experiment['design_spec'] | undefined, cellLabel?: string): string {
+  const parts = name.split(':').map(part => part.trim()).filter(Boolean)
+  const field = parts.pop() ?? name
+  const displayedLevel = displayFactorLevel(designSpec, name, value, cellLabel)
+  if (typeof value === 'boolean' && /enabled$/i.test(field) && displayedLevel === String(value)) {
+    const subject = field.replace(/\s*enabled$/i, '').trim()
+    return [...parts, subject].filter(Boolean).join(' · ') + `: ${value ? 'Enabled' : 'Disabled'}`
+  }
+  return [...parts, field].filter(Boolean).join(' · ') + `: ${displayedLevel}`
+}
+
 function getFactors(designSpec: Experiment['design_spec'] | undefined): FactorSpec[] | null {
   const factors = (designSpec as { factors?: unknown } | null)?.factors
   return Array.isArray(factors) ? (factors as FactorSpec[]) : null

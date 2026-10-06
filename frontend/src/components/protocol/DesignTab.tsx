@@ -25,10 +25,11 @@ import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
 import { FactorEditorDialog } from './FactorEditorDialog'
 import { InfoTooltip } from './InfoTooltip'
 import { MetricsEditor } from './MetricsEditor'
+import { DatasetExecutionSummary } from './DatasetExecutionSummary'
 export { MetricsEditor } from './MetricsEditor'
 import { normalizeDesignMetrics } from '@/lib/metricCatalog'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
-import type { ProtocolEdge, ProtocolGraph, ProtocolNode } from '@/types/protocols'
+import type { Protocol, ProtocolEdge, ProtocolGraph, ProtocolNode } from '@/types/protocols'
 import {
   COORDINATION_STRATEGY_CATALOG,
   type CoordinationStrategySlug,
@@ -332,13 +333,17 @@ function FactorsEditor({
 export function DesignTab({
   experiment,
   protocolId,
+  protocol,
   canvasRef,
   onDesignUpdatePendingChange,
+  onDraftBusyChange,
 }: {
   experiment: Experiment
   protocolId: string | undefined
+  protocol?: Protocol
   canvasRef: RefObject<ProtocolCanvasHandle | null>
   onDesignUpdatePendingChange: (pending: boolean) => void
+  onDraftBusyChange?: (busy: boolean) => void
 }) {
   const queryClient = useQueryClient()
   const graphQuery = useProtocolGraph(protocolId)
@@ -581,6 +586,21 @@ export function DesignTab({
     onDesignUpdatePendingChange(needsDesignUpdate)
     return () => onDesignUpdatePendingChange(false)
   }, [needsDesignUpdate, onDesignUpdatePendingChange])
+  useEffect(() => {
+    onDraftBusyChange?.(needsDesignUpdate || metadataDraftChanged || isAutosavingMetadata || generateMutation.isPending)
+  }, [needsDesignUpdate, metadataDraftChanged, isAutosavingMetadata, generateMutation.isPending, onDraftBusyChange])
+  useEffect(() => {
+    if (!protocolId) return
+    let cancelled = false
+    protocolsApi.get(protocolId).then(fresh => {
+      if (cancelled) return
+      queryClient.setQueryData<Protocol>(['protocols', 'for-experiment', experiment.id], previous => previous
+        ? (previous.published_revision ?? 0) > (fresh.published_revision ?? 0) ? previous
+          : { ...previous, published_revision_id: fresh.published_revision_id, published_revision: fresh.published_revision, has_unpublished_changes: fresh.has_unpublished_changes }
+        : fresh)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [experiment.updated_at, experiment.id, protocolId, queryClient])
 
   // Keep the latest delayed write in a ref so unmounting (navigating away or
   // switching to Runs) can flush it immediately. Once a snapshot has been
@@ -703,7 +723,7 @@ export function DesignTab({
           </ul>
           <p className="text-xs text-muted-foreground">
             Nothing on the canvas is deleted, and switching back restores this state. Cells already generated stay
-            readable under the design revision that produced them, but they'll need regenerating before the new
+            readable under the experiment version that produced them, but they'll need regenerating before the new
             strategy's results are comparable.
           </p>
           <DialogFooter>
@@ -783,6 +803,8 @@ export function DesignTab({
           />
         </div>
       </div>
+
+      <DatasetExecutionSummary graph={draftGraph} protocol={protocol} experimentId={experiment.id} cellCount={validFactors.length ? combinations : 0} replicateCount={Math.max(replicates ?? 1, 1)} />
 
       <div className="space-y-1.5">
         <Label className="flex items-center gap-1.5">

@@ -4,11 +4,12 @@ import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { DesignTab } from './DesignTab'
+import { ExperimentVersionDesign, ExperimentVersionRuns } from './ExperimentVersionView'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import { RunsTab } from './RunsTab'
 import { ResultsTab, type ResultsSelection } from './ResultsTab'
 import type { Experiment } from '@/types/experiments'
-import type { Protocol } from '@/types/protocols'
+import type { Protocol, ProtocolRevision } from '@/types/protocols'
 
 // The default full-panel width and what double-clicking the drag handle snaps
 // back to. It includes the labeled navigation rail.
@@ -60,6 +61,8 @@ function readStoredCollapsed(): boolean {
 // you'd already aim at, and the width is remembered across sessions.
 export function ExperimentSidePanel({
   experiment,
+  draftExperiment,
+  resultsExperiment,
   protocolId,
   protocol,
   canvasRef,
@@ -68,8 +71,13 @@ export function ExperimentSidePanel({
   regenerationRequired,
   unboundFactors,
   onResultSelection,
+  version,
+  viewingHistory = false,
+  onDraftBusyChange,
 }: {
   experiment: Experiment | undefined
+  draftExperiment?: Experiment
+  resultsExperiment?: Experiment
   protocolId: string | undefined
   protocol: Protocol | undefined
   canvasRef: RefObject<ProtocolCanvasHandle | null>
@@ -78,6 +86,9 @@ export function ExperimentSidePanel({
   regenerationRequired: boolean
   unboundFactors: string[]
   onResultSelection: (selection: ResultsSelection | null) => void
+  version?: ProtocolRevision
+  viewingHistory?: boolean
+  onDraftBusyChange?: (busy: boolean) => void
 }) {
   const [width, setWidth] = useState(readStoredPanelWidth)
   const [collapsed, setCollapsed] = useState(readStoredCollapsed)
@@ -242,30 +253,36 @@ export function ExperimentSidePanel({
             </div>
           ) : (
             <div className="min-h-0 flex-1 overflow-y-auto">
-              {activeTab === 'design' ? (
+              <div className={activeTab === 'design' && !viewingHistory ? '' : 'hidden'}>
                 <DesignTab
-                  experiment={experiment}
+                  experiment={draftExperiment ?? experiment}
                   protocolId={protocolId}
+                  protocol={protocol}
                   canvasRef={canvasRef}
                   onDesignUpdatePendingChange={setHasPendingDesignUpdate}
+                  onDraftBusyChange={onDraftBusyChange}
                 />
-              ) : activeTab === 'runs' ? (
+              </div>
+              {viewingHistory && !version ? <p role="status" className="p-3 text-xs text-muted-foreground">The selected version is unavailable. Return to draft to continue.</p> : activeTab === 'design' && version ? <ExperimentVersionDesign version={version} /> : activeTab === 'runs' && version ? <ExperimentVersionRuns key={version.id} protocolId={protocol?.id} experimentId={experiment.id} version={version} onSelectResult={onResultSelection} /> : activeTab === 'runs' ? (
                 <RunsTab
                   experimentId={experiment.id}
                   designSpec={experiment.design_spec}
                   protocol={protocol}
                   regenerationRequired={regenerationRequired}
                   unboundFactors={unboundFactors}
+                  onViewRowResult={rowResultId => { onResultSelection({ type: 'row', rowResultId, scope: { protocol_id: protocol?.id } }); openPanel('results') }}
                   onViewResult={viewReplicateResult}
                 />
-              ) : (
+              ) : activeTab === 'results' ? (
                 <ResultsTab
+                  versionId={version?.id}
+                  protocolId={protocol?.id}
                   experimentId={experiment.id}
                   experimentName={experiment.name}
-                  experiment={experiment}
-                  onSelectResult={onResultSelection}
+                  experiment={resultsExperiment ?? experiment}
+                  onSelectResult={selection => onResultSelection({ ...selection, scope: { protocol_id: protocol?.id, protocol_revision_id: version?.id } })}
                 />
-              )}
+              ) : null}
             </div>
           )}
         </Card>

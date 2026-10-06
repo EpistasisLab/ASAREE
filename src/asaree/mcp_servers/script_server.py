@@ -81,6 +81,7 @@ _META_KEY_DATA_PATH = "motoro.ambient.data_path"
 _META_KEY_TARGET_COLUMN = "motoro.ambient.target_column"
 _META_KEY_DATASET_NAMES = "motoro.ambient.dataset_names"
 _META_KEY_DATASET_MODE = "motoro.ambient.dataset_mode"
+_META_KEY_ROW_INPUTS = "motoro.ambient.row_inputs"
 
 _RUN_CONTEXT_ENV = "ASAREE_RUN_CONTEXT"
 
@@ -100,7 +101,7 @@ _MAX_TIMEOUT = 900
 # (the product database URL and the internal API key among them — see .env), and
 # a wired script is user-authored code that has no business reading either.
 # Inheriting os.environ would hand every one of them over. What's left is what a
-# script plausibly needs to run and find the workspace.
+# script plausibly needs to run; its workspace is supplied as its cwd.
 _ENV_PASSTHROUGH = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "ASAREE_DATASET_WORKSPACE_DIR")
 
 
@@ -204,6 +205,46 @@ def _runtime_manifest(ctx: Context[Any, Any, Any] | None, workspace_id: str) -> 
     raw_names = _ambient_value(ctx, _META_KEY_DATASET_NAMES)
     names = [str(name) for name in raw_names if isinstance(name, str)] if isinstance(raw_names, list) else []
     dataset_mode = _ambient(ctx, _META_KEY_DATASET_MODE)
+    row_inputs = _ambient_value(ctx, _META_KEY_ROW_INPUTS)
+    if dataset_mode == "per_row" and isinstance(row_inputs, list):
+        # The list was resolved for this invoking Agent. It is authoritative,
+        # including [], and must never be supplemented from shared workspace
+        # state or a registration lookup.
+        training_inputs = []
+        for item in row_inputs:
+            if not isinstance(item, dict):
+                continue
+            mode = item.get("mode")
+            if mode == "per_row":
+                training_inputs.append(
+                    {
+                        "name": str(item.get("name") or ""),
+                        "path": str(item.get("path") or ""),
+                        "target_column": str(item.get("target_column") or ""),
+                        "mode": "per_row",
+                        "slot": None,
+                        "workspace_version": None,
+                        "dataset_id": item.get("dataset_id"),
+                        "raw_sha256": item.get("raw_sha256"),
+                        "row_index": item.get("row_index"),
+                        "columns": item.get("columns"),
+                    }
+                )
+            elif mode in {"workspace", "raw_unsplit"} and item.get("path"):
+                # Whole-context inputs are included only if they occur in the
+                # invoking Agent's authorized row_inputs list.
+                training_inputs.append(
+                    {
+                        "name": str(item.get("name") or ""),
+                        "path": str(item["path"]),
+                        "target_column": str(item.get("target_column") or ""),
+                        "mode": mode,
+                        "slot": item.get("slot"),
+                        "workspace_version": item.get("workspace_version"),
+                    }
+                )
+        return {"schema_version": 1, "training_inputs": training_inputs}
+
     # An explicitly wired unsplit dataset must not inherit a durable workspace
     # left by an older protocol revision for the same experiment/cell.
     locators = raw_training_data_locators(workspace_id) if workspace_id and dataset_mode != "raw_unsplit" else {}
@@ -243,15 +284,15 @@ def _runtime_manifest(ctx: Context[Any, Any, Any] | None, workspace_id: str) -> 
 def _legacy_unsplit_state(manifest: dict[str, Any]) -> dict[str, Any] | None:
     """A read-only workspace-shaped view for scripts written before the API.
 
-    This is never placed at a real workspace root.  It exists only in an
-    isolated execution directory while a single unsplit input's script runs,
+    This is never placed at a real workspace root. It exists only in an
+    isolated execution directory while a single input's script runs,
     so workspace tools cannot mistake it for a seeded train/test lineage.
     """
     inputs = manifest.get("training_inputs")
     if not isinstance(inputs, list) or len(inputs) != 1:
         return None
     item = inputs[0]
-    if not isinstance(item, dict) or item.get("mode") != "raw_unsplit" or not item.get("path"):
+    if not isinstance(item, dict) or item.get("mode") not in {"raw_unsplit", "per_row"} or not item.get("path"):
         return None
     return {
         "target_column": str(item.get("target_column") or ""),
@@ -356,14 +397,18 @@ def run_wired_script(
             )
 
     env = {k: os.environ[k] for k in _ENV_PASSTHROUGH if k in os.environ}
+    if not workspace_id:
+        # A standalone script has no ASAREE workspace to resolve. Do not expose
+        # the server's workspace root merely because it exists in the parent.
+        env.pop("ASAREE_DATASET_WORKSPACE_DIR", None)
     # Unbuffered so a script killed by the timeout has still flushed what it
     # printed -- the whole value of a partial result is that it survives.
     env["PYTHONUNBUFFERED"] = "1"
     result: dict[str, Any] = {"code_sha256": code_sha256, "script": script_file.name}
     cwd = _working_dir(workspace_id, script_file)
     manifest = _runtime_manifest(ctx, workspace_id)
-    # Preserve cwd for ordinary/helper-based scripts.  The isolated legacy
-    # view is only needed when the authored source explicitly expects the old
+    # Preserve the invoking Agent's private workspace cwd for ordinary scripts.
+    # The isolated legacy view is only needed when the source expects the old
     # state-file contract.
     legacy_state = _legacy_unsplit_state(manifest) if "state.json" in source else None
     compatibility_dir: Path | None = None

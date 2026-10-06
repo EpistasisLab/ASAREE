@@ -52,6 +52,7 @@ from asaree.services.protocol_graph import node_map
 from asaree.services.protocol_runs import (
     TERMINAL_PROTOCOL_RUN_STATUSES,
     get_cancel_requested_at,
+    measurement_subject_id,
     record_measurement_evaluation,
 )
 from asaree.services.reported_metrics import (
@@ -684,7 +685,13 @@ async def finalize_attempt_measurement(
     if (
         run is None
         or (run.status not in TERMINAL_PROTOCOL_RUN_STATUSES and run.status != "finalizing")
-        or (run.replicate_result_id is None and not run.is_test_run and run.target_node_id is None)
+        or (
+            run.replicate_result_id is None
+            and run.row_result_id is None
+            and run.dataset_row is None
+            and not run.is_test_run
+            and run.target_node_id is None
+        )
         or (run.attempt_result or {}).get("measurement") is not None
     ):
         return False
@@ -716,7 +723,7 @@ async def finalize_attempt_measurement(
             )
         if interrupted_status is not None:
             attempt = CompletedReplicate(
-                replicate_id=str(run.replicate_result_id or run.id),
+                replicate_id=measurement_subject_id(run),
                 attempt_id=str(run.id),
             )
             interrupted = MeasurementEngine(()).complete_declared_metrics(
@@ -745,6 +752,13 @@ async def finalize_attempt_measurement(
             interrupted_result = dict(run.attempt_result or {})
             interrupted_result["evaluation_summary"] = {"cost_usd": 0.0}
             run.attempt_result = interrupted_result
+            revision = await db.get(ProtocolRevision, run.protocol_revision_id) if run.protocol_revision_id else None
+            graph = resolve_reported_metric_graph(
+                revision.graph if revision is not None else {},
+                run.factor_values or {},
+            )
+            reported = await collect_reported_metrics(run, declared, graph)
+            interrupted = _merge_evaluations(interrupted, reported)
             await record_measurement_evaluation(db, run.id, interrupted)
             completed_result = dict(run.attempt_result or {})
             completed_result["evaluation_state"] = "completed"
@@ -889,7 +903,7 @@ async def finalize_attempt_measurement(
         evaluation = await engine.evaluate(
             runtime_plan,
             snapshot,
-            CompletedReplicate(replicate_id=str(run.replicate_result_id or run.id), attempt_id=str(run.id)),
+            CompletedReplicate(replicate_id=measurement_subject_id(run), attempt_id=str(run.id)),
             validate_plan=True,
             unavailable_outputs={
                 binding_id: reasons
@@ -908,7 +922,7 @@ async def finalize_attempt_measurement(
 
     evaluation = engine.complete_declared_metrics(
         declared,
-        CompletedReplicate(replicate_id=str(run.replicate_result_id or run.id), attempt_id=str(run.id)),
+        CompletedReplicate(replicate_id=measurement_subject_id(run), attempt_id=str(run.id)),
         evaluation,
         status="unavailable",
         error=lambda _metric, binding: (
@@ -931,7 +945,11 @@ async def finalize_attempt_measurement(
     completed_result = dict(run.attempt_result or {})
     completed_result["evaluation_state"] = "completed"
     run.attempt_result = completed_result
-    if any(observation.status == "cancelled" for observation in evaluation.observations):
+    await db.flush()
+    if (
+        any(observation.status == "cancelled" for observation in evaluation.observations)
+        and run.status not in TERMINAL_PROTOCOL_RUN_STATUSES
+    ):
         run.status = "cancelled"
         run.completed_at = datetime.now(UTC)
         await db.flush()

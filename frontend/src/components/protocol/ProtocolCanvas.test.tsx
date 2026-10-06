@@ -4,12 +4,13 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { experimentsApi, protocolsApi } from '@/api/client'
+import { datasetsApi, experimentsApi, protocolsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import {
   defaultAgentNodeData,
   defaultAnthropicModelNodeData,
   defaultCriticGateNodeData,
+  defaultDatasetNodeData,
   defaultMemoryNodeData,
   defaultOutputParserNodeData,
   defaultReasonActPatternNodeData,
@@ -24,7 +25,7 @@ vi.mock('./PythonCodeEditor', () => ({
   PythonCodeEditor: ({ value }: { value: string }) => <textarea aria-label="Python code" value={value} readOnly />,
 }))
 
-function renderCanvas(graph: ProtocolGraph, experimentId: string | null = null) {
+function renderCanvas(graph: ProtocolGraph, experimentId: string | null = null, publishedRevision: number | null = null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const result = render(
     <QueryClientProvider client={client}>
@@ -35,8 +36,8 @@ function renderCanvas(graph: ProtocolGraph, experimentId: string | null = null) 
               protocolId="protocol-1"
               experimentId={experimentId}
               initialGraph={graph}
-              hasUnpublishedChanges={false}
-              publishedRevision={null}
+              hasUnpublishedChanges={publishedRevision !== null}
+              publishedRevision={publishedRevision}
             />
           </div>
         </ReactFlowProvider>
@@ -140,6 +141,37 @@ describe('ProtocolCanvas connector adds', () => {
       created_at: '',
       updated_at: '',
     }))
+  })
+
+  it.each([null, 1])('selects a draft row for Publish & Test Run with published version %s', async publishedRevision => {
+    const dataset = defaultDatasetNodeData()
+    dataset.config.dataset_id = '11111111-1111-4111-8111-111111111111'
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: defaultAgentNodeData('Writer') },
+        { id: 'dataset-1', type: 'dataset', position: { x: 100, y: 0 }, data: dataset },
+      ],
+      edges: [{ id: 'dataset-agent', source: 'dataset-1', sourceHandle: 'dataset', target: 'agent-1', targetHandle: 'dataset', data: { dataset_input: { mode: 'per_row', columns: ['question'] } } }],
+    }
+    const published = { id: 'protocol-1', published_revision_id: 'revision-1', published_revision: 1, graph }
+    vi.spyOn(protocolsApi, 'get').mockResolvedValue({ ...published, published_revision_id: publishedRevision ? 'older-revision' : null, published_revision: publishedRevision } as Awaited<ReturnType<typeof protocolsApi.get>>)
+    vi.spyOn(protocolsApi, 'publish').mockResolvedValue(published as Awaited<ReturnType<typeof protocolsApi.publish>>)
+    vi.spyOn(protocolsApi, 'getRevision').mockImplementation(async (_id, revisionId) => ({ id: revisionId, graph: revisionId === 'older-revision' ? { ...graph, edges: graph.edges.map(edge => ({ ...edge, data: {} })) } : graph } as Awaited<ReturnType<typeof protocolsApi.getRevision>>))
+    vi.spyOn(datasetsApi, 'getRowSchema').mockResolvedValue({ dataset_id: 'dataset-1', raw_sha256: 'hash', row_count: 8, columns: ['question'] })
+    const start = vi.spyOn(protocolsApi, 'testRun').mockResolvedValue(testRun())
+    vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(protocolRun({ status: 'completed' }))
+    renderCanvas(graph, null, publishedRevision)
+    fireEvent.click(screen.getByRole('button', { name: 'Test Run' }))
+    const row = await screen.findByRole('spinbutton', { name: 'Source row' })
+    await waitFor(() => expect(row).toBeEnabled())
+    fireEvent.change(row, { target: { value: '5' } })
+    fireEvent.change(row, { target: { value: '9' } })
+    expect(screen.getByRole('button', { name: 'Publish & Test Run' })).toBeDisabled()
+    expect(start).not.toHaveBeenCalled()
+    fireEvent.change(row, { target: { value: '5' } })
+    expect(screen.getByRole('button', { name: 'Publish & Test Run' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Publish & Test Run' }))
+    await waitFor(() => expect(start).toHaveBeenCalledWith('protocol-1', { row_index: 4 }))
   })
 
   it('keeps an output parser wired after adding it from the agent inspector and closing its inspector', async () => {

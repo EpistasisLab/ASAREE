@@ -14,13 +14,21 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from sqlalchemy import cast, func, or_, select
+from sqlalchemy.dialects.postgresql import JSONPATH
 
 from asaree.deps import CurrentUser, DbSession
+from asaree.models.dataset import RegisteredDataset
+from asaree.models.protocol_revision import ProtocolRevision
+from asaree.models.protocol_run import ProtocolRun
+from asaree.services.dataset_row_csv import DatasetRowCsvError, project_row, read_row_source
+from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 from asaree.services.experiment_measurements import (
     blocking_measurement_plan_issues,
     validate_experiment_measurement_plan,
 )
+from asaree.services.experiment_versions import publication_matches_experiment, version_design_spec
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.protocol_execution import (
@@ -45,6 +53,7 @@ from asaree.services.protocol_revisions import (
 from asaree.services.protocol_runs import (
     create_protocol_run,
     create_test_run,
+    fail_protocol_run,
     get_protocol_run,
     list_protocol_runs,
     request_protocol_run_cancellation,
@@ -105,6 +114,8 @@ class ProtocolRunResponse(BaseModel):
     error: str | None
     replicate_label: str | None
     replicate_result_id: uuid.UUID | None
+    row_result_id: uuid.UUID | None = None
+    dataset_row: dict[str, Any] | None = None
     factor_values: dict[str, Any] | None
     design_revision_id: uuid.UUID | None
     protocol_revision_id: uuid.UUID | None
@@ -118,11 +129,14 @@ class ProtocolRunResponse(BaseModel):
     observations: list[dict[str, Any]] = Field(default_factory=list)
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
+
 def _protocol_run_response(run: Any) -> ProtocolRunResponse:
     response = ProtocolRunResponse.model_validate(run)
     measurement = (run.attempt_result or {}).get("measurement") if isinstance(run.attempt_result, dict) else None
     return response.model_copy(
         update={
+            "row_result_id": run.row_result_id,
+            "dataset_row": run.dataset_row,
             "observations": list(measurement.get("observations") or []) if isinstance(measurement, dict) else [],
             "artifacts": list(measurement.get("artifacts") or []) if isinstance(measurement, dict) else [],
         }
@@ -168,6 +182,7 @@ class TestRunResponse(BaseModel):
     status: str
     error: str | None
     protocol_revision_id: uuid.UUID | None
+    dataset_row: dict[str, Any] | None
     created_at: datetime
     updated_at: datetime
     observations: list[dict[str, Any]]
@@ -187,7 +202,8 @@ async def _test_run_response(db: DbSession, run: Any, protocol: Any, experiment:
         protocol_id=run.protocol_id,
         status=run.status,
         error=run.error,
-        protocol_revision_id=run.protocol_revision_id,
+        protocol_revision_id=result.protocol_revision_id,
+        dataset_row=result.dataset_row,
         created_at=run.created_at,
         updated_at=run.updated_at,
         observations=result.observations,
@@ -217,14 +233,33 @@ async def _test_run_response(db: DbSession, run: Any, protocol: Any, experiment:
     )
 
 
+class VersionAnnotationsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, max_length=120)
+    note: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("name", "note")
+    @classmethod
+    def trim_annotation(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
+
 class ProtocolRevisionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     protocol_id: uuid.UUID
     revision: int
+    name: str | None = None
+    note: str | None = None
+    run_count: int = 0
+    result_count: int = 0
     graph: dict[str, Any]
     published_at: datetime
+    experiment_snapshot: dict[str, Any] | None = None
+    design_revision_id: uuid.UUID | None = None
+
 
 class CreateProtocolRunRequest(BaseModel):
     # Omitted/null -- today's ad-hoc, un-substituted whole-graph run. Set --
@@ -233,10 +268,23 @@ class CreateProtocolRunRequest(BaseModel):
     # the same as one entry of "Run all cells" but picked by name instead of
     # running every not-yet-completed replicate at once.
     replicate_label: str | None = None
+    row_index: StrictInt | None = Field(default=None, ge=0)
+
+
+class TestRunRequest(BaseModel):
+    """Optional original Dataset row selection for a row-mode Test Run."""
+
+    row_index: StrictInt | None = Field(default=None, ge=0)
+
+
+class NodePlayRequest(BaseModel):
+    """Optional original Dataset row selection for an eligible node Play."""
+
+    row_index: StrictInt | None = Field(default=None, ge=0)
 
 
 class CellRunBatchRequest(BaseModel):
-    """Previously completed replicates the user explicitly chose to run again.
+    """Options for a cell batch or an explicit row-slot retry.
 
     Omit this body for the normal resume behavior: every never-completed
     replicate runs, while completed ones remain skipped.
@@ -246,6 +294,7 @@ class CellRunBatchRequest(BaseModel):
     # a run from one cell to just that cell's replicates.
     replicate_labels: list[str] | None = None
     rerun_replicate_labels: list[str] = []
+    retry_row_result_ids: list[uuid.UUID] | None = None
 
 
 class CellRunBatchResponse(BaseModel):
@@ -258,6 +307,8 @@ class CellRunBatchResponse(BaseModel):
     skipped: int
     protocol_revision_id: uuid.UUID
     protocol_revision: int
+    consumption_mode: str = "whole_dataset"
+    row_result_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class PromptPreviewRequest(BaseModel):
@@ -265,10 +316,12 @@ class PromptPreviewRequest(BaseModel):
     # is on screen, including edits autosave has not flushed yet; omitted, the
     # stored draft stands in. Nothing is written either way.
     graph: dict[str, Any] | None = None
+    row_index: StrictInt | None = None
 
 
 class PromptPreviewResponse(BaseModel):
     text: str
+    dataset_row: dict[str, Any] | None = None
 
 
 async def _get_owned_protocol(db: DbSession, protocol_id: uuid.UUID, user: CurrentUser) -> Any:
@@ -288,7 +341,9 @@ async def _protocol_response(db: DbSession, protocol: Any) -> ProtocolResponse:
         graph=normalize_protocol_graph(protocol.graph),
         published_revision_id=published.id if published else None,
         published_revision=published.revision if published else None,
-        has_unpublished_changes=not is_draft_published(protocol, published),
+        has_unpublished_changes=not (
+            is_draft_published(protocol, published) and await publication_matches_experiment(db, protocol, published)
+        ),
         created_at=protocol.created_at,
         updated_at=protocol.updated_at,
     )
@@ -364,19 +419,13 @@ async def update_protocol_endpoint(
 
 
 @router.post("/{protocol_id}/publish", response_model=ProtocolResponse)
-async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> ProtocolResponse:
+async def publish_protocol_endpoint(
+    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession,
+    body: VersionAnnotationsRequest | None = None,
+) -> ProtocolResponse:
     """Make the current autosaved canvas the immutable version future runs use."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
     published = await get_published_revision(db, protocol)
-    if published is not None and is_draft_published(protocol, published):
-        return await _protocol_response(db, protocol)
-    if protocol.experiment_id:
-        experiment = await get_experiment(db, protocol.experiment_id)
-        if experiment is not None and experiment.locked_at is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="Experiment is locked. Unlock it before publishing a changed canvas.",
-            )
     try:
         # Strategy before shape: the acyclic requirement is a pipeline
         # requirement, and a peer_collaboration canvas isn't run as one -- see
@@ -401,8 +450,74 @@ async def publish_protocol_endpoint(protocol_id: uuid.UUID, user: CurrentUser, d
                 raise ProtocolValidationError("; ".join(issue.message for issue in blocking_issues))
     except (ProtocolValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await publish_protocol(db, protocol)
+    if (
+        published is not None and is_draft_published(protocol, published)
+        and await publication_matches_experiment(db, protocol, published)
+    ):
+        try:
+            await publish_protocol(db, protocol, owner_id=user.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return await _protocol_response(db, protocol)
+    if protocol.experiment_id:
+        experiment = await get_experiment(db, protocol.experiment_id)
+        if experiment is not None and experiment.locked_at is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Experiment is locked. Unlock it before publishing a changed canvas.",
+            )
+    try:
+        await publish_protocol(db, protocol, owner_id=user.id, **(body.model_dump() if body else {}))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await _protocol_response(db, protocol)
+
+
+@router.get("/{protocol_id}/revisions", response_model=list[ProtocolRevisionResponse])
+async def list_protocol_revisions_endpoint(
+    protocol_id: uuid.UUID, user: CurrentUser, db: DbSession,
+) -> list[ProtocolRevisionResponse]:
+    await _get_owned_protocol(db, protocol_id, user)
+    revisions = await db.scalars(
+        select(ProtocolRevision).where(ProtocolRevision.protocol_id == protocol_id)
+        .order_by(ProtocolRevision.revision.desc())
+    )
+    counts = await _version_run_counts(db, protocol_id, user.id)
+    return [_version_response(revision, counts.get(revision.id, (0, 0))) for revision in revisions]
+
+
+async def _version_run_counts(
+    db: DbSession, protocol_id: uuid.UUID, owner_id: uuid.UUID,
+) -> dict[uuid.UUID, tuple[int, int]]:
+    # Count execution attempts with recorded scores/observations, never a
+    # design's mutable latest-results projection shared by several versions.
+    has_result = or_(
+        (func.jsonb_typeof(ProtocolRun.attempt_result["metric_values"]) == "object")
+        & (ProtocolRun.attempt_result["metric_values"] != {}),
+        func.jsonb_path_exists(
+            ProtocolRun.attempt_result,
+            cast('$.measurement.observations[*] ? (@.status == "measured" && @.value != null)', JSONPATH),
+        ),
+    )
+    rows = await db.execute(
+        select(
+            ProtocolRun.protocol_revision_id,
+            func.count(ProtocolRun.id),
+            func.count(ProtocolRun.id).filter(has_result),
+        ).where(
+            ProtocolRun.protocol_id == protocol_id, ProtocolRun.owner_id == owner_id,
+            ProtocolRun.protocol_revision_id.is_not(None),
+            ProtocolRun.is_test_run.is_(False), ProtocolRun.target_node_id.is_(None),
+        ).group_by(ProtocolRun.protocol_revision_id)
+    )
+    return {revision_id: (run_count, result_count) for revision_id, run_count, result_count in rows}
+
+
+def _version_response(revision: ProtocolRevision, counts: tuple[int, int]) -> ProtocolRevisionResponse:
+    return ProtocolRevisionResponse.model_validate(revision).model_copy(update={
+        "graph": normalize_protocol_graph(revision.graph),
+        "run_count": counts[0], "result_count": counts[1],
+    })
 
 
 @router.get("/{protocol_id}/revisions/{revision_id}", response_model=ProtocolRevisionResponse)
@@ -413,13 +528,24 @@ async def get_protocol_revision_endpoint(
     revision = await get_revision(db, revision_id)
     if revision is None or revision.protocol_id != protocol_id:
         raise HTTPException(status_code=404, detail="No such protocol revision")
-    return ProtocolRevisionResponse(
-        id=revision.id,
-        protocol_id=revision.protocol_id,
-        revision=revision.revision,
-        graph=normalize_protocol_graph(revision.graph),
-        published_at=revision.published_at,
-    )
+    counts = await _version_run_counts(db, protocol_id, user.id)
+    return _version_response(revision, counts.get(revision.id, (0, 0)))
+
+
+@router.patch("/{protocol_id}/revisions/{revision_id}", response_model=ProtocolRevisionResponse)
+async def update_protocol_revision_endpoint(
+    protocol_id: uuid.UUID, revision_id: uuid.UUID, body: VersionAnnotationsRequest,
+    user: CurrentUser, db: DbSession,
+) -> ProtocolRevisionResponse:
+    await _get_owned_protocol(db, protocol_id, user)
+    revision = await get_revision(db, revision_id)
+    if revision is None or revision.protocol_id != protocol_id:
+        raise HTTPException(status_code=404, detail="No such protocol revision")
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(revision, key, value)
+    await db.flush()
+    counts = await _version_run_counts(db, protocol_id, user.id)
+    return _version_response(revision, counts.get(revision.id, (0, 0)))
 
 
 @router.delete("/{protocol_id}", status_code=204)
@@ -439,8 +565,15 @@ async def create_protocol_run_endpoint(
     protocol = await _get_owned_protocol(db, protocol_id, user)
     revision = await _require_published_revision(db, protocol)
     replicate_label = body.replicate_label if body else None
+    row_index = body.row_index if body else None
     try:
-        if replicate_label:
+        row_mode = resolve_dataset_row_plan(revision.graph) is not None
+    except DatasetRowInputError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if row_index is not None and not row_mode:
+        raise HTTPException(status_code=422, detail="no_row_driver")
+    try:
+        if replicate_label or row_mode:
             run = await plan_single_replicate_run(
                 db,
                 protocol_id=protocol_id,
@@ -448,6 +581,8 @@ async def create_protocol_run_endpoint(
                 owner_id=user.id,
                 graph=revision.graph,
                 replicate_label=replicate_label,
+                row_index=row_index,
+                snapshot_only=replicate_label is None,
                 protocol_revision_id=revision.id,
             )
         else:
@@ -462,27 +597,76 @@ async def create_protocol_run_endpoint(
             )
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if row_mode:
+        await db.commit()
+        await db.refresh(run)
     await enqueue_protocol_run(run.id)
     return _protocol_run_response(run)
 
 
 @router.post("/{protocol_id}/test-runs", response_model=TestRunResponse, status_code=201)
-async def create_test_run_endpoint(protocol_id: uuid.UUID, user: CurrentUser, db: DbSession) -> TestRunResponse:
+async def create_test_run_endpoint(
+    protocol_id: uuid.UUID,
+    user: CurrentUser,
+    db: DbSession,
+    body: TestRunRequest | None = None,
+) -> TestRunResponse:
     """Start the experiment's single current canvas Test Run."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
     revision = await _require_published_revision(db, protocol)
     try:
         experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
-        validate_coordination_strategy(experiment.design_spec if experiment is not None else None, graph=revision.graph)
-        validate_stage_plan(experiment.design_spec if experiment is not None else None)
+        published_design = version_design_spec(revision, experiment.design_spec if experiment is not None else None)
+        validate_coordination_strategy(published_design, graph=revision.graph)
+        validate_stage_plan(published_design)
         validate_prompt_references(graph=revision.graph)
         topological_order(
             revision.graph,
-            require_acyclic=not is_conversation_strategy(experiment.design_spec if experiment else None),
+            require_acyclic=not is_conversation_strategy(published_design),
         )
-        run = await create_test_run(db, protocol_id=protocol.id, owner_id=user.id, protocol_revision_id=revision.id)
+        dataset_row = None
+        try:
+            row_plan = resolve_dataset_row_plan(revision.graph, published_design)
+        except DatasetRowInputError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        row_index = body.row_index if body is not None else None
+        if row_plan is None and row_index is not None:
+            raise HTTPException(status_code=422, detail="no_row_driver")
+        if row_plan is not None:
+            registration = (
+                await db.execute(
+                    select(RegisteredDataset).where(
+                        RegisteredDataset.id == uuid.UUID(row_plan["driver_dataset_id"]),
+                        RegisteredDataset.owner_id == user.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if registration is None:
+                raise HTTPException(status_code=422, detail="Registered row source is unavailable.")
+            try:
+                source = read_row_source(
+                    dataset_id=str(registration.id),
+                    raw_path=registration.raw_path,
+                    raw_sha256=registration.raw_sha256,
+                )
+                columns = list(
+                    dict.fromkeys(column for binding in row_plan["bindings"] for column in binding["columns"])
+                )
+                selected_index = 0 if row_index is None else row_index
+                dataset_row = project_row(source, row_index=selected_index, columns=columns)
+            except DatasetRowCsvError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        run = await create_test_run(
+            db,
+            protocol_id=protocol.id,
+            owner_id=user.id,
+            protocol_revision_id=revision.id,
+            dataset_row=dataset_row,
+        )
     except (ProtocolValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if run.dataset_row is not None:
+        await db.commit()
     await enqueue_protocol_run(run.id)
     return await _test_run_response(db, run, protocol, experiment)
 
@@ -507,7 +691,11 @@ async def get_latest_test_run_endpoint(protocol_id: uuid.UUID, user: CurrentUser
 
 @router.post("/{protocol_id}/nodes/{node_id}/run", response_model=ProtocolRunResponse, status_code=201)
 async def run_single_node_endpoint(
-    protocol_id: uuid.UUID, node_id: str, user: CurrentUser, db: DbSession
+    protocol_id: uuid.UUID,
+    node_id: str,
+    user: CurrentUser,
+    db: DbSession,
+    body: NodePlayRequest | None = None,
 ) -> ProtocolRunResponse:
     """The canvas's per-node Play icon -- runs one Agent node in isolation.
     Scoped to a node with no upstream input (validated up front, same
@@ -518,11 +706,53 @@ async def run_single_node_endpoint(
     revision = await _require_published_revision(db, protocol)
     try:
         validate_single_node_runnable(revision.graph, node_id)
+        row_plan = resolve_dataset_row_plan(revision.graph)
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    run = await create_protocol_run(
-        db, protocol_id=protocol_id, owner_id=user.id, target_node_id=node_id, protocol_revision_id=revision.id
+    except DatasetRowInputError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    row_index = body.row_index if body is not None else None
+    row_binding = next(
+        (binding for binding in (row_plan or {}).get("bindings", []) if binding["agent_node_id"] == node_id),
+        None,
     )
+    if row_index is not None and row_binding is None:
+        raise HTTPException(status_code=422, detail="no_row_driver")
+    dataset_row = None
+    if row_binding is not None:
+        registration = (
+            await db.execute(
+                select(RegisteredDataset).where(
+                    RegisteredDataset.id == uuid.UUID(row_plan["driver_dataset_id"]),
+                    RegisteredDataset.owner_id == user.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if registration is None:
+            raise HTTPException(status_code=422, detail="Registered row source is unavailable.")
+        try:
+            source = read_row_source(
+                dataset_id=str(registration.id),
+                raw_path=registration.raw_path,
+                raw_sha256=registration.raw_sha256,
+            )
+            columns = row_binding["columns"]
+            if not columns or set(columns) - set(source.columns):
+                raise DatasetRowCsvError(
+                    "invalid_columns", "row input columns must exist in the registered CSV header"
+                )
+            dataset_row = project_row(source, row_index=0 if row_index is None else row_index, columns=columns)
+        except DatasetRowCsvError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    run = await create_protocol_run(
+        db,
+        protocol_id=protocol_id,
+        owner_id=user.id,
+        target_node_id=node_id,
+        protocol_revision_id=revision.id,
+        dataset_row=dataset_row,
+    )
+    await db.commit()
     await enqueue_protocol_run(run.id)
     return _protocol_run_response(run)
 
@@ -540,26 +770,43 @@ async def preview_node_prompt_endpoint(
     resource.
     """
     protocol = await _get_owned_protocol(db, protocol_id, user)
+    dataset_rows: list[dict[str, Any]] = []
     try:
         text = await preview_node_prompt(
             normalize_protocol_graph(body.graph) if body.graph is not None else protocol.graph,
             node_id,
             owner_id=user.id,
             experiment_id=protocol.experiment_id,
+            row_index=body.row_index,
+            dataset_row_out=dataset_rows,
         )
-    except ProtocolValidationError as exc:
+    except (ProtocolValidationError, DatasetRowInputError, DatasetRowCsvError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return PromptPreviewResponse(text=text)
+    return PromptPreviewResponse(text=text, dataset_row=dataset_rows[0] if dataset_rows else None)
 
 
 @router.post("/{protocol_id}/cell-runs", response_model=CellRunBatchResponse, status_code=201)
 async def create_cell_runs_endpoint(
     protocol_id: uuid.UUID, user: CurrentUser, db: DbSession, body: CellRunBatchRequest | None = None
 ) -> CellRunBatchResponse:
-    """Run every pending replicate plus any explicitly selected reruns."""
+    """Run pending replicates or retry explicitly selected failed row slots."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
     revision = await _require_published_revision(db, protocol)
     try:
+        retry_row_result_ids = body.retry_row_result_ids if body is not None else None
+        if retry_row_result_ids is not None:
+            try:
+                is_row_mode = resolve_dataset_row_plan(revision.graph) is not None
+            except DatasetRowInputError:
+                is_row_mode = False
+            if (
+                not retry_row_result_ids
+                or len(set(retry_row_result_ids)) != len(retry_row_result_ids)
+                or (body is not None and body.replicate_labels is not None)
+                or (body is not None and body.rerun_replicate_labels)
+                or not is_row_mode
+            ):
+                raise ProtocolValidationError("invalid_retry_selection")
         runs, skipped = await plan_cell_runs(
             db,
             protocol_id=protocol.id,
@@ -569,17 +816,34 @@ async def create_cell_runs_endpoint(
             protocol_revision_id=revision.id,
             replicate_labels=set(body.replicate_labels) if body and body.replicate_labels is not None else None,
             rerun_replicate_labels=set(body.rerun_replicate_labels) if body is not None else None,
+            retry_row_result_ids=retry_row_result_ids,
         )
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    for run in runs:
-        await enqueue_protocol_run(run.id)
+    row_mode = resolve_dataset_row_plan(revision.graph) is not None
+    if row_mode:
+        await db.commit()
+        for run in runs:
+            try:
+                await enqueue_protocol_run(run.id)
+            except Exception as exc:
+                await fail_protocol_run(
+                    db, run.id, error=f"enqueue_failure: {type(exc).__name__}: {exc}"
+                )
+                await db.commit()
+    else:
+        for run in runs:
+            await enqueue_protocol_run(run.id)
     return CellRunBatchResponse(
         protocol_run_ids=[r.id for r in runs],
         replicate_labels=[r.replicate_label for r in runs if r.replicate_label is not None],
         skipped=skipped,
         protocol_revision_id=revision.id,
         protocol_revision=revision.revision,
+        consumption_mode=(
+            "per_row" if row_mode else "whole_dataset"
+        ),
+        row_result_ids=[r.row_result_id for r in runs if r.row_result_id is not None],
     )
 
 

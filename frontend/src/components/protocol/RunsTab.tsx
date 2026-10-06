@@ -7,12 +7,14 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
-import { displayFactorLevel, factorValueKey, groupReplicatesIntoCells, type ExperimentalCell } from '@/lib/experiment'
+import { displayFactorCondition, factorValueKey, groupReplicatesIntoCells, type ExperimentalCell } from '@/lib/experiment'
 import { factorBindingDiscrepancies, type FactorBindingDiscrepancy } from '@/lib/factorBindings'
-import { protocolForExperimentQueryKey } from '@/lib/protocolGraph'
+import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import type { Experiment, ResultCell, ResultReplicate, Trial } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
+import { DatasetRowRuns } from './DatasetRowRuns'
 import { RunConfirmDialog } from './RunConfirmDialog'
+import { CellCard, ReplicateRow, ReplicateRunAction, CellRunAction, ReplicateStatus } from './CellPresentation'
 import { WarningBadge } from './nodes/WarningBadge'
 
 function factorEntries(cell: ExperimentalCell): [string, unknown][] {
@@ -26,52 +28,6 @@ function cellSortKey(cell: ExperimentalCell): string {
   return factorEntries(cell)
     .map(([name, value]) => `${name}:${factorValueKey(value)}`)
     .join('|')
-}
-
-// Factor names are stored as fully-qualified binding identifiers so two
-// similarly named node fields never collide (e.g. Agent:Search:Enabled).
-// That identity is useful to the engine, but it is not a readable treatment
-// label. Keep the path as context and turn its final field/value pair into a
-// sentence: "Agent · Search: Disabled" rather than "Agent:Search:Enabled:
-// false".
-function displayFactorCondition(
-  name: string,
-  value: unknown,
-  designSpec: Experiment['design_spec'] | undefined,
-  cellLabel?: string,
-): string {
-  const parts = name.split(':').map((part) => part.trim()).filter(Boolean)
-  const field = parts.pop() ?? name
-  const displayedLevel = displayFactorLevel(designSpec, name, value, cellLabel)
-
-  if (typeof value === 'boolean' && /enabled$/i.test(field)) {
-    if (displayedLevel !== String(value)) {
-      return [...parts, field].filter(Boolean).join(' · ') + `: ${displayedLevel}`
-    }
-    const subject = field.replace(/\s*enabled$/i, '').trim()
-    return [...parts, subject].filter(Boolean).join(' · ') + `: ${value ? 'Enabled' : 'Disabled'}`
-  }
-
-  return [...parts, field].filter(Boolean).join(' · ') + `: ${displayedLevel}`
-}
-
-function trialStatusBadge(status: Trial['status']) {
-  switch (status) {
-    case 'not_started':
-      return { label: 'Not started', className: 'border-transparent bg-muted text-muted-foreground' }
-    case 'queued':
-      return { label: 'Queued', className: 'border-transparent bg-[color:var(--primary)]/10 text-[color:var(--primary)]' }
-    case 'running':
-      return { label: 'Running', className: 'border-transparent bg-[color:var(--primary)]/10 text-[color:var(--primary)]' }
-    case 'finalizing':
-      return { label: 'Finalizing', className: 'border-transparent bg-[color:var(--primary)]/10 text-[color:var(--primary)]' }
-    case 'completed':
-      return { label: 'Completed', className: 'border-transparent bg-[color:var(--chart-3)]/10 text-[color:var(--chart-3)]' }
-    case 'failed':
-      return { label: 'Failed', className: 'border-transparent bg-destructive/10 text-destructive' }
-    case 'cancelled':
-      return { label: 'Cancelled', className: 'border-transparent bg-muted text-muted-foreground' }
-  }
 }
 
 function isActiveTrialStatus(status: Trial['status']): boolean {
@@ -256,8 +212,13 @@ export function RunAllCellsButton({
   }
 
   const publishAndRunMutation = useMutation({
-    mutationFn: () => protocolsApi.publish(protocol!.id),
+    mutationFn: async () => {
+      const live = queryClient.getQueryData<{ nodes: Node[]; edges: Edge[] }>(protocolGraphQueryKey(protocol!.id))
+      if (live) await protocolsApi.update(protocol!.id, { graph: toPersistedGraph(live.nodes, live.edges) })
+      return protocolsApi.publish(protocol!.id)
+    },
     onSuccess: (published) => {
+      queryClient.invalidateQueries({ queryKey: ['protocols', protocol!.id, 'revisions'] })
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
       beginRun()
     },
@@ -425,14 +386,7 @@ export function RunAllCellsButton({
   return (
     <>
       <span title={blockedTitle}>
-        <Button
-          size={compact ? 'xs' : 'sm'}
-          disabled={runBlocked}
-          onClick={openDialog}
-          className={compact ? 'bg-[color:var(--chart-3)] text-primary-foreground hover:bg-[color:var(--chart-3)]/80' : undefined}
-        >
-          {actionLabel}
-        </Button>
+        {compact ? <CellRunAction disabled={runBlocked} onClick={openDialog}>{actionLabel}</CellRunAction> : <Button size="sm" disabled={runBlocked} onClick={openDialog}>{actionLabel}</Button>}
       </span>
       {dialogOpen && protocol && (
         <RunConfirmDialog
@@ -649,8 +603,13 @@ function RunReplicateButton({
     },
   })
   const publishAndRunMutation = useMutation({
-    mutationFn: () => protocolsApi.publish(protocol!.id),
+    mutationFn: async () => {
+      const live = queryClient.getQueryData<{ nodes: Node[]; edges: Edge[] }>(protocolGraphQueryKey(protocol!.id))
+      if (live) await protocolsApi.update(protocol!.id, { graph: toPersistedGraph(live.nodes, live.edges) })
+      return protocolsApi.publish(protocol!.id)
+    },
     onSuccess: (published) => {
+      queryClient.invalidateQueries({ queryKey: ['protocols', protocol!.id, 'revisions'] })
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
       runMutation.mutate()
     },
@@ -673,16 +632,14 @@ function RunReplicateButton({
   return (
     <>
       <span title={blockedTitle}>
-        <Button
-          size="xs"
+        <ReplicateRunAction
           disabled={runBlocked || !!activeRunId}
           onClick={() => setDialogOpen(true)}
-          aria-label={`${actionLabel} replicate ${replicateNumber}`}
+          label={`${actionLabel} replicate ${replicateNumber}`}
           title={activeRunId ? 'This replicate is already running.' : `${actionLabel} replicate`}
-          className="h-5 px-1.5 text-[0.65rem]"
         >
           {actionLabel}
-        </Button>
+        </ReplicateRunAction>
       </span>
       {dialogOpen && protocol && (
         <RunConfirmDialog
@@ -729,12 +686,14 @@ export function RunsTab({
   regenerationRequired,
   unboundFactors,
   onViewResult,
+  onViewRowResult,
 }: {
   experimentId: string
   designSpec: Experiment['design_spec']
   protocol: Protocol | undefined
   regenerationRequired: boolean
   unboundFactors: string[]
+  onViewRowResult?: (rowId: string) => void
   onViewResult: (replicateLabel: string) => void
 }) {
   const [expandedCells, setExpandedCells] = useState<Set<string>>(() => new Set())
@@ -751,10 +710,17 @@ export function RunsTab({
     refetchInterval: 3000,
   })
   const resultsQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'run-results'],
-    queryFn: () => experimentsApi.getRunResults(experimentId),
+    queryKey: ['experiments', experimentId, 'run-results', protocol?.id, protocol?.published_revision_id],
+    queryFn: () => experimentsApi.getRunResults(experimentId, { protocol_id: protocol?.id }),
     refetchInterval: 5000,
   })
+
+  if (protocol && resultsQuery.data?.consumption_mode === 'per_row') {
+    return <DatasetRowRuns results={resultsQuery.data} designSpec={designSpec} protocol={protocol} blocked={regenerationRequired || unboundFactors.length > 0 || factorBindingDiscrepancies(designSpec, protocol.graph).length > 0} onInspect={onViewRowResult} />
+  }
+
+  if (protocol && resultsQuery.isLoading) return <Skeleton className="m-3 h-16" />
+  if (protocol && resultsQuery.isError) return <p role="alert" className="p-3 text-xs text-destructive">Could not load the published execution scope.</p>
 
   if (replicatesQuery.isLoading) {
     return (
@@ -888,8 +854,6 @@ export function RunsTab({
       <div className="space-y-2">
         {cells.map((cell) => {
           const entries = factorEntries(cell)
-          const summary = entries.slice(0, 2)
-          const remaining = entries.slice(2)
           const expanded = expandedCells.has(cell.label)
           const replicateListId = `cell-${cell.label}-replicates`
           const obsoleteCount = cell.replicates.filter((replicate) => trialsByLabel.get(replicate.replicate_label)?.obsolete).length
@@ -904,58 +868,16 @@ export function RunsTab({
             hasFinishedRun(trialsByLabel.get(replicate.replicate_label)),
           )
           return (
-            <div key={cell.label} className="overflow-hidden rounded-md border">
-              <div className="flex items-start gap-2 px-3 py-2.5">
-                <button
-                  type="button"
-                  onClick={() => toggleCell(cell.label)}
-                  aria-expanded={expanded}
-                  aria-controls={replicateListId}
-                  className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <ChevronDown className={`mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                        <p className="min-w-0 flex-1 truncate text-sm font-medium" title={summary.map(([name, value]) => displayFactorCondition(name, value, designSpec, cell.label)).join(' · ')}>
-                        {summary.length > 0
-                          ? summary.map(([name, value]) => displayFactorCondition(name, value, designSpec, cell.label)).join(' · ')
-                          : 'Cell'}
-                      </p>
-                      <Badge variant="outline" className="shrink-0 border-[color:var(--chart-2)] text-[color:var(--chart-2)]">
-                        {cell.replicates.length} {cell.replicates.length === 1 ? 'replicate' : 'replicates'}
-                      </Badge>
-                      {obsoleteCount > 0 && (
-                        <WarningBadge
-                          issues={`${obsoleteCount} replicate${obsoleteCount === 1 ? '' : 's'} ran against an older published canvas version.`}
-                          className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
-                        />
-                      )}
-                      {truncatedCount > 0 && (
-                        <WarningBadge
-                          issues={`${truncatedCount} replicate${truncatedCount === 1 ? '' : 's'} stopped at the iteration limit, so ${truncatedCount === 1 ? 'it is' : 'they are'} not counted as scored.`}
-                          className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
-                        />
-                      )}
-                    </div>
-                    {remaining.length > 0 && (
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {remaining.map(([name, value]) => (
-                          <Badge key={name} variant="outline" className="max-w-full font-mono text-[0.65rem] font-normal">
-                            <span className="truncate">{displayFactorCondition(name, value, designSpec, cell.label)}</span>
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                    <p className="mt-1 font-mono text-[0.65rem] text-muted-foreground" title={cell.label}>Cell ID: {cell.label}</p>
-                    {cellResult && (
-                      <p className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-                        <span>{cellResult.current_completed_count}/{cellResult.replicate_count} current complete</span>
-                        {cellUsage.map((value) => <span key={value}>{value}</span>)}
-                      </p>
-                    )}
-                  </div>
-                </button>
-                <div className="flex shrink-0 flex-col items-end gap-1.5">
+            <CellCard key={cell.label} label={cell.label}
+              conditions={entries.map(([name, value]) => displayFactorCondition(name, value, designSpec, cell.label))}
+              replicateCount={cell.replicates.length} expanded={expanded} listId={replicateListId}
+              onToggle={() => toggleCell(cell.label)}
+              progress={cellResult && <><span>{cellResult.current_completed_count}/{cellResult.replicate_count} current complete</span>{cellUsage.map(value => <span key={value}>{value}</span>)}</>}
+              badges={<>
+                {obsoleteCount > 0 && <WarningBadge issues={`${obsoleteCount} replicate${obsoleteCount === 1 ? '' : 's'} ran against an older published canvas version.`} className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40" />}
+                {truncatedCount > 0 && <WarningBadge issues={`${truncatedCount} replicate${truncatedCount === 1 ? '' : 's'} stopped at the iteration limit, so ${truncatedCount === 1 ? 'it is' : 'they are'} not counted as scored.`} className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40" />}
+              </>}
+              actions={<>
                   <RunAllCellsButton
                     protocol={protocol}
                     experimentId={experimentId}
@@ -968,11 +890,7 @@ export function RunsTab({
                     compact
                   />
                   <StopRunsButton protocol={protocol} experimentId={experimentId} runIds={activeCellRunIds} all />
-                </div>
-              </div>
-
-              {expanded && (
-                <div id={replicateListId} className="border-t bg-muted/20 px-3 py-2.5">
+              </>}>
                   {trialsQuery.isLoading ? (
                     <div className="space-y-2">
                       <Skeleton className="h-12 w-full" />
@@ -989,14 +907,11 @@ export function RunsTab({
                             ? OBSOLETE_TRIAL_BADGE
                             : trial.truncated
                               ? TRUNCATED_TRIAL_BADGE
-                              : trialStatusBadge(trial.status)
+                              : null
                           : null
                         return (
-                          <li key={replicate.id} className="rounded-md border bg-background px-2.5 py-2">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-1.5">
-                                  <p className="text-sm font-medium">Replicate {replicate.replicate_number}</p>
+                          <ReplicateRow key={replicate.id} number={replicate.replicate_number}
+                            badges={<>
                                   {trial?.obsolete && (
                                     <WarningBadge
                                       issues="This replicate ran against an older published canvas version. Run it again to produce a current result."
@@ -1009,22 +924,12 @@ export function RunsTab({
                                       className="flex size-4 shrink-0 items-center justify-center rounded-full bg-card ring-1 ring-[color:var(--chart-4)]/40"
                                     />
                                   )}
-                                </div>
-                                {replicateUsage.length > 0 && <p className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground">{replicateUsage.map((value) => <span key={value}>{value}</span>)}</p>}
-                              </div>
-                              <div className="flex shrink-0 items-center gap-2">
-                                {badge ? <Badge className={badge.className}>{badge.label}</Badge> : <Badge variant="outline">Status unavailable</Badge>}
-                                {trial?.run_id && (
-                                  <Button
-                                    variant="outline"
-                                    size="xs"
-                                    className="h-5 px-1.5 text-[0.65rem]"
-                                    onClick={() => onViewResult(replicate.replicate_label)}
-                                  >
-                                    View result
-                                  </Button>
-                                )}
-                                <RunReplicateButton
+                            </>}
+                            detail={replicateUsage.length > 0 && replicateUsage.map(value => <span key={value}>{value}</span>)}
+                            status={badge ? <Badge className={badge.className}>{badge.label}</Badge> : trial ? <ReplicateStatus status={trial.status} /> : <Badge variant="outline">Status unavailable</Badge>}
+                            onView={trial?.run_id ? () => onViewResult(replicate.replicate_label) : undefined}
+                            actions={
+                              <RunReplicateButton
                                   protocol={protocol}
                                   experimentId={experimentId}
                                   replicateLabel={replicate.replicate_label}
@@ -1036,17 +941,14 @@ export function RunsTab({
                                   unboundFactors={unboundFactors}
                                   bindingDiscrepancies={bindingDiscrepancies}
                                 />
-                              </div>
-                            </div>
-                            {trial?.error && <p className="mt-2 rounded bg-destructive/10 px-2 py-1.5 text-xs text-destructive">{trial.error}</p>}
-                          </li>
+                            }
+                            error={trial?.error}
+                          />
                         )
                       })}
                     </ul>
                   )}
-                </div>
-              )}
-            </div>
+            </CellCard>
           )
         })}
       </div>

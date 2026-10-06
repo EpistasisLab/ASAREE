@@ -7,6 +7,8 @@ import json
 from copy import deepcopy
 from typing import Any
 
+from asaree.services.dataset_row_inputs import normalize_dataset_input
+
 _LEGACY_MODEL_NODE_TYPES = {
     "llm_anthropic": "model_anthropic",
     "llm_openai": "model_openai",
@@ -67,16 +69,25 @@ def functional_protocol_graph(graph: dict[str, Any]) -> dict[str, Any]:
         for node in nodes or []
         if isinstance(node, dict)
     ]
-    functional_edges = [
-        {
+    functional_edges = []
+    for edge in edges or []:
+        if not isinstance(edge, dict):
+            continue
+        functional_edge = {
             "source": edge.get("source"),
             "target": edge.get("target"),
             "sourceHandle": edge.get("sourceHandle"),
             "targetHandle": edge.get("targetHandle"),
         }
-        for edge in edges or []
-        if isinstance(edge, dict)
-    ]
+        data = edge.get("data")
+        if isinstance(data, dict) and "dataset_input" in data:
+            try:
+                configured = normalize_dataset_input(data["dataset_input"])
+            except ValueError:
+                configured = None
+            if configured is not None and configured.get("mode") != "whole_dataset":
+                functional_edge["data"] = {"dataset_input": configured}
+        functional_edges.append(functional_edge)
 
     def canonical_json(value: dict[str, Any]) -> str:
         return json.dumps(value, sort_keys=True, separators=(",", ":"))

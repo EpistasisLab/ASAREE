@@ -15,9 +15,12 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.models.dataset_workspace_event import WorkspaceEventType
+from asaree.services.dataset_row_csv import DatasetRowCsvError, read_row_source
+from asaree.services.dataset_row_inputs import DatasetRowInputError
 from asaree.services.dataset_workspace_events import list_events, record_event
 from asaree.services.datasets import (
     DatasetNameConflictError,
@@ -32,6 +35,19 @@ from asaree.services.datasets import (
 )
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
+
+
+def _integrity_constraint_name(exc: IntegrityError) -> str | None:
+    """Read a constraint name through SQLAlchemy's asyncpg exception wrapper."""
+    for candidate in (exc.orig, getattr(exc.orig, "__cause__", None)):
+        if candidate is None:
+            continue
+        constraint = getattr(candidate, "constraint_name", None) or getattr(
+            getattr(candidate, "diag", None), "constraint_name", None
+        )
+        if constraint is not None:
+            return constraint
+    return None
 
 
 async def _get_owned_dataset(db: DbSession, dataset_id: uuid.UUID, user: CurrentUser) -> Any:
@@ -77,6 +93,13 @@ class DatasetResponse(BaseModel):
     # dictionary_json contract exactly.
     dictionary_json: str | None = None
     created_at: datetime | None = None
+
+
+class DatasetRowSchemaResponse(BaseModel):
+    dataset_id: uuid.UUID
+    raw_sha256: str
+    columns: list[str]
+    row_count: int
 
 
 def _dataset_response(d: Any) -> DatasetResponse:
@@ -221,10 +244,43 @@ async def get_dataset_endpoint(dataset_id: uuid.UUID, db: DbSession, user: Curre
     return _dataset_response(dataset)
 
 
+@router.get("/{dataset_id}/row-schema", response_model=DatasetRowSchemaResponse)
+async def get_dataset_row_schema_endpoint(
+    dataset_id: uuid.UUID, db: DbSession, user: CurrentUser
+) -> DatasetRowSchemaResponse:
+    dataset = await _get_owned_dataset(db, dataset_id, user)
+    try:
+        source = read_row_source(
+            dataset_id=str(dataset.id),
+            raw_path=dataset.raw_path,
+            raw_sha256=dataset.raw_sha256,
+        )
+    except DatasetRowCsvError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(DatasetRowInputError(exc.code, exc.message)),
+        ) from exc
+    return DatasetRowSchemaResponse(
+        dataset_id=dataset.id,
+        raw_sha256=source.raw_sha256,
+        columns=list(source.columns),
+        row_count=len(source.rows),
+    )
+
+
 @router.delete("/{dataset_id}", status_code=204)
 async def delete_dataset_endpoint(dataset_id: uuid.UUID, db: DbSession, user: CurrentUser) -> None:
     await _get_owned_dataset(db, dataset_id, user)
-    await delete_dataset(db, dataset_id)
+    try:
+        await delete_dataset(db, dataset_id)
+    except IntegrityError as exc:
+        if _integrity_constraint_name(exc) != "fk_factorial_row_results_dataset":
+            raise
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Dataset is referenced by stored row results and cannot be deleted",
+        ) from exc
 
 
 @router.post("/{dataset_id}/workspace-events", response_model=WorkspaceEventResponse, status_code=201)

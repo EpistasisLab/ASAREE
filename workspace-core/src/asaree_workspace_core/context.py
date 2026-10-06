@@ -118,6 +118,8 @@ def resolve_owner_id_from_ctx(ctx: Any, *, required: bool = False) -> str:
 # workspace_id above cannot fully serve — can resolve it without the model
 # retyping a name it read out of its prompt.
 META_KEY_DATASET_NAMES = "motoro.ambient.dataset_names"
+META_KEY_ROW_INPUTS = "motoro.ambient.row_inputs"
+META_KEY_DATASET_ROW = "motoro.ambient.dataset_row"
 
 
 def dataset_names_from_meta(meta: Mapping[str, Any] | None) -> list[str]:
@@ -132,6 +134,11 @@ def dataset_names_from_meta(meta: Mapping[str, Any] | None) -> list[str]:
     if not isinstance(value, list):
         return []
     return [v for v in value if isinstance(v, str) and v]
+
+
+def ambient_value_from_ctx(key: str, ctx: Any) -> Any:
+    """Read an ASAREE ambient value from a FastMCP context."""
+    return meta_mapping_from_ctx(ctx).get(f"motoro.ambient.{key}") if meta_mapping_from_ctx(ctx) else None
 
 
 def resolve_dataset_name(explicit: str, meta: Mapping[str, Any] | None) -> str:

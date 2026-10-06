@@ -1771,6 +1771,12 @@ async def test_plan_cell_runs_runs_an_obsolete_completed_replicate(owner_id: uui
             graph=graph,
         )
         protocol_id = protocol.id
+        await upsert_replicate(
+            db,
+            experiment_id=experiment_id,
+            replicate_label="cell-obsolete",
+            fields={"factor_values": {"x": 1}},
+        )
         old_revision = await publish_protocol(db, protocol)
         completed_run = await create_protocol_run(
             db,

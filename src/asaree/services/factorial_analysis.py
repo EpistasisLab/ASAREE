@@ -517,7 +517,12 @@ def analyze_binary_factorial(
     }
 
 
-def analyze_experiment_design(design_spec: dict[str, Any] | None, replicates: Sequence[Any]) -> dict[str, Any]:
+def analyze_experiment_design(
+    design_spec: dict[str, Any] | None,
+    replicates: Sequence[Any],
+    *,
+    consumption_mode: str = "whole_dataset",
+) -> dict[str, Any]:
     """The Results tab's own entry point -- a thin wrapper around
     ``analyze_factorial`` that needs no caller-supplied parameters at all.
     ``condition_factors``/``positive_levels``/``reference_condition``/
@@ -536,6 +541,26 @@ def analyze_experiment_design(design_spec: dict[str, Any] | None, replicates: Se
     whether that's a missing declaration or ``analyze_factorial`` itself
     raising ``FactorialAnalysisError`` (e.g. not enough scored replicates).
     """
+    if consumption_mode == "per_row":
+        return {
+            "available": False,
+            "reason": (
+                "Per-row executions are available for inspection and export; "
+                "factorial analysis is not supported."
+            ),
+            "analysis": None,
+            "best_condition": None,
+        }
+    if consumption_mode != "whole_dataset":
+        raise FactorialAnalysisError(f"unsupported consumption mode: {consumption_mode}")
+    for replicate in replicates:
+        if isinstance(replicate, dict):
+            row_shaped = any(key in replicate for key in ("row_result_id", "row_index", "dataset_row"))
+        else:
+            row_shaped = hasattr(replicate, "row_result_id") or type(replicate).__name__ == "FactorialRowResult"
+        if row_shaped:
+            raise FactorialAnalysisError("row execution results cannot be analyzed as factorial replicates")
+
     design_spec = design_spec or {}
     factors = design_spec.get("factors") or []
     metrics = design_spec.get("metrics") or []

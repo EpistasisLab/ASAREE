@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 
 from asaree.services.protocol_graph_schema import functional_protocol_graph_hash, normalize_protocol_graph
@@ -117,3 +119,34 @@ def test_functional_hash_changes_for_node_configuration_and_edge_reconnection() 
 
     assert functional_protocol_graph_hash(configured) != functional_protocol_graph_hash(graph)
     assert functional_protocol_graph_hash(reconnected) != functional_protocol_graph_hash(graph)
+
+
+def test_dataset_input_hash_preserves_legacy_whole_hash_and_ordered_row_columns() -> None:
+    graph = {
+        "nodes": [{"id": "d", "type": "dataset", "data": {"config": {}}}],
+        "edges": [{"id": "e", "source": "d", "target": "a", "targetHandle": "dataset"}],
+    }
+    omitted = functional_protocol_graph_hash(graph)
+    legacy_functional_graph = {
+        "nodes": [{"id": "d", "type": "dataset", "data": {"config": {}}}],
+        "edges": [{"source": "d", "target": "a", "sourceHandle": None, "targetHandle": "dataset"}],
+    }
+    legacy_bytes = json.dumps(legacy_functional_graph, sort_keys=True, separators=(",", ":")).encode()
+    assert omitted == hashlib.sha256(legacy_bytes).hexdigest()
+    explicit = deepcopy(graph)
+    explicit["edges"][0]["data"] = {"dataset_input": {"mode": "whole_dataset"}}
+    assert functional_protocol_graph_hash(explicit) == omitted
+
+    row = deepcopy(graph)
+    row["edges"][0]["data"] = {"dataset_input": {"mode": "per_row", "columns": ["question", "answer"]}}
+    reversed_row = deepcopy(row)
+    reversed_row["edges"][0]["data"]["dataset_input"]["columns"].reverse()
+    assert functional_protocol_graph_hash(row) != omitted
+    assert functional_protocol_graph_hash(row) != functional_protocol_graph_hash(reversed_row)
+
+    cosmetic = deepcopy(row)
+    cosmetic["edges"][0]["id"] = "replacement"
+    cosmetic["edges"][0]["data"]["transient"] = True
+    cosmetic["edges"][0]["data"]["unrelated"] = {"metadata": "ignored"}
+    cosmetic["nodes"][0]["position"] = {"x": 900, "y": 300}
+    assert functional_protocol_graph_hash(cosmetic) == functional_protocol_graph_hash(row)

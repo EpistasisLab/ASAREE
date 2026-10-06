@@ -1,3 +1,6 @@
+import { DatasetRowSelector } from './DatasetRowSelector'
+import { useDatasetRowSelection } from './useDatasetRowSelection'
+import type { ProtocolGraph } from '@/types/protocols'
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { ApiError } from '@/api/client'
@@ -20,18 +23,25 @@ const DEBOUNCE_MS = 500
 // doubt what reaches the model.
 export function PromptPreviewPanel({
   signature,
+  graph,
+  nodeId,
   fetchPreview,
 }: {
   // Changes whenever something the preview depends on changes. The canvas
   // cannot be rewired while this modal is open, so the node's own data is the
   // whole dependency -- the caller serializes it rather than this component
   // guessing which fields matter.
+  graph?: ProtocolGraph
+  nodeId?: string
   signature: string
   // Passed as a callback rather than (protocolId, nodeId, graph) because the
   // graph it has to send is the live canvas, which only the canvas holds. Read
   // through a ref below so re-creating it every keystroke doesn't refetch.
-  fetchPreview: () => Promise<PromptPreview>
+  fetchPreview: (rowIndex?: number) => Promise<PromptPreview>
 }) {
+  const row = useDatasetRowSelection(graph, 'draft', nodeId)
+  const hasRowBinding = !!row.binding
+  const rowSignature = `${row.schema?.dataset_id}:${row.schema?.raw_sha256}:${row.rowIndex}:${row.error}`
   const [open, setOpen] = useState(false)
   const [preview, setPreview] = useState<PromptPreview | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -42,13 +52,14 @@ export function PromptPreviewPanel({
 
   useEffect(() => {
     if (!open) return
+    if (hasRowBinding && row.error) { setError(row.error); setPreview(null); setLoading(false); return }
     let cancelled = false
     setLoading(true)
     // Debounced, because `signature` changes on every keystroke in the prompt
     // field above and each change is a request.
     const timer = setTimeout(() => {
       fetchRef
-        .current()
+        .current(hasRowBinding ? row.rowIndex : undefined)
         .then((result) => {
           if (cancelled) return
           setPreview(result)
@@ -67,7 +78,7 @@ export function PromptPreviewPanel({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [open, signature, nonce])
+  }, [open, signature, nonce, rowSignature, hasRowBinding, row.rowIndex, row.error])
 
   const placeholders = preview ? (preview.text.match(PLACEHOLDER_RE) ?? []).length : 0
 
@@ -100,6 +111,8 @@ export function PromptPreviewPanel({
         )}
       </div>
 
+      {open && row.binding && <DatasetRowSelector rowIndex={row.rowIndex} onChange={row.setRowIndex} rowCount={row.schema?.row_count ?? 0} disabled={!row.schema} />}
+      {open && preview?.dataset_row && <p className="break-all font-mono text-xs">Source row {preview.dataset_row.row_index + 1} · {preview.dataset_row.dataset_id} · {preview.dataset_row.raw_sha256}</p>}
       {!open ? (
         <p className="text-xs text-muted-foreground">
           The exact user message, assembled the way a run assembles it — your prompt with every reference resolved,

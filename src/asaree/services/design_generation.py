@@ -24,9 +24,13 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from asaree.models.experiment import ResearchExperiment
+from asaree.models.experiment_design_revision import ExperimentDesignRevision
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.models.protocol_revision import ProtocolRevision
 from asaree.services.coordination import coordination_strategy_slug
 from asaree.services.design_revisions import get_current_revision, supersede_and_create
 from asaree.services.factorial_cells import list_replicates, upsert_replicate
@@ -361,13 +365,18 @@ async def generate_design_cells(
     """Compute the design and materialize ``replicates`` child rows per
     combination (default 1), under the experiment's current design revision.
 
-    A new revision is opened exactly when the new design would *drop* a cell
+    An unpublished design opens a revision when the new design would *drop* a cell
     the current revision has — not on every change. Re-clicking generate,
     changing ``randomization_seed``, widening a factor's levels or raising
     ``replicates`` all leave every existing cell part of the new design, so
     they keep the current revision and merge into its rows: no near-empty
     duplicate revisions pile up, and (as before) the cells you already scored
     are untouched, right down to their row ids.
+
+    Once a publication references the design, its declaration and planned
+    slots are frozen. Any subsequent change creates a separate draft design;
+    results remain with the experiment version that produced them. Clicking
+    Generate again with the same declaration reuses the existing design.
 
     Dropping a cell is the case that needs a revision (see
     services.design_revisions). This is the fix for cells outliving the design
@@ -385,6 +394,16 @@ async def generate_design_cells(
     practice) — it never affects which combinations/replicates are generated
     or their (deterministic) cell_label.
     """
+    experiment = (
+        await db.execute(
+            select(ResearchExperiment)
+            .where(ResearchExperiment.id == experiment_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if experiment is None:
+        raise DesignValidationError("Experiment not found")
     # An empty factor declaration is a meaningful replacement when an
     # existing design's final factor was removed: it retires every current
     # cell into history and leaves an empty current revision.  Do not call
@@ -393,7 +412,17 @@ async def generate_design_cells(
     planned = _planned_replicates(factors, replicates) if factors else []
     planned_labels = {label for label, _, _ in planned}
 
-    current = await get_current_revision(db, experiment_id)
+    current = (
+        await db.execute(
+            select(ExperimentDesignRevision)
+            .where(
+                ExperimentDesignRevision.experiment_id == experiment_id,
+                ExperimentDesignRevision.superseded_at.is_(None),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
     existing = (
         {
             replicate.replicate_label: replicate
@@ -427,7 +456,12 @@ async def generate_design_cells(
         and coordination_strategy_slug(current.design_spec) != coordination_strategy_slug(design_spec)
     )
 
-    if current is not None and not dropped and not strategy_changed:
+    published_design_changes = current is not None and (
+        current.design_spec != design_spec or set(existing) != planned_labels or strategy_changed
+    ) and await db.scalar(
+        select(ProtocolRevision.id).where(ProtocolRevision.design_revision_id == current.id).limit(1)
+    ) is not None
+    if current is not None and not dropped and not strategy_changed and not published_design_changes:
         # Keep the revision and merge into its rows -- factor_values is
         # re-merged because a level's *value* can change without changing its
         # slugified label.
@@ -441,7 +475,7 @@ async def generate_design_cells(
         revision_id = revision.id
         carry_over = (
             {}
-            if strategy_changed
+            if strategy_changed or published_design_changes
             else {
                 (_cell_key(previous.factor_values, previous.replicate_label), previous.replicate_number): previous
                 for previous in existing.values()

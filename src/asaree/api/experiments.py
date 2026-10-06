@@ -12,6 +12,7 @@ import re
 import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
@@ -35,7 +36,7 @@ from asaree.services.experiment_measurements import (
     measurement_plan_issue_is_blocking,
     validate_experiment_measurement_plan,
 )
-from asaree.services.experiment_run_results import summarize_experiment_run_results
+from asaree.services.experiment_run_results import RunResultsProjectionError, summarize_experiment_run_results
 from asaree.services.experiments import (
     create_experiment,
     create_untitled_experiment,
@@ -569,7 +570,7 @@ async def import_experiment_definition_endpoint(
                     allow_preserved_bindings=False,
                 )
             if published_graph is not None:
-                await publish_protocol(db, protocol)
+                await publish_protocol(db, protocol, owner_id=user.id)
                 if graph != published_graph:
                     protocol.graph = graph
                     await db.flush()
@@ -963,14 +964,24 @@ class AnalyzeFactorialRequest(BaseModel):
 
 @router.post("/{experiment_id}/analyze")
 async def analyze_factorial_endpoint(
-    experiment_id: uuid.UUID, body: AnalyzeFactorialRequest, user: CurrentUser, db: DbSession
+    experiment_id: uuid.UUID, body: AnalyzeFactorialRequest, user: CurrentUser, db: DbSession,
+    protocol_id: uuid.UUID | None = None,
+    design_revision_id: uuid.UUID | None = None,
+    protocol_revision_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Failure homogeneity, factorial effects (Freedman-Lane + max-stat FWER),
     estimated marginal means, non-inferiority vs. the reference condition
     (BCa bootstrap + Holm), and heteroscedasticity diagnostics — computed
     fresh from this experiment's current replicate results, not persisted."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
-    declared_primary = declared_primary_metric((experiment.design_spec or {}).get("metrics"))
+    selection = await _factorial_analysis_selection(
+        db, experiment, protocol_id=protocol_id, design_revision_id=design_revision_id,
+        protocol_revision_id=protocol_revision_id,
+    )
+    if selection["consumption_mode"] == "per_row":
+        return _row_analysis_unavailable()
+    selected_design = selection["design_spec"]
+    declared_primary = declared_primary_metric((selected_design or {}).get("metrics"))
     if declared_primary is None:
         raise HTTPException(status_code=422, detail="This experiment has no declared primary metric.")
     if declared_primary["name"] != body.primary_metric:
@@ -978,7 +989,7 @@ async def analyze_factorial_endpoint(
             status_code=422,
             detail=f"{body.primary_metric!r} is not the experiment's declared primary metric.",
         )
-    replicates = await list_replicates(db, experiment_id=experiment_id)
+    replicates = selection["replicates"]
     try:
         analysis = (
             analyze_binary_factorial
@@ -1016,6 +1027,45 @@ class ResultsResponse(BaseModel):
     best_condition: dict[str, Any] | None
 
 
+def _row_analysis_unavailable() -> dict[str, Any]:
+    return {
+        "available": False,
+        "reason": "Per-row executions are available for inspection and export; factorial analysis is not supported.",
+        "analysis": None,
+        "best_condition": None,
+    }
+
+
+async def _factorial_analysis_selection(
+    db: DbSession,
+    experiment: Any,
+    *,
+    protocol_id: uuid.UUID | None,
+    design_revision_id: uuid.UUID | None,
+    protocol_revision_id: uuid.UUID | None,
+) -> dict[str, Any]:
+    """Resolve mode and design from the same publication/revision selectors as Results."""
+    try:
+        projection = await summarize_experiment_run_results(
+            db, experiment_id=experiment.id, design_spec=experiment.design_spec,
+            protocol_id=protocol_id, design_revision_id=design_revision_id,
+            protocol_revision_id=protocol_revision_id,
+        )
+    except RunResultsProjectionError as exc:
+        status = 422 if str(exc) == "ambiguous_protocol" else 404
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    replicates = [SimpleNamespace(
+        replicate_label=row["replicate_label"], cell_label=row["cell_label"],
+        factor_values=row["factor_values"], metric_values=row["metric_values"],
+        run_id=row.get("run_id"), workspace_id=row.get("workspace_id"),
+        artifacts={"metric_evaluation": row.get("metric_evaluation")},
+    ) for row in projection["replicates"]]
+    return {
+        "consumption_mode": projection["consumption_mode"],
+        "design_spec": projection["selected_design_spec"], "replicates": replicates,
+    }
+
+
 class RunResultsResponse(BaseModel):
     """The general-purpose results scorecard, unlike the optional factorial analysis."""
 
@@ -1028,44 +1078,87 @@ class RunResultsResponse(BaseModel):
     primary_metric_direction: str | None
     cells: list[dict[str, Any]]
     replicates: list[dict[str, Any]]
+    consumption_mode: str
+    row_results: list[dict[str, Any]]
+    row_cells: list[dict[str, Any]] = Field(default_factory=list)
+    row_summary: dict[str, Any] | None
 
 
 @router.get("/{experiment_id}/results", response_model=ResultsResponse)
 async def get_experiment_results_endpoint(
-    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession,
+    protocol_id: uuid.UUID | None = None,
+    design_revision_id: uuid.UUID | None = None,
+    protocol_revision_id: uuid.UUID | None = None,
 ) -> ResultsResponse:
     """See services.factorial_analysis.analyze_experiment_design -- this
     endpoint is a thin pass-through, all the real derivation/wrapping logic
     lives there so it's unit-testable without a request/response cycle."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
-    replicates = await list_replicates(db, experiment_id=experiment_id)
-    result = analyze_experiment_design(experiment.design_spec, replicates)
+    selection = await _factorial_analysis_selection(
+        db, experiment, protocol_id=protocol_id, design_revision_id=design_revision_id,
+        protocol_revision_id=protocol_revision_id,
+    )
+    if selection["consumption_mode"] == "per_row":
+        return ResultsResponse(**_row_analysis_unavailable())
+    replicates = selection["replicates"]
+    result = analyze_experiment_design(selection["design_spec"], replicates, consumption_mode="whole_dataset")
     return ResultsResponse(**result)
 
 
 @router.get("/{experiment_id}/run-results", response_model=RunResultsResponse)
 async def get_experiment_run_results_endpoint(
-    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession
+    experiment_id: uuid.UUID,
+    user: CurrentUser,
+    db: DbSession,
+    protocol_id: uuid.UUID | None = None,
+    design_revision_id: uuid.UUID | None = None,
+    protocol_revision_id: uuid.UUID | None = None,
 ) -> RunResultsResponse:
-    """Operational and outcome summary for the experiment's current cells.
-
-    This remains available for every experiment, including one without the
-    balanced 2-level design needed by the statistical ``/results`` endpoint.
-    """
+    """Operational Results for the selected published protocol and design."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
-    return RunResultsResponse(
-        **(await summarize_experiment_run_results(db, experiment_id=experiment_id, design_spec=experiment.design_spec))
-    )
+    try:
+        results = await summarize_experiment_run_results(
+            db,
+            experiment_id=experiment_id,
+            design_spec=experiment.design_spec,
+            protocol_id=protocol_id,
+            design_revision_id=design_revision_id,
+            protocol_revision_id=protocol_revision_id,
+        )
+    except RunResultsProjectionError as exc:
+        if str(exc) == "ambiguous_protocol":
+            raise HTTPException(status_code=422, detail="ambiguous_protocol") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return RunResultsResponse(**results)
 
 
 @router.get("/{experiment_id}/run-results.csv")
-async def export_run_results_csv_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> Response:
+async def export_run_results_csv_endpoint(
+    experiment_id: uuid.UUID,
+    user: CurrentUser,
+    db: DbSession,
+    protocol_id: uuid.UUID | None = None,
+    design_revision_id: uuid.UUID | None = None,
+    protocol_revision_id: uuid.UUID | None = None,
+) -> Response:
     """Download the same enriched data shown on the Results tab."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
-    results = await summarize_experiment_run_results(
-        db, experiment_id=experiment_id, design_spec=experiment.design_spec
+    try:
+        results = await summarize_experiment_run_results(
+            db, experiment_id=experiment_id, design_spec=experiment.design_spec,
+            protocol_id=protocol_id, design_revision_id=design_revision_id, protocol_revision_id=protocol_revision_id,
+        )
+    except RunResultsProjectionError as exc:
+        if str(exc) == "ambiguous_protocol":
+            raise HTTPException(status_code=422, detail="ambiguous_protocol") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    row_mode = results["consumption_mode"] == "per_row"
+    csv_text = result_rows_to_csv(
+        results["row_results"] if row_mode else results["replicates"],
+        results.get("selected_design_spec", experiment.design_spec),
+        consumption_mode=results["consumption_mode"],
     )
-    csv_text = result_rows_to_csv(results["replicates"], experiment.design_spec)
     filename = _UNSAFE_FILENAME_CHAR.sub("_", experiment.name.strip()) or "experiment"
     return Response(
         content=csv_text,
@@ -1075,14 +1168,30 @@ async def export_run_results_csv_endpoint(experiment_id: uuid.UUID, user: Curren
 
 
 @router.get("/{experiment_id}/run-results.schema.json")
-async def get_run_results_schema_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> dict[str, Any]:
+async def get_run_results_schema_endpoint(
+    experiment_id: uuid.UUID,
+    user: CurrentUser,
+    db: DbSession,
+    protocol_id: uuid.UUID | None = None,
+    design_revision_id: uuid.UUID | None = None,
+    protocol_revision_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
     """Machine-readable factor encoding and outcome types for Results CSV consumers."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
-    results = await summarize_experiment_run_results(
-        db, experiment_id=experiment_id, design_spec=experiment.design_spec
-    )
+    try:
+        results = await summarize_experiment_run_results(
+            db, experiment_id=experiment_id, design_spec=experiment.design_spec,
+            protocol_id=protocol_id, design_revision_id=design_revision_id, protocol_revision_id=protocol_revision_id,
+        )
+    except RunResultsProjectionError as exc:
+        if str(exc) == "ambiguous_protocol":
+            raise HTTPException(status_code=422, detail="ambiguous_protocol") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return result_rows_schema(
-        results["replicates"], results["metric_types"], results["metric_aggregations"], experiment.design_spec
+        results["row_results"] if results["consumption_mode"] == "per_row" else results["replicates"],
+        results["metric_types"], results["metric_aggregations"],
+        results.get("selected_design_spec", experiment.design_spec),
+        consumption_mode=results["consumption_mode"],
     )
 
 
@@ -1112,7 +1221,12 @@ async def upsert_replicate_endpoint(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-    replicate = await upsert_replicate(db, experiment_id=experiment_id, replicate_label=replicate_label, fields=fields)
+    try:
+        replicate = await upsert_replicate(
+            db, experiment_id=experiment_id, replicate_label=replicate_label, fields=fields
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ReplicateResponse.model_validate(replicate)
 
 
@@ -1139,13 +1253,29 @@ async def list_replicates_endpoint(
 
 
 @router.get("/{experiment_id}/replicates.csv")
-async def export_replicates_csv_endpoint(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> Response:
+async def export_replicates_csv_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession,
+    protocol_id: uuid.UUID | None = None,
+    design_revision_id: uuid.UUID | None = None,
+    protocol_revision_id: uuid.UUID | None = None,
+) -> Response:
     """One row per replicate that's actually run, one column per factor_values/
     metric_values key seen across them -- see services.csv_export
     (replicates_that_ran / replicates_to_csv)."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
-    replicates = await list_replicates(db, experiment_id=experiment_id)
-    csv_text = replicates_to_csv(replicates_that_ran(replicates), design_spec=experiment.design_spec)
+    selection = await _factorial_analysis_selection(
+        db, experiment, protocol_id=protocol_id, design_revision_id=design_revision_id,
+        protocol_revision_id=protocol_revision_id,
+    )
+    if selection["consumption_mode"] == "per_row":
+        raise HTTPException(status_code=422, detail={
+            "code": "use_row_results_export",
+            "message": "Per-row executions are available in the run-results.csv export.",
+            "href": f"/experiments/{experiment_id}/run-results.csv",
+            "link_text": "run-results.csv",
+        })
+    replicates = selection["replicates"]
+    csv_text = replicates_to_csv(replicates_that_ran(replicates), design_spec=selection["design_spec"])
     filename = _UNSAFE_FILENAME_CHAR.sub("_", experiment.name.strip()) or "experiment"
     return Response(
         content=csv_text,

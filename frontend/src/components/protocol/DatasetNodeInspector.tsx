@@ -180,6 +180,13 @@ export function DatasetNodeInspector({
         )}
       </FactorBindableField>
 
+      <div className="space-y-1.5">
+        <Label>Dataset ID</Label>
+        <p className="select-text break-all font-mono text-xs text-muted-foreground">
+          {config.dataset_id || 'No dataset selected.'}
+        </p>
+      </div>
+
       {datasetsQuery.isLoading ? (
         <Skeleton className="h-8 w-full" />
       ) : datasetsQuery.isError ? (

@@ -5,7 +5,7 @@ import { datasetsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { datasetRowBindings, datasetRowTopologyError } from '@/lib/datasetRows'
+import { datasetConfigIsFactorBound, datasetRowBindings, datasetRowFactorBindingError, datasetRowTopologyError } from '@/lib/datasetRows'
 import type { DatasetInput, ProtocolEdge, ProtocolNode } from '@/types/protocols'
 
 export function DatasetInputPanel({ edgeId, source, disabled = false }: { edgeId: string; source: string; disabled?: boolean }) {
@@ -22,7 +22,9 @@ export function DatasetInputPanel({ edgeId, source, disabled = false }: { edgeId
     ? ['per_row', [...saved.columns].sort()] : ['whole_dataset']))
   const inputKey = JSON.stringify(mode === 'per_row' ? [mode, [...columns].sort()] : [mode])
   const hasChanges = inputKey !== appliedKey
-  const id = (nodes.find(node => node.id === source)?.data.config as { dataset_id?: string })?.dataset_id
+  const sourceNode = nodes.find(node => node.id === source)
+  const id = (sourceNode?.data.config as { dataset_id?: string })?.dataset_id
+  const factorBound = datasetConfigIsFactorBound(sourceNode)
   const otherRowDriver = datasetRowBindings({ nodes, edges }).find(binding =>
     binding.edge.id !== edgeId && binding.input.mode === 'per_row' &&
     binding.config?.dataset_id?.toLowerCase() !== id?.toLowerCase(),
@@ -59,11 +61,12 @@ export function DatasetInputPanel({ edgeId, source, disabled = false }: { edgeId
     <p className="font-mono text-primary">Dataset input</p>
     <div role="radiogroup" aria-label="Dataset consumption">
       {(['whole_dataset', 'per_row'] as const).map(value => {
-        const optionDisabled = disabled || (value === 'per_row' && !!otherRowDriver)
+        const optionDisabled = disabled || (value === 'per_row' && (!!otherRowDriver || factorBound))
         return <label key={value} className={`flex items-center gap-2 py-1 ${optionDisabled ? 'cursor-not-allowed text-muted-foreground opacity-50' : ''}`}><input type="radio" name={`dataset-${edgeId}`} checked={mode === value} disabled={optionDisabled} onChange={() => { setMode(value); setApplied(null) }} />{value === 'per_row' ? 'Per row' : 'Whole dataset'}</label>
       })}
     </div>
     {otherRowDriver && <p className="text-muted-foreground">Per row is unavailable because another dataset already uses it. All per-row inputs must use the same dataset. Use Whole dataset here, or switch the other dataset to Whole dataset first.</p>}
+    {factorBound && <p className="text-muted-foreground">{datasetRowFactorBindingError}</p>}
     {schema.data && <p>{schema.data.row_count} original rows. {mode === 'per_row' ? 'Each row runs one complete protocol; Agents share one driver and select their own columns.' : 'Each replicate runs the protocol with the whole dataset.'}</p>}
     {mode === 'per_row' && (displayedColumns.length <= 10 ? columnPicker : <div className="space-y-2">
       <p className="text-muted-foreground">{columns.length} of {availableColumns.length} columns selected</p>
@@ -77,7 +80,7 @@ export function DatasetInputPanel({ edgeId, source, disabled = false }: { edgeId
         </DialogContent>
       </Dialog>
     </div>)}
-    {error && <p role="alert" className="text-destructive">{error}</p>}
+    {error && !(factorBound && error === datasetRowFactorBindingError) && <p role="alert" className="text-destructive">{error}</p>}
     <Button size="sm" disabled={!!error || disabled || !hasChanges} onClick={apply}>Apply</Button>
     {applied ? <p role="status" className="text-primary">{applied === 'per_row' ? 'Per row' : 'Whole dataset'} applied to the draft. Publish the experiment to update production runs and results.</p> : <p className="text-muted-foreground">Apply changes the draft connection. Publish the experiment to use it for production runs and results.</p>}
   </div>

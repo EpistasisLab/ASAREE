@@ -98,6 +98,25 @@ def test_duplicate_row_values_keep_distinct_original_positions(tmp_path):
     assert [candidate["dataset_row"]["row_index"] for candidate in candidates[:2]] == [0, 1]
 
 
+def test_explicit_row_selection_keeps_original_index(tmp_path):
+    candidates = enumerate_row_candidates(
+        parents=make_parents()[:1], source=make_source(tmp_path), graph=make_graph(),
+        design_spec=None, protocol_revision_id="published-revision", row_indices=[2],
+    )
+    assert len(candidates) == 1
+    assert candidates[0]["dataset_row"]["row_index"] == 2
+    assert candidates[0]["replicate_result_id"] == "result-0-1"
+
+
+@pytest.mark.parametrize("indices", [[], [-1], [3], [1, 1], [True], [1.5]])
+def test_rejects_invalid_source_row_selections(tmp_path, indices):
+    with pytest.raises(DatasetRowInputError, match="invalid_row_selection"):
+        enumerate_row_candidates(
+            parents=make_parents()[:1], source=make_source(tmp_path), graph=make_graph(),
+            design_spec=None, protocol_revision_id="published-revision", row_indices=indices,
+        )
+
+
 def test_candidate_order_does_not_depend_on_parent_input_order(tmp_path):
     arguments = {
         "source": make_source(tmp_path),

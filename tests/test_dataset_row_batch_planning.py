@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -18,6 +19,7 @@ import asaree.api.protocols as protocol_api
 from asaree.api.protocols import CellRunBatchRequest, create_cell_runs_endpoint
 from asaree.models.dataset import RegisteredDataset
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.models.factorial_row_result import FactorialRowResult
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.experiments import create_experiment
 from asaree.services.factorial_cells import upsert_replicate
@@ -234,3 +236,60 @@ async def test_new_publication_has_separate_row_slots(row_batch, monkeypatch: py
     assert first.protocol_revision_id != second.protocol_revision_id
     assert len(second.protocol_run_ids) == 30
     assert len(set(first.row_result_ids).intersection(second.row_result_ids)) == 0
+
+
+@pytest.mark.asyncio
+async def test_individual_row_run_and_rerun_preserve_other_rows(row_batch, monkeypatch) -> None:
+    db, ctx = row_batch
+    queued = []
+
+    async def enqueue(run_id):
+        queued.append(run_id)
+
+    monkeypatch.setattr(protocol_api, "enqueue_protocol_run", enqueue)
+    protocol = ctx["protocol"]
+    selection = CellRunBatchRequest(replicate_labels=["batch-parent"], row_indices=[2])
+    first = await create_cell_runs_endpoint(protocol.id, ctx["user"], db, selection)
+    assert len(first.protocol_run_ids) == len(first.row_result_ids) == 1
+    original = await db.get(ProtocolRun, first.protocol_run_ids[0])
+    assert original.dataset_row["row_index"] == 2
+    assert original.protocol_revision_id == ctx["revision"].id
+    assert await db.scalar(select(func.count()).select_from(FactorialRowResult).where(
+        FactorialRowResult.protocol_revision_id == ctx["revision"].id,
+    )) == 1
+
+    active = await create_cell_runs_endpoint(protocol.id, ctx["user"], db, selection)
+    assert active.protocol_run_ids == [] and active.skipped == 1
+    original.status = "completed"
+    await db.flush()
+    rerun = await create_cell_runs_endpoint(protocol.id, ctx["user"], db, CellRunBatchRequest(
+        replicate_labels=["batch-parent"], rerun_replicate_labels=["batch-parent"], row_indices=[2],
+    ))
+    assert len(rerun.protocol_run_ids) == 1
+    assert rerun.row_result_ids == first.row_result_ids
+    assert rerun.protocol_run_ids != first.protocol_run_ids
+    await db.refresh(original)
+    assert original.status == "completed"
+    remaining = await create_cell_runs_endpoint(protocol.id, ctx["user"], db, CellRunBatchRequest())
+    assert len(remaining.protocol_run_ids) == 29
+    assert remaining.skipped == 1
+    assert first.row_result_ids[0] not in remaining.row_result_ids
+    assert len(queued) == 31
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection", [
+    {"row_indices": [0]},
+    {"replicate_labels": [], "row_indices": [0]},
+    {"replicate_labels": ["batch-parent"], "row_indices": []},
+    {"replicate_labels": ["batch-parent"], "row_indices": [30]},
+    {"replicate_labels": ["unknown"], "row_indices": [0]},
+])
+async def test_invalid_row_selection_creates_no_runs(row_batch, selection) -> None:
+    db, ctx = row_batch
+    with pytest.raises(HTTPException) as exc:
+        await create_cell_runs_endpoint(ctx["protocol"].id, ctx["user"], db, CellRunBatchRequest(**selection))
+    assert exc.value.status_code == 422
+    assert await db.scalar(select(func.count()).select_from(ProtocolRun).where(
+        ProtocolRun.protocol_id == ctx["protocol"].id,
+    )) == 0

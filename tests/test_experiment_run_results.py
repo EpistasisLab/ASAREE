@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from asaree.services.experiment_run_results import (
     _node_labels,
     _numeric_metrics,
     _primary_metric,
+    _row_attempt_payload,
     _sum,
     _usage,
 )
@@ -657,6 +659,19 @@ def test_node_labels_prefers_the_canvas_name_over_its_durable_id() -> None:
 
 def test_node_labels_uses_the_canvas_placeholder_when_an_old_node_has_no_title() -> None:
     assert _node_labels({"nodes": [{"id": "node-old", "type": "agent", "data": {}}]}) == {"node-old": "Agent"}
+
+
+def test_row_attempt_includes_published_names_without_modifying_output() -> None:
+    nodes = {"node-stable": {"status": "completed", "output_text": "Answer in plain text"}}
+    run = SimpleNamespace(
+        id=uuid.uuid4(), status="completed", error=None, started_at=None, completed_at=None,
+        attempt_result={}, node_runs=nodes, conversation=None, dataset_row=None,
+        protocol_revision_id=uuid.uuid4(), design_revision_id=uuid.uuid4(),
+    )
+    payload = _row_attempt_payload(run, current=True, node_labels={"node-stable": "Published researcher"})
+    assert payload["node_labels"] == {"node-stable": "Published researcher"}
+    assert payload["node_runs"] == nodes
+    assert payload["current"] is True
 
 
 def test_execution_evidence_excludes_completed_configuration_nodes() -> None:

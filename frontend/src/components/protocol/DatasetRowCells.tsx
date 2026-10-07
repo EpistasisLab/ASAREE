@@ -71,9 +71,9 @@ export function DatasetRowCells({ results, selectedCellId, onSelect, designSpec,
             return <ReplicateRow key={replicate.replicate_result_id} number={replicate.replicate_number} results={resultView}
               detail={<>{done}/{rowCount ?? '?'} row executions complete{active > 0 && ` · ${active} active`}{errors > 0 && ` · ${errors} failed`}</>}
               status={<ReplicateStatus status={finished ? 'completed' : active ? 'running' : errors ? 'failed' : 'not_started'} />}
-              onView={hasAttempt && onSelectReplicate ? () => onSelectReplicate(cell.cell_id, replicate.replicate_result_id) : undefined}
+              onView={(hasAttempt || !!onRun) && onSelectReplicate ? () => onSelectReplicate(cell.cell_id, replicate.replicate_result_id) : undefined}
               viewAriaLabel={resultView ? `View ${cell.cell_label} replicate ${replicate.replicate_number}` : undefined}
-              viewLabel="View results"
+              viewLabel={resultView ? 'View results' : 'View rows'}
               actions={<>{onRun && <ReplicateRunAction disabled={runDisabled || active > 0 || !replicate.replicate_label} onClick={() => onRun([replicate.replicate_label], 1, done > 0 || errors > 0 ? [replicate.replicate_label] : [])} label={`Run ${cell.cell_label} replicate ${replicate.replicate_number}`}>{done > 0 || errors > 0 ? 'Re-run' : 'Run'}</ReplicateRunAction>}{onStop?.(replicateRows.filter(row => ['pending', 'running', 'finalizing'].includes(row.status) && row.latest_attempt).map(row => row.latest_attempt!.run_id))}</>} />
           })}</ul>
       </CellCard>

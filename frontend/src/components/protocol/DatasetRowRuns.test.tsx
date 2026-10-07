@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import type { ExperimentRunResults } from '@/types/experiments'
@@ -22,6 +22,32 @@ export function mountRows(inspect = vi.fn(), results = rowResults) {
  render(<QueryClientProvider client={client}><RunsTab experimentId="e" designSpec={{}} protocol={protocol} regenerationRequired={false} unboundFactors={[]} onViewResult={vi.fn()} onViewRowResult={inspect} /></QueryClientProvider>)
  return client
 }
+it('runs an unstarted source row in one selected replicate', async () => {
+ const run = vi.spyOn(protocolsApi, 'runCells').mockResolvedValue({} as never)
+ const results = { ...rowResults, row_results: [], row_cells: [{ cell_id: 'a', cell_label: 'short', factor_values: {}, replicate_count: 2, replicates: [
+  { replicate_result_id: 'parent', replicate_label: 'short', replicate_number: 1 },
+  { replicate_result_id: 'parent-2', replicate_label: 'short__rep2', replicate_number: 2 },
+ ] }] }
+ render(<QueryClientProvider client={new QueryClient()}><DatasetRowRuns results={results} protocol={protocol} blocked={false} /></QueryClientProvider>)
+ const sourceRows = screen.getAllByRole('row')
+ expect(sourceRows).toHaveLength(7)
+ fireEvent.click(within(sourceRows[2]).getByRole('button', { name: 'Run' }))
+ expect(run).not.toHaveBeenCalled()
+ expect(screen.getByText('Run source row 2?')).toBeInTheDocument()
+ fireEvent.click(screen.getByRole('button', { name: 'Run row' }))
+ await waitFor(() => expect(run).toHaveBeenCalledWith('p', { replicateLabels: ['short'], rerunReplicateLabels: [], row_indices: [1] }))
+})
+
+it('reruns only a finished source row and leaves active rows with stop controls', async () => {
+ const run = vi.spyOn(protocolsApi, 'runCells').mockResolvedValue({} as never)
+ render(<QueryClientProvider client={new QueryClient()}><DatasetRowRuns results={rowResults} protocol={protocol} blocked={false} /></QueryClientProvider>)
+ expect(screen.getAllByRole('button', { name: 'Re-run' })).toHaveLength(1)
+ expect(screen.getAllByRole('button', { name: 'Stop' })).toHaveLength(1)
+ fireEvent.click(screen.getByRole('button', { name: 'Re-run' }))
+ fireEvent.click(screen.getByRole('button', { name: 'Re-run row' }))
+ await waitFor(() => expect(run).toHaveBeenCalledWith('p', { replicateLabels: ['same'], rerunReplicateLabels: ['same'], row_indices: [1] }))
+})
+
 it('renders authoritative forecast and distinct row identities', async () => {
  const inspect = vi.fn()
  mountRows(inspect)
@@ -53,7 +79,8 @@ it('shows generated cells before row executions are planned', () => {
  fireEvent.click(screen.getByRole('button', { name: 'View cell Prompt:short' }))
  expect(screen.getByText('Replicate 1')).toBeInTheDocument()
  expect(screen.getByText('Replicate 2')).toBeInTheDocument()
- expect(screen.queryByRole('button', { name: 'View results' })).not.toBeInTheDocument()
+ expect(screen.getAllByRole('button', { name: 'View results' }).every(button => button.hasAttribute('disabled'))).toBe(true)
+ expect(screen.getAllByRole('button', { name: 'View rows' })).toHaveLength(2)
  expect(screen.queryByRole('button', { name: 'View Prompt:short replicate 1' })).not.toBeInTheDocument()
  expect(screen.getByRole('button', { name: 'Run Prompt:short replicate 1' })).toBeEnabled()
  expect(screen.getByRole('button', { name: 'Run all replicates in Prompt:short' })).toBeEnabled()

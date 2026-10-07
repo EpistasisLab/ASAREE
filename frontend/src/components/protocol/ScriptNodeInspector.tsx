@@ -1,11 +1,13 @@
-import { Code2 } from 'lucide-react'
+import { Code2, Power, Split, Trash2 } from 'lucide-react'
 import { nodeAccent } from '@/lib/nodeAccent'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { EditableNodeTitle } from './EditableNodeTitle'
-import { FactorBindableField } from './FactorBindableField'
+import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { PythonCodeEditor } from './PythonCodeEditor'
+import { useProtocolCanvasActions } from './ProtocolCanvasContext'
 import type { ScriptNodeConfig, ScriptNodeData, ProtocolNode } from '@/types/protocols'
 
 const ACCENT = nodeAccent('script')
@@ -13,28 +15,22 @@ const ACCENT = nodeAccent('script')
 // Same floating-dialog shell as every other node inspector. Python-only for
 // v1 (see ScriptNodeData's own comment in types/protocols.ts) -- "Language"
 // is a fixed label, not a picker, so there's nothing to configure there yet.
-// The whole node is also factor-bindable (bindableFields.ts's 'script_config'
-// kind) -- comparing two hand-written scoring scripts as an experimental
-// factor is a direct use of the same whole-node-config mechanism model_config/
-// tool_config/pattern already have.
+// Script factor creation lives in the hover toolbar. The inspector edits the
+// base code and exposes existing factor links and connector-controlled availability.
 export function ScriptNodeInspector({
   node,
-  experimentId,
-  factorNodeLabel,
+  connectorFactorName,
   onChange,
   onDelete,
   onClose,
 }: {
   node: (ProtocolNode & { data: ScriptNodeData }) | null
-  experimentId: string | null
-  // The agent-traced display label (see bindableFields.ts's
-  // agentTracedLabel) -- distinct from data.label, which is this node's own
-  // plain label shown in the header title.
-  factorNodeLabel: string
+  connectorFactorName?: string
   onChange: (nodeId: string, data: ScriptNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
+  const { requestEditFactor } = useProtocolCanvasActions()
   if (!node) return null
   const data = node.data
   const config = data.config
@@ -42,10 +38,6 @@ export function ScriptNodeInspector({
 
   function patchConfig(patch: Partial<ScriptNodeConfig>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
-  }
-
-  function bindFactor(fieldPath: string, factorName: string) {
-    onChange(node!.id, { ...data, factor_bindings: { ...bindings, [fieldPath]: factorName } })
   }
 
   function unbindFactor(fieldPath: string) {
@@ -70,6 +62,24 @@ export function ScriptNodeInspector({
       onDelete={() => onDelete(node.id)}
       onClose={onClose}
     >
+      <div className="rounded-lg border px-3 py-2">
+        <p className="text-xs text-muted-foreground">
+          <span className="font-medium text-chart-2">Make factor</span> has moved to the node toolbar. Hover over the Script node and click the <Split className="inline size-3 align-text-bottom text-chart-2" aria-hidden="true" /> icon.
+          {' '}<span className="ml-4 inline-flex flex-col gap-1 align-middle">
+            <span className="text-[10px]">Toolbar preview</span>
+            <span role="img" aria-label="Node toolbar preview: activate or deactivate, delete, and Make factor (the branching icon on the right)" className="inline-flex items-center gap-3">
+              <Power className="size-3" />
+              <Trash2 className="size-3" />
+              <Split className="size-3 text-chart-2" />
+            </span>
+          </span>
+        </p>
+      </div>
+      {connectorFactorName ? <div className="space-y-2 rounded-lg border px-3 py-2"><div className="flex items-center justify-between"><Label>Enabled</Label><Switch checked disabled /></div><p className="text-xs text-muted-foreground">Availability is controlled by connector factor {connectorFactorName}. Remove it to restore individual controls.</p>{Object.entries(bindings).map(([path, name]) => <div key={path} className="space-y-1"><p className="text-xs text-destructive">Individual factor {name} conflicts with this connector.</p><Button variant="outline" size="sm" onClick={() => unbindFactor(path)}>Remove individual binding</Button><p className="text-xs text-muted-foreground">Its declaration remains in Design until you remove or rebind it.</p></div>)}</div> : <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+        <div><Label htmlFor="script-enabled">Enabled</Label><p className="text-xs text-muted-foreground">Off: the wired agent never sees this script at all.</p>{bindings['config.enabled'] && <p className="text-xs text-chart-2">Factor: {bindings['config.enabled']}</p>}</div>
+        <Switch id="script-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
+      </div>}
+
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
           <Label htmlFor="script-name">Name</Label>
@@ -91,31 +101,7 @@ export function ScriptNodeInspector({
         />
       </div>
 
-      <FactorBindableField
-        experimentId={experimentId}
-        fieldPath="config"
-        defaultLabel="Script"
-        nodeLabel={factorNodeLabel}
-        levelType="script_config"
-        currentValue={config}
-        boundFactorName={bindings.config}
-        onBind={(name) => bindFactor('config', name)}
-        onUnbind={() => unbindFactor('config')}
-      >
-        {(trigger) => (
-          <div className="w-full space-y-1.5">
-            <Label className="flex items-center gap-1.5">
-              Code
-              {trigger}
-            </Label>
-            <PythonCodeEditor
-              value={config.code}
-              onChange={(code) => patchConfig({ code })}
-              height="max(12rem, calc(100vh - 22rem))"
-            />
-          </div>
-        )}
-      </FactorBindableField>
+      <div className="space-y-1.5"><Label>Code</Label>{bindings.config && <Button variant="ghost" size="sm" onClick={() => requestEditFactor(bindings.config)}>Factor: {bindings.config}</Button>}<PythonCodeEditor value={config.code} onChange={(code) => patchConfig({ code })} height="max(12rem, calc(100vh - 22rem))" /></div>
 
     </NodeInspectorDialog>
   )

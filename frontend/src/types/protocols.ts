@@ -364,6 +364,10 @@ export interface AgentNodeData {
   knowledge_factor_mode?: 'knowledge_selection' | 'knowledge_toggle'
   sub_agent_selection?: string[]
   sub_agent_factor_mode?: 'sub_agent_selection' | 'sub_agent_toggle'
+  script_selection?: string[]
+  script_factor_mode?: 'script_selection' | 'script_toggle'
+  tool_selection?: string[]
+  tool_factor_mode?: 'tool_selection' | 'tool_toggle'
   skill_selection?: string[]
   skill_factor_mode?: 'skill_selection' | 'skill_toggle'
   label: string
@@ -685,16 +689,11 @@ export function defaultDatasetNodeData(label = 'Dataset'): DatasetNodeData {
   return { label, config: { dataset_id: null, dataset_name: null, enabled: true } }
 }
 
-// A "Script" node -- carries a fixed piece of code an Agent passes verbatim
-// as some tool's own code-shaped argument (e.g. a domain MCP server's
-// run_model_script's `code`). Not executed by ASAREE itself -- same "pure
-// config source" status as every other connector; _build_user_input folds
-// the code, fenced, into the wired agent's own instruction. Python-only for
-// now (language is fixed, not a picker) -- matches the one real use case in
-// evidence (a fixed XGBoost+Optuna scoring script whose only per-cell
-// variation is the hyperparameters an upstream agent proposes, not the code
-// itself).
+// Script source stays outside the prompt and is staged in the run workspace.
+// Agents can execute available Scripts through run_wired_script; Tool Steps
+// can send a wired Script's source through a script_code argument. Python-only.
 export interface ScriptNodeConfig {
+  enabled?: boolean
   name: string
   description?: string
   language: 'python'

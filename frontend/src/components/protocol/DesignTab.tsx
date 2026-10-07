@@ -17,6 +17,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { ApiError, experimentsApi, protocolsApi, skillsApi } from '@/api/client'
 import { coordinationStrategyIssues } from '@/lib/coordinationStrategy'
 import { unboundFactorNames } from '@/lib/factorBindings'
+import { scriptFactorIssues } from '@/lib/scriptFactors'
+import { toolFactorIssues } from '@/lib/toolFactors'
+import { mcpServersApi } from '@/api/client'
 import { skillFactorIssues } from '@/lib/skillFactors'
 import { promptReferenceScope } from '@/lib/promptReferences'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
@@ -511,6 +514,9 @@ export function DesignTab({
   const datasetLibrary = useQuery({ queryKey: ['datasets'], queryFn: () => datasetsApi.list(), enabled: factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') })
   const datasetIssues = datasetFactorIssues(draftGraph, factors, datasetLibrary.data ? new Set(datasetLibrary.data.map((dataset) => dataset.id)) : undefined)
   const subAgentIssues = subAgentFactorIssues(draftGraph, factors)
+  const toolLibrary = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list(), enabled: factors.some((factor) => factor.level_type === 'tool_selection' || factor.level_type === 'tool_toggle') })
+  const scriptIssues = scriptFactorIssues(draftGraph, factors)
+  const toolIssues = toolFactorIssues(draftGraph, factors, toolLibrary.data ? new Set(toolLibrary.data.map((server) => server.id)) : undefined)
   const skillIssues = skillFactorIssues(draftGraph, factors, skillLibrary.data ? new Set(skillLibrary.data.map((skill) => skill.id)) : undefined)
   const impact = impactQuery.data
 
@@ -880,14 +886,14 @@ export function DesignTab({
             Unbound factor{unboundFactors.length === 1 ? '' : 's'}: {unboundFactors.join(', ')}. Rebind on the canvas or remove from this design.
           </p>
         )}
-        {[...subAgentIssues, ...skillIssues, ...datasetIssues, ...knowledgeIssues].map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
+        {[...scriptIssues, ...toolIssues, ...subAgentIssues, ...skillIssues, ...datasetIssues, ...knowledgeIssues].map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
         <Button
           size="sm"
           disabled={
             generateMutation.isPending ||
             isAutosavingMetadata ||
             !canGenerate ||
-            unboundFactors.length > 0 || subAgentIssues.length > 0 || knowledgeIssues.length > 0 || (factors.some(isKnowledgeFactor) && !knowledgeLibrary.isSuccess) || skillIssues.length > 0 || datasetIssues.length > 0 || (factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') && !datasetLibrary.isSuccess) || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
+            scriptIssues.length > 0 || toolIssues.length > 0 || (factors.some((factor) => factor.level_type === 'tool_selection' || factor.level_type === 'tool_toggle') && !toolLibrary.isSuccess) || unboundFactors.length > 0 || subAgentIssues.length > 0 || knowledgeIssues.length > 0 || (factors.some(isKnowledgeFactor) && !knowledgeLibrary.isSuccess) || skillIssues.length > 0 || datasetIssues.length > 0 || (factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') && !datasetLibrary.isSuccess) || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
           }
           onClick={() => generateMutation.mutate()}
         >

@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { datasetsApi, experimentsApi, protocolsApi, skillsApi } from '@/api/client'
+import { datasetsApi, experimentsApi, mcpServersApi, protocolsApi, skillsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import type { Experiment } from '@/types/experiments'
 import {
@@ -207,6 +207,71 @@ describe('ProtocolCanvas connector adds', () => {
       expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ skill_selection: 'Writer:Skills' })
       expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.skill_factor_mode).toBe(mode)
       expect(persisted?.nodes.filter((node) => node.type === 'skill')).toHaveLength(2)
+    })
+  })
+
+  it.each(['tool_selection', 'tool_toggle'] as const)('creates a %s tool factor from the node hover menu and preserves connected nodes', async (mode) => {
+    const experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    vi.spyOn(mcpServersApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        ...['a', 'b'].map((id) => ({ id, type: 'mcp_tool', position: { x: 100, y: 0 }, data: { label: `Tool ${id}`, config: { server_id: id, server_name: `Server ${id}`, tool_names: ['run'] } } })),
+      ],
+      edges: ['a', 'b'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'tool' })),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
+    expect(makeFactor).not.toBeNull()
+    fireEvent.click(makeFactor!)
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: mode === 'tool_toggle' ? 'All agent tools on/off' : 'Tool levels' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Tools', level_type: mode, levels: mode === 'tool_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'tool_toggle' ? ['All enabled', 'All disabled'] : ['Tool a', 'Tool b'] }] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ tool_selection: 'Writer:Tools' })
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.tool_factor_mode).toBe(mode)
+      expect(persisted?.nodes.filter((node) => node.type === 'mcp_tool')).toHaveLength(2)
+    })
+  })
+
+  it.each(['script_selection', 'script_toggle'] as const)('creates a %s script factor from the node hover menu and preserves connected nodes', async (mode) => {
+    const experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        ...['a', 'b'].map((id) => ({ id, type: 'script', position: { x: 100, y: 0 }, data: { label: `Script ${id}`, config: { name: `Script ${id}`, language: 'python', code: 'print(1)'  } } })),
+      ],
+      edges: ['a', 'b'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'tool' })),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
+    expect(makeFactor).not.toBeNull()
+    fireEvent.click(makeFactor!)
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: mode === 'script_toggle' ? 'All agent scripts on/off' : 'Script levels' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Scripts', level_type: mode, levels: mode === 'script_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'script_toggle' ? ['All enabled', 'All disabled'] : ['Script a', 'Script b'] }] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ script_selection: 'Writer:Scripts' })
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.script_factor_mode).toBe(mode)
+      expect(persisted?.nodes.filter((node) => node.type === 'script')).toHaveLength(2)
     })
   })
 

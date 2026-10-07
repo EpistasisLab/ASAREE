@@ -37,8 +37,10 @@ from asaree.services.dataset_factors import validate_dataset_factors
 from asaree.services.design_revisions import get_current_revision, supersede_and_create
 from asaree.services.factorial_cells import list_replicates, upsert_replicate
 from asaree.services.knowledge_factors import validate_knowledge_factors
+from asaree.services.script_factors import validate_script_factors, validate_tool_step_script_factors
 from asaree.services.skill_factors import validate_skill_factors
 from asaree.services.sub_agent_factors import validate_sub_agent_factor_structure
+from asaree.services.tool_factors import validate_tool_factors
 
 
 class DesignValidationError(ValueError):
@@ -290,10 +292,13 @@ async def get_design_impact(
     material = material_design_spec(design_spec)
     incomplete_skills = any(
         (factor.get("level_type") in {
-                "sub_agent_selection", "skill_selection", "dataset_selection", "knowledge_selection"
+                "sub_agent_selection", "script_selection", "tool_selection", "skill_selection",
+                "dataset_selection", "knowledge_selection"
             }
          and len(factor.get("levels") or []) < 2)
-        or (factor.get("level_type") in {"sub_agent_toggle", "skill_toggle", "dataset_toggle", "knowledge_toggle"}
+        or (factor.get("level_type") in {
+            "sub_agent_toggle", "script_toggle", "tool_toggle", "skill_toggle", "dataset_toggle", "knowledge_toggle"
+        }
             and not any(factor.get("levels") or []))
         for factor in material["factors"]
     )
@@ -421,17 +426,27 @@ async def generate_design_cells(
     ).scalar_one_or_none()
     if experiment is None:
         raise DesignValidationError("Experiment not found")
+    protocol_for_scripts = await db.scalar(select(Protocol).where(Protocol.experiment_id == experiment_id))
+    try:
+        validate_tool_step_script_factors(
+            {"factors": factors}, protocol_for_scripts.graph if protocol_for_scripts else {}
+        )
+    except ValueError as exc:
+        raise DesignValidationError(str(exc)) from exc
     if any(
         factor.get("level_type") in {
             "sub_agent_selection", "sub_agent_toggle",
-            "skill_selection", "skill_toggle", "dataset_selection", "dataset_toggle",
+            "script_selection", "script_toggle", "tool_selection", "tool_toggle", "skill_selection", "skill_toggle",
+            "dataset_selection", "dataset_toggle",
             "knowledge_selection", "knowledge_toggle",
         }
         for factor in factors
     ):
-        protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == experiment_id))
+        protocol = protocol_for_scripts
         try:
             validate_sub_agent_factor_structure({"factors": factors}, protocol.graph if protocol else {})
+            validate_script_factors({"factors": factors}, protocol.graph if protocol else {})
+            await validate_tool_factors({"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id)
             await validate_skill_factors({"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id)
             await validate_knowledge_factors(
                 {"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id

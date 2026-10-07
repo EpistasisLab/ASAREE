@@ -38,6 +38,8 @@ import { useDialogAutosave } from './useDialogAutosave'
 import type { DesignFactor } from '@/types/experiments'
 import { DatasetFactorEditor } from './DatasetFactorEditor'
 import { KnowledgeFactorEditor } from './KnowledgeFactorEditor'
+import { ScriptFactorEditor } from './ScriptFactorEditor'
+import { ToolFactorEditor } from './ToolFactorEditor'
 import { SkillFactorEditor } from './SkillFactorEditor'
 
 const EFFORT_LEVELS_FALLBACK = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -293,7 +295,7 @@ export function PatternLevelRow({ value, onChange }: { value: StructuredLevel; o
 // Script node's config (protocol_execution.py's _resolve_script_configs
 // reads it verbatim, never the node's xyflow type). Python-only for v1,
 // same as ScriptNodeInspector's own fixed "Language: Python" label.
-function ScriptConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+export function ScriptConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
   function patch(patch: StructuredLevel) {
     onChange({ ...value, ...patch })
   }
@@ -310,6 +312,7 @@ function ScriptConfigLevelRow({ value, onChange }: { value: StructuredLevel; onC
           <p className="rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">Python</p>
         </div>
       </div>
+      <div className="space-y-1"><Label className="text-xs">Description and when to use it</Label><Input value={(value.description as string) ?? ''} onChange={(event) => patch({ description: event.target.value })} /></div>
       <div className="space-y-1">
         <Label className="text-xs">Code</Label>
         <PythonCodeEditor value={(value.code as string) ?? ''} onChange={(code) => patch({ code })} rows={10} />
@@ -424,7 +427,7 @@ function DatasetConfigLevelRow({
 // the factor arrived with an imported design_spec) the level falls back to
 // listing its stored names read-only, so an unresolvable server never looks
 // like "no tools selected".
-function ToolNamesLevelRow({
+export function ToolNamesLevelRow({
   value,
   serverId,
   onChange,
@@ -513,6 +516,8 @@ export function FactorEditorDialog(props: Parameters<typeof StandardFactorEditor
   if (props.factor.level_type === 'knowledge_selection' || props.factor.level_type === 'knowledge_toggle') return <KnowledgeFactorEditor {...props} />
   if (props.factor.level_type === 'dataset_selection' || props.factor.level_type === 'dataset_toggle') return <DatasetFactorEditor {...props} />
   if ((props.factor.level_type === 'skill_selection' || props.factor.level_type === 'skill_toggle')) return <SkillFactorEditor {...props} />
+  if (props.factor.level_type === 'tool_selection' || props.factor.level_type === 'tool_toggle') return <ToolFactorEditor {...props} />
+  if (props.factor.level_type === 'script_selection' || props.factor.level_type === 'script_toggle') return <ScriptFactorEditor {...props} />
   return <StandardFactorEditorDialog {...props} />
 }
 

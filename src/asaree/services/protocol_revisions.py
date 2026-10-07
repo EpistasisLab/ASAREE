@@ -151,10 +151,13 @@ async def publish_protocol(
         from asaree.services.design_generation import get_design_impact
         incomplete_skills = any(
             (factor.get("level_type") in {
-                "sub_agent_selection", "skill_selection", "dataset_selection", "knowledge_selection"
+                "sub_agent_selection", "script_selection", "tool_selection", "skill_selection",
+                "dataset_selection", "knowledge_selection"
             }
              and len(factor.get("levels") or []) < 2)
-            or (factor.get("level_type") in {"sub_agent_toggle", "skill_toggle", "dataset_toggle", "knowledge_toggle"}
+            or (factor.get("level_type") in {
+                "sub_agent_toggle", "script_toggle", "tool_toggle", "skill_toggle", "dataset_toggle", "knowledge_toggle"
+            }
             and not any(factor.get("levels") or []))
             for factor in (experiment.design_spec or {}).get("factors") or []
         )

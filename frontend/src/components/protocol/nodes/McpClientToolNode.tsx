@@ -3,6 +3,7 @@ import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { Plug } from 'lucide-react'
 import type { McpToolNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
 
 // Its own hue, distinct from McpToolNode's: "a server the deployment
@@ -21,7 +22,9 @@ export function McpClientToolNode({ id, data, selected }: NodeProps & { data: Mc
   const toolNames = data.config?.tool_names ?? []
   const summary = toolNames.length > 0 ? `${data.config.server_name ?? '?'}: ${toolNames.join(', ')}` : null
   const { updateNodeData } = useReactFlow()
-  const enabled = data.config?.enabled ?? true
+  const { requestToolFactor, experimentLocked } = useProtocolCanvasActions()
+  const controlled = !!data.toolFactorControlled
+  const enabled = controlled || (data.config?.enabled ?? true)
   const allowListIsFactor = !!data.factor_bindings?.['config.tool_names']
 
   return (
@@ -37,10 +40,11 @@ export function McpClientToolNode({ id, data, selected }: NodeProps & { data: Mc
       // too, so the allow-list is the only thing that can be empty -- and
       // same suppression once that allow-list is itself a factor.
       warning={summary || allowListIsFactor ? undefined : 'Not configured -- allow at least one tool'}
-      factorCount={boundFactorCount(data)}
+      factorCount={controlled ? 1 : boundFactorCount(data)}
+      onMakeFactor={!experimentLocked && requestToolFactor ? () => requestToolFactor(id) : undefined}
       dimmed={!enabled}
       isActive={enabled}
-      onToggleActive={() => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
+      onToggleActive={controlled ? undefined : () => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
     />
   )
 }

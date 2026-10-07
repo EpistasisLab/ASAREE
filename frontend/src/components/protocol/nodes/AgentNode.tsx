@@ -82,7 +82,7 @@ export function AgentNode({
     ...(peerNeedsToolCalling ? ["This model can't call tools, so this agent can't consult or delegate to connected agents"] : []),
   ]
   const { updateNodeData } = useReactFlow()
-  const { requestRunNode, requestSubAgentFactor, experimentLocked } = useProtocolCanvasActions()
+  const { requestRunNode, requestSubAgentFactor, requestEditFactor, experimentLocked } = useProtocolCanvasActions()
   const controlled = isSubAgent && !!data.subAgentFactorControlled
   const isActive = controlled || (data.active ?? true)
   const factorCount = boundFactorCount(data) + (controlled ? 1 : 0)
@@ -405,7 +405,8 @@ export function AgentNode({
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.tool}>Tool</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="tool" left={CONNECTOR_LEFT.tool} alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="tool" left={CONNECTOR_LEFT.tool} alwaysVisible factorName={data.factor_bindings?.tool_selection} factorLevelCount={data.toolFactorLevelCount as number | undefined} factorOnOff={data.tool_factor_mode === 'tool_toggle'} />
+      {data.factor_bindings?.script_selection && <button type="button" className="nodrag absolute text-[10px] text-chart-2" style={{ left: `calc(${CONNECTOR_LEFT.tool} + 12px)`, bottom: -34 }} onClick={() => requestEditFactor(data.factor_bindings!.script_selection)}>Scripts: {data.script_factor_mode === 'script_toggle' ? 'on/off' : `${data.scriptFactorLevelCount ?? 0} levels`}</button>}
       {/* Output Parser -- the field spec the agent's answer is written to and
           read back out of. Last on the bottom edge, at 95%: it's the only
           connector here whose work outlives the agent's own turn, so it sits

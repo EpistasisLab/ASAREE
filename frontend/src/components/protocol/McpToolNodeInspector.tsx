@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { nodeAccent } from '@/lib/nodeAccent'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { KeyRound, Plug, RefreshCw, Wrench } from 'lucide-react'
+import { KeyRound, Plug, RefreshCw, Wrench, Power, Split, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -9,7 +9,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { mcpServersApi } from '@/api/client'
 import { EditableNodeTitle } from './EditableNodeTitle'
-import { FactorBindableField } from './FactorBindableField'
 import { MCP_CLIENT_TOOL_NODE_TYPE } from './mcpServerCatalog'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { ManageMcpCredentialsDialog } from './ManageMcpCredentialsDialog'
@@ -40,26 +39,17 @@ const TRANSPORT_LABELS: Record<string, string> = { stdio: 'stdio', http: 'Stream
 // dropdown -- and the whole-config "Server & tools" factor binding that hung
 // off it -- are gone deliberately: reassigning a node's server after the
 // fact contradicts the one-node-per-server model. Use a second MCP Servers
-// node instead. What DID survive that removal is varying the allow-list
-// alone: "Tools allowed" is bindable as a `tool_names` factor whose levels
-// are each a subset of this one server's tools.
+// node instead. Factor creation lives in the node toolbar; this inspector
+// preserves the pinned server and edits its base allow-list.
 export function McpToolNodeInspector({
   node,
-  experimentId,
-  factorNodeLabel,
+  connectorFactorName,
   onChange,
   onDelete,
   onClose,
 }: {
   node: (ProtocolNode & { data: McpToolNodeData }) | null
-  experimentId: string | null
-  // The agent-traced display label (see bindableFields.ts's
-  // agentTracedLabel) -- distinct from data.label, which is this node's own
-  // plain label shown in the header title. Only used to scope this node's
-  // "+ Make experimental factor" names, e.g. "Research Agent:Search API:
-  // Enabled" instead of an ambiguous plain "Search API:Enabled" that can't
-  // tell two agents' identically-labeled tool nodes apart.
-  factorNodeLabel: string
+  connectorFactorName?: string
   onChange: (nodeId: string, data: McpToolNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
@@ -107,10 +97,6 @@ export function McpToolNodeInspector({
     patchConfig({ tool_names: allowed ? [...selectedTools, name] : selectedTools.filter((t) => t !== name) })
   }
 
-  function bindFactor(fieldPath: string, factorName: string) {
-    onChange(node!.id, { ...data, factor_bindings: { ...bindings, [fieldPath]: factorName } })
-  }
-
   function unbindFactor(fieldPath: string) {
     const next = { ...bindings }
     delete next[fieldPath]
@@ -137,29 +123,23 @@ export function McpToolNodeInspector({
       onDelete={() => onDelete(node.id)}
       onClose={onClose}
     >
-      <FactorBindableField
-        experimentId={experimentId}
-        fieldPath="config.enabled"
-        defaultLabel="Enabled"
-        nodeLabel={factorNodeLabel}
-        levelType="boolean"
-        boundFactorName={bindings['config.enabled']}
-        onBind={(name) => bindFactor('config.enabled', name)}
-        onUnbind={() => unbindFactor('config.enabled')}
-      >
-        {(trigger) => (
-          <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
-            <div>
-              <Label htmlFor="tool-enabled" className="flex items-center gap-1.5">
-                Enabled
-                {trigger}
-              </Label>
-              <p className="text-xs text-muted-foreground">Off: this server's tools aren't offered to the agent at all.</p>
-            </div>
-            <Switch id="tool-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
-          </div>
-        )}
-      </FactorBindableField>
+      <div className="rounded-lg border px-3 py-2">
+        <p className="text-xs text-muted-foreground">
+          <span className="font-medium text-chart-2">Make factor</span> has moved to the node toolbar. Hover over the Tool node and click the <Split className="inline size-3 align-text-bottom text-chart-2" aria-hidden="true" /> icon.
+          {' '}<span className="ml-4 inline-flex flex-col gap-1 align-middle">
+            <span className="text-[10px]">Toolbar preview</span>
+            <span role="img" aria-label="Node toolbar preview: activate or deactivate, delete, and Make factor (the branching icon on the right)" className="inline-flex items-center gap-3">
+              <Power className="size-3" />
+              <Trash2 className="size-3" />
+              <Split className="size-3 text-chart-2" />
+            </span>
+          </span>
+        </p>
+      </div>
+      {connectorFactorName ? <div className="space-y-2 rounded-lg border px-3 py-2"><div className="flex items-center justify-between"><Label>Enabled</Label><Switch checked disabled /></div><p className="text-xs text-muted-foreground">Availability is controlled by connector factor {connectorFactorName}. Remove it to restore individual controls.</p>{Object.entries(bindings).map(([path, name]) => <div key={path} className="space-y-1"><p className="text-xs text-destructive">Individual factor {name} conflicts with this connector.</p><Button variant="outline" size="sm" onClick={() => unbindFactor(path)}>Remove individual binding</Button><p className="text-xs text-muted-foreground">Its declaration remains in Design until you remove or rebind it.</p></div>)}</div> : <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+        <div><Label htmlFor="tool-enabled">Enabled</Label><p className="text-xs text-muted-foreground">Off: the wired agent never sees this server’s tools at all.</p>{bindings['config.enabled'] && <p className="text-xs text-chart-2">Factor: {bindings['config.enabled']}</p>}</div>
+        <Switch id="tool-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
+      </div>}
 
       {/* Which process this node actually talks to. Most valuable on a client
           tool -- its endpoint is something a user typed, so it's part of the
@@ -226,44 +206,14 @@ export function McpToolNodeInspector({
       )}
 
       <div className="space-y-1.5">
-        {/* The one factor this node type offers beyond Enabled: which of THIS
-            server's tools the agent may call, varied per cell. The node's
-            server stays pinned across every level -- see bindableFields.ts's
-            mcp_tool case for why swapping it isn't offered. The toggle list
-            below stays live even once bound (it's still this node's base
-            config, and every other inspector leaves its own bound control
-            editable too); the levels just override it per cell. */}
-        <FactorBindableField
-          experimentId={experimentId}
-          fieldPath="config.tool_names"
-          defaultLabel="Tools allowed"
-          nodeLabel={factorNodeLabel}
-          levelType="tool_names"
-          currentValue={selectedTools}
-          toolServerId={config.server_id}
-          boundFactorName={bindings['config.tool_names']}
-          onBind={(name) => bindFactor('config.tool_names', name)}
-          onUnbind={() => unbindFactor('config.tool_names')}
-        >
-          {(trigger) => (
-            <div className="flex items-center justify-between gap-2">
-              <Label className="flex items-center gap-1.5">
-                Tools allowed
-                {trigger}
-              </Label>
-              {tools.length > 0 && (
-                <div className="flex shrink-0 gap-3 text-xs text-muted-foreground">
-                  <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: tools.map((t) => t.name) })}>
-                    All
-                  </button>
-                  <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: [] })}>
-                    None
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-        </FactorBindableField>
+        <div className="flex items-center justify-between gap-2">
+          <div><Label>Tools allowed</Label>{bindings['config.tool_names'] && <p className="text-xs text-chart-2">Factor: {bindings['config.tool_names']}</p>}</div>
+          {tools.length > 0 && <div className="flex gap-3 text-xs text-muted-foreground">
+            <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: tools.map((tool) => tool.name) })}>All</button>
+            <button type="button" className="hover:text-foreground" onClick={() => patchConfig({ tool_names: [] })}>None</button>
+          </div>}
+        </div>
+        {connectorFactorName && <p className="text-xs text-muted-foreground">This allow-list is preserved when the connector selects this node.</p>}
         {serversQuery.isLoading ? (
           <Skeleton className="h-16 w-full" />
         ) : serversQuery.isError ? (

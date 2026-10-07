@@ -69,9 +69,11 @@ from asaree.services.protocols import (
     list_protocols,
     update_protocol,
 )
+from asaree.services.script_factors import test_script_factor_values
 from asaree.services.skill_factors import test_skill_factor_values
 from asaree.services.sub_agent_factors import test_sub_agent_factor_values
 from asaree.services.test_run_results import FreshnessReason, project_test_run_result
+from asaree.services.tool_factors import test_tool_factor_values
 from asaree.worker.enqueue import enqueue_protocol_run
 
 router = APIRouter(prefix="/protocols", tags=["protocols"])
@@ -282,6 +284,8 @@ class TestRunRequest(BaseModel):
     row_index: StrictInt | None = Field(default=None, ge=0)
     knowledge_selections: dict[str, str] | None = None
     sub_agent_selections: dict[str, str] | None = None
+    script_selections: dict[str, str] | None = None
+    tool_selections: dict[str, str] | None = None
     skill_selections: dict[str, str] | None = None
     dataset_selections: dict[str, str] | None = None
 
@@ -292,6 +296,8 @@ class NodePlayRequest(BaseModel):
     row_index: StrictInt | None = Field(default=None, ge=0)
     knowledge_selections: dict[str, str] | None = None
     sub_agent_selections: dict[str, str] | None = None
+    script_selections: dict[str, str] | None = None
+    tool_selections: dict[str, str] | None = None
     skill_selections: dict[str, str] | None = None
     dataset_selections: dict[str, str] | None = None
 
@@ -302,6 +308,8 @@ async def _node_test_factor_values(
     try:
         return {
             **await test_sub_agent_factor_values(graph, body.sub_agent_selections if body else None, owner_id, node_id),
+            **await test_script_factor_values(graph, body.script_selections if body else None, node_id),
+            **await test_tool_factor_values(graph, body.tool_selections if body else None, owner_id, node_id),
             **await test_skill_factor_values(graph, body.skill_selections if body else None, owner_id, node_id),
             **await test_knowledge_factor_values(graph, body.knowledge_selections if body else None, owner_id, node_id),
             **await test_dataset_factor_values(graph, body.dataset_selections if body else None, owner_id, db, node_id),
@@ -697,6 +705,8 @@ async def create_test_run_endpoint(
                 **await test_sub_agent_factor_values(
                     revision.graph, body.sub_agent_selections if body else None, user.id
                 ),
+                **await test_script_factor_values(revision.graph, body.script_selections if body else None),
+                **await test_tool_factor_values(revision.graph, body.tool_selections if body else None, user.id),
                 **await test_skill_factor_values(revision.graph, body.skill_selections if body else None, user.id),
                 **await test_knowledge_factor_values(
                     revision.graph, body.knowledge_selections if body else None, user.id

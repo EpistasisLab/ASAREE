@@ -46,6 +46,13 @@ describe('DesignTab design generation', () => {
     ['Sub-Agent levels', 'sub_agent', 'sub_agent_selection'],
     ['All agent sub-agents on/off', 'sub_agent', 'sub_agent_toggle'],
     ['This sub-agent on/off', 'sub_agent', 'boolean'],
+    ['Script levels', 'script', 'script_selection'],
+    ['All agent scripts on/off', 'script', 'script_toggle'],
+    ['This script on/off', 'script', 'boolean'],
+    ['Tool levels', 'tool', 'tool_selection'],
+    ['All agent tools on/off', 'tool', 'tool_toggle'],
+    ['This tool on/off', 'tool', 'boolean'],
+    ['Tools allowed', 'tool', 'tool_names'],
     ['Skill levels', 'skill', 'skill_selection'],
     ['All skills on/off', 'skill', 'skill_toggle'],
     ['This skill on/off', 'skill', 'boolean'],
@@ -58,11 +65,13 @@ describe('DesignTab design generation', () => {
     client.setQueryData(protocolGraphQueryKey('protocol-1'), {
       nodes: [
         { id: 'agent', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Writer', config: {} } },
+        { id: 'script', type: 'script', position: { x: 0, y: 0 }, data: { label: 'Scoring', config: { name: 'score', language: 'python', code: 'print(1)' } } },
+        { id: 'tool', type: 'mcp_tool', position: { x: 0, y: 0 }, data: { label: 'Search', config: { server_id: 's', tool_names: ['search'] } } },
         { id: 'skill', type: 'skill', position: { x: 0, y: 0 }, data: { label: 'Summarize', config: { skill_id: 'a' } } },
         { id: 'sub_agent', type: 'sub_agent', position: { x: 0, y: 0 }, data: { label: 'Worker', config: {} } },
         { id: 'dataset', type: 'dataset', position: { x: 0, y: 0 }, data: { label: 'Cohort', config: { dataset_id: 'd' } } },
       ],
-      edges: ['skill', 'dataset', 'sub_agent'].map(source => ({ id: source, source, target: 'agent', targetHandle: source === 'sub_agent' ? 'sub_agents' : source })),
+      edges: ['script', 'tool', 'skill', 'dataset', 'sub_agent'].map(source => ({ id: source, source, target: 'agent', targetHandle: source === 'script' ? 'tool' : source === 'sub_agent' ? 'sub_agents' : source })),
     })
     vi.spyOn(experimentsApi, 'getMeasurementCapabilities').mockResolvedValue({ outputs: {} })
     vi.spyOn(experimentsApi, 'validateMeasurementPlan').mockResolvedValue({ valid: true, issues: [] })

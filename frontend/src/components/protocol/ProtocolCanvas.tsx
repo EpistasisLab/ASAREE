@@ -17,6 +17,14 @@ import { DatasetRowSelector } from './DatasetRowSelector'
 import { useDatasetRowSelection } from './useDatasetRowSelection'
 import { rowBindingForNode } from '@/lib/datasetRows'
 import { reconcileSkillFactor, skillFactorConflict, skillFactorOwner, SKILL_FACTOR_PATH } from '@/lib/skillFactors'
+import { reconcileToolFactor, toolFactorConflict, toolFactorOwner, toolFactorPath, isIndividualToolMode, TOOL_FACTOR_PATH, type ToolFactorMode } from '@/lib/toolFactors'
+import { reconcileScriptFactor, scriptFactorConflict, scriptFactorOwner, scriptFactorPath, isIndividualScriptMode, SCRIPT_FACTOR_PATH, type ScriptFactorMode } from '@/lib/scriptFactors'
+import { ToolFactorDialog } from './ToolFactorDialog'
+import { ScriptFactorDialog } from './ScriptFactorDialog'
+import { ToolTestSelectors } from './ToolTestSelectors'
+import { ScriptTestSelectors } from './ScriptTestSelectors'
+import { useToolTestSelection } from './useToolTestSelection'
+import { useScriptTestSelection } from './useScriptTestSelection'
 import { SkillFactorDialog } from './SkillFactorDialog'
 import { SkillTestSelectors } from './SkillTestSelectors'
 import { useSkillTestSelection } from './useSkillTestSelection'
@@ -425,11 +433,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       setNodes((nds) => {
         const knowledgeIds = new Set(edges.filter((edge) => edge.targetHandle === 'knowledge' && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[KNOWLEDGE_FACTOR_PATH] === factorName).map((edge) => edge.source))
         const subAgentIds = new Set(edges.filter((edge) => edge.targetHandle === 'sub_agents' && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[SUB_AGENT_FACTOR_PATH] === factorName).map((edge) => edge.source))
+        const toolIds = new Set(edges.filter((edge) => edge.targetHandle === 'tool' && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[TOOL_FACTOR_PATH] === factorName).map((edge) => edge.source).filter((id) => MCP_TOOL_NODE_TYPES.includes(nds.find((node) => node.id === id)?.type ?? '')))
+        const scriptIds = new Set(edges.filter((edge) => edge.targetHandle === 'tool' && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[SCRIPT_FACTOR_PATH] === factorName).map((edge) => edge.source).filter((id) => nds.find((node) => node.id === id)?.type === 'script'))
         const skillIds = new Set(edges.filter((edge) => edge.targetHandle === 'skill' && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[SKILL_FACTOR_PATH] === factorName).map((edge) => edge.source))
         const datasetIds = new Set(edges.filter((edge) => ['dataset', 'resource', 'tool'].includes(edge.targetHandle ?? '') && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[DATASET_FACTOR_PATH] === factorName).map((edge) => edge.source))
         return nds.map((n) => {
           if (subAgentIds.has(n.id)) return { ...n, data: { ...n.data, active: true } }
-          if (skillIds.has(n.id) || datasetIds.has(n.id) || knowledgeIds.has(n.id)) return { ...n, data: { ...n.data, config: { ...(n.data.config as object), enabled: true } } }
+          if (scriptIds.has(n.id) || toolIds.has(n.id) || skillIds.has(n.id) || datasetIds.has(n.id) || knowledgeIds.has(n.id)) return { ...n, data: { ...n.data, config: { ...(n.data.config as object), enabled: true } } }
           const bindings = n.data.factor_bindings as Record<string, string> | undefined
           if (!bindings || !Object.values(bindings).includes(factorName)) return n
           const next = Object.fromEntries(Object.entries(bindings).filter(([, name]) => name !== factorName))
@@ -441,6 +451,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           if (bindings[SUB_AGENT_FACTOR_PATH] === factorName) {
             delete data.sub_agent_selection
             delete data.sub_agent_factor_mode
+          }
+          if (bindings[TOOL_FACTOR_PATH] === factorName) {
+            delete data.tool_selection
+            delete data.tool_factor_mode
+          }
+          if (bindings[SCRIPT_FACTOR_PATH] === factorName) {
+            delete data.script_selection
+            delete data.script_factor_mode
           }
           if (bindings[SKILL_FACTOR_PATH] === factorName) {
             delete data.skill_selection
@@ -493,6 +511,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         setSelectedNodeId(null)
         setConnectorFactorChoice(field.connectorFactor)
         if (field.connectorFactor.kind === 'sub_agent') setSubAgentFactorNodeId(field.connectorFactor.nodeId)
+        else if (field.connectorFactor.kind === 'tool') setToolFactorNodeId(field.connectorFactor.nodeId)
+        else if (field.connectorFactor.kind === 'script') setScriptFactorNodeId(field.connectorFactor.nodeId)
         else if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
         else if (field.connectorFactor.kind === 'dataset') setDatasetFactorNodeId(field.connectorFactor.nodeId)
         else if (field.connectorFactor.kind === 'model') { setModelFactorLevelIndex(undefined); setModelFactorFieldPath(field.fieldPath); setModelFactorNodeId(field.connectorFactor.nodeId) }
@@ -524,6 +544,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const [modelFactorFieldPath, setModelFactorFieldPath] = useState<string>()
   const [modelFactorLevelIndex, setModelFactorLevelIndex] = useState<number>()
   const [subAgentFactorNodeId, setSubAgentFactorNodeId] = useState<string | null>(null)
+  const [toolFactorNodeId, setToolFactorNodeId] = useState<string | null>(null)
+  const [scriptFactorNodeId, setScriptFactorNodeId] = useState<string | null>(null)
   const [skillFactorNodeId, setSkillFactorNodeId] = useState<string | null>(null)
   const [datasetFactorNodeId, setDatasetFactorNodeId] = useState<string | null>(null)
   const [connectorFactorChoice, setConnectorFactorChoice] = useState<UnboundField['connectorFactor']>()
@@ -652,12 +674,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     mutationFn: async ({ scope, rowIndex }: { scope: RunScope; rowIndex: number }) => {
       if (draftRow.error) throw new Error(draftRow.error)
       if (draftSubAgents.error) throw new Error(draftSubAgents.error)
+      if (draftScripts.error) throw new Error(draftScripts.error)
+      if (draftTools.error) throw new Error(draftTools.error)
       if (draftSkills.error) throw new Error(draftSkills.error)
       if (draftKnowledge.error) throw new Error(draftKnowledge.error)
       if (draftDatasets.error) throw new Error(draftDatasets.error)
       await protocolsApi.update(protocolId, { graph: toPersistedGraph(nodes, edges) })
       const published = await protocolsApi.publish(protocolId)
-      return { published, scope, rowIndex, skillOptions: { ...draftSubAgents.options, ...draftSkills.options, ...draftKnowledge.options, ...draftDatasets.options } }
+      return { published, scope, rowIndex, skillOptions: { ...draftSubAgents.options, ...draftScripts.options, ...draftTools.options, ...draftSkills.options, ...draftKnowledge.options, ...draftDatasets.options } }
     },
     onSuccess: async ({ published, scope, rowIndex, skillOptions }) => {
       queryClient.invalidateQueries({ queryKey: ['protocols', protocolId, 'revisions'] })
@@ -691,7 +715,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const publishedSubAgents = useSubAgentTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
   const draftSubAgents = useSubAgentTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
   const publishedSkills = useSkillTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
+  const publishedTools = useToolTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
+  const publishedScripts = useScriptTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
   const draftSkills = useSkillTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
+  const draftTools = useToolTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
+  const draftScripts = useScriptTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
   const publishedKnowledge = useKnowledgeTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
   const draftKnowledge = useKnowledgeTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
   const publishedDatasets = useDatasetTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
@@ -704,10 +732,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     mutationFn: (rowIndex: number) => {
       if (publishedSourceError || (publishedRow.binding && publishedRow.error)) throw new Error(publishedSourceError ?? publishedRow.error!)
       if (publishedSubAgents.error) throw new Error(publishedSubAgents.error)
+      if (publishedScripts.error) throw new Error(publishedScripts.error)
+      if (publishedTools.error) throw new Error(publishedTools.error)
       if (publishedSkills.error) throw new Error(publishedSkills.error)
       if (publishedKnowledge.error) throw new Error(publishedKnowledge.error)
       if (publishedDatasets.error) throw new Error(publishedDatasets.error)
-      return protocolsApi.testRun(protocolId, publishedRow.binding || publishedSubAgents.owners.length || publishedSkills.owners.length || publishedKnowledge.owners.length || publishedDatasets.owners.length ? { ...(publishedRow.binding ? { row_index: rowIndex } : {}), ...publishedSubAgents.options, ...publishedSkills.options, ...publishedKnowledge.options, ...publishedDatasets.options } : undefined)
+      return protocolsApi.testRun(protocolId, publishedRow.binding || publishedSubAgents.owners.length || publishedScripts.owners.length || publishedTools.owners.length || publishedSkills.owners.length || publishedKnowledge.owners.length || publishedDatasets.owners.length ? { ...(publishedRow.binding ? { row_index: rowIndex } : {}), ...publishedSubAgents.options, ...publishedScripts.options, ...publishedTools.options, ...publishedSkills.options, ...publishedKnowledge.options, ...publishedDatasets.options } : undefined)
     },
     onSuccess: (run) => {
       setRunId(run.id)
@@ -728,10 +758,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       const binding = publishedGraphQuery.data && rowBindingForNode(publishedGraphQuery.data.graph, nodeId)
       if (publishedSourceError || (binding && publishedRow.error)) throw new Error(publishedSourceError ?? publishedRow.error!)
       if (publishedSubAgents.error) throw new Error(publishedSubAgents.error)
+      if (publishedScripts.error) throw new Error(publishedScripts.error)
+      if (publishedTools.error) throw new Error(publishedTools.error)
       if (publishedSkills.error) throw new Error(publishedSkills.error)
       if (publishedKnowledge.error) throw new Error(publishedKnowledge.error)
       if (publishedDatasets.error) throw new Error(publishedDatasets.error)
-      return protocolsApi.runNode(protocolId, nodeId, binding || publishedSubAgents.owners.length || publishedSkills.owners.length || publishedKnowledge.owners.length || publishedDatasets.owners.length ? { ...(binding ? { row_index: rowIndex } : {}), ...publishedSubAgents.options, ...publishedSkills.options, ...publishedKnowledge.options, ...publishedDatasets.options } : undefined)
+      return protocolsApi.runNode(protocolId, nodeId, binding || publishedSubAgents.owners.length || publishedScripts.owners.length || publishedTools.owners.length || publishedSkills.owners.length || publishedKnowledge.owners.length || publishedDatasets.owners.length ? { ...(binding ? { row_index: rowIndex } : {}), ...publishedSubAgents.options, ...publishedScripts.options, ...publishedTools.options, ...publishedSkills.options, ...publishedKnowledge.options, ...publishedDatasets.options } : undefined)
     },
     onSuccess: (run) => {
       setRunId(run.id)
@@ -1196,6 +1228,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           knowledgeFactorControlled: ['okf_bundle', 'okf_document'].includes(n.type ?? '') && !!knowledgeFactorOwner(toPersistedGraph(nodes, edges), n.id),
           subAgentFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[SUB_AGENT_FACTOR_PATH])?.levels.length,
           subAgentFactorControlled: n.type === 'sub_agent' && !!subAgentFactorOwner(toPersistedGraph(nodes, edges), n.id),
+          toolFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[TOOL_FACTOR_PATH])?.levels.length,
+          scriptFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[SCRIPT_FACTOR_PATH])?.levels.length,
+          toolFactorControlled: MCP_TOOL_NODE_TYPES.includes(n.type ?? '') && !!toolFactorOwner(toPersistedGraph(nodes, edges), n.id),
+          scriptFactorControlled: n.type === 'script' && !!scriptFactorOwner(toPersistedGraph(nodes, edges), n.id),
           skillFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[SKILL_FACTOR_PATH])?.levels.length,
           skillFactorControlled: n.type === 'skill' && !!skillFactorOwner(toPersistedGraph(nodes, edges), n.id),
           datasetFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[DATASET_FACTOR_PATH])?.levels.length,
@@ -1434,6 +1470,18 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     setConnectorFactorChoice(undefined)
     setSkillFactorNodeId(nodeId)
   }, [experimentId, experimentLocked])
+  const requestToolFactor = useCallback((nodeId: string) => {
+    if (!experimentId || experimentLocked) return
+    setSelectedNodeId(null)
+    setConnectorFactorChoice(undefined)
+    setToolFactorNodeId(nodeId)
+  }, [experimentId, experimentLocked])
+  const requestScriptFactor = useCallback((nodeId: string) => {
+    if (!experimentId || experimentLocked) return
+    setSelectedNodeId(null)
+    setConnectorFactorChoice(undefined)
+    setScriptFactorNodeId(nodeId)
+  }, [experimentId, experimentLocked])
   const requestKnowledgeFactor = useCallback((nodeId: string) => {
     if (!experimentId || experimentLocked) return
     setSelectedNodeId(null)
@@ -1533,6 +1581,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestPatternFactor,
       modelFactorForNode,
       requestSubAgentFactor,
+      requestToolFactor,
+      requestScriptFactor,
       requestSkillFactor,
       requestKnowledgeFactor,
       requestDatasetFactor,
@@ -1551,6 +1601,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestPatternFactor,
       modelFactorForNode,
       requestSubAgentFactor,
+      requestToolFactor,
+      requestScriptFactor,
       requestSkillFactor,
       requestKnowledgeFactor,
       requestDatasetFactor,
@@ -2017,6 +2069,22 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   useEffect(() => {
     if (experimentLocked) return
     setNodes((current) => current.map((node) => {
+      const factor = factors.find((factor) => (factor.level_type === 'tool_selection' || factor.level_type === 'tool_toggle') && (node.data.factor_bindings as Record<string, string> | undefined)?.[TOOL_FACTOR_PATH] === factor.name)
+      if (!factor || JSON.stringify(node.data.tool_selection) === JSON.stringify(factor.levels[0] ?? [])) return node
+      return { ...node, data: { ...node.data, tool_selection: factor.levels[0] ?? [] } }
+    }))
+  }, [factors, experimentLocked, setNodes])
+  useEffect(() => {
+    if (experimentLocked) return
+    setNodes((current) => current.map((node) => {
+      const factor = factors.find((factor) => (factor.level_type === 'script_selection' || factor.level_type === 'script_toggle') && (node.data.factor_bindings as Record<string, string> | undefined)?.[SCRIPT_FACTOR_PATH] === factor.name)
+      if (!factor || JSON.stringify(node.data.script_selection) === JSON.stringify(factor.levels[0] ?? [])) return node
+      return { ...node, data: { ...node.data, script_selection: factor.levels[0] ?? [] } }
+    }))
+  }, [factors, experimentLocked, setNodes])
+  useEffect(() => {
+    if (experimentLocked) return
+    setNodes((current) => current.map((node) => {
       const factor = factors.find((factor) => (factor.level_type === 'knowledge_selection' || factor.level_type === 'knowledge_toggle') && (node.data.factor_bindings as Record<string, string> | undefined)?.[KNOWLEDGE_FACTOR_PATH] === factor.name)
       if (!factor || JSON.stringify(node.data.knowledge_selection) === JSON.stringify(factor.levels[0] ?? [])) return node
       return { ...node, data: { ...node.data, knowledge_selection: factor.levels[0] ?? [] } }
@@ -2416,8 +2484,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : MCP_TOOL_NODE_TYPES.includes(selectedNode?.type ?? '') ? (
           <McpToolNodeInspector
             node={{ id: selectedNode!.id, type: selectedNode!.type!, position: selectedNode!.position, data: selectedNode!.data as McpToolNodeData }}
-            experimentId={experimentId}
-            factorNodeLabel={factorNodeLabel}
+            connectorFactorName={toolFactorOwner(toPersistedGraph(nodes, edges), selectedNode!.id)}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
@@ -2505,8 +2572,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : selectedNode?.type === 'script' ? (
           <ScriptNodeInspector
             node={{ id: selectedNode.id, type: 'script', position: selectedNode.position, data: selectedNode.data as ScriptNodeData }}
-            experimentId={experimentId}
-            factorNodeLabel={factorNodeLabel}
+            connectorFactorName={scriptFactorOwner(toPersistedGraph(nodes, edges), selectedNode.id)}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
@@ -2600,13 +2666,17 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           }
           onPublishAndRun={() => publishAndRunMutation.mutate({ scope: pendingRunConfirm, rowIndex: draftRow.rowIndex })}
           confirmLabel={pendingRunConfirm.type === 'graph' ? 'Test Run' : undefined}
-          confirmDisabled={!!publishedSourceError || !!publishedSubAgents.error || !!publishedSkills.error || !!publishedKnowledge.error || !!publishedDatasets.error || (pendingHasRow && !!publishedRow.error)}
-          publishDisabled={!!draftRow.error || !!draftSubAgents.error || !!draftSkills.error || !!draftKnowledge.error || !!draftDatasets.error}
+          confirmDisabled={!!publishedSourceError || !!publishedSubAgents.error || !!publishedScripts.error || !!publishedTools.error || !!publishedSkills.error || !!publishedKnowledge.error || !!publishedDatasets.error || (pendingHasRow && !!publishedRow.error)}
+          publishDisabled={!!draftRow.error || !!draftSubAgents.error || !!draftScripts.error || !!draftTools.error || !!draftSkills.error || !!draftKnowledge.error || !!draftDatasets.error}
           additionalContent={<div className="space-y-3">
             {publishedSubAgents.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published Sub-Agents · run published v{publishedRevision}</p><SubAgentTestSelectors selection={publishedSubAgents} /></div>}
             {showDraftInputs && draftSubAgents.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft Sub-Agents · publish and run</p><SubAgentTestSelectors selection={draftSubAgents} /></div>}
             {publishedSkills.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published skills · run published v{publishedRevision}</p><SkillTestSelectors selection={publishedSkills} /></div>}
+            {publishedTools.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published tools · run published v{publishedRevision}</p><ToolTestSelectors selection={publishedTools} /></div>}
+            {publishedScripts.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published scripts · run published v{publishedRevision}</p><ScriptTestSelectors selection={publishedScripts} /></div>}
             {showDraftInputs && draftSkills.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft skills · publish and run</p><SkillTestSelectors selection={draftSkills} /></div>}
+            {showDraftInputs && draftTools.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft tools · publish and run</p><ToolTestSelectors selection={draftTools} /></div>}
+            {showDraftInputs && draftScripts.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft scripts · publish and run</p><ScriptTestSelectors selection={draftScripts} /></div>}
             {publishedKnowledge.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published knowledge · run published v{publishedRevision}</p><KnowledgeTestSelectors selection={publishedKnowledge} /></div>}
             {showDraftInputs && draftKnowledge.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft knowledge · publish and run</p><KnowledgeTestSelectors selection={draftKnowledge} /></div>}
             {publishedDatasets.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published datasets · run published v{publishedRevision}</p><DatasetTestSelectors selection={publishedDatasets} /></div>}
@@ -2631,7 +2701,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             setFactorPickerNodeId(null)
             setConnectorFactorChoice(field.connectorFactor)
             if (field.connectorFactor.kind === 'sub_agent') setSubAgentFactorNodeId(field.connectorFactor.nodeId)
-        else if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
+            else if (field.connectorFactor.kind === 'tool') setToolFactorNodeId(field.connectorFactor.nodeId)
+            else if (field.connectorFactor.kind === 'script') setScriptFactorNodeId(field.connectorFactor.nodeId)
+            else if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
             else if (field.connectorFactor.kind === 'dataset') setDatasetFactorNodeId(field.connectorFactor.nodeId)
             else if (field.connectorFactor.kind === 'model') { setModelFactorLevelIndex(undefined); setModelFactorFieldPath(field.fieldPath); setModelFactorNodeId(field.connectorFactor.nodeId) }
             else if (field.connectorFactor.kind === 'pattern') { setPatternFactorFieldPath(field.fieldPath); setPatternFactorAgentId(field.connectorFactor.agentId); setPatternFactorNodeId(field.connectorFactor.nodeId) }
@@ -2790,6 +2862,88 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           const shared = individual && graph.nodes.some((node) => node.id !== skillFactorNodeId && Object.values(node.data.factor_bindings ?? {}).includes(name))
           if (!shared) await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: (fresh.design_spec?.factors ?? []).filter((factor) => factor.name !== name) } })
           if (individual) setNodes((current) => current.map((node) => node.id === skillFactorNodeId ? { ...node, data: { ...node.data, factor_bindings: Object.fromEntries(Object.entries(node.data.factor_bindings as Record<string, string>).filter(([path]) => path !== 'config.enabled')) } } : node))
+          else removeFactorBindings(name)
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+      />}
+      {toolFactorNodeId && <ToolFactorDialog
+        key={toolFactorNodeId}
+        toolNodeId={toolFactorNodeId}
+        initialMode={connectorFactorChoice?.mode as ToolFactorMode | undefined}
+        initialAgentId={connectorFactorChoice?.agentId}
+        graph={toPersistedGraph(nodes, edges)}
+        factors={factors}
+        onClose={() => setToolFactorNodeId(null)}
+        onSave={async (factor, ownerId, previousName) => {
+          const fresh = await experimentsApi.get(experimentId!)
+          const graph = toPersistedGraph(nodes, edges)
+          const conflict = toolFactorConflict(graph, fresh.design_spec?.factors ?? [], toolFactorNodeId, factor.level_type as ToolFactorMode, ownerId)
+          if (conflict) throw new Error(conflict)
+          if ((fresh.design_spec?.factors ?? []).some((existing) => existing.name === factor.name && existing.name !== previousName)) throw new Error('A factor with this name already exists.')
+          const next = isIndividualToolMode(factor.level_type as ToolFactorMode) ? factor : reconcileToolFactor(factor, toPersistedGraph(nodes, edges), ownerId)
+          await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== previousName), next] } })
+          if (previousName) {
+            renameFactorBindings(previousName, next.name)
+            setFactorBaseline(next.name, next.levels[0])
+          }
+          setNodes((current) => current.map((node) => node.id === ownerId ? { ...node, data: {
+            ...node.data,
+            ...(next.level_type === 'boolean' ? { config: { ...(node.data.config as object), enabled: next.levels[0] } } : next.level_type === 'tool_names' ? { config: { ...(node.data.config as object), tool_names: next.levels[0] ?? [] } } : { tool_selection: next.levels[0] ?? [], tool_factor_mode: next.level_type }),
+            factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), [toolFactorPath(next.level_type as ToolFactorMode)]: next.name },
+          } } : node))
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+        onRemove={async (name) => {
+          const fresh = await experimentsApi.get(experimentId!)
+          const graph = toPersistedGraph(nodes, edges)
+          const individualPath = Object.entries(graph.nodes.find((node) => node.id === toolFactorNodeId)?.data.factor_bindings ?? {}).find(([, value]) => value === name)?.[0]
+          const individual = !!individualPath
+          const shared = individual && graph.nodes.some((node) => node.id !== toolFactorNodeId && Object.values(node.data.factor_bindings ?? {}).includes(name))
+          if (!shared) await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: (fresh.design_spec?.factors ?? []).filter((factor) => factor.name !== name) } })
+          if (individual) setNodes((current) => current.map((node) => node.id === toolFactorNodeId ? { ...node, data: { ...node.data, factor_bindings: Object.fromEntries(Object.entries(node.data.factor_bindings as Record<string, string>).filter(([path]) => path !== individualPath)) } } : node))
+          else removeFactorBindings(name)
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+      />}
+      {scriptFactorNodeId && <ScriptFactorDialog
+        key={scriptFactorNodeId}
+        scriptNodeId={scriptFactorNodeId}
+        initialMode={connectorFactorChoice?.mode as ScriptFactorMode | undefined}
+        initialAgentId={connectorFactorChoice?.agentId}
+        graph={toPersistedGraph(nodes, edges)}
+        factors={factors}
+        onClose={() => setScriptFactorNodeId(null)}
+        onSave={async (factor, ownerId, previousName) => {
+          const fresh = await experimentsApi.get(experimentId!)
+          const graph = toPersistedGraph(nodes, edges)
+          const conflict = scriptFactorConflict(graph, fresh.design_spec?.factors ?? [], scriptFactorNodeId, factor.level_type as ScriptFactorMode, ownerId)
+          if (conflict) throw new Error(conflict)
+          if ((fresh.design_spec?.factors ?? []).some((existing) => existing.name === factor.name && existing.name !== previousName)) throw new Error('A factor with this name already exists.')
+          const next = isIndividualScriptMode(factor.level_type as ScriptFactorMode) ? factor : reconcileScriptFactor(factor, toPersistedGraph(nodes, edges), ownerId)
+          await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== previousName), next] } })
+          if (previousName) {
+            renameFactorBindings(previousName, next.name)
+            setFactorBaseline(next.name, next.levels[0])
+          }
+          setNodes((current) => current.map((node) => node.id === ownerId ? { ...node, data: {
+            ...node.data,
+            ...(next.level_type === 'boolean' ? { config: { ...(node.data.config as object), enabled: next.levels[0] } } : { script_selection: next.levels[0] ?? [], script_factor_mode: next.level_type }),
+            factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), [scriptFactorPath(next.level_type as ScriptFactorMode)]: next.name },
+          } } : node))
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+        onRemove={async (name) => {
+          const fresh = await experimentsApi.get(experimentId!)
+          const graph = toPersistedGraph(nodes, edges)
+          const individualPath = Object.entries(graph.nodes.find((node) => node.id === scriptFactorNodeId)?.data.factor_bindings ?? {}).find(([, value]) => value === name)?.[0]
+          const individual = !!individualPath
+          const shared = individual && graph.nodes.some((node) => node.id !== scriptFactorNodeId && Object.values(node.data.factor_bindings ?? {}).includes(name))
+          if (!shared) await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: (fresh.design_spec?.factors ?? []).filter((factor) => factor.name !== name) } })
+          if (individual) setNodes((current) => current.map((node) => node.id === scriptFactorNodeId ? { ...node, data: { ...node.data, factor_bindings: Object.fromEntries(Object.entries(node.data.factor_bindings as Record<string, string>).filter(([path]) => path !== individualPath)) } } : node))
           else removeFactorBindings(name)
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })

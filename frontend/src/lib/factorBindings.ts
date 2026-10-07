@@ -3,6 +3,8 @@ import { reconcileKnowledgeFactor, KNOWLEDGE_FACTOR_PATH } from './knowledgeFact
 import { reconcileDatasetFactor, DATASET_FACTOR_PATH } from './datasetFactors'
 import type { DesignFactor, DesignSpec } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
+import { reconcileScriptFactor, SCRIPT_FACTOR_PATH } from './scriptFactors'
+import { reconcileToolFactor, TOOL_FACTOR_PATH } from './toolFactors'
 import { reconcileSkillFactor, SKILL_FACTOR_PATH } from './skillFactors'
 
 export interface FactorBindingDiscrepancy {
@@ -63,7 +65,7 @@ function withPathValue(root: Record<string, unknown>, dottedPath: string, nextVa
  * as an extra level would turn each pause mid-edit into a new treatment.
  */
 export function factorWithCanvasBaseline(factor: DesignFactor, currentValue: unknown): DesignFactor {
-  if ((factor.level_type === 'sub_agent_selection' || factor.level_type === 'sub_agent_toggle' || factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle' || factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle' || factor.level_type === 'knowledge_selection' || factor.level_type === 'knowledge_toggle')) return factor
+  if ((factor.level_type === 'sub_agent_selection' || factor.level_type === 'sub_agent_toggle' || factor.level_type === 'script_selection' || factor.level_type === 'script_toggle' || factor.level_type === 'tool_selection' || factor.level_type === 'tool_toggle' || factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle' || factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle' || factor.level_type === 'knowledge_selection' || factor.level_type === 'knowledge_toggle')) return factor
   if (isBooleanFactor(factor) || valuesEqual(factor.levels[0], currentValue)) return factor
 
   const currentIndex = factor.levels.findIndex((level) => valuesEqual(level, currentValue))
@@ -100,6 +102,14 @@ export function reconcileFactorBaselines(designSpec: DesignSpec | null | undefin
     if ((factor.level_type === 'sub_agent_selection' || factor.level_type === 'sub_agent_toggle') && graph) {
       const owner = graph.nodes.find((node) => node.data.factor_bindings?.[SUB_AGENT_FACTOR_PATH] === factor.name)
       return owner ? reconcileSubAgentFactor(factor, graph, owner.id) : factor
+    }
+    if ((factor.level_type === 'tool_selection' || factor.level_type === 'tool_toggle') && graph) {
+      const owner = graph.nodes.find((node) => node.data.factor_bindings?.[TOOL_FACTOR_PATH] === factor.name)
+      return owner ? reconcileToolFactor(factor, graph, owner.id) : factor
+    }
+    if ((factor.level_type === 'script_selection' || factor.level_type === 'script_toggle') && graph) {
+      const owner = graph.nodes.find((node) => node.data.factor_bindings?.[SCRIPT_FACTOR_PATH] === factor.name)
+      return owner ? reconcileScriptFactor(factor, graph, owner.id) : factor
     }
     if ((factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle') && graph) {
       const owner = graph.nodes.find((node) => node.data.factor_bindings?.[SKILL_FACTOR_PATH] === factor.name)
@@ -164,7 +174,7 @@ export function factorBindingDiscrepancies(
         ? 'factor is no longer declared'
         : value === MISSING
           ? 'field no longer exists on the canvas'
-          : (factor.level_type === 'sub_agent_selection' || factor.level_type === 'sub_agent_toggle' || factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle' || factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle' || factor.level_type === 'knowledge_selection' || factor.level_type === 'knowledge_toggle') || isBooleanFactor(factor) || valuesEqual(value, factor.levels[0])
+          : (factor.level_type === 'sub_agent_selection' || factor.level_type === 'sub_agent_toggle' || factor.level_type === 'script_selection' || factor.level_type === 'script_toggle' || factor.level_type === 'tool_selection' || factor.level_type === 'tool_toggle' || factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle' || factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle' || factor.level_type === 'knowledge_selection' || factor.level_type === 'knowledge_toggle') || isBooleanFactor(factor) || valuesEqual(value, factor.levels[0])
             ? null
             : 'published value does not match the first (canvas baseline) level'
       if (reason) discrepancies.push({ nodeId: node.id, nodeLabel, fieldPath, factorName, reason })

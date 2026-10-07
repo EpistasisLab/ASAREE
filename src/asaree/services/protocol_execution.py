@@ -2015,11 +2015,17 @@ def _resolve_script_configs(graph: dict[str, Any], node_id: str) -> list[dict[st
     selectable script to the wired agent.
     """
     nodes, _downstream, _upstream = _adjacency(graph)
+    data = (nodes.get(node_id) or {}).get("data") or {}
+    selection = data.get("script_selection") if (data.get("factor_bindings") or {}).get("script_selection") else None
     configs: list[dict[str, Any]] = []
     for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
         source = nodes.get(edge["source"])
         if source is not None and source.get("type") in _SCRIPT_NODE_TYPES:
             config = (source.get("data") or {}).get("config") or {}
+            if selection is not None and source["id"] not in selection:
+                continue
+            if selection is None and config.get("enabled") is False:
+                continue
             configs.append({**config, "node_id": str(source.get("id") or "")})
     return configs
 
@@ -2484,6 +2490,11 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     meaningful level: the server still connects (its ``server_name`` is still
     reported) but contributes no tools to that cell."""
     nodes, _downstream, _upstream = _adjacency(graph)
+    agent_data = (nodes.get(node_id) or {}).get("data") or {}
+    selected = (
+        agent_data.get("tool_selection")
+        if (agent_data.get("factor_bindings") or {}).get("tool_selection") else None
+    )
     server_names: list[str] = []
     tool_names: list[str] = []
     for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
@@ -2491,7 +2502,9 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
         if source is None or source.get("type") not in _MCP_TOOL_NODE_TYPES:
             continue
         tool_node_config = (source.get("data") or {}).get("config") or {}
-        if not tool_node_config.get("enabled", True):
+        if selected is not None and source["id"] not in selected:
+            continue
+        if selected is None and not tool_node_config.get("enabled", True):
             continue
         server_name = tool_node_config.get("server_name")
         node_tool_names = tool_node_config.get("tool_names") or []

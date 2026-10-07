@@ -275,11 +275,9 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       // listed by factorCreationFields and edited in the dedicated dialog.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     case 'script':
-      // The whole node as a factor -- levels are entirely different scripts.
-      // _resolve_script_configs reads each wired script node's whole config
-      // verbatim, so comparing two scoring scripts already works with zero
-      // backend changes, same reasoning as model_config/tool_config.
-      return [{ fieldPath: 'config', label: 'Script', levelType: 'script_config' }]
+      // Keep config discoverable for editing existing variant bindings.
+      // New factors compare separate Script nodes through Script levels.
+      return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }, { fieldPath: 'config', label: 'Script variants (existing factors)', levelType: 'script_config' }]
     default:
       return []
   }
@@ -287,7 +285,7 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
 
 export interface UnboundField {
   pickerGroup?: { id: string; label: string; category: string; componentId: string; componentLabel: string }
-  connectorFactor?: { kind: 'skill' | 'sub_agent' | 'dataset' | 'knowledge' | 'model' | 'pattern'; nodeId: string; mode: LevelType; agentId?: string }
+  connectorFactor?: { kind: 'script' | 'tool' | 'skill' | 'sub_agent' | 'dataset' | 'knowledge' | 'model' | 'pattern'; nodeId: string; mode: LevelType; agentId?: string }
   nodeId: string
   nodeLabel: string
   fieldPath: string
@@ -468,7 +466,7 @@ export function unboundBindableFields(nodes: Node[], edges: Edge[]): UnboundFiel
 export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField[] {
   const fields = unboundBindableFields(nodes, edges).filter((field) => {
     const kind = nodes.find((node) => node.id === field.nodeId)?.type
-    return kind !== 'skill' && kind !== 'dataset' && kind !== 'okf_bundle' && kind !== 'okf_document'
+    return !['script', 'mcp_tool', 'mcp_scikit_learn', 'mcp_client_tool'].includes(kind ?? '') && kind !== 'skill' && kind !== 'dataset' && kind !== 'okf_bundle' && kind !== 'okf_document'
       && !(kind === 'sub_agent' && field.fieldPath === 'active')
       && !isPatternNode(kind) && field.fieldPath !== PATTERN_FACTOR_PATH
   })
@@ -505,15 +503,16 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
     }
   }
   for (const node of nodes) {
-    if (!['skill', 'dataset', 'okf_bundle', 'okf_document'].includes(node.type ?? '')) continue
-    const kind = (node.type === 'okf_bundle' || node.type === 'okf_document' ? 'knowledge' : node.type) as 'skill' | 'dataset' | 'knowledge'
-    const handles = kind === 'skill' ? ['skill'] : kind === 'knowledge' ? ['knowledge'] : ['dataset', 'resource', 'tool']
+    if (!['script', 'mcp_tool', 'mcp_scikit_learn', 'mcp_client_tool', 'skill', 'dataset', 'okf_bundle', 'okf_document'].includes(node.type ?? '')) continue
+    const kind = (node.type === 'okf_bundle' || node.type === 'okf_document' ? 'knowledge' : ['mcp_tool', 'mcp_scikit_learn', 'mcp_client_tool'].includes(node.type ?? '') ? 'tool' : node.type) as 'script' | 'tool' | 'skill' | 'dataset' | 'knowledge'
+    const handles = (kind === 'tool' || kind === 'script') ? ['tool'] : kind === 'skill' ? ['skill'] : kind === 'knowledge' ? ['knowledge'] : ['dataset', 'resource', 'tool']
     const owners = nodes.filter((owner) => ['agent', 'sub_agent'].includes(owner.type ?? '') && edges.some((edge) => edge.source === node.id && edge.target === owner.id && handles.includes(edge.targetHandle ?? '')))
     if (!(node.data.factor_bindings as Record<string, string> | undefined)?.['config.enabled']) fields.push({
       nodeId: node.id, nodeLabel: agentTracedLabel(node, edges, nodes), fieldPath: 'config.enabled',
       fieldLabel: `This ${kind} on/off`, levelType: 'boolean', currentValue: undefined,
       connectorFactor: { kind, nodeId: node.id, mode: 'boolean' },
     })
+    if (kind === 'tool' && !(node.data.factor_bindings as Record<string, string> | undefined)?.['config.tool_names']) fields.push({ nodeId: node.id, nodeLabel: agentTracedLabel(node, edges, nodes), fieldPath: 'config.tool_names', fieldLabel: 'Tools allowed', levelType: 'tool_names', currentValue: (node.data.config as { tool_names?: string[] })?.tool_names, connectorFactor: { kind, nodeId: node.id, mode: 'tool_names' } })
     for (const owner of owners) {
       const key = `${owner.id}:${kind}`
       if (connectorOwners.has(key)) continue
@@ -522,7 +521,7 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
         const levelType = `${kind}_${mode}` as LevelType
         fields.push({
           nodeId: owner.id, nodeLabel: String(owner.data.label || 'Agent'), fieldPath: `${kind}_selection`,
-          fieldLabel: mode === 'selection' ? `${kind === 'skill' ? 'Skill' : kind === 'knowledge' ? 'Knowledge' : 'Dataset'} levels` : `All ${kind === 'knowledge' ? 'knowledge' : `${kind}s`} on/off`,
+          fieldLabel: mode === 'selection' ? `${kind === 'script' ? 'Script' : kind === 'tool' ? 'Tool' : kind === 'skill' ? 'Skill' : kind === 'knowledge' ? 'Knowledge' : 'Dataset'} levels` : `All ${kind === 'script' ? 'agent scripts' : kind === 'tool' ? 'agent tools' : kind === 'knowledge' ? 'knowledge' : `${kind}s`} on/off`,
           levelType, currentValue: undefined,
           connectorFactor: { kind, nodeId: node.id, mode: levelType, agentId: owner.id },
         })
@@ -540,7 +539,7 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
     const agentKinds = ['agent', 'sub_agent']
     const targets = nodes.filter((candidate) => agentKinds.includes(candidate.type ?? '') && edges.some((edge) => edge.source === node.id && edge.target === candidate.id))
     const owner = field.connectorFactor?.kind === 'sub_agent' && field.connectorFactor.mode === 'boolean' ? targets.length === 1 ? targets[0] : undefined : agentKinds.includes(node.type ?? '') ? node : targets.length === 1 ? targets[0] : undefined
-    const category = field.connectorFactor?.kind === 'sub_agent' ? 'Sub-Agents'
+    const category = field.connectorFactor?.kind === 'script' ? 'Scripts' : field.connectorFactor?.kind === 'tool' ? 'Tools' : field.connectorFactor?.kind === 'sub_agent' ? 'Sub-Agents'
       : field.connectorFactor?.kind === 'skill' ? 'Skills'
       : field.connectorFactor?.kind === 'dataset' ? 'Datasets'
       : field.connectorFactor?.kind === 'knowledge' ? 'Knowledge'
@@ -550,7 +549,7 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
       : MODEL_NODE_TYPES.has(kind) ? 'Model'
       : kind.startsWith('pattern_') ? 'Pattern'
       : ({ skill: 'Skills', dataset: 'Datasets', mcp_tool: 'Tools', mcp_scikit_learn: 'Tools', mcp_client_tool: 'Tools', script: 'Tools', okf_bundle: 'Knowledge', okf_document: 'Knowledge', memory: 'Memory', output_parser: 'Output parser', critic_gate: 'Critic gate' } as Record<string, string>)[kind] ?? String(node.data.label || kind)
-    const connectorChoice = field.connectorFactor && field.connectorFactor.kind !== 'model' && field.connectorFactor.kind !== 'pattern' && field.connectorFactor.mode !== 'boolean'
+    const connectorChoice = field.connectorFactor && field.connectorFactor.kind !== 'model' && field.connectorFactor.kind !== 'pattern' && field.connectorFactor.mode !== 'boolean' && field.connectorFactor.mode !== 'tool_names' && field.connectorFactor.mode !== 'script_config'
     return {
       ...field,
       pickerGroup: {

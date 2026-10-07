@@ -32,6 +32,26 @@ function renderFlow(graph: ProtocolGraph, onSave = vi.fn(), sourceContext?: Cust
 }
 
 describe('CustomMetricFlow', () => {
+  it('groups nodes alphabetically by agent and supports collapsing and search', async () => {
+    const user = userEvent.setup()
+    const graph = {
+      nodes: ['Zebra', 'Alpha'].map(label => ({ id: label, type: 'agent', position: { x: 0, y: 0 }, data: { label } })),
+      edges: [],
+    } as unknown as ProtocolGraph
+    renderFlow(graph)
+    await user.click(screen.getByRole('combobox', { name: 'Metric node' }))
+    const list = screen.getByRole('listbox', { name: 'Metric nodes' })
+    const summaries = [...list.querySelectorAll('summary')]
+    expect(summaries.map(summary => summary.textContent)).toEqual(['Alpha', 'Zebra', 'Runtime metrics for selected nodes'])
+    await user.click(summaries[0])
+    expect(summaries[0].parentElement).not.toHaveAttribute('open')
+    await user.type(screen.getByRole('textbox', { name: 'Search metric nodes' }), 'Alpha')
+    expect(screen.queryByRole('option', { name: 'Zebra, Agent' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('option', { name: 'Alpha, Agent' }))
+    expect(screen.queryByRole('textbox', { name: 'Search metric nodes' })).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Metric node' })).toHaveTextContent('Alpha')
+  })
+
   it('sums a runtime measure over several chosen nodes', async () => {
     const user = userEvent.setup()
     const graph = {
@@ -45,7 +65,7 @@ describe('CustomMetricFlow', () => {
     const onSave = renderFlow(graph)
 
     await user.click(screen.getByRole('combobox', { name: 'Metric node' }))
-    await user.click(screen.getByRole('option', { name: 'Runs of chosen nodes, Node runtime' }))
+    await user.click(screen.getByRole('option', { name: 'Runtime metrics for selected nodes, Node runtime' }))
     expect(screen.getByRole('button', { name: 'Add custom metric' })).toBeDisabled()
     await user.click(screen.getByRole('checkbox', { name: /^Critic \(FS\)/ }))
     await user.click(screen.getByRole('checkbox', { name: /^Critic \(DC\)/ }))

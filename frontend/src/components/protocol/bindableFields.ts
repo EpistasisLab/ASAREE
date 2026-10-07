@@ -251,16 +251,11 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       ]
     case 'dataset':
       return [
-        // No runtime effect beyond skipping the Dataset-context block in
-        // _build_user_input.
+        // Individual availability controls Dataset context and implicit tools.
         { fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' },
         // The whole node as a factor -- levels are entirely different
-        // datasets, which is the ONLY supported way to run one experiment
-        // across several of them. The Dataset connector is capped at one
-        // node per agent (see AgentNode.tsx) precisely because a cell's
-        // workspace is keyed by experiment_id/cell_label and therefore holds
-        // exactly one dataset; varying it per CELL is the shape that fits,
-        // and wiring several at once never was.
+        // datasets. Keep this field for editing legacy bindings; new creation
+        // uses factorCreationFields and the Dataset connector's levels.
         //
         // Unlike skill/okf_bundle above -- whose configs are also just
         // per-account pointers -- this one earns a structured level type
@@ -271,14 +266,7 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
         { fieldPath: 'config', label: 'Dataset', levelType: 'dataset_config' },
       ]
     case 'skill':
-      // Only `enabled` -- the natural "which skill" factor is the WHOLE node
-      // (levels = different skills), but unlike script/llm/tool_config, a
-      // skill node's config is just an id pointing at a row in the skill
-      // library, so a level would carry a per-account id rather than the
-      // thing itself. Comparing two skills today means two nodes, one
-      // enabled per cell; a real skill_config level type is deferred until
-      // the level editor can pick from the library the way the inspector
-      // does.
+      // Connector choices are listed by factorCreationFields.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     case 'okf_bundle':
     case 'okf_document':
@@ -301,6 +289,8 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
 }
 
 export interface UnboundField {
+  pickerGroup?: { id: string; label: string; category: string; componentId: string; componentLabel: string }
+  connectorFactor?: { kind: 'skill' | 'dataset'; nodeId: string; mode: LevelType; agentId?: string }
   nodeId: string
   nodeLabel: string
   fieldPath: string
@@ -473,4 +463,82 @@ export function unboundBindableFields(nodes: Node[], edges: Edge[]): UnboundFiel
     }
   }
   return result
+}
+
+/** Creation entries route connector choices through their dedicated factor dialogs. */
+export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField[] {
+  const fields = unboundBindableFields(nodes, edges).filter((field) => {
+    const kind = nodes.find((node) => node.id === field.nodeId)?.type
+    return kind !== 'skill' && kind !== 'dataset'
+  })
+  const connectorOwners = new Set<string>()
+  for (const node of nodes) {
+    if (node.type !== 'skill' && node.type !== 'dataset') continue
+    const kind = node.type
+    const handles = kind === 'skill' ? ['skill'] : ['dataset', 'resource', 'tool']
+    const owners = nodes.filter((owner) => ['agent', 'sub_agent'].includes(owner.type ?? '') && edges.some((edge) => edge.source === node.id && edge.target === owner.id && handles.includes(edge.targetHandle ?? '')))
+    if (!(node.data.factor_bindings as Record<string, string> | undefined)?.['config.enabled']) fields.push({
+      nodeId: node.id, nodeLabel: agentTracedLabel(node, edges, nodes), fieldPath: 'config.enabled',
+      fieldLabel: `This ${kind} on/off`, levelType: 'boolean', currentValue: undefined,
+      connectorFactor: { kind, nodeId: node.id, mode: 'boolean' },
+    })
+    for (const owner of owners) {
+      const key = `${owner.id}:${kind}`
+      if (connectorOwners.has(key)) continue
+      connectorOwners.add(key)
+      for (const mode of ['selection', 'toggle'] as const) {
+        const levelType = `${kind}_${mode}` as LevelType
+        fields.push({
+          nodeId: owner.id, nodeLabel: String(owner.data.label || 'Agent'), fieldPath: `${kind}_selection`,
+          fieldLabel: mode === 'selection' ? `${kind === 'skill' ? 'Skill' : 'Dataset'} levels` : `All ${kind}s on/off`,
+          levelType, currentValue: undefined,
+          connectorFactor: { kind, nodeId: node.id, mode: levelType, agentId: owner.id },
+        })
+      }
+    }
+  }
+  return fields.map((field) => {
+    const node = nodes.find((candidate) => candidate.id === field.nodeId)!
+    const kind = field.connectorFactor?.kind ?? node.type ?? 'node'
+    const agentKinds = ['agent', 'sub_agent']
+    const targets = nodes.filter((candidate) => agentKinds.includes(candidate.type ?? '') && edges.some((edge) => edge.source === node.id && edge.target === candidate.id))
+    const owner = agentKinds.includes(node.type ?? '') ? node : targets.length === 1 ? targets[0] : undefined
+    const category = field.connectorFactor?.kind === 'skill' ? 'Skills'
+      : field.connectorFactor?.kind === 'dataset' ? 'Datasets'
+      : agentKinds.includes(kind) ? 'Agent fields'
+      : kind.startsWith('llm_') ? 'Model'
+      : kind.startsWith('pattern_') ? 'Execution pattern'
+      : ({ skill: 'Skills', dataset: 'Datasets', mcp_tool: 'Tools', script: 'Tools', okf_bundle: 'Knowledge', okf_document: 'Knowledge', memory: 'Memory', output_parser: 'Output parser', critic_gate: 'Critic gate' } as Record<string, string>)[kind] ?? 'Other components'
+    const connectorChoice = field.connectorFactor && field.connectorFactor.mode !== 'boolean'
+    return {
+      ...field,
+      pickerGroup: {
+        id: owner?.id ?? 'shared-unconnected',
+        label: owner ? String(owner.data.label || 'Agent') : 'Shared or unconnected components',
+        category,
+        componentId: connectorChoice ? `${field.nodeId}:${kind}` : node.id,
+        componentLabel: connectorChoice ? `${category} on this agent` : String(node.data.label || kind),
+      },
+    }
+  })
+}
+
+export function groupFactorCreationFields(fields: UnboundField[]) {
+  const agents = new Map<string, { id: string; label: string; components: Map<string, { id: string; category: string; label: string; fields: UnboundField[] }> }>()
+  for (const field of fields) {
+    const group = field.pickerGroup ?? { id: 'fields', label: 'Canvas fields', category: 'Fields', componentId: field.nodeId, componentLabel: field.nodeLabel }
+    if (!agents.has(group.id)) agents.set(group.id, { id: group.id, label: group.label, components: new Map() })
+    const agent = agents.get(group.id)!
+    if (!agent.components.has(group.componentId)) agent.components.set(group.componentId, { id: group.componentId, category: group.category, label: group.componentLabel, fields: [] })
+    agent.components.get(group.componentId)!.fields.push(field)
+  }
+  const categories = ['Agent fields', 'Skills', 'Datasets', 'Model', 'Execution pattern', 'Tools', 'Knowledge', 'Memory', 'Output parser', 'Critic gate', 'Other components']
+  return [...agents.values()]
+    .sort((a, b) => a.id === 'shared-unconnected' ? 1 : b.id === 'shared-unconnected' ? -1 : a.label.localeCompare(b.label))
+    .map((agent) => ({ ...agent, components: [...agent.components.values()]
+      .sort((a, b) => categories.indexOf(a.category) - categories.indexOf(b.category) || a.label.localeCompare(b.label))
+      .map((component) => ({ ...component, fields: component.fields.sort((a, b) => {
+        const modeOrder = (field: UnboundField) => field.connectorFactor?.mode === 'boolean' ? 0 : field.connectorFactor?.mode.endsWith('_selection') ? 1 : 2
+        return a.connectorFactor && b.connectorFactor ? modeOrder(a) - modeOrder(b) : a.fieldLabel.localeCompare(b.fieldLabel)
+      }) })) }))
 }

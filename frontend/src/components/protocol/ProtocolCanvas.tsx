@@ -85,7 +85,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { Skill } from '@/types/skills'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
-import { agentTracedLabel, factorBoundField, revealsHiddenMcpServers, toolFactorServerId, unboundBindableFields, type UnboundField } from './bindableFields'
+import { agentTracedLabel, factorBoundField, factorCreationFields, revealsHiddenMcpServers, toolFactorServerId, type UnboundField } from './bindableFields'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { ToolStepNodeInspector } from './ToolStepNodeInspector'
@@ -364,6 +364,7 @@ export interface ProtocolCanvasHandle {
   // level from the sibling Design tab must update every field controlled by
   // the factor, not leave the graph and design as two sources of truth.
   setFactorBaseline: (factorName: string, baseline: unknown) => void
+  openConnectorFactor: (field: UnboundField) => void
 }
 
 export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
@@ -464,8 +465,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       removeFactorBindings,
       renameFactorBindings,
       setFactorBaseline,
+      openConnectorFactor: (field) => {
+        if (!experimentId || experimentLocked || !field.connectorFactor) return
+        setSelectedNodeId(null)
+        setConnectorFactorChoice(field.connectorFactor)
+        if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
+        else setDatasetFactorNodeId(field.connectorFactor.nodeId)
+      },
     }),
-    [bindFactorOnNode, removeFactorBindings, renameFactorBindings, setFactorBaseline],
+    [bindFactorOnNode, removeFactorBindings, renameFactorBindings, setFactorBaseline, experimentId, experimentLocked],
   )
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   useEffect(() => {
@@ -483,6 +491,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const [editingFactorName, setEditingFactorName] = useState<string | null>(null)
   const [skillFactorNodeId, setSkillFactorNodeId] = useState<string | null>(null)
   const [datasetFactorNodeId, setDatasetFactorNodeId] = useState<string | null>(null)
+  const [connectorFactorChoice, setConnectorFactorChoice] = useState<UnboundField['connectorFactor']>()
   const [addPanelOpen, setAddPanelOpen] = useState(false)
   // The second level of the add-node panel: AddNodePanel's "MCP Servers"
   // entry swaps the browser in over it, and its Back button returns. Only
@@ -1345,11 +1354,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const requestSkillFactor = useCallback((nodeId: string) => {
     if (!experimentId || experimentLocked) return
     setSelectedNodeId(null)
+    setConnectorFactorChoice(undefined)
     setSkillFactorNodeId(nodeId)
   }, [experimentId, experimentLocked])
   const requestDatasetFactor = useCallback((nodeId: string) => {
     if (!experimentId || experimentLocked) return
     setSelectedNodeId(null)
+    setConnectorFactorChoice(undefined)
     setDatasetFactorNodeId(nodeId)
   }, [experimentId, experimentLocked])
   const metricsByNode = useMemo(() => {
@@ -1465,7 +1476,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   })
   const factorPickerNode = nodes.find((n) => n.id === factorPickerNodeId) ?? null
   const factorPickerFields: UnboundField[] = factorPickerNodeId
-    ? unboundBindableFields(nodes, edges).filter((f) => f.nodeId === factorPickerNodeId)
+    ? factorCreationFields(nodes, edges).filter((f) => f.nodeId === factorPickerNodeId)
     : []
   const factorPickerExistingNames = factorPickerExperimentQuery.data?.design_spec?.factors?.map((f) => f.name) ?? []
 
@@ -2500,6 +2511,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           }}
           factor={{ name: '', levels: [], level_type: 'string' }}
           pickableFields={factorPickerFields}
+          onPickConnectorFactor={(field) => {
+            if (!field.connectorFactor) return
+            setFactorPickerNodeId(null)
+            setConnectorFactorChoice(field.connectorFactor)
+            if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
+            else setDatasetFactorNodeId(field.connectorFactor.nodeId)
+          }}
           existingNames={factorPickerExistingNames}
           emptyPickerMessage={`${(factorPickerNode?.data as { label?: string })?.label || 'This node'} has no fields that can be turned into a factor.`}
           revealHiddenServers={revealsHiddenMcpServers(nodes)}
@@ -2512,6 +2530,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       {skillFactorNodeId && <SkillFactorDialog
         key={skillFactorNodeId}
         skillNodeId={skillFactorNodeId}
+        initialMode={connectorFactorChoice?.mode as 'boolean' | 'skill_selection' | 'skill_toggle' | undefined}
+        initialAgentId={connectorFactorChoice?.agentId}
         graph={toPersistedGraph(nodes, edges)}
         factors={factors}
         onClose={() => setSkillFactorNodeId(null)}
@@ -2550,6 +2570,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       {datasetFactorNodeId && <DatasetFactorDialog
         key={datasetFactorNodeId}
         datasetNodeId={datasetFactorNodeId}
+        initialMode={connectorFactorChoice?.mode as 'boolean' | 'dataset_selection' | 'dataset_toggle' | undefined}
+        initialAgentId={connectorFactorChoice?.agentId}
         graph={toPersistedGraph(nodes, edges)}
         factors={factors}
         onClose={() => setDatasetFactorNodeId(null)}

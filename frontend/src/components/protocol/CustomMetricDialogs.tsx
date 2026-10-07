@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { ChevronsUpDown } from 'lucide-react'
 import { mcpServersApi, protocolsApi } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { HUD_ACCENT_RING_CLASSNAME, cn } from '@/lib/utils'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AGENT_OUTPUT_PRODUCER_ID, agentOutputSourceOptions } from '@/lib/agentOutputMetrics'
 import { mcpToolSourceOptions, type McpToolSourceOption } from '@/lib/mcpToolMetrics'
@@ -50,16 +53,50 @@ export function MetricNodeLabel({ display, reason }: { display: MetricNodeDispla
   )
 }
 
-function MetricNodeOption({ value, display, reason }: { value: string; display: MetricNodeDisplay; reason?: string }) {
-  return (
-    <SelectItem
-      value={value}
-      disabled={!!reason}
-      aria-label={`${display.label}, ${display.type}${reason ? `, ${reason}` : ''}`}
-    >
-      <MetricNodeLabel display={display} reason={reason} />
-    </SelectItem>
-  )
+type MetricNodeChoice = { value: string; display: MetricNodeDisplay; reason?: string; agentId?: string; category: string }
+
+function MetricNodePicker({ value, display, choices, graph, onChange }: {
+  value: string
+  display: MetricNodeDisplay | null | undefined
+  choices: MetricNodeChoice[]
+  graph?: ProtocolGraph
+  onChange: (value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const groups = new Map<string, { label: string; categories: Map<string, MetricNodeChoice[]> }>()
+  for (const choice of choices) {
+    const key = choice.agentId ?? (choice.value === 'node_runtime' ? 'runtime' : 'shared')
+    const label = choice.agentId ? String(graph?.nodes.find(node => node.id === choice.agentId)?.data.label || 'Agent')
+      : key === 'runtime' ? 'Runtime metrics for selected nodes' : 'Shared or unconnected components'
+    if (!`${label} ${choice.category} ${choice.display.label} ${choice.display.type}`.toLowerCase().includes(search.trim().toLowerCase())) continue
+    if (!groups.has(key)) groups.set(key, { label, categories: new Map() })
+    const categories = groups.get(key)!.categories
+    categories.set(choice.category, [...(categories.get(choice.category) ?? []), choice])
+  }
+  const groupOrder = (key: string) => key === 'runtime' ? 2 : key === 'shared' ? 1 : 0
+  const categoryOrder = ['Agent output', 'Scripts', 'MCP tools', 'Tool steps', 'Runtime']
+  return <Popover open={open} onOpenChange={(next) => { setOpen(next); if (next) setSearch('') }}>
+    <PopoverTrigger render={<Button variant="outline" role="combobox" aria-label="Metric node" aria-expanded={open} className="w-full justify-between" />}>
+      {display ? <MetricNodeLabel display={display} /> : 'Select a node…'}<ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+    </PopoverTrigger>
+    <PopoverContent align="start" className={cn('w-[min(36rem,calc(100vw-4rem))] max-h-[min(32rem,var(--available-height))] overflow-hidden', HUD_ACCENT_RING_CLASSNAME)}>
+      <Input autoFocus placeholder="Search nodes…" aria-label="Search metric nodes" value={search} onChange={event => setSearch(event.target.value)} />
+      <div className="min-h-0 overflow-y-auto" role="listbox" aria-label="Metric nodes">
+        {groups.size === 0 && <p className="p-3 text-sm text-muted-foreground">No matching nodes.</p>}
+        {[...groups.entries()].sort(([a, ga], [b, gb]) => groupOrder(a) - groupOrder(b) || ga.label.localeCompare(gb.label)).map(([id, group]) => <details key={`${id}:${!!search.trim()}`} open className="mb-2 rounded-md border">
+          <summary className="cursor-pointer bg-muted/30 px-3 py-2 text-sm font-semibold">{group.label}</summary>
+          <div className="space-y-2 p-2">{[...group.categories.entries()].sort(([a], [b]) => categoryOrder.indexOf(a) - categoryOrder.indexOf(b)).map(([category, options]) => <div key={category}>
+            <p className="px-2 py-1 text-xs font-medium text-primary">{category}</p>
+            {options.sort((a, b) => a.display.label.localeCompare(b.display.label)).map(choice => <button key={choice.value} type="button" role="option" aria-selected={value === choice.value} disabled={!!choice.reason}
+              aria-label={`${choice.display.label}, ${choice.display.type}${choice.reason ? `, ${choice.reason}` : ''}`}
+              className={cn('flex w-full cursor-pointer items-center rounded-md px-2 py-2 text-left hover:bg-muted disabled:cursor-not-allowed disabled:text-muted-foreground', value === choice.value && 'bg-primary/15 ring-1 ring-primary')}
+              onClick={() => { onChange(choice.value); setOpen(false) }}><MetricNodeLabel display={choice.display} reason={choice.reason} /></button>)}
+          </div>)}</div>
+        </details>)}
+      </div>
+    </PopoverContent>
+  </Popover>
 }
 
 function duplicateName(metric: DesignMetric, name: string, metrics: DesignMetric[]) {
@@ -206,7 +243,7 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
     label: source.label,
     type: 'Tool Step',
   })
-  const nodeRuntimeDisplay: MetricNodeDisplay = { label: 'Runs of chosen nodes', type: 'Node runtime' }
+  const nodeRuntimeDisplay: MetricNodeDisplay = { label: 'Runtime metrics for selected nodes', type: 'Node runtime' }
   const selectedNodeDisplay = producer === 'node_runtime' ? nodeRuntimeDisplay : selectedAgentSource
     ? agentNodeDisplay(selectedAgentSource)
     : selectedPythonSource
@@ -380,17 +417,13 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
       <legend className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Metric node</legend>
       {!sourceContext ? <div className="space-y-1.5">
         <Label>Node</Label>
-        <Select value={selectedMetricNode} onValueChange={selectMetricNode}>
-          <SelectTrigger className="w-full" aria-label="Metric node"><SelectValue>{() => selectedNodeDisplay ? <MetricNodeLabel display={selectedNodeDisplay} /> : 'Select a node…'}</SelectValue></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__" disabled>Select a node…</SelectItem>
-            {agentSources.map((source) => <MetricNodeOption key={`agent:${source.agentNodeId}`} value={`agent:${source.agentNodeId}`} display={agentNodeDisplay(source)} reason={agentSourceDisabledReason(source)} />)}
-            {pythonSources.map((source) => <MetricNodeOption key={`python:${source.key}`} value={`python:${source.key}`} display={pythonNodeDisplay(source)} reason={pythonSourceDisabledReason(source)} />)}
-            {mcpSources.map((source) => <MetricNodeOption key={`mcp:${source.key}`} value={`mcp:${source.key}`} display={mcpNodeDisplay(source)} reason={mcpSourceDisabledReason(source)} />)}
-            {toolStepSources.map((source) => <MetricNodeOption key={`tool_step:${source.nodeId}`} value={`tool_step:${source.nodeId}`} display={toolStepNodeDisplay(source)} reason={source.disabledReason} />)}
-            {offerNodeRuntime && <MetricNodeOption value="node_runtime" display={nodeRuntimeDisplay} />}
-          </SelectContent>
-        </Select>
+        <MetricNodePicker value={selectedMetricNode} display={selectedNodeDisplay} graph={graph} onChange={selectMetricNode} choices={[
+          ...agentSources.map(source => ({ value: `agent:${source.agentNodeId}`, display: agentNodeDisplay(source), reason: agentSourceDisabledReason(source), agentId: source.agentNodeId, category: 'Agent output' })),
+          ...pythonSources.map(source => ({ value: `python:${source.key}`, display: pythonNodeDisplay(source), reason: pythonSourceDisabledReason(source), agentId: source.agentNodeId, category: 'Scripts' })),
+          ...mcpSources.map(source => ({ value: `mcp:${source.key}`, display: mcpNodeDisplay(source), reason: mcpSourceDisabledReason(source), agentId: source.agentNodeId, category: 'MCP tools' })),
+          ...toolStepSources.map(source => ({ value: `tool_step:${source.nodeId}`, display: toolStepNodeDisplay(source), reason: source.disabledReason, category: 'Tool steps' })),
+          ...(offerNodeRuntime ? [{ value: 'node_runtime', display: nodeRuntimeDisplay, category: 'Runtime' }] : []),
+        ]} />
       </div> : <>
         <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm">{producer === 'agent' ? 'Agent output' : producer === 'tool_step' ? 'Tool Step' : producer === 'node_runtime' ? 'Node runtime' : producer === 'python' ? 'Python Script' : 'MCP Tool'}</p>
         {producer === 'tool_step' && <div className="space-y-1.5"><Label>Tool Step source</Label><p className="rounded-md border bg-muted/30 px-3 py-2 text-sm">{selectedToolStepSource?.label}</p>{toolStepSourceError && <p role="alert" className="text-xs text-destructive">{toolStepSourceError}</p>}</div>}
@@ -402,7 +435,7 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
     </fieldset>
 
     {producer === 'node_runtime' && <fieldset className="space-y-3">
-      <legend className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Runtime total</legend>
+      <legend className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Runtime metrics for selected nodes</legend>
       <div className="space-y-1.5" role="group" aria-label="Nodes to measure">
         <Label>Nodes</Label>
         {runtimeNodeSources.map((source) => <label key={source.nodeId} className="flex cursor-pointer items-center gap-2">

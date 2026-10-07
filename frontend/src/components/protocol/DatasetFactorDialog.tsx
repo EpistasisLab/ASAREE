@@ -10,22 +10,24 @@ import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 import { computeFactorName } from './factorLevels'
 
-export function DatasetFactorDialog({ datasetNodeId, graph, factors, onClose, onSave, onRemove }: {
+export function DatasetFactorDialog({ datasetNodeId, graph, factors, initialMode, initialAgentId, onClose, onSave, onRemove }: {
   datasetNodeId: string
   graph: ProtocolGraph
   factors: DesignFactor[]
+  initialMode?: Mode
+  initialAgentId?: string
   onClose: () => void
   onSave: (factor: DesignFactor, ownerId: string, previousName?: string) => Promise<void>
   onRemove: (name: string) => Promise<void>
 }) {
   const dataset = graph.nodes.find((node) => node.id === datasetNodeId)!
   const agents = graph.nodes.filter((node) => ['agent', 'sub_agent'].includes(node.type) && graph.edges.some((edge) => edge.source === datasetNodeId && edge.target === node.id && ['dataset', 'resource', 'tool'].includes(edge.targetHandle ?? '')))
-  const [agentId, setAgentId] = useState(agents.find((agent) => agent.data.factor_bindings?.[DATASET_FACTOR_PATH])?.id ?? agents[0]?.id ?? '')
+  const [agentId, setAgentId] = useState(initialAgentId ?? agents.find((agent) => agent.data.factor_bindings?.[DATASET_FACTOR_PATH])?.id ?? agents[0]?.id ?? '')
   const existingFor = (ownerId: string, path: string) => factors.find((factor) => factor.name === graph.nodes.find((node) => node.id === ownerId)?.data.factor_bindings?.[path])
   const legacy = existingFor(datasetNodeId, 'config')
   const initialFactor = existingFor(agentId, DATASET_FACTOR_PATH) ?? existingFor(datasetNodeId, 'config.enabled')
   const initial = initialFactor && initialFactor.level_type !== 'boolean' && initialFactor.level_type ? reconcileDatasetFactor(initialFactor, graph, agentId) : initialFactor
-  const [mode, setMode] = useState<Mode>((initial?.level_type as Mode) ?? 'boolean')
+  const [mode, setMode] = useState<Mode>(initialMode ?? (initial?.level_type as Mode) ?? 'boolean')
   function seed(nextMode: Mode, nextAgentId: string): DesignFactor {
     const ownerId = nextMode === 'boolean' ? datasetNodeId : nextAgentId
     const existing = existingFor(ownerId, nextMode === 'boolean' ? 'config.enabled' : DATASET_FACTOR_PATH)
@@ -44,7 +46,7 @@ export function DatasetFactorDialog({ datasetNodeId, graph, factors, onClose, on
     return nextMode === 'boolean' ? factor : reconcileDatasetFactor(factor, graph, ownerId)
   }
   const [draft, setDraft] = useState<DesignFactor>(() => {
-    const factor = initial ?? seed(mode, agentId)
+    const factor = initialMode ? seed(mode, agentId) : initial ?? seed(mode, agentId)
     return { ...factor, level_type: factor.level_type ?? 'boolean', level_labels: factor.level_labels ?? factor.levels.map((level) => level ? 'Enabled' : 'Disabled') }
   })
   const [saving, setSaving] = useState(false)

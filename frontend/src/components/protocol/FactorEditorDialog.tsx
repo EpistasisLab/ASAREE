@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { datasetsApi, mcpServersApi } from '@/api/client'
 import { isPromptReferenceField, type PromptReferenceScope } from '@/lib/promptReferences'
 import { cardAccent, cn, hashToChartHue, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
-import { pickToolNamesForServer, selectableMcpServers, type UnboundField } from './bindableFields'
+import { groupFactorCreationFields, pickToolNamesForServer, selectableMcpServers, type UnboundField } from './bindableFields'
 import { useProviderModels } from './useProviderModels'
 import {
   computeFactorName,
@@ -518,6 +518,7 @@ function StandardFactorEditorDialog({
   boundField,
   promptScopeFor,
   onSave,
+  onPickConnectorFactor,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -543,6 +544,7 @@ function StandardFactorEditorDialog({
   // large number of fields to search through, and this dialog already has
   // the room a cramped popover wouldn't.
   pickableFields?: UnboundField[]
+  onPickConnectorFactor?: (field: UnboundField) => void
   // Needed to dedupe the computed name once a field is picked -- only
   // meaningful alongside pickableFields.
   existingNames?: string[]
@@ -597,6 +599,10 @@ function StandardFactorEditorDialog({
   }, [open])
 
   function pickField(field: UnboundField) {
+    if (field.connectorFactor && onPickConnectorFactor) {
+      onPickConnectorFactor(field)
+      return
+    }
     setSelectedField(field)
     const nextName = computeFactorName(field.nodeLabel, field.fieldLabel, existingNames ?? [])
     setSelectedName(nextName)
@@ -680,8 +686,9 @@ function StandardFactorEditorDialog({
 
   const accent = hashToChartHue(name || 'factor')
   const filteredFields = (pickableFields ?? []).filter((f) =>
-    `${f.nodeLabel}:${f.fieldLabel}`.toLowerCase().includes(search.trim().toLowerCase()),
+    `${f.nodeLabel}:${f.fieldLabel} ${f.pickerGroup?.label ?? ''} ${f.pickerGroup?.category ?? ''} ${f.pickerGroup?.componentLabel ?? ''}`.toLowerCase().includes(search.trim().toLowerCase()),
   )
+  const fieldGroups = groupFactorCreationFields(filteredFields)
 
   return (
     <Dialog open={open} onOpenChange={changeOpen}>
@@ -700,12 +707,12 @@ function StandardFactorEditorDialog({
           </Button>
         </div>
 
-        <div className="flex-1 space-y-4 overflow-y-auto p-4">
+        <div className={cn('min-h-0 flex-1 p-4', needsFieldPick ? 'flex flex-col overflow-hidden' : 'space-y-4 overflow-y-auto')}>
           {needsFieldPick ? (
-            <div className="space-y-1.5">
+            <div className="flex min-h-0 flex-1 flex-col gap-1.5">
               <Label>Bind to a field on the canvas</Label>
               <Input autoFocus placeholder="Search fields…" value={search} onChange={(e) => setSearch(e.target.value)} />
-              <div className="max-h-96 space-y-0.5 overflow-y-auto rounded-lg border p-1.5">
+              <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto rounded-lg border p-1.5">
                 {filteredFields.length === 0 && (
                   <p className="py-4 text-center text-sm text-muted-foreground">
                     {pickableFields?.length === 0
@@ -713,21 +720,27 @@ function StandardFactorEditorDialog({
                       : 'No matching fields.'}
                   </p>
                 )}
-                {filteredFields.map((field) => (
+                {fieldGroups.map((group) => <details key={`${group.id}:${!!search.trim()}`} open className="mb-2 rounded-md border">
+                  <summary className="cursor-pointer rounded-t-md bg-muted/30 px-3 py-2 text-sm font-semibold">{group.label}<span className="ml-2 text-xs font-normal text-muted-foreground">{group.components.reduce((count, component) => count + component.fields.length, 0)} options</span></summary>
+                  <div className="space-y-3 p-2">{group.components.map((component) => <section key={component.id} aria-label={`${group.label}: ${component.category}: ${component.label}`}>
+                    <h3 className="px-2 py-1 text-xs font-medium text-primary">{component.category}{component.category === 'Agent fields' ? '' : ` · ${component.label}`}</h3>
+                    {component.fields.map((field) => (
                   <button
-                    key={`${field.nodeId}.${field.fieldPath}`}
+                    key={`${field.nodeId}.${field.fieldPath}.${field.levelType}`}
                     type="button"
                     onClick={() => pickField(field)}
                     className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
                   >
                     <span className="truncate">
-                      {field.nodeLabel}:{field.fieldLabel}
+                      {field.fieldLabel}
                     </span>
                     <Badge variant="outline" className="shrink-0">
                       {LEVEL_TYPE_LABELS[field.levelType]}
                     </Badge>
                   </button>
-                ))}
+                    ))}
+                  </section>)}</div>
+                </details>)}
               </div>
             </div>
           ) : (

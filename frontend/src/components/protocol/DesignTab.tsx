@@ -21,7 +21,7 @@ import {
   factorBoundField,
   revealsHiddenMcpServers,
   toolFactorServerId,
-  unboundBindableFields,
+  factorCreationFields,
   type UnboundField,
 } from './bindableFields'
 import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
@@ -174,7 +174,7 @@ function AddFactorButton({
     },
   })
 
-  const fields = unboundBindableFields(graphQuery.data?.nodes ?? [], graphQuery.data?.edges ?? [])
+  const fields = factorCreationFields(graphQuery.data?.nodes ?? [], graphQuery.data?.edges ?? [])
 
   return (
     <>
@@ -190,6 +190,10 @@ function AddFactorButton({
           revealHiddenServers={revealsHiddenMcpServers(graphQuery.data?.nodes ?? [])}
           promptScopeFor={promptScopeFor}
           pickableFields={fields}
+          onPickConnectorFactor={(field) => {
+            canvasRef.current?.openConnectorFactor(field)
+            setDialogOpen(false)
+          }}
           existingNames={existingNames}
           onSave={(factor, field) => {
             if (field) return createMutation.mutateAsync({ factor, field })

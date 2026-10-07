@@ -10,21 +10,23 @@ import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 import { computeFactorName } from './factorLevels'
 
-export function SkillFactorDialog({ skillNodeId, graph, factors, onClose, onSave, onRemove }: {
+export function SkillFactorDialog({ skillNodeId, graph, factors, initialMode, initialAgentId, onClose, onSave, onRemove }: {
   skillNodeId: string
   graph: ProtocolGraph
   factors: DesignFactor[]
+  initialMode?: Mode
+  initialAgentId?: string
   onClose: () => void
   onSave: (factor: DesignFactor, ownerId: string, previousName?: string) => Promise<void>
   onRemove: (name: string) => Promise<void>
 }) {
   const skill = graph.nodes.find((node) => node.id === skillNodeId)!
   const agents = graph.nodes.filter((node) => ['agent', 'sub_agent'].includes(node.type) && graph.edges.some((edge) => edge.source === skillNodeId && edge.target === node.id && edge.targetHandle === 'skill'))
-  const [agentId, setAgentId] = useState(agents.find((agent) => agent.data.factor_bindings?.[SKILL_FACTOR_PATH])?.id ?? agents[0]?.id ?? '')
+  const [agentId, setAgentId] = useState(initialAgentId ?? agents.find((agent) => agent.data.factor_bindings?.[SKILL_FACTOR_PATH])?.id ?? agents[0]?.id ?? '')
   const existingFor = (ownerId: string, path: string) => factors.find((factor) => factor.name === graph.nodes.find((node) => node.id === ownerId)?.data.factor_bindings?.[path])
   const initialFactor = existingFor(agentId, SKILL_FACTOR_PATH) ?? existingFor(skillNodeId, 'config.enabled')
   const initial = initialFactor && initialFactor.level_type !== 'boolean' && initialFactor.level_type ? reconcileSkillFactor(initialFactor, graph, agentId) : initialFactor
-  const [mode, setMode] = useState<Mode>((initial?.level_type as Mode) ?? 'boolean')
+  const [mode, setMode] = useState<Mode>(initialMode ?? (initial?.level_type as Mode) ?? 'boolean')
   function seed(nextMode: Mode, nextAgentId: string): DesignFactor {
     const ownerId = nextMode === 'boolean' ? skillNodeId : nextAgentId
     const existing = existingFor(ownerId, nextMode === 'boolean' ? 'config.enabled' : SKILL_FACTOR_PATH)
@@ -43,7 +45,7 @@ export function SkillFactorDialog({ skillNodeId, graph, factors, onClose, onSave
     return nextMode === 'boolean' ? factor : reconcileSkillFactor(factor, graph, ownerId)
   }
   const [draft, setDraft] = useState<DesignFactor>(() => {
-    const factor = initial ?? seed(mode, agentId)
+    const factor = initialMode ? seed(mode, agentId) : initial ?? seed(mode, agentId)
     return { ...factor, level_type: factor.level_type ?? 'boolean', level_labels: factor.level_labels ?? factor.levels.map((level) => level ? 'Enabled' : 'Disabled') }
   })
   const [saving, setSaving] = useState(false)

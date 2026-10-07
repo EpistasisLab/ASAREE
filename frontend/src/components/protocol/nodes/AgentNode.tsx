@@ -82,8 +82,10 @@ export function AgentNode({
     ...(peerNeedsToolCalling ? ["This model can't call tools, so this agent can't consult or delegate to connected agents"] : []),
   ]
   const { updateNodeData } = useReactFlow()
-  const { requestRunNode } = useProtocolCanvasActions()
-  const isActive = data.active ?? true
+  const { requestRunNode, requestSubAgentFactor, experimentLocked } = useProtocolCanvasActions()
+  const controlled = isSubAgent && !!data.subAgentFactorControlled
+  const isActive = controlled || (data.active ?? true)
+  const factorCount = boundFactorCount(data) + (controlled ? 1 : 0)
 
   // Ids are stored, labels are only ever displayed -- the same invariant the
   // inspector's editor upholds via `toDisplayPrompt`. Without this the summary
@@ -127,7 +129,8 @@ export function AgentNode({
       <NodeHoverToolbar
         nodeId={id}
         isActive={isActive}
-        onToggleActive={() => updateNodeData(id, { active: !isActive })}
+        onToggleActive={controlled ? undefined : () => updateNodeData(id, { active: !isActive })}
+        onMakeFactor={isSubAgent && !experimentLocked && requestSubAgentFactor ? () => requestSubAgentFactor(id) : undefined}
         runAlone={{ canRun: !!data.canRunAlone, onRun: () => requestRunNode(id) }}
       />
       {/* Sits inside the top-right corner so it stays clear of the Knowledge
@@ -145,7 +148,7 @@ export function AgentNode({
           node" anyway. Top-center (on hover) is NodeHoverToolbar, and the
           Architectural Pattern connector's own label/stub live OUTSIDE the
           card on the left of this edge, so neither competes for this corner. */}
-      {hasBoundFactor(data) && <NodeFactorBadge count={boundFactorCount(data)} className="-top-3 -right-3" />}
+      {factorCount > 0 && <NodeFactorBadge count={factorCount} className="-top-3 -right-3" />}
       {/* Main flow is left-to-right -- the bottom sub-connectors stay on the
           bottom edge regardless, since a config source hangs below a node no
           matter which way the main flow runs.
@@ -379,7 +382,7 @@ export function AgentNode({
             className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
           />
           <ConnectorHandleLabel left={CONNECTOR_LEFT.sub_agents}>Sub-Agents</ConnectorHandleLabel>
-          <ConnectorAddStub nodeId={id} slot="sub_agents" left={CONNECTOR_LEFT.sub_agents} alwaysVisible />
+          <ConnectorAddStub nodeId={id} slot="sub_agents" left={CONNECTOR_LEFT.sub_agents} alwaysVisible factorName={data.factor_bindings?.sub_agent_selection} factorLevelCount={data.subAgentFactorLevelCount as number | undefined} factorOnOff={data.sub_agent_factor_mode === 'sub_agent_toggle'} />
         </>
       )}
       <Handle

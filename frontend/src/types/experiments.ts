@@ -24,6 +24,8 @@ export interface DesignFactor {
     | 'tool_names'
     | 'skill_selection'
     | 'skill_toggle'
+    | 'sub_agent_selection'
+    | 'sub_agent_toggle'
   | 'dataset_selection'
   | 'dataset_toggle'
   | 'knowledge_selection'

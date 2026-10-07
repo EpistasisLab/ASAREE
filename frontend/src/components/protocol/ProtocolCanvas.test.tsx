@@ -144,6 +144,39 @@ describe('ProtocolCanvas connector adds', () => {
     }))
   })
 
+  it.each(['sub_agent_selection', 'sub_agent_toggle'] as const)('creates a %s Sub-Agent factor from the node hover menu and preserves connected nodes', async (mode) => {
+    const experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    vi.spyOn(skillsApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        ...['a', 'b'].map((id) => ({ id, type: 'sub_agent', position: { x: 100, y: 0 }, data: { ...defaultAgentNodeData(`Worker ${id}`), active: false } })),
+      ],
+      edges: ['a', 'b'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'sub_agents' })),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
+    expect(makeFactor).not.toBeNull()
+    fireEvent.click(makeFactor!)
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: mode === 'sub_agent_toggle' ? 'All agent sub-agents on/off' : 'Sub-Agent levels' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Sub-Agents', level_type: mode, levels: mode === 'sub_agent_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'sub_agent_toggle' ? ['All enabled', 'All disabled'] : ['Worker a', 'Worker b'] }] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ sub_agent_selection: 'Writer:Sub-Agents' })
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.sub_agent_factor_mode).toBe(mode)
+      expect(persisted?.nodes.filter((node) => node.type === 'sub_agent')).toHaveLength(2)
+    })
+  })
+
   it.each(['skill_selection', 'skill_toggle'] as const)('creates a %s skill factor from the node hover menu and preserves connected nodes', async (mode) => {
     const experiment = {
       id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,

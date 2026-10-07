@@ -377,6 +377,34 @@ async def test_pulling_the_edge_mid_run_stops_the_next_consultation(stubs: dict[
     assert len(stubs["peer_runs"]) == 1
 
 
+async def test_sub_agent_factor_selection_survives_draft_changes_but_not_unplugging(stubs: dict[str, Any]) -> None:
+    graph = _graph()
+    graph["nodes"][0]["data"].update(
+        factor_bindings={"sub_agent_selection": "Workers"}, sub_agent_selection=["critic"]
+    )
+    graph["nodes"][1]["type"] = "sub_agent"
+    graph["nodes"][1]["data"]["active"] = False
+    graph["nodes"][2]["type"] = "sub_agent"
+    graph["edges"] = [
+        {"source": id, "target": "planner", "targetHandle": "sub_agents"} for id in ["critic", "loner"]
+    ]
+    stubs["live_graph"] = graph
+    messenger = AgentMessenger(
+        protocol_id=PROTOCOL_ID,
+        protocol_run_id=RUN_ID,
+        owner_id=OWNER,
+        graph=pe.apply_factor_bindings(graph, {}),
+        entry_agent_id="planner",
+    )
+    assert (await _ask(messenger)).state == "completed"
+    assert (await _ask(messenger, to="loner")).state == "rejected"
+    graph["nodes"][0]["data"]["sub_agent_selection"] = ["loner"]
+    assert (await _ask(messenger)).state == "completed"
+    assert (await _ask(messenger, to="loner")).state == "rejected"
+    graph["edges"] = []
+    assert (await _ask(messenger)).state == "rejected"
+
+
 async def test_a_refused_consultation_is_still_in_the_transcript(stubs: dict[str, Any]) -> None:
     """Invariant 10 -- a silently dropped question is the failure this makes
     debuggable."""

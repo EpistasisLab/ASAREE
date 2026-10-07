@@ -70,6 +70,7 @@ from asaree.services.protocols import (
     update_protocol,
 )
 from asaree.services.skill_factors import test_skill_factor_values
+from asaree.services.sub_agent_factors import test_sub_agent_factor_values
 from asaree.services.test_run_results import FreshnessReason, project_test_run_result
 from asaree.worker.enqueue import enqueue_protocol_run
 
@@ -280,6 +281,7 @@ class TestRunRequest(BaseModel):
 
     row_index: StrictInt | None = Field(default=None, ge=0)
     knowledge_selections: dict[str, str] | None = None
+    sub_agent_selections: dict[str, str] | None = None
     skill_selections: dict[str, str] | None = None
     dataset_selections: dict[str, str] | None = None
 
@@ -289,6 +291,7 @@ class NodePlayRequest(BaseModel):
 
     row_index: StrictInt | None = Field(default=None, ge=0)
     knowledge_selections: dict[str, str] | None = None
+    sub_agent_selections: dict[str, str] | None = None
     skill_selections: dict[str, str] | None = None
     dataset_selections: dict[str, str] | None = None
 
@@ -298,6 +301,7 @@ async def _node_test_factor_values(
 ) -> dict[str, Any]:
     try:
         return {
+            **await test_sub_agent_factor_values(graph, body.sub_agent_selections if body else None, owner_id, node_id),
             **await test_skill_factor_values(graph, body.skill_selections if body else None, owner_id, node_id),
             **await test_knowledge_factor_values(graph, body.knowledge_selections if body else None, owner_id, node_id),
             **await test_dataset_factor_values(graph, body.dataset_selections if body else None, owner_id, db, node_id),
@@ -690,6 +694,9 @@ async def create_test_run_endpoint(
             protocol_revision_id=revision.id,
             dataset_row=dataset_row,
             factor_values={
+                **await test_sub_agent_factor_values(
+                    revision.graph, body.sub_agent_selections if body else None, user.id
+                ),
                 **await test_skill_factor_values(revision.graph, body.skill_selections if body else None, user.id),
                 **await test_knowledge_factor_values(
                     revision.graph, body.knowledge_selections if body else None, user.id

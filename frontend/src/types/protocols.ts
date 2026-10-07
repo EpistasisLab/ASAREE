@@ -362,6 +362,8 @@ export interface AgentNodeData {
   dataset_factor_mode?: 'dataset_selection' | 'dataset_toggle'
   knowledge_selection?: string[]
   knowledge_factor_mode?: 'knowledge_selection' | 'knowledge_toggle'
+  sub_agent_selection?: string[]
+  sub_agent_factor_mode?: 'sub_agent_selection' | 'sub_agent_toggle'
   skill_selection?: string[]
   skill_factor_mode?: 'skill_selection' | 'skill_toggle'
   label: string

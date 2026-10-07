@@ -1065,6 +1065,7 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
     except DatasetRowInputError as exc:
         raise ProtocolValidationError(str(exc)) from exc
     _, downstream, _ = _adjacency(graph)
+    graph = graph_with_sub_agent_selection(graph)
     nodes, ordered, complete = _kahn_order(graph)
     if not nodes:
         raise ProtocolValidationError("This protocol has no nodes.")
@@ -1373,7 +1374,7 @@ def apply_factor_bindings(graph: dict[str, Any], factor_values: dict[str, Any]) 
         for field_path, factor_name in bindings.items():
             if factor_name in factor_values:
                 _set_path(data, field_path, factor_values[factor_name])
-    return patched
+    return graph_with_sub_agent_selection(patched, copy_graph=False)
 
 
 def find_gated_pairs(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -2283,11 +2284,36 @@ def _connected_agent_ids(graph: dict[str, Any], node_id: str) -> list[str]:
     return peers
 
 
+def graph_with_sub_agent_selection(graph: dict[str, Any], *, copy_graph: bool = True) -> dict[str, Any]:
+    """Materialize parent-owned availability for all execution consumers."""
+    patched = copy.deepcopy(graph) if copy_graph else graph
+    nodes = {node["id"]: node for node in patched.get("nodes") or []}
+    for parent in nodes.values():
+        data = parent.get("data") or {}
+        if parent.get("type") != "agent" or not (data.get("factor_bindings") or {}).get("sub_agent_selection"):
+            continue
+        selected = data.get("sub_agent_selection") or []
+        for edge in patched.get("edges") or []:
+            child = nodes.get(edge.get("source"))
+            if (
+                edge.get("target") == parent["id"]
+                and edge.get("targetHandle") == "sub_agents"
+                and child
+                and child.get("type") == "sub_agent"
+            ):
+                child.setdefault("data", {})["active"] = child["id"] in selected
+    return patched
+
+
 def _sub_agent_ids(graph: dict[str, Any], parent_id: str) -> list[str]:
     """Active Sub-Agents owned by *parent_id*, in canvas wiring order."""
     nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
     if (nodes.get(parent_id) or {}).get("type") != "agent":
         return []
+    data = (nodes[parent_id].get("data") or {})
+    selected = (
+        data.get("sub_agent_selection") if (data.get("factor_bindings") or {}).get("sub_agent_selection") else None
+    )
     children: list[str] = []
     for edge in graph.get("edges") or []:
         if edge.get("target") != parent_id or edge.get("targetHandle") != "sub_agents":
@@ -2297,7 +2323,7 @@ def _sub_agent_ids(graph: dict[str, Any], parent_id: str) -> list[str]:
         if (
             child is not None
             and child.get("type") == "sub_agent"
-            and _is_node_active(child)
+            and (child_id in selected if selected is not None else _is_node_active(child))
             and child_id not in children
         ):
             children.append(child_id)
@@ -5579,8 +5605,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
     # values into whichever fields the canvas bound to a matching factor
     # name before doing anything else, so every node below (including
     # topological_order's own validation) sees the already-patched graph.
-    if factor_values:
-        graph = apply_factor_bindings(graph, factor_values)
+    graph = apply_factor_bindings(graph, factor_values or {})
 
     try:
         validate_coordination_strategy(design_spec, graph=graph)

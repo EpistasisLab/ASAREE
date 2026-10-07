@@ -287,7 +287,7 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
 
 export interface UnboundField {
   pickerGroup?: { id: string; label: string; category: string; componentId: string; componentLabel: string }
-  connectorFactor?: { kind: 'skill' | 'dataset' | 'knowledge' | 'model' | 'pattern'; nodeId: string; mode: LevelType; agentId?: string }
+  connectorFactor?: { kind: 'skill' | 'sub_agent' | 'dataset' | 'knowledge' | 'model' | 'pattern'; nodeId: string; mode: LevelType; agentId?: string }
   nodeId: string
   nodeLabel: string
   fieldPath: string
@@ -439,6 +439,7 @@ export function unboundBindableFields(nodes: Node[], edges: Edge[]): UnboundFiel
     const wholeConfigBound = !!bindings.config
     const configSubFieldBound = Object.keys(bindings).some((path) => path !== 'config' && path.startsWith('config.'))
     for (const field of bindableFieldsForNode(node)) {
+      if (node.type === 'sub_agent' && field.fieldPath === 'active' && edges.some((edge) => edge.source === node.id && edge.targetHandle === 'sub_agents' && (nodes.find((owner) => owner.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.sub_agent_selection)) continue
       if (bindings[field.fieldPath]) continue
       if (field.fieldPath === 'config' && configSubFieldBound) continue
       if (field.fieldPath.startsWith('config.') && wholeConfigBound) continue
@@ -468,6 +469,7 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
   const fields = unboundBindableFields(nodes, edges).filter((field) => {
     const kind = nodes.find((node) => node.id === field.nodeId)?.type
     return kind !== 'skill' && kind !== 'dataset' && kind !== 'okf_bundle' && kind !== 'okf_document'
+      && !(kind === 'sub_agent' && field.fieldPath === 'active')
       && !isPatternNode(kind) && field.fieldPath !== PATTERN_FACTOR_PATH
   })
   for (const node of nodes.filter((node) => isPatternNode(node.type))) {
@@ -483,6 +485,25 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
     }
   }
   const connectorOwners = new Set<string>()
+  for (const node of nodes.filter((node) => node.type === 'sub_agent')) {
+    const owners = nodes.filter((owner) => owner.type === 'agent' && edges.some((edge) => edge.source === node.id && edge.target === owner.id && edge.targetHandle === 'sub_agents'))
+    if (!(node.data.factor_bindings as Record<string, string> | undefined)?.active) fields.push({
+      nodeId: node.id, nodeLabel: agentTracedLabel(node, edges, nodes), fieldPath: 'active',
+      fieldLabel: 'This sub-agent on/off', levelType: 'boolean', currentValue: node.data.active ?? true,
+      connectorFactor: { kind: 'sub_agent', nodeId: node.id, mode: 'boolean' },
+    })
+    for (const owner of owners) {
+      const key = `${owner.id}:sub_agent`
+      if (connectorOwners.has(key)) continue
+      connectorOwners.add(key)
+      for (const mode of ['selection', 'toggle'] as const) fields.push({
+        nodeId: owner.id, nodeLabel: String(owner.data.label || 'Agent'), fieldPath: 'sub_agent_selection',
+        fieldLabel: mode === 'selection' ? 'Sub-Agent levels' : 'All agent sub-agents on/off',
+        levelType: `sub_agent_${mode}`, currentValue: undefined,
+        connectorFactor: { kind: 'sub_agent', nodeId: node.id, mode: `sub_agent_${mode}`, agentId: owner.id },
+      })
+    }
+  }
   for (const node of nodes) {
     if (!['skill', 'dataset', 'okf_bundle', 'okf_document'].includes(node.type ?? '')) continue
     const kind = (node.type === 'okf_bundle' || node.type === 'okf_document' ? 'knowledge' : node.type) as 'skill' | 'dataset' | 'knowledge'
@@ -518,8 +539,9 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
     const kind = field.connectorFactor?.kind ?? node.type ?? 'node'
     const agentKinds = ['agent', 'sub_agent']
     const targets = nodes.filter((candidate) => agentKinds.includes(candidate.type ?? '') && edges.some((edge) => edge.source === node.id && edge.target === candidate.id))
-    const owner = agentKinds.includes(node.type ?? '') ? node : targets.length === 1 ? targets[0] : undefined
-    const category = field.connectorFactor?.kind === 'skill' ? 'Skills'
+    const owner = field.connectorFactor?.kind === 'sub_agent' && field.connectorFactor.mode === 'boolean' ? targets.length === 1 ? targets[0] : undefined : agentKinds.includes(node.type ?? '') ? node : targets.length === 1 ? targets[0] : undefined
+    const category = field.connectorFactor?.kind === 'sub_agent' ? 'Sub-Agents'
+      : field.connectorFactor?.kind === 'skill' ? 'Skills'
       : field.connectorFactor?.kind === 'dataset' ? 'Datasets'
       : field.connectorFactor?.kind === 'knowledge' ? 'Knowledge'
       : field.connectorFactor?.kind === 'model' ? 'Model'

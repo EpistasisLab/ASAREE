@@ -38,6 +38,7 @@ from asaree.services.design_revisions import get_current_revision, supersede_and
 from asaree.services.factorial_cells import list_replicates, upsert_replicate
 from asaree.services.knowledge_factors import validate_knowledge_factors
 from asaree.services.skill_factors import validate_skill_factors
+from asaree.services.sub_agent_factors import validate_sub_agent_factor_structure
 
 
 class DesignValidationError(ValueError):
@@ -288,9 +289,11 @@ async def get_design_impact(
     """Compare the declared factorial matrix to its materialized revision."""
     material = material_design_spec(design_spec)
     incomplete_skills = any(
-        (factor.get("level_type") in {"skill_selection", "dataset_selection", "knowledge_selection"}
+        (factor.get("level_type") in {
+                "sub_agent_selection", "skill_selection", "dataset_selection", "knowledge_selection"
+            }
          and len(factor.get("levels") or []) < 2)
-        or (factor.get("level_type") in {"skill_toggle", "dataset_toggle", "knowledge_toggle"}
+        or (factor.get("level_type") in {"sub_agent_toggle", "skill_toggle", "dataset_toggle", "knowledge_toggle"}
             and not any(factor.get("levels") or []))
         for factor in material["factors"]
     )
@@ -420,6 +423,7 @@ async def generate_design_cells(
         raise DesignValidationError("Experiment not found")
     if any(
         factor.get("level_type") in {
+            "sub_agent_selection", "sub_agent_toggle",
             "skill_selection", "skill_toggle", "dataset_selection", "dataset_toggle",
             "knowledge_selection", "knowledge_toggle",
         }
@@ -427,6 +431,7 @@ async def generate_design_cells(
     ):
         protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == experiment_id))
         try:
+            validate_sub_agent_factor_structure({"factors": factors}, protocol.graph if protocol else {})
             await validate_skill_factors({"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id)
             await validate_knowledge_factors(
                 {"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id

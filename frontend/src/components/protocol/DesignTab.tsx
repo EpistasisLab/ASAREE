@@ -1,3 +1,4 @@
+import { subAgentFactorIssues } from '@/lib/subAgentFactors'
 import { knowledgeFactorIssues, isKnowledgeFactor } from '@/lib/knowledgeFactors'
 import { useKnowledgeLibrary } from './useKnowledgeLibrary'
 import { datasetsApi } from '@/api/client'
@@ -186,6 +187,7 @@ function AddFactorButton({
 
       {dialogOpen && (
         <FactorEditorDialog
+          graph={graphQuery.data as unknown as ProtocolGraph | undefined}
           open
           onOpenChange={setDialogOpen}
           factor={{ name: '', levels: [], level_type: 'string' }}
@@ -307,7 +309,7 @@ function FactorsEditor({
             variant="ghost"
             size="icon-sm"
             aria-label="Remove factor"
-            title={(factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle') ? 'Remove factor and enable all connected skills' : 'Remove factor'}
+            title={factor.level_type === 'sub_agent_selection' || factor.level_type === 'sub_agent_toggle' ? 'Remove factor and enable all connected sub-agents' : (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle') ? 'Remove factor and enable all connected skills' : 'Remove factor'}
             disabled={disabled || deleteMutation.isPending}
             onClick={() => deleteMutation.mutate(factor.name)}
           >
@@ -319,6 +321,7 @@ function FactorsEditor({
 
       {editingFactor && (
         <FactorEditorDialog
+          graph={graphQuery.data as unknown as ProtocolGraph | undefined}
           open
           onOpenChange={(open) => {
             if (!open) setEditingFactor(null)
@@ -507,6 +510,7 @@ export function DesignTab({
   const skillLibrary = useQuery({ queryKey: ['skills'], queryFn: () => skillsApi.list(), enabled: factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) })
   const datasetLibrary = useQuery({ queryKey: ['datasets'], queryFn: () => datasetsApi.list(), enabled: factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') })
   const datasetIssues = datasetFactorIssues(draftGraph, factors, datasetLibrary.data ? new Set(datasetLibrary.data.map((dataset) => dataset.id)) : undefined)
+  const subAgentIssues = subAgentFactorIssues(draftGraph, factors)
   const skillIssues = skillFactorIssues(draftGraph, factors, skillLibrary.data ? new Set(skillLibrary.data.map((skill) => skill.id)) : undefined)
   const impact = impactQuery.data
 
@@ -876,14 +880,14 @@ export function DesignTab({
             Unbound factor{unboundFactors.length === 1 ? '' : 's'}: {unboundFactors.join(', ')}. Rebind on the canvas or remove from this design.
           </p>
         )}
-        {[...skillIssues, ...datasetIssues, ...knowledgeIssues].map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
+        {[...subAgentIssues, ...skillIssues, ...datasetIssues, ...knowledgeIssues].map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
         <Button
           size="sm"
           disabled={
             generateMutation.isPending ||
             isAutosavingMetadata ||
             !canGenerate ||
-            unboundFactors.length > 0 || knowledgeIssues.length > 0 || (factors.some(isKnowledgeFactor) && !knowledgeLibrary.isSuccess) || skillIssues.length > 0 || datasetIssues.length > 0 || (factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') && !datasetLibrary.isSuccess) || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
+            unboundFactors.length > 0 || subAgentIssues.length > 0 || knowledgeIssues.length > 0 || (factors.some(isKnowledgeFactor) && !knowledgeLibrary.isSuccess) || skillIssues.length > 0 || datasetIssues.length > 0 || (factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') && !datasetLibrary.isSuccess) || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
           }
           onClick={() => generateMutation.mutate()}
         >

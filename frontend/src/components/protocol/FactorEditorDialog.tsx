@@ -1,3 +1,5 @@
+import { SubAgentFactorEditor } from './SubAgentFactorEditor'
+import type { ProtocolGraph } from '@/types/protocols'
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Split, X } from 'lucide-react'
@@ -507,6 +509,7 @@ function ToolNamesLevelRow({
 // remove button on DesignTab's own summary row), so this dialog only ever
 // edits, never deletes.
 export function FactorEditorDialog(props: Parameters<typeof StandardFactorEditorDialog>[0]) {
+  if (props.factor.level_type === 'sub_agent_selection' || props.factor.level_type === 'sub_agent_toggle') return <SubAgentFactorEditor {...props} />
   if (props.factor.level_type === 'knowledge_selection' || props.factor.level_type === 'knowledge_toggle') return <KnowledgeFactorEditor {...props} />
   if (props.factor.level_type === 'dataset_selection' || props.factor.level_type === 'dataset_toggle') return <DatasetFactorEditor {...props} />
   if ((props.factor.level_type === 'skill_selection' || props.factor.level_type === 'skill_toggle')) return <SkillFactorEditor {...props} />
@@ -528,6 +531,7 @@ function StandardFactorEditorDialog({
   onSave,
   onPickConnectorFactor,
 }: {
+  graph?: ProtocolGraph
   open: boolean
   onOpenChange: (open: boolean) => void
   factor: DesignFactor

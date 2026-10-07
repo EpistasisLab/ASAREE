@@ -187,7 +187,7 @@ export interface ResultsScope {
   protocol_revision_id?: string
 }
 
-export interface RowSelection { row_index?: number | null; skill_selections?: Record<string, string>; dataset_selections?: Record<string, string>; knowledge_selections?: Record<string, string> }
+export interface RowSelection { row_index?: number | null; sub_agent_selections?: Record<string, string>; skill_selections?: Record<string, string>; dataset_selections?: Record<string, string>; knowledge_selections?: Record<string, string> }
 
 function scopeQuery(scope?: ResultsScope): string {
   const params = new URLSearchParams()

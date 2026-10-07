@@ -23,6 +23,8 @@ export type LevelType =
   | 'tool_names'
   | 'skill_selection'
   | 'skill_toggle'
+  | 'sub_agent_selection'
+  | 'sub_agent_toggle'
   | 'dataset_selection'
   | 'dataset_toggle'
   | 'knowledge_selection'
@@ -41,6 +43,8 @@ export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   tool_names: 'Tools allowed',
   skill_selection: 'Skills as levels',
   skill_toggle: 'All skills on/off',
+  sub_agent_selection: 'Sub-Agent levels',
+  sub_agent_toggle: 'All agent sub-agents on/off',
   dataset_selection: 'Dataset levels',
   dataset_toggle: 'All datasets on/off',
   knowledge_selection: 'Knowledge levels',
@@ -62,6 +66,8 @@ export function isStructuredLevelType(type: LevelType): boolean {
     type === 'tool_names' ||
     type === 'skill_selection' ||
     type === 'skill_toggle' ||
+    type === 'sub_agent_selection' ||
+    type === 'sub_agent_toggle' ||
     type === 'dataset_selection' ||
     type === 'dataset_toggle' ||
     type === 'knowledge_selection' ||

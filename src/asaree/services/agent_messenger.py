@@ -491,7 +491,23 @@ class AgentMessenger:
 
         # The live draft graph, not the revision this run's agents came from.
         live_graph = protocol.graph if protocol is not None else self._graph
-        if not _can_deliver_communication(live_graph, from_agent_id, to_agent_id):
+        run_nodes = {node["id"]: node for node in self._graph.get("nodes") or []}
+        parent_data = (run_nodes.get(from_agent_id) or {}).get("data") or {}
+        selected_sub_agent = (run_nodes.get(to_agent_id) or {}).get("type") == "sub_agent" and (
+            parent_data.get("factor_bindings") or {}
+        ).get("sub_agent_selection")
+        if selected_sub_agent:
+            # Published factor values stay authoritative. The existing live
+            # unplug behavior still applies to the parent connection.
+            reachable = _can_deliver_communication(self._graph, from_agent_id, to_agent_id) and any(
+                edge.get("source") == to_agent_id
+                and edge.get("target") == from_agent_id
+                and edge.get("targetHandle") == "sub_agents"
+                for edge in live_graph.get("edges") or []
+            )
+        else:
+            reachable = _can_deliver_communication(live_graph, from_agent_id, to_agent_id)
+        if not reachable:
             return (
                 "That agent is not connected to you on the canvas, so it cannot be consulted. "
                 "Answer using the agents listed for you, or with what you already have."

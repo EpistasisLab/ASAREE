@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { Bot } from 'lucide-react'
+import { Bot, Power, Split, Trash2 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -62,6 +62,7 @@ const GUTTER_WIDTH = 96
 export function AgentNodeInspector({
   node,
   experimentId,
+  subAgentFactorControlled,
   markedLeadAgentId,
   referenceScope,
   handoffPeers,
@@ -75,6 +76,7 @@ export function AgentNodeInspector({
 }: {
   node: (ProtocolNode & { data: AgentNodeData }) | null
   experimentId: string | null
+  subAgentFactorControlled?: boolean
   // Which agent on the canvas already carries the lead marker, if any -- the
   // inspector can't see its siblings, so ProtocolCanvas resolves it.
   markedLeadAgentId: string | null
@@ -197,20 +199,22 @@ export function AgentNodeInspector({
             placeholder={node.type === 'sub_agent' ? 'Sub-Agent' : 'Agent'}
             onCommit={(label) => onChange(node.id, { ...data, label })}
           />
-          <FactorBindableField
-            experimentId={experimentId}
-            nodeId={node.id}
-            fieldPath="active"
-            defaultLabel="Active"
-            nodeLabel={data.label || (isSubAgent ? 'Sub-Agent' : 'Agent')}
-            levelType="boolean"
-            currentValue={data.active ?? true}
-            boundFactorName={bindings.active}
-            onBind={(name) => bindFactor('active', name)}
-            onUnbind={() => unbindFactor('active')}
-          >
-            {(trigger) => trigger}
-          </FactorBindableField>
+          {!isSubAgent && <>
+            <FactorBindableField
+              experimentId={experimentId}
+              nodeId={node.id}
+              fieldPath="active"
+              defaultLabel="Active"
+              nodeLabel={data.label || (isSubAgent ? 'Sub-Agent' : 'Agent')}
+              levelType="boolean"
+              currentValue={data.active ?? true}
+              boundFactorName={bindings.active}
+              onBind={(name) => bindFactor('active', name)}
+              onUnbind={() => unbindFactor('active')}
+            >
+              {(trigger) => trigger}
+            </FactorBindableField>
+          </>}
         </>
       }
       onDelete={() => onDelete(node.id)}
@@ -268,6 +272,23 @@ export function AgentNodeInspector({
             </TabsList>
 
             <TabsContent value="parameters" className="space-y-4 pt-2">
+              {isSubAgent && <>
+                <div className="rounded-lg border px-3 py-2">
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-medium text-chart-2">Make factor</span> has moved to the node toolbar. Hover over the Sub-Agent node and click the <Split className="inline size-3 align-text-bottom text-chart-2" aria-hidden="true" /> icon.
+                    {' '}<span className="ml-4 inline-flex flex-col gap-1 align-middle">
+                      <span className="text-[10px]">Toolbar preview</span>
+                      <span role="img" aria-label="Node toolbar preview: activate or deactivate, delete, and Make factor (the branching icon on the right)" className="inline-flex items-center gap-3">
+                        <Power className="size-3" />
+                        <Trash2 className="size-3" />
+                        <Split className="size-3 text-chart-2" />
+                      </span>
+                    </span>
+                  </p>
+                </div>
+              {subAgentFactorControlled ? <p className="text-xs text-muted-foreground">Availability is controlled by the parent Agent’s Sub-Agents factor. Remove it to restore individual controls.</p> : bindings.active && <p className="text-xs text-chart-2">Factor: {bindings.active}</p>}
+              {subAgentFactorControlled && bindings.active && <Button variant="outline" size="sm" onClick={() => unbindFactor('active')}>Remove conflicting individual on/off binding</Button>}
+              </>}
               {/* First, above Prompt: which agent leads decides whose prompt
                   becomes the task and whose answer gets scored, so it frames
                   everything below it rather than being one more setting. It

@@ -69,6 +69,7 @@ interface ProtocolCanvasActions {
   requestModelFactor?: (nodeId: string, levelIndex?: number) => void
   requestPatternFactor?: (nodeId: string) => void
   modelFactorForNode?: (nodeId: string) => DesignFactor | undefined
+  requestSubAgentFactor?: (nodeId: string) => void
   requestSkillFactor?: (nodeId: string) => void
   // Same idea for the main pipeline handle -- always creates and wires
   // another Agent node (see MainEdgeAddRequest's own comment).

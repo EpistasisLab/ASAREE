@@ -5,24 +5,17 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { connectedSkills, reconcileSkillFactor, SKILL_FACTOR_PATH } from '@/lib/skillFactors'
+import { connectedSkills, reconcileSkillFactor, skillFactorConflict, skillFactorModes as modes, SKILL_FACTOR_PATH, type SkillFactorMode as Mode } from '@/lib/skillFactors'
 import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 import { computeFactorName } from './factorLevels'
-
-type Mode = 'boolean' | 'skill_selection' | 'skill_toggle'
-const modes: Record<Mode, string> = {
-  boolean: 'This skill on/off',
-  skill_selection: 'Skill levels',
-  skill_toggle: 'All agent skills on/off',
-}
 
 export function SkillFactorDialog({ skillNodeId, graph, factors, onClose, onSave, onRemove }: {
   skillNodeId: string
   graph: ProtocolGraph
   factors: DesignFactor[]
   onClose: () => void
-  onSave: (factor: DesignFactor, ownerId: string, removeNames: string[]) => Promise<void>
+  onSave: (factor: DesignFactor, ownerId: string, previousName?: string) => Promise<void>
   onRemove: (name: string) => Promise<void>
 }) {
   const skill = graph.nodes.find((node) => node.id === skillNodeId)!
@@ -55,22 +48,18 @@ export function SkillFactorDialog({ skillNodeId, graph, factors, onClose, onSave
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [confirmed, setConfirmed] = useState(false)
   const ownerId = mode === 'boolean' ? skillNodeId : agentId
   const current = existingFor(ownerId, mode === 'boolean' ? 'config.enabled' : SKILL_FACTOR_PATH)
   const affected = mode === 'boolean' ? [skill] : connectedSkills(graph, agentId)
-  const conflicts = [...new Set(mode === 'boolean'
-    ? agents.flatMap((agent) => agent.data.factor_bindings?.[SKILL_FACTOR_PATH] ? [agent.data.factor_bindings[SKILL_FACTOR_PATH]] : [])
-    : affected.flatMap((node) => Object.values(node.data.factor_bindings ?? {})))]
-  const changingType = !!current && (current.level_type ?? 'boolean') !== mode
-  const replacements = [...new Set([...(current ? [current.name] : []), ...conflicts])]
-  const needsConfirmation = changingType || conflicts.length > 0
+  const unavailable = (value: Mode) => value !== 'boolean' && !agentId
+    ? `${modes[value]} is unavailable because this Skill is not connected to an Agent. Connect this Skill to an Agent first.`
+    : skillFactorConflict(graph, factors, skillNodeId, value, agentId)
+  const blockedReason = unavailable(mode)
   const labels = draft.level_labels ?? []
   function change(nextMode: Mode, nextAgentId = agentId) {
     setAgentId(nextAgentId)
     setMode(nextMode)
     setDraft(seed(nextMode, nextAgentId))
-    setConfirmed(false)
     setError('')
   }
   function move(index: number, offset: number) {
@@ -81,11 +70,12 @@ export function SkillFactorDialog({ skillNodeId, graph, factors, onClose, onSave
     setDraft({ ...draft, levels, level_labels: nextLabels })
   }
   async function commit(remove = false) {
+    if (!remove && blockedReason) return
     setSaving(true)
     setError('')
     try {
       if (remove && current) await onRemove(current.name)
-      else await onSave({ ...draft, name: draft.name.trim(), level_labels: labels.map((label) => label.trim()) }, ownerId, replacements)
+      else await onSave({ ...draft, name: draft.name.trim(), level_labels: labels.map((label) => label.trim()) }, ownerId, current?.name)
       onClose()
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Could not save the skill factor.')
@@ -104,8 +94,8 @@ export function SkillFactorDialog({ skillNodeId, graph, factors, onClose, onSave
           const existing = existingFor(id, SKILL_FACTOR_PATH)
           change((existing?.level_type as Mode) ?? mode, id)
         }}><SelectTrigger className="w-full"><SelectValue>{String(agents.find((agent) => agent.id === agentId)?.data.label)}</SelectValue></SelectTrigger><SelectContent>{agents.map((agent) => <SelectItem key={agent.id} value={agent.id}>{String(agent.data.label)}</SelectItem>)}</SelectContent></Select></div>}
-        <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{(Object.keys(modes) as Mode[]).map((value) => <Button key={value} size="sm" variant={mode === value ? 'default' : 'outline'} aria-pressed={mode === value} disabled={saving || (value !== 'boolean' && !agentId)} onClick={() => change(value)}>{modes[value]}</Button>)}</div></div>
-        {!agentId && <p className="text-xs text-muted-foreground">Connect this Skill to an Agent to use Agent-level factors.</p>}
+        <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{(Object.keys(modes) as Mode[]).map((value) => <Button key={value} size="sm" variant={mode === value ? 'default' : 'outline'} aria-pressed={mode === value} className={unavailable(value) ? 'text-muted-foreground opacity-50' : undefined} title={unavailable(value)} disabled={saving} onClick={() => change(value)}>{modes[value]}</Button>)}</div></div>
+        {blockedReason ? <p role="status" className="rounded-md border p-3 text-sm text-muted-foreground">{blockedReason}</p> : <>
         <p className="text-xs text-muted-foreground">{mode === 'boolean' ? 'Enable or disable this Skill node.' : mode === 'skill_selection' ? 'Each cell receives exactly one connected skill.' : 'Each cell enables every connected skill, including deactivated skills, or disables them all.'}</p>
         <div className="space-y-2"><Label htmlFor="skill-factor-name">Factor name</Label><Input id="skill-factor-name" value={draft.name} disabled={saving} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></div>
         {mode !== 'boolean' && affected.length < (mode === 'skill_toggle' ? 1 : 2) && <p className="text-xs text-destructive">Connect at least {mode === 'skill_toggle' ? 'one skill' : 'two different skills'} before generating cells.</p>}
@@ -116,15 +106,12 @@ export function SkillFactorDialog({ skillNodeId, graph, factors, onClose, onSave
           </div>
           {mode !== 'boolean' && <><Button variant="ghost" size="icon-sm" aria-label="Move level up" disabled={saving || index === 0} onClick={() => move(index, -1)}><ArrowUp className="size-3.5" /></Button><Button variant="ghost" size="icon-sm" aria-label="Move level down" disabled={saving || index === draft.levels.length - 1} onClick={() => move(index, 1)}><ArrowDown className="size-3.5" /></Button></>}
         </div>)}</div>
-        {needsConfirmation && <div className="space-y-2 rounded-md border border-chart-4 p-3">
-          <p className="text-xs">Saving replaces {changingType ? `the current ${modes[(current!.level_type ?? 'boolean') as Mode]} factor` : 'conflicting factors'}{conflicts.length ? ` and removes these factor declarations and all their bindings: ${conflicts.join(', ')}` : ''}.</p>
-          <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={confirmed} disabled={saving} onChange={(event) => setConfirmed(event.target.checked)} />Replace these factors</label>
-        </div>}
         <p className="text-xs text-muted-foreground">Agent-level factors follow current Skill connections. Changes require design review and regeneration.</p>
         {current && <Button variant="destructive" size="sm" disabled={saving} onClick={() => void commit(true)}>Remove factor</Button>}
+        </>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
-      <DialogFooter><Button variant="outline" disabled={saving} onClick={onClose}>Cancel</Button><Button disabled={saving || !valid || (needsConfirmation && !confirmed)} onClick={() => void commit()}>{saving ? 'Saving…' : 'Save factor'}</Button></DialogFooter>
+      <DialogFooter><Button variant="outline" disabled={saving} onClick={onClose}>Cancel</Button><Button disabled={saving || !valid || !!blockedReason} onClick={() => void commit()}>{saving ? 'Saving…' : 'Save factor'}</Button></DialogFooter>
     </DialogContent>
   </Dialog>
 }

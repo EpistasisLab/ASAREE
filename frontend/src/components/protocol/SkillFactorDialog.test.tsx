@@ -11,22 +11,55 @@ const graph = {
   edges: [{ source: 'skill', target: 'agent', targetHandle: 'skill' }],
 } as unknown as ProtocolGraph
 
-it('requires explicit confirmation before replacing individual factors with a group factor', async () => {
+it.each(['Skill levels', 'All agent skills on/off'])('explains why %s conflicts with individual bindings without offering replacement', (mode) => {
   const save = vi.fn().mockResolvedValue(undefined)
   render(<SkillFactorDialog skillNodeId="skill" graph={graph} factors={[{ name: 'Skill enabled', level_type: 'boolean', levels: [false, true] }]} onClose={vi.fn()} onSave={save} onRemove={vi.fn()} />)
-  fireEvent.click(screen.getByRole('button', { name: 'All agent skills on/off' }))
+  const option = screen.getByRole('button', { name: mode })
+  expect(option).toHaveClass('opacity-50')
+  fireEvent.click(option)
   expect(screen.getByRole('button', { name: 'Save factor' })).toBeDisabled()
-  expect(screen.getByText(/removes these factor declarations/)).toHaveTextContent('Skill enabled')
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Replace these factors' }))
+  expect(screen.getByRole('status')).toHaveTextContent('Skill enabled')
+  expect(screen.getByRole('status')).toHaveTextContent('remove those bindings in each Skill’s factor dialog first')
+  expect(screen.queryByLabelText('Factor name')).not.toBeInTheDocument()
+  expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
-  await waitFor(() => expect(save).toHaveBeenCalledWith({ name: 'Writer:Skills', level_type: 'skill_toggle', levels: [['a'], []], level_labels: ['All enabled', 'All disabled'] }, 'agent', ['Skill enabled']))
+  expect(save).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: 'This skill on/off' }))
+  expect(screen.getByLabelText('Factor name')).toHaveValue('Skill enabled')
+  expect(screen.getByRole('button', { name: 'Remove factor' })).toBeEnabled()
 })
 
 it('only offers individual factors for disconnected skills', () => {
   render(<SkillFactorDialog skillNodeId="skill" graph={{ ...graph, edges: [] }} factors={[]} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />)
-  expect(screen.getByRole('button', { name: 'Skill levels' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'All agent skills on/off' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'This skill on/off' })).toHaveAttribute('aria-pressed', 'true')
+  fireEvent.click(screen.getByRole('button', { name: 'Skill levels' }))
+  expect(screen.getByRole('status')).toHaveTextContent('Connect this Skill to an Agent first')
+  expect(screen.queryByLabelText('Factor name')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Save factor' })).toBeDisabled()
+})
+
+it.each(['This skill on/off', 'Skill levels'])('blocks %s when an Agent already has an all-skills factor', (mode) => {
+  const grouped = {
+    ...graph,
+    nodes: [
+      { ...graph.nodes[0], data: { label: 'Writer', factor_bindings: { skill_selection: 'Group' } } },
+      { ...graph.nodes[1], data: { label: 'Summarize', config: { skill_id: 'a' } } },
+    ],
+  } as ProtocolGraph
+  render(<SkillFactorDialog skillNodeId="skill" graph={grouped} factors={[{ name: 'Group', level_type: 'skill_toggle', levels: [['a'], []], level_labels: ['All enabled', 'All disabled'] }]} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />)
+  fireEvent.click(screen.getByRole('button', { name: mode }))
+  expect(screen.getByRole('status')).toHaveTextContent('Group')
+  expect(screen.getByRole('status')).toHaveTextContent('remove it first')
+  expect(screen.queryByLabelText('Factor name')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Save factor' })).toBeDisabled()
+})
+
+it('saves edits to an existing individual factor without removing other declarations', async () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  render(<SkillFactorDialog skillNodeId="skill" graph={graph} factors={[{ name: 'Skill enabled', level_type: 'boolean', levels: [false, true] }]} onClose={vi.fn()} onSave={save} onRemove={vi.fn()} />)
+  fireEvent.change(screen.getByLabelText('Factor name'), { target: { value: 'Renamed' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+  await waitFor(() => expect(save).toHaveBeenCalledWith({ name: 'Renamed', level_type: 'boolean', levels: [false, true], level_labels: ['Disabled', 'Enabled'] }, 'skill', 'Skill enabled'))
 })
 
 it('opens the existing group factor when a shared skill has multiple connected agents', () => {

@@ -1,7 +1,7 @@
 import { DatasetRowSelector } from './DatasetRowSelector'
 import { useDatasetRowSelection } from './useDatasetRowSelection'
 import { rowBindingForNode } from '@/lib/datasetRows'
-import { reconcileSkillFactor, skillFactorOwner, SKILL_FACTOR_PATH } from '@/lib/skillFactors'
+import { reconcileSkillFactor, skillFactorConflict, skillFactorOwner, SKILL_FACTOR_PATH } from '@/lib/skillFactors'
 import { SkillFactorDialog } from './SkillFactorDialog'
 import { SkillTestSelectors } from './SkillTestSelectors'
 import { useSkillTestSelection } from './useSkillTestSelection'
@@ -2480,16 +2480,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         graph={toPersistedGraph(nodes, edges)}
         factors={factors}
         onClose={() => setSkillFactorNodeId(null)}
-        onSave={async (factor, ownerId, removeNames) => {
+        onSave={async (factor, ownerId, previousName) => {
           const fresh = await experimentsApi.get(experimentId!)
-          if ((fresh.design_spec?.factors ?? []).some((existing) => existing.name === factor.name && !removeNames.includes(existing.name))) throw new Error('A factor with this name already exists.')
+          const graph = toPersistedGraph(nodes, edges)
+          const conflict = skillFactorConflict(graph, fresh.design_spec?.factors ?? [], skillFactorNodeId, factor.level_type as 'boolean' | 'skill_selection' | 'skill_toggle', ownerId)
+          if (conflict) throw new Error(conflict)
+          if ((fresh.design_spec?.factors ?? []).some((existing) => existing.name === factor.name && existing.name !== previousName)) throw new Error('A factor with this name already exists.')
           const next = factor.level_type === 'boolean' ? factor : reconcileSkillFactor(factor, toPersistedGraph(nodes, edges), ownerId)
-          const oldIndividualName = nodes.find((node) => node.id === ownerId)?.data.factor_bindings as Record<string, string> | undefined
-          const preserveIndividual = next.level_type === 'boolean' ? oldIndividualName?.['config.enabled'] : undefined
-          await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => !removeNames.includes(existing.name)), next] } })
-          removeNames.filter((name) => name !== preserveIndividual).forEach(removeFactorBindings)
-          if (preserveIndividual) {
-            renameFactorBindings(preserveIndividual, next.name)
+          await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== previousName), next] } })
+          if (previousName) {
+            renameFactorBindings(previousName, next.name)
             setFactorBaseline(next.name, next.levels[0])
           }
           setNodes((current) => current.map((node) => node.id === ownerId ? { ...node, data: {

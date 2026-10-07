@@ -1,6 +1,6 @@
 import { nodeAccent } from '@/lib/nodeAccent'
 import { useQuery } from '@tanstack/react-query'
-import { ScrollText } from 'lucide-react'
+import { Power, ScrollText, Split, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -72,6 +72,19 @@ export function SkillNodeInspector({
       onDelete={() => onDelete(node.id)}
       onClose={onClose}
     >
+      <div className="rounded-lg border px-3 py-2">
+        <p className="text-xs text-muted-foreground">
+          <span className="font-medium text-chart-2">Make factor</span> has moved to the node toolbar. Hover over the Skill node and click the <Split className="inline size-3 align-text-bottom text-chart-2" aria-hidden="true" /> icon.
+          {' '}<span className="ml-4 inline-flex flex-col gap-1 align-middle">
+            <span className="text-[10px]">Toolbar preview</span>
+            <span role="img" aria-label="Node toolbar preview: activate or deactivate, delete, and Make factor (the branching icon on the right)" className="inline-flex items-center gap-3">
+              <Power className="size-3" />
+              <Trash2 className="size-3" />
+              <Split className="size-3 text-chart-2" />
+            </span>
+          </span>
+        </p>
+      </div>
       {connectorFactorName ? <div className="space-y-2 rounded-lg border px-3 py-2"><div className="flex items-center justify-between"><Label>Enabled</Label><Switch checked disabled /></div><p className="text-xs text-muted-foreground">Availability is controlled by connector factor {connectorFactorName}. Remove it to restore individual controls.</p>{Object.entries(bindings).map(([path, name]) => <div key={path} className="space-y-1"><p className="text-xs text-destructive">Individual factor {name} conflicts with this connector.</p><Button variant="outline" size="sm" onClick={() => unbindFactor(path)}>Remove individual binding</Button><p className="text-xs text-muted-foreground">Its declaration remains in Design until you remove or rebind it.</p></div>)}</div> : <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
         <div><Label htmlFor="skill-enabled">Enabled</Label><p className="text-xs text-muted-foreground">Off: the wired agent never sees this skill at all.</p>{bindings['config.enabled'] && <p className="text-xs text-chart-2">Factor: {bindings['config.enabled']}</p>}</div>
         <Switch id="skill-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />

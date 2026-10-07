@@ -1,11 +1,10 @@
 import { DatasetRowSelector } from './DatasetRowSelector'
 import { useDatasetRowSelection } from './useDatasetRowSelection'
 import { rowBindingForNode } from '@/lib/datasetRows'
-import { connectedSkills, reconcileSkillFactor, skillFactorOwner, SKILL_FACTOR_PATH } from '@/lib/skillFactors'
-import { SkillFactorEditor } from './SkillFactorEditor'
+import { reconcileSkillFactor, skillFactorOwner, SKILL_FACTOR_PATH } from '@/lib/skillFactors'
+import { SkillFactorDialog } from './SkillFactorDialog'
 import { SkillTestSelectors } from './SkillTestSelectors'
 import { useSkillTestSelection } from './useSkillTestSelection'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -415,7 +414,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           if (!bindings || !Object.values(bindings).includes(factorName)) return n
           const next = Object.fromEntries(Object.entries(bindings).filter(([, name]) => name !== factorName))
           const data: Record<string, unknown> = { ...n.data, factor_bindings: next }
-          if (bindings[SKILL_FACTOR_PATH] === factorName) delete data.skill_selection
+          if (bindings[SKILL_FACTOR_PATH] === factorName) {
+            delete data.skill_selection
+            delete data.skill_factor_mode
+          }
           return { ...n, data }
         })
       })
@@ -470,8 +472,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // that node's own unbound fields (see requestMakeFactor below).
   const [factorPickerNodeId, setFactorPickerNodeId] = useState<string | null>(null)
   const [editingFactorName, setEditingFactorName] = useState<string | null>(null)
-  const [skillFactorDraft, setSkillFactorDraft] = useState<{ nodeId: string; factor: DesignFactor; oldName?: string } | null>(null)
-  const [skillFactorError, setSkillFactorError] = useState<string | null>(null)
+  const [skillFactorNodeId, setSkillFactorNodeId] = useState<string | null>(null)
   const [addPanelOpen, setAddPanelOpen] = useState(false)
   // The second level of the add-node panel: AddNodePanel's "MCP Servers"
   // entry swaps the browser in over it, and its Back button returns. Only
@@ -1326,22 +1327,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   )
   const requestSkillFactor = useCallback((nodeId: string) => {
     if (!experimentId || experimentLocked) return
-    const graph = toPersistedGraph(nodes, edges)
-    const node = graph.nodes.find((node) => node.id === nodeId)
-    if (!node) return
-    const connected = connectedSkills(graph, nodeId)
-    if (connected.some((skill) => Object.keys(skill.data.factor_bindings ?? {}).length > 0)) {
-      setSkillFactorError('Remove individual skill factor bindings before making a connector factor. Their declarations must then be removed or rebound in Design.')
-      return
-    }
-    const oldName = node.data.factor_bindings?.[SKILL_FACTOR_PATH]
-    const existing = experimentQuery.data?.design_spec?.factors?.find((factor) => factor.name === oldName)
-    const names = new Set(experimentQuery.data?.design_spec?.factors?.map((factor) => factor.name))
-    const base = `${node.data.label || 'Agent'}:Skills`
-    let name = base
-    for (let suffix = 2; names.has(name); suffix++) name = `${base} (${suffix})`
-    setSkillFactorDraft({ nodeId, oldName, factor: reconcileSkillFactor(existing ?? { name, level_type: 'skill_selection', levels: [], level_labels: [] }, graph, nodeId) })
-  }, [experimentId, experimentLocked, nodes, edges, experimentQuery.data])
+    setSelectedNodeId(null)
+    setSkillFactorNodeId(nodeId)
+  }, [experimentId, experimentLocked])
   const metricsByNode = useMemo(() => {
     const definitions = new Map((experimentQuery.data?.measurement_plan?.metrics ?? []).map((metric) => [metric.id, metric]))
     const bindings = new Map<string, Map<string, { id: string; name: string }>>()
@@ -1885,7 +1873,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   useEffect(() => {
     if (experimentLocked) return
     setNodes((current) => current.map((node) => {
-      const factor = factors.find((factor) => factor.level_type === 'skill_selection' && (node.data.factor_bindings as Record<string, string> | undefined)?.[SKILL_FACTOR_PATH] === factor.name)
+      const factor = factors.find((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle') && (node.data.factor_bindings as Record<string, string> | undefined)?.[SKILL_FACTOR_PATH] === factor.name)
       if (!factor || JSON.stringify(node.data.skill_selection) === JSON.stringify(factor.levels[0] ?? [])) return node
       return { ...node, data: { ...node.data, skill_selection: factor.levels[0] ?? [] } }
     }))
@@ -2336,8 +2324,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           <SkillNodeInspector
             connectorFactorName={skillFactorOwner(toPersistedGraph(nodes, edges), selectedNode.id)}
             node={{ id: selectedNode.id, type: 'skill', position: selectedNode.position, data: selectedNode.data as SkillNodeData }}
-            experimentId={experimentId}
-            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
@@ -2488,29 +2474,43 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           }}
         />
       )}
-      {skillFactorError && <Dialog open onOpenChange={() => setSkillFactorError(null)}><DialogContent><DialogHeader><DialogTitle>Individual skill factors must be removed</DialogTitle><DialogDescription>{skillFactorError}</DialogDescription></DialogHeader><Button onClick={() => setSkillFactorError(null)}>Close</Button></DialogContent></Dialog>}
-      {skillFactorDraft && <SkillFactorEditor
-        open
-        factor={skillFactorDraft.factor}
-        onOpenChange={(open) => !open && setSkillFactorDraft(null)}
-        onSave={async (factor) => {
-          const graph = toPersistedGraph(nodes, edges)
-          if (connectedSkills(graph, skillFactorDraft.nodeId).some((skill) => Object.keys(skill.data.factor_bindings ?? {}).length)) throw new Error('Remove individual skill factor bindings first.')
+      {skillFactorNodeId && <SkillFactorDialog
+        key={skillFactorNodeId}
+        skillNodeId={skillFactorNodeId}
+        graph={toPersistedGraph(nodes, edges)}
+        factors={factors}
+        onClose={() => setSkillFactorNodeId(null)}
+        onSave={async (factor, ownerId, removeNames) => {
           const fresh = await experimentsApi.get(experimentId!)
-          if ((fresh.design_spec?.factors ?? []).some((existing) => existing.name === factor.name && existing.name !== skillFactorDraft.oldName)) throw new Error('A factor with this name already exists.')
-          const next = reconcileSkillFactor(factor, graph, skillFactorDraft.nodeId)
-          await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((factor) => factor.name !== skillFactorDraft.oldName), next] } })
-          setNodes((nodes) => nodes.map((node) => node.id === skillFactorDraft.nodeId ? { ...node, data: { ...node.data, skill_selection: next.levels[0] ?? [], factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), [SKILL_FACTOR_PATH]: next.name } } } : node))
+          if ((fresh.design_spec?.factors ?? []).some((existing) => existing.name === factor.name && !removeNames.includes(existing.name))) throw new Error('A factor with this name already exists.')
+          const next = factor.level_type === 'boolean' ? factor : reconcileSkillFactor(factor, toPersistedGraph(nodes, edges), ownerId)
+          const oldIndividualName = nodes.find((node) => node.id === ownerId)?.data.factor_bindings as Record<string, string> | undefined
+          const preserveIndividual = next.level_type === 'boolean' ? oldIndividualName?.['config.enabled'] : undefined
+          await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => !removeNames.includes(existing.name)), next] } })
+          removeNames.filter((name) => name !== preserveIndividual).forEach(removeFactorBindings)
+          if (preserveIndividual) {
+            renameFactorBindings(preserveIndividual, next.name)
+            setFactorBaseline(next.name, next.levels[0])
+          }
+          setNodes((current) => current.map((node) => node.id === ownerId ? { ...node, data: {
+            ...node.data,
+            ...(next.level_type === 'boolean' ? { config: { ...(node.data.config as object), enabled: next.levels[0] } } : { skill_selection: next.levels[0] ?? [], skill_factor_mode: next.level_type }),
+            factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), [next.level_type === 'boolean' ? 'config.enabled' : SKILL_FACTOR_PATH]: next.name },
+          } } : node))
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
         }}
-        onRemove={skillFactorDraft.oldName ? async () => {
+        onRemove={async (name) => {
           const fresh = await experimentsApi.get(experimentId!)
-          await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: (fresh.design_spec?.factors ?? []).filter((factor) => factor.name !== skillFactorDraft.oldName) } })
-          removeFactorBindings(skillFactorDraft.oldName!)
+          const graph = toPersistedGraph(nodes, edges)
+          const individual = graph.nodes.find((node) => node.id === skillFactorNodeId)?.data.factor_bindings?.['config.enabled'] === name
+          const shared = individual && graph.nodes.some((node) => node.id !== skillFactorNodeId && Object.values(node.data.factor_bindings ?? {}).includes(name))
+          if (!shared) await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: (fresh.design_spec?.factors ?? []).filter((factor) => factor.name !== name) } })
+          if (individual) setNodes((current) => current.map((node) => node.id === skillFactorNodeId ? { ...node, data: { ...node.data, factor_bindings: Object.fromEntries(Object.entries(node.data.factor_bindings as Record<string, string>).filter(([path]) => path !== 'config.enabled')) } } : node))
+          else removeFactorBindings(name)
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
-        } : undefined}
+        }}
       />}
       {editingFactor && (
         <FactorEditorDialog

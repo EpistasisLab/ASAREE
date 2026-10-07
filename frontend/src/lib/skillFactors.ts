@@ -3,6 +3,10 @@ import type { ProtocolGraph, ProtocolNode } from '@/types/protocols'
 
 export const SKILL_FACTOR_PATH = 'skill_selection'
 
+export function isSkillFactor(factor: DesignFactor): boolean {
+  return factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle'
+}
+
 export function connectedSkills(graph: ProtocolGraph, agentId: string): ProtocolNode[] {
   return graph.edges.filter((edge) => edge.target === agentId && edge.targetHandle === 'skill')
     .flatMap((edge) => {
@@ -18,6 +22,14 @@ export function skillId(node: ProtocolNode): string {
 export function reconcileSkillFactor(factor: DesignFactor, graph: ProtocolGraph, agentId: string): DesignFactor {
   const skills = connectedSkills(graph, agentId)
   const ids = [...new Set(skills.map(skillId))]
+  if (factor.level_type === 'skill_toggle') {
+    const noneFirst = factor.levels.length === 2 && Array.isArray(factor.levels[0]) && factor.levels[0].length === 0
+    return {
+      ...factor,
+      levels: noneFirst ? [[], ids] : [ids, []],
+      level_labels: factor.level_labels?.length === 2 ? factor.level_labels : noneFirst ? ['All disabled', 'All enabled'] : ['All enabled', 'All disabled'],
+    }
+  }
   const oldIds = factor.levels.map((level) => Array.isArray(level) ? String(level[0] ?? '') : '')
   const ordered = [...new Set([...oldIds.filter((id) => ids.includes(id)), ...ids.filter((id) => !oldIds.includes(id))])]
   return {
@@ -40,14 +52,14 @@ export function skillFactorOwner(graph: ProtocolGraph | undefined, skillNodeId: 
 }
 
 export function skillFactorIssues(graph: ProtocolGraph | undefined, factors: DesignFactor[], availableIds?: Set<string>): string[] {
-  return factors.filter((factor) => factor.level_type === 'skill_selection').flatMap((factor) => {
+  return factors.filter(isSkillFactor).flatMap((factor) => {
     const owner = graph?.nodes.find((node) => node.data.factor_bindings?.[SKILL_FACTOR_PATH] === factor.name)
     if (!owner || !graph) return [`${factor.name}: rebind or remove this skill factor.`]
     const skills = connectedSkills(graph, owner.id)
     const ids = [...new Set(skills.map(skillId))]
     const conflicts = skills.some((node) => Object.keys(node.data.factor_bindings ?? {}).length > 0)
     if (conflicts) return [`${factor.name}: remove individual skill factor bindings first.`]
-    if (ids.length < 2) return [`${factor.name}: connect at least two different skills.`]
+    if (ids.length < (factor.level_type === 'skill_toggle' ? 1 : 2)) return [`${factor.name}: ${factor.level_type === 'skill_toggle' ? 'connect at least one skill' : 'connect at least two different skills'}.`]
     if (ids.some((id) => !id || (availableIds && !availableIds.has(id)))) return [`${factor.name}: disconnect or restore unavailable skills.`]
     return []
   })

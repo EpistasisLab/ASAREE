@@ -23,6 +23,7 @@ export interface DesignFactor {
     | 'dataset_config'
     | 'tool_names'
     | 'skill_selection'
+    | 'skill_toggle'
 }
 
 export interface DesignMetric {

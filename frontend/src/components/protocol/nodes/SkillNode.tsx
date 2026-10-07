@@ -4,6 +4,7 @@ import { ScrollText } from 'lucide-react'
 import type { SkillNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 
 // Names one registered Agent Skill for the Agent it's wired into -- a real
 // runtime effect once wired (see SkillNodeData in types/protocols.ts), like
@@ -16,6 +17,7 @@ const ACCENT = nodeAccent('skill')
 
 export function SkillNode({ id, data, selected }: NodeProps & { data: SkillNodeData }) {
   const { updateNodeData } = useReactFlow()
+  const { requestSkillFactor, experimentLocked } = useProtocolCanvasActions()
   const controlled = !!data.skillFactorControlled
   const enabled = controlled || (data.config?.enabled ?? true)
 
@@ -30,7 +32,8 @@ export function SkillNode({ id, data, selected }: NodeProps & { data: SkillNodeD
       handleId="skill"
       handlePosition="bottom"
       warning={data.config?.skill_id ? undefined : 'No skill selected'}
-      factorCount={boundFactorCount(data)}
+      factorCount={controlled ? 1 : boundFactorCount(data)}
+      onMakeFactor={!experimentLocked && requestSkillFactor ? () => requestSkillFactor(id) : undefined}
       dimmed={!enabled}
       isActive={enabled}
       onToggleActive={controlled ? undefined : () => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}

@@ -286,7 +286,8 @@ async def get_design_impact(
     """Compare the declared factorial matrix to its materialized revision."""
     material = material_design_spec(design_spec)
     incomplete_skills = any(
-        factor.get("level_type") == "skill_selection" and len(factor.get("levels") or []) < 2
+        (factor.get("level_type") == "skill_selection" and len(factor.get("levels") or []) < 2)
+        or (factor.get("level_type") == "skill_toggle" and not any(factor.get("levels") or []))
         for factor in material["factors"]
     )
     planned = (
@@ -413,7 +414,7 @@ async def generate_design_cells(
     ).scalar_one_or_none()
     if experiment is None:
         raise DesignValidationError("Experiment not found")
-    if any(factor.get("level_type") == "skill_selection" for factor in factors):
+    if any(factor.get("level_type") in {"skill_selection", "skill_toggle"} for factor in factors):
         protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == experiment_id))
         try:
             await validate_skill_factors({"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id)

@@ -357,8 +357,9 @@ export interface AgentNodeConfig {
 }
 
 export interface AgentNodeData {
-  // Connector-owned selection; comparison levels contain one skill ID.
+  // Connector-owned selection: one skill per level, or every skill versus none.
   skill_selection?: string[]
+  skill_factor_mode?: 'skill_selection' | 'skill_toggle'
   label: string
   config: AgentNodeConfig
   // field path (e.g. "model_config_data.temperature") -> factor name, for

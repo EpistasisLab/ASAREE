@@ -298,7 +298,7 @@ function FactorsEditor({
             variant="ghost"
             size="icon-sm"
             aria-label="Remove factor"
-            title={factor.level_type === 'skill_selection' ? 'Remove factor and enable all connected skills' : 'Remove factor'}
+            title={(factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle') ? 'Remove factor and enable all connected skills' : 'Remove factor'}
             disabled={disabled || deleteMutation.isPending}
             onClick={() => deleteMutation.mutate(factor.name)}
           >
@@ -493,7 +493,7 @@ export function DesignTab({
     ? ({ nodes: graphQuery.data.nodes, edges: graphQuery.data.edges } as unknown as ProtocolGraph)
     : undefined
   const unboundFactors = unboundFactorNames(experiment.design_spec, draftGraph)
-  const skillLibrary = useQuery({ queryKey: ['skills'], queryFn: () => skillsApi.list(), enabled: factors.some((factor) => factor.level_type === 'skill_selection') })
+  const skillLibrary = useQuery({ queryKey: ['skills'], queryFn: () => skillsApi.list(), enabled: factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) })
   const skillIssues = skillFactorIssues(draftGraph, factors, skillLibrary.data ? new Set(skillLibrary.data.map((skill) => skill.id)) : undefined)
   const impact = impactQuery.data
 
@@ -870,7 +870,7 @@ export function DesignTab({
             generateMutation.isPending ||
             isAutosavingMetadata ||
             !canGenerate ||
-            unboundFactors.length > 0 || skillIssues.length > 0 || (factors.some((factor) => factor.level_type === 'skill_selection') && !skillLibrary.isSuccess)
+            unboundFactors.length > 0 || skillIssues.length > 0 || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
           }
           onClick={() => generateMutation.mutate()}
         >

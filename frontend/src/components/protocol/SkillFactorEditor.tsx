@@ -42,8 +42,8 @@ export function SkillFactorEditor({ factor, open, onOpenChange, onSave, onRemove
   return <Dialog open={open} onOpenChange={(open) => !saving && onOpenChange(open)}>
     <DialogContent className="sm:max-w-xl">
       <DialogHeader>
-        <DialogTitle>Skills as levels</DialogTitle>
-        <DialogDescription>Each cell receives exactly one connected skill. Add or disconnect Skill nodes on the canvas to change the levels.</DialogDescription>
+        <DialogTitle>{factor.level_type === 'skill_toggle' ? 'All agent skills on/off' : 'Skills as levels'}</DialogTitle>
+        <DialogDescription>{factor.level_type === 'skill_toggle' ? 'Each cell receives all connected skills or none.' : 'Each cell receives exactly one connected skill.'} Add or disconnect Skill nodes on the canvas to change the levels.</DialogDescription>
       </DialogHeader>
       <div className="space-y-3">
         <Label htmlFor="skill-factor-name">Factor name</Label>
@@ -53,10 +53,10 @@ export function SkillFactorEditor({ factor, open, onOpenChange, onSave, onRemove
           {draft.levels.map((level, index) => {
             const id = (level as string[])[0]
             const skill = skills.data?.find((skill) => skill.id === id)
-            return <div key={id} className="flex items-center gap-2 rounded-md border p-2">
+            return <div key={index} className="flex items-center gap-2 rounded-md border p-2">
               <div className="min-w-0 flex-1 space-y-1">
-                <p className="font-mono text-xs">{skill?.name ?? labels[index] ?? 'Unavailable skill'}{index === 0 ? ' · default test selection' : ''}</p>
-                {skills.isSuccess && !skill && <p className="text-xs text-destructive">Unavailable: disconnect or restore this skill.</p>}
+                <p className="font-mono text-xs">{factor.level_type === 'skill_toggle' ? ((level as string[]).length ? 'All enabled' : 'All disabled') : skill?.name ?? labels[index] ?? 'Unavailable skill'}{index === 0 ? ' · default test selection' : ''}</p>
+                {factor.level_type !== 'skill_toggle' && skills.isSuccess && !skill && <p className="text-xs text-destructive">Unavailable: disconnect or restore this skill.</p>}
                 <Input aria-label={`Level ${index + 1} label`} value={labels[index] ?? ''} disabled={saving} onChange={(event) => setDraft({ ...draft, level_labels: labels.map((label, i) => i === index ? event.target.value : label) })} />
               </div>
               <Button variant="ghost" size="icon-sm" aria-label="Move level up" disabled={saving || index === 0} onClick={() => move(index, -1)}><ArrowUp className="size-3.5" /></Button>

@@ -14,6 +14,13 @@ const graph = {
 const factor: DesignFactor = { name: 'Skills', level_type: 'skill_selection', levels: [['b'], ['a']], level_labels: ['Custom B', 'Custom A'] }
 
 describe('skill connector factors', () => {
+  it('keeps all-or-none levels in their chosen order as connections change', () => {
+    const toggle: DesignFactor = { name: 'Skills', level_type: 'skill_toggle', levels: [['a', 'b'], []], level_labels: ['With skills', 'Without skills'] }
+    expect(reconcileSkillFactor(toggle, graph, 'agent')).toEqual({ ...toggle, levels: [['a', 'b', 'c'], []] })
+    const noneFirst = { ...toggle, levels: [[], ['a', 'b']], level_labels: ['Without skills', 'With skills'] }
+    expect(reconcileSkillFactor(noneFirst, { ...graph, edges: graph.edges.filter((edge) => edge.source !== 'b') }, 'agent')).toEqual({ ...noneFirst, levels: [[], ['a', 'c']] })
+    expect(skillFactorIssues({ ...graph, edges: [] }, [toggle])[0]).toContain('at least one')
+  })
   it('preserves ordered labels and appends newly connected skills', () => {
     expect(reconcileSkillFactor(factor, graph, 'agent')).toEqual({ ...factor, levels: [['b'], ['a'], ['c']], level_labels: ['Custom B', 'Custom A', 'Skill c'] })
   })

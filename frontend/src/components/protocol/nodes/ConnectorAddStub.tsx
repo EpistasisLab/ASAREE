@@ -1,8 +1,6 @@
 import type { MouseEvent } from 'react'
 import { useNodeConnections } from '@xyflow/react'
 import { Plus } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { FACTOR_TRIGGER_CLASSNAME } from '../factorLevels'
 import { CONNECTOR_SLOT_LABELS, useProtocolCanvasActions, type ConnectorSlot } from '../ProtocolCanvasContext'
 
 // The affordance for an empty sub-connector: a short stub line ending
@@ -35,7 +33,7 @@ export function ConnectorAddStub({
   factorLevelCount?: number
 }) {
   const connections = useNodeConnections({ id: nodeId, handleType: 'target', handleId: slot })
-  const { requestConnectorAdd, requestSkillFactor, experimentLocked } = useProtocolCanvasActions()
+  const { requestConnectorAdd } = useProtocolCanvasActions()
 
   if (connections.length > 0 && !alwaysVisible) return null
 
@@ -68,11 +66,6 @@ export function ConnectorAddStub({
       className={side === 'right' ? 'group/stub absolute top-1/2 -right-11 -translate-y-1/2' : side === 'top' ? 'group/stub absolute -top-11 -translate-x-1/2' : 'group/stub absolute -bottom-11 -translate-x-1/2'}
       style={side !== 'right' ? { left } : undefined}
     >
-      {slot === 'skill' && requestSkillFactor && !experimentLocked && <Button
-        size="xs"
-        className={`pointer-events-none absolute bottom-full left-1/2 z-20 -translate-x-1/2 opacity-0 group-hover/stub:pointer-events-auto group-hover/stub:opacity-100 group-focus-within/stub:pointer-events-auto group-focus-within/stub:opacity-100 ${FACTOR_TRIGGER_CLASSNAME}`}
-        onClick={(event) => { event.stopPropagation(); requestSkillFactor(nodeId) }}
-      >{factorName ? 'Edit factor' : 'Make factor'}</Button>}
       {factorName && <span className="pointer-events-none absolute bottom-[calc(100%+1.5rem)] left-1/2 -translate-x-1/2 whitespace-nowrap rounded border border-chart-2 bg-card px-1 font-mono text-[9px] text-chart-2" title={factorName}>Skills · {factorLevelCount ?? 0} levels</span>}
     <button
       type="button"

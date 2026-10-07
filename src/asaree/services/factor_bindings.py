@@ -67,7 +67,7 @@ def validate_factor_bindings(
                 "level_type" not in factor and len(levels) == 2 and all(isinstance(level, bool) for level in levels)
             )
             if (
-                level_type not in {"boolean", "skill_selection"}
+                level_type not in {"boolean", "skill_selection", "skill_toggle"}
                 and not legacy_boolean
                 and (not levels or published_value != levels[0])
             ):

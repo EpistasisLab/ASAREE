@@ -144,7 +144,7 @@ describe('ProtocolCanvas connector adds', () => {
     }))
   })
 
-  it('creates a connector skill factor and preserves the connected skill nodes', async () => {
+  it.each(['skill_selection', 'skill_toggle'] as const)('creates a %s skill factor from the node hover menu and preserves connected nodes', async (mode) => {
     const experiment = {
       id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
       design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
@@ -162,15 +162,17 @@ describe('ProtocolCanvas connector adds', () => {
       edges: ['a', 'b'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'skill' })),
     }
     const { client } = renderCanvas(graph, 'experiment-1')
-    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-agent"] button.bg-chart-2')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
     expect(makeFactor).not.toBeNull()
     fireEvent.click(makeFactor!)
     await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: mode === 'skill_toggle' ? 'All agent skills on/off' : 'Skill levels' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
-    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Skills', level_type: 'skill_selection', levels: [['a'], ['b']], level_labels: ['Skill a', 'Skill b'] }] }) })))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Skills', level_type: mode, levels: mode === 'skill_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'skill_toggle' ? ['All enabled', 'All disabled'] : ['Skill a', 'Skill b'] }] }) })))
     await waitFor(() => {
       const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
       expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ skill_selection: 'Writer:Skills' })
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.skill_factor_mode).toBe(mode)
       expect(persisted?.nodes.filter((node) => node.type === 'skill')).toHaveLength(2)
     })
   })
@@ -431,8 +433,9 @@ describe('ProtocolCanvas connector adds', () => {
       edges: [],
     }
     const { client } = renderCanvas(graph, experiment.id)
-    fireEvent.doubleClick(await screen.findByText('Skill a'))
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove factor binding' }))
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
+    fireEvent.click(makeFactor!)
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove factor' }))
 
     await waitFor(() => {
       const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))

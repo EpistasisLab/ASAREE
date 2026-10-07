@@ -8,7 +8,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { skillsApi } from '@/api/client'
 import { EditableNodeTitle } from './EditableNodeTitle'
-import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { ProtocolNode, SkillNodeData } from '@/types/protocols'
 
@@ -28,18 +27,12 @@ const ACCENT = nodeAccent('skill')
 // across many protocols, so an inline edit would silently change all of them.
 export function SkillNodeInspector({
   node,
-  experimentId,
-  factorNodeLabel,
   onChange,
   onDelete,
   onClose,
   connectorFactorName,
 }: {
   node: (ProtocolNode & { data: SkillNodeData }) | null
-  experimentId: string | null
-  // The agent-traced display label (see bindableFields.ts's agentTracedLabel)
-  // -- distinct from data.label, this node's own plain header title.
-  factorNodeLabel: string
   onChange: (nodeId: string, data: SkillNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
@@ -55,10 +48,6 @@ export function SkillNodeInspector({
 
   function patchConfig(patch: Partial<SkillNodeData['config']>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
-  }
-
-  function bindFactor(fieldPath: string, factorName: string) {
-    onChange(node!.id, { ...data, factor_bindings: { ...bindings, [fieldPath]: factorName } })
   }
 
   function unbindFactor(fieldPath: string) {
@@ -83,29 +72,10 @@ export function SkillNodeInspector({
       onDelete={() => onDelete(node.id)}
       onClose={onClose}
     >
-      {connectorFactorName ? <div className="space-y-2 rounded-lg border px-3 py-2"><div className="flex items-center justify-between"><Label>Enabled</Label><Switch checked disabled /></div><p className="text-xs text-muted-foreground">Availability is controlled by connector factor {connectorFactorName}. Remove it to restore individual controls.</p>{Object.entries(bindings).map(([path, name]) => <div key={path} className="space-y-1"><p className="text-xs text-destructive">Individual factor {name} conflicts with this connector.</p><Button variant="outline" size="sm" onClick={() => unbindFactor(path)}>Remove individual binding</Button><p className="text-xs text-muted-foreground">Its declaration remains in Design until you remove or rebind it.</p></div>)}</div> : <FactorBindableField
-        experimentId={experimentId}
-        fieldPath="config.enabled"
-        defaultLabel="Enabled"
-        nodeLabel={factorNodeLabel}
-        levelType="boolean"
-        boundFactorName={bindings['config.enabled']}
-        onBind={(name) => bindFactor('config.enabled', name)}
-        onUnbind={() => unbindFactor('config.enabled')}
-      >
-        {(trigger) => (
-          <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
-            <div>
-              <Label htmlFor="skill-enabled" className="flex items-center gap-1.5">
-                Enabled
-                {trigger}
-              </Label>
-              <p className="text-xs text-muted-foreground">Off: the wired agent never sees this skill at all.</p>
-            </div>
-            <Switch id="skill-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
-          </div>
-        )}
-      </FactorBindableField>}
+      {connectorFactorName ? <div className="space-y-2 rounded-lg border px-3 py-2"><div className="flex items-center justify-between"><Label>Enabled</Label><Switch checked disabled /></div><p className="text-xs text-muted-foreground">Availability is controlled by connector factor {connectorFactorName}. Remove it to restore individual controls.</p>{Object.entries(bindings).map(([path, name]) => <div key={path} className="space-y-1"><p className="text-xs text-destructive">Individual factor {name} conflicts with this connector.</p><Button variant="outline" size="sm" onClick={() => unbindFactor(path)}>Remove individual binding</Button><p className="text-xs text-muted-foreground">Its declaration remains in Design until you remove or rebind it.</p></div>)}</div> : <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+        <div><Label htmlFor="skill-enabled">Enabled</Label><p className="text-xs text-muted-foreground">Off: the wired agent never sees this skill at all.</p>{bindings['config.enabled'] && <p className="text-xs text-chart-2">Factor: {bindings['config.enabled']}</p>}</div>
+        <Switch id="skill-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
+      </div>}
 
       <div className="space-y-1.5">
         <Label>Skill</Label>

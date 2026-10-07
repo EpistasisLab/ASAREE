@@ -55,6 +55,66 @@ def test_cell_selection_overrides_individual_switches_without_mutating_graph():
     assert graph == original
 
 
+@pytest.mark.parametrize("none_first", [False, True])
+def test_all_or_none_runs_override_disabled_skills_and_preserve_graph(none_first):
+    graph, spec, ids = skill_graph()
+    graph["nodes"][0]["data"]["skill_factor_mode"] = "skill_toggle"
+    spec["factors"][0].update(level_type="skill_toggle", levels=[[], ids] if none_first else [ids, []])
+    graph["nodes"][0]["data"]["skill_selection"] = spec["factors"][0]["levels"][0]
+    original = copy.deepcopy(graph)
+    validate_factor_bindings(spec, graph)
+    assert _resolve_skill_config(apply_factor_bindings(graph, {"Skills": ids}), "agent") == {"skill_ids": ids}
+    assert _resolve_skill_config(apply_factor_bindings(graph, {"Skills": []}), "agent") == {}
+    assert graph == original
+
+
+def test_all_or_none_accepts_one_skill_and_scopes_shared_nodes_to_each_agent():
+    graph, spec, ids = skill_graph()
+    graph["edges"].pop()
+    graph["nodes"][0]["data"].update(skill_factor_mode="skill_toggle", skill_selection=[ids[0]])
+    graph["nodes"].append({"id": "other-agent", "type": "agent", "data": {}})
+    graph["edges"].append({"source": "skill-0", "target": "other-agent", "targetHandle": "skill"})
+    spec["factors"][0].update(level_type="skill_toggle", levels=[[ids[0]], []])
+    validate_factor_bindings(spec, graph)
+    patched = apply_factor_bindings(graph, {"Skills": [ids[0]]})
+    assert _resolve_skill_config(patched, "agent") == {"skill_ids": [ids[0]]}
+    assert _resolve_skill_config(patched, "other-agent") == {}
+
+
+@pytest.mark.parametrize("levels", ["partial", "duplicate", "all-only", "foreign"])
+def test_all_or_none_rejects_invalid_levels(levels):
+    graph, spec, ids = skill_graph()
+    graph["nodes"][0]["data"]["skill_factor_mode"] = "skill_toggle"
+    spec["factors"][0].update(
+        level_type="skill_toggle",
+        levels={
+            "partial": [[ids[0]], []],
+            "duplicate": [ids + [ids[0]], []],
+            "all-only": [ids, ids],
+            "foreign": [[ids[0], str(uuid.uuid4())], []],
+        }[levels],
+    )
+    with pytest.raises(ValueError, match="every connected skill or none"):
+        validate_factor_bindings(spec, graph)
+
+
+@pytest.mark.asyncio
+async def test_all_or_none_preview_default_and_explicit_choice(monkeypatch):
+    graph, _, ids = skill_graph()
+    owner = uuid.uuid4()
+    graph["nodes"][0]["data"].update(skill_factor_mode="skill_toggle", skill_selection=ids)
+    monkeypatch.setattr(
+        "asaree.services.skill_factors.skill_service.get_skill",
+        AsyncMock(return_value=SimpleNamespace(owner_id=owner, is_system=False)),
+    )
+    assert await preview_values(graph, None, owner) == {"Skills": ids}
+    assert await preview_values(graph, {"agent": "none"}, owner) == {"Skills": []}
+    graph["nodes"][0]["data"]["skill_selection"] = []
+    assert await preview_values(graph, None, owner) == {"Skills": []}
+    with pytest.raises(ValueError, match="all enabled"):
+        await preview_values(graph, {"agent": ids[0]}, owner)
+
+
 @pytest.mark.parametrize("change", ["one", "missing-level", "duplicate", "conflict"])
 def test_incomplete_or_conflicting_factor_blocks_cells(change):
     graph, spec, ids = skill_graph()
@@ -105,12 +165,13 @@ async def test_generation_checks_every_skill_but_one_skill_can_be_published_and_
 
 
 @pytest.mark.asyncio
-async def test_empty_skill_factor_has_readable_design_impact_instead_of_error(monkeypatch):
+@pytest.mark.parametrize("level_type,levels", [("skill_selection", []), ("skill_toggle", [[], []])])
+async def test_empty_skill_factor_has_readable_design_impact_instead_of_error(monkeypatch, level_type, levels):
     monkeypatch.setattr("asaree.services.design_generation.get_current_revision", AsyncMock(return_value=None))
     impact = await get_design_impact(
         AsyncMock(),
         experiment_id=uuid.uuid4(),
-        design_spec={"factors": [{"name": "Skills", "level_type": "skill_selection", "levels": []}]},
+        design_spec={"factors": [{"name": "Skills", "level_type": level_type, "levels": levels}]},
     )
     assert impact.proposed_cell_count == 0
     assert impact.proposed_replicate_count == 0

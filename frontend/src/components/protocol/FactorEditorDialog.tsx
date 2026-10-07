@@ -500,7 +500,7 @@ function ToolNamesLevelRow({
 // remove button on DesignTab's own summary row), so this dialog only ever
 // edits, never deletes.
 export function FactorEditorDialog(props: Parameters<typeof StandardFactorEditorDialog>[0]) {
-  if (props.factor.level_type === 'skill_selection') return <SkillFactorEditor {...props} />
+  if ((props.factor.level_type === 'skill_selection' || props.factor.level_type === 'skill_toggle')) return <SkillFactorEditor {...props} />
   return <StandardFactorEditorDialog {...props} />
 }
 

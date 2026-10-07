@@ -150,7 +150,8 @@ async def publish_protocol(
     if experiment is not None:
         from asaree.services.design_generation import get_design_impact
         incomplete_skills = any(
-            factor.get("level_type") == "skill_selection" and len(factor.get("levels") or []) < 2
+            (factor.get("level_type") == "skill_selection" and len(factor.get("levels") or []) < 2)
+            or (factor.get("level_type") == "skill_toggle" and not any(factor.get("levels") or []))
             for factor in (experiment.design_spec or {}).get("factors") or []
         )
         if incomplete_skills:

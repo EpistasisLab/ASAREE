@@ -29,6 +29,7 @@ export function CircleNode({
   dimmed,
   isActive,
   onToggleActive,
+  onMakeFactor,
   swap,
   handlePosition = 'top',
 }: {
@@ -64,6 +65,7 @@ export function CircleNode({
   // AgentNode/CriticGateNode's own usage.
   isActive?: boolean
   onToggleActive?: () => void
+  onMakeFactor?: () => void
   // Passed straight through to NodeHoverToolbar -- see its own comment.
   swap?: { label: string; onSwap: () => void }
   // Which edge of the circle the connector handle sits on -- 'top' (default)
@@ -80,7 +82,7 @@ export function CircleNode({
   const metricCount = metricsForNode(id).length
   return (
     <div className={`group relative flex flex-col items-center ${dimmed ? 'opacity-50' : ''}`}>
-      <NodeHoverToolbar nodeId={id} isActive={isActive} onToggleActive={onToggleActive} swap={swap} />
+      <NodeHoverToolbar nodeId={id} isActive={isActive} onToggleActive={onToggleActive} onMakeFactor={onMakeFactor} swap={swap} />
       <div className="relative">
         <div
           style={cardAccent(accent)}

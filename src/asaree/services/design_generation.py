@@ -36,6 +36,7 @@ from asaree.services.coordination import coordination_strategy_slug
 from asaree.services.dataset_factors import validate_dataset_factors
 from asaree.services.design_revisions import get_current_revision, supersede_and_create
 from asaree.services.factorial_cells import list_replicates, upsert_replicate
+from asaree.services.knowledge_factors import validate_knowledge_factors
 from asaree.services.skill_factors import validate_skill_factors
 
 
@@ -287,8 +288,10 @@ async def get_design_impact(
     """Compare the declared factorial matrix to its materialized revision."""
     material = material_design_spec(design_spec)
     incomplete_skills = any(
-        (factor.get("level_type") in {"skill_selection", "dataset_selection"} and len(factor.get("levels") or []) < 2)
-        or (factor.get("level_type") in {"skill_toggle", "dataset_toggle"} and not any(factor.get("levels") or []))
+        (factor.get("level_type") in {"skill_selection", "dataset_selection", "knowledge_selection"}
+         and len(factor.get("levels") or []) < 2)
+        or (factor.get("level_type") in {"skill_toggle", "dataset_toggle", "knowledge_toggle"}
+            and not any(factor.get("levels") or []))
         for factor in material["factors"]
     )
     planned = (
@@ -416,12 +419,18 @@ async def generate_design_cells(
     if experiment is None:
         raise DesignValidationError("Experiment not found")
     if any(
-        factor.get("level_type") in {"skill_selection", "skill_toggle", "dataset_selection", "dataset_toggle"}
+        factor.get("level_type") in {
+            "skill_selection", "skill_toggle", "dataset_selection", "dataset_toggle",
+            "knowledge_selection", "knowledge_toggle",
+        }
         for factor in factors
     ):
         protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == experiment_id))
         try:
             await validate_skill_factors({"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id)
+            await validate_knowledge_factors(
+                {"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id
+            )
             await validate_dataset_factors(
                 {"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id, db
             )

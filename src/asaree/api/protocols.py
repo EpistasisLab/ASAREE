@@ -33,6 +33,7 @@ from asaree.services.experiment_measurements import (
 from asaree.services.experiment_versions import publication_matches_experiment, version_design_spec
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
+from asaree.services.knowledge_factors import test_knowledge_factor_values
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
     is_conversation_strategy,
@@ -278,6 +279,7 @@ class TestRunRequest(BaseModel):
     """Optional original Dataset row selection for a row-mode Test Run."""
 
     row_index: StrictInt | None = Field(default=None, ge=0)
+    knowledge_selections: dict[str, str] | None = None
     skill_selections: dict[str, str] | None = None
     dataset_selections: dict[str, str] | None = None
 
@@ -286,6 +288,7 @@ class NodePlayRequest(BaseModel):
     """Optional original Dataset row selection for an eligible node Play."""
 
     row_index: StrictInt | None = Field(default=None, ge=0)
+    knowledge_selections: dict[str, str] | None = None
     skill_selections: dict[str, str] | None = None
     dataset_selections: dict[str, str] | None = None
 
@@ -296,6 +299,7 @@ async def _node_test_factor_values(
     try:
         return {
             **await test_skill_factor_values(graph, body.skill_selections if body else None, owner_id, node_id),
+            **await test_knowledge_factor_values(graph, body.knowledge_selections if body else None, owner_id, node_id),
             **await test_dataset_factor_values(graph, body.dataset_selections if body else None, owner_id, db, node_id),
         }
     except ValueError as exc:
@@ -687,6 +691,9 @@ async def create_test_run_endpoint(
             dataset_row=dataset_row,
             factor_values={
                 **await test_skill_factor_values(revision.graph, body.skill_selections if body else None, user.id),
+                **await test_knowledge_factor_values(
+                    revision.graph, body.knowledge_selections if body else None, user.id
+                ),
                 **await test_dataset_factor_values(
                     revision.graph, body.dataset_selections if body else None, user.id, db
                 ),

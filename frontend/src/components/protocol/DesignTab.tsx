@@ -1,3 +1,5 @@
+import { knowledgeFactorIssues, isKnowledgeFactor } from '@/lib/knowledgeFactors'
+import { useKnowledgeLibrary } from './useKnowledgeLibrary'
 import { datasetsApi } from '@/api/client'
 import { datasetFactorIssues } from '@/lib/datasetFactors'
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
@@ -499,6 +501,8 @@ export function DesignTab({
     ? ({ nodes: graphQuery.data.nodes, edges: graphQuery.data.edges } as unknown as ProtocolGraph)
     : undefined
   const unboundFactors = unboundFactorNames(experiment.design_spec, draftGraph)
+  const knowledgeLibrary = useKnowledgeLibrary(factors.some(isKnowledgeFactor))
+  const knowledgeIssues = knowledgeFactorIssues(draftGraph, factors, knowledgeLibrary.data ? new Set(knowledgeLibrary.data.map((item) => item.id)) : undefined)
   const skillLibrary = useQuery({ queryKey: ['skills'], queryFn: () => skillsApi.list(), enabled: factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) })
   const datasetLibrary = useQuery({ queryKey: ['datasets'], queryFn: () => datasetsApi.list(), enabled: factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') })
   const datasetIssues = datasetFactorIssues(draftGraph, factors, datasetLibrary.data ? new Set(datasetLibrary.data.map((dataset) => dataset.id)) : undefined)
@@ -871,14 +875,14 @@ export function DesignTab({
             Unbound factor{unboundFactors.length === 1 ? '' : 's'}: {unboundFactors.join(', ')}. Rebind on the canvas or remove from this design.
           </p>
         )}
-        {[...skillIssues, ...datasetIssues].map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
+        {[...skillIssues, ...datasetIssues, ...knowledgeIssues].map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
         <Button
           size="sm"
           disabled={
             generateMutation.isPending ||
             isAutosavingMetadata ||
             !canGenerate ||
-            unboundFactors.length > 0 || skillIssues.length > 0 || datasetIssues.length > 0 || (factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') && !datasetLibrary.isSuccess) || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
+            unboundFactors.length > 0 || knowledgeIssues.length > 0 || (factors.some(isKnowledgeFactor) && !knowledgeLibrary.isSuccess) || skillIssues.length > 0 || datasetIssues.length > 0 || (factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') && !datasetLibrary.isSuccess) || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
           }
           onClick={() => generateMutation.mutate()}
         >

@@ -86,6 +86,7 @@ from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
 from asaree.services.factorial_row_results import claim_row_attempt, ensure_row_result, get_row_result
+from asaree.services.knowledge_factors import knowledge_id, validate_knowledge_factors
 from asaree.services.protocol_revisions import get_revision
 from asaree.services.protocol_runs import (
     TERMINAL_PROTOCOL_RUN_STATUSES,
@@ -2500,6 +2501,11 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
     De-duplicated by server: two nodes pointing at the same bundle are one
     server, and listing it twice would just double every tool name."""
     nodes, _downstream, _upstream = _adjacency(graph)
+    agent_data = (nodes.get(node_id) or {}).get("data") or {}
+    selection = (
+        agent_data.get("knowledge_selection")
+        if (agent_data.get("factor_bindings") or {}).get("knowledge_selection") else None
+    )
     server_names: list[str] = []
     tool_names: list[str] = []
     tool_descriptions: dict[str, str] = {}
@@ -2508,7 +2514,9 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
         if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
             continue
         bundle_config = (source.get("data") or {}).get("config") or {}
-        if not bundle_config.get("enabled", True):
+        if selection is not None and knowledge_id(source) not in selection:
+            continue
+        if selection is None and not bundle_config.get("enabled", True):
             continue
         server_name = bundle_config.get("server_name")
         if not server_name or server_name in server_names:
@@ -4749,6 +4757,7 @@ async def plan_cell_runs(
     try:
         validate_factor_bindings(design_spec, graph)
         await validate_skill_factors(design_spec, graph, owner_id)
+        await validate_knowledge_factors(design_spec, graph, owner_id)
         await validate_dataset_factors(design_spec, graph, owner_id, db)
     except ValueError as exc:
         raise ProtocolValidationError(str(exc)) from exc
@@ -5138,6 +5147,7 @@ async def plan_single_replicate_run(
     try:
         validate_factor_bindings(design_spec, graph)
         await validate_skill_factors(design_spec, graph, owner_id)
+        await validate_knowledge_factors(design_spec, graph, owner_id)
         await validate_dataset_factors(design_spec, graph, owner_id, db)
     except ValueError as exc:
         raise ProtocolValidationError(str(exc)) from exc

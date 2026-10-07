@@ -270,12 +270,8 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     case 'okf_bundle':
     case 'okf_document':
-      // Only `enabled`, same reasoning as skill above: the node's config is a
-      // pointer at a per-account registration (a server name plus a path on
-      // the server), not the knowledge itself, so a level would carry a
-      // reference rather than the thing being compared. Comparing "with the
-      // knowledge vs. without" -- the question actually worth an experiment
-      // here -- is exactly what toggling `enabled` per cell does.
+      // Individual availability binds here; Knowledge connector choices are
+      // listed by factorCreationFields and edited in the dedicated dialog.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
     case 'script':
       // The whole node as a factor -- levels are entirely different scripts.
@@ -290,7 +286,7 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
 
 export interface UnboundField {
   pickerGroup?: { id: string; label: string; category: string; componentId: string; componentLabel: string }
-  connectorFactor?: { kind: 'skill' | 'dataset'; nodeId: string; mode: LevelType; agentId?: string }
+  connectorFactor?: { kind: 'skill' | 'dataset' | 'knowledge'; nodeId: string; mode: LevelType; agentId?: string }
   nodeId: string
   nodeLabel: string
   fieldPath: string
@@ -434,6 +430,7 @@ export function agentTracedLabel(node: Node, edges: Edge[], nodes: Node[]): stri
 export function unboundBindableFields(nodes: Node[], edges: Edge[]): UnboundField[] {
   const result: UnboundField[] = []
   for (const node of nodes) {
+    if (['okf_bundle', 'okf_document'].includes(node.type ?? '') && edges.some((edge) => edge.source === node.id && edge.targetHandle === 'knowledge' && (nodes.find((target) => target.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.knowledge_selection)) continue
     if (node.type === 'skill' && edges.some((edge) => edge.source === node.id && edge.targetHandle === 'skill' && (nodes.find((target) => target.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.skill_selection)) continue
     if (node.type === 'dataset' && edges.some((edge) => edge.source === node.id && edge.targetHandle === 'dataset' && (nodes.find((target) => target.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.dataset_selection)) continue
     const bindings = (node.data as { factor_bindings?: Record<string, string> })?.factor_bindings ?? {}
@@ -469,13 +466,13 @@ export function unboundBindableFields(nodes: Node[], edges: Edge[]): UnboundFiel
 export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField[] {
   const fields = unboundBindableFields(nodes, edges).filter((field) => {
     const kind = nodes.find((node) => node.id === field.nodeId)?.type
-    return kind !== 'skill' && kind !== 'dataset'
+    return kind !== 'skill' && kind !== 'dataset' && kind !== 'okf_bundle' && kind !== 'okf_document'
   })
   const connectorOwners = new Set<string>()
   for (const node of nodes) {
-    if (node.type !== 'skill' && node.type !== 'dataset') continue
-    const kind = node.type
-    const handles = kind === 'skill' ? ['skill'] : ['dataset', 'resource', 'tool']
+    if (!['skill', 'dataset', 'okf_bundle', 'okf_document'].includes(node.type ?? '')) continue
+    const kind = (node.type === 'okf_bundle' || node.type === 'okf_document' ? 'knowledge' : node.type) as 'skill' | 'dataset' | 'knowledge'
+    const handles = kind === 'skill' ? ['skill'] : kind === 'knowledge' ? ['knowledge'] : ['dataset', 'resource', 'tool']
     const owners = nodes.filter((owner) => ['agent', 'sub_agent'].includes(owner.type ?? '') && edges.some((edge) => edge.source === node.id && edge.target === owner.id && handles.includes(edge.targetHandle ?? '')))
     if (!(node.data.factor_bindings as Record<string, string> | undefined)?.['config.enabled']) fields.push({
       nodeId: node.id, nodeLabel: agentTracedLabel(node, edges, nodes), fieldPath: 'config.enabled',
@@ -490,7 +487,7 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
         const levelType = `${kind}_${mode}` as LevelType
         fields.push({
           nodeId: owner.id, nodeLabel: String(owner.data.label || 'Agent'), fieldPath: `${kind}_selection`,
-          fieldLabel: mode === 'selection' ? `${kind === 'skill' ? 'Skill' : 'Dataset'} levels` : `All ${kind}s on/off`,
+          fieldLabel: mode === 'selection' ? `${kind === 'skill' ? 'Skill' : kind === 'knowledge' ? 'Knowledge' : 'Dataset'} levels` : `All ${kind === 'knowledge' ? 'knowledge' : `${kind}s`} on/off`,
           levelType, currentValue: undefined,
           connectorFactor: { kind, nodeId: node.id, mode: levelType, agentId: owner.id },
         })
@@ -505,6 +502,7 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
     const owner = agentKinds.includes(node.type ?? '') ? node : targets.length === 1 ? targets[0] : undefined
     const category = field.connectorFactor?.kind === 'skill' ? 'Skills'
       : field.connectorFactor?.kind === 'dataset' ? 'Datasets'
+      : field.connectorFactor?.kind === 'knowledge' ? 'Knowledge'
       : agentKinds.includes(kind) ? 'Agent fields'
       : kind.startsWith('llm_') ? 'Model'
       : kind.startsWith('pattern_') ? 'Execution pattern'

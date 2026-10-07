@@ -21,3 +21,16 @@ it('groups by owning agent and component, putting shared nodes last and keeping 
   expect(groups[0].components.find(component => component.category === 'Skills')?.fields.map(field => field.fieldLabel)).toEqual(['Skill levels', 'All skills on/off'])
   expect(groups[2].components.map(component => component.label)).toEqual(['Shared skill', 'Unconnected skill'])
 })
+
+it('routes both knowledge kinds through the dialog and offers connector modes once per agent', () => {
+  const nodes: Node[] = [
+    { id: 'agent', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Researcher' } },
+    { id: 'bundle', type: 'okf_bundle', position: { x: 0, y: 0 }, data: { label: 'Bundle', config: { bundle_id: 'b' } } },
+    { id: 'doc', type: 'okf_document', position: { x: 0, y: 0 }, data: { label: 'Document', config: { document_id: 'd' } } },
+  ]
+  const edges: Edge[] = ['bundle', 'doc'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'knowledge' }))
+  const fields = factorCreationFields(nodes, edges).filter((field) => field.connectorFactor?.kind === 'knowledge')
+  expect(fields.map((field) => field.fieldLabel)).toEqual(['This knowledge on/off', 'Knowledge levels', 'All knowledge on/off', 'This knowledge on/off'])
+  expect(fields.every((field) => field.pickerGroup?.category === 'Knowledge')).toBe(true)
+  expect(fields.filter((field) => field.connectorFactor?.agentId === 'agent')).toHaveLength(2)
+})

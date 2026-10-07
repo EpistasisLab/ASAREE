@@ -360,6 +360,8 @@ export interface AgentNodeData {
   // Connector-owned selection: one skill per level, or every skill versus none.
   dataset_selection?: string[]
   dataset_factor_mode?: 'dataset_selection' | 'dataset_toggle'
+  knowledge_selection?: string[]
+  knowledge_factor_mode?: 'knowledge_selection' | 'knowledge_toggle'
   skill_selection?: string[]
   skill_factor_mode?: 'skill_selection' | 'skill_toggle'
   label: string

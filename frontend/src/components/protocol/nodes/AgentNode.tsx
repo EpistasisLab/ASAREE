@@ -351,7 +351,7 @@ export function AgentNode({
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.knowledge} side="top">Knowledge</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="knowledge" left={CONNECTOR_LEFT.knowledge} side="top" alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="knowledge" left={CONNECTOR_LEFT.knowledge} side="top" alwaysVisible factorName={data.factor_bindings?.knowledge_selection} factorLevelCount={data.knowledgeFactorLevelCount as number | undefined} factorOnOff={data.knowledge_factor_mode === 'knowledge_toggle'} />
       {/* Handle id `model`; graphs saved before the rename carry these edges on
           `ai` or `llm` -- ProtocolCanvas.tsx rewrites those on load
           (migrateLegacyHandles) and the backend keeps accepting both (see

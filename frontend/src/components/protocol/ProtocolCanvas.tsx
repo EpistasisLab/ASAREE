@@ -1,3 +1,7 @@
+import { reconcileKnowledgeFactor, knowledgeFactorConflict, knowledgeFactorOwner, KNOWLEDGE_FACTOR_PATH } from '@/lib/knowledgeFactors'
+import { KnowledgeFactorDialog } from './KnowledgeFactorDialog'
+import { KnowledgeTestSelectors } from './KnowledgeTestSelectors'
+import { useKnowledgeTestSelection } from './useKnowledgeTestSelection'
 import { reconcileDatasetFactor, datasetFactorConflict, datasetFactorOwner, DATASET_FACTOR_PATH } from '@/lib/datasetFactors'
 import { DatasetFactorDialog } from './DatasetFactorDialog'
 import { DatasetTestSelectors } from './DatasetTestSelectors'
@@ -412,14 +416,19 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const removeFactorBindings = useCallback(
     (factorName: string) => {
       setNodes((nds) => {
+        const knowledgeIds = new Set(edges.filter((edge) => edge.targetHandle === 'knowledge' && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[KNOWLEDGE_FACTOR_PATH] === factorName).map((edge) => edge.source))
         const skillIds = new Set(edges.filter((edge) => edge.targetHandle === 'skill' && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[SKILL_FACTOR_PATH] === factorName).map((edge) => edge.source))
         const datasetIds = new Set(edges.filter((edge) => ['dataset', 'resource', 'tool'].includes(edge.targetHandle ?? '') && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[DATASET_FACTOR_PATH] === factorName).map((edge) => edge.source))
         return nds.map((n) => {
-          if (skillIds.has(n.id) || datasetIds.has(n.id)) return { ...n, data: { ...n.data, config: { ...(n.data.config as object), enabled: true } } }
+          if (skillIds.has(n.id) || datasetIds.has(n.id) || knowledgeIds.has(n.id)) return { ...n, data: { ...n.data, config: { ...(n.data.config as object), enabled: true } } }
           const bindings = n.data.factor_bindings as Record<string, string> | undefined
           if (!bindings || !Object.values(bindings).includes(factorName)) return n
           const next = Object.fromEntries(Object.entries(bindings).filter(([, name]) => name !== factorName))
           const data: Record<string, unknown> = { ...n.data, factor_bindings: next }
+          if (bindings[KNOWLEDGE_FACTOR_PATH] === factorName) {
+            delete data.knowledge_selection
+            delete data.knowledge_factor_mode
+          }
           if (bindings[SKILL_FACTOR_PATH] === factorName) {
             delete data.skill_selection
             delete data.skill_factor_mode
@@ -470,7 +479,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         setSelectedNodeId(null)
         setConnectorFactorChoice(field.connectorFactor)
         if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
-        else setDatasetFactorNodeId(field.connectorFactor.nodeId)
+        else if (field.connectorFactor.kind === 'dataset') setDatasetFactorNodeId(field.connectorFactor.nodeId)
+        else setKnowledgeFactorNodeId(field.connectorFactor.nodeId)
       },
     }),
     [bindFactorOnNode, removeFactorBindings, renameFactorBindings, setFactorBaseline, experimentId, experimentLocked],
@@ -489,6 +499,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // that node's own unbound fields (see requestMakeFactor below).
   const [factorPickerNodeId, setFactorPickerNodeId] = useState<string | null>(null)
   const [editingFactorName, setEditingFactorName] = useState<string | null>(null)
+  const [knowledgeFactorNodeId, setKnowledgeFactorNodeId] = useState<string | null>(null)
   const [skillFactorNodeId, setSkillFactorNodeId] = useState<string | null>(null)
   const [datasetFactorNodeId, setDatasetFactorNodeId] = useState<string | null>(null)
   const [connectorFactorChoice, setConnectorFactorChoice] = useState<UnboundField['connectorFactor']>()
@@ -617,10 +628,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     mutationFn: async ({ scope, rowIndex }: { scope: RunScope; rowIndex: number }) => {
       if (draftRow.error) throw new Error(draftRow.error)
       if (draftSkills.error) throw new Error(draftSkills.error)
+      if (draftKnowledge.error) throw new Error(draftKnowledge.error)
       if (draftDatasets.error) throw new Error(draftDatasets.error)
       await protocolsApi.update(protocolId, { graph: toPersistedGraph(nodes, edges) })
       const published = await protocolsApi.publish(protocolId)
-      return { published, scope, rowIndex, skillOptions: { ...draftSkills.options, ...draftDatasets.options } }
+      return { published, scope, rowIndex, skillOptions: { ...draftSkills.options, ...draftKnowledge.options, ...draftDatasets.options } }
     },
     onSuccess: async ({ published, scope, rowIndex, skillOptions }) => {
       queryClient.invalidateQueries({ queryKey: ['protocols', protocolId, 'revisions'] })
@@ -653,6 +665,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const draftRow = useDatasetRowSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, `draft:${protocolId}`, pendingNodeId)
   const publishedSkills = useSkillTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
   const draftSkills = useSkillTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
+  const publishedKnowledge = useKnowledgeTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
+  const draftKnowledge = useKnowledgeTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
   const publishedDatasets = useDatasetTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
   const draftDatasets = useDatasetTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
   const showDraftInputs = hasUnpublishedChanges || publishedRevision === null
@@ -663,8 +677,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     mutationFn: (rowIndex: number) => {
       if (publishedSourceError || (publishedRow.binding && publishedRow.error)) throw new Error(publishedSourceError ?? publishedRow.error!)
       if (publishedSkills.error) throw new Error(publishedSkills.error)
+      if (publishedKnowledge.error) throw new Error(publishedKnowledge.error)
       if (publishedDatasets.error) throw new Error(publishedDatasets.error)
-      return protocolsApi.testRun(protocolId, publishedRow.binding || publishedSkills.owners.length || publishedDatasets.owners.length ? { ...(publishedRow.binding ? { row_index: rowIndex } : {}), ...publishedSkills.options, ...publishedDatasets.options } : undefined)
+      return protocolsApi.testRun(protocolId, publishedRow.binding || publishedSkills.owners.length || publishedKnowledge.owners.length || publishedDatasets.owners.length ? { ...(publishedRow.binding ? { row_index: rowIndex } : {}), ...publishedSkills.options, ...publishedKnowledge.options, ...publishedDatasets.options } : undefined)
     },
     onSuccess: (run) => {
       setRunId(run.id)
@@ -685,8 +700,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       const binding = publishedGraphQuery.data && rowBindingForNode(publishedGraphQuery.data.graph, nodeId)
       if (publishedSourceError || (binding && publishedRow.error)) throw new Error(publishedSourceError ?? publishedRow.error!)
       if (publishedSkills.error) throw new Error(publishedSkills.error)
+      if (publishedKnowledge.error) throw new Error(publishedKnowledge.error)
       if (publishedDatasets.error) throw new Error(publishedDatasets.error)
-      return protocolsApi.runNode(protocolId, nodeId, binding || publishedSkills.owners.length || publishedDatasets.owners.length ? { ...(binding ? { row_index: rowIndex } : {}), ...publishedSkills.options, ...publishedDatasets.options } : undefined)
+      return protocolsApi.runNode(protocolId, nodeId, binding || publishedSkills.owners.length || publishedKnowledge.owners.length || publishedDatasets.owners.length ? { ...(binding ? { row_index: rowIndex } : {}), ...publishedSkills.options, ...publishedKnowledge.options, ...publishedDatasets.options } : undefined)
     },
     onSuccess: (run) => {
       setRunId(run.id)
@@ -1143,6 +1159,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         deletable: !nonDeletablePatternNodeIds.has(n.id),
         data: {
           ...n.data,
+          knowledgeFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[KNOWLEDGE_FACTOR_PATH])?.levels.length,
+          knowledgeFactorControlled: ['okf_bundle', 'okf_document'].includes(n.type ?? '') && !!knowledgeFactorOwner(toPersistedGraph(nodes, edges), n.id),
           skillFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[SKILL_FACTOR_PATH])?.levels.length,
           skillFactorControlled: n.type === 'skill' && !!skillFactorOwner(toPersistedGraph(nodes, edges), n.id),
           datasetFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[DATASET_FACTOR_PATH])?.levels.length,
@@ -1357,6 +1375,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     setConnectorFactorChoice(undefined)
     setSkillFactorNodeId(nodeId)
   }, [experimentId, experimentLocked])
+  const requestKnowledgeFactor = useCallback((nodeId: string) => {
+    if (!experimentId || experimentLocked) return
+    setSelectedNodeId(null)
+    setConnectorFactorChoice(undefined)
+    setKnowledgeFactorNodeId(nodeId)
+  }, [experimentId, experimentLocked])
   const requestDatasetFactor = useCallback((nodeId: string) => {
     if (!experimentId || experimentLocked) return
     setSelectedNodeId(null)
@@ -1447,6 +1471,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestMakeFactor,
       requestEditFactor,
       requestSkillFactor,
+      requestKnowledgeFactor,
       requestDatasetFactor,
       metricsForNode,
       convertLegacyOutputContract,
@@ -1460,6 +1485,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestMakeFactor,
       requestEditFactor,
       requestSkillFactor,
+      requestKnowledgeFactor,
       requestDatasetFactor,
       metricsForNode,
       convertLegacyOutputContract,
@@ -1911,6 +1937,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       const factor = factors.find((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle') && (node.data.factor_bindings as Record<string, string> | undefined)?.[SKILL_FACTOR_PATH] === factor.name)
       if (!factor || JSON.stringify(node.data.skill_selection) === JSON.stringify(factor.levels[0] ?? [])) return node
       return { ...node, data: { ...node.data, skill_selection: factor.levels[0] ?? [] } }
+    }))
+  }, [factors, experimentLocked, setNodes])
+  useEffect(() => {
+    if (experimentLocked) return
+    setNodes((current) => current.map((node) => {
+      const factor = factors.find((factor) => (factor.level_type === 'knowledge_selection' || factor.level_type === 'knowledge_toggle') && (node.data.factor_bindings as Record<string, string> | undefined)?.[KNOWLEDGE_FACTOR_PATH] === factor.name)
+      if (!factor || JSON.stringify(node.data.knowledge_selection) === JSON.stringify(factor.levels[0] ?? [])) return node
+      return { ...node, data: { ...node.data, knowledge_selection: factor.levels[0] ?? [] } }
     }))
   }, [factors, experimentLocked, setNodes])
   useEffect(() => {
@@ -2374,18 +2408,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           />
         ) : selectedNode?.type === 'okf_bundle' ? (
           <OkfBundleNodeInspector
+            connectorFactorName={knowledgeFactorOwner(toPersistedGraph(nodes, edges), selectedNode.id)}
             node={{ id: selectedNode.id, type: 'okf_bundle', position: selectedNode.position, data: selectedNode.data as OkfBundleNodeData }}
-            experimentId={experimentId}
-            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
           />
         ) : selectedNode?.type === 'okf_document' ? (
           <OkfDocumentNodeInspector
+            connectorFactorName={knowledgeFactorOwner(toPersistedGraph(nodes, edges), selectedNode.id)}
             node={{ id: selectedNode.id, type: 'okf_document', position: selectedNode.position, data: selectedNode.data as OkfDocumentNodeData }}
-            experimentId={experimentId}
-            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
@@ -2491,11 +2523,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           }
           onPublishAndRun={() => publishAndRunMutation.mutate({ scope: pendingRunConfirm, rowIndex: draftRow.rowIndex })}
           confirmLabel={pendingRunConfirm.type === 'graph' ? 'Test Run' : undefined}
-          confirmDisabled={!!publishedSourceError || !!publishedSkills.error || !!publishedDatasets.error || (pendingHasRow && !!publishedRow.error)}
-          publishDisabled={!!draftRow.error || !!draftSkills.error || !!draftDatasets.error}
+          confirmDisabled={!!publishedSourceError || !!publishedSkills.error || !!publishedKnowledge.error || !!publishedDatasets.error || (pendingHasRow && !!publishedRow.error)}
+          publishDisabled={!!draftRow.error || !!draftSkills.error || !!draftKnowledge.error || !!draftDatasets.error}
           additionalContent={<div className="space-y-3">
             {publishedSkills.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published skills · run published v{publishedRevision}</p><SkillTestSelectors selection={publishedSkills} /></div>}
             {showDraftInputs && draftSkills.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft skills · publish and run</p><SkillTestSelectors selection={draftSkills} /></div>}
+            {publishedKnowledge.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published knowledge · run published v{publishedRevision}</p><KnowledgeTestSelectors selection={publishedKnowledge} /></div>}
+            {showDraftInputs && draftKnowledge.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft knowledge · publish and run</p><KnowledgeTestSelectors selection={draftKnowledge} /></div>}
             {publishedDatasets.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published datasets · run published v{publishedRevision}</p><DatasetTestSelectors selection={publishedDatasets} /></div>}
             {showDraftInputs && draftDatasets.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft datasets · publish and run</p><DatasetTestSelectors selection={draftDatasets} /></div>}
             {publishedRevision !== null && (pendingHasRow ? <div className="space-y-2"><p className="text-xs">Published source · run published v{publishedRevision}</p><DatasetRowSelector rowIndex={publishedRow.rowIndex} onChange={publishedRow.setRowIndex} rowCount={publishedRow.schema?.row_count ?? 0} disabled={publishAndRunMutation.isPending || !publishedRow.schema || !publishedRow.schema.row_count} />{publishedRow.error && <p role="alert" className="text-xs text-destructive">{publishedRow.error}</p>}</div> : publishedSourceError ? <p role="alert">{publishedSourceError}</p> : null)}
@@ -2516,7 +2550,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             setFactorPickerNodeId(null)
             setConnectorFactorChoice(field.connectorFactor)
             if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
-            else setDatasetFactorNodeId(field.connectorFactor.nodeId)
+            else if (field.connectorFactor.kind === 'dataset') setDatasetFactorNodeId(field.connectorFactor.nodeId)
+            else setKnowledgeFactorNodeId(field.connectorFactor.nodeId)
           }}
           existingNames={factorPickerExistingNames}
           emptyPickerMessage={`${(factorPickerNode?.data as { label?: string })?.label || 'This node'} has no fields that can be turned into a factor.`}
@@ -2562,6 +2597,46 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           const shared = individual && graph.nodes.some((node) => node.id !== skillFactorNodeId && Object.values(node.data.factor_bindings ?? {}).includes(name))
           if (!shared) await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: (fresh.design_spec?.factors ?? []).filter((factor) => factor.name !== name) } })
           if (individual) setNodes((current) => current.map((node) => node.id === skillFactorNodeId ? { ...node, data: { ...node.data, factor_bindings: Object.fromEntries(Object.entries(node.data.factor_bindings as Record<string, string>).filter(([path]) => path !== 'config.enabled')) } } : node))
+          else removeFactorBindings(name)
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+      />}
+      {knowledgeFactorNodeId && <KnowledgeFactorDialog
+        key={knowledgeFactorNodeId}
+        knowledgeNodeId={knowledgeFactorNodeId}
+        initialMode={connectorFactorChoice?.mode as 'boolean' | 'knowledge_selection' | 'knowledge_toggle' | undefined}
+        initialAgentId={connectorFactorChoice?.agentId}
+        graph={toPersistedGraph(nodes, edges)}
+        factors={factors}
+        onClose={() => setKnowledgeFactorNodeId(null)}
+        onSave={async (factor, ownerId, previousName) => {
+          const fresh = await experimentsApi.get(experimentId!)
+          const graph = toPersistedGraph(nodes, edges)
+          const conflict = knowledgeFactorConflict(graph, fresh.design_spec?.factors ?? [], knowledgeFactorNodeId, factor.level_type as 'boolean' | 'knowledge_selection' | 'knowledge_toggle', ownerId)
+          if (conflict) throw new Error(conflict)
+          if ((fresh.design_spec?.factors ?? []).some((existing) => existing.name === factor.name && existing.name !== previousName)) throw new Error('A factor with this name already exists.')
+          const next = factor.level_type === 'boolean' ? factor : reconcileKnowledgeFactor(factor, toPersistedGraph(nodes, edges), ownerId)
+          await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== previousName), next] } })
+          if (previousName) {
+            renameFactorBindings(previousName, next.name)
+            setFactorBaseline(next.name, next.levels[0])
+          }
+          setNodes((current) => current.map((node) => node.id === ownerId ? { ...node, data: {
+            ...node.data,
+            ...(next.level_type === 'boolean' ? { config: { ...(node.data.config as object), enabled: next.levels[0] } } : { knowledge_selection: next.levels[0] ?? [], knowledge_factor_mode: next.level_type }),
+            factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), [next.level_type === 'boolean' ? 'config.enabled' : KNOWLEDGE_FACTOR_PATH]: next.name },
+          } } : node))
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+        onRemove={async (name) => {
+          const fresh = await experimentsApi.get(experimentId!)
+          const graph = toPersistedGraph(nodes, edges)
+          const individual = graph.nodes.find((node) => node.id === knowledgeFactorNodeId)?.data.factor_bindings?.['config.enabled'] === name
+          const shared = individual && graph.nodes.some((node) => node.id !== knowledgeFactorNodeId && Object.values(node.data.factor_bindings ?? {}).includes(name))
+          if (!shared) await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: (fresh.design_spec?.factors ?? []).filter((factor) => factor.name !== name) } })
+          if (individual) setNodes((current) => current.map((node) => node.id === knowledgeFactorNodeId ? { ...node, data: { ...node.data, factor_bindings: Object.fromEntries(Object.entries(node.data.factor_bindings as Record<string, string>).filter(([path]) => path !== 'config.enabled')) } } : node))
           else removeFactorBindings(name)
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })

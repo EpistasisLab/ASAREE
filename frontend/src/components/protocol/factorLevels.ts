@@ -25,6 +25,8 @@ export type LevelType =
   | 'skill_toggle'
   | 'dataset_selection'
   | 'dataset_toggle'
+  | 'knowledge_selection'
+  | 'knowledge_toggle'
 
 export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   string: 'String',
@@ -41,6 +43,8 @@ export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   skill_toggle: 'All skills on/off',
   dataset_selection: 'Dataset levels',
   dataset_toggle: 'All datasets on/off',
+  knowledge_selection: 'Knowledge levels',
+  knowledge_toggle: 'All knowledge on/off',
 }
 
 // Whether a level of this kind is a structured value (an object, or -- for
@@ -59,7 +63,9 @@ export function isStructuredLevelType(type: LevelType): boolean {
     type === 'skill_selection' ||
     type === 'skill_toggle' ||
     type === 'dataset_selection' ||
-    type === 'dataset_toggle'
+    type === 'dataset_toggle' ||
+    type === 'knowledge_selection' ||
+    type === 'knowledge_toggle'
   )
 }
 

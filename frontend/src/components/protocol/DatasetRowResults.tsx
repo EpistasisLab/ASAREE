@@ -1,10 +1,12 @@
 import { useState } from 'react'
-import type { ResultsScope } from '@/api/client'
+import { useQuery } from '@tanstack/react-query'
+import { protocolsApi, type ResultsScope } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { reportedMetricText } from '@/lib/reportedMetrics'
 import { displayFactorLevel } from '@/lib/experiment'
 import type { Experiment, ExperimentRunResults, RowResult } from '@/types/experiments'
-import { RunStepTrace } from './NodeRunOutputPanel'
+import { ResultTimelineNode } from './ResultTimelineNode'
+import { referenceLabel } from '@/lib/promptReferences'
 import { DatasetRowCells } from './DatasetRowCells'
 import { ChevronRight, AlertTriangle, CircleCheck, CircleHelp } from 'lucide-react'
 import { ResultsPanel, ResultsScorecard } from './ResultsPanel'
@@ -43,14 +45,39 @@ export function DatasetRowResults({ results, experiment, scope, onInspect }: { r
   />
 }
 
-export function DatasetRowDetail({ row, onClose }: { row: RowResult; onClose: () => void }) {
+export function DatasetRowDetail({ row, protocolId, onClose }: { row: RowResult; protocolId?: string; onClose: () => void }) {
   const [attemptId, setAttemptId] = useState(row.latest_attempt?.run_id)
   const attempt = row.attempts.find(item => item.run_id === attemptId) ?? row.latest_attempt
-  const provenance = attempt?.attempt_result?.row_provenance
+  // Match the whole-dataset timeline: completed configuration nodes have
+  // no execution details, while agent traces and failures remain inspectable.
+  const visibleNodeRuns = Object.entries(attempt?.node_runs ?? {}).filter(([, node]) =>
+    !!node.run_id || !!node.output_text || !!node.error || ['running', 'failed', 'cancelled'].includes(node.status),
+  )
+  const suppliedLabels = { ...row.latest_attempt?.node_labels, ...attempt?.node_labels }
+  const revisionId = attempt?.protocol_revision_id ?? row.protocol_revision_id
+  const needsLabels = visibleNodeRuns.some(([id]) => !suppliedLabels[id])
+  const revision = useQuery({
+    queryKey: ['protocols', protocolId, 'revision', revisionId],
+    queryFn: () => protocolsApi.getRevision(protocolId!, revisionId),
+    enabled: !!protocolId && !!revisionId && needsLabels,
+    staleTime: Infinity,
+  })
+  const publishedLabels = Object.fromEntries((revision.data?.graph.nodes ?? []).map(node => {
+    const name = node.data.label
+    return [node.id, typeof name === 'string' && name.trim() ? name.trim() : node.type === 'agent' ? 'Agent' : 'Canvas node']
+  }))
+  const nodeLabels = { ...publishedLabels, ...suppliedLabels }
+  const nodes = visibleNodeRuns.map(([id, node]) => ({
+    node_id: id, node_label: nodeLabels[id] ?? (revision.isFetching ? 'Loading node name…' : 'Canvas node'), status: node.status,
+    output_text: node.output_text ?? null, error: node.error ?? null, agent_run_id: node.run_id ?? null,
+    unresolved_reference_labels: (node.unresolved_references ?? []).map(ref => referenceLabel(ref, nodeLabels)),
+    input_tokens: null, output_tokens: null, total_tokens: null, cost_usd: null,
+  }))
+  const defaultOpenNodeId = nodes.findLast(node => !!node.output_text || !!node.error)?.node_id
   return <aside className="absolute inset-0 z-20 flex flex-col overflow-y-auto border-l bg-card p-3" aria-label="Row result details">
     <div className="flex items-center justify-between"><h2 className="text-sm">Source row {row.dataset_row.row_index + 1} · Replicate {row.replicate_number}</h2><Button variant="ghost" size="sm" onClick={onClose}>Close</Button></div>
-    <dl className="my-3 break-all font-mono text-xs">{Object.entries({ 'Dataset UUID': row.dataset_row.dataset_id, 'Original SHA-256': row.dataset_row.raw_sha256, 'Design revision': row.design_revision_id, 'Protocol revision': row.protocol_revision_id, 'Row result': row.row_result_id }).map(([label,value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}</dl>
+    <details className="my-3 text-xs"><summary className="cursor-pointer text-muted-foreground">Source and revision details</summary><dl className="mt-2 space-y-1 break-all font-mono">{Object.entries({ 'Dataset UUID': row.dataset_row.dataset_id, 'Original SHA-256': row.dataset_row.raw_sha256, 'Design revision': row.design_revision_id, 'Protocol revision': row.protocol_revision_id, 'Row result': row.row_result_id }).map(([label,value]) => <div key={label}><dt className="text-muted-foreground">{label}</dt><dd>{value}</dd></div>)}</dl></details>
     <label className="space-y-1 text-xs">Attempt<select className="w-full rounded border bg-background p-2 font-mono" aria-label="Inspect attempt" value={attemptId ?? ''} onChange={event => setAttemptId(event.target.value)}>{row.attempts.map(item => <option key={item.run_id} value={item.run_id}>{item.status} · {item.run_id}{item.current ? ' · latest' : ''}</option>)}</select></label>
-    {attempt && <><p className="my-2 font-mono text-xs">{attempt.run_id} · {attempt.status}</p>{attempt.error && <p role="alert" className="text-xs text-destructive">{attempt.error}</p>}<pre className="overflow-auto whitespace-pre-wrap break-all font-mono text-xs">{JSON.stringify(attempt.attempt_result, null, 2)}</pre>{provenance ? <pre className="font-mono text-xs">{JSON.stringify(provenance, null, 2)}</pre> : null}{Object.entries(attempt.node_runs).map(([id,node]) => <section key={id} className="my-3 space-y-2"><p className="font-mono text-xs">{id}</p><pre className="whitespace-pre-wrap font-mono text-xs">{node.output_text}</pre>{node.error && <p className="text-xs text-destructive">{node.error}</p>}{node.run_id && <RunStepTrace runId={node.run_id} />}</section>)}</>}
+    {attempt && <><p className="my-2 font-mono text-xs">{attempt.run_id} · {attempt.status}</p>{attempt.error && <p role="alert" className="text-xs text-destructive">{attempt.error}</p>}<h3 className="mb-2 text-sm font-medium">Node outputs</h3>{nodes.length ? <ol className="space-y-2">{nodes.map(node => <ResultTimelineNode key={`${attempt.run_id}-${node.node_id}`} node={node} defaultOpen={node.node_id === defaultOpenNodeId} />)}</ol> : <p className="text-xs text-muted-foreground">No node output recorded for this attempt.</p>}</>}
   </aside>
 }

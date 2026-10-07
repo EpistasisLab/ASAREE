@@ -22,6 +22,7 @@ def enumerate_row_candidates(
     graph: dict,
     design_spec: dict | None,
     protocol_revision_id: str,
+    row_indices: Sequence[int] | None = None,
 ) -> list[dict]:
     """Expand sorted replicate parents across original source rows.
 
@@ -34,6 +35,14 @@ def enumerate_row_candidates(
 
     if not source.rows:
         raise DatasetRowInputError("empty_source", "row source must contain at least one data row")
+    selected_rows = range(len(source.rows)) if row_indices is None else row_indices
+    if row_indices is not None and (
+        not row_indices
+        or any(isinstance(index, bool) or not isinstance(index, int) or index < 0 or index >= len(source.rows)
+               for index in row_indices)
+        or len(set(row_indices)) != len(row_indices)
+    ):
+        raise DatasetRowInputError("invalid_row_selection", "select unique source row indices within the dataset")
 
     original_plan = resolve_dataset_row_plan(graph, design_spec)
     if original_plan is None:
@@ -90,7 +99,7 @@ def enumerate_row_candidates(
                 "factor substitution must preserve the row driver and ordered Agent/column bindings",
             )
 
-        for row_index in range(len(source.rows)):
+        for row_index in selected_rows:
             candidate = deepcopy(parent)
             candidate["protocol_revision_id"] = protocol_revision_id
             candidate["dataset_row"] = {

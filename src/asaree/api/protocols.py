@@ -307,6 +307,8 @@ class CellRunBatchRequest(BaseModel):
     replicate_labels: list[str] | None = None
     rerun_replicate_labels: list[str] = []
     retry_row_result_ids: list[uuid.UUID] | None = None
+    # Zero-based source rows, scoped to exactly one selected replicate.
+    row_indices: list[StrictInt] | None = None
 
 
 class CellRunBatchResponse(BaseModel):
@@ -835,6 +837,7 @@ async def create_cell_runs_endpoint(
             replicate_labels=set(body.replicate_labels) if body and body.replicate_labels is not None else None,
             rerun_replicate_labels=set(body.rerun_replicate_labels) if body is not None else None,
             retry_row_result_ids=retry_row_result_ids,
+            row_indices=body.row_indices if body is not None else None,
         )
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

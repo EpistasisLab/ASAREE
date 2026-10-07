@@ -341,7 +341,7 @@ export const protocolsApi = {
   // "Run all cells" -- 422 if there's no linked experiment or the graph
   // doesn't have exactly one final node; fans out one ProtocolRun per pending
   // replicate. The optional list explicitly re-runs selected completed rows.
-  runCells: (id: string, options?: { replicateLabels?: string[]; rerunReplicateLabels?: string[]; retry_row_result_ids?: string[] }) =>
+  runCells: (id: string, options?: { replicateLabels?: string[]; rerunReplicateLabels?: string[]; retry_row_result_ids?: string[]; row_indices?: number[] }) =>
     request<CellRunBatch>(`/protocols/${id}/cell-runs`, {
       method: 'POST',
       body: options
@@ -349,6 +349,7 @@ export const protocolsApi = {
             replicate_labels: options.replicateLabels,
             rerun_replicate_labels: options.retry_row_result_ids ? undefined : options.rerunReplicateLabels ?? [],
             retry_row_result_ids: options.retry_row_result_ids,
+            row_indices: options.row_indices,
           }
         : undefined,
     }),

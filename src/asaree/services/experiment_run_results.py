@@ -398,6 +398,7 @@ async def _summarize_row_results(
 ) -> dict[str, Any]:
     revision_id = design_revision.id if design_revision is not None else None
     protocol_revision_id = protocol_revision.id
+    node_labels = _node_labels(protocol_revision.graph)
     cells = list(
         (
             await db.execute(
@@ -543,8 +544,14 @@ async def _summarize_row_results(
                 "metric_values": slot.metric_values,
                 "measurement": measurement,
                 "artifacts": slot.artifacts,
-                "latest_attempt": _row_attempt_payload(latest, current=latest.id == slot.run_id) if latest else None,
-                "attempts": [_row_attempt_payload(run, current=run.id == slot.run_id) for run in history],
+                "latest_attempt": _row_attempt_payload(
+                    latest, current=latest.id == slot.run_id, node_labels=node_labels
+                ) if latest else None,
+                "attempts": [
+                    _row_attempt_payload(
+                        run, current=run.id == slot.run_id, node_labels=node_labels
+                    ) for run in history
+                ],
             }
         )
 
@@ -613,7 +620,9 @@ async def _summarize_row_results(
     }
 
 
-def _row_attempt_payload(run: ProtocolRun, *, current: bool) -> dict[str, Any]:
+def _row_attempt_payload(
+    run: ProtocolRun, *, current: bool, node_labels: dict[str, str] | None = None
+) -> dict[str, Any]:
     return {
         "run_id": str(run.id),
         "status": run.status,
@@ -623,6 +632,7 @@ def _row_attempt_payload(run: ProtocolRun, *, current: bool) -> dict[str, Any]:
         "workspace_id": row_attempt_workspace_id(run.id),
         "attempt_result": run.attempt_result,
         "node_runs": run.node_runs,
+        "node_labels": node_labels or {},
         "conversation": run.conversation,
         "dataset_row": run.dataset_row,
         "protocol_revision_id": str(run.protocol_revision_id) if run.protocol_revision_id else None,

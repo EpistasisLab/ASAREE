@@ -470,6 +470,7 @@ export interface RowAttempt {
   workspace_id: string | null
   attempt_result: Record<string, unknown> | null
   node_runs: Record<string, NodeRunState>
+  node_labels?: Record<string, string>
   conversation: Conversation | null
   dataset_row: DatasetRowSnapshot | null
   protocol_revision_id: string | null

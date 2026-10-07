@@ -78,8 +78,10 @@ export function DatasetFactorDialog({ datasetNodeId, graph, factors, initialMode
     setError('')
     try {
       if (remove && current) await onRemove(current.name)
-      else await onSave({ ...draft, name: draft.name.trim(), level_labels: labels.map((label) => label.trim()) }, ownerId, current?.name)
-      onClose()
+      else {
+        await onSave({ ...draft, name: draft.name.trim(), level_labels: labels.map((label) => label.trim()) }, ownerId, current?.name)
+        onClose()
+      }
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Could not save the dataset factor.')
     } finally { setSaving(false) }
@@ -100,7 +102,7 @@ export function DatasetFactorDialog({ datasetNodeId, graph, factors, initialMode
         <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{(Object.keys(modes) as Mode[]).map((value) => <Button key={value} size="sm" variant={mode === value ? 'default' : unavailable(value) ? 'secondary' : 'outline'} aria-pressed={mode === value} className={unavailable(value) ? 'border-dashed border-border' : undefined} title={unavailable(value)} disabled={saving} onClick={() => change(value)}>{modes[value]}</Button>)}</div></div>
         {legacy && <div className="space-y-2 rounded-md border p-3"><p className="text-xs text-muted-foreground">This Dataset has an existing configuration factor: {legacy.name}. Remove it before creating a Dataset factor.</p><Button variant="destructive" size="sm" disabled={saving} onClick={async () => {
           setSaving(true)
-          try { await onRemove(legacy.name); onClose() } catch (error) { setError(error instanceof Error ? error.message : 'Could not remove the dataset factor.') } finally { setSaving(false) }
+          try { await onRemove(legacy.name) } catch (error) { setError(error instanceof Error ? error.message : 'Could not remove the dataset factor.') } finally { setSaving(false) }
         }}>Remove configuration factor</Button></div>}
         {blockedReason ? <p role="status" className="rounded-md border p-3 text-sm text-muted-foreground">{blockedReason}</p> : <>
         <p className="text-xs text-muted-foreground">{mode === 'boolean' ? 'Enable or disable this Dataset node.' : mode === 'dataset_selection' ? 'Each cell receives exactly one connected dataset.' : 'Each cell enables every connected dataset, including deactivated datasets, or disables them all.'}</p>

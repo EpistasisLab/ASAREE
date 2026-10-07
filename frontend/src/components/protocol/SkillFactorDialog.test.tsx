@@ -11,6 +11,22 @@ const graph = {
   edges: [{ source: 'skill', target: 'agent', targetHandle: 'skill' }],
 } as unknown as ProtocolGraph
 
+it('keeps the dialog open after removal and permits choosing another factor type', async () => {
+  const remove = vi.fn().mockResolvedValue(undefined)
+  const close = vi.fn()
+  const { rerender } = render(<SkillFactorDialog skillNodeId="skill" graph={graph} factors={[{ name: 'Skill enabled', level_type: 'boolean', levels: [false, true] }]} onClose={close} onSave={vi.fn()} onRemove={remove} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Remove factor' }))
+  await waitFor(() => expect(remove).toHaveBeenCalledWith('Skill enabled'))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled())
+  expect(close).not.toHaveBeenCalled()
+  const updated = { ...graph, nodes: graph.nodes.map((node) => ({ ...node, data: { ...node.data, factor_bindings: {} } })) }
+  rerender(<SkillFactorDialog skillNodeId="skill" graph={updated} factors={[]} onClose={close} onSave={vi.fn()} onRemove={remove} />)
+  expect(screen.queryByRole('button', { name: 'Remove factor' })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Skill levels' }))
+  expect(screen.getByLabelText('Factor name')).toBeEnabled()
+  expect(screen.queryByRole('status')).not.toBeInTheDocument()
+})
+
 it.each(['Skill levels', 'All skills on/off'])('explains why %s conflicts with individual bindings without offering replacement', (mode) => {
   const save = vi.fn().mockResolvedValue(undefined)
   render(<SkillFactorDialog skillNodeId="skill" graph={graph} factors={[{ name: 'Skill enabled', level_type: 'boolean', levels: [false, true] }]} onClose={vi.fn()} onSave={save} onRemove={vi.fn()} />)

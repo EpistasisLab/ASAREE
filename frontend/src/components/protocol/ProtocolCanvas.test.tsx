@@ -177,6 +177,49 @@ describe('ProtocolCanvas connector adds', () => {
     })
   })
 
+  it('creates and removes a whole-pattern factor from the Pattern toolbar, clearing the Agent override', async () => {
+    let experiment: Experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockImplementation(async () => experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockImplementation(async (_id, patch) => {
+      experiment = { ...experiment, ...patch }
+      return experiment
+    })
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        { id: 'pattern', type: 'pattern_reason_act', position: { x: 100, y: 0 }, data: defaultReasonActPatternNodeData() },
+      ],
+      edges: [{ id: 'pattern-edge', source: 'pattern', target: 'agent', targetHandle: 'architectural_pattern' }],
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const toolbar = () => document.querySelector<HTMLButtonElement>('[data-testid="rf__node-pattern"] button[aria-label="Make experimental factor"]')!
+    fireEvent.click(toolbar())
+    await screen.findByRole('dialog', { name: 'Pattern factor' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [expect.objectContaining({ name: 'Writer:Reason + Act:Pattern levels', level_type: 'pattern' })] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))!
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ pattern_override: 'Writer:Reason + Act:Pattern levels' })
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.pattern_override).toEqual({ execution_pattern: 'reason_act', pattern_params: { reason_act: graph.nodes[1].data.config } })
+      expect(persisted.nodes.find((node) => node.id === 'pattern')?.data.factor_bindings).toBeUndefined()
+      expect(persisted.edges).toHaveLength(1)
+    })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    fireEvent.click(toolbar())
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove factor' }))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))!
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({})
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.pattern_override).toBeUndefined()
+      expect(experiment.design_spec?.factors).toEqual([])
+    })
+  })
+
   it.each(['dataset_selection', 'dataset_toggle'] as const)('creates a %s dataset factor from the node hover menu and preserves connected nodes', async (mode) => {
     const experiment = {
       id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,

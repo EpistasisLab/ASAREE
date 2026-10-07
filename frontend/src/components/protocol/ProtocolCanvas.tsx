@@ -1,3 +1,6 @@
+import { ModelFactorDialog } from './ModelFactorDialog'
+import { PatternFactorDialog } from './PatternFactorDialog'
+import { PATTERN_FACTOR_PATH, isPatternNode, patternFactorConflict } from './patternFactors'
 import { reconcileKnowledgeFactor, knowledgeFactorConflict, knowledgeFactorOwner, KNOWLEDGE_FACTOR_PATH } from '@/lib/knowledgeFactors'
 import { KnowledgeFactorDialog } from './KnowledgeFactorDialog'
 import { KnowledgeTestSelectors } from './KnowledgeTestSelectors'
@@ -437,6 +440,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             delete data.dataset_selection
             delete data.dataset_factor_mode
           }
+          if (bindings[PATTERN_FACTOR_PATH] === factorName) delete data.pattern_override
           return { ...n, data }
         })
       })
@@ -480,6 +484,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         setConnectorFactorChoice(field.connectorFactor)
         if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
         else if (field.connectorFactor.kind === 'dataset') setDatasetFactorNodeId(field.connectorFactor.nodeId)
+        else if (field.connectorFactor.kind === 'model') { setModelFactorLevelIndex(undefined); setModelFactorFieldPath(field.fieldPath); setModelFactorNodeId(field.connectorFactor.nodeId) }
+        else if (field.connectorFactor.kind === 'pattern') { setPatternFactorFieldPath(field.fieldPath); setPatternFactorAgentId(field.connectorFactor.agentId); setPatternFactorNodeId(field.connectorFactor.nodeId) }
         else setKnowledgeFactorNodeId(field.connectorFactor.nodeId)
       },
     }),
@@ -500,6 +506,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const [factorPickerNodeId, setFactorPickerNodeId] = useState<string | null>(null)
   const [editingFactorName, setEditingFactorName] = useState<string | null>(null)
   const [knowledgeFactorNodeId, setKnowledgeFactorNodeId] = useState<string | null>(null)
+  const [modelFactorNodeId, setModelFactorNodeId] = useState<string | null>(null)
+  const [patternFactorNodeId, setPatternFactorNodeId] = useState<string | null>(null)
+  const [patternFactorFieldPath, setPatternFactorFieldPath] = useState<string>()
+  const [patternFactorAgentId, setPatternFactorAgentId] = useState<string>()
+  const [modelFactorFieldPath, setModelFactorFieldPath] = useState<string>()
+  const [modelFactorLevelIndex, setModelFactorLevelIndex] = useState<number>()
   const [skillFactorNodeId, setSkillFactorNodeId] = useState<string | null>(null)
   const [datasetFactorNodeId, setDatasetFactorNodeId] = useState<string | null>(null)
   const [connectorFactorChoice, setConnectorFactorChoice] = useState<UnboundField['connectorFactor']>()
@@ -1159,6 +1171,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         deletable: !nonDeletablePatternNodeIds.has(n.id),
         data: {
           ...n.data,
+          patternFactorCount: isPatternNode(n.type) ? new Set(edges.filter((edge) => edge.source === n.id && edge.targetHandle === 'architectural_pattern').flatMap((edge) => {
+            const name = (nodes.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[PATTERN_FACTOR_PATH]
+            return name ? [name] : []
+          })).size : 0,
           knowledgeFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[KNOWLEDGE_FACTOR_PATH])?.levels.length,
           knowledgeFactorControlled: ['okf_bundle', 'okf_document'].includes(n.type ?? '') && !!knowledgeFactorOwner(toPersistedGraph(nodes, edges), n.id),
           skillFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[SKILL_FACTOR_PATH])?.levels.length,
@@ -1369,6 +1385,24 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
     [experimentId, experimentLocked],
   )
+  const requestModelFactor = useCallback((nodeId: string, levelIndex?: number) => {
+    if (!experimentId || experimentLocked) return
+    setSelectedNodeId(null)
+    setModelFactorFieldPath(levelIndex == null ? undefined : 'config')
+    setModelFactorLevelIndex(levelIndex)
+    setModelFactorNodeId(nodeId)
+  }, [experimentId, experimentLocked])
+  const requestPatternFactor = useCallback((nodeId: string) => {
+    if (!experimentId || experimentLocked) return
+    setSelectedNodeId(null)
+    setPatternFactorFieldPath(undefined)
+    setPatternFactorAgentId(undefined)
+    setPatternFactorNodeId(nodeId)
+  }, [experimentId, experimentLocked])
+  const modelFactorForNode = useCallback((nodeId: string) => {
+    const name = (nodes.find((node) => node.id === nodeId)?.data.factor_bindings as Record<string, string> | undefined)?.config
+    return factors.find((factor) => factor.name === name && factor.level_type === 'model_config')
+  }, [nodes, factors])
   const requestSkillFactor = useCallback((nodeId: string) => {
     if (!experimentId || experimentLocked) return
     setSelectedNodeId(null)
@@ -1470,6 +1504,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestRunNode,
       requestMakeFactor,
       requestEditFactor,
+      requestModelFactor,
+      requestPatternFactor,
+      modelFactorForNode,
       requestSkillFactor,
       requestKnowledgeFactor,
       requestDatasetFactor,
@@ -1484,6 +1521,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestRunNode,
       requestMakeFactor,
       requestEditFactor,
+      requestModelFactor,
+      requestPatternFactor,
+      modelFactorForNode,
       requestSkillFactor,
       requestKnowledgeFactor,
       requestDatasetFactor,
@@ -2134,6 +2174,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onNodeDoubleClick={(_, node) => {
               if (experimentLocked) return
               setAddPanelOpen(false)
+              if (modelFactorForNode(node.id)) {
+                setModelFactorFieldPath('config')
+                setModelFactorLevelIndex(undefined)
+                setModelFactorNodeId(node.id)
+                setSelectedNodeId(null)
+                return
+              }
               setSelectedNodeId(node.id)
             }}
             onPaneClick={() => setSelectedNodeId(null)}
@@ -2364,8 +2411,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : MODEL_NODE_TYPES.includes(selectedNode?.type ?? '') ? (
           <ModelNodeInspector
             node={{ id: selectedNode!.id, type: selectedNode!.type!, position: selectedNode!.position, data: selectedNode!.data as ModelNodeData }}
-            experimentId={experimentId}
-            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
@@ -2439,8 +2484,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               position: selectedNode.position,
               data: selectedNode.data as ReasonActPatternNodeData,
             }}
-            experimentId={experimentId}
-            factorNodeLabel={factorNodeLabel}
             suggestedIterations={suggestedIterationsByPattern.get(selectedNode.id) ?? null}
             truncatedAt={truncationByPattern.get(selectedNode.id)?.max_iterations ?? null}
             onChange={updateNodeData}
@@ -2454,8 +2497,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               position: selectedNode.position,
               data: selectedNode.data as SingleAgentBaselinePatternNodeData,
             }}
-            experimentId={experimentId}
-            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onClose={() => setSelectedNodeId(null)}
           />
@@ -2552,7 +2593,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             setConnectorFactorChoice(field.connectorFactor)
             if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
             else if (field.connectorFactor.kind === 'dataset') setDatasetFactorNodeId(field.connectorFactor.nodeId)
-            else setKnowledgeFactorNodeId(field.connectorFactor.nodeId)
+            else if (field.connectorFactor.kind === 'model') { setModelFactorLevelIndex(undefined); setModelFactorFieldPath(field.fieldPath); setModelFactorNodeId(field.connectorFactor.nodeId) }
+            else if (field.connectorFactor.kind === 'pattern') { setPatternFactorFieldPath(field.fieldPath); setPatternFactorAgentId(field.connectorFactor.agentId); setPatternFactorNodeId(field.connectorFactor.nodeId) }
+        else setKnowledgeFactorNodeId(field.connectorFactor.nodeId)
           }}
           existingNames={factorPickerExistingNames}
           emptyPickerMessage={`${(factorPickerNode?.data as { label?: string })?.label || 'This node'} has no fields that can be turned into a factor.`}
@@ -2563,6 +2606,75 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           }}
         />
       )}
+      {patternFactorNodeId && nodes.some((node) => node.id === patternFactorNodeId) && <PatternFactorDialog
+        key={`${patternFactorNodeId}:${patternFactorFieldPath}:${patternFactorAgentId}`}
+        patternNodeId={patternFactorNodeId}
+        graph={toPersistedGraph(nodes, edges)}
+        nodeLabel={agentTracedLabel(nodes.find((node) => node.id === patternFactorNodeId)!, edges, nodes)}
+        initialFieldPath={patternFactorFieldPath}
+        initialAgentId={patternFactorAgentId}
+        factors={factors}
+        onClose={() => setPatternFactorNodeId(null)}
+        onSave={async (factor, fieldPath, ownerId, previousName) => {
+          if (experimentLocked) throw new Error('Unlock the experiment before editing factors.')
+          const fresh = await experimentsApi.get(experimentId!)
+          const existing = fresh.design_spec?.factors ?? []
+          if (existing.some((candidate) => candidate.name === factor.name && candidate.name !== previousName)) throw new Error('A factor with this name already exists.')
+          const conflict = patternFactorConflict(patternFactorNodeId, fieldPath, nodes, edges, fieldPath === PATTERN_FACTOR_PATH ? ownerId : undefined)
+          if (conflict) throw new Error(conflict)
+          await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...existing.filter((candidate) => candidate.name !== previousName), factor] } })
+          if (previousName) renameFactorBindings(previousName, factor.name)
+          bindFactorOnNode(ownerId, fieldPath, factor.name)
+          setNodes((current) => graphWithFactorBaseline({ nodes: current as unknown as ProtocolNode[], edges: [] }, factor.name, factor.levels[0]).nodes as unknown as Node[])
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+        onRemove={async (name, fieldPath, ownerId) => {
+          if (experimentLocked) throw new Error('Unlock the experiment before editing factors.')
+          const fresh = await experimentsApi.get(experimentId!)
+          const shared = nodes.some((node) => Object.entries(node.data.factor_bindings as Record<string, string> | undefined ?? {}).some(([path, factorName]) => factorName === name && (node.id !== ownerId || path !== fieldPath)))
+          if (!shared) await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: (fresh.design_spec?.factors ?? []).filter((factor) => factor.name !== name) } })
+          setNodes((current) => current.map((node) => {
+            if (node.id !== ownerId) return node
+            const data: Record<string, unknown> = { ...node.data, factor_bindings: Object.fromEntries(Object.entries(node.data.factor_bindings as Record<string, string> ?? {}).filter(([path]) => path !== fieldPath)) }
+            if (fieldPath === PATTERN_FACTOR_PATH) delete data.pattern_override
+            return { ...node, data }
+          }))
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+      />}
+      {modelFactorNodeId && nodes.some((node) => node.id === modelFactorNodeId) && <ModelFactorDialog
+        key={`${modelFactorNodeId}:${modelFactorFieldPath}:${modelFactorLevelIndex}`}
+        node={toPersistedGraph(nodes, edges).nodes.find((node) => node.id === modelFactorNodeId)!}
+        nodeLabel={agentTracedLabel(nodes.find((node) => node.id === modelFactorNodeId)!, edges, nodes)}
+        initialFieldPath={modelFactorFieldPath}
+        initialLevelIndex={modelFactorLevelIndex}
+        factors={factors}
+        onClose={() => setModelFactorNodeId(null)}
+        onSave={async (factor, fieldPath, previousName) => {
+          const fresh = await experimentsApi.get(experimentId!)
+          const existing = fresh.design_spec?.factors ?? []
+          if (existing.some((candidate) => candidate.name === factor.name && candidate.name !== previousName)) throw new Error('A factor with this name already exists.')
+          const bindings = nodes.find((node) => node.id === modelFactorNodeId)?.data.factor_bindings as Record<string, string> | undefined
+          if (fieldPath === 'config' ? Object.keys(bindings ?? {}).some((key) => key.startsWith('config.')) : !!bindings?.config) throw new Error('Remove the conflicting model factor binding first.')
+          await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...existing.filter((candidate) => candidate.name !== previousName), factor] } })
+          if (previousName) renameFactorBindings(previousName, factor.name)
+          bindFactorOnNode(modelFactorNodeId, fieldPath, factor.name)
+          // Apply the first level to every binding, including the newly added one.
+          setNodes((current) => graphWithFactorBaseline({ nodes: current as unknown as ProtocolNode[], edges: [] }, factor.name, factor.levels[0]).nodes as unknown as Node[])
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+        onRemove={async (name, fieldPath) => {
+          const fresh = await experimentsApi.get(experimentId!)
+          const shared = nodes.some((node) => Object.entries(node.data.factor_bindings as Record<string, string> | undefined ?? {}).some(([path, factorName]) => factorName === name && (node.id !== modelFactorNodeId || path !== fieldPath)))
+          if (!shared) await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: (fresh.design_spec?.factors ?? []).filter((factor) => factor.name !== name) } })
+          setNodes((current) => current.map((node) => node.id === modelFactorNodeId ? { ...node, data: { ...node.data, factor_bindings: Object.fromEntries(Object.entries(node.data.factor_bindings as Record<string, string> ?? {}).filter(([path]) => path !== fieldPath)) } } : node))
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+      />}
       {skillFactorNodeId && <SkillFactorDialog
         key={skillFactorNodeId}
         skillNodeId={skillFactorNodeId}

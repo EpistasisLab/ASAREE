@@ -77,8 +77,10 @@ export function SkillFactorDialog({ skillNodeId, graph, factors, initialMode, in
     setError('')
     try {
       if (remove && current) await onRemove(current.name)
-      else await onSave({ ...draft, name: draft.name.trim(), level_labels: labels.map((label) => label.trim()) }, ownerId, current?.name)
-      onClose()
+      else {
+        await onSave({ ...draft, name: draft.name.trim(), level_labels: labels.map((label) => label.trim()) }, ownerId, current?.name)
+        onClose()
+      }
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Could not save the skill factor.')
     } finally { setSaving(false) }

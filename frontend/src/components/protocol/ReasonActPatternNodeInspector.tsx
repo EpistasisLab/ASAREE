@@ -1,4 +1,4 @@
-import { Repeat2 } from 'lucide-react'
+import { Repeat2, Split, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 import { nodeAccent } from '@/lib/nodeAccent'
 import { isUnderIterated } from '@/lib/reasonActIterations'
@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import type { ReasonActPatternConfig, ReasonActPatternNodeData, ProtocolNode } from '@/types/protocols'
 
@@ -29,19 +28,12 @@ const ACCENT = nodeAccent('pattern_reason_act')
 // (the node's own canvas hover toolbar), never a bare delete.
 export function ReasonActPatternNodeInspector({
   node,
-  experimentId,
-  factorNodeLabel,
   suggestedIterations,
   truncatedAt,
   onChange,
   onClose,
 }: {
   node: (ProtocolNode & { data: ReasonActPatternNodeData }) | null
-  experimentId: string | null
-  // The agent-traced display label (see bindableFields.ts's agentTracedLabel)
-  // -- distinct from data.label, which is this node's own plain label shown
-  // in the header title.
-  factorNodeLabel: string
   // What the driven agent's wiring implies (lib/reasonActIterations.ts), or
   // null when this pattern drives no agent yet.
   suggestedIterations: number | null
@@ -60,7 +52,6 @@ export function ReasonActPatternNodeInspector({
   if (!node) return null
   const data = node.data
   const config = data.config
-  const bindings = data.factor_bindings ?? {}
 
   // Only ever offered as a raise. Going below what the wiring needs truncates
   // the run into a payload of nulls that still reports as completed, while
@@ -84,16 +75,6 @@ export function ReasonActPatternNodeInspector({
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
   }
 
-  function bindFactor(fieldPath: string, factorName: string) {
-    onChange(node!.id, { ...data, factor_bindings: { ...bindings, [fieldPath]: factorName } })
-  }
-
-  function unbindFactor(fieldPath: string) {
-    const next = { ...bindings }
-    delete next[fieldPath]
-    onChange(node!.id, { ...data, factor_bindings: next })
-  }
-
   return (
     <NodeInspectorDialog
       open
@@ -109,140 +90,81 @@ export function ReasonActPatternNodeInspector({
       }
       onClose={requestClose}
     >
+      <div className="rounded-lg border px-3 py-2"><p className="text-xs text-muted-foreground"><span className="font-medium text-chart-2">Make factor</span> has moved to the node toolbar. Hover over the Pattern node and click the <Split className="inline size-3 align-text-bottom text-chart-2" aria-hidden="true" /> icon. <span className="ml-4 inline-flex flex-col gap-1 align-middle"><span className="text-[10px]">Toolbar preview</span><span role="img" aria-label="Node toolbar preview: swap pattern and Make factor (the branching icon on the right)" className="inline-flex items-center gap-3"><RefreshCw className="size-3" /><Split className="size-3 text-chart-2" /></span></span></p></div>
       <div className="grid grid-cols-2 gap-4">
-        <FactorBindableField
-          experimentId={experimentId}
-          fieldPath="config.max_iterations"
-          defaultLabel="Max iterations"
-          nodeLabel={factorNodeLabel}
-          levelType="number"
-          currentValue={config.max_iterations}
-          boundFactorName={bindings['config.max_iterations']}
-          onBind={(name) => bindFactor('config.max_iterations', name)}
-          onUnbind={() => unbindFactor('config.max_iterations')}
-        >
-          {(trigger) => (
-            <div className="space-y-1.5">
-              <Label htmlFor="reason-act-max-iterations" className="flex items-center gap-1.5">
-                Max iterations
-                {trigger}
-              </Label>
-              <Input
-                id="reason-act-max-iterations"
-                type="number"
-                min="1"
-                value={config.max_iterations ?? ''}
-                onChange={(e) => patchConfig({ max_iterations: e.target.value === '' ? null : Number(e.target.value) })}
-              />
-              {underIterated && (
-                <p className="text-xs text-[color:var(--chart-4)]">
-                  {truncatedAt != null
-                    ? `The last run stopped at ${truncatedAt} with its answer unwritten, so at least ${suggestedIterations} — `
-                    : `This agent's wiring suggests at least ${suggestedIterations} — `}
-                  each tool call costs an iteration, and a run that hits the cap stops mid-work.{' '}
-                  <button
-                    type="button"
-                    className="underline underline-offset-2 hover:no-underline"
-                    onClick={() => patchConfig({ max_iterations: suggestedIterations })}
-                  >
-                    Use {suggestedIterations}
-                  </button>
-                </p>
-              )}
-            </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="reason-act-max-iterations" className="flex items-center gap-1.5">
+            Max iterations
+          </Label>
+          <Input
+            id="reason-act-max-iterations"
+            type="number"
+            min="1"
+            value={config.max_iterations ?? ''}
+            onChange={(e) => patchConfig({ max_iterations: e.target.value === '' ? null : Number(e.target.value) })}
+          />
+          {underIterated && (
+            <p className="text-xs text-[color:var(--chart-4)]">
+              {truncatedAt != null
+                ? `The last run stopped at ${truncatedAt} with its answer unwritten, so at least ${suggestedIterations} — `
+                : `This agent's wiring suggests at least ${suggestedIterations} — `}
+              each tool call costs an iteration, and a run that hits the cap stops mid-work.{' '}
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:no-underline"
+                onClick={() => patchConfig({ max_iterations: suggestedIterations })}
+              >
+                Use {suggestedIterations}
+              </button>
+            </p>
           )}
-        </FactorBindableField>
-        <FactorBindableField
-          experimentId={experimentId}
-          fieldPath="config.observation_format"
-          defaultLabel="Observation format"
-          nodeLabel={factorNodeLabel}
-          levelType="string"
-          currentValue={config.observation_format}
-          levelOptions={OBSERVATION_FORMATS.map((f) => ({ value: f, label: f }))}
-          boundFactorName={bindings['config.observation_format']}
-          onBind={(name) => bindFactor('config.observation_format', name)}
-          onUnbind={() => unbindFactor('config.observation_format')}
-        >
-          {(trigger) => (
-            <div className="space-y-1.5">
-              <Label className="flex items-center gap-1.5">
-                Observation format
-                {trigger}
-              </Label>
-              <Select value={config.observation_format} onValueChange={(value) => patchConfig({ observation_format: value as 'raw' | 'summarized' })}>
-                <SelectTrigger className="w-full">
-                  <SelectValue>{(value: string) => value}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {OBSERVATION_FORMATS.map((format) => (
-                    <SelectItem key={format} value={format}>
-                      {format}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-        </FactorBindableField>
+        </div>
+        <div className="space-y-1.5">
+          <Label className="flex items-center gap-1.5">
+            Observation format
+          </Label>
+          <Select value={config.observation_format} onValueChange={(value) => patchConfig({ observation_format: value as 'raw' | 'summarized' })}>
+            <SelectTrigger className="w-full">
+              <SelectValue>{(value: string) => value}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {OBSERVATION_FORMATS.map((format) => (
+                <SelectItem key={format} value={format}>
+                  {format}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
-      <FactorBindableField
-        experimentId={experimentId}
-        fieldPath="config.include_scratchpad"
-        defaultLabel="Include scratchpad"
-        nodeLabel={factorNodeLabel}
-        levelType="boolean"
-        boundFactorName={bindings['config.include_scratchpad']}
-        onBind={(name) => bindFactor('config.include_scratchpad', name)}
-        onUnbind={() => unbindFactor('config.include_scratchpad')}
-      >
-        {(trigger) => (
-          <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
-            <div>
-              <Label htmlFor="reason-act-scratchpad" className="flex items-center gap-1.5">
-                Include scratchpad
-                {trigger}
-              </Label>
-              <p className="text-xs text-muted-foreground">Carries a running record of prior reasoning/observations into each iteration.</p>
-            </div>
-            <Switch
-              id="reason-act-scratchpad"
-              checked={config.include_scratchpad}
-              onCheckedChange={(checked) => patchConfig({ include_scratchpad: checked })}
-            />
-          </div>
-        )}
-      </FactorBindableField>
+      <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+        <div>
+          <Label htmlFor="reason-act-scratchpad" className="flex items-center gap-1.5">
+            Include scratchpad
+          </Label>
+          <p className="text-xs text-muted-foreground">Carries a running record of prior reasoning/observations into each iteration.</p>
+        </div>
+        <Switch
+          id="reason-act-scratchpad"
+          checked={config.include_scratchpad}
+          onCheckedChange={(checked) => patchConfig({ include_scratchpad: checked })}
+        />
+      </div>
 
       {config.include_scratchpad && (
-        <FactorBindableField
-          experimentId={experimentId}
-          fieldPath="config.scratchpad_window"
-          defaultLabel="Scratchpad window"
-          nodeLabel={factorNodeLabel}
-          levelType="number"
-          currentValue={config.scratchpad_window}
-          boundFactorName={bindings['config.scratchpad_window']}
-          onBind={(name) => bindFactor('config.scratchpad_window', name)}
-          onUnbind={() => unbindFactor('config.scratchpad_window')}
-        >
-          {(trigger) => (
-            <div className="space-y-1.5">
-              <Label htmlFor="reason-act-scratchpad-window" className="flex items-center gap-1.5">
-                Scratchpad window
-                {trigger}
-              </Label>
-              <Input
-                id="reason-act-scratchpad-window"
-                type="number"
-                min="1"
-                value={config.scratchpad_window ?? ''}
-                onChange={(e) => patchConfig({ scratchpad_window: e.target.value === '' ? null : Number(e.target.value) })}
-              />
-            </div>
-          )}
-        </FactorBindableField>
+        <div className="space-y-1.5">
+          <Label htmlFor="reason-act-scratchpad-window" className="flex items-center gap-1.5">
+            Scratchpad window
+          </Label>
+          <Input
+            id="reason-act-scratchpad-window"
+            type="number"
+            min="1"
+            value={config.scratchpad_window ?? ''}
+            onChange={(e) => patchConfig({ scratchpad_window: e.target.value === '' ? null : Number(e.target.value) })}
+          />
+        </div>
       )}
 
       <Dialog open={pendingCloseWarning} onOpenChange={(open) => !open && setPendingCloseWarning(false)}>

@@ -50,10 +50,11 @@ type StructuredLevel = Record<string, unknown>
 // own Provider/Model/Temperature/Effort/Max tokens fields exactly, since a
 // level here IS a whole Model node's config (protocol_execution.py's
 // _resolve_model_config reads it verbatim, never the node's xyflow type).
-function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+export function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
   const provider = (value.provider as string) || 'anthropic'
   const { modelsQuery, models } = useProviderModels(provider)
   const selectedModelInfo = models.find((m) => m.id === value.model)
+  const showTemperature = selectedModelInfo?.supports_temperature ?? true
   const showEffort = selectedModelInfo?.supports_effort ?? false
   const effortLevels = selectedModelInfo?.effort_levels.length ? selectedModelInfo.effort_levels : EFFORT_LEVELS_FALLBACK
 
@@ -87,7 +88,7 @@ function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChan
           onChange={(model) => patch({ model })}
         />
       </div>
-      <div className="space-y-1">
+      {showTemperature && <div className="space-y-1">
         <Label className="text-xs">Temperature</Label>
         <Input
           className="h-8"
@@ -98,7 +99,7 @@ function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChan
           value={(value.temperature as number | undefined) ?? ''}
           onChange={(e) => patch({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
         />
-      </div>
+      </div>}
       {showEffort && (
         <div className="space-y-1">
           <Label className="text-xs">Effort</Label>
@@ -221,7 +222,7 @@ function ToolConfigLevelRow({
 // slug. Written onto the agent's own synthetic data.pattern_override (see
 // bindableFields.ts) -- protocol_execution.py's _resolve_pattern_config
 // checks this before falling back to the wired connector node.
-function PatternLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+export function PatternLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
   const slug = (value.execution_pattern as string) || 'reason_act'
   const allParams = (value.pattern_params as Record<string, StructuredLevel> | undefined) ?? {}
   const params = allParams[slug] ?? {}
@@ -231,7 +232,7 @@ function PatternLevelRow({ value, onChange }: { value: StructuredLevel; onChange
   }
 
   function changeSlug(nextSlug: string) {
-    onChange({ execution_pattern: nextSlug, pattern_params: { [nextSlug]: allParams[nextSlug] ?? {} } })
+    onChange({ execution_pattern: nextSlug, pattern_params: { [nextSlug]: allParams[nextSlug] ?? (nextSlug === 'reason_act' ? { max_iterations: 30, include_scratchpad: true, scratchpad_window: 10, observation_format: 'raw' } : { max_iterations: 10, stop_on_first_success: true }) } })
   }
 
   return (
@@ -258,7 +259,7 @@ function PatternLevelRow({ value, onChange }: { value: StructuredLevel; onChange
           type="number"
           min="1"
           value={(params.max_iterations as number | undefined) ?? ''}
-          onChange={(e) => patchParams({ max_iterations: Number(e.target.value) })}
+          onChange={(e) => patchParams({ max_iterations: e.target.value === '' ? null : Number(e.target.value) })}
         />
       </div>
       {slug === 'reason_act' && (
@@ -277,6 +278,10 @@ function PatternLevelRow({ value, onChange }: { value: StructuredLevel; onChange
           />
         </div>
       )}
+      {slug === 'reason_act' && <>
+        {(params.include_scratchpad ?? true) && <div className="space-y-1"><Label className="text-xs">Scratchpad window</Label><Input aria-label="Scratchpad window" type="number" min="1" value={(params.scratchpad_window as number | undefined) ?? ''} onChange={(event) => patchParams({ scratchpad_window: event.target.value === '' ? null : Number(event.target.value) })} /></div>}
+        <div className="space-y-1"><Label className="text-xs">Observation format</Label><Select value={String(params.observation_format ?? 'raw')} onValueChange={(value) => value && patchParams({ observation_format: value })}><SelectTrigger className="w-full"><SelectValue>{String(params.observation_format ?? 'raw')}</SelectValue></SelectTrigger><SelectContent><SelectItem value="raw">raw</SelectItem><SelectItem value="summarized">summarized</SelectItem></SelectContent></Select></div>
+      </>}
     </div>
   )
 }

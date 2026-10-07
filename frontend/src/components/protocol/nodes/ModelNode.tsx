@@ -4,7 +4,9 @@ import { nodeAccent } from '@/lib/nodeAccent'
 import type { ModelNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { useProviderModels } from '../useProviderModels'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
+import { ModelFactorGroup } from './ModelFactorGroup'
 
 // One shared card renderer for all three LLM provider node types
 // (model_anthropic/model_openai/model_azure_foundry -- see ModelNodeData's own
@@ -31,6 +33,8 @@ export const PROVIDER_META: Record<string, { label: string; icon: typeof Sparkle
 
 export function ModelNode({ id, data, selected }: NodeProps & { data: ModelNodeData }) {
   const meta = PROVIDER_META[data.config?.provider] ?? { label: data.config?.provider || 'Model', icon: Sparkles }
+  const { requestModelFactor, modelFactorForNode, experimentLocked } = useProtocolCanvasActions()
+  const factor = modelFactorForNode?.(id)
   const accent = nodeAccent('model')
   const provider = data.config?.provider
 
@@ -75,6 +79,8 @@ export function ModelNode({ id, data, selected }: NodeProps & { data: ModelNodeD
     warnings.push('Temperature is required')
   }
 
+  if (factor) return <ModelFactorGroup id={id} factor={factor} selected={selected} warning={warnings} />
+
   return (
     <CircleNode
       id={id}
@@ -86,6 +92,7 @@ export function ModelNode({ id, data, selected }: NodeProps & { data: ModelNodeD
       handleId="model"
       warning={warnings.length > 0 ? warnings : undefined}
       factorCount={boundFactorCount(data)}
+      onMakeFactor={!experimentLocked && requestModelFactor ? () => requestModelFactor(id) : undefined}
     />
   )
 }

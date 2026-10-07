@@ -1,6 +1,7 @@
 import type { Edge, Node } from '@xyflow/react'
 import type { LevelType } from './factorLevels'
 import type { McpServer } from '@/types/mcpServers'
+import { isPatternNode, patternFactorFields, PATTERN_FACTOR_PATH, patternFactorConflict } from './patternFactors'
 
 export interface BindableFieldSpec {
   fieldPath: string
@@ -191,7 +192,7 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
         // a connected Model node's whole config verbatim (never the node's
         // xyflow `type`), so replacing it wholesale per cell already works
         // with zero backend changes.
-        { fieldPath: 'config', label: 'Provider & model', levelType: 'model_config' },
+        { fieldPath: 'config', label: 'Model levels', levelType: 'model_config' },
       ]
     case 'mcp_tool':
     case 'mcp_scikit_learn':
@@ -286,7 +287,7 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
 
 export interface UnboundField {
   pickerGroup?: { id: string; label: string; category: string; componentId: string; componentLabel: string }
-  connectorFactor?: { kind: 'skill' | 'dataset' | 'knowledge'; nodeId: string; mode: LevelType; agentId?: string }
+  connectorFactor?: { kind: 'skill' | 'dataset' | 'knowledge' | 'model' | 'pattern'; nodeId: string; mode: LevelType; agentId?: string }
   nodeId: string
   nodeLabel: string
   fieldPath: string
@@ -467,7 +468,20 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
   const fields = unboundBindableFields(nodes, edges).filter((field) => {
     const kind = nodes.find((node) => node.id === field.nodeId)?.type
     return kind !== 'skill' && kind !== 'dataset' && kind !== 'okf_bundle' && kind !== 'okf_document'
+      && !isPatternNode(kind) && field.fieldPath !== PATTERN_FACTOR_PATH
   })
+  for (const node of nodes.filter((node) => isPatternNode(node.type))) {
+    const owners = nodes.filter((owner) => ['agent', 'sub_agent'].includes(owner.type ?? '') && edges.some((edge) => edge.source === node.id && edge.target === owner.id && edge.targetHandle === 'architectural_pattern'))
+    for (const owner of owners.length ? owners : [undefined]) {
+      for (const field of patternFactorFields(node.id, nodes, edges, owner?.id)) {
+        if ((nodes.find((node) => node.id === field.nodeId)?.data.factor_bindings as Record<string, string> | undefined)?.[field.fieldPath]) continue
+        if (patternFactorConflict(node.id, field.fieldPath, nodes, edges, owner?.id)) continue
+        if (field.fieldPath !== PATTERN_FACTOR_PATH && fields.some((candidate) => candidate.nodeId === node.id && candidate.fieldPath === field.fieldPath)) continue
+        fields.push({ nodeId: field.nodeId, nodeLabel: agentTracedLabel(node, edges, nodes), fieldPath: field.fieldPath, fieldLabel: field.label, levelType: field.levelType, currentValue: field.currentValue,
+          connectorFactor: { kind: 'pattern', nodeId: node.id, mode: field.levelType, agentId: owner?.id } })
+      }
+    }
+  }
   const connectorOwners = new Set<string>()
   for (const node of nodes) {
     if (!['skill', 'dataset', 'okf_bundle', 'okf_document'].includes(node.type ?? '')) continue
@@ -494,6 +508,11 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
       }
     }
   }
+  for (const field of fields) {
+    if (MODEL_NODE_TYPES.has(nodes.find((node) => node.id === field.nodeId)?.type ?? '')) {
+      field.connectorFactor = { kind: 'model', nodeId: field.nodeId, mode: field.levelType }
+    }
+  }
   return fields.map((field) => {
     const node = nodes.find((candidate) => candidate.id === field.nodeId)!
     const kind = field.connectorFactor?.kind ?? node.type ?? 'node'
@@ -503,19 +522,21 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
     const category = field.connectorFactor?.kind === 'skill' ? 'Skills'
       : field.connectorFactor?.kind === 'dataset' ? 'Datasets'
       : field.connectorFactor?.kind === 'knowledge' ? 'Knowledge'
+      : field.connectorFactor?.kind === 'model' ? 'Model'
+      : field.connectorFactor?.kind === 'pattern' ? 'Pattern'
       : agentKinds.includes(kind) ? 'Agent fields'
       : MODEL_NODE_TYPES.has(kind) ? 'Model'
       : kind.startsWith('pattern_') ? 'Pattern'
       : ({ skill: 'Skills', dataset: 'Datasets', mcp_tool: 'Tools', mcp_scikit_learn: 'Tools', mcp_client_tool: 'Tools', script: 'Tools', okf_bundle: 'Knowledge', okf_document: 'Knowledge', memory: 'Memory', output_parser: 'Output parser', critic_gate: 'Critic gate' } as Record<string, string>)[kind] ?? String(node.data.label || kind)
-    const connectorChoice = field.connectorFactor && field.connectorFactor.mode !== 'boolean'
+    const connectorChoice = field.connectorFactor && field.connectorFactor.kind !== 'model' && field.connectorFactor.kind !== 'pattern' && field.connectorFactor.mode !== 'boolean'
     return {
       ...field,
       pickerGroup: {
         id: owner?.id ?? 'shared-unconnected',
         label: owner ? String(owner.data.label || 'Agent') : 'Shared or unconnected components',
         category,
-        componentId: connectorChoice ? `${field.nodeId}:${kind}` : node.id,
-        componentLabel: connectorChoice ? `${category} on this agent` : String(node.data.label || kind),
+        componentId: field.connectorFactor?.kind === 'pattern' ? field.connectorFactor.nodeId : connectorChoice ? `${field.nodeId}:${kind}` : node.id,
+        componentLabel: field.connectorFactor?.kind === 'pattern' ? String(nodes.find((node) => node.id === field.connectorFactor?.nodeId)?.data.label || 'Pattern') : connectorChoice ? `${category} on this agent` : String(node.data.label || kind),
       },
     }
   })

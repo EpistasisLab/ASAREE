@@ -351,6 +351,50 @@ describe('ProtocolCanvas connector adds', () => {
     })
   })
 
+  it.each(['dataset', 'resource', 'tool'])('removes a Dataset factor on %s without enabling unrelated Tools or Scripts', async (handle) => {
+    let experiment: Experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [{ name: 'Datasets', level_type: 'dataset_toggle', levels: [['dataset-id'], []], level_labels: ['All enabled', 'All disabled'] }], metrics: [] },
+      measurement_plan: null, dataset_ids: ['dataset-id'], dataset_id: 'dataset-id',
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockImplementation(async () => experiment)
+    vi.spyOn(experimentsApi, 'update').mockImplementation(async (_id, patch) => {
+      experiment = { ...experiment, ...patch }
+      return experiment
+    })
+    vi.spyOn(datasetsApi, 'list').mockResolvedValue([])
+    vi.spyOn(mcpServersApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: { ...defaultAgentNodeData('Writer'), dataset_selection: ['dataset-id'], dataset_factor_mode: 'dataset_toggle', factor_bindings: { dataset_selection: 'Datasets' } } },
+        { id: 'dataset', type: 'dataset', position: { x: 100, y: 0 }, data: { ...defaultDatasetNodeData(), config: { dataset_id: 'dataset-id', dataset_name: 'Dataset', enabled: false } } },
+        { id: 'tool', type: 'mcp_tool', position: { x: 300, y: 0 }, data: { label: 'Tool', config: { server_id: 'server', server_name: 'Server', tool_names: ['run'], enabled: false } } },
+        { id: 'script', type: 'script', position: { x: 500, y: 0 }, data: { ...defaultScriptNodeData(), config: { name: 'Script', language: 'python', code: 'print(1)', enabled: false } } },
+      ],
+      edges: [
+        { id: 'dataset-edge', source: 'dataset', target: 'agent', targetHandle: handle },
+        ...['tool', 'script'].map((id) => ({ id: `${id}-edge`, source: id, target: 'agent', targetHandle: 'tool' })),
+      ],
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    await waitFor(() => expect(client.getQueryData<Experiment>(['experiments', 'experiment-1'])?.design_spec?.factors?.[0]?.name).toBe('Datasets'))
+    fireEvent.click(document.querySelector<HTMLButtonElement>('[data-testid="rf__node-dataset"] button[aria-label="Make experimental factor"]')!)
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove factor' }))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))!
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({})
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.dataset_selection).toBeUndefined()
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.dataset_factor_mode).toBeUndefined()
+      expect(persisted.nodes.find((node) => node.id === 'dataset')?.data.config).toMatchObject({ enabled: true })
+      for (const id of ['tool', 'script']) {
+        expect(persisted.nodes.find((node) => node.id === id)?.data.config).toEqual(graph.nodes.find((node) => node.id === id)?.data.config)
+      }
+      expect(experiment.design_spec?.factors).toEqual([])
+    })
+  })
+
   it.each([null, 1])('selects a draft row for Publish & Test Run with published version %s', async publishedRevision => {
     const dataset = defaultDatasetNodeData()
     dataset.config.dataset_id = '11111111-1111-4111-8111-111111111111'

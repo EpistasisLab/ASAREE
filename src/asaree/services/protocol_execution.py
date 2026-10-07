@@ -608,13 +608,8 @@ def derive_stage_plan(graph: dict[str, Any]) -> Any:
         node = nodes[nid]
         if node.get("type") not in ("agent", "sub_agent"):
             continue
-        for edge in _edges_with_handle(graph, nid, "tool", direction="incoming"):
-            source = nodes.get(str(edge.get("source")))
-            if source is None or source.get("type") not in _MCP_TOOL_NODE_TYPES:
-                continue
+        for source in _resolve_tool_nodes(graph, nid):
             config = (source.get("data") or {}).get("config") or {}
-            if not config.get("enabled", True):
-                continue
             stage_id = STAGE_WRITING_SERVERS.get(str(config.get("server_name") or ""))
             if stage_id is not None and stage_id not in stage_ids:
                 stage_ids.append(stage_id)
@@ -2468,6 +2463,32 @@ def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, An
     return {"execution_pattern": slug, "pattern_params": {slug: (source.get("data") or {}).get("config") or {}}}
 
 
+def _resolve_tool_nodes(graph: dict[str, Any], node_id: str) -> list[dict[str, Any]]:
+    """Tool sources selected for this agent, in connector wiring order.
+
+    A bound selection overrides source enabled flags for this agent only.
+    Stage planning and tool access must use the same treatment.
+    """
+    nodes, _downstream, _upstream = _adjacency(graph)
+    agent_data = (nodes.get(node_id) or {}).get("data") or {}
+    selected = (
+        agent_data.get("tool_selection")
+        if (agent_data.get("factor_bindings") or {}).get("tool_selection") else None
+    )
+    sources: list[dict[str, Any]] = []
+    for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
+        source = nodes.get(edge.get("source"))
+        if source is None or source.get("type") not in _MCP_TOOL_NODE_TYPES:
+            continue
+        config = (source.get("data") or {}).get("config") or {}
+        if selected is not None and source["id"] not in selected:
+            continue
+        if selected is None and not config.get("enabled", True):
+            continue
+        sources.append(source)
+    return sources
+
+
 def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """``{"server_names": [...], "tool_names": [...]}`` -- built from every
     ``mcp_tool`` node wired into this agent's Tool connector -- replaces the
@@ -2502,29 +2523,38 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     server's tools are offered, never which server). An empty allow-list is a
     meaningful level: the server still connects (its ``server_name`` is still
     reported) but contributes no tools to that cell."""
-    nodes, _downstream, _upstream = _adjacency(graph)
-    agent_data = (nodes.get(node_id) or {}).get("data") or {}
-    selected = (
-        agent_data.get("tool_selection")
-        if (agent_data.get("factor_bindings") or {}).get("tool_selection") else None
-    )
     server_names: list[str] = []
     tool_names: list[str] = []
-    for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
-        source = nodes.get(edge["source"])
-        if source is None or source.get("type") not in _MCP_TOOL_NODE_TYPES:
-            continue
+    for source in _resolve_tool_nodes(graph, node_id):
         tool_node_config = (source.get("data") or {}).get("config") or {}
-        if selected is not None and source["id"] not in selected:
-            continue
-        if selected is None and not tool_node_config.get("enabled", True):
-            continue
         server_name = tool_node_config.get("server_name")
         node_tool_names = tool_node_config.get("tool_names") or []
         if server_name:
             server_names.append(server_name)
             tool_names.extend(f"{server_name}.{name}" for name in node_tool_names)
     return {"server_names": server_names, "tool_names": tool_names}
+
+
+def _resolve_knowledge_nodes(graph: dict[str, Any], node_id: str) -> list[dict[str, Any]]:
+    """Knowledge sources selected for this agent's tools and prompt catalog."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    agent_data = (nodes.get(node_id) or {}).get("data") or {}
+    selection = (
+        agent_data.get("knowledge_selection")
+        if (agent_data.get("factor_bindings") or {}).get("knowledge_selection") else None
+    )
+    sources: list[dict[str, Any]] = []
+    for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
+            continue
+        config = (source.get("data") or {}).get("config") or {}
+        if selection is not None and knowledge_id(source) not in selection:
+            continue
+        if selection is None and not config.get("enabled", True):
+            continue
+        sources.append(source)
+    return sources
 
 
 def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
@@ -2552,24 +2582,11 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
 
     De-duplicated by server: two nodes pointing at the same bundle are one
     server, and listing it twice would just double every tool name."""
-    nodes, _downstream, _upstream = _adjacency(graph)
-    agent_data = (nodes.get(node_id) or {}).get("data") or {}
-    selection = (
-        agent_data.get("knowledge_selection")
-        if (agent_data.get("factor_bindings") or {}).get("knowledge_selection") else None
-    )
     server_names: list[str] = []
     tool_names: list[str] = []
     tool_descriptions: dict[str, str] = {}
-    for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
-        source = nodes.get(edge["source"])
-        if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
-            continue
+    for source in _resolve_knowledge_nodes(graph, node_id):
         bundle_config = (source.get("data") or {}).get("config") or {}
-        if selection is not None and knowledge_id(source) not in selection:
-            continue
-        if selection is None and not bundle_config.get("enabled", True):
-            continue
         server_name = bundle_config.get("server_name")
         if not server_name or server_name in server_names:
             continue
@@ -3443,15 +3460,9 @@ def _resource_catalog(
             lines.append(f"- {name}: {detail}" if detail else f"- {name}")
         sections.append("Available datasets:\n" + "\n".join(lines))
 
-    nodes, _downstream, _upstream = _adjacency(graph)
     knowledge_lines: list[str] = []
-    for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
-        source = nodes.get(edge["source"])
-        if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
-            continue
+    for source in _resolve_knowledge_nodes(graph, node_id):
         config = (source.get("data") or {}).get("config") or {}
-        if not config.get("enabled", True):
-            continue
         label = str(
             config.get("document_title")
             or config.get("bundle_label")

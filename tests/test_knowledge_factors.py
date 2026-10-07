@@ -10,7 +10,7 @@ import pytest
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.knowledge_factors import test_knowledge_factor_values as preview_values
 from asaree.services.knowledge_factors import validate_knowledge_factors
-from asaree.services.protocol_execution import _resolve_knowledge_config, apply_factor_bindings
+from asaree.services.protocol_execution import _build_user_input, _resolve_knowledge_config, apply_factor_bindings
 
 
 def knowledge_graph(mode="knowledge_selection"):
@@ -64,6 +64,28 @@ def test_treatments_override_disabled_sources_and_preserve_graph(mode):
         assert resolved["tool_names"] == [
             f"server-{index}.read_concept" for index, value in enumerate(ids) if value in selected
         ]
+    assert graph == original
+
+
+@pytest.mark.parametrize("mode", ["knowledge_selection", "knowledge_toggle"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_prompt_only_describes_selected_knowledge_sources(mode, enabled):
+    graph, _, ids = knowledge_graph(mode)
+    for index, source in enumerate(graph["nodes"][1:]):
+        source["data"]["config"].update(
+            enabled=enabled,
+            document_title=f"Knowledge source {index}",
+            document_description=f"Description {index}",
+            document_tags=[f"tag-{index}"],
+        )
+    original = copy.deepcopy(graph)
+    choices = [[ids[0]], [ids[1]]] if mode == "knowledge_selection" else [ids, []]
+    for selected in choices:
+        patched = apply_factor_bindings(graph, {"Knowledge": selected})
+        prompt = _build_user_input(patched["nodes"][0], patched, {})
+        for index, source_id in enumerate(ids):
+            for metadata in [f"Knowledge source {index}", f"Description {index}", f"tag-{index}"]:
+                assert (metadata in prompt) is (source_id in selected)
     assert graph == original
 
 

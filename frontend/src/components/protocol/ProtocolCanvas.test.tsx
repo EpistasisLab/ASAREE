@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { datasetsApi, experimentsApi, protocolsApi, skillsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
+import type { Experiment } from '@/types/experiments'
 import {
   defaultAgentNodeData,
   defaultAnthropicModelNodeData,
@@ -405,6 +406,45 @@ describe('ProtocolCanvas connector adds', () => {
     expect(screen.queryByText('Custom metric evaluator')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Metric: Clarity' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Create (another )?metric/ })).not.toBeInTheDocument()
+  })
+
+  it.each([false, true])('removes a Skill factor declaration only after its last binding is removed (shared: %s)', async (shared) => {
+    const factorName = 'Skill enabled'
+    const experiment: Experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [{ name: factorName, levels: [true, false], level_type: 'boolean' }], metrics: [] },
+      measurement_plan: null, dataset_ids: [], dataset_id: null, locked_at: null,
+      locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    vi.spyOn(skillsApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: (shared ? ['a', 'b'] : ['a']).map((id) => ({
+        id, type: 'skill', position: { x: id === 'a' ? 100 : 300, y: 100 },
+        data: {
+          label: `Skill ${id}`, config: { skill_id: id, skill_name: `Skill ${id}`, enabled: true },
+          factor_bindings: { 'config.enabled': factorName },
+        },
+      })),
+      edges: [],
+    }
+    const { client } = renderCanvas(graph, experiment.id)
+    fireEvent.doubleClick(await screen.findByText('Skill a'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove factor binding' }))
+
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'a')?.data.factor_bindings).toEqual({})
+    })
+    if (shared) {
+      expect(save).not.toHaveBeenCalled()
+    } else {
+      await waitFor(() => expect(save).toHaveBeenCalledWith(experiment.id, {
+        design_spec: { factors: [], metrics: [] },
+      }))
+    }
   })
 
   it('opens a bound factor from the Script inspector', async () => {

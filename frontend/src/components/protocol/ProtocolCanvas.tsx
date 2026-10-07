@@ -2013,9 +2013,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       .map(([, name]) => name)
     const nextNodes = nodes.map((node) => (node.id === nodeId ? { ...node, data } : node))
     setNodes(nextNodes)
-    // Keep individual skill declarations visible for explicit removal or
-    // rebinding when the user switches to connector ownership.
-    if (previous?.type !== 'skill') void removeUnboundFactors(nextNodes, removedNames)
+    void removeUnboundFactors(nextNodes, removedNames)
   }
 
   // Client-side guardrail mirroring the backend's own connector validation

@@ -34,6 +34,7 @@ import { PromptReferenceField } from './PromptReferenceField'
 import { PythonCodeEditor } from './PythonCodeEditor'
 import { useDialogAutosave } from './useDialogAutosave'
 import type { DesignFactor } from '@/types/experiments'
+import { DatasetFactorEditor } from './DatasetFactorEditor'
 import { SkillFactorEditor } from './SkillFactorEditor'
 
 const EFFORT_LEVELS_FALLBACK = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -500,6 +501,7 @@ function ToolNamesLevelRow({
 // remove button on DesignTab's own summary row), so this dialog only ever
 // edits, never deletes.
 export function FactorEditorDialog(props: Parameters<typeof StandardFactorEditorDialog>[0]) {
+  if (props.factor.level_type === 'dataset_selection' || props.factor.level_type === 'dataset_toggle') return <DatasetFactorEditor {...props} />
   if ((props.factor.level_type === 'skill_selection' || props.factor.level_type === 'skill_toggle')) return <SkillFactorEditor {...props} />
   return <StandardFactorEditorDialog {...props} />
 }

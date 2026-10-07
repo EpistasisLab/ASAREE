@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from asaree.services.dataset_factors import validate_dataset_factor_structure
 from asaree.services.skill_factors import validate_skill_factor_structure
 
 _MISSING = object()
@@ -32,6 +33,7 @@ def validate_factor_bindings(
     design_spec: dict[str, Any] | None, graph: dict[str, Any], *, complete_skills: bool = True
 ) -> None:
     validate_skill_factor_structure(design_spec, graph, complete=complete_skills)
+    validate_dataset_factor_structure(design_spec, graph, complete=complete_skills)
     missing = unbound_factor_names(design_spec, graph)
     if missing:
         labels = ", ".join(repr(name) for name in missing)
@@ -67,7 +69,7 @@ def validate_factor_bindings(
                 "level_type" not in factor and len(levels) == 2 and all(isinstance(level, bool) for level in levels)
             )
             if (
-                level_type not in {"boolean", "skill_selection", "skill_toggle"}
+                level_type not in {"boolean", "skill_selection", "skill_toggle", "dataset_selection", "dataset_toggle"}
                 and not legacy_boolean
                 and (not levels or published_value != levels[0])
             ):

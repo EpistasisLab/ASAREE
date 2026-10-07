@@ -55,6 +55,16 @@ def test_cell_selection_overrides_individual_switches_without_mutating_graph():
     assert graph == original
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_individual_on_off_excludes_or_includes_only_the_bound_skill(enabled):
+    graph, _, ids = skill_graph()
+    graph["nodes"][0]["data"] = {}
+    graph["nodes"][1]["data"]["factor_bindings"] = {"config.enabled": "Enabled"}
+    graph["nodes"][2]["data"]["config"]["enabled"] = True
+    patched = apply_factor_bindings(graph, {"Enabled": enabled})
+    assert _resolve_skill_config(patched, "agent") == {"skill_ids": ids if enabled else [ids[1]]}
+
+
 @pytest.mark.parametrize("none_first", [False, True])
 def test_all_or_none_runs_override_disabled_skills_and_preserve_graph(none_first):
     graph, spec, ids = skill_graph()

@@ -17,11 +17,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from sqlalchemy import cast, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONPATH
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.models.dataset import RegisteredDataset
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.dataset_factors import test_dataset_factor_values
 from asaree.services.dataset_row_csv import DatasetRowCsvError, project_row, read_row_source
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 from asaree.services.experiment_measurements import (
@@ -277,6 +279,7 @@ class TestRunRequest(BaseModel):
 
     row_index: StrictInt | None = Field(default=None, ge=0)
     skill_selections: dict[str, str] | None = None
+    dataset_selections: dict[str, str] | None = None
 
 
 class NodePlayRequest(BaseModel):
@@ -284,13 +287,17 @@ class NodePlayRequest(BaseModel):
 
     row_index: StrictInt | None = Field(default=None, ge=0)
     skill_selections: dict[str, str] | None = None
+    dataset_selections: dict[str, str] | None = None
 
 
-async def _node_test_skill_values(
-    graph: dict[str, Any], body: NodePlayRequest | None, owner_id: uuid.UUID, node_id: str
+async def _node_test_factor_values(
+    graph: dict[str, Any], body: NodePlayRequest | None, owner_id: uuid.UUID, node_id: str, db: AsyncSession
 ) -> dict[str, Any]:
     try:
-        return await test_skill_factor_values(graph, body.skill_selections if body else None, owner_id, node_id)
+        return {
+            **await test_skill_factor_values(graph, body.skill_selections if body else None, owner_id, node_id),
+            **await test_dataset_factor_values(graph, body.dataset_selections if body else None, owner_id, db, node_id),
+        }
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -678,9 +685,12 @@ async def create_test_run_endpoint(
             owner_id=user.id,
             protocol_revision_id=revision.id,
             dataset_row=dataset_row,
-            factor_values=await test_skill_factor_values(
-                revision.graph, body.skill_selections if body else None, user.id
-            ),
+            factor_values={
+                **await test_skill_factor_values(revision.graph, body.skill_selections if body else None, user.id),
+                **await test_dataset_factor_values(
+                    revision.graph, body.dataset_selections if body else None, user.id, db
+                ),
+            },
         )
     except (ProtocolValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -770,7 +780,7 @@ async def run_single_node_endpoint(
         target_node_id=node_id,
         protocol_revision_id=revision.id,
         dataset_row=dataset_row,
-        factor_values=await _node_test_skill_values(revision.graph, body, user.id, node_id),
+        factor_values=await _node_test_factor_values(revision.graph, body, user.id, node_id, db),
     )
     await db.commit()
     await enqueue_protocol_run(run.id)

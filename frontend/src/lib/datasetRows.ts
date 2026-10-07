@@ -1,7 +1,7 @@
 import type { ProtocolGraph, ProtocolNode } from '@/types/protocols'
 
 const handles = new Set(['dataset', 'resource', 'tool'])
-export const datasetRowFactorBindingError = 'Per row is unavailable because this Dataset has configuration bound to an experimental factor. Per-row runs require the same dataset across all cells. Use Whole dataset here, or remove the factor bindings from this Dataset’s configuration first.'
+export const datasetRowFactorBindingError = 'Per row is unavailable because this Dataset or its Agent connector is bound to an experimental factor. Per-row runs require the same dataset across all cells. Use Whole dataset here, or remove the Dataset factor bindings first.'
 
 export function datasetConfigIsFactorBound(node?: ProtocolNode) {
   return Object.keys(node?.data.factor_bindings ?? {}).some(path => path === 'config' || path.startsWith('config.'))
@@ -38,7 +38,7 @@ export function datasetRowTopologyError(graph: ProtocolGraph): string | null {
     const key = JSON.stringify(binding.input.columns)
     if (agents.has(binding.edge.target) && agents.get(binding.edge.target) !== key) return 'Duplicate Dataset connections must select identical columns.'
     agents.set(binding.edge.target, key)
-    if (datasetConfigIsFactorBound(binding.source)) return datasetRowFactorBindingError
+    if (datasetConfigIsFactorBound(binding.source) || graph.nodes.find((node) => node.id === binding.edge.target)?.data.factor_bindings?.dataset_selection) return datasetRowFactorBindingError
   }
   return null
 }

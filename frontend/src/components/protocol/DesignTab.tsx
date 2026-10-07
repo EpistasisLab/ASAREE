@@ -1,3 +1,5 @@
+import { datasetsApi } from '@/api/client'
+import { datasetFactorIssues } from '@/lib/datasetFactors'
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
@@ -494,6 +496,8 @@ export function DesignTab({
     : undefined
   const unboundFactors = unboundFactorNames(experiment.design_spec, draftGraph)
   const skillLibrary = useQuery({ queryKey: ['skills'], queryFn: () => skillsApi.list(), enabled: factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) })
+  const datasetLibrary = useQuery({ queryKey: ['datasets'], queryFn: () => datasetsApi.list(), enabled: factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') })
+  const datasetIssues = datasetFactorIssues(draftGraph, factors, datasetLibrary.data ? new Set(datasetLibrary.data.map((dataset) => dataset.id)) : undefined)
   const skillIssues = skillFactorIssues(draftGraph, factors, skillLibrary.data ? new Set(skillLibrary.data.map((skill) => skill.id)) : undefined)
   const impact = impactQuery.data
 
@@ -863,14 +867,14 @@ export function DesignTab({
             Unbound factor{unboundFactors.length === 1 ? '' : 's'}: {unboundFactors.join(', ')}. Rebind on the canvas or remove from this design.
           </p>
         )}
-        {skillIssues.map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
+        {[...skillIssues, ...datasetIssues].map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
         <Button
           size="sm"
           disabled={
             generateMutation.isPending ||
             isAutosavingMetadata ||
             !canGenerate ||
-            unboundFactors.length > 0 || skillIssues.length > 0 || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
+            unboundFactors.length > 0 || skillIssues.length > 0 || datasetIssues.length > 0 || (factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') && !datasetLibrary.isSuccess) || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
           }
           onClick={() => generateMutation.mutate()}
         >

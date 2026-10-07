@@ -321,7 +321,7 @@ export function AgentNode({
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.dataset} side="top">Dataset</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="dataset" left={CONNECTOR_LEFT.dataset} side="top" alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="dataset" left={CONNECTOR_LEFT.dataset} side="top" alwaysVisible factorName={data.factor_bindings?.dataset_selection} factorLevelCount={data.datasetFactorLevelCount as number | undefined} factorOnOff={data.dataset_factor_mode === 'dataset_toggle'} />
       {/* Knowledge -- registered OKF bundles, each a directory of Markdown
           concepts on the SERVER's disk that the agent reads AND writes as it
           works (see OkfBundleNodeData). Its own slot rather than sharing

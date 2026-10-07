@@ -58,6 +58,7 @@ it('shows the split action immediately after registration while the list refresh
   fireEvent.click(screen.getByRole('button', { name: 'Register dataset' }))
 
   expect(await screen.findByRole('button', { name: 'Split dataset' })).toBeTruthy()
+  expect(screen.getByText(/has moved to the node toolbar/)).toHaveTextContent('Hover over the Dataset node')
   expect(client.getQueryData<Dataset[]>(['datasets'])?.map((d) => d.id)).toEqual(['existing', dataset.id])
   client.clear()
 })

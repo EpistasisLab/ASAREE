@@ -63,6 +63,7 @@ from asaree.models.protocol_run import ProtocolRun
 from asaree.services import prompt_references
 from asaree.services.agent_cards import AgentCard, build_agent_card
 from asaree.services.coordination import coordination_strategy_slug
+from asaree.services.dataset_factors import validate_dataset_factors
 from asaree.services.dataset_row_csv import DatasetRowCsvError, project_row, read_row_source
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 from asaree.services.dataset_row_planning import enumerate_row_candidates
@@ -1973,6 +1974,11 @@ def _resolve_dataset_configs(
     nodes, _downstream, _upstream = _adjacency(graph)
     configs: list[dict[str, Any]] = []
     seen: set[str] = set()
+    agent_data = (nodes.get(node_id) or {}).get("data") or {}
+    selection = (
+        agent_data.get("dataset_selection")
+        if (agent_data.get("factor_bindings") or {}).get("dataset_selection") else None
+    )
     # Edges first, handles second: an agent's Dataset nodes should come out in
     # the order they were wired, not grouped by which handle spelling they
     # happen to be saved under.
@@ -1983,7 +1989,9 @@ def _resolve_dataset_configs(
         if source is None or source.get("type") not in _DATASET_NODE_TYPES:
             continue
         config = (source.get("data") or {}).get("config") or {}
-        if not config.get("enabled", True) or not config.get("dataset_name"):
+        if (selection is None and not config.get("enabled", True)) or not config.get("dataset_name"):
+            continue
+        if selection is not None and config.get("dataset_id") not in selection:
             continue
         key = str(config.get("dataset_id") or config["dataset_name"])
         if key in seen:
@@ -4741,6 +4749,7 @@ async def plan_cell_runs(
     try:
         validate_factor_bindings(design_spec, graph)
         await validate_skill_factors(design_spec, graph, owner_id)
+        await validate_dataset_factors(design_spec, graph, owner_id, db)
     except ValueError as exc:
         raise ProtocolValidationError(str(exc)) from exc
     measurement_report = await validate_experiment_measurement_plan(
@@ -5129,6 +5138,7 @@ async def plan_single_replicate_run(
     try:
         validate_factor_bindings(design_spec, graph)
         await validate_skill_factors(design_spec, graph, owner_id)
+        await validate_dataset_factors(design_spec, graph, owner_id, db)
     except ValueError as exc:
         raise ProtocolValidationError(str(exc)) from exc
     measurement_report = await validate_experiment_measurement_plan(

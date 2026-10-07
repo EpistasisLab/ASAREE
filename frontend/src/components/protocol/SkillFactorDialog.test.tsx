@@ -11,12 +11,15 @@ const graph = {
   edges: [{ source: 'skill', target: 'agent', targetHandle: 'skill' }],
 } as unknown as ProtocolGraph
 
-it.each(['Skill levels', 'All agent skills on/off'])('explains why %s conflicts with individual bindings without offering replacement', (mode) => {
+it.each(['Skill levels', 'All skills on/off'])('explains why %s conflicts with individual bindings without offering replacement', (mode) => {
   const save = vi.fn().mockResolvedValue(undefined)
   render(<SkillFactorDialog skillNodeId="skill" graph={graph} factors={[{ name: 'Skill enabled', level_type: 'boolean', levels: [false, true] }]} onClose={vi.fn()} onSave={save} onRemove={vi.fn()} />)
   const option = screen.getByRole('button', { name: mode })
-  expect(option).toHaveClass('opacity-50')
+  expect(option).toHaveClass('bg-secondary', 'text-secondary-foreground', 'border-dashed')
+  expect(option).not.toHaveClass('opacity-50', 'text-muted-foreground')
   fireEvent.click(option)
+  expect(option).toHaveClass('bg-primary', 'text-primary-foreground')
+  expect(option).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByRole('button', { name: 'Save factor' })).toBeDisabled()
   expect(screen.getByRole('status')).toHaveTextContent('Skill enabled')
   expect(screen.getByRole('status')).toHaveTextContent('remove those bindings in each Skill’s factor dialog first')
@@ -74,6 +77,6 @@ it('opens the existing group factor when a shared skill has multiple connected a
   } as ProtocolGraph
   render(<SkillFactorDialog skillNodeId="skill" graph={sharedGraph} factors={[{ name: 'Group', level_type: 'skill_toggle', levels: [['a'], []], level_labels: ['All enabled', 'All disabled'] }]} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />)
   expect(screen.getByRole('combobox')).toHaveTextContent('Second agent')
-  expect(screen.getByRole('button', { name: 'All agent skills on/off' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('button', { name: 'All skills on/off' })).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByLabelText('Factor name')).toHaveValue('Group')
 })

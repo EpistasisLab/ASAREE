@@ -6,7 +6,7 @@ export const SKILL_FACTOR_PATH = 'skill_selection'
 export const skillFactorModes = {
   boolean: 'This skill on/off',
   skill_selection: 'Skill levels',
-  skill_toggle: 'All agent skills on/off',
+  skill_toggle: 'All skills on/off',
 }
 export type SkillFactorMode = keyof typeof skillFactorModes
 

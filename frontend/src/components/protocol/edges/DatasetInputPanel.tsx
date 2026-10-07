@@ -24,7 +24,7 @@ export function DatasetInputPanel({ edgeId, source, disabled = false }: { edgeId
   const hasChanges = inputKey !== appliedKey
   const sourceNode = nodes.find(node => node.id === source)
   const id = (sourceNode?.data.config as { dataset_id?: string })?.dataset_id
-  const factorBound = datasetConfigIsFactorBound(sourceNode)
+  const factorBound = datasetConfigIsFactorBound(sourceNode) || !!nodes.find(node => node.id === edge?.target)?.data.factor_bindings?.dataset_selection
   const otherRowDriver = datasetRowBindings({ nodes, edges }).find(binding =>
     binding.edge.id !== edgeId && binding.input.mode === 'per_row' &&
     binding.config?.dataset_id?.toLowerCase() !== id?.toLowerCase(),

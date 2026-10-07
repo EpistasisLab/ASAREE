@@ -63,6 +63,7 @@ interface ProtocolCanvasActions {
   // edge into the right handle, and opens its Inspector immediately.
   requestConnectorAdd: (request: ConnectorAddRequest) => void
   // Opens the consolidated factor dialog from a Skill node's hover toolbar.
+  requestDatasetFactor?: (nodeId: string) => void
   requestSkillFactor?: (nodeId: string) => void
   // Same idea for the main pipeline handle -- always creates and wires
   // another Agent node (see MainEdgeAddRequest's own comment).

@@ -1,3 +1,4 @@
+import { reconcileDatasetFactor, DATASET_FACTOR_PATH } from './datasetFactors'
 import type { DesignFactor, DesignSpec } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 import { reconcileSkillFactor, SKILL_FACTOR_PATH } from './skillFactors'
@@ -60,7 +61,7 @@ function withPathValue(root: Record<string, unknown>, dottedPath: string, nextVa
  * as an extra level would turn each pause mid-edit into a new treatment.
  */
 export function factorWithCanvasBaseline(factor: DesignFactor, currentValue: unknown): DesignFactor {
-  if ((factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) return factor
+  if ((factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle' || factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle')) return factor
   if (isBooleanFactor(factor) || valuesEqual(factor.levels[0], currentValue)) return factor
 
   const currentIndex = factor.levels.findIndex((level) => valuesEqual(level, currentValue))
@@ -97,6 +98,10 @@ export function reconcileFactorBaselines(designSpec: DesignSpec | null | undefin
     if ((factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle') && graph) {
       const owner = graph.nodes.find((node) => node.data.factor_bindings?.[SKILL_FACTOR_PATH] === factor.name)
       return owner ? reconcileSkillFactor(factor, graph, owner.id) : factor
+    }
+    if ((factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') && graph) {
+      const owner = graph.nodes.find((node) => node.data.factor_bindings?.[DATASET_FACTOR_PATH] === factor.name)
+      return owner ? reconcileDatasetFactor(factor, graph, owner.id) : factor
     }
     const values = valuesByFactor.get(factor.name.trim()) ?? []
     if (values.length === 0 || values.some((value) => !valuesEqual(value, values[0]))) return factor
@@ -149,7 +154,7 @@ export function factorBindingDiscrepancies(
         ? 'factor is no longer declared'
         : value === MISSING
           ? 'field no longer exists on the canvas'
-          : (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle') || isBooleanFactor(factor) || valuesEqual(value, factor.levels[0])
+          : (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle' || factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') || isBooleanFactor(factor) || valuesEqual(value, factor.levels[0])
             ? null
             : 'published value does not match the first (canvas baseline) level'
       if (reason) discrepancies.push({ nodeId: node.id, nodeLabel, fieldPath, factorName, reason })

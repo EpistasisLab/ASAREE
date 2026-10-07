@@ -166,7 +166,7 @@ describe('ProtocolCanvas connector adds', () => {
     expect(makeFactor).not.toBeNull()
     fireEvent.click(makeFactor!)
     await screen.findByRole('dialog')
-    fireEvent.click(screen.getByRole('button', { name: mode === 'skill_toggle' ? 'All agent skills on/off' : 'Skill levels' }))
+    fireEvent.click(screen.getByRole('button', { name: mode === 'skill_toggle' ? 'All skills on/off' : 'Skill levels' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
     await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Skills', level_type: mode, levels: mode === 'skill_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'skill_toggle' ? ['All enabled', 'All disabled'] : ['Skill a', 'Skill b'] }] }) })))
     await waitFor(() => {
@@ -174,6 +174,39 @@ describe('ProtocolCanvas connector adds', () => {
       expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ skill_selection: 'Writer:Skills' })
       expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.skill_factor_mode).toBe(mode)
       expect(persisted?.nodes.filter((node) => node.type === 'skill')).toHaveLength(2)
+    })
+  })
+
+  it.each(['dataset_selection', 'dataset_toggle'] as const)('creates a %s dataset factor from the node hover menu and preserves connected nodes', async (mode) => {
+    const experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    vi.spyOn(datasetsApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        ...['a', 'b'].map((id) => ({ id, type: 'dataset', position: { x: 100, y: 0 }, data: { label: `Dataset ${id}`, config: { dataset_id: id, dataset_name: `Dataset ${id}` } } })),
+      ],
+      edges: ['a', 'b'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'dataset' })),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
+    expect(makeFactor).not.toBeNull()
+    fireEvent.click(makeFactor!)
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: mode === 'dataset_toggle' ? 'All datasets on/off' : 'Dataset levels' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Datasets', level_type: mode, levels: mode === 'dataset_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'dataset_toggle' ? ['All enabled', 'All disabled'] : ['Dataset a', 'Dataset b'] }] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ dataset_selection: 'Writer:Datasets' })
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.dataset_factor_mode).toBe(mode)
+      expect(persisted?.nodes.filter((node) => node.type === 'dataset')).toHaveLength(2)
     })
   })
 

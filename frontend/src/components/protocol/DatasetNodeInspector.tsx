@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { nodeAccent } from '@/lib/nodeAccent'
 import { useQuery } from '@tanstack/react-query'
-import { Database } from 'lucide-react'
+import { Database, Power, Split, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -9,7 +9,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { datasetsApi } from '@/api/client'
 import { EditableNodeTitle } from './EditableNodeTitle'
-import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { SplitDatasetDialog } from './SplitDatasetDialog'
 import type { DatasetNodeData, ProtocolNode } from '@/types/protocols'
@@ -52,25 +51,7 @@ function formatTestSize(fraction: number): string {
   return `${+(fraction * 100).toFixed(2)}%`
 }
 
-// Same floating-dialog shell as McpToolNodeInspector, but with NO "which
-// dataset" picker: the dataset IS the node, chosen when it was added from the
-// canvas's Datasets browser (DatasetBrowserPanel/nodeDataForDataset), the same
-// model as Skill and the server-dedicated MCP node types. So this is a
-// read-out of the bound dataset -- description, target column, hashes, split
-// state, data dictionary -- plus the two things that ARE this node's to
-// change: its Enabled switch (factor-bindable) and its split.
-//
-// Which is also why the experiment's own attached-dataset list is synced from
-// the canvas's Dataset nodes rather than here (ProtocolCanvas's
-// syncExperimentDatasets effect): with no picker, the binding can no longer
-// change from inside this dialog.
-//
-// The one exception to "no picker here" is the title row's "Make factor"
-// button: a dataset_config factor's levels are whole Dataset configs, so
-// picking among registered datasets happens in FactorEditorDialog's own
-// DatasetConfigLevelRow. That's the supported way to run one experiment
-// across several datasets -- the Dataset connector itself is capped at one
-// node per agent, since a cell's workspace holds exactly one dataset.
+// Dataset identity is pinned by the browser; factor controls live in the hover toolbar.
 //
 // A dataset_id in an imported protocol JSON is per-account/environment (same
 // reasoning as an MCP Tool node's server_id), so an imported node can name a
@@ -79,18 +60,18 @@ function formatTestSize(fraction: number): string {
 // dataset from the browser -- there's nothing here to repoint.
 export function DatasetNodeInspector({
   node,
-  experimentId,
-  factorNodeLabel,
+  connectorFactorName,
   onChange,
   onDelete,
   onClose,
 }: {
   node: (ProtocolNode & { data: DatasetNodeData }) | null
-  experimentId: string | null
+  experimentId?: string | null
   // The agent-traced display label (see bindableFields.ts's
   // agentTracedLabel) -- distinct from data.label, which is this node's own
   // plain label shown in the header title.
-  factorNodeLabel: string
+  factorNodeLabel?: string
+  connectorFactorName?: string
   onChange: (nodeId: string, data: DatasetNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
@@ -107,10 +88,6 @@ export function DatasetNodeInspector({
 
   function patchConfig(patch: Partial<DatasetNodeData['config']>) {
     onChange(node!.id, { ...data, config: { ...config, ...patch } })
-  }
-
-  function bindFactor(fieldPath: string, factorName: string) {
-    onChange(node!.id, { ...data, factor_bindings: { ...bindings, [fieldPath]: factorName } })
   }
 
   function unbindFactor(fieldPath: string) {
@@ -130,55 +107,28 @@ export function DatasetNodeInspector({
         <>
           <Database className="size-5" style={{ color: ACCENT }} />
           <EditableNodeTitle label={data.label} placeholder="Dataset" onCommit={(label) => onChange(node.id, { ...data, label })} />
-          {/* In the title row rather than beside a field, because there is no
-              "which dataset" field here to sit beside -- the dataset IS the
-              node. Same position and visual identity as the Agent inspector's
-              own Active factor control, but this one
-              binds one specific field (`config`, the whole node) directly
-              instead of opening a per-node field picker: a Dataset node has
-              exactly one whole-node factor worth making, so a picker listing
-              one entry would be a step with no choice in it. */}
-          <FactorBindableField
-            experimentId={experimentId}
-            fieldPath="config"
-            defaultLabel="Dataset"
-            nodeLabel={factorNodeLabel}
-            levelType="dataset_config"
-            currentValue={config}
-            boundFactorName={bindings.config}
-            onBind={(name) => bindFactor('config', name)}
-            onUnbind={() => unbindFactor('config')}
-          >
-            {(trigger) => trigger}
-          </FactorBindableField>
         </>
       }
       onDelete={() => onDelete(node.id)}
       onClose={onClose}
     >
-      <FactorBindableField
-        experimentId={experimentId}
-        fieldPath="config.enabled"
-        defaultLabel="Enabled"
-        nodeLabel={factorNodeLabel}
-        levelType="boolean"
-        boundFactorName={bindings['config.enabled']}
-        onBind={(name) => bindFactor('config.enabled', name)}
-        onUnbind={() => unbindFactor('config.enabled')}
-      >
-        {(trigger) => (
-          <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
-            <div>
-              <Label htmlFor="dataset-enabled" className="flex items-center gap-1.5">
-                Enabled
-                {trigger}
-              </Label>
-              <p className="text-xs text-muted-foreground">Off: no dataset context is given to the wired agent.</p>
-            </div>
-            <Switch id="dataset-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
-          </div>
-        )}
-      </FactorBindableField>
+      <div className="rounded-lg border px-3 py-2">
+        <p className="text-xs text-muted-foreground">
+          <span className="font-medium text-chart-2">Make factor</span> has moved to the node toolbar. Hover over the Dataset node and click the <Split className="inline size-3 align-text-bottom text-chart-2" aria-hidden="true" /> icon.
+          {' '}<span className="ml-4 inline-flex flex-col gap-1 align-middle">
+            <span className="text-[10px]">Toolbar preview</span>
+            <span role="img" aria-label="Node toolbar preview: activate or deactivate, delete, and Make factor (the branching icon on the right)" className="inline-flex items-center gap-3">
+              <Power className="size-3" />
+              <Trash2 className="size-3" />
+              <Split className="size-3 text-chart-2" />
+            </span>
+          </span>
+        </p>
+      </div>
+      {connectorFactorName ? <div className="space-y-2 rounded-lg border px-3 py-2"><div className="flex items-center justify-between"><Label>Enabled</Label><Switch checked disabled /></div><p className="text-xs text-muted-foreground">Availability is controlled by connector factor {connectorFactorName}. Remove it to restore individual controls.</p>{Object.entries(bindings).map(([path, name]) => <div key={path} className="space-y-1"><p className="text-xs text-destructive">Individual factor {name} conflicts with this connector.</p><Button variant="outline" size="sm" onClick={() => unbindFactor(path)}>Remove individual binding</Button><p className="text-xs text-muted-foreground">Its declaration remains in Design until you remove or rebind it.</p></div>)}</div> : <div className="flex w-full items-center justify-between rounded-lg border px-3 py-2">
+        <div><Label htmlFor="dataset-enabled">Enabled</Label><p className="text-xs text-muted-foreground">Off: the wired agent never sees this dataset at all.</p>{bindings['config.enabled'] && <p className="text-xs text-chart-2">Factor: {bindings['config.enabled']}</p>}</div>
+        <Switch id="dataset-enabled" checked={config.enabled ?? true} onCheckedChange={(checked) => patchConfig({ enabled: checked })} />
+      </div>}
 
       <div className="space-y-1.5">
         <Label>Dataset ID</Label>

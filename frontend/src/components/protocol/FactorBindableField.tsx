@@ -70,6 +70,7 @@ export function FactorBindableField({
   levelOptions,
   toolServerId,
   boundFactorName,
+  creationInToolbar,
   onBind,
   onUnbind,
   children,
@@ -105,6 +106,8 @@ export function FactorBindableField({
   // server's real tools instead of asking for hand-typed names.
   toolServerId?: string | null
   boundFactorName?: string
+  // Keep bound badges in the inspector when creation lives in the node dialog.
+  creationInToolbar?: boolean
   onBind: (factorName: string) => void
   onUnbind: () => void
   // Receives the trigger/badge element to place -- e.g.
@@ -168,6 +171,8 @@ export function FactorBindableField({
       </Badge>,
     )
   }
+
+  if (creationInToolbar) return children(null)
 
   if (!experimentId) {
     return children(

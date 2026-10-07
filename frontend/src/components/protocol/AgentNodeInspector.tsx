@@ -204,6 +204,7 @@ export function AgentNodeInspector({
               experimentId={experimentId}
               nodeId={node.id}
               fieldPath="active"
+              creationInToolbar
               defaultLabel="Active"
               nodeLabel={data.label || (isSubAgent ? 'Sub-Agent' : 'Agent')}
               levelType="boolean"
@@ -272,10 +273,10 @@ export function AgentNodeInspector({
             </TabsList>
 
             <TabsContent value="parameters" className="space-y-4 pt-2">
-              {isSubAgent && <>
+              <>
                 <div className="rounded-lg border px-3 py-2">
                   <p className="text-xs text-muted-foreground">
-                    <span className="font-medium text-chart-2">Make factor</span> has moved to the node toolbar. Hover over the Sub-Agent node and click the <Split className="inline size-3 align-text-bottom text-chart-2" aria-hidden="true" /> icon.
+                    <span className="font-medium text-chart-2">Make factor</span> has moved to the node toolbar. Hover over the {isSubAgent ? 'Sub-Agent' : 'Agent'} node and click the <Split className="inline size-3 align-text-bottom text-chart-2" aria-hidden="true" /> icon.
                     {' '}<span className="ml-4 inline-flex flex-col gap-1 align-middle">
                       <span className="text-[10px]">Toolbar preview</span>
                       <span role="img" aria-label="Node toolbar preview: activate or deactivate, delete, and Make factor (the branching icon on the right)" className="inline-flex items-center gap-3">
@@ -286,9 +287,9 @@ export function AgentNodeInspector({
                     </span>
                   </p>
                 </div>
-              {subAgentFactorControlled ? <p className="text-xs text-muted-foreground">Availability is controlled by the parent Agent’s Sub-Agents factor. Remove it to restore individual controls.</p> : bindings.active && <p className="text-xs text-chart-2">Factor: {bindings.active}</p>}
+              {isSubAgent && (subAgentFactorControlled ? <p className="text-xs text-muted-foreground">Availability is controlled by the parent Agent’s Sub-Agents factor. Remove it to restore individual controls.</p> : bindings.active && <p className="text-xs text-chart-2">Factor: {bindings.active}</p>)}
               {subAgentFactorControlled && bindings.active && <Button variant="outline" size="sm" onClick={() => unbindFactor('active')}>Remove conflicting individual on/off binding</Button>}
-              </>}
+              </>
               {/* First, above Prompt: which agent leads decides whose prompt
                   becomes the task and whose answer gets scored, so it frames
                   everything below it rather than being one more setting. It
@@ -338,6 +339,7 @@ export function AgentNodeInspector({
                 experimentId={experimentId}
                 nodeId={node.id}
                 fieldPath="config.prompt"
+                creationInToolbar={!isSubAgent}
                 defaultLabel="Prompt"
                 nodeLabel={data.label || 'Agent'}
                 levelType="text"
@@ -481,6 +483,7 @@ export function AgentNodeInspector({
               <FactorBindableField
                 experimentId={experimentId}
                 fieldPath="config.system_prompt"
+                creationInToolbar={!isSubAgent}
                 defaultLabel="System prompt"
                 nodeLabel={data.label || 'Agent'}
                 levelType="text"

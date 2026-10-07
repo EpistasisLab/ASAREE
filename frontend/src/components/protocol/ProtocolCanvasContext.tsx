@@ -65,6 +65,7 @@ interface ProtocolCanvasActions {
   requestConnectorAdd: (request: ConnectorAddRequest) => void
   // Opens the consolidated factor dialog from a Skill node's hover toolbar.
   requestDatasetFactor?: (nodeId: string) => void
+  requestAgentFactor?: (nodeId: string) => void
   requestKnowledgeFactor?: (nodeId: string) => void
   requestModelFactor?: (nodeId: string, levelIndex?: number) => void
   requestPatternFactor?: (nodeId: string) => void

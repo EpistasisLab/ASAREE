@@ -666,10 +666,25 @@ def validate_stage_plan(design_spec: dict[str, Any] | None) -> None:
         raise ProtocolValidationError(f"This experiment's stage plan is not usable: {e}") from e
 
 
+def validate_agent_activity(graph: dict[str, Any]) -> None:
+    """Availability must leave executable work and preserve required gated roles."""
+    agents = {node["id"]: node for node in graph.get("nodes") or [] if node.get("type") == "agent"}
+    if agents and not any(_is_node_active(node) for node in agents.values()):
+        raise ProtocolValidationError("This cell disables every Agent. Keep at least one executable Agent active.")
+    for worker_id in find_gated_pairs(graph):
+        worker = agents.get(worker_id)
+        if worker is not None and not _is_node_active(worker):
+            raise ProtocolValidationError(
+                f"Agent node {_node_display_name(worker)!r} is gated by a Critic Gate and can't be "
+                "deactivated -- deactivate the Critic Gate instead."
+            )
+
+
 def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, graph: dict[str, Any]) -> None:
     """Checks the experiment's declared strategy against the protocol it will
     run. Takes the whole graph rather than a pre-computed fact about it because
     each strategy asks a different question of the canvas."""
+    validate_agent_activity(graph)
     slug = coordination_strategy_slug(design_spec)
     if slug == "sequential":
         validate_sequential_chain(graph)
@@ -2271,7 +2286,13 @@ def resolve_supervisor_roles(graph: dict[str, Any]) -> SupervisorRoles:
                 "report to the supervisor, not to each other. Remove that connection, or switch the strategy to "
                 "'Peer Collaboration' on the Design tab."
             )
-    return SupervisorRoles(supervisor=supervisor, workers=workers, reviewer=reviewer)
+    if not _is_node_active(nodes[supervisor]):
+        raise ProtocolValidationError(f"The supervisor {_name(supervisor)!r} must remain active in every cell.")
+    active_workers = tuple(nid for nid in workers if _is_node_active(nodes[nid]))
+    if not active_workers:
+        raise ProtocolValidationError("A supervisor cell must keep at least one worker Agent active.")
+    active_reviewer = reviewer if reviewer is not None and _is_node_active(nodes[reviewer]) else None
+    return SupervisorRoles(supervisor=supervisor, workers=active_workers, reviewer=active_reviewer)
 
 
 def _connected_agent_ids(graph: dict[str, Any], node_id: str) -> list[str]:
@@ -4955,6 +4976,7 @@ async def plan_cell_runs(
                             expected_sha256=slot.raw_sha256,
                         )
                         patched_graph = apply_factor_bindings(revision.graph, parent.factor_values or {})
+                        validate_coordination_strategy(design_spec, graph=patched_graph)
                         patched_plan = resolve_dataset_row_plan(patched_graph, design_spec)
                         if patched_plan is None or patched_plan["driver_dataset_id"] != str(slot.dataset_id):
                             raise DatasetRowInputError("driver_mismatch", "factor substitution changed the row driver")
@@ -5031,6 +5053,7 @@ async def plan_cell_runs(
                 planned = []
                 for candidate in candidates:
                     patched_graph = apply_factor_bindings(revision.graph, candidate["factor_values"])
+                    validate_coordination_strategy(design_spec, graph=patched_graph)
                     patched_plan = resolve_dataset_row_plan(patched_graph, design_spec)
                     if patched_plan is None or patched_plan["driver_dataset_id"] != str(registration.id):
                         raise DatasetRowInputError("driver_mismatch", "factor substitution changed the row driver")
@@ -5137,6 +5160,14 @@ async def plan_cell_runs(
         for replicate in replicates
         if replicate.replicate_label not in completed_labels or replicate.replicate_label in requested_reruns
     ]
+    # Validate every requested cell before creating any run in this batch.
+    for replicate in pending:
+        try:
+            validate_coordination_strategy(
+                design_spec, graph=apply_factor_bindings(graph, replicate.factor_values or {})
+            )
+        except ProtocolValidationError as exc:
+            raise ProtocolValidationError(f"Replicate {replicate.replicate_label!r}: {exc}") from exc
     runs = [
         await create_protocol_run(
             db,
@@ -5240,6 +5271,7 @@ async def plan_single_replicate_run(
         if replicate_label is not None:
             raise ProtocolValidationError(f"No such replicate: {replicate_label!r}")
         raise ProtocolValidationError("No current design replicate is available for row execution.")
+    validate_coordination_strategy(design_spec, graph=apply_factor_bindings(graph, replicate.factor_values or {}))
     if row_plan is not None:
         if protocol_revision_id is None:
             raise ProtocolValidationError("A published protocol revision is required for row execution.")
@@ -5352,6 +5384,10 @@ def validate_conversation_entry(graph: dict[str, Any], node_id: str) -> dict[str
         raise ProtocolValidationError(f"No such node: {node_id!r}")
     if node.get("type") != "agent":
         raise ProtocolValidationError("Only Agent nodes can start a conversation.")
+    if not _is_node_active(node):
+        raise ProtocolValidationError(
+            f"The conversation lead {_node_display_name(node)!r} must remain active in every cell."
+        )
 
     peers = _connected_agent_ids(graph, node_id)
     if not peers:
@@ -5363,6 +5399,8 @@ def validate_conversation_entry(graph: dict[str, Any], node_id: str) -> dict[str
     # or the consultation fails partway through a run the user already paid for.
     for participant_id in [node_id, *peers]:
         participant = nodes[participant_id]
+        if not _is_node_active(participant):
+            continue
         model_edges = _edges_with_handle(graph, participant_id, "model", direction="incoming")
         if len(model_edges) != 1:
             raise ProtocolValidationError(

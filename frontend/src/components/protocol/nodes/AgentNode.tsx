@@ -82,7 +82,7 @@ export function AgentNode({
     ...(peerNeedsToolCalling ? ["This model can't call tools, so this agent can't consult or delegate to connected agents"] : []),
   ]
   const { updateNodeData } = useReactFlow()
-  const { requestRunNode, requestSubAgentFactor, requestEditFactor, experimentLocked } = useProtocolCanvasActions()
+  const { requestRunNode, requestAgentFactor, requestSubAgentFactor, requestEditFactor, experimentLocked } = useProtocolCanvasActions()
   const controlled = isSubAgent && !!data.subAgentFactorControlled
   const isActive = controlled || (data.active ?? true)
   const factorCount = boundFactorCount(data) + (controlled ? 1 : 0)
@@ -130,7 +130,7 @@ export function AgentNode({
         nodeId={id}
         isActive={isActive}
         onToggleActive={controlled ? undefined : () => updateNodeData(id, { active: !isActive })}
-        onMakeFactor={isSubAgent && !experimentLocked && requestSubAgentFactor ? () => requestSubAgentFactor(id) : undefined}
+        onMakeFactor={experimentLocked ? undefined : isSubAgent ? requestSubAgentFactor && (() => requestSubAgentFactor(id)) : requestAgentFactor && (() => requestAgentFactor(id))}
         runAlone={{ canRun: !!data.canRunAlone, onRun: () => requestRunNode(id) }}
       />
       {/* Sits inside the top-right corner so it stays clear of the Knowledge

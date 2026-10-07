@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactFlowProvider } from '@xyflow/react'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,6 +16,7 @@ import {
   defaultOutputParserNodeData,
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
+  type AgentNodeData,
   type ProtocolGraph,
   type ProtocolRun,
   type TestRun,
@@ -691,25 +692,54 @@ describe('ProtocolCanvas connector adds', () => {
     expect(screen.getByText('Factor name')).toBeInTheDocument()
   })
 
-  it('binds the Agent inspector header action directly to Active', async () => {
+  it('moves Agent factor creation to the hover toolbar and saves a prompt baseline', async () => {
     const user = userEvent.setup()
-    vi.spyOn(experimentsApi, 'get').mockResolvedValue({
+    const experiment: Experiment = {
       id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
       design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
       locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
       created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockImplementation(async () => experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockImplementation(async (_id, patch) => {
+      Object.assign(experiment, patch)
+      return experiment
     })
-    renderCanvas({
+    const { client } = renderCanvas({
       nodes: [{ id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: defaultAgentNodeData('Writer') }],
       edges: [],
     }, 'experiment-1')
 
     fireEvent.doubleClick(await screen.findByText('Writer'))
-    await user.click(screen.getAllByRole('button', { name: 'Make experimental factor' })[0])
-
-    expect(await screen.findByText('Writer:Active')).toBeInTheDocument()
-    expect(screen.getByText('Levels: false, true')).toBeInTheDocument()
+    expect(screen.getByText(/has moved to the node toolbar/)).toHaveTextContent('Hover over the Agent node')
+    expect(screen.getByRole('img', { name: /Node toolbar preview/ })).toBeInTheDocument()
+    // The inspector has no inline creation buttons.
+    expect(within(screen.getByRole('dialog')).queryByRole('button', { name: 'Make experimental factor' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByTitle('Make experimental factor'))
+    expect(await screen.findByRole('heading', { name: 'Agent factor' })).toBeInTheDocument()
     expect(screen.queryByText('Bind to a field on the canvas')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Prompt levels' }))
+    fireEvent.change(screen.getByLabelText('Level 1 prompt'), { target: { value: 'Baseline task' } })
+    fireEvent.change(screen.getByLabelText('Level 2 prompt'), { target: { value: 'Alternate task' } })
+    await user.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [expect.objectContaining({ name: 'Writer:Prompt', levels: ['Baseline task', 'Alternate task'] })] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes[0].data.factor_bindings).toEqual({ 'config.prompt': 'Writer:Prompt' })
+      expect((persisted?.nodes[0]?.data as AgentNodeData | undefined)?.config.prompt).toBe('Baseline task')
+    })
+    fireEvent.doubleClick(await screen.findByText('Writer'))
+    await user.click(await screen.findByText('Factor: Writer:Prompt'))
+    expect(await screen.findByRole('heading', { name: 'Agent factor' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Factor name')).toHaveValue('Writer:Prompt')
+    await user.click(screen.getByRole('button', { name: 'This agent on/off' }))
+    await user.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes[0].data.active).toBe(true)
+      expect(persisted?.nodes[0].data.factor_bindings).toEqual({ 'config.prompt': 'Writer:Prompt', active: 'Writer:Enabled' })
+    })
   })
 
   it('keeps the Test Run label when a production replicate is running', async () => {

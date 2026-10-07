@@ -9,6 +9,12 @@ export interface BindableFieldSpec {
   levelType: LevelType
 }
 
+export const agentFactorFields: BindableFieldSpec[] = [
+  { fieldPath: 'active', label: 'This agent on/off', levelType: 'boolean' },
+  { fieldPath: 'config.prompt', label: 'Prompt levels', levelType: 'text' },
+  { fieldPath: 'config.system_prompt', label: 'System prompt levels', levelType: 'text' },
+]
+
 // The bundled system servers (see the backend's
 // services/system_mcp_servers.py) that are hidden from every MCP Tool server
 // picker -- they're still registered, still connected, and still usable by
@@ -156,6 +162,7 @@ const MODEL_NODE_TYPES = new Set([
 export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
   switch (node.type) {
     case 'agent':
+      return [...agentFactorFields, { fieldPath: 'pattern_override', label: 'Execution pattern', levelType: 'pattern' }]
     case 'sub_agent':
       return [
         // The run's own ask, and the field `{{...}}` references resolve in --
@@ -285,7 +292,7 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
 
 export interface UnboundField {
   pickerGroup?: { id: string; label: string; category: string; componentId: string; componentLabel: string }
-  connectorFactor?: { kind: 'script' | 'tool' | 'skill' | 'sub_agent' | 'dataset' | 'knowledge' | 'model' | 'pattern'; nodeId: string; mode: LevelType; agentId?: string }
+  connectorFactor?: { kind: 'agent' | 'script' | 'tool' | 'skill' | 'sub_agent' | 'dataset' | 'knowledge' | 'model' | 'pattern'; nodeId: string; mode: LevelType; agentId?: string }
   nodeId: string
   nodeLabel: string
   fieldPath: string
@@ -529,6 +536,9 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
     }
   }
   for (const field of fields) {
+    if (nodes.find((node) => node.id === field.nodeId)?.type === 'agent' && agentFactorFields.some((candidate) => candidate.fieldPath === field.fieldPath)) {
+      field.connectorFactor = { kind: 'agent', nodeId: field.nodeId, mode: field.levelType }
+    }
     if (MODEL_NODE_TYPES.has(nodes.find((node) => node.id === field.nodeId)?.type ?? '')) {
       field.connectorFactor = { kind: 'model', nodeId: field.nodeId, mode: field.levelType }
     }
@@ -545,11 +555,12 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
       : field.connectorFactor?.kind === 'knowledge' ? 'Knowledge'
       : field.connectorFactor?.kind === 'model' ? 'Model'
       : field.connectorFactor?.kind === 'pattern' ? 'Pattern'
+      : kind === 'agent' ? 'Agent'
       : agentKinds.includes(kind) ? 'Agent fields'
       : MODEL_NODE_TYPES.has(kind) ? 'Model'
       : kind.startsWith('pattern_') ? 'Pattern'
       : ({ skill: 'Skills', dataset: 'Datasets', mcp_tool: 'Tools', mcp_scikit_learn: 'Tools', mcp_client_tool: 'Tools', script: 'Tools', okf_bundle: 'Knowledge', okf_document: 'Knowledge', memory: 'Memory', output_parser: 'Output parser', critic_gate: 'Critic gate' } as Record<string, string>)[kind] ?? String(node.data.label || kind)
-    const connectorChoice = field.connectorFactor && field.connectorFactor.kind !== 'model' && field.connectorFactor.kind !== 'pattern' && field.connectorFactor.mode !== 'boolean' && field.connectorFactor.mode !== 'tool_names' && field.connectorFactor.mode !== 'script_config'
+    const connectorChoice = field.connectorFactor && field.connectorFactor.kind !== 'agent' && field.connectorFactor.kind !== 'model' && field.connectorFactor.kind !== 'pattern' && field.connectorFactor.mode !== 'boolean' && field.connectorFactor.mode !== 'tool_names' && field.connectorFactor.mode !== 'script_config'
     return {
       ...field,
       pickerGroup: {

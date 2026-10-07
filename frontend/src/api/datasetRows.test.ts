@@ -37,6 +37,12 @@ describe('row HTTP contracts', () => {
     await protocolsApi.runCells('p', { retry_row_result_ids: ['slot'] })
     expect(lastBody()).toEqual({ retry_row_result_ids: ['slot'] })
   })
+  it('selects a source row within a replicate for a run or rerun', async () => {
+    await protocolsApi.runCells('p', { replicateLabels: ['rep'], row_indices: [0] })
+    expect(lastBody()).toEqual({ replicate_labels: ['rep'], rerun_replicate_labels: [], row_indices: [0] })
+    await protocolsApi.runCells('p', { replicateLabels: ['rep'], rerunReplicateLabels: ['rep'], row_indices: [2] })
+    expect(lastBody()).toEqual({ replicate_labels: ['rep'], rerun_replicate_labels: ['rep'], row_indices: [2] })
+  })
   it('uses identical encoded scope on projection and exports', async () => {
     const scope = { protocol_id: 'p /', design_revision_id: 'd', protocol_revision_id: 'r' }
     await experimentsApi.getRunResults('e', scope)

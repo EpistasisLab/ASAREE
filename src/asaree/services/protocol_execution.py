@@ -4626,6 +4626,7 @@ async def plan_cell_runs(
     replicate_labels: set[str] | None = None,
     rerun_replicate_labels: set[str] | None = None,
     retry_row_result_ids: Sequence[uuid.UUID] | None = None,
+    row_indices: Sequence[int] | None = None,
 ) -> tuple[list[ProtocolRun], int]:
     """ "Run all cells": creates one pending :class:`ProtocolRun` per
     not-yet-completed replicate row under *experiment_id*, each carrying its
@@ -4652,6 +4653,13 @@ async def plan_cell_runs(
     # Serialize all production row planning against publication and design
     # regeneration. Keep this global lock order in retry paths too.
     row_mode_requested = resolve_dataset_row_plan(graph) is not None
+    if row_indices is not None and (
+        not row_mode_requested
+        or retry_row_result_ids is not None
+        or replicate_labels is None
+        or len(replicate_labels) != 1
+    ):
+        raise ProtocolValidationError("Row selection requires exactly one per-row replicate.")
     if retry_row_result_ids is not None and (
         not retry_row_result_ids
         or len(set(retry_row_result_ids)) != len(retry_row_result_ids)
@@ -4929,6 +4937,7 @@ async def plan_cell_runs(
                     graph=revision.graph,
                     design_spec=design_spec,
                     protocol_revision_id=str(revision.id),
+                    row_indices=row_indices,
                 )
                 planned = []
                 for candidate in candidates:

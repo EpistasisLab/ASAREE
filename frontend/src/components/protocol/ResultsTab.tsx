@@ -10,12 +10,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { displayFactorLevel, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
 import { OBSERVATION_LABELS } from '@/lib/measurementPlan'
-import type { DesignMetric, EvaluationArtifact, Experiment, HistoricalRun, MetricObservation, ObsoleteRun, ResultCell, ResultNodeRun, ResultReplicate, SupersededRun } from '@/types/experiments'
+import type { DesignMetric, EvaluationArtifact, Experiment, HistoricalRun, MetricObservation, ObsoleteRun, ResultCell, ResultReplicate, SupersededRun } from '@/types/experiments'
 import { DatasetRowDetail, DatasetRowResults } from './DatasetRowResults'
 import { ResultsPanel, ResultsScorecard as Scorecard } from './ResultsPanel'
 import { InfoTooltip } from './InfoTooltip'
 import { CellCard, ReplicateRow } from './CellPresentation'
-import { ReceivedPromptPanel, RunStepTrace, UnresolvedReferencesNote } from './NodeRunOutputPanel'
+import { ResultTimelineNode } from './ResultTimelineNode'
 
 function formatNumber(value: number | null, maximumFractionDigits = 0): string {
   if (value === null || !Number.isFinite(value)) return 'Not reported'
@@ -189,13 +189,6 @@ function ArtifactCard({ artifact }: { artifact: EvaluationArtifact }) {
   return <Card size="sm" className="gap-0 bg-background p-2.5"><div className="mb-2 flex items-center justify-between gap-2"><h4 className="text-xs font-medium">{presentation.title}</h4><span className="font-mono text-[11px] text-muted-foreground">{artifact.producer.producer_id} · v{artifact.producer.version}</span></div>{presentation.content}</Card>
 }
 
-function nodeStatusClass(status: string): string {
-  if (status === 'completed') return 'border-transparent bg-[color:var(--chart-3)]/10 text-[color:var(--chart-3)]'
-  if (status === 'failed' || status === 'cancelled') return 'border-transparent bg-destructive/10 text-destructive'
-  if (status === 'running' || status === 'queued') return 'border-transparent bg-primary/10 text-primary'
-  return 'border-transparent bg-muted text-muted-foreground'
-}
-
 function usageSummarizesMetric(
   key: string,
   result: Pick<ResultCell, 'cost_usd' | 'total_tokens' | 'duration_seconds'>,
@@ -245,52 +238,6 @@ function CellResultSummary({ cell, metricKeys, metricTypes, metricAggregations }
       )}
       {metrics.length === 0 && !hasUsage && <p className="mt-4 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">No current numeric results or provider usage have been reported yet.</p>}
     </section>
-  )
-}
-
-function ReplicateTimelineNode({ node, defaultOpen = false }: { node: ResultNodeRun; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen)
-  const hasDetails = Boolean(node.error || node.output_text || node.agent_run_id)
-
-  return (
-    <li className="overflow-hidden rounded-md border bg-card">
-      <button
-        type="button"
-        onClick={() => hasDetails && setOpen((value) => !value)}
-        disabled={!hasDetails}
-        aria-expanded={hasDetails ? open : undefined}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted/40 disabled:cursor-default disabled:hover:bg-transparent"
-      >
-        {hasDetails ? (
-          open ? <ChevronDown className="size-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-        ) : <span className="size-4 shrink-0" />}
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium" title={node.node_id}>{node.node_label}</span>
-          <span className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-            {node.cost_usd !== null && <span>{formatCurrency(node.cost_usd)}</span>}
-            {node.total_tokens !== null && <span>{formatNumber(node.total_tokens)} tokens</span>}
-            {!hasDetails && <span>No output details recorded</span>}
-          </span>
-        </span>
-        <Badge variant="outline" className={`shrink-0 capitalize ${nodeStatusClass(node.status)}`}>{node.status}</Badge>
-      </button>
-      {open && (
-        <div className="space-y-4 border-t bg-muted/15 px-3 py-3">
-          {node.error && <section className="space-y-1.5"><h4 className="text-xs font-medium">Error</h4><p className="rounded border border-destructive/30 bg-destructive/5 p-2 text-xs whitespace-pre-wrap break-words text-destructive">{node.error}</p></section>}
-          {/* Received before produced, so one node reads as the handoff it
-              was: what it was given, then what it made of it. */}
-          {node.agent_run_id && <ReceivedPromptPanel runId={node.agent_run_id} />}
-          <UnresolvedReferencesNote names={node.unresolved_reference_labels ?? []} />
-          {node.output_text ? (
-            <section className="space-y-1.5">
-              <h4 className="text-xs font-medium">Output</h4>
-              <p className="max-h-64 overflow-y-auto rounded border bg-background/70 p-2 font-mono text-xs whitespace-pre-wrap break-words">{node.output_text}</p>
-            </section>
-          ) : !node.error && <p className="text-xs text-muted-foreground">No output was recorded for this node.</p>}
-          {node.agent_run_id && <RunStepTrace runId={node.agent_run_id} />}
-        </div>
-      )}
-    </li>
   )
 }
 
@@ -356,7 +303,7 @@ function ReplicateResultDetail({ replicate, metricKeys, metricTypes }: {
             <h3 className="text-sm font-medium">Run timeline</h3>
             {replicate.node_runs.length === 0 ? <p className="text-sm text-muted-foreground">No node-level run details are available.</p> : (
               <ol className={timelineOnly ? 'min-h-0 flex-1 space-y-2' : 'space-y-2'}>
-              {replicate.node_runs.map((node) => <ReplicateTimelineNode key={`${replicate.run_id ?? replicate.replicate_label}-${node.node_id}`} node={node} defaultOpen={node.node_id === defaultOpenNodeId} />)}
+              {replicate.node_runs.map((node) => <ResultTimelineNode key={`${replicate.run_id ?? replicate.replicate_label}-${node.node_id}`} node={node} defaultOpen={node.node_id === defaultOpenNodeId} />)}
             </ol>
           )}
         </section>
@@ -449,7 +396,7 @@ export function ResultsInspectorPanel({
   if (selection.type === 'row') {
     const row = resultsQuery.data?.row_results?.find(item => item.row_result_id === selection.rowResultId)
     if (!row) return <aside className="absolute inset-0 z-20 bg-card p-3"><Button onClick={onClose}>Close</Button><p role="alert">{resultsQuery.isLoading ? 'Loading row…' : 'Row unavailable in this scope.'}</p></aside>
-    return <DatasetRowDetail key={row.row_result_id} row={row} onClose={onClose} />
+    return <DatasetRowDetail key={row.row_result_id} row={row} protocolId={selection.scope.protocol_id} onClose={onClose} />
   }
 
   const replicate = selection.type === 'replicate'

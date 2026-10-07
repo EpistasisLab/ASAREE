@@ -584,7 +584,7 @@ describe('ProtocolCanvas connector adds', () => {
     expect(screen.queryByRole('button', { name: /Create (another )?metric/ })).not.toBeInTheDocument()
   })
 
-  it.each([false, true])('removes a Skill factor declaration only after its last binding is removed (shared: %s)', async (shared) => {
+  it.each([false, true])('keeps factor declarations when a bound Skill node is deleted (shared: %s)', async (shared) => {
     const factorName = 'Skill enabled'
     const experiment: Experiment = {
       id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
@@ -607,21 +607,16 @@ describe('ProtocolCanvas connector adds', () => {
       edges: [],
     }
     const { client } = renderCanvas(graph, experiment.id)
-    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
-    fireEvent.click(makeFactor!)
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove factor' }))
+    fireEvent.doubleClick(await screen.findByText('Skill a'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete node' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
 
     await waitFor(() => {
       const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
-      expect(persisted?.nodes.find((node) => node.id === 'a')?.data.factor_bindings).toEqual({})
+      expect(persisted?.nodes.some((node) => node.id === 'a')).toBe(false)
     })
-    if (shared) {
-      expect(save).not.toHaveBeenCalled()
-    } else {
-      await waitFor(() => expect(save).toHaveBeenCalledWith(experiment.id, {
-        design_spec: { factors: [], metrics: [] },
-      }))
-    }
+    expect(save).not.toHaveBeenCalled()
+    expect(client.getQueryData<Experiment>(['experiments', experiment.id])?.design_spec?.factors).toEqual(experiment.design_spec?.factors)
   })
 
   it('opens a bound factor from the Script inspector', async () => {

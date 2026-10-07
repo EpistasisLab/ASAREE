@@ -155,6 +155,9 @@ def validate_tool_step_script_factors(design_spec: dict[str, Any] | None, graph:
             enabled_factor = factors.get(bindings.get("config.enabled"))
             if enabled_factor and any(level is not True for level in enabled_factor.get("levels") or []):
                 raise ValueError(f"Tool Step {label!r} requires script_code: its Script factor cannot include off.")
+            code_factor = factors.get(bindings.get("config.code"))
+            if code_factor and any(not str(level or "").strip() for level in code_factor.get("levels") or []):
+                raise ValueError(f"Tool Step {label!r} requires script_code: every Script code level needs code.")
             for variant in variants:
                 if (
                     not isinstance(variant, dict)

@@ -2,6 +2,8 @@
 
 import copy
 import uuid
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -10,6 +12,8 @@ from asaree.services.protocol_execution import (
     ProtocolValidationError,
     _sub_agent_ids,
     apply_factor_bindings,
+    plan_cell_runs,
+    plan_single_replicate_run,
     topological_order,
 )
 from asaree.services.sub_agent_factors import test_sub_agent_factor_values as preview_values
@@ -102,3 +106,29 @@ def test_selected_disabled_worker_requires_a_model_at_validation():
     graph["edges"].append({"source": "model", "target": "parent", "targetHandle": "model"})
     with pytest.raises(ProtocolValidationError, match="exactly one Model"):
         topological_order(graph)
+
+
+@pytest.mark.parametrize("mode", ["sub_agent_selection", "sub_agent_toggle"])
+@pytest.mark.parametrize("planner", [plan_cell_runs, plan_single_replicate_run])
+@pytest.mark.asyncio
+async def test_production_validation_requires_models_for_every_selectable_worker(monkeypatch, mode, planner):
+    graph, spec = worker_graph()
+    graph["nodes"][0]["data"].update(sub_agent_factor_mode=mode)
+    graph["nodes"].extend([
+        {"id": "parent-model", "type": "model_openai", "data": {"config": {}}},
+        {"id": "a-model", "type": "model_openai", "data": {"config": {}}},
+    ])
+    graph["edges"].extend([
+        {"source": "parent-model", "target": "parent", "targetHandle": "model"},
+        {"source": "a-model", "target": "a", "targetHandle": "model"},
+    ])
+    # A preview of a configured worker remains runnable.
+    topological_order(graph)
+    experiment = SimpleNamespace(design_spec=spec, measurement_plan=None, locked_at=None)
+    monkeypatch.setattr("asaree.services.protocol_execution.get_experiment", AsyncMock(return_value=experiment))
+    kwargs = {"replicate_label": "rep1"} if planner is plan_single_replicate_run else {}
+    with pytest.raises(ProtocolValidationError, match="exactly one Model"):
+        await planner(
+            AsyncMock(), protocol_id=uuid.uuid4(), experiment_id=uuid.uuid4(),
+            owner_id=uuid.uuid4(), graph=graph, **kwargs,
+        )

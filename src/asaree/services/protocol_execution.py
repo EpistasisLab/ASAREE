@@ -1042,7 +1042,9 @@ def _kahn_order(graph: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[
     return nodes, ordered, complete
 
 
-def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) -> list[dict[str, Any]]:
+def topological_order(
+    graph: dict[str, Any], *, require_acyclic: bool = True, validate_all_sub_agents: bool = False
+) -> list[dict[str, Any]]:
     """Kahn's algorithm. Raises :class:`ProtocolValidationError` on an empty
     graph, a cycle (any node Kahn's algorithm can't reach stays with a
     nonzero in-degree, which is exactly the cycle signature), or a malformed
@@ -1065,6 +1067,17 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
     except DatasetRowInputError as exc:
         raise ProtocolValidationError(str(exc)) from exc
     _, downstream, _ = _adjacency(graph)
+    # Production must validate workers from every connector level, including
+    # those disabled in the baseline. Previews only need their selected workers.
+    factor_parents = {
+        node["id"] for node in graph.get("nodes") or []
+        if node.get("type") == "agent"
+        and ((node.get("data") or {}).get("factor_bindings") or {}).get("sub_agent_selection")
+    } if validate_all_sub_agents else set()
+    selectable_sub_agents = {
+        edge.get("source") for edge in graph.get("edges") or []
+        if edge.get("target") in factor_parents and edge.get("targetHandle") == "sub_agents"
+    }
     graph = graph_with_sub_agent_selection(graph)
     nodes, ordered, complete = _kahn_order(graph)
     if not nodes:
@@ -1107,7 +1120,7 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
 
         sub_agent_is_callable = (
             node_type == "sub_agent"
-            and _is_node_active(node)
+            and (_is_node_active(node) or nid in selectable_sub_agents)
             and bool(_edges_with_handle(graph, nid, "sub_agents", direction="outgoing"))
         )
         if node_type in ("agent", "critic_gate") or sub_agent_is_callable:
@@ -4786,7 +4799,7 @@ async def plan_cell_runs(
     validate_stage_plan(design_spec)
     validate_prompt_references(graph=graph)
     conversation = is_conversation_strategy(design_spec)
-    topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
+    topological_order(graph, require_acyclic=not conversation, validate_all_sub_agents=True)
     if not conversation:
         sinks = sink_node_ids(graph)
         if len(sinks) != 1:
@@ -5176,7 +5189,7 @@ async def plan_single_replicate_run(
     validate_stage_plan(design_spec)
     validate_prompt_references(graph=graph)
     conversation = is_conversation_strategy(design_spec)
-    topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
+    topological_order(graph, require_acyclic=not conversation, validate_all_sub_agents=True)
     if not conversation:
         sinks = sink_node_ids(graph)
         if len(sinks) != 1:

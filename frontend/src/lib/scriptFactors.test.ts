@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { reconcileFactorBaselines } from './factorBindings'
-import { reconcileScriptFactor, scriptFactorIssues, scriptFactorOwner } from './scriptFactors'
+import { reconcileScriptFactor, requiredScriptIssues, scriptFactorIssues, scriptFactorOwner } from './scriptFactors'
 import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 
@@ -14,6 +14,19 @@ const graph = {
 const factor: DesignFactor = { name: 'Scripts', level_type: 'script_selection', levels: [['b'], ['a']], level_labels: ['Custom B', 'Custom A'] }
 
 describe('script connector factors', () => {
+  it.each(['', '   ', null])('reports an empty code treatment for a required Script (%s)', (code) => {
+    const requiredGraph: ProtocolGraph = {
+      nodes: [
+        { id: 'step', type: 'tool_step', position: { x: 0, y: 0 }, data: { label: 'step', config: { tool_name: 'execute', arguments: { code: { source: 'script_code' } } } } },
+        { id: 'script', type: 'script', position: { x: 0, y: 0 }, data: { label: 'Script', config: { name: 'Script', language: 'python', code: 'print(1)' }, factor_bindings: { 'config.code': 'Code' } } },
+      ],
+      edges: [{ id: 'script-step', source: 'script', target: 'step', targetHandle: 'tool' }],
+    }
+    expect(requiredScriptIssues(requiredGraph, [{ name: 'Code', levels: ['print(1)', code] }])).toEqual([
+      'step: requires script_code; every Script code level needs code.',
+    ])
+    expect(requiredScriptIssues(requiredGraph, [{ name: 'Code', levels: ['print(1)', 'print(2)'] }])).toEqual([])
+  })
   it('keeps all-or-none levels in their chosen order as connections change', () => {
     const toggle: DesignFactor = { name: 'Scripts', level_type: 'script_toggle', levels: [['a', 'b'], []], level_labels: ['With scripts', 'Without scripts'] }
     expect(reconcileScriptFactor(toggle, graph, 'agent')).toEqual({ ...toggle, levels: [['a', 'b', 'c'], []] })

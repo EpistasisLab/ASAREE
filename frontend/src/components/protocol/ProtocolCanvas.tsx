@@ -2166,34 +2166,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // data.label for that purpose specifically; the header title itself still
   // shows the node's own plain label, unaffected.
   const factorNodeLabel = selectedNode ? agentTracedLabel(selectedNode, edges, nodes) : ''
-  // A factor only has meaning while it controls at least one canvas field.
-  // Whether the final binding was explicitly unbound in an inspector or was
-  // removed with a deleted node, remove that factor declaration too so the
-  // Design panel and the materialized matrix cannot advertise a treatment
-  // the canvas no longer has.
-  async function removeUnboundFactors(nextNodes: Node[], removedNames: string[]) {
-    if (!experimentId || removedNames.length === 0) return
-    const stillBound = new Set(
-      nextNodes.flatMap((node) => Object.values((node.data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {})),
-    )
-    const orphaned = removedNames.filter((name) => !stillBound.has(name))
-    if (orphaned.length === 0) return
-    const experiment = await experimentsApi.get(experimentId)
-    const factors = experiment.design_spec?.factors ?? []
-    const nextFactors = factors.filter((factor) => !orphaned.includes(factor.name))
-    if (nextFactors.length === factors.length) return
-    await experimentsApi.update(experimentId, { design_spec: { ...experiment.design_spec, factors: nextFactors } })
-    queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
-    queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
-  }
-
-  function removeFactorsForDeletedNodes(deleting: Node[], nextNodes: Node[]) {
-    const removedNames = [...new Set(
-      deleting.flatMap((node) => Object.values((node.data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {})),
-    )]
-    void removeUnboundFactors(nextNodes, removedNames)
-  }
-
+  // Removing a node or field leaves its factor declared and unbound for
+  // explicit design review. Factor dialogs handle intentional factor removal.
   function updateNodeData(
     nodeId: string,
     data:
@@ -2213,15 +2187,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | SingleAgentBaselinePatternNodeData,
   ) {
     if (experimentLocked) return
-    const previous = nodes.find((node) => node.id === nodeId)
-    const oldBindings = (previous?.data as { factor_bindings?: Record<string, string> } | undefined)?.factor_bindings ?? {}
-    const nextBindings = (data as { factor_bindings?: Record<string, string> }).factor_bindings ?? {}
-    const removedNames = Object.entries(oldBindings)
-      .filter(([path, name]) => nextBindings[path] !== name)
-      .map(([, name]) => name)
     const nextNodes = nodes.map((node) => (node.id === nodeId ? { ...node, data } : node))
     setNodes(nextNodes)
-    void removeUnboundFactors(nextNodes, removedNames)
   }
 
   // Client-side guardrail mirroring the backend's own connector validation
@@ -2235,12 +2202,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   function deleteNode(nodeId: string) {
     if (experimentLocked) return
-    const deleting = nodes.filter((node) => node.id === nodeId)
     const nextNodes = nodes.filter((node) => node.id !== nodeId)
     setNodes(nextNodes)
     setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId))
     setSelectedNodeId(null)
-    removeFactorsForDeletedNodes(deleting, nextNodes)
   }
 
   // The node inspector's own Delete button calls deleteNode directly --
@@ -2630,11 +2595,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           }}
           onConfirm={() => {
             if (pendingDelete.resolve) {
-              const deletedNodeIds = new Set(pendingDelete.nodes.map((node) => node.id))
-              removeFactorsForDeletedNodes(
-                pendingDelete.nodes,
-                nodes.filter((node) => !deletedNodeIds.has(node.id)),
-              )
               pendingDelete.resolve({ nodes: pendingDelete.nodes, edges: pendingDelete.edges })
             } else {
               // requestDeleteNode's path -- no xyflow deletion pending, just

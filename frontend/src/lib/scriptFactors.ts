@@ -109,6 +109,8 @@ export function requiredScriptIssues(graph: ProtocolGraph | undefined, factors: 
       const bindings = script.data.factor_bindings ?? {}
       const enabled = factors.find((factor) => factor.name === bindings['config.enabled'])
       if (enabled?.levels.some((level) => level !== true)) return [`${prefix}; its Script factor cannot include off.`]
+      const code = factors.find((factor) => factor.name === bindings['config.code'])
+      if (code?.levels.some((level) => !String(level ?? '').trim())) return [`${prefix}; every Script code level needs code.`]
       const variants = factors.find((factor) => factor.name === bindings.config)?.levels ?? [script.data.config]
       if (variants.some((level) => {
         const config = level as { code?: string; enabled?: boolean } | null

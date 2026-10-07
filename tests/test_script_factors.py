@@ -19,6 +19,26 @@ from asaree.services.script_factors import test_script_factor_values as preview_
 from asaree.services.script_factors import validate_script_factors, validate_tool_step_script_factors
 
 
+@pytest.mark.parametrize("code", ["", "   ", None])
+def test_required_script_rejects_empty_individual_code_levels(code):
+    graph = {
+        "nodes": [
+            {"id": "step", "type": "tool_step", "data": {"config": {
+                "arguments": {"code": {"source": "script_code"}},
+            }}},
+            {"id": "script", "type": "script", "data": {
+                "config": {"code": "print(1)"}, "factor_bindings": {"config.code": "Code"},
+            }},
+        ],
+        "edges": [{"source": "script", "target": "step", "targetHandle": "tool"}],
+    }
+    factor = {"name": "Code", "level_type": "text", "levels": ["print(1)", code]}
+    with pytest.raises(ValueError, match="requires script_code"):
+        validate_tool_step_script_factors({"factors": [factor]}, graph)
+    factor["levels"] = ["print(1)", "print(2)"]
+    validate_tool_step_script_factors({"factors": [factor]}, graph)
+
+
 def script_graph(mode="script_selection"):
     ids = ["a", "b"]
     graph = {

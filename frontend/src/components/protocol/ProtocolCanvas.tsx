@@ -2545,6 +2545,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           }}
           factor={{ name: '', levels: [], level_type: 'string' }}
           pickableFields={factorPickerFields}
+          canvasAgentCount={nodes.filter(node => node.type === 'agent' || node.type === 'sub_agent').length}
           onPickConnectorFactor={(field) => {
             if (!field.connectorFactor) return
             setFactorPickerNodeId(null)

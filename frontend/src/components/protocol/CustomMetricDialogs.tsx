@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { HUD_ACCENT_RING_CLASSNAME, cn } from '@/lib/utils'
+import { HUD_ACCENT_RING_CLASSNAME, PICKER_GROUP_CLASSNAME, cn } from '@/lib/utils'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AGENT_OUTPUT_PRODUCER_ID, agentOutputSourceOptions } from '@/lib/agentOutputMetrics'
 import { mcpToolSourceOptions, type McpToolSourceOption } from '@/lib/mcpToolMetrics'
@@ -64,18 +64,20 @@ function MetricNodePicker({ value, display, choices, graph, onChange }: {
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
-  const groups = new Map<string, { label: string; categories: Map<string, MetricNodeChoice[]> }>()
+  const expandGroups = (graph?.nodes.filter(node => node.type === 'agent' || node.type === 'sub_agent').length ?? 0) < 2
+  const groups = new Map<string, { label: string; connectors: Map<string, Map<string, MetricNodeChoice[]>> }>()
   for (const choice of choices) {
     const key = choice.agentId ?? (choice.value === 'node_runtime' ? 'runtime' : 'shared')
     const label = choice.agentId ? String(graph?.nodes.find(node => node.id === choice.agentId)?.data.label || 'Agent')
       : key === 'runtime' ? 'Runtime metrics for selected nodes' : 'Shared or unconnected components'
-    if (!`${label} ${choice.category} ${choice.display.label} ${choice.display.type}`.toLowerCase().includes(search.trim().toLowerCase())) continue
-    if (!groups.has(key)) groups.set(key, { label, categories: new Map() })
-    const categories = groups.get(key)!.categories
+    const connector = ['MCP Tools', 'Scripts', 'Tool steps'].includes(choice.category) ? 'Tools' : choice.category === 'Agent output' ? 'Agent' : choice.category
+    if (!`${label} ${connector} ${choice.category} ${choice.display.label} ${choice.display.type}`.toLowerCase().includes(search.trim().toLowerCase())) continue
+    if (!groups.has(key)) groups.set(key, { label, connectors: new Map() })
+    const connectors = groups.get(key)!.connectors
+    if (!connectors.has(connector)) connectors.set(connector, new Map())
+    const categories = connectors.get(connector)!
     categories.set(choice.category, [...(categories.get(choice.category) ?? []), choice])
   }
-  const groupOrder = (key: string) => key === 'runtime' ? 2 : key === 'shared' ? 1 : 0
-  const categoryOrder = ['Agent output', 'Scripts', 'MCP tools', 'Tool steps', 'Runtime']
   return <Popover open={open} onOpenChange={(next) => { setOpen(next); if (next) setSearch('') }}>
     <PopoverTrigger render={<Button variant="outline" role="combobox" aria-label="Metric node" aria-expanded={open} className="w-full justify-between" />}>
       {display ? <MetricNodeLabel display={display} /> : 'Select a node…'}<ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
@@ -84,15 +86,18 @@ function MetricNodePicker({ value, display, choices, graph, onChange }: {
       <Input autoFocus placeholder="Search nodes…" aria-label="Search metric nodes" value={search} onChange={event => setSearch(event.target.value)} />
       <div className="min-h-0 overflow-y-auto" role="listbox" aria-label="Metric nodes">
         {groups.size === 0 && <p className="p-3 text-sm text-muted-foreground">No matching nodes.</p>}
-        {[...groups.entries()].sort(([a, ga], [b, gb]) => groupOrder(a) - groupOrder(b) || ga.label.localeCompare(gb.label)).map(([id, group]) => <details key={`${id}:${!!search.trim()}`} open className="mb-2 rounded-md border">
+        {[...groups.entries()].sort(([, a], [, b]) => a.label.localeCompare(b.label)).map(([id, group]) => <details key={`${id}:${!!search.trim()}:${expandGroups}`} open={expandGroups || !!search.trim()} className={PICKER_GROUP_CLASSNAME}>
           <summary className="cursor-pointer bg-muted/30 px-3 py-2 text-sm font-semibold">{group.label}</summary>
-          <div className="space-y-2 p-2">{[...group.categories.entries()].sort(([a], [b]) => categoryOrder.indexOf(a) - categoryOrder.indexOf(b)).map(([category, options]) => <div key={category}>
-            <p className="px-2 py-1 text-xs font-medium text-primary">{category}</p>
-            {options.sort((a, b) => a.display.label.localeCompare(b.display.label)).map(choice => <button key={choice.value} type="button" role="option" aria-selected={value === choice.value} disabled={!!choice.reason}
+          <div className="space-y-3 p-2">{[...group.connectors.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([connector, categories]) => <section key={connector} aria-label={`${group.label}: ${connector}`}>
+            <h3 className="px-2 py-1 text-sm font-medium text-primary">{connector}</h3>
+            <div className="ml-3 space-y-2 border-l border-border pl-2">{[...categories.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([category, options]) => <section key={category} aria-label={`${group.label}: ${connector}: ${category}`}>
+            {connector === 'Tools' && <h4 className="px-2 py-1 text-sm font-semibold text-chart-2">{category}</h4>}
+            <div className={connector === 'Tools' ? 'ml-3' : undefined}>{options.sort((a, b) => a.display.label.localeCompare(b.display.label)).map(choice => <button key={choice.value} type="button" role="option" aria-selected={value === choice.value} disabled={!!choice.reason}
               aria-label={`${choice.display.label}, ${choice.display.type}${choice.reason ? `, ${choice.reason}` : ''}`}
               className={cn('flex w-full cursor-pointer items-center rounded-md px-2 py-2 text-left hover:bg-muted disabled:cursor-not-allowed disabled:text-muted-foreground', value === choice.value && 'bg-primary/15 ring-1 ring-primary')}
-              onClick={() => { onChange(choice.value); setOpen(false) }}><MetricNodeLabel display={choice.display} reason={choice.reason} /></button>)}
-          </div>)}</div>
+              onClick={() => { onChange(choice.value); setOpen(false) }}><MetricNodeLabel display={choice.display} reason={choice.reason} /></button>)}</div>
+            </section>)}</div>
+          </section>)}</div>
         </details>)}
       </div>
     </PopoverContent>
@@ -420,7 +425,7 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
         <MetricNodePicker value={selectedMetricNode} display={selectedNodeDisplay} graph={graph} onChange={selectMetricNode} choices={[
           ...agentSources.map(source => ({ value: `agent:${source.agentNodeId}`, display: agentNodeDisplay(source), reason: agentSourceDisabledReason(source), agentId: source.agentNodeId, category: 'Agent output' })),
           ...pythonSources.map(source => ({ value: `python:${source.key}`, display: pythonNodeDisplay(source), reason: pythonSourceDisabledReason(source), agentId: source.agentNodeId, category: 'Scripts' })),
-          ...mcpSources.map(source => ({ value: `mcp:${source.key}`, display: mcpNodeDisplay(source), reason: mcpSourceDisabledReason(source), agentId: source.agentNodeId, category: 'MCP tools' })),
+          ...mcpSources.map(source => ({ value: `mcp:${source.key}`, display: mcpNodeDisplay(source), reason: mcpSourceDisabledReason(source), agentId: source.agentNodeId, category: 'MCP Tools' })),
           ...toolStepSources.map(source => ({ value: `tool_step:${source.nodeId}`, display: toolStepNodeDisplay(source), reason: source.disabledReason, category: 'Tool steps' })),
           ...(offerNodeRuntime ? [{ value: 'node_runtime', display: nodeRuntimeDisplay, category: 'Runtime' }] : []),
         ]} />

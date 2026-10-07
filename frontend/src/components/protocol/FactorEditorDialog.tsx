@@ -11,7 +11,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { datasetsApi, mcpServersApi } from '@/api/client'
 import { isPromptReferenceField, type PromptReferenceScope } from '@/lib/promptReferences'
-import { cardAccent, cn, hashToChartHue, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
+import { cardAccent, cn, hashToChartHue, HUD_ACCENT_RING_CLASSNAME, PICKER_GROUP_CLASSNAME } from '@/lib/utils'
 import { groupFactorCreationFields, pickToolNamesForServer, selectableMcpServers, type UnboundField } from './bindableFields'
 import { useProviderModels } from './useProviderModels'
 import {
@@ -513,6 +513,7 @@ function StandardFactorEditorDialog({
   onOpenChange,
   factor,
   pickableFields,
+  canvasAgentCount = 1,
   existingNames,
   emptyPickerMessage,
   toolServerId,
@@ -546,6 +547,7 @@ function StandardFactorEditorDialog({
   // large number of fields to search through, and this dialog already has
   // the room a cramped popover wouldn't.
   pickableFields?: UnboundField[]
+  canvasAgentCount?: number
   onPickConnectorFactor?: (field: UnboundField) => void
   // Needed to dedupe the computed name once a field is picked -- only
   // meaningful alongside pickableFields.
@@ -722,16 +724,18 @@ function StandardFactorEditorDialog({
                       : 'No matching fields.'}
                   </p>
                 )}
-                {fieldGroups.map((group) => <details key={`${group.id}:${!!search.trim()}`} open className="mb-2 rounded-md border">
-                  <summary className="cursor-pointer rounded-t-md bg-muted/30 px-3 py-2 text-sm font-semibold">{group.label}<span className="ml-2 text-xs font-normal text-muted-foreground">{group.components.reduce((count, component) => count + component.fields.length, 0)} options</span></summary>
-                  <div className="space-y-3 p-2">{group.components.map((component) => <section key={component.id} aria-label={`${group.label}: ${component.category}: ${component.label}`}>
-                    <h3 className="px-2 py-1 text-xs font-medium text-primary">{component.category}{component.category === 'Agent fields' ? '' : ` · ${component.label}`}</h3>
-                    {component.fields.map((field) => (
+                {fieldGroups.map((group) => <details key={`${group.id}:${!!search.trim()}:${canvasAgentCount < 2}`} open={canvasAgentCount < 2 || !!search.trim()} className={PICKER_GROUP_CLASSNAME}>
+                  <summary className="cursor-pointer rounded-t-md bg-muted/30 px-3 py-2 text-sm font-semibold">{group.label}<span className="ml-2 text-xs font-normal text-muted-foreground">{group.connectors.reduce((count, connector) => count + connector.components.reduce((total, component) => total + component.fields.length, 0), 0)} options</span></summary>
+                  <div className="space-y-3 p-2">{group.connectors.map((connector) => <section key={connector.label} aria-label={`${group.label}: ${connector.label}`}>
+                    <h3 className="px-2 py-1 text-sm font-medium text-primary">{connector.label}</h3>
+                    <div className="ml-3 space-y-2 border-l border-border pl-2">{connector.components.map((component) => <section key={component.id} aria-label={`${group.label}: ${connector.label}: ${component.label}`}>
+                    {connector.label !== 'Agent fields' && <h4 className="px-2 py-1 text-sm font-semibold text-chart-2">{component.label}</h4>}
+                    <div className={connector.label === 'Agent fields' ? undefined : 'ml-3'}>{component.fields.map((field) => (
                   <button
                     key={`${field.nodeId}.${field.fieldPath}.${field.levelType}`}
                     type="button"
                     onClick={() => pickField(field)}
-                    className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
                   >
                     <span className="truncate">
                       {field.fieldLabel}
@@ -740,7 +744,8 @@ function StandardFactorEditorDialog({
                       {LEVEL_TYPE_LABELS[field.levelType]}
                     </Badge>
                   </button>
-                    ))}
+                    ))}</div>
+                    </section>)}</div>
                   </section>)}</div>
                 </details>)}
               </div>

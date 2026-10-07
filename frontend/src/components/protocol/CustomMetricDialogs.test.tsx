@@ -42,7 +42,10 @@ describe('CustomMetricFlow', () => {
     await user.click(screen.getByRole('combobox', { name: 'Metric node' }))
     const list = screen.getByRole('listbox', { name: 'Metric nodes' })
     const summaries = [...list.querySelectorAll('summary')]
-    expect(summaries.map(summary => summary.textContent)).toEqual(['Alpha', 'Zebra', 'Runtime metrics for selected nodes'])
+    expect(summaries.map(summary => summary.textContent)).toEqual(['Alpha', 'Runtime metrics for selected nodes', 'Zebra'])
+    expect(summaries.every(summary => !summary.parentElement?.hasAttribute('open'))).toBe(true)
+    await user.click(summaries[0])
+    expect(summaries[0].parentElement).toHaveAttribute('open')
     await user.click(summaries[0])
     expect(summaries[0].parentElement).not.toHaveAttribute('open')
     await user.type(screen.getByRole('textbox', { name: 'Search metric nodes' }), 'Alpha')
@@ -50,6 +53,29 @@ describe('CustomMetricFlow', () => {
     await user.click(screen.getByRole('option', { name: 'Alpha, Agent' }))
     expect(screen.queryByRole('textbox', { name: 'Search metric nodes' })).not.toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: 'Metric node' })).toHaveTextContent('Alpha')
+  })
+
+  it('sorts categories and node names alphabetically within each agent', async () => {
+    const user = userEvent.setup()
+    const graph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Writer' } },
+        ...['Zulu', 'Alpha'].map(label => ({ id: label, type: 'script', position: { x: 0, y: 0 }, data: { label, config: { code: 'print(1)' } } })),
+        { id: 'tool', type: 'mcp_tool', position: { x: 0, y: 0 }, data: { label: 'Quality', config: { server_id: 'server-1', tool_names: ['score'] } } },
+      ],
+      edges: ['Zulu', 'Alpha', 'tool'].map(id => ({ id, source: id, target: 'agent', targetHandle: 'tool' })),
+    } as unknown as ProtocolGraph
+    renderFlow(graph)
+    await user.click(screen.getByRole('combobox', { name: 'Metric node' }))
+    const list = screen.getByRole('listbox', { name: 'Metric nodes' })
+    const agentGroup = [...list.querySelectorAll('details')].find(group => group.querySelector('summary')?.textContent === 'Writer')!
+    expect(agentGroup).toHaveAttribute('open')
+    expect([...agentGroup.querySelectorAll('h3')].map(heading => heading.textContent)).toEqual(['Agent', 'Tools'])
+    const toolsGroup = within(agentGroup).getByRole('region', { name: 'Writer: Tools' })
+    expect([...toolsGroup.querySelectorAll('h4')].map(heading => heading.textContent)).toEqual(['MCP Tools', 'Scripts'])
+    expect(toolsGroup.querySelector('h4')).toHaveClass('text-sm', 'text-chart-2')
+    expect(within(toolsGroup).getAllByRole('option').every(option => option.parentElement?.classList.contains('ml-3'))).toBe(true)
+    expect(within(agentGroup).getAllByRole('option').map(option => option.getAttribute('aria-label')?.split(', ').slice(0, 2).join(', '))).toEqual(['Writer, Agent', 'Writer:Quality, MCP Tool', 'Writer:Alpha, Script', 'Writer:Zulu, Script'])
   })
 
   it('sums a runtime measure over several chosen nodes', async () => {

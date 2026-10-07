@@ -192,6 +192,7 @@ function AddFactorButton({
           revealHiddenServers={revealsHiddenMcpServers(graphQuery.data?.nodes ?? [])}
           promptScopeFor={promptScopeFor}
           pickableFields={fields}
+          canvasAgentCount={(graphQuery.data?.nodes ?? []).filter(node => node.type === 'agent' || node.type === 'sub_agent').length}
           onPickConnectorFactor={(field) => {
             canvasRef.current?.openConnectorFactor(field)
             setDialogOpen(false)

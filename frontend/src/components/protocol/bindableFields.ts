@@ -504,9 +504,9 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
       : field.connectorFactor?.kind === 'dataset' ? 'Datasets'
       : field.connectorFactor?.kind === 'knowledge' ? 'Knowledge'
       : agentKinds.includes(kind) ? 'Agent fields'
-      : kind.startsWith('llm_') ? 'Model'
-      : kind.startsWith('pattern_') ? 'Execution pattern'
-      : ({ skill: 'Skills', dataset: 'Datasets', mcp_tool: 'Tools', script: 'Tools', okf_bundle: 'Knowledge', okf_document: 'Knowledge', memory: 'Memory', output_parser: 'Output parser', critic_gate: 'Critic gate' } as Record<string, string>)[kind] ?? 'Other components'
+      : MODEL_NODE_TYPES.has(kind) ? 'Model'
+      : kind.startsWith('pattern_') ? 'Pattern'
+      : ({ skill: 'Skills', dataset: 'Datasets', mcp_tool: 'Tools', mcp_scikit_learn: 'Tools', mcp_client_tool: 'Tools', script: 'Tools', okf_bundle: 'Knowledge', okf_document: 'Knowledge', memory: 'Memory', output_parser: 'Output parser', critic_gate: 'Critic gate' } as Record<string, string>)[kind] ?? String(node.data.label || kind)
     const connectorChoice = field.connectorFactor && field.connectorFactor.mode !== 'boolean'
     return {
       ...field,
@@ -522,21 +522,23 @@ export function factorCreationFields(nodes: Node[], edges: Edge[]): UnboundField
 }
 
 export function groupFactorCreationFields(fields: UnboundField[]) {
-  const agents = new Map<string, { id: string; label: string; components: Map<string, { id: string; category: string; label: string; fields: UnboundField[] }> }>()
+  type ComponentGroup = { id: string; label: string; fields: UnboundField[] }
+  type ConnectorGroup = { label: string; components: Map<string, ComponentGroup> }
+  const agents = new Map<string, { id: string; label: string; connectors: Map<string, ConnectorGroup> }>()
   for (const field of fields) {
     const group = field.pickerGroup ?? { id: 'fields', label: 'Canvas fields', category: 'Fields', componentId: field.nodeId, componentLabel: field.nodeLabel }
-    if (!agents.has(group.id)) agents.set(group.id, { id: group.id, label: group.label, components: new Map() })
+    if (!agents.has(group.id)) agents.set(group.id, { id: group.id, label: group.label, connectors: new Map() })
     const agent = agents.get(group.id)!
-    if (!agent.components.has(group.componentId)) agent.components.set(group.componentId, { id: group.componentId, category: group.category, label: group.componentLabel, fields: [] })
-    agent.components.get(group.componentId)!.fields.push(field)
+    if (!agent.connectors.has(group.category)) agent.connectors.set(group.category, { label: group.category, components: new Map() })
+    const connector = agent.connectors.get(group.category)!
+    if (!connector.components.has(group.componentId)) connector.components.set(group.componentId, { id: group.componentId, label: group.componentLabel, fields: [] })
+    connector.components.get(group.componentId)!.fields.push(field)
   }
-  const categories = ['Agent fields', 'Skills', 'Datasets', 'Model', 'Execution pattern', 'Tools', 'Knowledge', 'Memory', 'Output parser', 'Critic gate', 'Other components']
   return [...agents.values()]
-    .sort((a, b) => a.id === 'shared-unconnected' ? 1 : b.id === 'shared-unconnected' ? -1 : a.label.localeCompare(b.label))
-    .map((agent) => ({ ...agent, components: [...agent.components.values()]
-      .sort((a, b) => categories.indexOf(a.category) - categories.indexOf(b.category) || a.label.localeCompare(b.label))
-      .map((component) => ({ ...component, fields: component.fields.sort((a, b) => {
-        const modeOrder = (field: UnboundField) => field.connectorFactor?.mode === 'boolean' ? 0 : field.connectorFactor?.mode.endsWith('_selection') ? 1 : 2
-        return a.connectorFactor && b.connectorFactor ? modeOrder(a) - modeOrder(b) : a.fieldLabel.localeCompare(b.fieldLabel)
-      }) })) }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .map((agent) => ({ ...agent, connectors: [...agent.connectors.values()]
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map((connector) => ({ ...connector, components: [...connector.components.values()]
+        .sort((a, b) => a.label.localeCompare(b.label))
+        .map((component) => ({ ...component, fields: component.fields.sort((a, b) => a.fieldLabel.localeCompare(b.fieldLabel)) })) })) }))
 }

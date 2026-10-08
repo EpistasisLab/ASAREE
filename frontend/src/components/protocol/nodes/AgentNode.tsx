@@ -228,20 +228,16 @@ export function AgentNode({
           w-72 rather than the w-60 it was with three: at 240px the margins are
           64px each, which two centered captions won't fit in; at 288px they're
           88px. Hence a Pattern/Skill pair in the left margin (5% / 18%) and a
-          Dataset/Knowledge pair in the right (71% / 90%) -- the numbers
+          Dataset/Knowledge pair in the right (73% / 90%) -- the numbers
           themselves live in layout.ts's CONNECTOR_X, because addNode() has to
           place a connector's node at that same x -- each spaced so neither
           their ~26px stubs nor their centered captions collide. Every
           caption is centered directly above its own handle, mirroring the
           bottom row (see ConnectorHandleLabel's side="top" branch).
 
-          Dataset is at 71% rather than the 74% it started at: "Dataset" and
-          "Knowledge" are the two longest captions on this edge, and centered
-          at 74/90 they were within a pixel or two of touching. 71% is about
-          as far left as it can go -- the toolbar's right edge is at ~69%, and
-          the stub's own padding already overlaps it slightly (harmless, the
-          toolbar is above the stub's z-index and only there on hover, and the
-          visible "+" glyph still clears it).
+          Dataset sits at 73%, nudged slightly right from its previous 71%
+          position on both Agent and Sub-Agent cards. Its handle, caption,
+          "+" stub and newly added dataset nodes share that same position.
 
           The bottom sub-connectors: required Model (exactly one), optional
           repeatable Sub-Agents on parent Agents, optional max-1 Memory (visual

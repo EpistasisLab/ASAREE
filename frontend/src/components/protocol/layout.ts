@@ -23,7 +23,7 @@ const CONNECTOR_X: {
   agent: {
     architectural_pattern: 0.05,
     skill: 0.18,
-    dataset: 0.71,
+    dataset: 0.73,
     knowledge: 0.9,
     model: 0.08,
     sub_agents: 0.32,

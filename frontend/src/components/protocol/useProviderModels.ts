@@ -27,10 +27,9 @@ export const providerModelsKey = (provider: string | undefined) => ['llm-setting
 // 10-per-60s limiter on GET /llm-settings/{provider}/models, so the old
 // behaviour could 429 a canvas with a few nodes and some tab-switching.
 //
-// Kept deliberately shorter than the server-side cache TTL: a credential
-// change busts both (via the prefix above and the server's own bust), so
-// this only bounds how long a list edited *outside* this app -- a new Azure
-// deployment, a model released mid-session -- stays hidden.
+// staleTime only marks data stale; it doesn't refresh a mounted menu.
+// Poll at the same cadence, sharing the cache across consumers, so external
+// changes eventually appear even without navigation or window refocus.
 const MODEL_LIST_STALE_TIME_MS = 10 * 60 * 1000
 
 export function useProviderModels(provider: string | undefined) {
@@ -50,6 +49,7 @@ export function useProviderModels(provider: string | undefined) {
     queryFn: () => llmSettingsApi.listModels(provider!),
     enabled: !!provider && (provider !== 'azure_foundry' || hasCredential),
     staleTime: MODEL_LIST_STALE_TIME_MS,
+    refetchInterval: MODEL_LIST_STALE_TIME_MS,
   })
 
   return {

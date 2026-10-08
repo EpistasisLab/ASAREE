@@ -156,6 +156,11 @@ async def check_connection_endpoint(provider: str, user: CurrentUser, db: DbSess
         raise HTTPException(status_code=404, detail="No credential saved for this provider.")
 
     result = await check_connection(provider=provider, setting=setting)
+    if provider == "azure_foundry" and result.status == "ok":
+        # The explicit connection check also requests a fresh deployment
+        # menu. The browser invalidates its list after this response, so
+        # its next request must not reuse the six-hour server cache.
+        await invalidate_models_cache(user_id=user.id, provider=provider)
     return LLMConnectionCheckResponse(
         provider=provider, status=result.status, detail=result.detail, endpoint=result.endpoint
     )

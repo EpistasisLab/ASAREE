@@ -143,7 +143,7 @@ export function InteractEdge({
       )}
       <EdgeToolbar edgeId={id} x={labelX} y={labelY} isVisible={(hovered || handoffOpen || datasetOpen) && !isPatternEdge}>
         <div
-          className="flex items-center gap-1 rounded-md border bg-card px-1 py-0.5 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20"
+          className="flex items-center gap-0.5 rounded-md border bg-card px-1 py-0.5 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20"
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
         >
@@ -152,14 +152,14 @@ export function InteractEdge({
               type="button"
               aria-label="Add node on this connection"
               title="Add node on this connection"
-              className="flex size-5 cursor-pointer items-center justify-center rounded-full text-primary hover:bg-primary/10"
+              className="flex size-6 cursor-pointer items-center justify-center rounded-full text-primary hover:bg-primary/10"
               onClick={() => requestEdgeInsert({ edgeId: id, source, target })}
             >
-              <Plus className="size-3" />
+              <Plus className="size-4" />
             </button>
           )}
           {canConfigureDataset && <Popover open={datasetOpen} onOpenChange={setDatasetOpen}>
-            <PopoverTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Dataset input settings" disabled={experimentLocked} />}><Settings2 className="size-3" /></PopoverTrigger>
+            <PopoverTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Dataset input settings" disabled={experimentLocked} />}><Settings2 className="size-4" /></PopoverTrigger>
             <PopoverContent side="bottom" className="w-80"><DatasetInputPanel edgeId={id} source={source} disabled={experimentLocked} /></PopoverContent>
           </Popover>}
           {canNarrow && (
@@ -170,11 +170,11 @@ export function InteractEdge({
                     type="button"
                     aria-label="What passes on this connection"
                     title={handoffLabel ? `Passes ${handoffLabel}` : 'What passes: full output'}
-                    className={`flex size-5 cursor-pointer items-center justify-center rounded-full hover:bg-primary/10 ${handoffLabel ? 'bg-primary/15 text-primary' : 'text-primary'}`}
+                    className={`flex size-6 cursor-pointer items-center justify-center rounded-full hover:bg-primary/10 ${handoffLabel ? 'bg-primary/15 text-primary' : 'text-primary'}`}
                   />
                 }
               >
-                <Filter className="size-3" />
+                <Filter className="size-4" />
               </PopoverTrigger>
               <PopoverContent side="bottom" className="w-80">
                 <EdgeHandoffPanel edgeId={id} source={source} />
@@ -185,10 +185,10 @@ export function InteractEdge({
             type="button"
             aria-label="Delete connection"
             title="Delete connection"
-            className="flex size-5 cursor-pointer items-center justify-center rounded-full text-destructive hover:bg-destructive/10"
+            className="flex size-6 cursor-pointer items-center justify-center rounded-full text-destructive hover:bg-destructive/10"
             onClick={() => setEdges((eds) => eds.filter((e) => e.id !== id))}
           >
-            <Trash2 className="size-3" />
+            <Trash2 className="size-4" />
           </button>
         </div>
       </EdgeToolbar>

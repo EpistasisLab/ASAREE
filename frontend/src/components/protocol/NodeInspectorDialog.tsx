@@ -37,7 +37,7 @@ function readStoredOpacity(): number {
 // types -- or between an inspector's own tabs -- never changes the dialog's
 // footprint. Don't tune this per inspector; adjust it once here.
 export const NODE_INSPECTOR_CONTENT_CLASSNAME =
-  'flex h-[calc(100vh-4rem)] w-[calc(100vw-4rem)] max-w-[calc(100vw-4rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[calc(100vw-4rem)]'
+  'flex h-[calc(100dvh-4rem)] w-[calc(100vw-4rem)] max-w-[calc(100vw-4rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[calc(100vw-4rem)]'
 
 /** Shared fixed-frame shell for node inspectors: a non-scrolling header row
  * up top (icon/title, a transparency slider, Delete/Close) and a
@@ -135,7 +135,7 @@ export function NodeInspectorDialog({
             </div>
           </div>
         </div>
-        <div className={cn('flex-1 space-y-4 overflow-y-auto p-4', bodyClassName)}>{children}</div>
+        <div className={cn('min-h-0 flex-1 space-y-4 overflow-y-auto p-4', bodyClassName)}>{children}</div>
       </DialogContent>
     </Dialog>
   )

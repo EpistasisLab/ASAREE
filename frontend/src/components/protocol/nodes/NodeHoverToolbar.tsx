@@ -17,8 +17,8 @@ function ToolbarIconButton({
   return (
     <Button
       variant="ghost"
-      size="icon"
-      className="size-10"
+      size="icon-xs"
+      className="hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent"
       aria-label={label}
       title={label}
       disabled={disabled}
@@ -88,7 +88,7 @@ export function NodeHoverToolbar({
   const { deleteElements } = useReactFlow()
 
   return (
-    <div className="absolute bottom-full left-1/2 z-10 mb-1 flex -translate-x-1/2 items-center gap-1.5 rounded-md border bg-card p-1.5 opacity-0 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20 transition-opacity group-hover:opacity-100">
+    <div className="absolute bottom-full left-1/2 z-10 mb-1 flex -translate-x-1/2 items-center gap-0.5 rounded-md border bg-card px-1 py-0.5 opacity-0 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20 transition-opacity group-hover:opacity-100">
       {runAlone && (
         // A disabled Button gets `pointer-events-none`, which would also
         // swallow its own `title` tooltip -- wrapping it in a span that
@@ -101,27 +101,27 @@ export function NodeHoverToolbar({
             disabled={!runAlone.canRun}
             onClick={() => runAlone.canRun && runAlone.onRun()}
           >
-            <Play className="size-5" />
+            <Play className="size-3" />
           </ToolbarIconButton>
         </span>
       )}
       {isActive !== undefined && onToggleActive && (
         <ToolbarIconButton label={isActive ? 'Deactivate' : 'Activate'} onClick={onToggleActive}>
-          {isActive ? <Power className="size-5" /> : <PowerOff className="size-5" />}
+          {isActive ? <Power className="size-3" /> : <PowerOff className="size-3" />}
         </ToolbarIconButton>
       )}
       {swap ? (
         <ToolbarIconButton label={swap.label} onClick={swap.onSwap}>
-          <Repeat className="size-5" />
+          <Repeat className="size-3" />
         </ToolbarIconButton>
       ) : (
         <ToolbarIconButton label="Delete" onClick={() => void deleteElements({ nodes: [{ id: nodeId }] })}>
-          <Trash2 className="size-5" />
+          <Trash2 className="size-3" />
         </ToolbarIconButton>
       )}
       {onMakeFactor && (
         <ToolbarIconButton label="Make experimental factor" onClick={onMakeFactor}>
-          <Split className="size-5" />
+          <Split className="size-3" />
         </ToolbarIconButton>
       )}
     </div>

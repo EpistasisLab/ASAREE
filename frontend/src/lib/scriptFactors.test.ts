@@ -32,7 +32,7 @@ describe('script connector factors', () => {
     expect(reconcileScriptFactor(toggle, graph, 'agent')).toEqual({ ...toggle, levels: [['a', 'b', 'c'], []] })
     const noneFirst = { ...toggle, levels: [[], ['a', 'b']], level_labels: ['Without scripts', 'With scripts'] }
     expect(reconcileScriptFactor(noneFirst, { ...graph, edges: graph.edges.filter((edge) => edge.source !== 'b') }, 'agent')).toEqual({ ...noneFirst, levels: [[], ['a', 'c']] })
-    expect(scriptFactorIssues({ ...graph, edges: [] }, [toggle])[0]).toContain('at least one')
+    expect(scriptFactorIssues({ ...graph, edges: [] }, [toggle])[0]).toContain('restore the factor group')
   })
   it('preserves ordered labels and appends newly connected scripts', () => {
     expect(reconcileScriptFactor(factor, graph, 'agent')).toEqual({ ...factor, levels: [['b'], ['a'], ['c']], level_labels: ['Custom B', 'Custom A', 'Script c'] })
@@ -43,8 +43,8 @@ describe('script connector factors', () => {
   })
   it('keeps an empty factor visible and reports incomplete and unavailable scripts', () => {
     const empty = { ...graph, edges: [] }
-    expect(reconcileScriptFactor(factor, empty, 'agent').levels).toEqual([])
-    expect(scriptFactorIssues(empty, [factor])[0]).toContain('at least two')
+    expect(reconcileScriptFactor(factor, empty, 'agent')).toEqual(factor)
+    expect(scriptFactorIssues(empty, [factor])[0]).toContain('restore the factor group')
     expect(scriptFactorOwner(graph, 'b')).toBe('Scripts')
   })
 })

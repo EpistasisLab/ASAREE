@@ -1,3 +1,4 @@
+import { sharedFactorGroup, sharedGroupConflict, sharedGroupIssues } from './sharedFactors'
 import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph, ProtocolNode } from '@/types/protocols'
 
@@ -11,13 +12,17 @@ export const datasetFactorModes = {
 export type DatasetFactorMode = keyof typeof datasetFactorModes
 
 export function datasetFactorConflict(graph: ProtocolGraph, factors: DesignFactor[], datasetNodeId: string, mode: DatasetFactorMode, agentId: string): string | undefined {
+  if (mode !== 'boolean') {
+    const groupConflict = sharedGroupConflict(graph, datasetNodeId, 'dataset')
+    if (groupConflict) return groupConflict
+  }
   const affectedIds = new Set(mode === 'boolean' ? [datasetNodeId] : connectedDatasets(graph, agentId).map((node) => node.id))
   if (graph.edges.some((edge) => affectedIds.has(edge.source) && edge.data?.dataset_input?.mode === 'per_row')) return 'Dataset factors require Whole dataset inputs. Change Per row to Whole dataset first.'
   const owner = graph.nodes.find((node) => node.id === (mode === 'boolean' ? datasetNodeId : agentId))
   const currentName = owner?.data.factor_bindings?.[mode === 'boolean' ? 'config.enabled' : DATASET_FACTOR_PATH]
   const current = factors.find((factor) => factor.name === currentName)
   if (current && (current.level_type ?? 'boolean') !== mode) {
-    return `${datasetFactorModes[mode]} is unavailable because this Agent already uses the factor ${current.name} (${datasetFactorModes[(current.level_type ?? 'boolean') as DatasetFactorMode]}). Keep the current factor type, or select its factor type and remove it first.`
+    return `${datasetFactorModes[mode]} is unavailable because this shared group already uses the factor ${current.name} (${datasetFactorModes[(current.level_type ?? 'boolean') as DatasetFactorMode]}). Keep the current factor type, or select its factor type and remove it first.`
   }
   const conflicts = [...new Set(mode === 'boolean'
     ? [...(owner?.data.factor_bindings?.config ? [owner.data.factor_bindings.config] : []), ...graph.edges.filter((edge) => edge.source === datasetNodeId && ['dataset', 'resource', 'tool'].includes(edge.targetHandle ?? ''))
@@ -28,8 +33,8 @@ export function datasetFactorConflict(graph: ProtocolGraph, factors: DesignFacto
     : connectedDatasets(graph, agentId).flatMap((node) => Object.values(node.data.factor_bindings ?? {})))]
   if (!conflicts.length) return undefined
   return mode === 'boolean'
-    ? `${datasetFactorModes[mode]} is unavailable because a connected Agent already controls this Dataset with the factor ${conflicts.join(', ')}. Use the existing Agent-level factor, or select its factor type and remove it first.`
-    : `${datasetFactorModes[mode]} is unavailable because connected Datasets already have factor bindings: ${conflicts.join(', ')}. Agent-level dataset factors cannot be combined with individual Dataset factor bindings. Use This dataset on/off, or remove those bindings in each Dataset’s factor dialog first.`
+    ? `${datasetFactorModes[mode]} is unavailable because a connected Agent already controls this Dataset with the factor ${conflicts.join(', ')}. Use the existing shared factor, or select its factor type and remove it first.`
+    : `${datasetFactorModes[mode]} is unavailable because connected Datasets already have factor bindings: ${conflicts.join(', ')}. Shared dataset factors cannot be combined with individual Dataset factor bindings. Use This dataset on/off, or remove those bindings in each Dataset’s factor dialog first.`
 }
 
 export function isDatasetFactor(factor: DesignFactor): boolean {
@@ -49,6 +54,9 @@ export function datasetId(node: ProtocolNode): string {
 }
 
 export function reconcileDatasetFactor(factor: DesignFactor, graph: ProtocolGraph, agentId: string): DesignFactor {
+  if (sharedGroupIssues(graph, [factor], 'dataset').length) return factor
+  const source = connectedDatasets(graph, agentId)[0]
+  if (source && sharedFactorGroup(graph, source.id, 'dataset').error) return factor
   const datasets = connectedDatasets(graph, agentId)
   const ids = [...new Set(datasets.map(datasetId))]
   if (factor.level_type === 'dataset_toggle') {
@@ -81,6 +89,8 @@ export function datasetFactorOwner(graph: ProtocolGraph | undefined, datasetNode
 }
 
 export function datasetFactorIssues(graph: ProtocolGraph | undefined, factors: DesignFactor[], availableIds?: Set<string>): string[] {
+  const groupIssues = sharedGroupIssues(graph, factors, 'dataset')
+  if (groupIssues.length) return groupIssues
   return factors.filter(isDatasetFactor).flatMap((factor) => {
     const owner = graph?.nodes.find((node) => node.data.factor_bindings?.[DATASET_FACTOR_PATH] === factor.name)
     if (!owner || !graph) return [`${factor.name}: rebind or remove this dataset factor.`]

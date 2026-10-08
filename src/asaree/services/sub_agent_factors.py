@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from asaree.services.shared_factors import shared_test_selections, validate_shared_factor_groups
+
 SUB_AGENT_SELECTION = "sub_agent_selection"
 SUB_AGENT_TOGGLE = "sub_agent_toggle"
 SUB_AGENT_FACTOR_TYPES = {SUB_AGENT_SELECTION, SUB_AGENT_TOGGLE}
@@ -25,6 +27,7 @@ def connected_sub_agent_nodes(graph: dict[str, Any], agent_id: str) -> list[dict
 def validate_sub_agent_factor_structure(
     design_spec: dict[str, Any] | None, graph: dict[str, Any], *, complete: bool = True
 ) -> None:
+    validate_shared_factor_groups(graph, "sub_agent")
     factors = {factor.get("name"): factor for factor in (design_spec or {}).get("factors") or []}
     bound = {
         (node.get("data") or {}).get("factor_bindings", {}).get(SUB_AGENT_SELECTION)
@@ -75,7 +78,7 @@ async def test_sub_agent_factor_values(
     graph: dict[str, Any], selections: dict[str, str] | None, owner_id: uuid.UUID, node_id: str | None = None
 ) -> dict[str, Any]:
     """Validate preview choices against the publication and retain run provenance."""
-    selections = selections or {}
+    selections = shared_test_selections(graph, selections, "sub_agent", node_id)
     owners = {
         node["id"]: node
         for node in graph.get("nodes") or []

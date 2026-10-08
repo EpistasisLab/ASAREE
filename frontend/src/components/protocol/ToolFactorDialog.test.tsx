@@ -29,7 +29,7 @@ it('keeps the dialog open after removal and permits choosing another factor type
   expect(screen.queryByRole('status')).not.toBeInTheDocument()
 })
 
-it.each(['Tool levels', 'All agent tools on/off'])('explains why %s conflicts with individual bindings without offering replacement', (mode) => {
+it.each(['Tool levels', 'All tools on/off'])('explains why %s conflicts with individual bindings without offering replacement', (mode) => {
   const save = vi.fn().mockResolvedValue(undefined)
   render(<ToolFactorDialog toolNodeId="tool" graph={graph} factors={[{ name: 'Tool enabled', level_type: 'boolean', levels: [false, true] }]} onClose={vi.fn()} onSave={save} onRemove={vi.fn()} />)
   const option = screen.getByRole('button', { name: mode })
@@ -108,7 +108,8 @@ it('opens the existing group factor when a shared tool has multiple connected ag
     edges: [...graph.edges, { id: 'second-edge', source: 'tool', target: 'second', targetHandle: 'tool' }],
   } as ProtocolGraph
   render(<ToolFactorDialog toolNodeId="tool" graph={sharedGraph} factors={[{ name: 'Group', level_type: 'tool_toggle', levels: [['tool'], []], level_labels: ['All enabled', 'All disabled'] }]} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />)
-  expect(screen.getByRole('combobox')).toHaveTextContent('Second agent')
-  expect(screen.getByRole('button', { name: 'All agent tools on/off' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  expect(screen.getByText('Applies to: First agent, Second agent')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'All tools on/off' })).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByLabelText('Factor name')).toHaveValue('Group')
 })

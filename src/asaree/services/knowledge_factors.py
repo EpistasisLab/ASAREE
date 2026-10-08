@@ -6,6 +6,7 @@ import uuid
 from typing import Any
 
 from asaree.services import okf_bundles, okf_documents
+from asaree.services.shared_factors import shared_test_selections, validate_shared_factor_groups
 
 KNOWLEDGE_SELECTION = "knowledge_selection"
 KNOWLEDGE_TOGGLE = "knowledge_toggle"
@@ -32,6 +33,7 @@ def connected_knowledge_nodes(graph: dict[str, Any], agent_id: str) -> list[dict
 def validate_knowledge_factor_structure(
     design_spec: dict[str, Any] | None, graph: dict[str, Any], *, complete: bool = True
 ) -> None:
+    validate_shared_factor_groups(graph, "knowledge")
     factors = {factor.get("name"): factor for factor in (design_spec or {}).get("factors") or []}
     bound = {
         (node.get("data") or {}).get("factor_bindings", {}).get(KNOWLEDGE_SELECTION)
@@ -110,7 +112,7 @@ async def test_knowledge_factor_values(
     graph: dict[str, Any], selections: dict[str, str] | None, owner_id: uuid.UUID, node_id: str | None = None
 ) -> dict[str, Any]:
     """Validate preview choices against the publication and retain run provenance."""
-    selections = selections or {}
+    selections = shared_test_selections(graph, selections, "knowledge", node_id)
     owners = {
         node["id"]: node
         for node in graph.get("nodes") or []

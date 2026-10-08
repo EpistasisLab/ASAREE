@@ -1,3 +1,4 @@
+import { sharedFactorGroup, sharedGroupConflict, sharedGroupIssues } from './sharedFactors'
 import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph, ProtocolNode } from '@/types/protocols'
 
@@ -11,11 +12,15 @@ export const knowledgeFactorModes = {
 export type KnowledgeFactorMode = keyof typeof knowledgeFactorModes
 
 export function knowledgeFactorConflict(graph: ProtocolGraph, factors: DesignFactor[], knowledgeNodeId: string, mode: KnowledgeFactorMode, agentId: string): string | undefined {
+  if (mode !== 'boolean') {
+    const groupConflict = sharedGroupConflict(graph, knowledgeNodeId, 'knowledge')
+    if (groupConflict) return groupConflict
+  }
   const owner = graph.nodes.find((node) => node.id === (mode === 'boolean' ? knowledgeNodeId : agentId))
   const currentName = owner?.data.factor_bindings?.[mode === 'boolean' ? 'config.enabled' : KNOWLEDGE_FACTOR_PATH]
   const current = factors.find((factor) => factor.name === currentName)
   if (current && (current.level_type ?? 'boolean') !== mode) {
-    return `${knowledgeFactorModes[mode]} is unavailable because this Agent already uses the factor ${current.name} (${knowledgeFactorModes[(current.level_type ?? 'boolean') as KnowledgeFactorMode]}). Keep the current factor type, or select its factor type and remove it first.`
+    return `${knowledgeFactorModes[mode]} is unavailable because this shared group already uses the factor ${current.name} (${knowledgeFactorModes[(current.level_type ?? 'boolean') as KnowledgeFactorMode]}). Keep the current factor type, or select its factor type and remove it first.`
   }
   const conflicts = [...new Set(mode === 'boolean'
     ? graph.edges.filter((edge) => edge.source === knowledgeNodeId && edge.targetHandle === 'knowledge')
@@ -26,8 +31,8 @@ export function knowledgeFactorConflict(graph: ProtocolGraph, factors: DesignFac
     : connectedKnowledge(graph, agentId).flatMap((node) => Object.values(node.data.factor_bindings ?? {})))]
   if (!conflicts.length) return undefined
   return mode === 'boolean'
-    ? `${knowledgeFactorModes[mode]} is unavailable because a connected Agent already controls this Knowledge with the factor ${conflicts.join(', ')}. Use the existing Agent-level factor, or select its factor type and remove it first.`
-    : `${knowledgeFactorModes[mode]} is unavailable because connected Knowledge nodes already have factor bindings: ${conflicts.join(', ')}. Agent-level knowledge factors cannot be combined with individual Knowledge factor bindings. Use This knowledge on/off, or remove those bindings in each Knowledge node’s factor dialog first.`
+    ? `${knowledgeFactorModes[mode]} is unavailable because a connected Agent already controls this Knowledge with the factor ${conflicts.join(', ')}. Use the existing shared factor, or select its factor type and remove it first.`
+    : `${knowledgeFactorModes[mode]} is unavailable because connected Knowledge nodes already have factor bindings: ${conflicts.join(', ')}. Shared knowledge factors cannot be combined with individual Knowledge factor bindings. Use This knowledge on/off, or remove those bindings in each Knowledge node’s factor dialog first.`
 }
 
 export function isKnowledgeFactor(factor: DesignFactor): boolean {
@@ -48,6 +53,9 @@ export function knowledgeId(node: ProtocolNode): string {
 }
 
 export function reconcileKnowledgeFactor(factor: DesignFactor, graph: ProtocolGraph, agentId: string): DesignFactor {
+  if (sharedGroupIssues(graph, [factor], 'knowledge').length) return factor
+  const source = connectedKnowledge(graph, agentId)[0]
+  if (source && sharedFactorGroup(graph, source.id, 'knowledge').error) return factor
   const knowledge = connectedKnowledge(graph, agentId)
   const ids = [...new Set(knowledge.map(knowledgeId))]
   if (factor.level_type === 'knowledge_toggle') {
@@ -80,6 +88,8 @@ export function knowledgeFactorOwner(graph: ProtocolGraph | undefined, knowledge
 }
 
 export function knowledgeFactorIssues(graph: ProtocolGraph | undefined, factors: DesignFactor[], availableIds?: Set<string>): string[] {
+  const groupIssues = sharedGroupIssues(graph, factors, 'knowledge')
+  if (groupIssues.length) return groupIssues
   return factors.filter(isKnowledgeFactor).flatMap((factor) => {
     const owner = graph?.nodes.find((node) => node.data.factor_bindings?.[KNOWLEDGE_FACTOR_PATH] === factor.name)
     if (!owner || !graph) return [`${factor.name}: rebind or remove this knowledge factor.`]

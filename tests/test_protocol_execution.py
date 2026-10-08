@@ -246,7 +246,7 @@ def test_sub_agent_is_a_callable_connector_not_a_pipeline_sink() -> None:
     assert pe._can_deliver_communication(graph, "child", "parent") is False
 
 
-def test_sub_agent_cannot_have_two_parents() -> None:
+def test_sub_agent_can_be_shared_by_two_parents() -> None:
     parent_a, parent_a_model = _agent_with_llm("parent-a", "model-a")
     parent_b, parent_b_model = _agent_with_llm("parent-b", "model-b")
     child = _node("child", "sub_agent")
@@ -261,8 +261,9 @@ def test_sub_agent_cannot_have_two_parents() -> None:
         ],
     }
 
-    with pytest.raises(ProtocolValidationError, match="exactly one parent"):
-        topological_order(graph)
+    topological_order(graph)
+    assert pe._sub_agent_ids(graph, "parent-a") == ["child"]
+    assert pe._sub_agent_ids(graph, "parent-b") == ["child"]
 
 
 def test_only_active_connected_sub_agents_require_a_model() -> None:

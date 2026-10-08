@@ -78,17 +78,19 @@ def test_all_or_none_runs_override_disabled_skills_and_preserve_graph(none_first
     assert graph == original
 
 
-def test_all_or_none_accepts_one_skill_and_scopes_shared_nodes_to_each_agent():
+def test_all_or_none_accepts_one_skill_and_applies_to_all_connected_agents():
     graph, spec, ids = skill_graph()
     graph["edges"].pop()
     graph["nodes"][0]["data"].update(skill_factor_mode="skill_toggle", skill_selection=[ids[0]])
-    graph["nodes"].append({"id": "other-agent", "type": "agent", "data": {}})
+    graph["nodes"].append({"id": "other-agent", "type": "agent", "data": copy.deepcopy(graph["nodes"][0]["data"])})
     graph["edges"].append({"source": "skill-0", "target": "other-agent", "targetHandle": "skill"})
     spec["factors"][0].update(level_type="skill_toggle", levels=[[ids[0]], []])
     validate_factor_bindings(spec, graph)
     patched = apply_factor_bindings(graph, {"Skills": [ids[0]]})
     assert _resolve_skill_config(patched, "agent") == {"skill_ids": [ids[0]]}
-    assert _resolve_skill_config(patched, "other-agent") == {}
+    assert _resolve_skill_config(patched, "other-agent") == {"skill_ids": [ids[0]]}
+    disabled = apply_factor_bindings(graph, {"Skills": []})
+    assert _resolve_skill_config(disabled, "agent") == _resolve_skill_config(disabled, "other-agent") == {}
 
 
 @pytest.mark.parametrize("levels", ["partial", "duplicate", "all-only", "foreign"])
@@ -123,6 +125,24 @@ async def test_all_or_none_preview_default_and_explicit_choice(monkeypatch):
     assert await preview_values(graph, None, owner) == {"Skills": []}
     with pytest.raises(ValueError, match="all enabled"):
         await preview_values(graph, {"agent": ids[0]}, owner)
+
+
+@pytest.mark.asyncio
+async def test_shared_preview_choice_is_not_overwritten_by_another_agents_default(monkeypatch):
+    graph, _, ids = skill_graph()
+    owner = uuid.uuid4()
+    graph["nodes"].append({"id": "other", "type": "agent", "data": copy.deepcopy(graph["nodes"][0]["data"])})
+    graph["edges"].extend([
+        {"source": f"skill-{index}", "target": "other", "targetHandle": "skill"} for index in range(2)
+    ])
+    monkeypatch.setattr(
+        "asaree.services.skill_factors.skill_service.get_skill",
+        AsyncMock(return_value=SimpleNamespace(owner_id=owner, is_system=False)),
+    )
+    assert await preview_values(graph, {"agent": ids[1]}, owner) == {"Skills": [ids[1]]}
+    assert await preview_values(graph, {"other": ids[1]}, owner) == {"Skills": [ids[1]]}
+    with pytest.raises(ValueError, match="different levels"):
+        await preview_values(graph, {"agent": ids[0], "other": ids[1]}, owner)
 
 
 @pytest.mark.parametrize("change", ["one", "missing-level", "duplicate", "conflict"])

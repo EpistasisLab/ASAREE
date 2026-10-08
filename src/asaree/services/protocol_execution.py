@@ -102,6 +102,7 @@ from asaree.services.protocol_runs import (
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import gather_tools
 from asaree.services.runtime_metrics import finalize_attempt_measurement
+from asaree.services.shared_factors import GROUP_SPECS, validate_shared_factor_groups
 from asaree.services.skill_factors import validate_skill_factors
 from asaree.services.system_mcp_servers import (
     DATASET_DICTIONARY_AGENT_TOOLS,
@@ -1073,8 +1074,10 @@ def topological_order(
     premise gone there is no order left to claim.
     """
     try:
+        for kind in GROUP_SPECS:
+            validate_shared_factor_groups(graph, kind)
         resolve_dataset_row_plan(graph)
-    except DatasetRowInputError as exc:
+    except (DatasetRowInputError, ValueError) as exc:
         raise ProtocolValidationError(str(exc)) from exc
     _, downstream, _ = _adjacency(graph)
     # Production must validate workers from every connector level, including
@@ -1295,10 +1298,6 @@ def topological_order(
 
         if node_type == "sub_agent":
             parent_edges = _edges_with_handle(graph, nid, "sub_agents", direction="outgoing")
-            if len(parent_edges) > 1:
-                raise ProtocolValidationError(
-                    f"Sub-Agent node {name!r} can have exactly one parent (found {len(parent_edges)})."
-                )
             for edge in parent_edges:
                 parent = nodes.get(str(edge.get("target")))
                 if parent is None or parent.get("type") != "agent":

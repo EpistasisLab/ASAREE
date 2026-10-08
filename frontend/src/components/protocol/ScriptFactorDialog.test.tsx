@@ -27,7 +27,7 @@ it('keeps the dialog open after removal and permits choosing another factor type
   expect(screen.queryByRole('status')).not.toBeInTheDocument()
 })
 
-it.each(['Script levels', 'All agent scripts on/off'])('explains why %s conflicts with individual bindings without offering replacement', (mode) => {
+it.each(['Script levels', 'All scripts on/off'])('explains why %s conflicts with individual bindings without offering replacement', (mode) => {
   const save = vi.fn().mockResolvedValue(undefined)
   render(<ScriptFactorDialog scriptNodeId="script" graph={graph} factors={[{ name: 'Script enabled', level_type: 'boolean', levels: [false, true] }]} onClose={vi.fn()} onSave={save} onRemove={vi.fn()} />)
   const option = screen.getByRole('button', { name: mode })

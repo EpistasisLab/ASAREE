@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.services.datasets import get_dataset
+from asaree.services.shared_factors import shared_test_selections, validate_shared_factor_groups
 
 DATASET_SELECTION = "dataset_selection"
 DATASET_TOGGLE = "dataset_toggle"
@@ -29,6 +30,7 @@ def connected_dataset_nodes(graph: dict[str, Any], agent_id: str) -> list[dict[s
 def validate_dataset_factor_structure(
     design_spec: dict[str, Any] | None, graph: dict[str, Any], *, complete: bool = True
 ) -> None:
+    validate_shared_factor_groups(graph, "dataset")
     factors = {factor.get("name"): factor for factor in (design_spec or {}).get("factors") or []}
     bound = {
         (node.get("data") or {}).get("factor_bindings", {}).get(DATASET_SELECTION) for node in graph.get("nodes") or []
@@ -113,7 +115,7 @@ async def test_dataset_factor_values(
     node_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate preview choices against the publication and retain run provenance."""
-    selections = selections or {}
+    selections = shared_test_selections(graph, selections, "dataset", node_id)
     owners = {
         node["id"]: node
         for node in graph.get("nodes") or []

@@ -1,3 +1,4 @@
+import { sharedFactorGroup, sharedGroupConflict, sharedGroupIssues } from './sharedFactors'
 import type { DesignFactor } from '@/types/experiments'
 import { MCP_TOOL_NODE_TYPES } from '@/components/protocol/mcpServerCatalog'
 import type { ProtocolGraph, ProtocolNode } from '@/types/protocols'
@@ -7,17 +8,21 @@ export const TOOL_FACTOR_PATH = 'tool_selection'
 export const toolFactorModes = {
   boolean: 'This tool on/off',
   tool_selection: 'Tool levels',
-  tool_toggle: 'All agent tools on/off',
+  tool_toggle: 'All tools on/off',
   tool_names: 'Tools allowed',
 }
 export type ToolFactorMode = keyof typeof toolFactorModes
 
 export function toolFactorConflict(graph: ProtocolGraph, factors: DesignFactor[], toolNodeId: string, mode: ToolFactorMode, agentId: string): string | undefined {
+  if (!(isIndividualToolMode(mode))) {
+    const groupConflict = sharedGroupConflict(graph, toolNodeId, 'tool')
+    if (groupConflict) return groupConflict
+  }
   const owner = graph.nodes.find((node) => node.id === (isIndividualToolMode(mode) ? toolNodeId : agentId))
   const currentName = owner?.data.factor_bindings?.[isIndividualToolMode(mode) ? toolFactorPath(mode) : TOOL_FACTOR_PATH]
   const current = factors.find((factor) => factor.name === currentName)
   if (current && (current.level_type ?? 'boolean') !== mode) {
-    return `${toolFactorModes[mode]} is unavailable because this Agent already uses the factor ${current.name} (${toolFactorModes[(current.level_type ?? 'boolean') as ToolFactorMode]}). Keep the current factor type, or select its factor type and remove it first.`
+    return `${toolFactorModes[mode]} is unavailable because this shared group already uses the factor ${current.name} (${toolFactorModes[(current.level_type ?? 'boolean') as ToolFactorMode]}). Keep the current factor type, or select its factor type and remove it first.`
   }
   const conflicts = [...new Set(isIndividualToolMode(mode)
     ? graph.edges.filter((edge) => edge.source === toolNodeId && edge.targetHandle === 'tool')
@@ -28,8 +33,8 @@ export function toolFactorConflict(graph: ProtocolGraph, factors: DesignFactor[]
     : connectedTools(graph, agentId).flatMap((node) => Object.values(node.data.factor_bindings ?? {})))]
   if (!conflicts.length) return undefined
   return isIndividualToolMode(mode)
-    ? `${toolFactorModes[mode]} is unavailable because a connected Agent already controls this Tool with the factor ${conflicts.join(', ')}. Use the existing Agent-level factor, or select its factor type and remove it first.`
-    : `${toolFactorModes[mode]} is unavailable because connected Tools already have factor bindings: ${conflicts.join(', ')}. Agent-level tool factors cannot be combined with individual Tool factor bindings. Use This tool on/off, or remove those bindings in each Tool’s factor dialog first.`
+    ? `${toolFactorModes[mode]} is unavailable because a connected Agent already controls this Tool with the factor ${conflicts.join(', ')}. Use the existing shared factor, or select its factor type and remove it first.`
+    : `${toolFactorModes[mode]} is unavailable because connected Tools already have factor bindings: ${conflicts.join(', ')}. Shared tool factors cannot be combined with individual Tool factor bindings. Use This tool on/off, or remove those bindings in each Tool’s factor dialog first.`
 }
 
 export function isToolFactor(factor: DesignFactor): boolean {
@@ -50,6 +55,9 @@ export function isIndividualToolMode(mode: ToolFactorMode): boolean { return mod
 export function toolFactorPath(mode: ToolFactorMode): string { return mode === 'boolean' ? 'config.enabled' : mode === 'tool_names' ? 'config.tool_names' : TOOL_FACTOR_PATH }
 
 export function reconcileToolFactor(factor: DesignFactor, graph: ProtocolGraph, agentId: string): DesignFactor {
+  if (sharedGroupIssues(graph, [factor], 'tool').length) return factor
+  const source = connectedTools(graph, agentId)[0]
+  if (source && sharedFactorGroup(graph, source.id, 'tool').error) return factor
   const tools = connectedTools(graph, agentId)
   const ids = [...new Set(tools.map(toolId))]
   if (factor.level_type === 'tool_toggle') {
@@ -82,6 +90,8 @@ export function toolFactorOwner(graph: ProtocolGraph | undefined, toolNodeId: st
 }
 
 export function toolFactorIssues(graph: ProtocolGraph | undefined, factors: DesignFactor[], availableIds?: Set<string>): string[] {
+  const groupIssues = sharedGroupIssues(graph, factors, 'tool')
+  if (groupIssues.length) return groupIssues
   return factors.filter(isToolFactor).flatMap((factor) => {
     const owner = graph?.nodes.find((node) => node.data.factor_bindings?.[TOOL_FACTOR_PATH] === factor.name)
     if (!owner || !graph) return [`${factor.name}: rebind or remove this tool factor.`]

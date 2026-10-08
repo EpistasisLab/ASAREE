@@ -1,3 +1,4 @@
+import { sharedFactorGroup, sharedGroupConflict, sharedGroupIssues } from './sharedFactors'
 import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph, ProtocolNode } from '@/types/protocols'
 
@@ -6,16 +7,20 @@ export const SUB_AGENT_FACTOR_PATH = 'sub_agent_selection'
 export const subAgentFactorModes = {
   boolean: 'This sub-agent on/off',
   sub_agent_selection: 'Sub-Agent levels',
-  sub_agent_toggle: 'All agent sub-agents on/off',
+  sub_agent_toggle: 'All sub-agents on/off',
 }
 export type SubAgentFactorMode = keyof typeof subAgentFactorModes
 
 export function subAgentFactorConflict(graph: ProtocolGraph, factors: DesignFactor[], subAgentNodeId: string, mode: SubAgentFactorMode, agentId: string): string | undefined {
+  if (mode !== 'boolean') {
+    const groupConflict = sharedGroupConflict(graph, subAgentNodeId, 'sub_agent')
+    if (groupConflict) return groupConflict
+  }
   const owner = graph.nodes.find((node) => node.id === (mode === 'boolean' ? subAgentNodeId : agentId))
   const currentName = owner?.data.factor_bindings?.[mode === 'boolean' ? 'active' : SUB_AGENT_FACTOR_PATH]
   const current = factors.find((factor) => factor.name === currentName)
   if (current && (current.level_type ?? 'boolean') !== mode) {
-    return `${subAgentFactorModes[mode]} is unavailable because this Agent already uses the factor ${current.name} (${subAgentFactorModes[(current.level_type ?? 'boolean') as SubAgentFactorMode]}). Keep the current factor type, or select its factor type and remove it first.`
+    return `${subAgentFactorModes[mode]} is unavailable because this shared group already uses the factor ${current.name} (${subAgentFactorModes[(current.level_type ?? 'boolean') as SubAgentFactorMode]}). Keep the current factor type, or select its factor type and remove it first.`
   }
   const conflicts = [...new Set(mode === 'boolean'
     ? graph.edges.filter((edge) => edge.source === subAgentNodeId && edge.targetHandle === 'sub_agents')
@@ -26,8 +31,8 @@ export function subAgentFactorConflict(graph: ProtocolGraph, factors: DesignFact
     : connectedSubAgents(graph, agentId).flatMap((node) => node.data.factor_bindings?.active ? [node.data.factor_bindings.active] : []))]
   if (!conflicts.length) return undefined
   return mode === 'boolean'
-    ? `${subAgentFactorModes[mode]} is unavailable because a connected Agent already controls this Sub-Agent with the factor ${conflicts.join(', ')}. Use the existing Agent-level factor, or select its factor type and remove it first.`
-    : `${subAgentFactorModes[mode]} is unavailable because connected Sub-Agents already have factor bindings: ${conflicts.join(', ')}. Agent-level sub-agent factors cannot be combined with individual Sub-Agent on/off factor bindings. Use This sub-agent on/off, or remove those bindings in each Sub-Agent’s factor dialog first.`
+    ? `${subAgentFactorModes[mode]} is unavailable because a connected Agent already controls this Sub-Agent with the factor ${conflicts.join(', ')}. Use the existing shared factor, or select its factor type and remove it first.`
+    : `${subAgentFactorModes[mode]} is unavailable because connected Sub-Agents already have factor bindings: ${conflicts.join(', ')}. Shared sub-agent factors cannot be combined with individual Sub-Agent on/off factor bindings. Use This sub-agent on/off, or remove those bindings in each Sub-Agent’s factor dialog first.`
 }
 
 export function isSubAgentFactor(factor: DesignFactor): boolean {
@@ -47,6 +52,9 @@ export function subAgentId(node: ProtocolNode): string {
 }
 
 export function reconcileSubAgentFactor(factor: DesignFactor, graph: ProtocolGraph, agentId: string): DesignFactor {
+  if (sharedGroupIssues(graph, [factor], 'sub_agent').length) return factor
+  const source = connectedSubAgents(graph, agentId)[0]
+  if (source && sharedFactorGroup(graph, source.id, 'sub_agent').error) return factor
   const subAgents = connectedSubAgents(graph, agentId)
   const ids = [...new Set(subAgents.map(subAgentId))]
   if (factor.level_type === 'sub_agent_toggle') {
@@ -79,6 +87,8 @@ export function subAgentFactorOwner(graph: ProtocolGraph | undefined, subAgentNo
 }
 
 export function subAgentFactorIssues(graph: ProtocolGraph | undefined, factors: DesignFactor[]): string[] {
+  const groupIssues = sharedGroupIssues(graph, factors, 'sub_agent')
+  if (groupIssues.length) return groupIssues
   return factors.filter(isSubAgentFactor).flatMap((factor) => {
     const owner = graph?.nodes.find((node) => node.data.factor_bindings?.[SUB_AGENT_FACTOR_PATH] === factor.name)
     if (!owner || !graph) return [`${factor.name}: rebind or remove this sub-agent factor.`]

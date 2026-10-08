@@ -1,3 +1,4 @@
+import { sharedFactorGroup, sharedGroupConflict, sharedGroupIssues } from './sharedFactors'
 import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph, ProtocolNode } from '@/types/protocols'
 
@@ -6,16 +7,20 @@ export const SCRIPT_FACTOR_PATH = 'script_selection'
 export const scriptFactorModes = {
   boolean: 'This script on/off',
   script_selection: 'Script levels',
-  script_toggle: 'All agent scripts on/off',
+  script_toggle: 'All scripts on/off',
 }
 export type ScriptFactorMode = keyof typeof scriptFactorModes
 
 export function scriptFactorConflict(graph: ProtocolGraph, factors: DesignFactor[], scriptNodeId: string, mode: ScriptFactorMode, agentId: string): string | undefined {
+  if (!(isIndividualScriptMode(mode))) {
+    const groupConflict = sharedGroupConflict(graph, scriptNodeId, 'script')
+    if (groupConflict) return groupConflict
+  }
   const owner = graph.nodes.find((node) => node.id === (isIndividualScriptMode(mode) ? scriptNodeId : agentId))
   const currentName = owner?.data.factor_bindings?.[isIndividualScriptMode(mode) ? scriptFactorPath(mode) : SCRIPT_FACTOR_PATH]
   const current = factors.find((factor) => factor.name === currentName)
   if (current && (current.level_type ?? 'boolean') !== mode) {
-    return `${scriptFactorModes[mode]} is unavailable because this Agent already uses the factor ${current.name} (${scriptFactorModes[(current.level_type ?? 'boolean') as ScriptFactorMode]}). Keep the current factor type, or select its factor type and remove it first.`
+    return `${scriptFactorModes[mode]} is unavailable because this shared group already uses the factor ${current.name} (${scriptFactorModes[(current.level_type ?? 'boolean') as ScriptFactorMode]}). Keep the current factor type, or select its factor type and remove it first.`
   }
   if (isIndividualScriptMode(mode)) {
     const other = Object.entries(owner?.data.factor_bindings ?? {}).filter(([path]) => path === 'config').filter(([path]) => path !== scriptFactorPath(mode))
@@ -30,8 +35,8 @@ export function scriptFactorConflict(graph: ProtocolGraph, factors: DesignFactor
     : connectedScripts(graph, agentId).flatMap((node) => Object.values(node.data.factor_bindings ?? {})))]
   if (!conflicts.length) return undefined
   return isIndividualScriptMode(mode)
-    ? `${scriptFactorModes[mode]} is unavailable because a connected Agent already controls this Script with the factor ${conflicts.join(', ')}. Use the existing Agent-level factor, or select its factor type and remove it first.`
-    : `${scriptFactorModes[mode]} is unavailable because connected Scripts already have factor bindings: ${conflicts.join(', ')}. Agent-level script factors cannot be combined with individual Script factor bindings. Use This script on/off, or remove those bindings in each Script’s factor dialog first.`
+    ? `${scriptFactorModes[mode]} is unavailable because a connected Agent already controls this Script with the factor ${conflicts.join(', ')}. Use the existing shared factor, or select its factor type and remove it first.`
+    : `${scriptFactorModes[mode]} is unavailable because connected Scripts already have factor bindings: ${conflicts.join(', ')}. Shared script factors cannot be combined with individual Script factor bindings. Use This script on/off, or remove those bindings in each Script’s factor dialog first.`
 }
 
 export function isScriptFactor(factor: DesignFactor): boolean {
@@ -52,6 +57,9 @@ export function isIndividualScriptMode(mode: ScriptFactorMode): boolean { return
 export function scriptFactorPath(mode: ScriptFactorMode): string { return mode === 'boolean' ? 'config.enabled' : SCRIPT_FACTOR_PATH }
 
 export function reconcileScriptFactor(factor: DesignFactor, graph: ProtocolGraph, agentId: string): DesignFactor {
+  if (sharedGroupIssues(graph, [factor], 'script').length) return factor
+  const source = connectedScripts(graph, agentId)[0]
+  if (source && sharedFactorGroup(graph, source.id, 'script').error) return factor
   const scripts = connectedScripts(graph, agentId)
   const ids = [...new Set(scripts.map(scriptId))]
   if (factor.level_type === 'script_toggle') {
@@ -84,6 +92,8 @@ export function scriptFactorOwner(graph: ProtocolGraph | undefined, scriptNodeId
 }
 
 export function scriptFactorIssues(graph: ProtocolGraph | undefined, factors: DesignFactor[]): string[] {
+  const groupIssues = sharedGroupIssues(graph, factors, 'script')
+  if (groupIssues.length) return groupIssues
   const connectorIssues = factors.filter(isScriptFactor).flatMap((factor) => {
     const owner = graph?.nodes.find((node) => node.data.factor_bindings?.[SCRIPT_FACTOR_PATH] === factor.name)
     if (!owner || !graph) return [`${factor.name}: rebind or remove this script factor.`]

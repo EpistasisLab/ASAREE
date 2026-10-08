@@ -12,7 +12,7 @@ const graph = {
   edges: ['a', 'b'].map((source) => ({ source, target: 'parent', targetHandle: 'sub_agents' })),
 } as unknown as ProtocolGraph
 
-it.each(['Sub-Agent levels', 'All agent sub-agents on/off'])('creates %s with disabled workers while allowing prompt factors', async (mode) => {
+it.each(['Sub-Agent levels', 'All sub-agents on/off'])('creates %s with disabled workers while allowing prompt factors', async (mode) => {
   const save = vi.fn().mockResolvedValue(undefined)
   render(<SubAgentFactorDialog subAgentNodeId="a" graph={graph} factors={[]} onClose={vi.fn()} onSave={save} onRemove={vi.fn()} />)
   fireEvent.click(screen.getByRole('button', { name: mode }))

@@ -65,14 +65,12 @@ def test_cell_inputs_override_disabled_nodes_without_mutating_graph(mode):
     assert graph == original
 
 
-def test_shared_dataset_remains_independently_disabled_for_other_agent():
+def test_incompletely_shared_dataset_group_blocks_generation():
     graph, spec, ids = dataset_graph("dataset_toggle")
     graph["nodes"].append({"id": "other", "type": "agent", "data": {}})
     graph["edges"].append({"source": "dataset-0", "target": "other", "targetHandle": "resource"})
-    validate_factor_bindings(spec, graph)
-    patched = apply_factor_bindings(graph, {"Datasets": ids})
-    assert len(_resolve_dataset_configs(patched, "agent")) == 2
-    assert _resolve_dataset_configs(patched, "other") == []
+    with pytest.raises(ValueError, match="exactly the same Agents"):
+        validate_factor_bindings(spec, graph)
 
 
 @pytest.mark.parametrize("enabled", [False, True])

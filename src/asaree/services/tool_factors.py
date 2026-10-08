@@ -7,6 +7,8 @@ from typing import Any
 
 from motoro.services import mcp_service
 
+from asaree.services.shared_factors import shared_test_selections, validate_shared_factor_groups
+
 TOOL_SELECTION = "tool_selection"
 TOOL_TOGGLE = "tool_toggle"
 TOOL_FACTOR_TYPES = {TOOL_SELECTION, TOOL_TOGGLE}
@@ -28,6 +30,7 @@ def connected_tool_nodes(graph: dict[str, Any], agent_id: str) -> list[dict[str,
 def validate_tool_factor_structure(
     design_spec: dict[str, Any] | None, graph: dict[str, Any], *, complete: bool = True
 ) -> None:
+    validate_shared_factor_groups(graph, "tool")
     factors = {factor.get("name"): factor for factor in (design_spec or {}).get("factors") or []}
     bound = {
         (node.get("data") or {}).get("factor_bindings", {}).get(TOOL_SELECTION) for node in graph.get("nodes") or []
@@ -102,7 +105,7 @@ async def test_tool_factor_values(
     graph: dict[str, Any], selections: dict[str, str] | None, owner_id: uuid.UUID, node_id: str | None = None
 ) -> dict[str, Any]:
     """Validate preview choices against the publication and retain run provenance."""
-    selections = selections or {}
+    selections = shared_test_selections(graph, selections, "tool", node_id)
     owners = {
         node["id"]: node
         for node in graph.get("nodes") or []

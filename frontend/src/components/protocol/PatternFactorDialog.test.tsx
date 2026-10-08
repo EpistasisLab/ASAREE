@@ -55,7 +55,7 @@ describe('Pattern factors', () => {
 
   it('requires an Agent for Pattern levels while permitting orphan parameter factors', () => {
     render(<PatternFactorDialog {...props} graph={{ nodes: [pattern], edges: [] }} />)
-    expect(screen.getByRole('status')).toHaveTextContent('Connect this Pattern to an Agent')
+    expect(screen.getByRole('status')).toHaveTextContent('Connect this node to an Agent')
     fireEvent.click(screen.getByRole('button', { name: 'Include scratchpad' }))
     expect(screen.getByRole('button', { name: 'Save factor' })).toBeEnabled()
   })

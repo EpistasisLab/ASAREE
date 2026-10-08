@@ -1,6 +1,8 @@
 import type { Node, Edge } from '@xyflow/react'
 import { defaultReasonActPatternNodeData, defaultSingleAgentBaselinePatternNodeData } from '@/types/protocols'
 import { bindableFieldsForNode } from './bindableFields'
+import { sharedGroupConflict } from '@/lib/sharedFactors'
+import type { ProtocolGraph } from '@/types/protocols'
 
 export const PATTERN_FACTOR_PATH = 'pattern_override'
 export const isPatternNode = (type?: string) => type === 'pattern_reason_act' || type === 'pattern_single_agent_baseline'
@@ -20,6 +22,10 @@ export function patternFactorFields(patternNodeId: string, nodes: Node[], edges:
 }
 
 export function patternFactorConflict(patternNodeId: string, path: string, nodes: Node[], edges: Edge[], agentId?: string): string | undefined {
+  if (path === PATTERN_FACTOR_PATH) {
+    const conflict = sharedGroupConflict({ nodes, edges } as unknown as ProtocolGraph, patternNodeId, 'pattern')
+    if (conflict) return conflict
+  }
   const node = nodes.find((node) => node.id === patternNodeId)
   const owners = nodes.filter((candidate) => ['agent', 'sub_agent'].includes(candidate.type ?? '') && edges.some((edge) => edge.source === patternNodeId && edge.target === candidate.id && edge.targetHandle === 'architectural_pattern'))
   if (path === PATTERN_FACTOR_PATH && !owners.some((owner) => !agentId || owner.id === agentId)) return 'Connect this Pattern to an Agent before creating Pattern levels.'

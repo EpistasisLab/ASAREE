@@ -7,6 +7,8 @@ from typing import Any
 
 from motoro.services import skill_service
 
+from asaree.services.shared_factors import shared_test_selections, validate_shared_factor_groups
+
 SKILL_SELECTION = "skill_selection"
 SKILL_TOGGLE = "skill_toggle"
 SKILL_FACTOR_TYPES = {SKILL_SELECTION, SKILL_TOGGLE}
@@ -27,6 +29,7 @@ def connected_skill_nodes(graph: dict[str, Any], agent_id: str) -> list[dict[str
 def validate_skill_factor_structure(
     design_spec: dict[str, Any] | None, graph: dict[str, Any], *, complete: bool = True
 ) -> None:
+    validate_shared_factor_groups(graph, "skill")
     factors = {factor.get("name"): factor for factor in (design_spec or {}).get("factors") or []}
     bound = {
         (node.get("data") or {}).get("factor_bindings", {}).get(SKILL_SELECTION) for node in graph.get("nodes") or []
@@ -100,7 +103,7 @@ async def test_skill_factor_values(
     graph: dict[str, Any], selections: dict[str, str] | None, owner_id: uuid.UUID, node_id: str | None = None
 ) -> dict[str, Any]:
     """Validate preview choices against the publication and retain run provenance."""
-    selections = selections or {}
+    selections = shared_test_selections(graph, selections, "skill", node_id)
     owners = {
         node["id"]: node
         for node in graph.get("nodes") or []

@@ -19,7 +19,7 @@ describe('dataset connector factors', () => {
     expect(reconcileDatasetFactor(toggle, graph, 'agent')).toEqual({ ...toggle, levels: [['a', 'b', 'c'], []] })
     const noneFirst = { ...toggle, levels: [[], ['a', 'b']], level_labels: ['Without datasets', 'With datasets'] }
     expect(reconcileDatasetFactor(noneFirst, { ...graph, edges: graph.edges.filter((edge) => edge.source !== 'b') }, 'agent')).toEqual({ ...noneFirst, levels: [[], ['a', 'c']] })
-    expect(datasetFactorIssues({ ...graph, edges: [] }, [toggle])[0]).toContain('at least one')
+    expect(datasetFactorIssues({ ...graph, edges: [] }, [toggle])[0]).toContain('restore the factor group')
   })
   it('preserves ordered labels and appends newly connected datasets', () => {
     expect(reconcileDatasetFactor(factor, graph, 'agent')).toEqual({ ...factor, levels: [['b'], ['a'], ['c']], level_labels: ['Custom B', 'Custom A', 'Dataset c'] })
@@ -30,8 +30,8 @@ describe('dataset connector factors', () => {
   })
   it('keeps an empty factor visible and reports incomplete and unavailable datasets', () => {
     const empty = { ...graph, edges: [] }
-    expect(reconcileDatasetFactor(factor, empty, 'agent').levels).toEqual([])
-    expect(datasetFactorIssues(empty, [factor])[0]).toContain('at least two')
+    expect(reconcileDatasetFactor(factor, empty, 'agent')).toEqual(factor)
+    expect(datasetFactorIssues(empty, [factor])[0]).toContain('restore the factor group')
     expect(datasetFactorIssues(graph, [factor], new Set(['a', 'c']))[0]).toContain('unavailable')
     expect(datasetFactorOwner(graph, 'b')).toBe('Datasets')
   })

@@ -1,3 +1,4 @@
+import { factorRecipients, factorScopeLabel } from '@/lib/sharedFactors'
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Plus, Split, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -12,19 +13,18 @@ import { PatternLevelRow } from './FactorEditorDialog'
 import { computeFactorName, defaultFactorLevelLabels, seedLevels } from './factorLevels'
 import { PATTERN_FACTOR_PATH, patternFactorFields, patternFactorConflict } from './patternFactors'
 
-export function PatternFactorDialog({ patternNodeId, graph, nodeLabel, factors, initialFieldPath, initialAgentId, onClose, onSave, onRemove }: {
+export function PatternFactorDialog({ patternNodeId, graph, nodeLabel, factors, initialFieldPath, onClose, onSave, onRemove }: {
   patternNodeId: string
   graph: ProtocolGraph
   nodeLabel: string
   factors: DesignFactor[]
   initialFieldPath?: string
-  initialAgentId?: string
   onClose: () => void
   onSave: (factor: DesignFactor, fieldPath: string, ownerId: string, previousName?: string) => Promise<unknown>
   onRemove: (name: string, fieldPath: string, ownerId: string) => Promise<unknown>
 }) {
-  const agents = graph.nodes.filter((node) => ['agent', 'sub_agent'].includes(node.type) && graph.edges.some((edge) => edge.source === patternNodeId && edge.target === node.id && edge.targetHandle === 'architectural_pattern'))
-  const [agentId, setAgentId] = useState(initialAgentId ?? agents.find((node) => node.data.factor_bindings?.[PATTERN_FACTOR_PATH])?.id ?? agents[0]?.id ?? '')
+  const agents = factorRecipients(graph, patternNodeId, 'pattern')
+  const agentId = agents.find((node) => node.data.factor_bindings?.[PATTERN_FACTOR_PATH])?.id ?? agents[0]?.id ?? ''
   const fields = patternFactorFields(patternNodeId, graph.nodes, graph.edges, agentId)
     .sort((a, b) => Number(b.fieldPath === PATTERN_FACTOR_PATH) - Number(a.fieldPath === PATTERN_FACTOR_PATH) || a.label.localeCompare(b.label))
   const fieldFor = (path: string) => fields.find((field) => field.fieldPath === path)!
@@ -81,7 +81,7 @@ export function PatternFactorDialog({ patternNodeId, graph, nodeLabel, factors, 
     <DialogContent className="sm:max-w-xl">
       <DialogHeader><DialogTitle className="flex items-center gap-2"><Split className="size-5 text-chart-2" />Pattern factor</DialogTitle><DialogDescription>Choose how patterns vary across experimental cells.</DialogDescription></DialogHeader>
       <div className="space-y-4">
-        {agents.length > 1 && <div className="space-y-2"><Label>Agent</Label><Select value={agentId} disabled={saving} onValueChange={(id) => { if (id) { setAgentId(id); setDraft(seed(path, id)); setError('') } }}><SelectTrigger className="w-full"><SelectValue>{String(agents.find((node) => node.id === agentId)?.data.label)}</SelectValue></SelectTrigger><SelectContent>{agents.map((node) => <SelectItem key={node.id} value={node.id}>{String(node.data.label)}</SelectItem>)}</SelectContent></Select></div>}
+        {agents.length > 0 && <p className="text-xs text-muted-foreground">Applies to: {factorScopeLabel(graph, patternNodeId, 'pattern')}</p>}
         <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{fields.map((field) => <Button key={field.fieldPath} size="sm" variant={path === field.fieldPath ? 'default' : blocked(field.fieldPath) ? 'secondary' : 'outline'} aria-pressed={path === field.fieldPath} disabled={saving} onClick={() => { setPath(field.fieldPath); setDraft(seed(field.fieldPath)); setError('') }}>{field.label}</Button>)}</div></div>
         {blocked(path) ? <p role="status" className="rounded-md border p-3 text-sm text-muted-foreground">{blocked(path)}</p> : <>
           <p className="text-xs text-primary">{structured ? 'Compare complete pattern configurations. Use individual parameter factors to measure their separate effects.' : 'Vary this parameter while keeping the other pattern settings.'}</p>

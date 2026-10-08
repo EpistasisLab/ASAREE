@@ -167,7 +167,7 @@ describe('ProtocolCanvas connector adds', () => {
     expect(makeFactor).not.toBeNull()
     fireEvent.click(makeFactor!)
     await screen.findByRole('dialog')
-    fireEvent.click(screen.getByRole('button', { name: mode === 'sub_agent_toggle' ? 'All agent sub-agents on/off' : 'Sub-Agent levels' }))
+    fireEvent.click(screen.getByRole('button', { name: mode === 'sub_agent_toggle' ? 'All sub-agents on/off' : 'Sub-Agent levels' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
     await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Sub-Agents', level_type: mode, levels: mode === 'sub_agent_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'sub_agent_toggle' ? ['All enabled', 'All disabled'] : ['Worker a', 'Worker b'] }] }) })))
     await waitFor(() => {
@@ -178,7 +178,7 @@ describe('ProtocolCanvas connector adds', () => {
     })
   })
 
-  it.each(['skill_selection', 'skill_toggle'] as const)('creates a %s skill factor from the node hover menu and preserves connected nodes', async (mode) => {
+  it.each(['skill_selection', 'skill_toggle'] as const)('creates a %s skill factor from a shared node and binds every connected Agent', async (mode) => {
     const experiment = {
       id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
       design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
@@ -191,9 +191,10 @@ describe('ProtocolCanvas connector adds', () => {
     const graph: ProtocolGraph = {
       nodes: [
         { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        { id: 'other', type: 'agent', position: { x: 300, y: 200 }, data: defaultAgentNodeData('Other') },
         ...['a', 'b'].map((id) => ({ id, type: 'skill', position: { x: 100, y: 0 }, data: { label: `Skill ${id}`, config: { skill_id: id, skill_name: `Skill ${id}` } } })),
       ],
-      edges: ['a', 'b'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'skill' })),
+      edges: ['a', 'b'].flatMap((id) => ['agent', 'other'].map((target) => ({ id: `${id}-${target}`, source: id, target, targetHandle: 'skill' }))),
     }
     const { client } = renderCanvas(graph, 'experiment-1')
     const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
@@ -207,6 +208,8 @@ describe('ProtocolCanvas connector adds', () => {
       const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
       expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ skill_selection: 'Writer:Skills' })
       expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.skill_factor_mode).toBe(mode)
+      expect(persisted?.nodes.find((node) => node.id === 'other')?.data.factor_bindings).toEqual({ skill_selection: 'Writer:Skills' })
+      expect(persisted?.nodes.find((node) => node.id === 'other')?.data.skill_factor_mode).toBe(mode)
       expect(persisted?.nodes.filter((node) => node.type === 'skill')).toHaveLength(2)
     })
   })
@@ -233,7 +236,7 @@ describe('ProtocolCanvas connector adds', () => {
     expect(makeFactor).not.toBeNull()
     fireEvent.click(makeFactor!)
     await screen.findByRole('dialog')
-    fireEvent.click(screen.getByRole('button', { name: mode === 'tool_toggle' ? 'All agent tools on/off' : 'Tool levels' }))
+    fireEvent.click(screen.getByRole('button', { name: mode === 'tool_toggle' ? 'All tools on/off' : 'Tool levels' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
     await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Tools', level_type: mode, levels: mode === 'tool_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'tool_toggle' ? ['All enabled', 'All disabled'] : ['Tool a', 'Tool b'] }] }) })))
     await waitFor(() => {
@@ -265,7 +268,7 @@ describe('ProtocolCanvas connector adds', () => {
     expect(makeFactor).not.toBeNull()
     fireEvent.click(makeFactor!)
     await screen.findByRole('dialog')
-    fireEvent.click(screen.getByRole('button', { name: mode === 'script_toggle' ? 'All agent scripts on/off' : 'Script levels' }))
+    fireEvent.click(screen.getByRole('button', { name: mode === 'script_toggle' ? 'All scripts on/off' : 'Script levels' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
     await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Scripts', level_type: mode, levels: mode === 'script_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'script_toggle' ? ['All enabled', 'All disabled'] : ['Script a', 'Script b'] }] }) })))
     await waitFor(() => {
@@ -276,7 +279,7 @@ describe('ProtocolCanvas connector adds', () => {
     })
   })
 
-  it('creates and removes a whole-pattern factor from the Pattern toolbar, clearing the Agent override', async () => {
+  it('creates and removes a whole-pattern factor from the Pattern toolbar, clearing every shared Agent override', async () => {
     let experiment: Experiment = {
       id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
       design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
@@ -291,22 +294,24 @@ describe('ProtocolCanvas connector adds', () => {
     const graph: ProtocolGraph = {
       nodes: [
         { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        { id: 'other', type: 'agent', position: { x: 300, y: 200 }, data: defaultAgentNodeData('Other') },
         { id: 'pattern', type: 'pattern_reason_act', position: { x: 100, y: 0 }, data: defaultReasonActPatternNodeData() },
       ],
-      edges: [{ id: 'pattern-edge', source: 'pattern', target: 'agent', targetHandle: 'architectural_pattern' }],
+      edges: ['agent', 'other'].map((target) => ({ id: `pattern-${target}`, source: 'pattern', target, targetHandle: 'architectural_pattern' })),
     }
     const { client } = renderCanvas(graph, 'experiment-1')
     const toolbar = () => document.querySelector<HTMLButtonElement>('[data-testid="rf__node-pattern"] button[aria-label="Make experimental factor"]')!
     fireEvent.click(toolbar())
     await screen.findByRole('dialog', { name: 'Pattern factor' })
     fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
-    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [expect.objectContaining({ name: 'Writer:Reason + Act:Pattern levels', level_type: 'pattern' })] }) })))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [expect.objectContaining({ name: 'Reason + Act:Pattern levels', level_type: 'pattern' })] }) })))
     await waitFor(() => {
       const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))!
-      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ pattern_override: 'Writer:Reason + Act:Pattern levels' })
-      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.pattern_override).toEqual({ execution_pattern: 'reason_act', pattern_params: { reason_act: graph.nodes[1].data.config } })
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ pattern_override: 'Reason + Act:Pattern levels' })
+      expect(persisted.nodes.find((node) => node.id === 'other')?.data.factor_bindings).toEqual({ pattern_override: 'Reason + Act:Pattern levels' })
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.pattern_override).toEqual({ execution_pattern: 'reason_act', pattern_params: { reason_act: graph.nodes.find((node) => node.id === 'pattern')!.data.config } })
       expect(persisted.nodes.find((node) => node.id === 'pattern')?.data.factor_bindings).toBeUndefined()
-      expect(persisted.edges).toHaveLength(1)
+      expect(persisted.edges).toHaveLength(2)
     })
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     fireEvent.click(toolbar())
@@ -314,6 +319,8 @@ describe('ProtocolCanvas connector adds', () => {
     await waitFor(() => {
       const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))!
       expect(persisted.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({})
+      expect(persisted.nodes.find((node) => node.id === 'other')?.data.factor_bindings).toEqual({})
+      expect(persisted.nodes.find((node) => node.id === 'other')?.data.pattern_override).toBeUndefined()
       expect(persisted.nodes.find((node) => node.id === 'agent')?.data.pattern_override).toBeUndefined()
       expect(experiment.design_spec?.factors).toEqual([])
     })

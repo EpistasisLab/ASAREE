@@ -1,28 +1,27 @@
+import { factorScopeLabel, factorRecipients } from '@/lib/sharedFactors'
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Split } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { connectedScripts, reconcileScriptFactor, requiredScriptIssues, scriptFactorConflict, scriptFactorModes as modes, SCRIPT_FACTOR_PATH, isIndividualScriptMode, scriptFactorPath, type ScriptFactorMode as Mode } from '@/lib/scriptFactors'
 import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 import { computeFactorName } from './factorLevels'
 
-export function ScriptFactorDialog({ scriptNodeId, graph, factors, initialMode, initialAgentId, onClose, onSave, onRemove }: {
+export function ScriptFactorDialog({ scriptNodeId, graph, factors, initialMode, onClose, onSave, onRemove }: {
   scriptNodeId: string
   graph: ProtocolGraph
   factors: DesignFactor[]
   initialMode?: Mode
-  initialAgentId?: string
   onClose: () => void
   onSave: (factor: DesignFactor, ownerId: string, previousName?: string) => Promise<void>
   onRemove: (name: string) => Promise<void>
 }) {
   const script = graph.nodes.find((node) => node.id === scriptNodeId)!
-  const agents = graph.nodes.filter((node) => ['agent', 'sub_agent'].includes(node.type) && graph.edges.some((edge) => edge.source === scriptNodeId && edge.target === node.id && edge.targetHandle === 'tool'))
-  const [agentId, setAgentId] = useState(initialAgentId ?? agents.find((agent) => agent.data.factor_bindings?.[SCRIPT_FACTOR_PATH])?.id ?? agents[0]?.id ?? '')
+  const agents = factorRecipients(graph, scriptNodeId, 'script')
+  const agentId = agents.find((agent) => agent.data.factor_bindings?.[SCRIPT_FACTOR_PATH])?.id ?? agents[0]?.id ?? ''
   const existingFor = (ownerId: string, path: string) => factors.find((factor) => factor.name === graph.nodes.find((node) => node.id === ownerId)?.data.factor_bindings?.[path])
   const initialFactor = existingFor(agentId, SCRIPT_FACTOR_PATH) ?? existingFor(scriptNodeId, 'config.enabled')
   const initial = initialFactor && !isIndividualScriptMode(initialFactor.level_type as Mode) && initialFactor.level_type ? reconcileScriptFactor(initialFactor, graph, agentId) : initialFactor
@@ -61,7 +60,6 @@ export function ScriptFactorDialog({ scriptNodeId, graph, factors, initialMode, 
   const blockedReason = unavailable(mode)
   const labels = draft.level_labels ?? []
   function change(nextMode: Mode, nextAgentId = agentId) {
-    setAgentId(nextAgentId)
     setMode(nextMode)
     setDraft(seed(nextMode, nextAgentId))
     setError('')
@@ -95,11 +93,7 @@ export function ScriptFactorDialog({ scriptNodeId, graph, factors, initialMode, 
         <DialogDescription>Choose how scripts vary across experimental cells.</DialogDescription>
       </DialogHeader>
       <div className="space-y-4">
-        {agents.length > 1 && <div className="space-y-2"><Label>Agent</Label><Select value={agentId} disabled={saving} onValueChange={(id) => {
-          if (!id) return
-          const existing = existingFor(id, SCRIPT_FACTOR_PATH)
-          change((existing?.level_type as Mode) ?? mode, id)
-        }}><SelectTrigger className="w-full"><SelectValue>{String(agents.find((agent) => agent.id === agentId)?.data.label)}</SelectValue></SelectTrigger><SelectContent>{agents.map((agent) => <SelectItem key={agent.id} value={agent.id}>{String(agent.data.label)}</SelectItem>)}</SelectContent></Select></div>}
+        {agents.length > 0 && <p className="text-xs text-muted-foreground">Applies to: {factorScopeLabel(graph, scriptNodeId, 'script')}</p>}
         <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{(Object.keys(modes) as Mode[]).map((value) => <Button key={value} size="sm" variant={mode === value ? 'default' : unavailable(value) ? 'secondary' : 'outline'} aria-pressed={mode === value} className={unavailable(value) ? 'border-dashed border-border' : undefined} title={unavailable(value)} disabled={saving} onClick={() => change(value)}>{modes[value]}</Button>)}</div></div>
         {blockedReason ? <p role="status" className="rounded-md border p-3 text-sm text-muted-foreground">{blockedReason}</p> : <>
         <p className="text-xs text-muted-foreground">{mode === 'boolean' ? 'Enable or disable this Script node.' : mode === 'script_selection' ? 'Each cell receives exactly one connected script.' : 'Each cell enables every connected script, including deactivated scripts, or disables them all.'}</p>
@@ -112,10 +106,10 @@ export function ScriptFactorDialog({ scriptNodeId, graph, factors, initialMode, 
           </div>
           {mode !== 'boolean' && <><Button variant="ghost" size="icon-sm" aria-label="Move level up" disabled={saving || index === 0} onClick={() => move(index, -1)}><ArrowUp className="size-3.5" /></Button><Button variant="ghost" size="icon-sm" aria-label="Move level down" disabled={saving || index === draft.levels.length - 1} onClick={() => move(index, 1)}><ArrowDown className="size-3.5" /></Button></>}
         </div>)}</div>
-        <p className="text-xs text-muted-foreground">Agent-level factors follow current Script connections. Changes require design review and regeneration.</p>
+        <p className="text-xs text-muted-foreground">Shared factors require matching Script connections. Changes require design review and regeneration.</p>
         {requiredIssues.map((issue) => <p key={issue} role="status" className="text-xs text-destructive">{issue}</p>)}
-        {current && <Button variant="destructive" size="sm" disabled={saving} onClick={() => void commit(true)}>Remove factor</Button>}
         </>}
+        {current && <Button variant="destructive" size="sm" disabled={saving} onClick={() => void commit(true)}>Remove factor</Button>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
       <DialogFooter><Button variant="outline" disabled={saving} onClick={onClose}>Cancel</Button><Button disabled={saving || !valid || !!blockedReason || requiredIssues.length > 0} onClick={() => void commit()}>{saving ? 'Saving…' : 'Save factor'}</Button></DialogFooter>

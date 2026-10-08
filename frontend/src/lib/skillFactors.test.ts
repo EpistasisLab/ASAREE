@@ -19,7 +19,7 @@ describe('skill connector factors', () => {
     expect(reconcileSkillFactor(toggle, graph, 'agent')).toEqual({ ...toggle, levels: [['a', 'b', 'c'], []] })
     const noneFirst = { ...toggle, levels: [[], ['a', 'b']], level_labels: ['Without skills', 'With skills'] }
     expect(reconcileSkillFactor(noneFirst, { ...graph, edges: graph.edges.filter((edge) => edge.source !== 'b') }, 'agent')).toEqual({ ...noneFirst, levels: [[], ['a', 'c']] })
-    expect(skillFactorIssues({ ...graph, edges: [] }, [toggle])[0]).toContain('at least one')
+    expect(skillFactorIssues({ ...graph, edges: [] }, [toggle])[0]).toContain('restore the factor group')
   })
   it('preserves ordered labels and appends newly connected skills', () => {
     expect(reconcileSkillFactor(factor, graph, 'agent')).toEqual({ ...factor, levels: [['b'], ['a'], ['c']], level_labels: ['Custom B', 'Custom A', 'Skill c'] })
@@ -30,8 +30,8 @@ describe('skill connector factors', () => {
   })
   it('keeps an empty factor visible and reports incomplete and unavailable skills', () => {
     const empty = { ...graph, edges: [] }
-    expect(reconcileSkillFactor(factor, empty, 'agent').levels).toEqual([])
-    expect(skillFactorIssues(empty, [factor])[0]).toContain('at least two')
+    expect(reconcileSkillFactor(factor, empty, 'agent')).toEqual(factor)
+    expect(skillFactorIssues(empty, [factor])[0]).toContain('restore the factor group')
     expect(skillFactorIssues(graph, [factor], new Set(['a', 'c']))[0]).toContain('unavailable')
     expect(skillFactorOwner(graph, 'b')).toBe('Skills')
   })

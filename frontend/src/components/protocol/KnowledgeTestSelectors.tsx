@@ -1,19 +1,19 @@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { connectedKnowledge, knowledgeId } from '@/lib/knowledgeFactors'
+import { connectedKnowledge, knowledgeId, KNOWLEDGE_FACTOR_PATH } from '@/lib/knowledgeFactors'
 import type { useKnowledgeTestSelection } from './useKnowledgeTestSelection'
 
 export function KnowledgeTestSelectors({ selection }: { selection: ReturnType<typeof useKnowledgeTestSelection> }) {
   return <div className="space-y-2">{selection.owners.map((node) => {
     const options = connectedKnowledge(selection.graph!, node.id)
     if (node.data.knowledge_factor_mode === 'knowledge_toggle') return <div key={node.id} className="space-y-1">
-      <p className="text-xs">{node.data.label}: knowledge for this test</p>
+      <p className="text-xs">{node.data.factor_bindings?.[KNOWLEDGE_FACTOR_PATH] || node.data.label}: knowledge for this test</p>
       <Select value={selection.selections[node.id]} onValueChange={(value) => value && selection.setChoice(node.id, value)}>
         <SelectTrigger className="w-full"><SelectValue>{selection.selections[node.id] === 'all' ? 'All enabled' : 'All disabled'}</SelectValue></SelectTrigger>
         <SelectContent><SelectItem value="all">All enabled</SelectItem><SelectItem value="none">All disabled</SelectItem></SelectContent>
       </Select>
     </div>
     return <div key={node.id} className="space-y-1">
-      <p className="text-xs">{node.data.label}: knowledge for this test</p>
+      <p className="text-xs">{node.data.factor_bindings?.[KNOWLEDGE_FACTOR_PATH] || node.data.label}: knowledge for this test</p>
       <Select value={selection.selections[node.id]} onValueChange={(id) => id && selection.setChoice(node.id, id)}>
         <SelectTrigger className="w-full"><SelectValue>{() => {
           const selected = options.find((option) => knowledgeId(option) === selection.selections[node.id])

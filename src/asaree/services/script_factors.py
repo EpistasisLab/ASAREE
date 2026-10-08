@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from asaree.services.shared_factors import shared_test_selections, validate_shared_factor_groups
+
 SCRIPT_SELECTION = "script_selection"
 SCRIPT_TOGGLE = "script_toggle"
 SCRIPT_FACTOR_TYPES = {SCRIPT_SELECTION, SCRIPT_TOGGLE}
@@ -25,6 +27,7 @@ def connected_script_nodes(graph: dict[str, Any], agent_id: str) -> list[dict[st
 def validate_script_factor_structure(
     design_spec: dict[str, Any] | None, graph: dict[str, Any], *, complete: bool = True
 ) -> None:
+    validate_shared_factor_groups(graph, "script")
     factors = {factor.get("name"): factor for factor in (design_spec or {}).get("factors") or []}
     for script in graph.get("nodes") or []:
         if script.get("type") != "script":
@@ -96,7 +99,7 @@ async def test_script_factor_values(
     graph: dict[str, Any], selections: dict[str, str] | None, node_id: str | None = None
 ) -> dict[str, Any]:
     """Validate preview choices against the publication and retain run provenance."""
-    selections = selections or {}
+    selections = shared_test_selections(graph, selections, "script", node_id)
     owners = {
         node["id"]: node
         for node in graph.get("nodes") or []

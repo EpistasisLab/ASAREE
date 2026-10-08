@@ -92,7 +92,24 @@ it('opens the existing group factor when a shared skill has multiple connected a
     edges: [...graph.edges, { id: 'second-edge', source: 'skill', target: 'second', targetHandle: 'skill' }],
   } as ProtocolGraph
   render(<SkillFactorDialog skillNodeId="skill" graph={sharedGraph} factors={[{ name: 'Group', level_type: 'skill_toggle', levels: [['a'], []], level_labels: ['All enabled', 'All disabled'] }]} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />)
-  expect(screen.getByRole('combobox')).toHaveTextContent('Second agent')
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  expect(screen.getByText('Applies to: First agent, Second agent')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'All skills on/off' })).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByLabelText('Factor name')).toHaveValue('Group')
+})
+
+it('blocks an incomplete shared group while keeping its factor removable', async () => {
+  const remove = vi.fn().mockResolvedValue(undefined)
+  const sharedGraph = {
+    nodes: [
+      ...['one', 'two'].map((id) => ({ id, type: 'agent', data: { label: id, skill_selection: ['a'], skill_factor_mode: 'skill_selection', factor_bindings: { skill_selection: 'Shared' } } })),
+      ...['a', 'b'].map((id) => ({ id, type: 'skill', data: { label: id, config: { skill_id: id } } })),
+    ],
+    edges: [{ source: 'a', target: 'one', targetHandle: 'skill' }, { source: 'a', target: 'two', targetHandle: 'skill' }, { source: 'b', target: 'one', targetHandle: 'skill' }],
+  } as unknown as ProtocolGraph
+  render(<SkillFactorDialog skillNodeId="b" graph={sharedGraph} factors={[{ name: 'Shared', level_type: 'skill_selection', levels: [['a'], ['b']] }]} onClose={vi.fn()} onSave={vi.fn()} onRemove={remove} />)
+  expect(screen.getByRole('status')).toHaveTextContent('exactly the same Agents')
+  expect(screen.getByRole('button', { name: 'Save factor' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Remove factor' }))
+  await waitFor(() => expect(remove).toHaveBeenCalledWith('Shared'))
 })

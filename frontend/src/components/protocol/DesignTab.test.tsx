@@ -44,13 +44,13 @@ const experiment: Experiment = {
 describe('DesignTab design generation', () => {
   it.each([
     ['Sub-Agent levels', 'sub_agent', 'sub_agent_selection'],
-    ['All agent sub-agents on/off', 'sub_agent', 'sub_agent_toggle'],
+    ['All sub-agents on/off', 'sub_agent', 'sub_agent_toggle'],
     ['This sub-agent on/off', 'sub_agent', 'boolean'],
     ['Script levels', 'script', 'script_selection'],
-    ['All agent scripts on/off', 'script', 'script_toggle'],
+    ['All scripts on/off', 'script', 'script_toggle'],
     ['This script on/off', 'script', 'boolean'],
     ['Tool levels', 'tool', 'tool_selection'],
-    ['All agent tools on/off', 'tool', 'tool_toggle'],
+    ['All tools on/off', 'tool', 'tool_toggle'],
     ['This tool on/off', 'tool', 'boolean'],
     ['Tools allowed', 'tool', 'tool_names'],
     ['Skill levels', 'skill', 'skill_selection'],

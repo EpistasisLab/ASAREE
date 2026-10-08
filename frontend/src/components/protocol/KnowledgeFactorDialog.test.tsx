@@ -76,7 +76,8 @@ it('opens the existing group factor when a shared knowledge has multiple connect
     edges: [...graph.edges, { id: 'second-edge', source: 'knowledge', target: 'second', targetHandle: 'knowledge' }],
   } as ProtocolGraph
   render(<KnowledgeFactorDialog knowledgeNodeId="knowledge" graph={sharedGraph} factors={[{ name: 'Group', level_type: 'knowledge_toggle', levels: [['a'], []], level_labels: ['All enabled', 'All disabled'] }]} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />)
-  expect(screen.getByRole('combobox')).toHaveTextContent('Second agent')
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  expect(screen.getByText('Applies to: First agent, Second agent')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'All knowledge on/off' })).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByLabelText('Factor name')).toHaveValue('Group')
 })

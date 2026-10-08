@@ -7,6 +7,7 @@ from typing import Any
 from asaree.services.dataset_factors import validate_dataset_factor_structure
 from asaree.services.knowledge_factors import validate_knowledge_factor_structure
 from asaree.services.script_factors import validate_script_factor_structure, validate_tool_step_script_factors
+from asaree.services.shared_factors import validate_shared_factor_groups
 from asaree.services.skill_factors import validate_skill_factor_structure
 from asaree.services.sub_agent_factors import validate_sub_agent_factor_structure
 from asaree.services.tool_factors import validate_tool_factor_structure
@@ -36,6 +37,7 @@ def unbound_factor_names(design_spec: dict[str, Any] | None, graph: dict[str, An
 def validate_factor_bindings(
     design_spec: dict[str, Any] | None, graph: dict[str, Any], *, complete_skills: bool = True
 ) -> None:
+    validate_shared_factor_groups(graph, 'pattern')
     validate_sub_agent_factor_structure(design_spec, graph, complete=complete_skills)
     validate_script_factor_structure(design_spec, graph, complete=complete_skills)
     validate_tool_step_script_factors(design_spec, graph)

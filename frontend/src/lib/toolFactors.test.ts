@@ -19,7 +19,7 @@ describe('tool connector factors', () => {
     expect(reconcileToolFactor(toggle, graph, 'agent')).toEqual({ ...toggle, levels: [['a', 'b', 'c'], []] })
     const noneFirst = { ...toggle, levels: [[], ['a', 'b']], level_labels: ['Without tools', 'With tools'] }
     expect(reconcileToolFactor(noneFirst, { ...graph, edges: graph.edges.filter((edge) => edge.source !== 'b') }, 'agent')).toEqual({ ...noneFirst, levels: [[], ['a', 'c']] })
-    expect(toolFactorIssues({ ...graph, edges: [] }, [toggle])[0]).toContain('at least one')
+    expect(toolFactorIssues({ ...graph, edges: [] }, [toggle])[0]).toContain('restore the factor group')
   })
   it('preserves ordered labels and appends newly connected tools', () => {
     expect(reconcileToolFactor(factor, graph, 'agent')).toEqual({ ...factor, levels: [['b'], ['a'], ['c']], level_labels: ['Custom B', 'Custom A', 'Tool c'] })
@@ -30,8 +30,8 @@ describe('tool connector factors', () => {
   })
   it('keeps an empty factor visible and reports incomplete and unavailable tools', () => {
     const empty = { ...graph, edges: [] }
-    expect(reconcileToolFactor(factor, empty, 'agent').levels).toEqual([])
-    expect(toolFactorIssues(empty, [factor])[0]).toContain('at least two')
+    expect(reconcileToolFactor(factor, empty, 'agent')).toEqual(factor)
+    expect(toolFactorIssues(empty, [factor])[0]).toContain('restore the factor group')
     expect(toolFactorIssues(graph, [factor], new Set(['a', 'c']))[0]).toContain('unavailable')
     expect(toolFactorOwner(graph, 'b')).toBe('Tools')
   })

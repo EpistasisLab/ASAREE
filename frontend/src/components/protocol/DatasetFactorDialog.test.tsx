@@ -92,7 +92,8 @@ it('opens the existing group factor when a shared dataset has multiple connected
     edges: [...graph.edges, { id: 'second-edge', source: 'dataset', target: 'second', targetHandle: 'dataset' }],
   } as ProtocolGraph
   render(<DatasetFactorDialog datasetNodeId="dataset" graph={sharedGraph} factors={[{ name: 'Group', level_type: 'dataset_toggle', levels: [['a'], []], level_labels: ['All enabled', 'All disabled'] }]} onClose={vi.fn()} onSave={vi.fn()} onRemove={vi.fn()} />)
-  expect(screen.getByRole('combobox')).toHaveTextContent('Second agent')
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  expect(screen.getByText('Applies to: First agent, Second agent')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'All datasets on/off' })).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByLabelText('Factor name')).toHaveValue('Group')
 })

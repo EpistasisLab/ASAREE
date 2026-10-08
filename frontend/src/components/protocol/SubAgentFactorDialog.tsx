@@ -1,28 +1,27 @@
+import { factorScopeLabel, factorRecipients } from '@/lib/sharedFactors'
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Split } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { connectedSubAgents, reconcileSubAgentFactor, subAgentFactorConflict, subAgentFactorModes as modes, SUB_AGENT_FACTOR_PATH, type SubAgentFactorMode as Mode } from '@/lib/subAgentFactors'
 import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 import { computeFactorName } from './factorLevels'
 
-export function SubAgentFactorDialog({ subAgentNodeId, graph, factors, initialMode, initialAgentId, onClose, onSave, onRemove }: {
+export function SubAgentFactorDialog({ subAgentNodeId, graph, factors, initialMode, onClose, onSave, onRemove }: {
   subAgentNodeId: string
   graph: ProtocolGraph
   factors: DesignFactor[]
   initialMode?: Mode
-  initialAgentId?: string
   onClose: () => void
   onSave: (factor: DesignFactor, ownerId: string, previousName?: string) => Promise<void>
   onRemove: (name: string) => Promise<void>
 }) {
   const subAgent = graph.nodes.find((node) => node.id === subAgentNodeId)!
-  const agents = graph.nodes.filter((node) => node.type === 'agent' && graph.edges.some((edge) => edge.source === subAgentNodeId && edge.target === node.id && edge.targetHandle === 'sub_agents'))
-  const [agentId, setAgentId] = useState(initialAgentId ?? agents.find((agent) => agent.data.factor_bindings?.[SUB_AGENT_FACTOR_PATH])?.id ?? agents[0]?.id ?? '')
+  const agents = factorRecipients(graph, subAgentNodeId, 'sub_agent')
+  const agentId = agents.find((agent) => agent.data.factor_bindings?.[SUB_AGENT_FACTOR_PATH])?.id ?? agents[0]?.id ?? ''
   const existingFor = (ownerId: string, path: string) => factors.find((factor) => factor.name === graph.nodes.find((node) => node.id === ownerId)?.data.factor_bindings?.[path])
   const initialFactor = existingFor(agentId, SUB_AGENT_FACTOR_PATH) ?? existingFor(subAgentNodeId, 'active')
   const initial = initialFactor && initialFactor.level_type !== 'boolean' && initialFactor.level_type ? reconcileSubAgentFactor(initialFactor, graph, agentId) : initialFactor
@@ -59,7 +58,6 @@ export function SubAgentFactorDialog({ subAgentNodeId, graph, factors, initialMo
   const blockedReason = unavailable(mode)
   const labels = draft.level_labels ?? []
   function change(nextMode: Mode, nextAgentId = agentId) {
-    setAgentId(nextAgentId)
     setMode(nextMode)
     setDraft(seed(nextMode, nextAgentId))
     setError('')
@@ -93,11 +91,7 @@ export function SubAgentFactorDialog({ subAgentNodeId, graph, factors, initialMo
         <DialogDescription>Choose how sub-agents vary across experimental cells.</DialogDescription>
       </DialogHeader>
       <div className="space-y-4">
-        {agents.length > 1 && <div className="space-y-2"><Label>Agent</Label><Select value={agentId} disabled={saving} onValueChange={(id) => {
-          if (!id) return
-          const existing = existingFor(id, SUB_AGENT_FACTOR_PATH)
-          change((existing?.level_type as Mode) ?? mode, id)
-        }}><SelectTrigger className="w-full"><SelectValue>{String(agents.find((agent) => agent.id === agentId)?.data.label)}</SelectValue></SelectTrigger><SelectContent>{agents.map((agent) => <SelectItem key={agent.id} value={agent.id}>{String(agent.data.label)}</SelectItem>)}</SelectContent></Select></div>}
+        {agents.length > 0 && <p className="text-xs text-muted-foreground">Applies to: {factorScopeLabel(graph, subAgentNodeId, 'sub_agent')}</p>}
         <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{(Object.keys(modes) as Mode[]).map((value) => <Button key={value} size="sm" variant={mode === value ? 'default' : unavailable(value) ? 'secondary' : 'outline'} aria-pressed={mode === value} className={unavailable(value) ? 'border-dashed border-border' : undefined} title={unavailable(value)} disabled={saving} onClick={() => change(value)}>{modes[value]}</Button>)}</div></div>
         {blockedReason ? <p role="status" className="rounded-md border p-3 text-sm text-muted-foreground">{blockedReason}</p> : <>
         <p className="text-xs text-muted-foreground">{mode === 'boolean' ? 'Enable or disable this Sub-Agent node.' : mode === 'sub_agent_selection' ? 'Each cell receives exactly one connected sub-agent.' : 'Each cell enables every connected sub-agent, including deactivated sub-agents, or disables them all.'}</p>
@@ -110,9 +104,9 @@ export function SubAgentFactorDialog({ subAgentNodeId, graph, factors, initialMo
           </div>
           {mode !== 'boolean' && <><Button variant="ghost" size="icon-sm" aria-label="Move level up" disabled={saving || index === 0} onClick={() => move(index, -1)}><ArrowUp className="size-3.5" /></Button><Button variant="ghost" size="icon-sm" aria-label="Move level down" disabled={saving || index === draft.levels.length - 1} onClick={() => move(index, 1)}><ArrowDown className="size-3.5" /></Button></>}
         </div>)}</div>
-        <p className="text-xs text-muted-foreground">Agent-level factors follow current Sub-Agent connections. Changes require design review and regeneration.</p>
-        {current && <Button variant="destructive" size="sm" disabled={saving} onClick={() => void commit(true)}>Remove factor</Button>}
+        <p className="text-xs text-muted-foreground">Shared factors require matching Sub-Agent connections. Changes require design review and regeneration.</p>
         </>}
+        {current && <Button variant="destructive" size="sm" disabled={saving} onClick={() => void commit(true)}>Remove factor</Button>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
       <DialogFooter><Button variant="outline" disabled={saving} onClick={onClose}>Cancel</Button><Button disabled={saving || !valid || !!blockedReason} onClick={() => void commit()}>{saving ? 'Saving…' : 'Save factor'}</Button></DialogFooter>

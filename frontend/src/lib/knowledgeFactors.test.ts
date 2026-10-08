@@ -19,7 +19,7 @@ describe('knowledge connector factors', () => {
     expect(reconcileKnowledgeFactor(toggle, graph, 'agent')).toEqual({ ...toggle, levels: [['a', 'b', 'c'], []] })
     const noneFirst = { ...toggle, levels: [[], ['a', 'b']], level_labels: ['Without knowledge', 'With knowledge'] }
     expect(reconcileKnowledgeFactor(noneFirst, { ...graph, edges: graph.edges.filter((edge) => edge.source !== 'b') }, 'agent')).toEqual({ ...noneFirst, levels: [[], ['a', 'c']] })
-    expect(knowledgeFactorIssues({ ...graph, edges: [] }, [toggle])[0]).toContain('at least one')
+    expect(knowledgeFactorIssues({ ...graph, edges: [] }, [toggle])[0]).toContain('restore the factor group')
   })
   it('preserves ordered labels and appends newly connected knowledge', () => {
     expect(reconcileKnowledgeFactor(factor, graph, 'agent')).toEqual({ ...factor, levels: [['b'], ['a'], ['c']], level_labels: ['Custom B', 'Custom A', 'Knowledge c'] })
@@ -30,8 +30,8 @@ describe('knowledge connector factors', () => {
   })
   it('keeps an empty factor visible and reports incomplete and unavailable knowledge', () => {
     const empty = { ...graph, edges: [] }
-    expect(reconcileKnowledgeFactor(factor, empty, 'agent').levels).toEqual([])
-    expect(knowledgeFactorIssues(empty, [factor])[0]).toContain('at least two')
+    expect(reconcileKnowledgeFactor(factor, empty, 'agent')).toEqual(factor)
+    expect(knowledgeFactorIssues(empty, [factor])[0]).toContain('restore the factor group')
     expect(knowledgeFactorIssues(graph, [factor], new Set(['a', 'c']))[0]).toContain('unavailable')
     expect(knowledgeFactorOwner(graph, 'b')).toBe('Knowledge')
   })

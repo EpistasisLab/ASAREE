@@ -1,28 +1,27 @@
+import { factorScopeLabel, factorRecipients } from '@/lib/sharedFactors'
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Split } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { connectedDatasets, reconcileDatasetFactor, datasetFactorConflict, datasetFactorModes as modes, DATASET_FACTOR_PATH, type DatasetFactorMode as Mode } from '@/lib/datasetFactors'
 import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 import { computeFactorName } from './factorLevels'
 
-export function DatasetFactorDialog({ datasetNodeId, graph, factors, initialMode, initialAgentId, onClose, onSave, onRemove }: {
+export function DatasetFactorDialog({ datasetNodeId, graph, factors, initialMode, onClose, onSave, onRemove }: {
   datasetNodeId: string
   graph: ProtocolGraph
   factors: DesignFactor[]
   initialMode?: Mode
-  initialAgentId?: string
   onClose: () => void
   onSave: (factor: DesignFactor, ownerId: string, previousName?: string) => Promise<void>
   onRemove: (name: string) => Promise<void>
 }) {
   const dataset = graph.nodes.find((node) => node.id === datasetNodeId)!
-  const agents = graph.nodes.filter((node) => ['agent', 'sub_agent'].includes(node.type) && graph.edges.some((edge) => edge.source === datasetNodeId && edge.target === node.id && ['dataset', 'resource', 'tool'].includes(edge.targetHandle ?? '')))
-  const [agentId, setAgentId] = useState(initialAgentId ?? agents.find((agent) => agent.data.factor_bindings?.[DATASET_FACTOR_PATH])?.id ?? agents[0]?.id ?? '')
+  const agents = factorRecipients(graph, datasetNodeId, 'dataset')
+  const agentId = agents.find((agent) => agent.data.factor_bindings?.[DATASET_FACTOR_PATH])?.id ?? agents[0]?.id ?? ''
   const existingFor = (ownerId: string, path: string) => factors.find((factor) => factor.name === graph.nodes.find((node) => node.id === ownerId)?.data.factor_bindings?.[path])
   const legacy = existingFor(datasetNodeId, 'config')
   const initialFactor = existingFor(agentId, DATASET_FACTOR_PATH) ?? existingFor(datasetNodeId, 'config.enabled')
@@ -60,7 +59,6 @@ export function DatasetFactorDialog({ datasetNodeId, graph, factors, initialMode
   const blockedReason = unavailable(mode)
   const labels = draft.level_labels ?? []
   function change(nextMode: Mode, nextAgentId = agentId) {
-    setAgentId(nextAgentId)
     setMode(nextMode)
     setDraft(seed(nextMode, nextAgentId))
     setError('')
@@ -94,11 +92,7 @@ export function DatasetFactorDialog({ datasetNodeId, graph, factors, initialMode
         <DialogDescription>Choose how datasets vary across experimental cells.</DialogDescription>
       </DialogHeader>
       <div className="space-y-4">
-        {agents.length > 1 && <div className="space-y-2"><Label>Agent</Label><Select value={agentId} disabled={saving} onValueChange={(id) => {
-          if (!id) return
-          const existing = existingFor(id, DATASET_FACTOR_PATH)
-          change((existing?.level_type as Mode) ?? mode, id)
-        }}><SelectTrigger className="w-full"><SelectValue>{String(agents.find((agent) => agent.id === agentId)?.data.label)}</SelectValue></SelectTrigger><SelectContent>{agents.map((agent) => <SelectItem key={agent.id} value={agent.id}>{String(agent.data.label)}</SelectItem>)}</SelectContent></Select></div>}
+        {agents.length > 0 && <p className="text-xs text-muted-foreground">Applies to: {factorScopeLabel(graph, datasetNodeId, 'dataset')}</p>}
         <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{(Object.keys(modes) as Mode[]).map((value) => <Button key={value} size="sm" variant={mode === value ? 'default' : unavailable(value) ? 'secondary' : 'outline'} aria-pressed={mode === value} className={unavailable(value) ? 'border-dashed border-border' : undefined} title={unavailable(value)} disabled={saving} onClick={() => change(value)}>{modes[value]}</Button>)}</div></div>
         {legacy && <div className="space-y-2 rounded-md border p-3"><p className="text-xs text-muted-foreground">This Dataset has an existing configuration factor: {legacy.name}. Remove it before creating a Dataset factor.</p><Button variant="destructive" size="sm" disabled={saving} onClick={async () => {
           setSaving(true)
@@ -115,9 +109,9 @@ export function DatasetFactorDialog({ datasetNodeId, graph, factors, initialMode
           </div>
           {mode !== 'boolean' && <><Button variant="ghost" size="icon-sm" aria-label="Move level up" disabled={saving || index === 0} onClick={() => move(index, -1)}><ArrowUp className="size-3.5" /></Button><Button variant="ghost" size="icon-sm" aria-label="Move level down" disabled={saving || index === draft.levels.length - 1} onClick={() => move(index, 1)}><ArrowDown className="size-3.5" /></Button></>}
         </div>)}</div>
-        <p className="text-xs text-muted-foreground">Agent-level factors follow current Dataset connections. Changes require design review and regeneration.</p>
-        {current && <Button variant="destructive" size="sm" disabled={saving} onClick={() => void commit(true)}>Remove factor</Button>}
+        <p className="text-xs text-muted-foreground">Shared factors require matching Dataset connections. Changes require design review and regeneration.</p>
         </>}
+        {current && <Button variant="destructive" size="sm" disabled={saving} onClick={() => void commit(true)}>Remove factor</Button>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
       <DialogFooter><Button variant="outline" disabled={saving} onClick={onClose}>Cancel</Button><Button disabled={saving || !valid || !!blockedReason} onClick={() => void commit()}>{saving ? 'Saving…' : 'Save factor'}</Button></DialogFooter>

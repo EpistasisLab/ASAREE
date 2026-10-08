@@ -7,12 +7,12 @@ import type { ProtocolGraph } from '@/types/protocols'
 import { useSkillTestSelection } from './useSkillTestSelection'
 
 afterEach(() => vi.restoreAllMocks())
-it('uses all-or-none defaults per agent without altering shared skill switches', async () => {
+it('uses all-or-none defaults once per shared factor without altering shared skill switches', async () => {
   vi.spyOn(skillsApi, 'list').mockResolvedValue([{ id: 'a' }] as Awaited<ReturnType<typeof skillsApi.list>>)
   const graph = {
     nodes: [
       { id: 'one', type: 'agent', data: { skill_factor_mode: 'skill_toggle', skill_selection: ['a'], factor_bindings: { skill_selection: 'One' } } },
-      { id: 'two', type: 'agent', data: { skill_factor_mode: 'skill_toggle', skill_selection: [], factor_bindings: { skill_selection: 'Two' } } },
+      { id: 'two', type: 'agent', data: { skill_factor_mode: 'skill_toggle', skill_selection: ['a'], factor_bindings: { skill_selection: 'One' } } },
       { id: 'a', type: 'skill', data: { config: { skill_id: 'a', enabled: false } } },
     ],
     edges: ['one', 'two'].map((target) => ({ source: 'a', target, targetHandle: 'skill' })),
@@ -22,17 +22,17 @@ it('uses all-or-none defaults per agent without altering shared skill switches',
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
   const { result } = renderHook(() => useSkillTestSelection(graph), { wrapper })
   await waitFor(() => expect(result.current.error).toBeNull())
-  expect(result.current.selections).toEqual({ one: 'all', two: 'none' })
+  expect(result.current.selections).toEqual({ one: 'all' })
   act(() => result.current.setChoice('one', 'none'))
-  expect(result.current.options).toEqual({ skill_selections: { one: 'none', two: 'none' } })
+  expect(result.current.options).toEqual({ skill_selections: { one: 'none' } })
   expect(JSON.stringify(graph)).toBe(original)
 })
-it('keeps preview selections scoped to the agent and does not alter the first level', async () => {
+it('keeps a shared preview choice scoped to the requested agent and does not alter the first level', async () => {
   vi.spyOn(skillsApi, 'list').mockResolvedValue([{ id: 'a' }, { id: 'b' }] as Awaited<ReturnType<typeof skillsApi.list>>)
   const graph = {
     nodes: [
       { id: 'one', type: 'agent', data: { skill_selection: ['a'], factor_bindings: { skill_selection: 'One' } } },
-      { id: 'two', type: 'agent', data: { skill_selection: ['b'], factor_bindings: { skill_selection: 'Two' } } },
+      { id: 'two', type: 'agent', data: { skill_selection: ['a'], factor_bindings: { skill_selection: 'One' } } },
       ...['a', 'b'].map((id) => ({ id, type: 'skill', data: { config: { skill_id: id } } })),
     ],
     edges: ['one', 'two'].flatMap((target) => ['a', 'b'].map((source) => ({ source, target, targetHandle: 'skill' }))),
@@ -42,9 +42,9 @@ it('keeps preview selections scoped to the agent and does not alter the first le
   const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
   const { result, rerender } = renderHook(({ nodeId }) => useSkillTestSelection(graph, nodeId), { wrapper, initialProps: { nodeId: undefined as string | undefined } })
   await waitFor(() => expect(result.current.error).toBeNull())
-  expect(result.current.selections).toEqual({ one: 'a', two: 'b' })
+  expect(result.current.selections).toEqual({ one: 'a' })
   act(() => result.current.setChoice('one', 'b'))
-  expect(result.current.options).toEqual({ skill_selections: { one: 'b', two: 'b' } })
+  expect(result.current.options).toEqual({ skill_selections: { one: 'b' } })
   rerender({ nodeId: 'one' })
   expect(result.current.selections).toEqual({ one: 'a' })
   expect(JSON.stringify(graph)).toBe(original)

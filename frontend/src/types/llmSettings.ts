@@ -79,6 +79,8 @@ export interface LLMConnectionCheck {
   // The URL actually contacted, so a failure is debuggable without guessing
   // which base the credential resolved to. Never contains the key.
   endpoint: string | null
+  // Azure returns the exact deployments counted by its successful check.
+  models?: LLMModelInfo[] | null
 }
 
 export interface LLMSettingModelsResponse {

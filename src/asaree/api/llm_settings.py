@@ -13,7 +13,8 @@ from pydantic import BaseModel
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.credential_resolver import SUPPORTED_PROVIDERS
 from asaree.services.llm_connection_check import check_connection
-from asaree.services.llm_model_cache import discover_models_cached, invalidate_models_cache
+from asaree.services.llm_model_cache import discover_models_cached, invalidate_models_cache, store_models_cache
+from asaree.services.llm_model_discovery import ModelInfo
 from asaree.services.rate_limit import check_rate_limit, record_attempt
 from asaree.services.tool_calling import model_tool_calling_support
 from asaree.services.user_llm_settings import delete_setting, get_setting, list_settings, upsert_setting
@@ -73,6 +74,17 @@ class LLMSettingModelsResponse(BaseModel):
     note: str | None
 
 
+def _model_response(model: ModelInfo, provider: str) -> LLMModelInfoResponse:
+    return LLMModelInfoResponse(
+        id=model.id,
+        label=model.label,
+        supports_temperature=model.capabilities.supports_temperature,
+        supports_effort=model.capabilities.supports_effort,
+        effort_levels=model.capabilities.effort_levels,
+        supports_tool_calling=model_tool_calling_support(provider, model.id),
+    )
+
+
 class LLMConnectionCheckResponse(BaseModel):
     provider: str
     # "ok" | "failed" | "unknown" -- see llm_connection_check for why an
@@ -80,6 +92,7 @@ class LLMConnectionCheckResponse(BaseModel):
     status: str
     detail: str
     endpoint: str | None
+    models: list[LLMModelInfoResponse] | None = None
 
 
 @router.put("", response_model=LLMSettingResponse, status_code=201)
@@ -156,13 +169,14 @@ async def check_connection_endpoint(provider: str, user: CurrentUser, db: DbSess
         raise HTTPException(status_code=404, detail="No credential saved for this provider.")
 
     result = await check_connection(provider=provider, setting=setting)
-    if provider == "azure_foundry" and result.status == "ok":
-        # The explicit connection check also requests a fresh deployment
-        # menu. The browser invalidates its list after this response, so
-        # its next request must not reuse the six-hour server cache.
-        await invalidate_models_cache(user_id=user.id, provider=provider)
+    if provider == "azure_foundry" and result.status == "ok" and result.models is not None:
+        await store_models_cache(user_id=user.id, provider=provider, models=result.models)
     return LLMConnectionCheckResponse(
-        provider=provider, status=result.status, detail=result.detail, endpoint=result.endpoint
+        provider=provider,
+        status=result.status,
+        detail=result.detail,
+        endpoint=result.endpoint,
+        models=[_model_response(model, provider) for model in result.models] if result.models is not None else None,
     )
 
 
@@ -188,17 +202,7 @@ async def list_models_endpoint(provider: str, user: CurrentUser, db: DbSession) 
     setting = await get_setting(db, user_id=user.id, provider=provider)
     models, source, note = await discover_models_cached(user_id=user.id, provider=provider, setting=setting)
     return LLMSettingModelsResponse(
-        models=[
-            LLMModelInfoResponse(
-                id=m.id,
-                label=m.label,
-                supports_temperature=m.capabilities.supports_temperature,
-                supports_effort=m.capabilities.supports_effort,
-                effort_levels=m.capabilities.effort_levels,
-                supports_tool_calling=model_tool_calling_support(provider, m.id),
-            )
-            for m in models
-        ],
+        models=[_model_response(model, provider) for model in models],
         source=source,
         note=note,
     )

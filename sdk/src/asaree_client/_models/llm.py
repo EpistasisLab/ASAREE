@@ -29,3 +29,4 @@ class LLMConnectionCheck(BaseModel):
     status: str
     detail: str
     endpoint: str | None
+    models: list[LLMModelInfo] | None = None

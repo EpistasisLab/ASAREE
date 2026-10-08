@@ -44,7 +44,15 @@ export function useConnectionCheck(provider: LLMProvider | null | undefined) {
     mutationFn: () => llmSettingsApi.testConnection(provider!),
     onSuccess: async (result) => {
       if (result.provider === 'azure_foundry' && result.status === 'ok') {
-        await queryClient.invalidateQueries({ queryKey: providerModelsKey(result.provider) })
+        const queryKey = providerModelsKey(result.provider)
+        if (result.models != null) {
+          // A stale in-flight list must not overwrite the checked deployments.
+          await queryClient.cancelQueries({ queryKey })
+          queryClient.setQueryData(queryKey, { models: result.models, source: 'api', note: null })
+        } else {
+          // Compatibility with a backend that predates the checked-model list.
+          await queryClient.invalidateQueries({ queryKey })
+        }
       }
     },
   })

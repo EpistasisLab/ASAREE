@@ -36,6 +36,7 @@ export function ConnectorAddStub({
 }) {
   const connections = useNodeConnections({ id: nodeId, handleType: 'target', handleId: slot })
   const { requestConnectorAdd } = useProtocolCanvasActions()
+  const factorLabel = slot === 'skill' ? 'Skills' : slot === 'dataset' ? 'Datasets' : slot === 'tool' ? 'Tools' : CONNECTOR_SLOT_LABELS[slot]
 
   if (connections.length > 0 && !alwaysVisible) return null
 
@@ -68,7 +69,7 @@ export function ConnectorAddStub({
       className={side === 'right' ? 'group/stub absolute top-1/2 -right-11 -translate-y-1/2' : side === 'top' ? 'group/stub absolute -top-11 -translate-x-1/2' : 'group/stub absolute -bottom-11 -translate-x-1/2'}
       style={side !== 'right' ? { left } : undefined}
     >
-      {factorName && <span className="pointer-events-none absolute bottom-[calc(100%+1.5rem)] left-1/2 -translate-x-1/2 whitespace-nowrap rounded border border-chart-2 bg-card px-1 font-mono text-[9px] text-chart-2" title={factorName}>{slot === 'knowledge' ? 'Knowledge' : slot === 'dataset' ? 'Datasets' : 'Skills'} · {factorOnOff ? 'on/off' : `${factorLevelCount ?? 0} levels`}</span>}
+      {factorName && <span className="pointer-events-none absolute bottom-[calc(100%+1.5rem)] left-1/2 -translate-x-1/2 whitespace-nowrap rounded border border-chart-2 bg-card px-1 font-mono text-[9px] text-chart-2" title={factorName}>{factorLabel} · {factorOnOff ? 'on/off' : `${factorLevelCount ?? 0} levels`}</span>}
     <button
       type="button"
       onClick={handleClick}

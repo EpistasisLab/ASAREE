@@ -39,7 +39,6 @@ from asaree_workspace_core import (
 from motoro.mcp.registry import get_registry
 from motoro.models.run import RunStatus
 from motoro.runner import create_agent, create_run, execute_run, get_agent_by_name, get_run, update_agent
-from motoro.schemas.agent import ModelConfig
 from motoro.schemas.output import OutputEnvelope, parse_envelope
 from motoro.schemas.pattern import PatternConfig
 from motoro.security.prompt_injection import (
@@ -87,6 +86,7 @@ from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
 from asaree.services.factorial_row_results import claim_row_attempt, ensure_row_result, get_row_result
 from asaree.services.knowledge_factors import knowledge_id, validate_knowledge_factors
+from asaree.services.model_config import build_model_config
 from asaree.services.protocol_revisions import get_revision
 from asaree.services.protocol_runs import (
     TERMINAL_PROTOCOL_RUN_STATUSES,
@@ -4260,8 +4260,7 @@ async def _run_agent_node(
     # need: extraction is a second LLM call per run, so its cost belongs on the
     # canvas. Unlike the three above, the node's own field is still read as a
     # fallback and always will be -- see _resolve_output_contract.
-    model_config_data = {k: v for k, v in _resolve_model_config(graph, node["id"]).items() if v is not None}
-    model_config = ModelConfig(**model_config_data)
+    model_config = await build_model_config(_resolve_model_config(graph, node["id"]), owner_id=owner_id)
     # Four connectors feed one allow-list. The Knowledge connector's OKF
     # bundles and documents are MCP servers like any other, so they land here
     # rather than in a slot of their own (see _resolve_knowledge_config), and
@@ -4438,8 +4437,7 @@ async def _run_critic(
     from its required Model connector, same as an agent node."""
     config = gate["data"]["config"]
     agent_name = f"protocol-{protocol_id}-{gate['id']}" + (f"-row-{protocol_run_id}" if row_attempt else "")
-    model_config_data = {k: v for k, v in _resolve_model_config(graph, gate["id"]).items() if v is not None}
-    model_config = ModelConfig(**model_config_data)
+    model_config = await build_model_config(_resolve_model_config(graph, gate["id"]), owner_id=owner_id)
     pattern_config = PatternConfig(execution_pattern="single_agent_baseline").model_dump()
     goal = config.get("goal") or "Review the given output and return an approval verdict with feedback."
     description = config.get("description") or ""

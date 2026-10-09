@@ -40,17 +40,21 @@ export const LLM_PROVIDER_LABELS: Record<LLMProvider, string> = Object.fromEntri
 
 // Matches src/asaree/api/llm_settings.py's LLMModelInfoResponse/
 // LLMSettingModelsResponse -- GET /llm-settings/{provider}/models.
-// supports_temperature/supports_effort/effort_levels come straight from
-// Motoro's own model_capabilities registry (some newer models 400 on
+// Sampling capabilities come from provider discovery with Motoro's registry
+// as fallback, and the same metadata reaches execution (some newer models 400 on
 // an explicit temperature and take an `effort` dial instead), so the same
 // response tells the Inspector both which models to list AND which control
 // to show for whichever one is selected.
-export interface LLMModelInfo {
-  id: string
-  label: string | null
+export interface ModelCapabilities {
   supports_temperature: boolean
   supports_effort: boolean
   effort_levels: string[]
+  default_effort?: string | null
+}
+
+export interface LLMModelInfo extends ModelCapabilities {
+  id: string
+  label: string | null
   // litellm's function-calling flag rather than the capabilities registry --
   // null means litellm doesn't know this model (every Azure Foundry deployment
   // name), so treat it as "can't tell" and warn about nothing.

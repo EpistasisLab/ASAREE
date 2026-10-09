@@ -1,3 +1,5 @@
+import type { ModelCapabilities } from '@/types/llmSettings'
+import { modelCapabilities } from '@/lib/modelCapabilities'
 import { useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, Plus, Split, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -25,11 +27,12 @@ export function ModelFactorDialog({ node, nodeLabel, factors, initialFieldPath, 
   onRemove: (name: string, fieldPath: string) => Promise<unknown>
 }) {
   const config = { ...node.data.config } as Record<string, unknown>
-  const { models, modelsQuery } = useProviderModels(config.provider as string | undefined)
+  const { models, modelsQuery, capabilities: resolvedCapabilities, capabilitiesPending, capabilitiesError } = useProviderModels(config.provider as string | undefined, config.model as string | undefined, config.resolved_capabilities as ModelCapabilities | undefined)
   const modelInfo = models.find((model) => model.id === config.model)
-  const showTemperature = modelInfo?.supports_temperature ?? true
-  const showEffort = modelInfo?.supports_effort ?? false
-  const effortLevels = modelInfo?.effort_levels.length ? modelInfo.effort_levels : ['low', 'medium', 'high', 'xhigh', 'max']
+  const capabilities = modelCapabilities(resolvedCapabilities ?? modelInfo, config.resolved_capabilities as ModelCapabilities | undefined)
+  const showTemperature = !capabilitiesPending && capabilities.supports_temperature
+  const showEffort = !capabilitiesPending && capabilities.supports_effort
+  const effortLevels = capabilities.effort_levels
   const fields = bindableFieldsForNode(node)
   const available = (fieldPath: string) => fieldPath === 'config.temperature' ? showTemperature : fieldPath === 'config.effort' ? showEffort : true
   const visibleFields = fields.filter((field) => available(field.fieldPath) || node.data.factor_bindings?.[field.fieldPath] || initialFieldPath === field.fieldPath)
@@ -118,6 +121,7 @@ export function ModelFactorDialog({ node, nodeLabel, factors, initialFieldPath, 
           <p className="text-xs text-muted-foreground">Changes require design review and regeneration.</p>
           {current && <Button variant="destructive" size="sm" disabled={saving} onClick={() => void commit(true)}>Remove factor</Button>}
         </>}
+        {capabilitiesPending && <p role="status" className="text-xs text-muted-foreground">{capabilitiesError ?? 'Resolving model capabilities…'}</p>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </div>
       <DialogFooter><Button variant="outline" disabled={saving} onClick={onClose}>Cancel</Button><Button disabled={saving || !valid || blocked(path) || !available(path)} onClick={() => void commit()}>{saving ? 'Saving…' : 'Save factor'}</Button></DialogFooter>

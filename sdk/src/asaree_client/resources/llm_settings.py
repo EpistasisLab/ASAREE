@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlencode
 
-from asaree_client.models import LLMConnectionCheck, LLMModels, LLMSetting
+from asaree_client.models import LLMConnectionCheck, LLMModelCapabilities, LLMModels, LLMSetting
 
 
 class LLMSettings:
@@ -48,3 +49,8 @@ class LLMSettings:
     def list_models(self, provider: str) -> LLMModels:
         data = self._client._get(f"/llm-settings/{provider}/models")
         return LLMModels(**data)
+
+    def model_capabilities(self, provider: str, model: str) -> LLMModelCapabilities:
+        """Resolve a model's sampling controls, including IDs outside the picker catalog."""
+        data = self._client._get(f"/llm-settings/{provider}/model-capabilities?{urlencode({'model': model})}")
+        return LLMModelCapabilities(**data)

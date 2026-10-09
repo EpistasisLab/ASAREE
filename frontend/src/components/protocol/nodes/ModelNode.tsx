@@ -1,3 +1,4 @@
+import { modelCapabilities } from '@/lib/modelCapabilities'
 import type { NodeProps } from '@xyflow/react'
 import { Atom, Cloud, HardDrive, Route, Sparkles } from 'lucide-react'
 import { nodeAccent } from '@/lib/nodeAccent'
@@ -44,7 +45,7 @@ export function ModelNode({ id, data, selected }: NodeProps & { data: ModelNodeD
   // default Model node config ships with a real-looking model string, so that
   // check can basically never fire in practice); this instead validates
   // against the provider's own actually-discovered model list.
-  const { modelsQuery, models } = useProviderModels(provider)
+  const { modelsQuery, models, capabilities: resolvedCapabilities, capabilitiesPending, capabilitiesError } = useProviderModels(provider, data.config?.model, data.config?.resolved_capabilities)
   // An empty list (still loading, discovery failed, or no credential saved
   // yet) means "can't tell," not "invalid" -- only warn once there's an
   // actual list to check against, same as the Inspector's own "unrecognized
@@ -70,12 +71,12 @@ export function ModelNode({ id, data, selected }: NodeProps & { data: ModelNodeD
   else if (listIsAuthoritative && models.length > 0 && !selectedModelInfo) {
     warnings.push(`"${modelName}" isn't available on your ${meta.label} credential`)
   }
+  if (capabilitiesPending) warnings.push(capabilitiesError ?? 'Model capabilities are still loading')
   if (data.config?.max_tokens == null) warnings.push('Max tokens is required')
-  // Same "unrecognized model defaults to temperature-only" fallback as
-  // ModelNodeInspector.tsx's own showTemperature -- Temperature is required
+  // Same resolved capability metadata as ModelNodeInspector -- Temperature is required
   // (not left to Motoro's own silent 0.7 default) whenever it's the field
   // actually offered for this model.
-  if ((selectedModelInfo?.supports_temperature ?? true) && data.config?.temperature == null) {
+  if (!capabilitiesPending && modelCapabilities(resolvedCapabilities ?? selectedModelInfo, data.config?.resolved_capabilities).supports_temperature && data.config?.temperature == null) {
     warnings.push('Temperature is required')
   }
 

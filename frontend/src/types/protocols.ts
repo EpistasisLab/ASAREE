@@ -1,3 +1,4 @@
+import type { ModelCapabilities } from './llmSettings'
 import type { EvaluationArtifact, MetricObservation } from './experiments'
 
 export interface Protocol {
@@ -278,6 +279,7 @@ export interface AgentModelConfigData {
   model: string
   temperature?: number | null
   effort?: string | null
+  resolved_capabilities?: ModelCapabilities | null
   // Nullable so ModelNodeInspector's Input can be backspaced to empty without
   // snapping to a forced value -- null is a real, persisted "not set yet"
   // state flagged by ModelNode's warning triangle and nodeConfigIssues.ts's

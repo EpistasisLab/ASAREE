@@ -8,6 +8,7 @@ from typing import Any
 
 from asaree_client.models import Experiment, RegisteredDataset, Trial
 from asaree_client.resources.experiments import Experiments
+from asaree_client.resources.llm_settings import LLMSettings
 from asaree_client.resources.protocols import Protocols
 
 
@@ -28,6 +29,23 @@ class RecordingClient:
 
     def _patch(self, path: str, **kwargs: Any) -> Any:
         return self._record("PATCH", path, **kwargs)
+
+
+def test_custom_model_capabilities_encodes_model_id_and_preserves_default() -> None:
+    client = RecordingClient(
+        {
+            "supports_temperature": False,
+            "supports_effort": True,
+            "effort_levels": ["low", "medium", "high"],
+            "default_effort": "medium",
+        }
+    )
+    capabilities = LLMSettings(client).model_capabilities("openrouter", "vendor/model?preview=1")
+    assert client.calls == [
+        ("GET", "/llm-settings/openrouter/model-capabilities?model=vendor%2Fmodel%3Fpreview%3D1", {})
+    ]
+    assert capabilities.default_effort == "medium"
+    assert capabilities.supports_temperature is False
 
 
 def _experiment_response() -> dict[str, Any]:

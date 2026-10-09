@@ -5,10 +5,13 @@ import { factorCreationFields } from './bindableFields'
 import { ModelFactorDialog } from './ModelFactorDialog'
 import { LlmConfigLevelRow } from './FactorEditorDialog'
 
-vi.mock('./useProviderModels', () => ({ useProviderModels: () => ({ models: [
+vi.mock('./useProviderModels', () => ({ useProviderModels: (_provider: string, model?: string) => ({ models: [
   { id: 'gpt-5', label: 'GPT 5', supports_temperature: true, supports_effort: false, effort_levels: [] },
   { id: 'reasoning', label: 'Reasoning model', supports_temperature: false, supports_effort: true, effort_levels: ['low', 'high'] },
-], modelsQuery: { isLoading: false } }) }))
+], capabilities: model === 'custom-id' ? {
+  supports_temperature: false, supports_effort: true,
+  effort_levels: ['low', 'medium', 'high'], default_effort: 'medium',
+} : undefined, modelsQuery: { isLoading: false } }) }))
 
 const node: ProtocolNode & { data: ModelNodeData } = {
   id: 'model', type: 'model_openai', position: { x: 0, y: 0 },
@@ -92,8 +95,9 @@ it('updates whole-model level controls when its selected model changes', () => {
   expect(screen.queryByText('Temperature')).not.toBeInTheDocument()
   expect(screen.getByText('Effort')).toBeInTheDocument()
   rerender(<LlmConfigLevelRow value={{ provider: 'openai', model: 'custom-id' }} onChange={vi.fn()} />)
-  expect(screen.getByText('Temperature')).toBeInTheDocument()
-  expect(screen.queryByText('Effort')).not.toBeInTheDocument()
+  expect(screen.queryByText('Temperature')).not.toBeInTheDocument()
+  expect(screen.getByText('Effort')).toBeInTheDocument()
+  expect(screen.getByText('Default (medium)')).toBeInTheDocument()
 })
 
 it('warns about duplicate model configurations regardless of property order and clears when changed', () => {

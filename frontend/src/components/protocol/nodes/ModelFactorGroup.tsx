@@ -1,3 +1,5 @@
+import type { ModelCapabilities } from '@/types/llmSettings'
+import { modelCapabilities } from '@/lib/modelCapabilities'
 import { useEffect, useState } from 'react'
 import { Handle, Position, useUpdateNodeInternals } from '@xyflow/react'
 import { ChevronDown, ChevronUp, Split } from 'lucide-react'
@@ -26,10 +28,11 @@ function LevelPreview({ level, label, index, disabled, onEdit }: {
   const provider = String(config.provider ?? '')
   const meta = PROVIDER_META[provider]
   const Icon = meta?.icon ?? Split
-  const { models } = useProviderModels(provider)
+  const { models, capabilities: resolvedCapabilities, capabilitiesPending, capabilitiesError } = useProviderModels(provider, config.model as string | undefined, config.resolved_capabilities as ModelCapabilities | undefined)
   const model = models.find((model) => model.id === config.model)
-  const effort = model?.supports_effort ?? false
-  const temperature = model?.supports_temperature ?? true
+  const capabilities = modelCapabilities(resolvedCapabilities ?? model, config.resolved_capabilities as ModelCapabilities | undefined)
+  const effort = !capabilitiesPending && capabilities.supports_effort
+  const temperature = !capabilitiesPending && capabilities.supports_temperature
   return <Card size="sm" className="nodrag nopan gap-2 px-3" style={cardAccent(nodeAccent('model'))}>
     <Button variant="ghost" className="h-auto w-full justify-start px-2 py-2 text-left whitespace-normal" disabled={disabled} onClick={(event) => { event.stopPropagation(); onEdit() }} onDoubleClick={(event) => event.stopPropagation()} aria-label={`Edit model level ${index + 1}: ${label}`}>
       <span className="flex min-w-0 flex-1 flex-col gap-1">
@@ -37,7 +40,8 @@ function LevelPreview({ level, label, index, disabled, onEdit }: {
         <span className="text-xs text-muted-foreground">{meta?.label ?? provider}{index === 0 ? ' · default test selection' : ''}</span>
         <span className="break-all font-mono text-xs">model={String(config.model || '(unset)')}</span>
         <span className="font-mono text-xs text-muted-foreground">
-          {effort ? `effort=${String(config.effort ?? '(unset)')} ` : ''}
+          {capabilitiesPending ? `${capabilitiesError ?? 'Resolving sampling controls…'} ` : ''}
+          {effort ? `effort=${String(config.effort ?? capabilities.default_effort)} ` : ''}
           {temperature ? `temperature=${String(config.temperature ?? '(unset)')} ` : ''}
           max_tokens={String(config.max_tokens ?? '(unset)')}
         </span>

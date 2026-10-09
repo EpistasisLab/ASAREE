@@ -1,3 +1,5 @@
+import type { ModelCapabilities } from '@/types/llmSettings'
+import { modelCapabilities } from '@/lib/modelCapabilities'
 import { SubAgentFactorEditor } from './SubAgentFactorEditor'
 import type { ProtocolGraph } from '@/types/protocols'
 import { useEffect, useMemo, useState } from 'react'
@@ -42,7 +44,6 @@ import { ScriptFactorEditor } from './ScriptFactorEditor'
 import { ToolFactorEditor } from './ToolFactorEditor'
 import { SkillFactorEditor } from './SkillFactorEditor'
 
-const EFFORT_LEVELS_FALLBACK = ['low', 'medium', 'high', 'xhigh', 'max']
 const PATTERN_OPTIONS = [
   { slug: 'reason_act', label: 'Reason + Act' },
   { slug: 'single_agent_baseline', label: 'Single-Agent Baseline' },
@@ -56,11 +57,12 @@ type StructuredLevel = Record<string, unknown>
 // _resolve_model_config reads it verbatim, never the node's xyflow type).
 export function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
   const provider = (value.provider as string) || 'anthropic'
-  const { modelsQuery, models } = useProviderModels(provider)
+  const { modelsQuery, models, capabilities: resolvedCapabilities, capabilitiesPending, capabilitiesError } = useProviderModels(provider, value.model as string | undefined, value.resolved_capabilities as ModelCapabilities | undefined)
   const selectedModelInfo = models.find((m) => m.id === value.model)
-  const showTemperature = selectedModelInfo?.supports_temperature ?? true
-  const showEffort = selectedModelInfo?.supports_effort ?? false
-  const effortLevels = selectedModelInfo?.effort_levels.length ? selectedModelInfo.effort_levels : EFFORT_LEVELS_FALLBACK
+  const capabilities = modelCapabilities(resolvedCapabilities ?? selectedModelInfo, value.resolved_capabilities as ModelCapabilities | undefined)
+  const showTemperature = !capabilitiesPending && capabilities.supports_temperature
+  const showEffort = !capabilitiesPending && capabilities.supports_effort
+  const effortLevels = capabilities.effort_levels
 
   function patch(patch: StructuredLevel) {
     onChange({ ...value, ...patch })
@@ -70,7 +72,7 @@ export function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel;
     <div className="grid grid-cols-2 gap-2 rounded-lg border p-2">
       <div className="space-y-1">
         <Label className="text-xs">Provider</Label>
-        <Select value={provider} onValueChange={(v) => v && patch({ provider: v, model: '' })}>
+        <Select value={provider} onValueChange={(v) => v && patch({ provider: v, model: '', resolved_capabilities: null })}>
           <SelectTrigger className="h-8 w-full">
             <SelectValue>{() => PROVIDER_META[provider]?.label ?? provider}</SelectValue>
           </SelectTrigger>
@@ -89,9 +91,10 @@ export function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel;
           value={(value.model as string) ?? ''}
           models={models}
           isLoading={modelsQuery.isLoading}
-          onChange={(model) => patch({ model })}
+          onChange={(model) => patch({ model, resolved_capabilities: null })}
         />
       </div>
+      {capabilitiesPending && <p role="status" className="col-span-2 text-xs text-muted-foreground">{capabilitiesError ?? 'Resolving model capabilities…'}</p>}
       {showTemperature && <div className="space-y-1">
         <Label className="text-xs">Temperature</Label>
         <Input
@@ -109,10 +112,10 @@ export function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel;
           <Label className="text-xs">Effort</Label>
           <Select value={(value.effort as string) || '__none__'} onValueChange={(v) => patch({ effort: v === '__none__' ? null : v })}>
             <SelectTrigger className="h-8 w-full">
-              <SelectValue>{(v: string) => (v === '__none__' ? '(none)' : v)}</SelectValue>
+              <SelectValue>{(v: string) => (v === '__none__' ? `Default (${capabilities.default_effort})` : v)}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__none__">(none)</SelectItem>
+              <SelectItem value="__none__">Default ({capabilities.default_effort})</SelectItem>
               {effortLevels.map((level) => (
                 <SelectItem key={level} value={level}>
                   {level}

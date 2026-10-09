@@ -7,7 +7,10 @@ whoever authenticated, never to an id someone else supplies.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Query
+from motoro.services.model_capabilities import ModelCapabilities
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
@@ -15,6 +18,7 @@ from asaree.services.credential_resolver import SUPPORTED_PROVIDERS
 from asaree.services.llm_connection_check import check_connection
 from asaree.services.llm_model_cache import discover_models_cached, invalidate_models_cache, store_models_cache
 from asaree.services.llm_model_discovery import ModelInfo
+from asaree.services.model_config import resolve_model_capabilities
 from asaree.services.rate_limit import check_rate_limit, record_attempt
 from asaree.services.tool_calling import model_tool_calling_support
 from asaree.services.user_llm_settings import delete_setting, get_setting, list_settings, upsert_setting
@@ -57,6 +61,7 @@ class LLMModelInfoResponse(BaseModel):
     supports_temperature: bool
     supports_effort: bool
     effort_levels: list[str]
+    default_effort: str | None
     # Unlike the three above, this one doesn't come from Motoro's
     # ModelCapabilities registry -- it's litellm's own function-calling flag,
     # the same oracle ``model_supports_tool_calling`` uses to pick an agent's
@@ -81,6 +86,7 @@ def _model_response(model: ModelInfo, provider: str) -> LLMModelInfoResponse:
         supports_temperature=model.capabilities.supports_temperature,
         supports_effort=model.capabilities.supports_effort,
         effort_levels=model.capabilities.effort_levels,
+        default_effort=model.capabilities.default_effort,
         supports_tool_calling=model_tool_calling_support(provider, model.id),
     )
 
@@ -206,3 +212,14 @@ async def list_models_endpoint(provider: str, user: CurrentUser, db: DbSession) 
         source=source,
         note=note,
     )
+
+
+@router.get("/{provider}/model-capabilities", response_model=ModelCapabilities)
+async def model_capabilities_endpoint(
+    provider: str, model: Annotated[str, Query(min_length=1, max_length=256)], user: CurrentUser, db: DbSession
+) -> ModelCapabilities:
+    if provider not in SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=422, detail=f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}")
+    if not model.strip():
+        raise HTTPException(status_code=422, detail="model must not be blank")
+    return await resolve_model_capabilities(provider=provider, model=model, db=db, owner_id=user.id)

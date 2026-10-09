@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { modelCapabilities } from '@/lib/modelCapabilities'
+import { useState } from 'react'
 import { Check, LoaderCircle, PlugZap, Sparkles, Split, Trash2 } from 'lucide-react'
 import { nodeAccent } from '@/lib/nodeAccent'
 import { Button } from '@/components/ui/button'
@@ -15,8 +16,6 @@ import { PROVIDER_META } from './nodes/ModelNode'
 import { useProviderModels } from './useProviderModels'
 import type { ModelNodeConfig, ModelNodeData, ProtocolNode } from '@/types/protocols'
 import type { LLMProvider } from '@/types/llmSettings'
-
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
 // Shared by all three LLM provider node types (model_anthropic/model_openai/
 // model_azure_foundry) -- fields are identical across providers (see
@@ -56,7 +55,7 @@ export function ModelNodeInspector({
   // answers. Shared with the canvas node cards via useProviderModels, so
   // opening this inspector reads the list those cards already fetched rather
   // than issuing its own request.
-  const { credentialsQuery, hasCredential, modelsQuery, models } = useProviderModels(provider)
+  const { credentialsQuery, hasCredential, modelsQuery, models, capabilities: resolvedCapabilities, capabilitiesPending, capabilitiesError, retryCapabilities } = useProviderModels(provider, node?.data.config.model, node?.data.config.resolved_capabilities)
   // Credential health belongs where you *pick* the credential, not only in a
   // settings screen -- this is the canvas-side entry point. Click-driven
   // rather than firing when the inspector opens: opening a node is a
@@ -65,26 +64,12 @@ export function ModelNodeInspector({
   const credentialCheck = useConnectionCheck(provider as LLMProvider | undefined)
   const configForEffort = node?.data.config
   const selectedModelInfo = models.find((m) => m.id === configForEffort?.model)
-  const showEffort = selectedModelInfo?.supports_effort ?? false
-  const effortLevels = selectedModelInfo?.effort_levels.length ? selectedModelInfo.effort_levels : EFFORT_LEVELS
+  const capabilities = modelCapabilities(resolvedCapabilities ?? selectedModelInfo, configForEffort?.resolved_capabilities)
+  const showEffort = !capabilitiesPending && capabilities.supports_effort
+  const effortLevels = capabilities.effort_levels
+  const defaultEffort = capabilities.default_effort
 
-  // A model that supports effort defaults to something usable instead of
-  // "(none)" -- "medium" when the model offers it (a reasonable middle
-  // ground of quality vs. cost), otherwise whatever its own list's first
-  // entry is. Only fires when effort is genuinely unset AND the currently
-  // selected model actually supports it -- switching to a model that
-  // doesn't support effort leaves config.effort alone (it's just not shown
-  // or used), rather than clearing a value the user may switch back to.
-  // Runs before the `!node` early return below (hooks can't be conditional).
-  useEffect(() => {
-    if (node && showEffort && !configForEffort?.effort && effortLevels.length > 0) {
-      onChange(node.id, {
-        ...node.data,
-        config: { ...node.data.config, effort: effortLevels.includes('medium') ? 'medium' : effortLevels[0] },
-      })
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [node, showEffort, configForEffort?.effort, effortLevels])
+  // Unset effort follows the resolved model default without mutating the draft.
 
   if (!node) return null
   const data = node.data
@@ -94,10 +79,8 @@ export function ModelNodeInspector({
   const Icon = meta.icon
   const ACCENT = nodeAccent('model')
 
-  // Unrecognized model (list still loading, discovery failed, or a
-  // hand-typed value not in the catalog) -- default to temperature-only,
-  // the same safe fallback Motoro's own DEFAULT_CAPABILITIES uses.
-  const showTemperature = selectedModelInfo?.supports_temperature ?? true
+  // Custom IDs use the backend resolver too; show no guessed control while loading.
+  const showTemperature = !capabilitiesPending && capabilities.supports_temperature
 
   // Deliberately off-catalog: a model id set here that the fetched list
   // doesn't contain, once there IS a list to compare against (an empty list
@@ -113,6 +96,7 @@ export function ModelNodeInspector({
   // Motoro's own ModelConfig default (0.7) apply silently -- required so
   // that value is always an explicit choice, not an invisible fallback.
   if (showTemperature && config.temperature == null) missingFields.push('Temperature')
+  if (capabilitiesPending) missingFields.push(capabilitiesError ?? 'Model capabilities are still loading')
 
   function requestClose() {
     if (missingFields.length > 0) {
@@ -229,25 +213,44 @@ export function ModelNodeInspector({
             value={config.model}
             models={models}
             isLoading={modelsQuery.isLoading}
-            onChange={(model) => patchConfig({ model })}
+            onChange={(model) => patchConfig({ model, resolved_capabilities: null })}
           />
           {modelsQuery.data?.source === 'error' && modelsQuery.data.note && (
             <p className="text-xs text-muted-foreground">{modelsQuery.data.note}</p>
           )}
           {isOffCatalogModel && (
-            // Say why the controls just changed shape: capabilities are
-            // looked up by model id, so an id the catalog doesn't know
-            // falls back to DEFAULT_CAPABILITIES -- Temperature shown,
-            // Effort hidden -- regardless of what the model really
-            // supports. Worth stating plainly rather than letting the
-            // Effort control silently vanish.
             <p className="text-xs text-muted-foreground">
-              Not in the catalog, so its capabilities are unknown — Temperature is offered and Effort isn&apos;t. The
-              id is sent to {meta.label} as typed.
+              Not in the catalog. Sampling controls are resolved for this model by the server. The id is sent to {meta.label} as typed.
             </p>
           )}
         </div>
       </div>
+
+      {(!selectedModelInfo || config.resolved_capabilities) && (
+        <div className="space-y-1.5">
+          <Label htmlFor="llm-sampling-control">Sampling control</Label>
+          <Select
+            value={config.resolved_capabilities?.supports_temperature ? 'temperature' : 'auto'}
+            onValueChange={(value) => value && patchConfig({
+              resolved_capabilities: value === 'temperature'
+                ? { supports_temperature: true, supports_effort: false, effort_levels: [], default_effort: null }
+                : null,
+            })}
+          >
+            <SelectTrigger id="llm-sampling-control" className="w-full">
+              <SelectValue>{(value: string) => value === 'temperature' ? 'Temperature only' : 'Automatic'}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">Automatic</SelectItem>
+              <SelectItem value="temperature">Temperature only</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">Choose Temperature only if your custom model does not support effort.</p>
+        </div>
+      )}
+
+      {capabilitiesPending && <p role="status" className="text-xs text-muted-foreground">{capabilitiesError ?? 'Resolving model capabilities…'}</p>}
+      {capabilitiesError && <Button variant="outline" size="sm" onClick={() => void retryCapabilities()}>Retry</Button>}
 
       <div className="grid grid-cols-3 gap-4">
         {showTemperature && (
@@ -279,10 +282,10 @@ export function ModelNodeInspector({
               }}
             >
               <SelectTrigger className="w-full">
-                <SelectValue>{(value: string) => (value === '__none__' ? '(none)' : value)}</SelectValue>
+                <SelectValue>{(value: string) => (value === '__none__' ? `Default (${defaultEffort})` : value)}</SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__none__">(none)</SelectItem>
+                <SelectItem value="__none__">Default ({defaultEffort})</SelectItem>
                 {effortLevels.map((level) => (
                   <SelectItem key={level} value={level}>
                     {level}

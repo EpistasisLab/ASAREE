@@ -30,44 +30,20 @@ def gather_tools(agent: Any) -> list[dict[str, Any]]:
     the executor fails closed on an empty allow-list rather than granting
     every connected server's tools by default.
 
-    Descriptors whose bare ``tool_name`` is exposed by more than one
-    connected server get that field rewritten to the namespaced
-    ``"{server}.{tool}"`` form (``name`` already is). Two things downstream
-    read the bare name and both break on a collision:
-
-    * ``motoro.mcp.adapters.tools_to_openai_format`` names the provider-facing
-      function after it, so two servers with a ``ping`` bind two tools called
-      ``ping`` -- which Anthropic/Azure reject outright ("tools: Tool names
-      must be unique"), failing the whole run before the first LLM call.
-    * ``MCPServerRegistry.lookup_tool`` resolves a bare name through an index
-      spanning every connected server and silently returns the *first* match,
-      so a call meant for one server's ``ping`` can be dispatched to another's
-      (or bounce off the allow-list as "not allowed" once it resolves to a
-      server this run was never granted).
-
-    Namespacing only the colliding entries keeps the common case's clean tool
-    names -- the namespaced form has to keep its ``.`` for ``lookup_tool`` to
-    resolve it directly, which costs the provider-facing name a sanitising
-    hash suffix, so it isn't worth applying to tools that don't need it.
-    Collisions are computed over the owner's visible registry, not just this
-    run's allow-list, because a bare name still has to be unambiguous among
-    every server that owner can use.
+    Catalog descriptors pass through unchanged, apart from optional
+    ``tool_descriptions`` prefixes. Motoro owns collision-safe provider names,
+    dispatch resolution, and allow-list matching; ``tool_name`` stays bare
+    even when several servers expose the same tool.
     """
     tool_names = set((agent.tool_config_data or {}).get("tool_names") or [])
     description_prefixes = (agent.tool_config_data or {}).get("tool_descriptions") or {}
     if not tool_names:
         return []
     catalog = get_registry().get_all_tools(owner_id=agent.owner_id)
-    servers_by_bare_name: dict[str, set[str]] = {}
-    for tool in catalog:
-        bare = str(tool.get("tool_name") or "")
-        servers_by_bare_name.setdefault(bare, set()).add(str(tool.get("server") or ""))
     admitted: list[dict[str, Any]] = []
     for tool in catalog:
         if tool["name"] not in tool_names:
             continue
-        if len(servers_by_bare_name.get(str(tool.get("tool_name") or ""), ())) > 1:
-            tool = {**tool, "tool_name": tool["name"]}
         prefix = str(description_prefixes.get(tool["name"]) or "").strip()
         if prefix:
             description = str(tool.get("description") or "").strip()

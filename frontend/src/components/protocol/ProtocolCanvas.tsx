@@ -1243,6 +1243,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           isSubAgent: n.type === 'sub_agent',
           runStatus: latestNodeRuns?.[n.id]?.status,
           runTruncated: Boolean(latestNodeRuns?.[n.id]?.truncation),
+          runBypassed: Boolean(latestNodeRuns?.[n.id]?.bypassed),
           missingModel:
             (n.type === 'agent' || (n.type === 'sub_agent' && connectedActiveSubAgentIds.has(n.id))) &&
             !agentIdsWithModel.has(n.id),

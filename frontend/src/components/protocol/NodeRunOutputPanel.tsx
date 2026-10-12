@@ -282,7 +282,7 @@ export function NodeRunOutputPanel({
   // viewport, matching the resize affordance on their prompt textareas.
   resizableOutput?: boolean
 }) {
-  const badge = nodeRunBadge(nodeRun?.status, Boolean(nodeRun?.truncation))
+  const badge = nodeRunBadge(nodeRun?.status, Boolean(nodeRun?.truncation), nodeRun?.bypassed)
   const unresolved = nodeRun?.unresolved_references ?? []
 
   if (!nodeRun) {

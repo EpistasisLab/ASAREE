@@ -77,6 +77,8 @@ export type NodeRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'sk
 
 export interface NodeRunState {
   status: NodeRunStatus
+  // Completed by passing upstream output through; this node's logic did not run.
+  bypassed?: boolean
   run_id?: string | null
   output_text?: string | null
   error?: string | null

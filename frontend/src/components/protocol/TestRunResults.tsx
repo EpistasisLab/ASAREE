@@ -188,7 +188,7 @@ export function TestRunResults({
                 <div key={group.label} className="space-y-1.5">
                   <h4 className="font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">{group.label}</h4>
                   {group.entries.map(([nodeId, nodeRun]) => {
-                    const badge = nodeRunBadge(nodeRun.status, Boolean(nodeRun.truncation))
+                    const badge = nodeRunBadge(nodeRun.status, Boolean(nodeRun.truncation), nodeRun.bypassed)
                     const label = nodeTypes.get(nodeId) === 'sub_agent' && nodeRun.status === 'skipped'
                       ? (running ? 'Available' : 'Not invoked')
                       : badge?.label

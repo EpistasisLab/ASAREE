@@ -145,6 +145,24 @@ describe('ProtocolCanvas connector adds', () => {
     }))
   })
 
+  it('shows the bypass marker on the canvas Agent badge', async () => {
+    const run = protocolRun({
+      status: 'completed',
+      node_runs: { observer: { status: 'completed', bypassed: true, output_text: 'Upstream answer' } },
+    })
+    vi.spyOn(protocolsApi, 'listRuns').mockResolvedValue([run])
+    vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
+    renderCanvas({
+      nodes: [{ id: 'observer', type: 'agent', position: { x: 100, y: 100 }, data: defaultAgentNodeData('Observer') }],
+      edges: [],
+    })
+    await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('[data-testid="rf__node-observer"]')
+      expect(node).not.toBeNull()
+      expect(within(node!).getByText('Bypassed')).toBeInTheDocument()
+    })
+  })
+
   it.each(['sub_agent_selection', 'sub_agent_toggle'] as const)('creates a %s Sub-Agent factor from the node hover menu and preserves connected nodes', async (mode) => {
     const experiment = {
       id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,

@@ -28,13 +28,14 @@ export function ToolStepNode({
 }: NodeProps & { data: ToolStepNodeData & {
     runStatus?: NodeRunStatus
     runTruncated?: boolean
+    runBypassed?: boolean
     mainInFull?: boolean
     mainOutFull?: boolean
   } }) {
   const isActive = data.active ?? true
   const toolName = data.config?.tool_name
   const summary = !isActive ? 'Step disabled' : toolName ? `${toolName}()` : 'No tool selected'
-  const badge = nodeRunBadge(data.runStatus, data.runTruncated)
+  const badge = nodeRunBadge(data.runStatus, data.runTruncated, data.runBypassed)
   const { updateNodeData } = useReactFlow()
   const { requestMakeFactor } = useProtocolCanvasActions()
 

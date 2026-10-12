@@ -4654,6 +4654,7 @@ async def _run_gated_worker(
                 _completed_worker_record(output_text, attempt, run_id_str, extraction),
                 {
                     "status": "completed",
+                    "bypassed": True,
                     "output_text": output_text,
                     "approved": None,
                     "revisions_used": 0,
@@ -6102,6 +6103,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         else:
             node_runs[node_id] = {
                 "status": "failed" if error else "completed",
+                **({"bypassed": True} if not _is_node_active(node) else {}),
                 "output_text": output_text,
                 "error": error,
                 "run_id": str(run_id) if run_id else None,

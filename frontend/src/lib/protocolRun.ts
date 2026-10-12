@@ -17,7 +17,8 @@ export const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>([
 // failed. A different status domain, but the same color meanings everywhere
 // reads as one consistent system rather than two competing ones.
 //
-// *truncated* is the one thing that overrides the status it is paired with: a
+// Bypassed nodes completed by passing input through, without executing.
+// *truncated* also overrides the status it is paired with: a
 // run cut off by its iteration ceiling is recorded as `completed` on purpose
 // (its work is real and downstream nodes consumed it), but a green "Done" is
 // the wrong thing to tell someone whose agent never got to write its answer.
@@ -25,7 +26,11 @@ export const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>([
 export function nodeRunBadge(
   status: NodeRunStatus | undefined,
   truncated = false,
+  bypassed = false,
 ): { label: string; className: string } | null {
+  if (status === 'completed' && bypassed) {
+    return { label: 'Bypassed', className: 'border-transparent bg-muted text-muted-foreground' }
+  }
   if (status === 'completed' && truncated) {
     return {
       label: 'Hit iteration limit',

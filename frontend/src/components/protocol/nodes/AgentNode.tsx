@@ -38,6 +38,7 @@ export function AgentNode({
     // Paired with runStatus, never derivable from it: a truncated run is still
     // `completed` (see NodeRunState.truncation).
     runTruncated?: boolean
+    runBypassed?: boolean
     missingModel?: boolean
     missingOutputParser?: boolean
     canRunAlone?: boolean
@@ -62,7 +63,7 @@ export function AgentNode({
 }) {
   const isSubAgent = data.isSubAgent === true
   const accent = nodeAccent(isSubAgent ? 'sub_agent' : 'agent')
-  const badge = nodeRunBadge(data.runStatus, data.runTruncated)
+  const badge = nodeRunBadge(data.runStatus, data.runTruncated, data.runBypassed)
   // Peers are offered to the model as function schemas -- that is the only
   // channel a consultation can be *chosen* through -- so an agent on a model
   // that can't accept them would know its peers exist and never be able to

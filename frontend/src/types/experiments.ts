@@ -311,6 +311,7 @@ export interface ResultNodeRun {
   node_id: string
   node_label: string
   status: string
+  bypassed?: boolean
   output_text: string | null
   error: string | null
   // Senders this node's prompt referenced that produced nothing, by label

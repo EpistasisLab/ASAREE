@@ -20,11 +20,11 @@ export function CriticGateNode({
   id,
   data,
   selected,
-}: NodeProps & { data: CriticGateNodeData & { runStatus?: NodeRunStatus; runTruncated?: boolean } }) {
+}: NodeProps & { data: CriticGateNodeData & { runStatus?: NodeRunStatus; runTruncated?: boolean; runBypassed?: boolean } }) {
   const enabled = data.config?.enabled ?? true
   const Icon = enabled ? ShieldCheck : ShieldOff
   const summary = enabled ? `Up to ${data.config?.max_revisions ?? 1} revision(s)` : 'Gate disabled'
-  const badge = nodeRunBadge(data.runStatus, data.runTruncated)
+  const badge = nodeRunBadge(data.runStatus, data.runTruncated, data.runBypassed)
   const modelConnections = useNodeConnections({ id, handleType: 'target', handleId: 'model' })
   const { updateNodeData } = useReactFlow()
   const { requestMakeFactor } = useProtocolCanvasActions()

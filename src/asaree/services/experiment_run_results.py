@@ -246,11 +246,12 @@ def _has_execution_evidence(node_run: dict[str, Any]) -> bool:
 
     Connector/config nodes are persisted as ``completed`` so the executor has
     a total graph record, but they don't independently run, spend, emit, or
-    fail. An agent run ID, output, error, or non-terminal execution state is
-    the evidence that makes a row useful to an end user.
+    fail. An agent run ID, output, error, explicit bypass outcome, or
+    non-terminal execution state makes a row useful to an end user.
     """
     return bool(
         node_run.get("run_id")
+        or node_run.get("bypassed")
         or node_run.get("output_text")
         or node_run.get("error")
         or node_run.get("status") in {"running", "failed", "cancelled"}
@@ -856,6 +857,7 @@ async def summarize_experiment_run_results(
                     "node_id": node_id,
                     "node_label": node_labels.get(node_id, node_id),
                     "status": node_run.get("status", "unknown"),
+                    "bypassed": bool(node_run.get("bypassed")),
                     "output_text": node_run.get("output_text"),
                     "error": node_run.get("error"),
                     # Labels, not ids -- the walk records ids (see

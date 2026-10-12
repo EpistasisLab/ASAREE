@@ -1255,6 +1255,7 @@ async def test_gated_worker_sends_and_forwards_payload_only_output(monkeypatch: 
     assert worker_run["payload"] == {"score": 0.91}
     assert gate_run["output_text"] == ""
     assert gate_run["payload"] == {"score": 0.91}
+    assert "bypassed" not in gate_run
 
 
 @pytest.mark.parametrize(("max_revisions", "enabled"), [(0, True), (1, False)])
@@ -1273,6 +1274,7 @@ async def test_gated_worker_forwards_payload_when_review_is_skipped(
     _worker_run, gate_run = await _run(*_worker_gate(max_revisions=max_revisions, enabled=enabled))
 
     assert gate_run["payload"] == {"score": 0.91}
+    assert gate_run.get("bypassed", False) is (not enabled)
 
 
 async def test_gated_worker_rejected_then_approved_on_revision(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1391,6 +1393,9 @@ async def test_gated_worker_disabled_skips_critic_entirely(monkeypatch: pytest.M
     assert worker_run["attempts"] == 1
     assert critic_calls == []
     assert gate_run["approved"] is None
+    assert gate_run["status"] == "completed"
+    assert gate_run["bypassed"] is True
+    assert "bypassed" not in worker_run
 
 
 async def test_gated_worker_worker_failure_stops_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2171,6 +2176,9 @@ async def test_run_protocol_deactivated_node_passes_through(
             assert fetched is not None
             assert fetched.status == "completed"
             assert fetched.node_runs["b"]["status"] == "completed"
+            assert fetched.node_runs["b"]["bypassed"] is True
+            assert "bypassed" not in fetched.node_runs["a"]
+            assert "bypassed" not in fetched.node_runs["c"]
             assert fetched.node_runs["b"]["output_text"] == "real output from a"
             assert fetched.node_runs["c"]["output_text"] == "real output from c"
     finally:

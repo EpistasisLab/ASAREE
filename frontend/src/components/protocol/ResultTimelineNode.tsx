@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { nodeRunBadge } from '@/lib/protocolRun'
 import type { ResultNodeRun } from '@/types/experiments'
 import { ReceivedPromptPanel, RunStepTrace, UnresolvedReferencesNote } from './NodeRunOutputPanel'
 
@@ -22,6 +23,7 @@ function nodeStatusClass(status: string): string {
 export function ResultTimelineNode({ node, defaultOpen = false }: { node: ResultNodeRun; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen)
   const hasDetails = Boolean(node.error || node.output_text || node.agent_run_id)
+  const bypassBadge = node.status === 'completed' && node.bypassed ? nodeRunBadge('completed', false, true) : null
 
   return (
     <li className="overflow-hidden rounded-md border bg-card">
@@ -43,7 +45,7 @@ export function ResultTimelineNode({ node, defaultOpen = false }: { node: Result
             {!hasDetails && <span>No output details recorded</span>}
           </span>
         </span>
-        <Badge variant="outline" className={`shrink-0 capitalize ${nodeStatusClass(node.status)}`}>{node.status}</Badge>
+        <Badge variant="outline" className={`shrink-0 capitalize ${bypassBadge?.className ?? nodeStatusClass(node.status)}`}>{bypassBadge?.label ?? node.status}</Badge>
       </button>
       {open && (
         <div className="space-y-4 border-t bg-muted/15 px-3 py-3">

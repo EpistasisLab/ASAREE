@@ -18,6 +18,22 @@ const node: ProtocolNode & { data: ModelNodeData } = {
   data: { label: 'OpenAI', config: { provider: 'openai', model: 'gpt-5', temperature: 0.7, max_tokens: 1000 } },
 }
 
+it('refreshes untouched levels after a refetch and saves an edit with paired labels', async () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  const bound = { ...node, data: { ...node.data, factor_bindings: { 'config.max_tokens': 'Tokens' } } }
+  const props = { node: bound, nodeLabel: 'OpenAI', initialFieldPath: 'config.max_tokens', onClose: vi.fn(), onSave: save, onRemove: vi.fn() }
+  const factor = { name: 'Tokens', level_type: 'number' as const, levels: [2048, 1024], level_labels: ['high', 'low'] }
+  const refreshed = { ...factor, levels: [1024, 2048], level_labels: ['low', 'high'] }
+  const { rerender } = render(<ModelFactorDialog {...props} factors={[factor]} />)
+  rerender(<ModelFactorDialog {...props} factors={[refreshed]} />)
+  expect(screen.getByLabelText('Level 1 value')).toHaveValue(1024)
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(save).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByLabelText('Level 1 label'), { target: { value: 'small' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+  await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith({ ...refreshed, level_labels: ['small', 'high'] }, 'config.max_tokens', 'Tokens'))
+})
+
 it('routes New Factor model choices to the dedicated dialog while retaining their node grouping', () => {
   const fields = factorCreationFields([node], [])
   expect(fields).toHaveLength(5)

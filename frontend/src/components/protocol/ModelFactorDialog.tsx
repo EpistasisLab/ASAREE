@@ -15,6 +15,7 @@ import { LlmConfigLevelRow } from './FactorEditorDialog'
 import { ModelField } from './ModelField'
 import { useProviderModels } from './useProviderModels'
 import { computeFactorName, defaultFactorLevelLabels, seedLevels } from './factorLevels'
+import { useDialogDraft } from './useDialogDraft'
 
 export function ModelFactorDialog({ node, nodeLabel, factors, initialFieldPath, initialLevelIndex, onClose, onSave, onRemove }: {
   node: ProtocolNode
@@ -49,7 +50,7 @@ export function ModelFactorDialog({ node, nodeLabel, factors, initialFieldPath, 
     const name = computeFactorName(nodeLabel, field.label, factors.map((factor) => factor.name))
     return { name, level_type: field.levelType, levels, level_labels: defaultFactorLevelLabels(name, levels.length, field.levelType) }
   }
-  const [draft, setDraft] = useState(() => seed(path))
+  const { draft, setDraft, reset: resetDraft } = useDialogDraft(seed(path), { sessionKey: path })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const initialLevelRef = useRef<HTMLDivElement>(null)
@@ -92,7 +93,7 @@ export function ModelFactorDialog({ node, nodeLabel, factors, initialFieldPath, 
     <DialogContent className="sm:max-w-xl" initialFocus={initialLevelIndex == null ? undefined : () => initialLevelRef.current?.querySelector<HTMLInputElement>('input') ?? true}>
       <DialogHeader><DialogTitle className="flex items-center gap-2"><Split className="size-5 text-chart-2" />Model factor</DialogTitle><DialogDescription>Choose how models vary across experimental cells.</DialogDescription></DialogHeader>
       <div className="space-y-4">
-        <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{visibleFields.map((field) => <Button key={field.fieldPath} size="sm" variant={path === field.fieldPath ? 'default' : blocked(field.fieldPath) ? 'secondary' : 'outline'} aria-pressed={path === field.fieldPath} disabled={saving} onClick={() => { setPath(field.fieldPath); setDraft(seed(field.fieldPath)); setError('') }}>{field.label}</Button>)}</div></div>
+        <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{visibleFields.map((field) => <Button key={field.fieldPath} size="sm" variant={path === field.fieldPath ? 'default' : blocked(field.fieldPath) ? 'secondary' : 'outline'} aria-pressed={path === field.fieldPath} disabled={saving} onClick={() => { setPath(field.fieldPath); resetDraft(seed(field.fieldPath)); setError('') }}>{field.label}</Button>)}</div></div>
         {blocked(path) ? <p role="status" className="rounded-md border p-3 text-sm text-muted-foreground">Model levels cannot be combined with individual configuration factors. Select the existing factor type and remove its binding first.</p> : <>
           <p className="text-xs text-primary">{structured ? 'Compare complete model configurations. Use individual parameter factors to measure their separate effects.' : 'Vary this configuration field while keeping the other model settings.'}</p>
           {!available(path) && <p role="status" className="text-xs text-muted-foreground">The selected model does not support this field. Remove its factor or choose a model that supports it.</p>}

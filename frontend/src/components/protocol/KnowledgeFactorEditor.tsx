@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useDialogDraft } from './useDialogDraft'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import { useKnowledgeLibrary } from './useKnowledgeLibrary'
 import { Button } from '@/components/ui/button'
@@ -14,7 +15,7 @@ export function KnowledgeFactorEditor({ factor, open, onOpenChange, onSave, onRe
   onSave: (factor: DesignFactor) => void | Promise<unknown>
   onRemove?: () => Promise<unknown>
 }) {
-  const [draft, setDraft] = useState(factor)
+  const { draft, setDraft } = useDialogDraft(factor, { open, sessionKey: factor.name })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const knowledge = useKnowledgeLibrary()

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useDialogDraft } from './useDialogDraft'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import { datasetsApi } from '@/api/client'
@@ -15,7 +16,7 @@ export function DatasetFactorEditor({ factor, open, onOpenChange, onSave, onRemo
   onSave: (factor: DesignFactor) => void | Promise<unknown>
   onRemove?: () => Promise<unknown>
 }) {
-  const [draft, setDraft] = useState(factor)
+  const { draft, setDraft } = useDialogDraft(factor, { open, sessionKey: factor.name })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const datasets = useQuery({ queryKey: ['datasets'], queryFn: () => datasetsApi.list() })

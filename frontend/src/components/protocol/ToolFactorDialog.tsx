@@ -1,5 +1,6 @@
 import { factorScopeLabel, factorRecipients } from '@/lib/sharedFactors'
 import { useState } from 'react'
+import { useDialogDraft } from './useDialogDraft'
 import { ArrowDown, ArrowUp, Split, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -44,10 +45,12 @@ export function ToolFactorDialog({ toolNodeId, graph, factors, initialMode, onCl
     }
     return isIndividualToolMode(nextMode) ? factor : reconcileToolFactor(factor, graph, ownerId)
   }
-  const [draft, setDraft] = useState<DesignFactor>(() => {
-    const factor = initialMode ? seed(mode, agentId) : initial ?? seed(mode, agentId)
-    return { ...factor, level_type: factor.level_type ?? 'boolean', level_labels: factor.level_labels ?? factor.levels.map((level, index) => mode === 'boolean' ? level ? 'Enabled' : 'Disabled' : `Level ${index + 1}`) }
-  })
+  const initialDraft = !initialMode && initial && (initial.level_type ?? 'boolean') === mode ? initial : seed(mode, agentId)
+  const { draft, setDraft, reset: resetDraft } = useDialogDraft<DesignFactor>({
+    ...initialDraft,
+    level_type: initialDraft.level_type ?? 'boolean',
+    level_labels: initialDraft.level_labels ?? initialDraft.levels.map((level, index) => mode === 'boolean' ? level ? 'Enabled' : 'Disabled' : `Level ${index + 1}`),
+  }, { sessionKey: mode })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const ownerId = isIndividualToolMode(mode) ? toolNodeId : agentId
@@ -60,7 +63,7 @@ export function ToolFactorDialog({ toolNodeId, graph, factors, initialMode, onCl
   const labels = draft.level_labels ?? []
   function change(nextMode: Mode, nextAgentId = agentId) {
     setMode(nextMode)
-    setDraft(seed(nextMode, nextAgentId))
+    resetDraft(seed(nextMode, nextAgentId))
     setError('')
   }
   function move(index: number, offset: number) {

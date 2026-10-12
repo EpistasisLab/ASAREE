@@ -13,6 +13,21 @@ const graph = {
   edges: [{ source: 'tool', target: 'agent', targetHandle: 'tool' }],
 } as unknown as ProtocolGraph
 
+it('refreshes untouched levels after a refetch and preserves label pairing on save', async () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  const props = { toolNodeId: 'tool', graph, onClose: vi.fn(), onSave: save, onRemove: vi.fn() }
+  const factor = { name: 'Tool enabled', level_type: 'boolean' as const, levels: [true, false], level_labels: ['on', 'off'] }
+  const refreshed = { ...factor, levels: [false, true], level_labels: ['off', 'on'] }
+  const { rerender } = render(<ToolFactorDialog {...props} factors={[factor]} />)
+  rerender(<ToolFactorDialog {...props} factors={[refreshed]} />)
+  expect(screen.getByLabelText('Level 1 label')).toHaveValue('off')
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(save).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByLabelText('Level 1 label'), { target: { value: 'disabled' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+  await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith({ ...refreshed, level_labels: ['disabled', 'on'] }, 'tool', 'Tool enabled'))
+})
+
 it('keeps the dialog open after removal and permits choosing another factor type', async () => {
   const remove = vi.fn().mockResolvedValue(undefined)
   const close = vi.fn()

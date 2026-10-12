@@ -2,7 +2,7 @@ import type { ModelCapabilities } from '@/types/llmSettings'
 import { modelCapabilities } from '@/lib/modelCapabilities'
 import { SubAgentFactorEditor } from './SubAgentFactorEditor'
 import type { ProtocolGraph } from '@/types/protocols'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type SetStateAction } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Split, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -37,6 +37,7 @@ import { PROVIDER_META } from './nodes/ModelNode'
 import { PromptReferenceField } from './PromptReferenceField'
 import { PythonCodeEditor } from './PythonCodeEditor'
 import { useDialogAutosave } from './useDialogAutosave'
+import { useDialogDraft } from './useDialogDraft'
 import type { DesignFactor } from '@/types/experiments'
 import { DatasetFactorEditor } from './DatasetFactorEditor'
 import { KnowledgeFactorEditor } from './KnowledgeFactorEditor'
@@ -593,46 +594,45 @@ function StandardFactorEditorDialog({
   // actual canvas node (this dialog has no way to do that itself).
   onSave: (factor: DesignFactor, field?: UnboundField) => void | Promise<unknown>
 }) {
-  const [selectedField, setSelectedField] = useState<UnboundField | null>(null)
-  const [selectedName, setSelectedName] = useState('')
   const [search, setSearch] = useState('')
-  const [levelType, setLevelType] = useState<LevelType>(levelTypeOf(factor))
-  const [levels, setLevels] = useState<unknown[]>(() => (isStructuredLevelType(levelTypeOf(factor)) ? factor.levels : factor.levels.map((l) => String(l))))
-  const [levelLabels, setLevelLabels] = useState<string[]>(() => factorLevelLabels(factor))
-
-  // Re-seed the local draft every time this dialog (re)opens -- same
-  // "re-seed on open" convention DesignTab.tsx and FactorBindableField.tsx's
-  // popover already use. In field-picker mode there's nothing to seed yet
-  // until a field is actually picked (see pickField below).
   useEffect(() => {
-    if (open) {
-      setSelectedField(null)
-      setSelectedName('')
-      setSearch('')
-      if (!pickableFields) {
-        const t = levelTypeOf(factor)
-        setLevelType(t)
-        setLevels(isStructuredLevelType(t) ? factor.levels : factor.levels.map((l) => String(l)))
-        setLevelLabels(factorLevelLabels(factor))
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (open) setSearch('')
   }, [open])
+  const initialLevelType = levelTypeOf(factor)
+  const { draft: localDraft, setDraft: setLocalDraft, dirty } = useDialogDraft({
+    selectedField: null as UnboundField | null,
+    selectedName: '',
+    levelType: initialLevelType,
+    levels: isStructuredLevelType(initialLevelType) ? factor.levels : factor.levels.map(String),
+    levelLabels: factorLevelLabels(factor),
+  }, {
+    open, sessionKey: pickableFields ? 'new' : factor.name,
+    signatureOf: (value) => JSON.stringify(makeDraft(
+      pickableFields ? value.selectedName : factor.name,
+      value.levelType, value.levels, value.levelLabels, value.selectedField ?? undefined,
+    )),
+  })
+  const { selectedField, selectedName, levelType, levels, levelLabels } = localDraft
+  function setLevels(value: SetStateAction<unknown[]>) {
+    setLocalDraft((previous) => ({ ...previous, levels: typeof value === 'function' ? value(previous.levels) : value }))
+  }
+  function setLevelLabels(value: SetStateAction<string[]>) {
+    setLocalDraft((previous) => ({ ...previous, levelLabels: typeof value === 'function' ? value(previous.levelLabels) : value }))
+  }
 
   function pickField(field: UnboundField) {
     if (field.connectorFactor && onPickConnectorFactor) {
       onPickConnectorFactor(field)
       return
     }
-    setSelectedField(field)
     const nextName = computeFactorName(field.nodeLabel, field.fieldLabel, existingNames ?? [])
-    setSelectedName(nextName)
-    setLevelType(field.levelType)
     const nextLevels = isStructuredLevelType(field.levelType)
       ? seedStructuredLevels(field.currentValue, field.levelType)
       : seedLevels(field.currentValue)
-    setLevels(nextLevels)
-    setLevelLabels(defaultFactorLevelLabels(nextName, nextLevels.length, field.levelType))
+    setLocalDraft({
+      selectedField: field, selectedName: nextName, levelType: field.levelType,
+      levels: nextLevels, levelLabels: defaultFactorLevelLabels(nextName, nextLevels.length, field.levelType),
+    })
   }
 
   // Computed, not user-typed (see factorLevels.ts's computeFactorName) --
@@ -671,7 +671,6 @@ function StandardFactorEditorDialog({
 
   const draft = makeDraft(name, levelType, levels, levelLabels, selectedField ?? undefined)
   const draftSignature = JSON.stringify(draft)
-  const initialLevelType = levelTypeOf(factor)
   const initialSignature = JSON.stringify(makeDraft(
     factor.name,
     initialLevelType,
@@ -679,7 +678,7 @@ function StandardFactorEditorDialog({
     factorLevelLabels(factor),
   ))
   const factorAutosave = useDialogAutosave({
-    draft: open && !needsFieldPick && draftSignature !== initialSignature ? draft : null,
+    draft: open && dirty && !needsFieldPick && draftSignature !== initialSignature ? draft : null,
     signature: draftSignature,
     onSave: ({ factor: next, field }) => onSave(next, field),
   })
@@ -777,7 +776,7 @@ function StandardFactorEditorDialog({
                     <button
                       type="button"
                       className="cursor-pointer text-xs text-muted-foreground underline hover:text-foreground"
-                      onClick={() => setSelectedField(null)}
+                      onClick={() => setLocalDraft((previous) => ({ ...previous, selectedField: null }))}
                     >
                       Change field
                     </button>

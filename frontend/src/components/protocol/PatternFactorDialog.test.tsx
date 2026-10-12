@@ -12,6 +12,22 @@ const graph: ProtocolGraph = { nodes: [pattern, agent], edges: [{ id: 'edge', so
 const props = { patternNodeId: 'pattern', graph, nodeLabel: 'Writer:Reason + Act', factors: [], onClose: vi.fn(), onSave: vi.fn(), onRemove: vi.fn() }
 
 describe('Pattern factors', () => {
+  it('refreshes untouched levels after a refetch and preserves label pairing on save', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const boundGraph = { ...graph, nodes: [{ ...pattern, data: { ...pattern.data, factor_bindings: { 'config.max_iterations': 'Iterations' } } }, agent] }
+    const factor = { name: 'Iterations', level_type: 'number' as const, levels: [6, 3], level_labels: ['six', 'three'] }
+    const refreshed = { ...factor, levels: [3, 6], level_labels: ['three', 'six'] }
+    const next = { ...props, graph: boundGraph, initialFieldPath: 'config.max_iterations', onSave: save }
+    const { rerender } = render(<PatternFactorDialog {...next} factors={[factor]} />)
+    rerender(<PatternFactorDialog {...next} factors={[refreshed]} />)
+    expect(screen.getByLabelText('Level 1 value')).toHaveValue(3)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(save).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Level 1 label'), { target: { value: 'short' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith({ ...refreshed, level_labels: ['short', 'six'] }, 'config.max_iterations', 'pattern', 'Iterations'))
+  })
+
   it('groups whole-pattern and parameter choices under the Pattern node in New Factor', () => {
     const fields = factorCreationFields(graph.nodes, graph.edges)
     const whole = fields.find((field) => field.fieldPath === 'pattern_override')!

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useDialogDraft } from './useDialogDraft'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -16,7 +17,7 @@ export function ToolFactorEditor({ graph, factor, open, onOpenChange, onSave, on
   onSave: (factor: DesignFactor) => void | Promise<unknown>
   onRemove?: () => Promise<unknown>
 }) {
-  const [draft, setDraft] = useState(factor)
+  const { draft, setDraft } = useDialogDraft(factor, { open, sessionKey: factor.name })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const labels = draft.level_labels ?? []

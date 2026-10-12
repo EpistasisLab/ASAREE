@@ -67,4 +67,17 @@ describe('useDialogAutosave', () => {
     expect(result.current.status).toBe('idle')
     expect(save).not.toHaveBeenCalled()
   })
+
+  it('permits a fresh edit with a previously acknowledged signature', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const { result, rerender } = renderHook(
+      ({ draft }) => useDialogAutosave({ draft, signature: 'same', onSave: save }),
+      { initialProps: { draft: { name: 'Edited' } as { name: string } | null } },
+    )
+    await act(async () => result.current.flush())
+    rerender({ draft: null })
+    rerender({ draft: { name: 'Edited' } })
+    await act(async () => result.current.flush())
+    expect(save).toHaveBeenCalledTimes(2)
+  })
 })

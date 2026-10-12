@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useDialogDraft } from './useDialogDraft'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import { skillsApi } from '@/api/client'
@@ -15,7 +16,7 @@ export function SkillFactorEditor({ factor, open, onOpenChange, onSave, onRemove
   onSave: (factor: DesignFactor) => void | Promise<unknown>
   onRemove?: () => Promise<unknown>
 }) {
-  const [draft, setDraft] = useState(factor)
+  const { draft, setDraft } = useDialogDraft(factor, { open, sessionKey: factor.name })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const skills = useQuery({ queryKey: ['skills'], queryFn: () => skillsApi.list() })

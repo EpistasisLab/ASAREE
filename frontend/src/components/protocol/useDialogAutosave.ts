@@ -79,6 +79,12 @@ export function useDialogAutosave<T>({
 
   useEffect(() => {
     if (!candidate) {
+      if (!draft) {
+        // Acknowledged, cancelled, or closed drafts end this edit. A later
+        // user edit may legitimately return to a previously saved value.
+        submittedSignatureRef.current = null
+        failedSignatureRef.current = null
+      }
       // A pending draft can become invalid or be moved into a nested editor
       // before its debounce fires. Do not leave the parent dialog claiming a
       // save is still queued after that timer has been cancelled.
@@ -91,7 +97,7 @@ export function useDialogAutosave<T>({
     // The signature is the canonical identity of the draft. Depending on the
     // object itself would restart the timer on unrelated parent renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [delay, signature, submit, Boolean(candidate)])
+  }, [delay, signature, submit, Boolean(candidate), Boolean(draft)])
 
   useEffect(() => {
     return () => {

@@ -163,6 +163,24 @@ describe('ProtocolCanvas connector adds', () => {
     })
   })
 
+  it('shows the bypass marker on a disabled Critic Gate badge', async () => {
+    const run = protocolRun({
+      status: 'completed',
+      node_runs: { gate: { status: 'completed', bypassed: true, approved: null, output_text: 'READY' } },
+    })
+    vi.spyOn(protocolsApi, 'listRuns').mockResolvedValue([run])
+    vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
+    renderCanvas({
+      nodes: [{ id: 'gate', type: 'critic_gate', position: { x: 100, y: 100 }, data: defaultCriticGateNodeData('Marker reviewer') }],
+      edges: [],
+    })
+    await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('[data-testid="rf__node-gate"]')
+      expect(node).not.toBeNull()
+      expect(within(node!).getByText('Bypassed')).toBeInTheDocument()
+    })
+  })
+
   it.each(['sub_agent_selection', 'sub_agent_toggle'] as const)('creates a %s Sub-Agent factor from the node hover menu and preserves connected nodes', async (mode) => {
     const experiment = {
       id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
@@ -764,6 +782,36 @@ describe('ProtocolCanvas connector adds', () => {
       const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
       expect(persisted?.nodes[0].data.active).toBe(true)
       expect(persisted?.nodes[0].data.factor_bindings).toEqual({ 'config.prompt': 'Writer:Prompt', active: 'Writer:Enabled' })
+    })
+  })
+
+  it('keeps an inactive Agent inactive when an on/off factor is created for it', async () => {
+    const user = userEvent.setup()
+    const experiment: Experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockImplementation(async () => experiment)
+    vi.spyOn(experimentsApi, 'update').mockImplementation(async (_id, patch) => {
+      Object.assign(experiment, patch)
+      return experiment
+    })
+    const { client } = renderCanvas({
+      nodes: [{ id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: { ...defaultAgentNodeData('Writer'), active: false } }],
+      edges: [],
+    }, 'experiment-1')
+
+    await screen.findByText('Writer')
+    fireEvent.click(screen.getByTitle('Make experimental factor'))
+    expect(await screen.findByRole('heading', { name: 'Agent factor' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'This agent on/off' }))
+    await user.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes[0].data.factor_bindings).toEqual({ active: 'Writer:Enabled' })
+      expect(persisted?.nodes[0].data.active).toBe(false)
     })
   })
 

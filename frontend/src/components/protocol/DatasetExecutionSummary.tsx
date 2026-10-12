@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { datasetsApi, experimentsApi, protocolsApi } from '@/api/client'
+import { datasetsApi, protocolsApi } from '@/api/client'
+import { useExecutionSummary } from '@/lib/executionQueries'
 import { Card } from '@/components/ui/card'
 import { datasetRowTopologyError, rowBindingForNode } from '@/lib/datasetRows'
 import type { Protocol, ProtocolGraph } from '@/types/protocols'
@@ -24,15 +25,10 @@ export function DatasetExecutionSummary({ graph, protocol, experimentId, cellCou
     queryFn: () => protocolsApi.getRevision(protocol!.id, protocol!.published_revision_id!),
     enabled: !!protocol?.published_revision_id,
   })
-  const results = useQuery({
-    queryKey: ['experiments', experimentId, 'run-results', protocol?.id, protocol?.published_revision_id],
-    queryFn: () => experimentsApi.getRunResults(experimentId, { protocol_id: protocol!.id }),
-    enabled: !!protocol?.id && !!protocol.published_revision_id,
-    refetchInterval: 5000,
-  })
+  const results = useExecutionSummary(experimentId, { protocol_id: protocol?.id }, !!protocol?.published_revision_id)
   const error = graph && datasetRowTopologyError(graph)
   const publishedBinding = publication.data && rowBindingForNode(publication.data.graph)
-  const summary = results.data?.row_summary
+  const summary = results.data
   const rows = source.data?.row_count
   const columnsMissing = binding?.input.mode === 'per_row' && source.data && binding.input.columns.some(column => !source.data.columns.includes(column))
 
@@ -49,9 +45,9 @@ export function DatasetExecutionSummary({ graph, protocol, experimentId, cellCou
     </div>
     <div className="space-y-1 border-t pt-2 text-xs">
       <p className="font-medium">Production runs · {protocol?.published_revision_id ? `experiment version ${protocol.published_revision}` : 'not published'}</p>
-      {!protocol?.published_revision_id ? <p className="text-muted-foreground">Publish the experiment before running.</p> : publication.isError || results.isError ? <p role="alert" className="text-destructive">Published execution forecast unavailable.</p> : !publication.data || !results.data ? <p className="text-muted-foreground">Loading published inputs…</p> : results.data.consumption_mode === 'per_row' ? <>
-        <p>Per row · {publishedBinding?.config?.dataset_name ?? publishedBinding?.config?.dataset_id ?? 'Dataset'} · {summary?.row_count ?? '?'} original rows</p>
-        {summary?.parent_replicate_count ? <p className="break-words font-mono">{summary.cell_count} cells / {summary.parent_replicate_count} generated replicates × {summary.row_count ?? '?'} rows = {summary.expected ?? '?'} executions</p> : <p className="text-muted-foreground">No generated replicates. Generate cells before running a batch.</p>}
+      {!protocol?.published_revision_id ? <p className="text-muted-foreground">Publish the experiment before running.</p> : publication.isError || results.isError ? <p role="alert" className="text-destructive">Published execution forecast unavailable.</p> : !publication.data || !results.data ? <p className="text-muted-foreground">Loading published inputs…</p> : results.data.unit === 'row' ? <>
+        <p>Per row · {publishedBinding?.config?.dataset_name ?? publishedBinding?.config?.dataset_id ?? 'Dataset'} · {summary?.source_row_count ?? '?'} original rows</p>
+        {summary?.replicate_count ? <p className="break-words font-mono">{summary.cell_count} cells / {summary.replicate_count} generated replicates × {summary.source_row_count ?? '?'} rows = {summary.expected ?? '?'} executions</p> : <p className="text-muted-foreground">No generated replicates. Generate cells before running a batch.</p>}
         <p className="text-muted-foreground">Uses the design saved with this experiment version. Review the forecast in Runs before launching.</p>
       </> : <p>Whole dataset · one protocol execution per replicate.</p>}
       <p className="text-muted-foreground">Draft edits take effect after publishing; design changes require generation before running.</p>

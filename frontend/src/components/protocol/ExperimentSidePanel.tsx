@@ -271,6 +271,7 @@ export function ExperimentSidePanel({
                   regenerationRequired={regenerationRequired}
                   unboundFactors={unboundFactors}
                   onViewRowResult={rowResultId => { onResultSelection({ type: 'row', rowResultId, scope: { protocol_id: protocol?.id } }); openPanel('results') }}
+                  onSelectResult={selection => { onResultSelection(selection); openPanel('results') }}
                   onViewResult={viewReplicateResult}
                 />
               ) : activeTab === 'results' ? (

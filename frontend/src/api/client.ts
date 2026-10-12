@@ -32,6 +32,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
+import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary } from '@/types/executionResults'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -138,7 +139,7 @@ async function authedFetch(path: string, options: RequestOptions = {}): Promise<
     }
   }
 
-  if (!res.ok) {
+  if (!res.ok && res.status !== 304) {
     let detail: string | ApiErrorDetail = res.statusText
     try {
       const data = await res.json()
@@ -195,6 +196,12 @@ function scopeQuery(scope?: ResultsScope): string {
   return params.size ? `?${params}` : ''
 }
 
+function resultPageQuery(scope: ResultsScope, params: Record<string, string | number | undefined>): string {
+  const query = new URLSearchParams(scopeQuery(scope).replace(/^\?/, ''))
+  for (const [key, value] of Object.entries(params)) if (value !== undefined) query.set(key, String(value))
+  return query.size ? `?${query}` : ''
+}
+
 function rowSelection(options?: RowSelection): RowSelection | undefined {
   const index = options?.row_index
   if (index !== undefined && index !== null && (!Number.isInteger(index) || index < 0)) {
@@ -204,6 +211,27 @@ function rowSelection(options?: RowSelection): RowSelection | undefined {
 }
 
 export const experimentsApi = {
+  getExecutionSummary: async (id: string, scope: ResultsScope, signal?: AbortSignal, cached?: ExecutionSummary): Promise<ExecutionSummary> => {
+    const res = await authedFetch(`/experiments/${id}/execution-results/summary${scopeQuery(scope)}`, {
+      signal, headers: cached?.etag ? { 'If-None-Match': cached.etag } : undefined,
+    })
+    if (res.status === 304 && cached) return cached
+    return { ...await res.json() as ExecutionSummary, etag: res.headers.get('ETag') ?? undefined }
+  },
+  listExecutionCells: (id: string, scope: ResultsScope, params: Record<string, string | number | undefined> = {}, signal?: AbortSignal) =>
+    request<CursorPage<ExecutionCell>>(`/experiments/${id}/execution-results/cells${resultPageQuery(scope, params)}`, { signal }),
+  listExecutions: (id: string, scope: ResultsScope, params: Record<string, string | number | undefined> = {}, signal?: AbortSignal) =>
+    request<CursorPage<ExecutionSlot>>(`/experiments/${id}/execution-results/executions${resultPageQuery(scope, params)}`, { signal }),
+  listExecutionAttempts: (id: string, slotId: string, scope: ResultsScope, cursor?: string, signal?: AbortSignal) =>
+    request<AttemptPage>(`/experiments/${id}/execution-results/slots/${slotId}/attempts${resultPageQuery(scope, { cursor })}`, { signal }),
+  lookupExecution: (id: string, replicateLabel: string, scope: ResultsScope, signal?: AbortSignal) =>
+    request<ExecutionSlot>(`/experiments/${id}/execution-results/lookup${resultPageQuery(scope, { replicate_label: replicateLabel })}`, { signal }),
+  getExecutionCell: (id: string, scope: ResultsScope, selection: { cell_id?: string; cell_label?: string }, signal?: AbortSignal) =>
+    request<ExecutionCell>(`/experiments/${id}/execution-results/cell${resultPageQuery(scope, selection)}`, { signal }),
+  getExecutionAttempt: (id: string, runId: string, scope: ResultsScope, signal?: AbortSignal) =>
+    request<AttemptDetail>(`/experiments/${id}/execution-results/attempts/${runId}${scopeQuery(scope)}`, { signal }),
+  getExecutionConversation: (id: string, runId: string, scope: ResultsScope, offset = 0, signal?: AbortSignal) =>
+    request<{ items: unknown[]; next_offset: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/conversation${resultPageQuery(scope, { offset })}`, { signal }),
   list: (opts?: { includeArchived?: boolean }) =>
     request<Experiment[]>(opts?.includeArchived ? '/experiments?include_archived=true' : '/experiments'),
   get: (id: string) => request<Experiment>(`/experiments/${id}`),

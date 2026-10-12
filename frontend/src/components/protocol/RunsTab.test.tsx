@@ -10,6 +10,8 @@ describe('RunsTab factor discrepancy warning', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it('warns immediately and blocks runs when the canvas disagrees with generated factor levels', async () => {
+    vi.spyOn(experimentsApi, 'getExecutionSummary').mockResolvedValue({ ready: true, metric_types: {}, metric_directions: {} } as never)
+    vi.spyOn(experimentsApi, 'listExecutionCells').mockResolvedValue({ items: [], next_cursor: null })
     vi.spyOn(experimentsApi, 'listReplicates').mockResolvedValue([{
       id: 'replicate-1', cell_id: 'cell-1', cell_label: 'Prompt:original', replicate_label: 'Prompt:original__rep1',
       replicate_number: 1, design_revision_id: 'design-1', run_id: null, workspace_id: null,

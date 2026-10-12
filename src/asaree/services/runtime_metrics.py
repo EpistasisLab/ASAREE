@@ -200,14 +200,17 @@ def authored_prompt_sha256(graph: Mapping[str, Any]) -> str | None:
 def _max_iterations_hit(run: Any) -> bool:
     """Whether a Reason+Act run was cut off by its iteration ceiling (see
     ``protocol_execution._truncation_fields`` for why this is read from
-    ``pattern_overrides`` rather than the steps)."""
+    ``run_metadata`` rather than the steps)."""
     state = _reason_act_state(run)
     return state is not None and bool(state.get("max_iterations_hit"))
 
 
 def _reason_act_state(run: Any) -> Mapping[str, Any] | None:
     """The loop summary Reason+Act mirrors onto its run; absent on single-pass runs."""
-    state = (getattr(run, "pattern_overrides", None) or {}).get("reason_act_state")
+    metadata = getattr(run, "run_metadata", None) or {}
+    state = metadata.get("reason_act_state")
+    if "reason_act_state" not in metadata:
+        state = (getattr(run, "pattern_overrides", None) or {}).get("reason_act_state")
     return state if isinstance(state, Mapping) and state else None
 
 

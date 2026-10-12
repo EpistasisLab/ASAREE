@@ -2222,14 +2222,15 @@ def test_an_all_null_payload_is_flagged_as_a_failed_read() -> None:
     }
 
 
-def test_a_ceiling_truncated_run_is_flagged_even_though_it_completed() -> None:
+@pytest.mark.parametrize("location", ["run_metadata", "pattern_overrides"])
+def test_a_ceiling_truncated_run_is_flagged_even_though_it_completed(location: str) -> None:
     """Motoro reports a cap-exhausted Reason+Act run as `completed` with the
     last tool result as its output, so the only thing that distinguishes it
     from a finished run is the loop summary the pattern persists."""
 
     class _Run:
         def __init__(self, overrides: dict[str, object] | None) -> None:
-            self.pattern_overrides = overrides
+            setattr(self, location, overrides)
 
     hit = {
         "reason_act_state": {
@@ -2256,6 +2257,14 @@ def test_a_ceiling_truncated_run_is_flagged_even_though_it_completed() -> None:
     assert pe._truncation_fields(_Run(done)) is None
     assert pe._truncation_fields(_Run({"other_pattern_state": {}})) is None
     assert pe._truncation_fields(_Run(None)) is None
+
+
+def test_new_reason_act_telemetry_takes_precedence_over_legacy_state() -> None:
+    run = SimpleNamespace(
+        run_metadata={"reason_act_state": {"max_iterations_hit": False}},
+        pattern_overrides={"reason_act_state": {"max_iterations_hit": True}},
+    )
+    assert pe._truncation_fields(run) is None
 
 
 async def test_run_protocol_stores_the_extraction_beside_the_output_text(

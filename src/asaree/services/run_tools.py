@@ -7,13 +7,17 @@ DB-session-scoped, so it has no reason to live in either exclusively.
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Mapping
 from typing import Any
 
 from motoro.mcp.registry import get_registry
 
+PINNED_TOOL_CONFIG = "asaree_tool_config"
 
-def gather_tools(agent: Any) -> list[dict[str, Any]]:
-    """Resolve an agent's ``tool_config`` into this run's tool allow-list.
+
+def gather_tools(tool_config: Mapping[str, Any] | None, *, owner_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Resolve ``tool_config`` into this run's tool allow-list.
 
     ``execute_run`` never reads ``Agent.tool_config_data`` itself (see its
     ``available_tools`` param) -- the caller is responsible for turning it
@@ -35,11 +39,11 @@ def gather_tools(agent: Any) -> list[dict[str, Any]]:
     dispatch resolution, and allow-list matching; ``tool_name`` stays bare
     even when several servers expose the same tool.
     """
-    tool_names = set((agent.tool_config_data or {}).get("tool_names") or [])
-    description_prefixes = (agent.tool_config_data or {}).get("tool_descriptions") or {}
+    tool_names = set((tool_config or {}).get("tool_names") or [])
+    description_prefixes = (tool_config or {}).get("tool_descriptions") or {}
     if not tool_names:
         return []
-    catalog = get_registry().get_all_tools(owner_id=agent.owner_id)
+    catalog = get_registry().get_all_tools(owner_id=owner_id)
     admitted: list[dict[str, Any]] = []
     for tool in catalog:
         if tool["name"] not in tool_names:
@@ -50,3 +54,20 @@ def gather_tools(agent: Any) -> list[dict[str, Any]]:
             tool = {**tool, "description": f"{prefix}\n\n{description}" if description else prefix}
         admitted.append(tool)
     return admitted
+
+
+def gather_agent_tools(agent: Any) -> list[dict[str, Any]]:
+    """Standalone and legacy runs use the durable Agent's current grants."""
+    return gather_tools(agent.tool_config_data, owner_id=agent.owner_id)
+
+
+def gather_run_tools(run: Any) -> list[dict[str, Any]]:
+    """Protocol grants are pinned in metadata, including an explicit empty set.
+
+    Motoro's execution snapshot does not carry tool config: the caller owns
+    tool resolution. Older runs and standalone /runs retain their Agent grants.
+    """
+    metadata = run.run_metadata or {}
+    if PINNED_TOOL_CONFIG in metadata:
+        return gather_tools(metadata[PINNED_TOOL_CONFIG], owner_id=run.owner_id)
+    return gather_agent_tools(run.agent)

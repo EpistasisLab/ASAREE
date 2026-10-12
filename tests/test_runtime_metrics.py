@@ -387,7 +387,8 @@ async def test_runtime_producer_records_collection_failures_as_failed_observatio
 
 
 @pytest.mark.asyncio
-async def test_runtime_fact_collection_uses_protocol_attribution_not_final_node_pointers(monkeypatch) -> None:
+@pytest.mark.parametrize("location", ["run_metadata", "pattern_overrides"])
+async def test_runtime_fact_collection_uses_protocol_attribution_not_final_node_pointers(monkeypatch, location) -> None:
     protocol_run_id = uuid4()
     owner_id = uuid4()
     run_ids = [uuid4(), uuid4(), uuid4(), uuid4()]
@@ -404,9 +405,9 @@ async def test_runtime_fact_collection_uses_protocol_attribution_not_final_node_
         run.output = None
     attributed[1].run_metadata = {"runtime_role": "critic"}
     attributed[1].output = OutputEnvelope(payload={"approved": False, "rejection_scope": "partial"}).to_json()
-    attributed[2].pattern_overrides = {
-        "reason_act_state": {"max_iterations_hit": True, "iterations": 4, "tool_calls": 6}
-    }
+    setattr(
+        attributed[2], location, {"reason_act_state": {"max_iterations_hit": True, "iterations": 4, "tool_calls": 6}}
+    )
     list_call: dict[str, object] = {}
 
     async def fake_list_runs(**kwargs):

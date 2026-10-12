@@ -62,13 +62,13 @@ def registry(monkeypatch: pytest.MonkeyPatch) -> _FakeRegistry:
 
 
 def test_no_tool_config_gets_no_tools(registry: _FakeRegistry) -> None:
-    assert run_tools.gather_tools(_FakeAgent(None)) == []
-    assert run_tools.gather_tools(_FakeAgent([])) == []
+    assert run_tools.gather_agent_tools(_FakeAgent(None)) == []
+    assert run_tools.gather_agent_tools(_FakeAgent([])) == []
 
 
 def test_admits_only_named_tools(registry: _FakeRegistry) -> None:
     agent = _FakeAgent(["scikit-learn-mcp.describe_dataset"])
-    tools = run_tools.gather_tools(agent)
+    tools = run_tools.gather_agent_tools(agent)
     assert [t["name"] for t in tools] == ["scikit-learn-mcp.describe_dataset"]
     # Unique bare name -> left alone, so the model sees the clean tool name.
     assert tools[0]["tool_name"] == "describe_dataset"
@@ -76,10 +76,28 @@ def test_admits_only_named_tools(registry: _FakeRegistry) -> None:
 
 def test_resource_description_is_prefixed_to_the_live_tool_description(registry: _FakeRegistry) -> None:
     name = "okf-doc-hair-concentrations.search_concepts"
-    [tool] = run_tools.gather_tools(_FakeAgent([name], {name: "Knowledge source: Hair concentrations."}))
+    [tool] = run_tools.gather_agent_tools(_FakeAgent([name], {name: "Knowledge source: Hair concentrations."}))
 
     assert tool["description"].startswith("Knowledge source: Hair concentrations.\n\n")
     assert tool["description"].endswith("search_concepts on okf-doc-hair-concentrations")
+
+
+@pytest.mark.parametrize("names", [["scikit-learn-mcp.ping"], []])
+def test_run_tools_use_pinned_grants_after_agent_changes(registry: _FakeRegistry, names: list[str]) -> None:
+    agent = _FakeAgent(["okf-doc-hair-concentrations.ping"])
+    config = {"tool_names": names}
+    run = SimpleNamespace(
+        agent=agent,
+        owner_id=_OWNER_ID,
+        run_metadata={run_tools.PINNED_TOOL_CONFIG: config},
+    )
+    assert [tool["name"] for tool in run_tools.gather_run_tools(run)] == names
+    assert [tool["name"] for tool in run_tools.gather_tools(config, owner_id=_OWNER_ID)] == names
+
+
+def test_standalone_run_tools_use_agent_grants(registry: _FakeRegistry) -> None:
+    run = SimpleNamespace(agent=_FakeAgent(["scikit-learn-mcp.ping"]), run_metadata=None)
+    assert [tool["name"] for tool in run_tools.gather_run_tools(run)] == ["scikit-learn-mcp.ping"]
 
 
 def test_colliding_bare_names_pass_through_to_motoro(registry: _FakeRegistry) -> None:
@@ -92,7 +110,7 @@ def test_colliding_bare_names_pass_through_to_motoro(registry: _FakeRegistry) ->
             "okf-doc-hair-concentrations.ping",
         ]
     )
-    tools = run_tools.gather_tools(agent)
+    tools = run_tools.gather_agent_tools(agent)
     assert len(tools) == 4
     assert tools == [
         tool
@@ -117,7 +135,7 @@ def test_colliding_bare_names_pass_through_to_motoro(registry: _FakeRegistry) ->
 
 def test_ungranted_collision_leaves_descriptor_and_provider_name_bare(registry: _FakeRegistry) -> None:
     """A collision outside the run's grants needs no provider-name rewrite."""
-    tools = run_tools.gather_tools(_FakeAgent(["scikit-learn-mcp.ping"]))
+    tools = run_tools.gather_agent_tools(_FakeAgent(["scikit-learn-mcp.ping"]))
     assert [t["tool_name"] for t in tools] == ["ping"]
     assert [t["function"]["name"] for t in tools_to_openai_format(tools)] == ["ping"]
 
@@ -145,7 +163,7 @@ async def test_gathered_tools_dispatch_through_motoro(
         await registry.register(server_id=uuid.uuid4(), name=server, owner_id=_OWNER_ID)
     monkeypatch.setattr(run_tools, "get_registry", lambda: registry)
 
-    tools = run_tools.gather_tools(_FakeAgent([f"{server}.ping" for server in granted_servers]))
+    tools = run_tools.gather_agent_tools(_FakeAgent([f"{server}.ping" for server in granted_servers]))
     assert [tool["tool_name"] for tool in tools] == ["ping"] * len(granted_servers)
     schemas = tools_to_openai_format(tools)
     provider_names = [schema["function"]["name"] for schema in schemas]

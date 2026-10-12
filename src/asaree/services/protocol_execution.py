@@ -100,8 +100,8 @@ from asaree.services.protocol_runs import (
     update_node_run,
 )
 from asaree.services.protocols import get_protocol
-from asaree.services.run_tools import gather_tools
-from asaree.services.runtime_metrics import finalize_attempt_measurement
+from asaree.services.run_tools import PINNED_TOOL_CONFIG, gather_run_tools
+from asaree.services.runtime_metrics import _reason_act_state, finalize_attempt_measurement
 from asaree.services.shared_factors import GROUP_SPECS, validate_shared_factor_groups
 from asaree.services.skill_factors import validate_skill_factors
 from asaree.services.system_mcp_servers import (
@@ -4096,11 +4096,13 @@ async def _sync_durable_agent(*, name: str, owner_id: uuid.UUID, fields: dict[st
     durable Motoro Agent is keyed by owner/name, so a losing create retries as
     an update of the row the concurrent request just inserted.
 
-    **Never put per-run state in ``fields``.** Every entry here must come from
-    the node's canvas config or its wired connectors -- i.e. from the protocol
-    itself, which is what this row is a projection of. Run-scoped configuration
-    belongs on the run: ``create_run`` already takes ``model_config_overrides``
-    and ``config_snapshot``. The rule needs stating because this write path
+    **Never put per-run state in ``fields``.** This stable canvas-node identity
+    holds the baseline config from the run's published graph, before factor
+    substitution or prompt-reference resolution. Cell and row values belong
+    in ``create_run(config_snapshot=...)``; tool grants are pinned separately
+    in run metadata because Motoro's snapshot omits tool config. Concurrent
+    runs may sync different published baselines, but execution never reads
+    those mutable settings. The rule needs stating because this write path
     makes the mistake cheap to make and expensive to notice: ``update_agent``
     reads ``None`` as "leave unchanged", so a field written once during one run
     is never cleared by any later run and quietly contaminates every future one
@@ -4176,8 +4178,8 @@ def _truncation_fields(run: Any) -> dict[str, Any] | None:
     agent that finished -- which is how a run whose report was never written
     ends up handed to an Output Parser that can only find nulls in a tool dump.
 
-    Read from ``agent_runs.pattern_overrides`` rather than rederived from the
-    step list: the ReasonAct pattern already records exactly this
+    Read from ``agent_runs.run_metadata`` with a legacy ``pattern_overrides``
+    fallback rather than rederived from the step list: ReasonAct records this
     (``reason_act_state``, see its ``_state``/``_persist_state``), and the step
     rows cannot answer it -- the persisted Act step carries the pre-hook
     ``should_continue`` and is ``false`` on every run, truncated or not.
@@ -4188,7 +4190,7 @@ def _truncation_fields(run: Any) -> dict[str, Any] | None:
     and the answer for a truncated run is still yes -- its work up to the
     ceiling is real. This is a flag on a completed run, the way ``caveats`` is.
     """
-    state = (getattr(run, "pattern_overrides", None) or {}).get("reason_act_state")
+    state = _reason_act_state(run)
     if not isinstance(state, Mapping) or not state.get("max_iterations_hit"):
         return None
     return {
@@ -4197,6 +4199,86 @@ def _truncation_fields(run: Any) -> dict[str, Any] | None:
             "iterations": state.get("iterations"),
             "max_iterations": state.get("max_iterations"),
         }
+    }
+
+
+async def _baseline_graph_for_run(protocol_run_id: uuid.UUID) -> dict[str, Any]:
+    """Read the unfactored publication, including for peer and single-node runs.
+
+    Legacy runs without a publication use the protocol's canvas baseline.
+    Never reconstruct the baseline from a cell's substituted graph.
+    """
+    async with get_session() as db:
+        run = await get_protocol_run(db, protocol_run_id)
+        if run is None:
+            raise ProtocolValidationError("protocol run no longer exists")
+        if run.protocol_revision_id is not None:
+            revision = await get_revision(db, run.protocol_revision_id)
+            if revision is None:
+                raise ProtocolValidationError("published protocol revision no longer exists")
+            return revision.graph
+        protocol = await get_protocol(db, run.protocol_id)
+        if protocol is None:
+            raise ProtocolValidationError("protocol no longer exists")
+        return protocol.graph
+
+
+async def _resolve_agent_fields(
+    node: dict[str, Any],
+    graph: dict[str, Any],
+    *,
+    owner_id: uuid.UUID,
+    system_prompt: str | None = None,
+    unsplit_dataset: str = "",
+    row_mode: bool = False,
+) -> dict[str, Any]:
+    """Resolve a baseline or a cell's complete execution settings."""
+    config = node["data"]["config"]
+    label = node.get("data", {}).get("label")
+    description = config.get("description") or ""
+    if label:
+        description = f"{description} (canvas label: {label})".strip()
+    model_config = await build_model_config(_resolve_model_config(graph, node["id"]), owner_id=owner_id)
+    tool_config = _merge_tool_configs(
+        _resolve_tool_config(graph, node["id"]),
+        _resolve_knowledge_config(graph, node["id"]),
+        _resolve_dataset_tool_config(graph, node["id"], unsplit_dataset=unsplit_dataset, row_mode=row_mode),
+        _resolve_script_tool_config(graph, node["id"]),
+    )
+    if row_mode:
+        allowed = {
+            f"{WORKSPACE_SERVER_NAME}.open_workspace", f"{WORKSPACE_SERVER_NAME}.workspace_status",
+            f"{SCIKIT_LEARN_SERVER_NAME}.describe_dataset",
+        }
+        unsafe_managed_servers = {WORKSPACE_SERVER_NAME, EDA_SERVER_NAME, SCIKIT_LEARN_SERVER_NAME}
+        unsafe_names = {
+            f"{server}.{tool}"
+            for server in unsafe_managed_servers
+            for tool in WORKSPACE_AGENT_TOOLS + DATASET_DICTIONARY_AGENT_TOOLS + UNSPLIT_DATASET_AGENT_TOOLS
+        }
+        tool_config["tool_names"] = [
+            name for name in tool_config.get("tool_names", []) if name not in unsafe_names or name in allowed
+        ]
+        tool_config["server_names"] = [
+            server for server in tool_config.get("server_names", [])
+            if server not in unsafe_managed_servers
+            or any(name.startswith(server + ".") for name in tool_config["tool_names"])
+        ]
+    pattern = _resolve_pattern_config(graph, node["id"])
+    return {
+        "goal": config.get("goal") or "",
+        "description": description,
+        "system_prompt": system_prompt or config.get("system_prompt") or _default_system_prompt(label, "Agent"),
+        "model_config": model_config,
+        "pattern_config": PatternConfig(
+            execution_pattern=pattern.get("execution_pattern"), pattern_params=pattern.get("pattern_params") or {},
+        ).model_dump(),
+        "tool_config": tool_config,
+        # Explicit empty config detaches skills rather than retaining earlier grants.
+        "skill_config": _resolve_skill_config(graph, node["id"]) or {"skill_ids": []},
+        "output_contract": _resolve_output_contract(graph, node["id"]),
+        "budget_limit_usd": config.get("budget_limit_usd"),
+        "max_run_duration_seconds": config.get("max_run_duration_seconds"),
     }
 
 
@@ -4244,101 +4326,16 @@ async def _run_agent_node(
     ``_sync_durable_agent``'s fields -- the card is per-run and derived, and
     writing it onto the durable agent row is exactly the contamination this
     design avoids."""
-    config = node["data"]["config"]
-    # Deterministic, not config["name"]: Agent.name is unique per OWNER, not
-    # per protocol, so trusting the freeform (often identically-defaulted)
-    # config.name directly risks two unrelated nodes silently overwriting
-    # each other's agent definition on every run. config.name is folded
-    # into the description instead, purely as a human label.
-    row_attempt = bool(ambient_meta and ambient_meta.get("dataset_mode") == "per_row")
-    agent_name = f"protocol-{protocol_id}-{node['id']}" + (f"-row-{protocol_run_id}" if row_attempt else "")
-    # Model/tool/execution-pattern are no longer fields on the agent's own
-    # config -- resolved from its required Model connector, its (optional,
-    # repeatable) Tool connectors, and its optional Architectural Pattern
-    # connector instead (topological_order already validated their shape).
-    # output_contract joined them, with one extra argument the others didn't
-    # need: extraction is a second LLM call per run, so its cost belongs on the
-    # canvas. Unlike the three above, the node's own field is still read as a
-    # fallback and always will be -- see _resolve_output_contract.
-    model_config = await build_model_config(_resolve_model_config(graph, node["id"]), owner_id=owner_id)
-    # Four connectors feed one allow-list. The Knowledge connector's OKF
-    # bundles and documents are MCP servers like any other, so they land here
-    # rather than in a slot of their own (see _resolve_knowledge_config), and
-    # the Dataset and Script connectors imply ASAREE's own workspace and
-    # script-running tools (see _resolve_dataset_tool_config /
-    # _resolve_script_tool_config) -- the split between the four is about
-    # what the user is declaring, not about how the engine consumes it.
-    tool_config = _merge_tool_configs(
-        _resolve_tool_config(graph, node["id"]),
-        _resolve_knowledge_config(graph, node["id"]),
-        _resolve_dataset_tool_config(
-            graph, node["id"], unsplit_dataset=unsplit_dataset,
-            row_mode=bool(ambient_meta and ambient_meta.get("dataset_mode") == "per_row"),
-        ),
-        _resolve_script_tool_config(graph, node["id"]),
+    agent_name = f"protocol-{protocol_id}-{node['id']}"
+    fields = await _resolve_agent_fields(
+        node, graph, owner_id=owner_id, system_prompt=system_prompt,
+        unsplit_dataset=unsplit_dataset,
+        row_mode=bool(ambient_meta and ambient_meta.get("dataset_mode") == "per_row"),
     )
-    if ambient_meta and ambient_meta.get("dataset_mode") == "per_row":
-        allowed = {
-            f"{WORKSPACE_SERVER_NAME}.open_workspace", f"{WORKSPACE_SERVER_NAME}.workspace_status",
-            f"{SCIKIT_LEARN_SERVER_NAME}.describe_dataset",
-        }
-        unsafe_managed_servers = {WORKSPACE_SERVER_NAME, EDA_SERVER_NAME, SCIKIT_LEARN_SERVER_NAME}
-        tool_config["tool_names"] = [
-            name for name in tool_config.get("tool_names", [])
-            if name not in {f"{server}.{tool}" for server in unsafe_managed_servers for tool in
-                            (WORKSPACE_AGENT_TOOLS + DATASET_DICTIONARY_AGENT_TOOLS + UNSPLIT_DATASET_AGENT_TOOLS)}
-            or name in allowed
-        ]
-        tool_config["server_names"] = [
-            server for server in tool_config.get("server_names", [])
-            if server not in unsafe_managed_servers
-            or any(name.startswith(server + ".") for name in tool_config["tool_names"])
-        ]
-    pattern_config_data = _resolve_pattern_config(graph, node["id"])
-    pattern_config = PatternConfig(
-        execution_pattern=pattern_config_data.get("execution_pattern"),
-        pattern_params=pattern_config_data.get("pattern_params") or {},
-    ).model_dump()
-    # Always a dict, never None, even with nothing wired: Motoro's update_agent
-    # reads None as "leave unchanged", so an agent that had skills and then had
-    # them unwired on the canvas would silently keep running with them. An
-    # explicit empty list is how you detach.
-    skill_config = _resolve_skill_config(graph, node["id"]) or {"skill_ids": []}
-    description = config.get("description") or ""
-    label = node.get("data", {}).get("label")
-    if label:
-        description = f"{description} (canvas label: {label})".strip()
-    # Explicit, ASAREE-owned default -- Motoro's own fallback
-    # ("You are {name}. {description}") would use `agent_name` here, an
-    # internal "protocol-{protocol_id}-{node_id}" bookkeeping id no user
-    # ever sees, not this agent's actual canvas identity.
-    #
-    # The *system_prompt* argument, when given, is that same authored field
-    # with its ``{{...}}`` references already resolved (:func:`_build_system_prompt`) --
-    # resolution needs `node_runs`, which this function does not have. Falling
-    # back to the raw field keeps the call sites that have nothing to resolve
-    # against (a single-node run) working unchanged.
-    resolved_system_prompt = system_prompt or config.get("system_prompt") or _default_system_prompt(label, "Agent")
-
-    agent = await _sync_durable_agent(
-        name=agent_name,
-        owner_id=owner_id,
-        fields={
-            "goal": config.get("goal") or "",
-            "description": description,
-            "system_prompt": resolved_system_prompt,
-            "model_config": model_config,
-            "pattern_config": pattern_config,
-            "tool_config": tool_config,
-            "skill_config": skill_config,
-            # From the wired Output Parser node, falling back to the agent's own
-            # stored field for graphs that predate it -- see
-            # _resolve_output_contract for why that fallback is permanent.
-            "output_contract": _resolve_output_contract(graph, node["id"]),
-            "budget_limit_usd": config.get("budget_limit_usd"),
-            "max_run_duration_seconds": config.get("max_run_duration_seconds"),
-        },
-    )
+    baseline_graph = await _baseline_graph_for_run(protocol_run_id)
+    baseline_node = next(n for n in baseline_graph["nodes"] if n["id"] == node["id"])
+    baseline_fields = await _resolve_agent_fields(baseline_node, baseline_graph, owner_id=owner_id)
+    agent = await _sync_durable_agent(name=agent_name, owner_id=owner_id, fields=baseline_fields)
     assert agent is not None
 
     resolved_ambient = (
@@ -4363,7 +4360,12 @@ async def _run_agent_node(
         agent_id=agent.id,
         user_input=user_input,
         owner_id=owner_id,
+        config_snapshot={
+            **{key: value for key, value in fields.items() if key != "tool_config"},
+            "model_config": fields["model_config"].model_dump(mode="json"),
+        },
         metadata={
+            PINNED_TOOL_CONFIG: copy.deepcopy(fields["tool_config"]),
             "protocol_id": str(protocol_id),
             "protocol_run_id": str(protocol_run_id),
             "node_id": node["id"],
@@ -4374,12 +4376,12 @@ async def _run_agent_node(
             **({"ambient_meta": resolved_ambient} if resolved_ambient else {}),
         },
     )
-    timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
+    timeout = fields["max_run_duration_seconds"] or get_settings().worker_job_timeout_seconds
     try:
         await _execute_run_cancellable(
             run_id=run.id,
             protocol_run_id=protocol_run_id,
-            available_tools=gather_tools(agent),
+            available_tools=gather_run_tools(run),
             timeout=timeout,
             available_agents=available_agents,
             agent_messenger=agent_messenger,
@@ -4415,6 +4417,34 @@ async def _run_agent_node(
     return output_text, None, run.id, node_fields or None
 
 
+async def _resolve_critic_fields(
+    gate: dict[str, Any], graph: dict[str, Any], *, owner_id: uuid.UUID,
+) -> dict[str, Any]:
+    config = gate["data"]["config"]
+    model_config = await build_model_config(_resolve_model_config(graph, gate["id"]), owner_id=owner_id)
+    pattern_config = PatternConfig(execution_pattern="single_agent_baseline").model_dump()
+    goal = config.get("goal") or "Review the given output and return an approval verdict with feedback."
+    description = config.get("description") or ""
+    label = gate.get("data", {}).get("label")
+    if label:
+        description = f"{description} (canvas label: {label})".strip()
+    system_prompt = config.get("system_prompt") or _default_system_prompt(label, "Critic Gate")
+    tool_config: dict[str, list[str]] = {"server_names": [], "tool_names": []}
+
+    return {
+        "goal": goal,
+        "description": description,
+        "system_prompt": system_prompt,
+        "model_config": model_config,
+        "pattern_config": pattern_config,
+        "tool_config": tool_config,
+        "skill_config": {"skill_ids": []},
+        "output_contract": CRITIC_OUTPUT_CONTRACT,
+        "budget_limit_usd": config.get("budget_limit_usd"),
+        "max_run_duration_seconds": config.get("max_run_duration_seconds"),
+    }
+
+
 async def _run_critic(
     gate: dict[str, Any],
     *,
@@ -4423,7 +4453,6 @@ async def _run_critic(
     owner_id: uuid.UUID,
     worker_output: str,
     graph: dict[str, Any],
-    row_attempt: bool = False,
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
     """Create-or-sync the gate's own critic agent and run it once. Returns
     ``(verdict, error, critic_run_id)`` -- exactly one of verdict/error is
@@ -4435,31 +4464,12 @@ async def _run_critic(
     ``output_contract`` is always :data:`CRITIC_OUTPUT_CONTRACT` -- not
     whatever (if anything) is in the node's own config. Model is resolved
     from its required Model connector, same as an agent node."""
-    config = gate["data"]["config"]
-    agent_name = f"protocol-{protocol_id}-{gate['id']}" + (f"-row-{protocol_run_id}" if row_attempt else "")
-    model_config = await build_model_config(_resolve_model_config(graph, gate["id"]), owner_id=owner_id)
-    pattern_config = PatternConfig(execution_pattern="single_agent_baseline").model_dump()
-    goal = config.get("goal") or "Review the given output and return an approval verdict with feedback."
-    description = config.get("description") or ""
-    label = gate.get("data", {}).get("label")
-    if label:
-        description = f"{description} (canvas label: {label})".strip()
-    system_prompt = config.get("system_prompt") or _default_system_prompt(label, "Critic Gate")
-    tool_config: dict[str, list[str]] = {"server_names": [], "tool_names": []}
-
-    agent = await _sync_durable_agent(
-        name=agent_name,
-        owner_id=owner_id,
-        fields={
-            "goal": goal,
-            "description": description,
-            "system_prompt": system_prompt,
-            "model_config": model_config,
-            "pattern_config": pattern_config,
-            "tool_config": tool_config,
-            "output_contract": CRITIC_OUTPUT_CONTRACT,
-        },
-    )
+    agent_name = f"protocol-{protocol_id}-{gate['id']}"
+    fields = await _resolve_critic_fields(gate, graph, owner_id=owner_id)
+    baseline_graph = await _baseline_graph_for_run(protocol_run_id)
+    baseline_gate = next(n for n in baseline_graph["nodes"] if n["id"] == gate["id"])
+    baseline_fields = await _resolve_critic_fields(baseline_gate, baseline_graph, owner_id=owner_id)
+    agent = await _sync_durable_agent(name=agent_name, owner_id=owner_id, fields=baseline_fields)
     assert agent is not None
 
     instruction = f"Review the following output and return your verdict.\n\nOutput to review:\n\n{worker_output}"
@@ -4467,7 +4477,12 @@ async def _run_critic(
         agent_id=agent.id,
         user_input=instruction,
         owner_id=owner_id,
+        config_snapshot={
+            **{key: value for key, value in fields.items() if key != "tool_config"},
+            "model_config": fields["model_config"].model_dump(mode="json"),
+        },
         metadata={
+            PINNED_TOOL_CONFIG: copy.deepcopy(fields["tool_config"]),
             "protocol_id": str(protocol_id),
             "protocol_run_id": str(protocol_run_id),
             "node_id": gate["id"],
@@ -4475,10 +4490,10 @@ async def _run_critic(
         },
     )
     critic_run_id = str(run.id)
-    timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
+    timeout = fields["max_run_duration_seconds"] or get_settings().worker_job_timeout_seconds
     try:
         await _execute_run_cancellable(
-            run_id=run.id, protocol_run_id=protocol_run_id, available_tools=gather_tools(agent), timeout=timeout
+            run_id=run.id, protocol_run_id=protocol_run_id, available_tools=gather_run_tools(run), timeout=timeout
         )
     except TimeoutError:
         return None, f"critic run exceeded its {timeout}s execution budget", critic_run_id
@@ -4671,7 +4686,6 @@ async def _run_gated_worker(
             owner_id=owner_id,
             worker_output=complete_output,
             graph=graph,
-            row_attempt=row_source is not None,
         )
         if verdict_error == _AGENT_CANCELLED:
             # The worker's own output is real and already complete -- only

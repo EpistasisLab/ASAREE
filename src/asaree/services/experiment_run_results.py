@@ -406,6 +406,7 @@ async def _summarize_row_results(
     protocol_revision: ProtocolRevision,
     design_revision: ExperimentDesignRevision | None,
     row_plan: dict[str, Any],
+    replicate_ids: set[uuid.UUID] | None = None,
 ) -> dict[str, Any]:
     revision_id = design_revision.id if design_revision is not None else None
     protocol_revision_id = protocol_revision.id
@@ -435,6 +436,7 @@ async def _summarize_row_results(
                     .where(
                         FactorialCell.experiment_id == experiment_id,
                         FactorialCell.design_revision_id == revision_id,
+                        *([FactorialReplicateResult.id.in_(replicate_ids)] if replicate_ids is not None else []),
                     )
                 )
             )
@@ -450,6 +452,7 @@ async def _summarize_row_results(
             experiment_id=experiment_id,
             design_revision_id=revision_id,
             protocol_revision_id=protocol_revision_id,
+            replicate_ids=replicate_ids,
         )
         if revision_id
         else []
@@ -691,12 +694,20 @@ async def summarize_experiment_run_results(
     protocol_id: uuid.UUID | None = None,
     design_revision_id: uuid.UUID | None = None,
     protocol_revision_id: uuid.UUID | None = None,
+    bounded: bool = True,
+    replicate_ids: set[uuid.UUID] | None = None,
 ) -> dict[str, Any]:
     """Build whole-dataset scorecards or scoped per-row Results projections.
 
     Whole-dataset rollups preserve their existing aggregate behavior. Row mode
     returns stable slots and their immutable attempt histories without combining
     values across rows.
+
+    ``bounded=False`` lifts the 500-run cap for the background CSV export,
+    which has no request deadline; every HTTP caller keeps the cap.
+    ``replicate_ids`` restricts the projection to those replicates (and their
+    row slots), so that export can build its rows a chunk at a time. Aggregate
+    scorecards then describe only the chunk; the export reads the rows alone.
     """
     # Full materialization is a compatibility path for small integrations.
     # Reject before reading evidence or consulting core, with a bounded probe.
@@ -705,14 +716,14 @@ async def summarize_experiment_run_results(
         probe = probe.where(ProtocolRun.protocol_id == protocol_id)
     if protocol_revision_id is not None:
         probe = probe.where(ProtocolRun.protocol_revision_id == protocol_revision_id)
-    if len(list((await db.scalars(probe.limit(501))).all())) > 500:
+    if bounded and len(list((await db.scalars(probe.limit(501))).all())) > 500:
         raise RunResultsProjectionError(
             "Use execution-results pagination and background CSV jobs for large experiments."
         )
     parents = (
         select(FactorialReplicateResult.id).join(FactorialCell).where(FactorialCell.experiment_id == experiment_id)
     )
-    if len(list((await db.scalars(parents.limit(501))).all())) > 500:
+    if bounded and len(list((await db.scalars(parents.limit(501))).all())) > 500:
         raise RunResultsProjectionError(
             "Use execution-results pagination and background CSV jobs for large experiments."
         )
@@ -784,6 +795,7 @@ async def summarize_experiment_run_results(
             protocol_revision=published,
             design_revision=revision,
             row_plan=row_plan,
+            replicate_ids=replicate_ids,
         )
         projection["selected_design_spec"] = design_spec
         return projection
@@ -792,12 +804,16 @@ async def summarize_experiment_run_results(
     replicates = (
         []
         if versioned and revision is None
-        else await list_replicates(db, experiment_id=experiment_id, revision_id=selected_revision_id)
+        else await list_replicates(
+            db, experiment_id=experiment_id, revision_id=selected_revision_id, replicate_ids=replicate_ids
+        )
     )
     trials = (
         []
         if versioned and revision is None
-        else await list_experiment_trials(db, experiment_id=experiment_id, revision_id=selected_revision_id)
+        else await list_experiment_trials(
+            db, experiment_id=experiment_id, revision_id=selected_revision_id, replicate_ids=replicate_ids
+        )
     )
     current_trial_run_ids = {trial.run_id for trial in trials if trial.run_id is not None}
     excluded_trial_run_ids: set[uuid.UUID] = set()
@@ -856,6 +872,11 @@ async def summarize_experiment_run_results(
                 *([ProtocolRun.protocol_id == protocol.id] if protocol is not None else []),
                 *([ProtocolRun.protocol_revision_id == protocol_revision_id] if protocol_revision_id else []),
                 *([ProtocolRun.design_revision_id == design_revision_id] if design_revision_id else []),
+                *(
+                    [ProtocolRun.replicate_label.in_([replicate.replicate_label for replicate in replicates])]
+                    if replicate_ids is not None
+                    else []
+                ),
             )
         )
     ).all()

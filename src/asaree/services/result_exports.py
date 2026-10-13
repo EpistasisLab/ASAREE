@@ -1,29 +1,33 @@
-"""Background CSV v2 exports streamed by PostgreSQL into owned, expiring files."""
+"""Background analysis-CSV exports, streamed in chunks into owned, expiring files."""
 
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import jwt
-from sqlalchemy import and_, case, func, literal, select, update
-from sqlalchemy.dialects import postgresql
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.config import get_settings
 from asaree.models.database import get_session
+from asaree.models.experiment import ResearchExperiment
 from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
-from asaree.models.factorial_row_result import FactorialRowResult
-from asaree.models.protocol_run import ProtocolRun
 from asaree.models.result_job import ResultJob
+from asaree.services.csv_export import layout_stub, result_csv_layout, result_rows_schema
+from asaree.services.experiment_run_results import summarize_experiment_run_results
 from asaree.services.result_jobs import job_scope
-from asaree.services.result_reads import slot_query
+from asaree.services.result_reads import ResultScope
 from asaree.worker.enqueue import _get_pool
 
 logger = logging.getLogger(__name__)
@@ -103,12 +107,118 @@ async def relay_exports(_ctx: dict[str, Any]) -> None:
         )
 
 
+EXPORT_CHUNK_ROWS = 1000
+
+
+async def _write_analysis_csv(
+    db: AsyncSession, job: ResultJob, scope: ResultScope, write: Callable[[bytes], Awaitable[None]]
+) -> dict[str, Any]:
+    """Stream the Results tab's analysis-ready CSV, a chunk of replicates at a time.
+
+    Rows come from the same projection the synchronous CSV uses, restricted to a
+    chunk, so both downloads have identical columns and values: one column per
+    factor, duration/tokens/cost, one column per metric, statuses. Pass one keeps
+    only what the column layout needs (:func:`layout_stub`); pass two rebuilds
+    each chunk and writes it in the layout's row order. Memory stays bounded by
+    the chunk, however large the experiment.
+    """
+    experiment = await db.get(ResearchExperiment, job.experiment_id)
+    selection = job.params["selection"]
+    replicates = select(
+        FactorialReplicateResult.id, FactorialCell.cell_label, FactorialReplicateResult.replicate_number
+    ).join(FactorialCell, FactorialCell.id == FactorialReplicateResult.cell_id).where(
+        FactorialCell.experiment_id == job.experiment_id,
+        FactorialCell.design_revision_id == scope.design_revision_id,
+    )
+    if selection.get("cell_id"):
+        replicates = replicates.where(FactorialCell.id == uuid.UUID(selection["cell_id"]))
+    if selection.get("replicate_ids") is not None:
+        replicates = replicates.where(
+            FactorialReplicateResult.id.in_([uuid.UUID(i) for i in selection["replicate_ids"]])
+        )
+    ordered = (
+        await db.execute(replicates.order_by(FactorialCell.cell_label, FactorialReplicateResult.replicate_number))
+    ).all()
+    # (cell label, replicate number) is unique within a design revision;
+    # a replicate label alone is only unique within its cell.
+    id_by_key = {(cell_label, number): identifier for identifier, cell_label, number in ordered}
+
+    def key(row: dict[str, Any]) -> tuple[str, int]:
+        return row["cell_label"], row["replicate_number"]
+
+    row_indices = set(selection["row_indices"]) if selection.get("row_indices") is not None else None
+
+    async def project(chunk: list[uuid.UUID]) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+        results = await summarize_experiment_run_results(
+            db,
+            experiment_id=job.experiment_id,
+            design_spec=experiment.design_spec if experiment else None,
+            protocol_id=scope.protocol_id,
+            design_revision_id=scope.design_revision_id,
+            protocol_revision_id=scope.protocol_revision_id,
+            bounded=False,
+            replicate_ids=set(chunk),
+        )
+        # The rows are plain dicts; drop the chunk's ORM objects (runs carry
+        # their full evidence) so the session doesn't accumulate the experiment.
+        db.expunge_all()
+        mode = results["consumption_mode"]
+        rows = results["row_results"] if mode == "per_row" else results["replicates"]
+        if mode == "per_row" and row_indices is not None:
+            rows = [row for row in rows if (row.get("dataset_row") or {}).get("row_index") in row_indices]
+        return mode, rows, results
+
+    # A per-row replicate expands into one row per source row, so size its
+    # chunks by the rows they produce rather than by replicates.
+    ids = [identifier for identifier, _, _ in ordered]
+    size = EXPORT_CHUNK_ROWS
+    mode, stubs = "whole_dataset", []
+    design_spec: dict[str, Any] | None = experiment.design_spec if experiment else None
+    metric_types: dict[str, Any] = {}
+    metric_aggregations: dict[str, Any] = {}
+    position = 0
+    while position < len(ids):
+        chunk = ids[position : position + size]
+        mode, rows, results = await project(chunk)
+        design_spec = results.get("selected_design_spec", design_spec)
+        metric_types.update(results.get("metric_types") or {})
+        metric_aggregations.update(results.get("metric_aggregations") or {})
+        for row in rows:
+            stubs.append({**layout_stub(row, consumption_mode=mode), "cell_label": row.get("cell_label")})
+        if mode == "per_row" and position == 0 and rows:
+            size = max(1, EXPORT_CHUNK_ROWS * len(chunk) // len(rows))
+        position += len(chunk)
+    layout = result_csv_layout(stubs, design_spec, consumption_mode=mode)
+    if layout.sort_key is not None:
+        # The analysis order (factor levels, then replicate number) is a property
+        # of whole replicates, so it fixes the order chunks are rebuilt in.
+        ids = [id_by_key[key(stub)] for stub in sorted(stubs, key=layout.sort_key)]
+    header = io.StringIO()
+    csv.DictWriter(header, fieldnames=layout.fields, extrasaction="ignore").writeheader()
+    await write(header.getvalue().encode())
+    for start in range(0, len(ids), size):
+        chunk = ids[start : start + size]
+        _, rows, _ = await project(chunk)
+        if layout.sort_key is not None:
+            rank = {label_id: index for index, label_id in enumerate(chunk)}
+            rows.sort(key=lambda row: rank[id_by_key[key(row)]])
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=layout.fields, extrasaction="ignore")
+        for row in rows:
+            writer.writerow(layout.write_row(row))
+        await write(buffer.getvalue().encode())
+    return result_rows_schema(stubs, metric_types, metric_aggregations, design_spec, consumption_mode=mode)
+
+
 async def execute_result_export(_ctx: dict[str, Any], job_id: str) -> None:
     identifier = uuid.UUID(job_id)
     destination = export_path(identifier)
     temporary = destination.with_suffix(".part")
     try:
         async with get_session() as db:
+            # Every chunk below reads one snapshot, so the file is consistent
+            # even while runs keep finishing during a long export.
+            await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
             # One expensive export globally; transaction locks also release on
             # worker death. Durable running jobs are relayed again after ARQ loss.
             if not await db.scalar(select(func.pg_try_advisory_xact_lock(73912842))):
@@ -117,55 +227,6 @@ async def execute_result_export(_ctx: dict[str, Any], job_id: str) -> None:
             if job is None or job.kind != "export" or job.status not in ("pending", "running"):
                 return
             scope = await job_scope(db, job)
-            cutoff = datetime.fromisoformat(job.params["cutoff"])
-            source = slot_query(scope, cutoff=cutoff)
-            selection = job.params["selection"]
-            if selection.get("cell_id"):
-                source = source.where(FactorialCell.id == uuid.UUID(selection["cell_id"]))
-            if selection.get("replicate_ids") is not None:
-                source = source.where(
-                    FactorialReplicateResult.id.in_([uuid.UUID(i) for i in selection["replicate_ids"]])
-                )
-            if selection.get("row_indices") is not None:
-                source = source.where(FactorialRowResult.row_index.in_(selection["row_indices"]))
-            slots = source.subquery("export_slots")
-            statement = (
-                select(
-                    slots,
-                    ProtocolRun.attempt_result,
-                    ProtocolRun.node_runs,
-                    case(
-                        (
-                            and_(
-                                slots.c.run_id.is_(None),
-                                slots.c.status == "completed",
-                                literal(scope.unit == "replicate"),
-                            ),
-                            func.jsonb_build_object(
-                                "metric_values",
-                                FactorialReplicateResult.metric_values,
-                                "artifacts",
-                                FactorialReplicateResult.artifacts,
-                            ),
-                        ),
-                        else_=None,
-                    ).label("legacy_result"),
-                )
-                .join(FactorialReplicateResult, FactorialReplicateResult.id == slots.c.replicate_id)
-                .outerjoin(ProtocolRun, ProtocolRun.id == slots.c.run_id)
-                .order_by(slots.c.slot_id)
-            )
-            dialect = postgresql.dialect()  # type: ignore[no-untyped-call]
-            sql = str(statement.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
-            schema = {
-                "format": "asaree.execution-results.csv.v2",
-                "scope": scope.key,
-                "attempts_created_before": cutoff.isoformat(),
-                "columns": list(statement.selected_columns.keys()),
-                "metrics": (scope.design_spec or {}).get("metrics", []),
-                "json_columns": ["factor_values", "result", "usage", "attempt_result", "node_runs", "legacy_result"],
-                "evidence": "Exact JSONB values and producer provenance are in attempt_result; JSON null remains null.",
-            }
             async with get_session() as status_db:
                 await status_db.execute(
                     update(ResultJob)
@@ -191,12 +252,7 @@ async def execute_result_export(_ctx: dict[str, Any], job_id: str) -> None:
                             )
                         checkpoint = time.monotonic()
 
-                connection = await db.connection()
-                raw = await connection.get_raw_connection()
-                driver = raw.driver_connection
-                if driver is None:
-                    raise RuntimeError("PostgreSQL driver connection unavailable")
-                await driver.copy_from_query(sql, output=write, format="csv", header=True)
+                schema = await _write_analysis_csv(db, job, scope, write)
             await asyncio.to_thread(temporary.replace, destination)
             await asyncio.to_thread(export_path(identifier, metadata=True).write_text, json.dumps(schema, indent=2))
             async with get_session() as status_db:

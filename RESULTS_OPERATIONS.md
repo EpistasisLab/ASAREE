@@ -87,22 +87,20 @@ cancel a confirmed job. Unconfirmed previews expire after 24 hours.
 
 ## Exports and source metadata
 
-An export is a background job, limited to one expensive COPY operation globally.
-PostgreSQL streams CSV directly to an owned temporary file, followed by atomic
-rename. One COPY statement supplies a coherent database snapshot; attempt
-selection excludes attempts created after the request cutoff. Active attempts
-may acquire evidence before COPY starts, so this is not a historical snapshot
-of every field at the request timestamp. A restart repeats the export from its
-cutoff. Progress reports bytes, and cancellation is checked during streaming.
-
-CSV v2 uses canonical execution columns and JSON columns for factor values,
-usage, original attempt results, node records and imported legacy results.
-`legacy_result` preserves imported metric values and artifacts. `attempt_result` contains
-exact opaque values, JSON nulls, artifacts and producer provenance. The schema
-sidecar lists all columns and metric declarations. This version intentionally
-does not flatten arbitrary reported structures into scalar metric columns.
-Legacy synchronous CSV retains its old format for small requests; large legacy
-full-result requests return 413 with directions to the bounded/job API.
+An export is a background job, limited to one export at a time globally. It
+writes the researcher-facing analysis CSV -- the same columns and values as the
+synchronous `run-results.csv`: one column per factor (short level labels),
+`duration_seconds`, `input_tokens`, `output_tokens`, `total_tokens`,
+`cost_usd`, one column per metric, observation statuses and run metadata. Rows
+are built by the Results projection a chunk of replicates at a time (two
+passes: the first lays out columns from compact stubs, the second writes rows
+in factor-level order), so memory stays bounded at any size; 15,786 runs take
+about 20 seconds. Every chunk reads one REPEATABLE READ snapshot, so the file is
+consistent even while runs finish. The file is written to an owned temporary
+path and renamed into place; progress reports bytes, cancellation is checked
+between chunks, and a restart repeats the export. The schema sidecar is the same
+`result_rows_schema` document as `run-results.schema.json`. The synchronous
+endpoint keeps a 500-run cap and returns 413 above it, pointing to this job.
 
 Completed exports are downloaded natively in the browser or streamed to disk
 by the SDK. Download capabilities bind job/owner, expire after five minutes,

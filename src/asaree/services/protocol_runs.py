@@ -865,7 +865,11 @@ class ExperimentTrial:
 
 
 async def list_experiment_trials(
-    db: AsyncSession, *, experiment_id: uuid.UUID, revision_id: uuid.UUID | None = None
+    db: AsyncSession,
+    *,
+    experiment_id: uuid.UUID,
+    revision_id: uuid.UUID | None = None,
+    replicate_ids: set[uuid.UUID] | None = None,
 ) -> list[ExperimentTrial]:
     """Every cell of *experiment_id*'s current design (or of *revision_id*,
     to inspect a superseded one), cross-referenced with its most recent run
@@ -880,7 +884,9 @@ async def list_experiment_trials(
     ``FactorialReplicateResult`` without joining its cell: that query would also
     return every superseded design's cells, which is exactly what design
     revisions exist to keep out of the current view."""
-    replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=revision_id)
+    replicates = await list_replicates(
+        db, experiment_id=experiment_id, revision_id=revision_id, replicate_ids=replicate_ids
+    )
     run_ids = [replicate.run_id for replicate in replicates if replicate.run_id is not None]
     runs_by_id: dict[uuid.UUID, ProtocolRun] = {}
     if run_ids:

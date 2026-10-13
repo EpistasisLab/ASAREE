@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Collection
 from datetime import UTC, datetime
 
 from sqlalchemy import exists, select, update
@@ -129,6 +130,7 @@ async def list_row_results(
     experiment_id: uuid.UUID,
     design_revision_id: uuid.UUID | None = None,
     protocol_revision_id: uuid.UUID,
+    replicate_ids: Collection[uuid.UUID] | None = None,
 ) -> list[FactorialRowResult]:
     revision_id = await _revision_id(db, experiment_id, design_revision_id)
     if revision_id is None:
@@ -141,7 +143,10 @@ async def list_row_results(
                 .join(FactorialCell, FactorialReplicateResult.cell_id == FactorialCell.id)
                 .join(ProtocolRevision, ProtocolRevision.id == FactorialRowResult.protocol_revision_id)
                 .join(Protocol, Protocol.id == ProtocolRevision.protocol_id)
-                .where(*_slot_scope(experiment_id, revision_id, protocol_revision_id))
+                .where(
+                    *_slot_scope(experiment_id, revision_id, protocol_revision_id),
+                    *([FactorialReplicateResult.id.in_(replicate_ids)] if replicate_ids is not None else []),
+                )
                 .order_by(
                     FactorialCell.cell_label,
                     FactorialReplicateResult.replicate_number,

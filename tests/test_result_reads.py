@@ -566,3 +566,76 @@ async def test_cell_summaries_aggregate_replicates_in_sql(results_db):
     assert summaries["other"] == {**summaries["other"], "replicate_count": 1, "scored_count": 0, "metrics": {}}
     # A revision id from another experiment never leaks its cells.
     assert await summarize_cells(db, experiment_id=uuid.uuid4(), revision_id=cell.design_revision_id) == []
+
+
+async def test_streamed_export_matches_the_analysis_csv(results_db, monkeypatch):
+    """The background export writes the same researcher-facing CSV as the
+    synchronous one -- factor, usage and metric columns -- in bounded chunks.
+    Two cells share replicate labels, which are only unique within a cell."""
+    from types import SimpleNamespace
+
+    from asaree.services import result_exports
+    from asaree.services.csv_export import result_rows_to_csv
+    from asaree.services.experiment_run_results import summarize_experiment_run_results
+
+    db, selected, cell, user = results_db
+    cell.factor_values = {"arm": "left"}
+    other = FactorialCell(
+        experiment_id=cell.experiment_id,
+        design_revision_id=cell.design_revision_id,
+        cell_label="other",
+        factor_values={"arm": "right"},
+    )
+    db.add(other)
+    await db.flush()
+    for target in (cell, other):
+        for number in (1, 2, 3):
+            parent = FactorialReplicateResult(
+                cell_id=target.id, replicate_number=number, replicate_label=f"rep{number}"
+            )
+            db.add(parent)
+            await db.flush()
+            run = ProtocolRun(
+                protocol_id=selected.protocol_id,
+                owner_id=user.id,
+                status="completed",
+                protocol_revision_id=selected.protocol_revision_id,
+                design_revision_id=selected.design_revision_id,
+                replicate_result_id=parent.id,
+                replicate_label=parent.replicate_label,
+                factor_values=target.factor_values,
+                node_runs={"agent": {"status": "completed", "output_text": "ok"}},
+                usage_summary={"settled": True, "input_tokens": 100 * number, "output_tokens": 10,
+                               "total_tokens": 100 * number + 10, "cost_usd": 0.001 * number, "duration_seconds": 2.5},
+                attempt_result={"measurement": {"observations": [{
+                    "metric_id": "score", "metric_name": "Score", "status": "measured", "value": number / 10,
+                    "producer": {"kind": "runtime", "producer_id": "asaree.runtime"}}], "artifacts": []}},
+            )
+            db.add(run)
+            await db.flush()
+            parent.run_id = run.id
+    await db.flush()
+
+    experiment = await db.get(ResearchExperiment, cell.experiment_id)
+    results = await summarize_experiment_run_results(
+        db, experiment_id=experiment.id, design_spec=experiment.design_spec, protocol_id=selected.protocol_id,
+        design_revision_id=selected.design_revision_id, protocol_revision_id=selected.protocol_revision_id,
+        bounded=False,
+    )
+    expected = result_rows_to_csv(
+        results["replicates"], results.get("selected_design_spec", experiment.design_spec),
+        consumption_mode=results["consumption_mode"],
+    )
+    monkeypatch.setattr(result_exports, "EXPORT_CHUNK_ROWS", 2)
+    chunks: list[bytes] = []
+
+    async def write(chunk: bytes) -> None:
+        chunks.append(chunk)
+
+    job = SimpleNamespace(experiment_id=experiment.id, params={"selection": {}})
+    await result_exports._write_analysis_csv(db, job, selected, write)
+    streamed = b"".join(chunks).decode()
+    assert streamed == expected
+    header = streamed.splitlines()[0].split(",")
+    assert {"arm", "input_tokens", "total_tokens", "cost_usd", "duration_seconds"} <= set(header)
+    assert len(streamed.splitlines()) == 7  # header + 6 replicates, none lost to the shared labels

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from math import prod
@@ -50,6 +51,13 @@ logger = logging.getLogger(__name__)
 ACTIVE = ("pending", "running", "finalizing")
 RETRYABLE = ("not_started", *sorted(RETRYABLE_PROTOCOL_RUN_STATUSES))
 WINDOW = 1000
+# Replicates one preview step checks when execution is per replicate.
+PREVIEW_PARENTS = 1000
+# How long one worker tick keeps advancing jobs before yielding to the next
+# tick. Each step is still its own short transaction (progress, cancellation and
+# locks stay as granular as before); the budget only stops one step per second
+# from setting the pace -- that made a 15,786-replicate preview take minutes.
+TICK_BUDGET_SECONDS = 0.9
 
 
 async def create_job(
@@ -255,10 +263,17 @@ async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> 
             ).order_by(None)
         )
     source = restored_source(progress)
+    indices = selection.get("row_indices")
+    start = int(progress.get("row", 0))
+    total_rows = (len(indices) if indices is not None else len(source.rows)) if source else 0
+    # Per row, a step covers as many whole replicates as fit in WINDOW rows; only
+    # a replicate with more source rows than that is split across steps.
+    whole_parents = source is not None and start == 0 and total_rows <= WINDOW
+    limit = PREVIEW_PARENTS if not source else max(1, WINDOW // max(total_rows, 1)) if whole_parents else 1
     parents = selected_parents(scope, selection)
     if progress.get("parent"):
         parents = parents.where(FactorialReplicateResult.id >= uuid.UUID(progress["parent"]))
-    identifiers = list((await db.scalars(parents.limit(1 if source else 100))).all())
+    identifiers = list((await db.scalars(parents.limit(limit))).all())
     if not identifiers:
         progress["planned"] = await db.scalar(
             select(func.count()).select_from(ResultJobMember).where(ResultJobMember.job_id == job.id)
@@ -270,8 +285,6 @@ async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> 
         FactorialReplicateResult.id.in_(identifiers)
     )
     if source:
-        start = int(progress.get("row", 0))
-        indices = selection.get("row_indices")
         indexes = (
             indices[start : start + WINDOW]
             if indices is not None
@@ -282,18 +295,19 @@ async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> 
         query = query.where(FactorialRowResult.row_index.in_(indexes))
     rows = [dict(row) for row in (await db.execute(query)).mappings()]
     if source:
-        by_index = {row["row_index"]: row for row in rows}
+        by_slot = {(row["replicate_id"], row["row_index"]): row for row in rows}
         rows = [
-            by_index.get(
-                index,
+            by_slot.get(
+                (parent, index),
                 {
-                    "replicate_id": identifiers[0],
+                    "replicate_id": parent,
                     "row_index": index,
                     "slot_id": None,
                     "run_id": None,
                     "status": "not_started",
                 },
             )
+            for parent in identifiers
             for index in indexes
         ]
     reruns = set(selection.get("rerun_slot_ids", []))
@@ -313,7 +327,7 @@ async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> 
     if members:
         await db.execute(insert(ResultJobMember).values(members).on_conflict_do_nothing())
     progress["scanned"] = progress.get("scanned", 0) + len(rows)
-    if source and start + WINDOW < (len(indices) if indices is not None else len(source.rows)):
+    if source and start + WINDOW < total_rows:
         progress.update(parent=str(identifiers[0]), row=start + WINDOW)
     else:
         # UUID successor gives a stable continuation without OFFSET.
@@ -425,6 +439,79 @@ async def cancel_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> N
         job.status = "completed"
 
 
+async def _advance_command(identifier: uuid.UUID) -> bool:
+    """Run one step of a plan/cancel command; whether it still has work to do."""
+    try:
+        async with get_session() as db:
+            if not await db.scalar(
+                select(func.pg_try_advisory_xact_lock(func.hashtextextended(str(identifier), 0)))
+            ):
+                return False
+            job = await db.get(ResultJob, identifier)
+            if not job or job.status not in ("pending", "queued"):
+                return False
+            scope = await job_scope(db, job)
+            if job.kind == "plan" and job.status == "pending":
+                # File verification can be slow. It must not hold the job
+                # or protocol row lock that HTTP progress/cancel needs.
+                if scope.row_plan is not None and not job.progress.get("source"):
+                    source = await indexed_source(db, scope, job.owner_id)
+                    assert source is not None
+                    progress = {
+                        **job.progress,
+                        "source": {
+                            "dataset_id": source.dataset_id,
+                            "sha256": source.raw_sha256,
+                            "columns": list(source.columns),
+                            "count": len(source.rows),
+                        },
+                    }
+                    await db.execute(
+                        update(ResultJob)
+                        .where(ResultJob.id == identifier, ResultJob.status == "pending")
+                        .values(progress=progress, updated_at=datetime.now(UTC))
+                    )
+                    return True
+                await prepare_step(db, job, scope)
+                status, progress = job.status, job.progress
+                db.expunge(job)
+                await db.execute(
+                    update(ResultJob)
+                    .where(ResultJob.id == identifier, ResultJob.status == "pending")
+                    .values(status=status, progress=progress, updated_at=datetime.now(UTC))
+                )
+                return status == "pending"
+            await db.execute(
+                select(Protocol.id).where(Protocol.id == job.protocol_id).with_for_update(key_share=True)
+            )
+            job = await db.get(ResultJob, identifier, with_for_update=True, populate_existing=True)
+            if not job or job.status not in ("pending", "queued"):
+                return False
+            scope = await job_scope(db, job)
+            if job.kind == "cancel":
+                await cancel_step(db, job, scope)
+            else:
+                await plan_step(db, job, scope)
+            job.updated_at = datetime.now(UTC)
+            return job.status in ("pending", "queued")
+    except DBAPIError:
+        # Retried on the next tick rather than spun on within this one.
+        logger.exception("result_command_database_retry", extra={"job_id": str(identifier)})
+        return False
+    except Exception as exc:
+        logger.exception("result_command_failed", extra={"job_id": str(identifier)})
+        async with get_session() as db:
+            await db.execute(
+                update(ResultJob)
+                .where(ResultJob.id == identifier, ResultJob.status != "cancelled")
+                .values(
+                    status="failed",
+                    error=str(exc)[:512] if isinstance(exc, ValueError) else "Command failed; retry preparation.",
+                )
+            )
+        return False
+
+
 async def drain_result_commands(_ctx: dict[str, Any]) -> None:
     async with get_session() as db:
         await db.execute(
@@ -446,72 +533,10 @@ async def drain_result_commands(_ctx: dict[str, Any]) -> None:
                 )
             ).all()
         )
+    deadline = time.monotonic() + TICK_BUDGET_SECONDS
     for identifier in ids:
-        try:
-            async with get_session() as db:
-                if not await db.scalar(
-                    select(func.pg_try_advisory_xact_lock(func.hashtextextended(str(identifier), 0)))
-                ):
-                    continue
-                job = await db.get(ResultJob, identifier)
-                if not job or job.status not in ("pending", "queued"):
-                    continue
-                scope = await job_scope(db, job)
-                if job.kind == "plan" and job.status == "pending":
-                    # File verification can be slow. It must not hold the job
-                    # or protocol row lock that HTTP progress/cancel needs.
-                    if scope.row_plan is not None and not job.progress.get("source"):
-                        source = await indexed_source(db, scope, job.owner_id)
-                        assert source is not None
-                        progress = {
-                            **job.progress,
-                            "source": {
-                                "dataset_id": source.dataset_id,
-                                "sha256": source.raw_sha256,
-                                "columns": list(source.columns),
-                                "count": len(source.rows),
-                            },
-                        }
-                        await db.execute(
-                            update(ResultJob)
-                            .where(ResultJob.id == identifier, ResultJob.status == "pending")
-                            .values(progress=progress, updated_at=datetime.now(UTC))
-                        )
-                    else:
-                        await prepare_step(db, job, scope)
-                        status, progress = job.status, job.progress
-                        db.expunge(job)
-                        await db.execute(
-                            update(ResultJob)
-                            .where(ResultJob.id == identifier, ResultJob.status == "pending")
-                            .values(status=status, progress=progress, updated_at=datetime.now(UTC))
-                        )
-                    continue
-                await db.execute(
-                    select(Protocol.id).where(Protocol.id == job.protocol_id).with_for_update(key_share=True)
-                )
-                job = await db.get(ResultJob, identifier, with_for_update=True, populate_existing=True)
-                if not job or job.status not in ("pending", "queued"):
-                    continue
-                scope = await job_scope(db, job)
-                if job.kind == "cancel":
-                    await cancel_step(db, job, scope)
-                else:
-                    await plan_step(db, job, scope)
-                job.updated_at = datetime.now(UTC)
-        except DBAPIError:
-            logger.exception("result_command_database_retry", extra={"job_id": str(identifier)})
-        except Exception as exc:
-            logger.exception("result_command_failed", extra={"job_id": str(identifier)})
-            async with get_session() as db:
-                await db.execute(
-                    update(ResultJob)
-                    .where(ResultJob.id == identifier, ResultJob.status != "cancelled")
-                    .values(
-                        status="failed",
-                        error=str(exc)[:512] if isinstance(exc, ValueError) else "Command failed; retry preparation.",
-                    )
-                )
+        while time.monotonic() < deadline and await _advance_command(identifier):
+            pass
     await deliver_planned_runs()
 
 
@@ -527,7 +552,7 @@ async def deliver_planned_runs() -> None:
                     ResultJob.status.in_(("queued", "completed", "cancelled", "failed")),
                 )
                 .order_by(ProtocolRun.created_at)
-                .limit(100)
+                .limit(500)
             )
         ).all()
     for (identifier,) in rows:

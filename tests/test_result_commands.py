@@ -89,3 +89,39 @@ async def test_export_relay_only_passes_options_arq_understands(monkeypatch):
         assert {key for key in kwargs if key.startswith("_")} <= arq_options, kwargs
     # And the task accepts exactly what is passed to it.
     inspect.signature(result_exports.execute_result_export).bind({}, *calls[0][1])
+
+
+async def test_one_worker_tick_keeps_advancing_a_job_until_it_is_done(monkeypatch):
+    """One step per one-second tick set the pace of every preview and batch."""
+    from contextlib import asynccontextmanager
+
+    from asaree.services import result_jobs
+
+    job_id = uuid.uuid4()
+
+    class Db:
+        async def execute(self, _statement):
+            return None
+
+        async def scalars(self, _statement):
+            return SimpleNamespace(all=lambda: [job_id])
+
+    @asynccontextmanager
+    async def session():
+        yield Db()
+
+    remaining = iter([True] * 7 + [False])
+    calls = []
+
+    async def advance(identifier):
+        calls.append(identifier)
+        return next(remaining)
+
+    async def deliver():
+        return None
+
+    monkeypatch.setattr(result_jobs, "get_session", session)
+    monkeypatch.setattr(result_jobs, "_advance_command", advance)
+    monkeypatch.setattr(result_jobs, "deliver_planned_runs", deliver)
+    await result_jobs.drain_result_commands({})
+    assert calls == [job_id] * 8

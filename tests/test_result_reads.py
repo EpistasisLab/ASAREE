@@ -639,3 +639,50 @@ async def test_streamed_export_matches_the_analysis_csv(results_db, monkeypatch)
     header = streamed.splitlines()[0].split(",")
     assert {"arm", "input_tokens", "total_tokens", "cost_usd", "duration_seconds"} <= set(header)
     assert len(streamed.splitlines()) == 7  # header + 6 replicates, none lost to the shared labels
+
+
+async def test_preview_checks_a_thousand_replicates_per_step(results_db, monkeypatch):
+    """A step used to check 100 replicates and the worker ran one step a second,
+    so a 15,786-replicate preview took over two and a half minutes."""
+    db, selected, cell, user = results_db
+    db.add_all(
+        FactorialReplicateResult(cell_id=cell.id, replicate_number=n, replicate_label=f"r{n}") for n in range(1, 2501)
+    )
+    await db.flush()
+    monkeypatch.setattr(result_jobs, "plan_cell_runs", AsyncMock(return_value=([], 0)))
+    job = await result_jobs.create_job(db, selected, user.id, kind="plan", request_key="big-preview", params={})
+    steps = 0
+    while job.status == "pending":
+        await result_jobs.prepare_step(db, job, selected)
+        await db.flush()
+        steps += 1
+    assert job.status == "awaiting_confirmation"
+    assert job.progress["planned"] == job.progress["scanned"] == 2500
+    assert steps == 4  # three windows of up to 1,000 (the first also validates), then finish
+
+
+async def test_per_row_preview_fits_several_replicates_in_one_step(results_db, monkeypatch):
+    """Per row, a step used to cover a single replicate however few source rows
+    it had: one replicate a second."""
+    import dataclasses
+
+    db, selected, cell, user = results_db
+    db.add_all(
+        FactorialReplicateResult(cell_id=cell.id, replicate_number=n, replicate_label=f"r{n}") for n in range(1, 101)
+    )
+    await db.flush()
+    row_scope = dataclasses.replace(selected, row_plan={"driver_dataset_id": str(uuid.uuid4())})
+    assert row_scope.unit == "row"
+    job = await result_jobs.create_job(db, row_scope, user.id, kind="plan", request_key="row-preview", params={})
+    # 30 verified source rows; validation already done.
+    job.progress = {"validated": True, "source": {"dataset_id": str(uuid.uuid4()), "sha256": "0" * 64,
+                                                  "columns": ["question"], "count": 30}}
+    await result_jobs.prepare_step(db, job, row_scope)
+    assert job.progress["scanned"] == (1000 // 30) * 30  # 33 whole replicates x 30 rows in one step
+    steps = 1
+    while job.status == "pending":
+        await result_jobs.prepare_step(db, job, row_scope)
+        await db.flush()
+        steps += 1
+    assert job.progress["planned"] == job.progress["scanned"] == 100 * 30
+    assert steps == 5  # 33 + 33 + 33 + 1 replicates, then finish

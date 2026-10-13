@@ -61,6 +61,18 @@ async def owned_job(db: DbSession, experiment_id: uuid.UUID, identifier: uuid.UU
     return job
 
 
+async def _committed(db: DbSession, job: ResultJob) -> dict[str, Any]:
+    """Commit before answering, not after.
+
+    get_db commits when FastAPI tears the dependency down, which happens after
+    the response is sent. A client that creates a job and polls it straight
+    away (the Runs tab, every SDK script) could then get job_not_found, or see
+    a confirmation/cancellation that hadn't landed yet.
+    """
+    await db.commit()
+    return payload(job)
+
+
 @router.post("", status_code=202)
 async def create(command: Command, user: CurrentUser, db: DbSession, scope: Scope) -> dict[str, Any]:
     if command.row_indices is not None and (
@@ -81,7 +93,7 @@ async def create(command: Command, user: CurrentUser, db: DbSession, scope: Scop
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return payload(job)
+    return await _committed(db, job)
 
 
 @router.get("/{job_id}")
@@ -102,7 +114,7 @@ async def confirm(experiment_id: uuid.UUID, job_id: uuid.UUID, user: CurrentUser
         raise HTTPException(status_code=409, detail="Batch preview is not ready for confirmation.")
     if job.status == "awaiting_confirmation":
         job.status = "queued"
-    return payload(job)
+    return await _committed(db, job)
 
 
 @router.post("/{job_id}/cancel")
@@ -120,7 +132,7 @@ async def cancel(
         return payload(job)
     if job.status not in ("completed", "expired"):
         job.status = "cancelled"
-    return payload(job)
+    return await _committed(db, job)
 
 
 @router.get("/{job_id}/download", response_class=FileResponse)

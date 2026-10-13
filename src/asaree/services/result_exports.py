@@ -100,7 +100,6 @@ async def relay_exports(_ctx: dict[str, Any]) -> None:
             str(identifier),
             _job_id=f"result-export:{identifier}",
             _queue_name="arq:results",
-            _keep_result=0,
         )
 
 

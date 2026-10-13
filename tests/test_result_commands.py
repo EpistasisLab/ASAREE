@@ -47,3 +47,45 @@ def test_download_capability_is_signed_and_bound_to_job_and_owner(monkeypatch):
         result_exports.validate_download_token(token, uuid.uuid4())
     with pytest.raises(ValueError):
         result_exports.validate_download_token(token + "tampered", job.id)
+
+
+async def test_export_relay_only_passes_options_arq_understands(monkeypatch):
+    """An unknown underscore option (it was `_keep_result`) isn't an arq option: arq
+    hands it to the task as a keyword, every export crashed on start, and the job
+    sat in "preparing..." forever."""
+    import inspect
+    from contextlib import asynccontextmanager
+
+    from arq.connections import ArqRedis
+
+    pending = [uuid.uuid4(), uuid.uuid4()]
+    results = iter([pending, []])  # pending exports, then expired ones
+
+    class Db:
+        async def scalars(self, _statement):
+            return SimpleNamespace(all=lambda: next(results))
+
+    @asynccontextmanager
+    async def session():
+        yield Db()
+
+    calls = []
+
+    class Pool:
+        async def enqueue_job(self, function, *args, **kwargs):
+            calls.append((function, args, kwargs))
+
+    async def pool():
+        return Pool()
+
+    monkeypatch.setattr(result_exports, "get_session", session)
+    monkeypatch.setattr(result_exports, "_get_pool", pool)
+    await result_exports.relay_exports({})
+
+    arq_options = {name for name in inspect.signature(ArqRedis.enqueue_job).parameters if name.startswith("_")}
+    assert [args for _, args, _ in calls] == [(str(identifier),) for identifier in pending]
+    for function, _, kwargs in calls:
+        assert function == "execute_result_export"
+        assert {key for key in kwargs if key.startswith("_")} <= arq_options, kwargs
+    # And the task accepts exactly what is passed to it.
+    inspect.signature(result_exports.execute_result_export).bind({}, *calls[0][1])

@@ -44,6 +44,11 @@ jobs:
       DATABASE_URL: postgresql+asyncpg://agentic:agentic@localhost:5432/motoro
       ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@localhost:5432/motoro
       ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@localhost:5432/asaree
+      # Opt-in suites that skip without these. Results checks run every revision
+      # in a throwaway schema inside a rolled-back transaction; the migration
+      # re-run checks create and drop their own scratch database on this server.
+      ASAREE_RESULTS_TEST_DATABASE_URL: postgresql+asyncpg://agentic:agentic@localhost:5432/asaree
+      ASAREE_MIGRATIONS_TEST_DATABASE_URL: postgresql+asyncpg://agentic:agentic@localhost:5432/motoro
 
     steps:
       - uses: actions/checkout@v6
@@ -145,6 +150,11 @@ jobs:
       # `--noEmit` against the solution file type-checks nothing at all.
       - name: Type check
         run: npx tsc -b
+
+      # Component and lib tests (vitest + jsdom). Without this step a stale
+      # test can sit red on a branch with CI still green.
+      - name: Unit tests
+        run: npx vitest run
 
       # oxlint exits 0 on warnings, so this reports rather than gates. The
       # standing baseline is 9 warnings; it is here to make that number

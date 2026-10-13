@@ -4,6 +4,7 @@
     python -m asaree.migrations current
     python -m asaree.migrations stamp    # adopt an existing schema
     python -m asaree.migrations downgrade --revision base
+    python -m asaree.migrations backup   # pre-deploy dumps; see migrations/backup.py
 
 Run Motoro's own chain first (``python -m motoro.migrations
 upgrade``) — this one does not know or care about that one, but product tables
@@ -20,10 +21,18 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m asaree.migrations")
-    ap.add_argument("command", choices=["upgrade", "downgrade", "current", "stamp"])
+    ap.add_argument("command", choices=["upgrade", "downgrade", "current", "stamp", "backup"])
     ap.add_argument("--url", default=None, help="Database URL. Defaults to product_database_url.")
     ap.add_argument("--revision", default=None, help="Target revision. Defaults: head, or -1 for downgrade.")
+    ap.add_argument("--core-url", default=None, help="backup only: core's database. Defaults to database_url.")
+    ap.add_argument("--dir", default="backups", help="backup only: where dumps are written.")
+    ap.add_argument("--keep", type=int, default=5, help="backup only: automatic dumps kept per database.")
     args = ap.parse_args(argv)
+
+    if args.command == "backup":
+        from asaree.migrations import backup
+
+        return backup.main(args)
 
     from asaree.migrations import current_revision, downgrade, stamp, upgrade
 

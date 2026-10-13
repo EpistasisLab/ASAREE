@@ -75,6 +75,32 @@ services:
   # Runs to completion and exits 0 -- `Exited (0)` in `docker compose ps` is
   # success, hence restart: "no". `--url` is passed explicitly because core's CLI
   # otherwise reads a bare DATABASE_URL, which nothing here sets.
+  # Snapshots both databases before either migration chain runs, only when a
+  # migration is pending: backups/{db}-pre-v{release}-{revision}-{UTC}.dump.
+  # Troubleshooting aid, not a backup strategy -- see asaree/migrations/backup.py.
+  # Runs as the host user so the dumps are yours, not root's.
+  db-backup:
+    build:
+      context: .
+      secrets:
+        - gh_token
+      additional_contexts:
+        gitdir: ./.git
+    container_name: db-backup
+    user: "${ASAREE_BACKUP_UID:-1000}:${ASAREE_BACKUP_GID:-1000}"
+    depends_on:
+      motoro-postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/motoro
+      ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/asaree
+    entrypoint: ["python", "-m", "asaree.migrations"]
+    command: ["backup", "--dir", "/app/backups"]
+    volumes:
+      - ./backups:/app/backups
+    restart: "no"
+
   motoro-migrate:
     build:
       context: .
@@ -88,6 +114,9 @@ services:
       # running initdb, which races the creation of the database being migrated.
       motoro-postgres:
         condition: service_healthy
+      # No migration runs until both databases are snapshotted (or need none).
+      db-backup:
+        condition: service_completed_successfully
     entrypoint: ["python", "-m", "motoro.migrations"]
     command:
       - deploy

@@ -19,7 +19,10 @@ FROM python:3.13-slim AS application
 WORKDIR /app
 
 # git: needed by uv to resolve Motoro's pinned git dependency below.
-RUN apt-get update && apt-get install -y --no-install-recommends git \
+# postgresql-client: pg_dump/pg_restore for the pre-migration backup step
+# (asaree/migrations/backup.py). Debian's client is newer than the pg16 server,
+# which pg_dump supports; restore with this same image's pg_restore.
+RUN apt-get update && apt-get install -y --no-install-recommends git postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 

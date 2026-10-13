@@ -120,6 +120,16 @@ hash; execution still verifies the pinned source identity before running.
 
 ## Deployment and recovery
 
+0. Compose's `db-backup` runs first: when either database has a pending
+   migration, it writes `backups/{db}-pre-v{release}-{revision}-{UTC}.dump`
+   (the database as it was before that release migrated it) and keeps the newest
+   five per database; manual dumps in `backups/` are left alone. If it fails, no
+   migration runs. Outside compose, run `python -m asaree.migrations backup`
+   before migrating. To restore one (stop the app first):
+   `docker compose run --rm --no-deps -e PGPASSWORD=... --entrypoint pg_restore db-backup -h motoro-postgres -U agentic --clean --if-exists --no-owner -d asaree /app/backups/<file>`.
+   One error about `transaction_timeout` is expected and harmless (the image's
+   client is newer than the server). These are troubleshooting snapshots taken
+   only at deploy time, not a backup strategy.
 1. Apply Motoro's migrations, then ASAREE's (through `718293a4b5c6`), using the
    usual migration deployment. Historical JSON evidence is not rewritten in migration.
 2. The usage and trace reads go through Motoro's `list_run_summaries` and

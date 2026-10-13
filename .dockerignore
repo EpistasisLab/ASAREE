@@ -10,6 +10,8 @@ __pycache__/
 dist/
 *.egg-info/
 data/
+# Database dumps (up to hundreds of MB) -- mounted at runtime, never built in.
+backups/
 # .git/ stays excluded even though the build has to read it. hatch-vcs derives
 # the package version from the repo's tags, so the final `uv sync` can't build
 # this project without that metadata -- but it arrives as a *named build context*

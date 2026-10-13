@@ -83,6 +83,21 @@ describe('bounded Results reads', () => {
       { cell_id: 'cell-1', cursor: 'page-2' }, expect.any(AbortSignal))
   })
 
+  it('labels per-row executions by source row and only inspects attempted slots', async () => {
+    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, unit: 'row', primary_metric: null })
+    vi.mocked(experimentsApi.listExecutions).mockResolvedValue({ items: [
+      { ...slot, row_result_id: 'slot-1', row_index: 0 },
+      { ...slot, slot_id: 'unplanned:parent-1:1', replicate_number: 2, row_index: 1, run_id: null, status: 'not_started' },
+    ], next_cursor: null })
+    const select = vi.fn()
+    mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={select} />)
+    fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
+    expect(await screen.findByText(/Source row 1/)).toBeInTheDocument()
+    expect(screen.getByText(/Source row 2/).closest('button')).toBeDisabled()
+    fireEvent.click(screen.getByText(/Source row 1/).closest('button')!)
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ type: 'execution', slotId: 'slot-1' }))
+  })
+
   it('fetches the selected attempt independently of the experiment list', async () => {
     mount(<ResultsInspectorPanel experimentId="experiment" experiment={experiment}
       selection={{ type: 'execution', slotId: 'slot-1', scope: { protocol_revision_id: 'v1' } }} onClose={vi.fn()} />)

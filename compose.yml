@@ -218,22 +218,6 @@ services:
       - ./data:/app/data
     restart: unless-stopped
 
-  asaree-results-index:
-    build:
-      context: .
-      secrets:
-        - gh_token
-      additional_contexts:
-        gitdir: ./.git
-    depends_on:
-      motoro-migrate:
-        condition: service_completed_successfully
-    env_file: .env
-    environment:
-      ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/motoro
-    command: ["python", "scripts/create_results_telemetry_index.py"]
-    restart: "no"
-
   # Result maintenance and bulk commands never compete for LLM worker slots.
   asaree-results-worker:
     build:
@@ -243,8 +227,8 @@ services:
       additional_contexts:
         gitdir: ./.git
     depends_on:
-      asaree-results-index:
-        condition: service_completed_successfully
+      # asaree-migrate itself waits for motoro-migrate, which creates the core
+      # indexes the usage/trace reads rely on.
       asaree-migrate:
         condition: service_completed_successfully
       motoro-redis:

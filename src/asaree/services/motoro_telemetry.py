@@ -1,10 +1,10 @@
 """Read-only telemetry adapter at the Motoro storage seam.
 
-Motoro's public runner reads eagerly hydrate Agent and RunStep relationships.
-Operational accounting needs only scalar columns. Keep that storage knowledge
-here, use its public audited system_session, and never join product/core tables.
-Accounting never loads evidence. Selected evidence crosses this seam only in
-bounded text or trace pages after the product verifies ownership.
+Usage accounting and trace pages go through Motoro's bulk reads
+(``list_run_summaries``/``list_run_step_summaries``), which own the indexes they
+need -- ASAREE never indexes core's tables. Accounting never loads evidence.
+Selected evidence crosses this seam only in bounded text or trace pages after the
+product verifies ownership.
 """
 
 from __future__ import annotations
@@ -12,39 +12,14 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from motoro import runner
 from motoro.models.database import system_session
 from motoro.models.run import AgentRun, RunStep
-from sqlalchemy import Text, cast, false, func, literal_column, or_, select
+from sqlalchemy import Text, cast, func, select
 
 PAGE_SIZE = 200
-ATTRIBUTION = AgentRun.run_metadata.op("->>", return_type=Text)(literal_column("'protocol_run_id'"))
-
-
-def usage_query(
-    owner_id: uuid.UUID,
-    protocol_run_ids: list[uuid.UUID],
-    referenced_ids: list[uuid.UUID],
-    after_id: uuid.UUID | None = None,
-) -> Any:
-    if len(protocol_run_ids) > PAGE_SIZE or len(referenced_ids) > PAGE_SIZE:
-        raise ValueError("telemetry_batch_too_large")
-    matches = []
-    if protocol_run_ids:
-        matches.append(ATTRIBUTION.in_([str(identifier) for identifier in protocol_run_ids]))
-    if referenced_ids:
-        matches.append(AgentRun.id.in_(referenced_ids))
-    statement = select(
-        AgentRun.id,
-        AgentRun.status,
-        AgentRun.token_usage,
-        AgentRun.cost_estimate,
-        ATTRIBUTION.label("protocol_run_id"),
-        AgentRun.run_metadata["node_id"].astext.label("node_id"),
-    )
-    statement = statement.where(AgentRun.owner_id == owner_id, or_(*matches) if matches else false())
-    if after_id:
-        statement = statement.where(AgentRun.id > after_id)
-    return statement.order_by(AgentRun.id).limit(PAGE_SIZE)
+# The key ASAREE stamps on every Motoro run it starts (see runtime_metrics).
+ATTRIBUTION_KEY = "protocol_run_id"
 
 
 async def read_usage_page(
@@ -53,15 +28,21 @@ async def read_usage_page(
     referenced_ids: list[uuid.UUID],
     after_id: uuid.UUID | None = None,
 ) -> list[dict[str, Any]]:
-    async with system_session(reason="asaree.results: capture bounded operational telemetry") as db:
-        return [
-            dict(row)
-            for row in (
-                await db.execute(
-                    usage_query(owner_id, protocol_run_ids, referenced_ids, after_id),
-                )
-            ).mappings()
-        ]
+    if len(protocol_run_ids) > PAGE_SIZE or len(referenced_ids) > PAGE_SIZE:
+        raise ValueError("telemetry_batch_too_large")
+    rows = await runner.list_run_summaries(
+        owner_id=owner_id,
+        metadata_key=ATTRIBUTION_KEY,
+        metadata_values=[str(identifier) for identifier in protocol_run_ids],
+        run_ids=referenced_ids,
+        after_id=after_id,
+        limit=PAGE_SIZE,
+    )
+    for row in rows:
+        metadata = row.pop("run_metadata") or {}
+        row["protocol_run_id"] = metadata.get(ATTRIBUTION_KEY)
+        row["node_id"] = metadata.get("node_id")
+    return rows
 
 
 async def read_prompt(owner_id: uuid.UUID, agent_run_id: uuid.UUID, offset: int, limit: int) -> dict[str, Any]:
@@ -84,30 +65,7 @@ async def read_prompt(owner_id: uuid.UUID, agent_run_id: uuid.UUID, offset: int,
 
 
 async def read_trace(owner_id: uuid.UUID, agent_run_id: uuid.UUID, after: int = -1) -> dict[str, Any]:
-    async with system_session(reason="asaree.results: selected trace page") as db:
-        rows = list(
-            (
-                await db.execute(
-                    select(
-                        RunStep.id,
-                        RunStep.sequence,
-                        RunStep.iteration,
-                        RunStep.phase,
-                        RunStep.started_at,
-                        RunStep.completed_at,
-                        func.left(cast(RunStep.output, Text), 2048).label("preview"),
-                    )
-                    .join(AgentRun, AgentRun.id == RunStep.run_id)
-                    .where(AgentRun.id == agent_run_id, AgentRun.owner_id == owner_id, RunStep.sequence > after)
-                    .order_by(RunStep.sequence)
-                    .limit(21)
-                )
-            ).mappings()
-        )
-        return {
-            "items": [dict(row) for row in rows[:20]],
-            "next_after": rows[19]["sequence"] if len(rows) > 20 else None,
-        }
+    return await runner.list_run_step_summaries(agent_run_id, owner_id=owner_id, after_sequence=after, limit=20)
 
 
 async def read_step(

@@ -2,26 +2,28 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy.dialects import postgresql
+import pytest
 
-from asaree.services.motoro_telemetry import usage_query
+from asaree.services import motoro_telemetry
 from asaree.services.result_usage import provider_usage, summarize_usage
 
 
-def test_usage_read_is_owner_scoped_batched_and_never_loads_traces():
-    sql = str(
-        usage_query(UUID(int=1), [UUID(int=2)], [UUID(int=3)]).compile(
-            dialect=postgresql.dialect(),
-            compile_kwargs={"literal_binds": True},
-        )
-    )
-    assert "agent_runs.owner_id" in sql
-    assert "protocol_run_id" in sql
-    assert "LIMIT 200" in sql
-    assert "run_steps" not in sql
-    assert "agent_runs.input" not in sql
-    assert "agent_runs.output" not in sql
-    assert "config_snapshot" not in sql
+async def test_usage_read_is_owner_scoped_batched_through_motoro(monkeypatch):
+    calls = []
+
+    async def summaries(**kwargs):
+        calls.append(kwargs)
+        return [{"id": UUID(int=9), "status": "completed", "token_usage": None, "cost_estimate": None,
+                 "run_metadata": {"protocol_run_id": str(UUID(int=2)), "node_id": "agent-1"}}]
+
+    monkeypatch.setattr(motoro_telemetry.runner, "list_run_summaries", summaries)
+    rows = await motoro_telemetry.read_usage_page(UUID(int=1), [UUID(int=2)], [UUID(int=3)])
+    assert calls == [{"owner_id": UUID(int=1), "metadata_key": "protocol_run_id", "metadata_values": [str(UUID(int=2))],
+                      "run_ids": [UUID(int=3)], "after_id": None, "limit": 200}]
+    assert rows[0]["protocol_run_id"] == str(UUID(int=2)) and rows[0]["node_id"] == "agent-1"
+    assert "run_metadata" not in rows[0]
+    with pytest.raises(ValueError):
+        await motoro_telemetry.read_usage_page(UUID(int=1), [UUID(int=2)] * 201, [])
 
 
 def test_usage_sums_distinct_causal_runs_and_excludes_queue_time():

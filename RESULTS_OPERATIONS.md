@@ -120,15 +120,16 @@ hash; execution still verifies the pinned source identity before running.
 
 ## Deployment and recovery
 
-1. Apply product Alembic migrations through `60718293a4b5` using the usual
-   migration deployment. Historical JSON evidence is not rewritten in migration.
-2. Create the two core indexes with `python scripts/create_results_telemetry_index.py`
-   in the deployed application environment. It uses `CREATE INDEX CONCURRENTLY`
-   for owner/attribution lookup and `(run_id, sequence)` trace paging.
+1. Apply Motoro's migrations, then ASAREE's (through `718293a4b5c6`), using the
+   usual migration deployment. Historical JSON evidence is not rewritten in migration.
+2. The usage and trace reads go through Motoro's `list_run_summaries` and
+   `list_run_step_summaries`; their indexes (`ix_agent_runs_run_metadata`,
+   `ix_run_steps_run_sequence`) ship with Motoro's own migrations. ASAREE never
+   creates indexes on core tables.
 3. Run `arq asaree.worker.result_settings.ResultWorkerSettings` alongside the
-   production execution worker. Compose defines `asaree-results-index` and
-   `asaree-results-worker`; the latter waits for the core indexes. Both workers
-   and the API must share the data volume and configured export/row-index paths.
+   production execution worker. Compose defines `asaree-results-worker`, which
+   waits for both migration steps. Both workers and the API must share the data
+   volume and configured export/row-index paths.
 4. Keep `ASAREE_RESULT_EXPORT_DIR` and `ASAREE_RESULT_ROW_INDEX_DIR` on persistent
    shared storage (defaults are `./data/result-exports` and `./data/result-row-indexes`).
 5. To requeue all existing overview projections, run

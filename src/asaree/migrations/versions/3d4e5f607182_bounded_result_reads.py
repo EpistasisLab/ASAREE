@@ -47,6 +47,7 @@ def upgrade() -> None:
     op.create_index("ix_factorial_rows_version_page", "factorial_row_results", ["protocol_revision_id", "replicate_result_id", "id"])
     # Previews are derived at the persistence seam, including notebook/legacy writes.
     # Reported values stay opaque; only bounded textual previews leave list reads.
+    # asyncpg rejects multi-statement strings, so each DDL statement executes on its own.
     op.execute("""
     CREATE FUNCTION asaree_result_preview(doc jsonb, nodes jsonb) RETURNS jsonb
     LANGUAGE sql IMMUTABLE AS $$
@@ -71,11 +72,16 @@ def upgrade() -> None:
         'evaluation_state', doc->'evaluation_state'
       );
     $$;
+    """)
+    op.execute("""
     CREATE FUNCTION asaree_preview_run() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN NEW.result_summary := asaree_result_preview(NEW.attempt_result, NEW.node_runs); RETURN NEW; END $$;
+    """)
+    op.execute("""
     CREATE TRIGGER result_preview BEFORE INSERT OR UPDATE OF attempt_result, node_runs ON protocol_runs
       FOR EACH ROW EXECUTE FUNCTION asaree_preview_run();
-
+    """)
+    op.execute("""
     CREATE FUNCTION asaree_dirty_results(p uuid, v uuid, d uuid) RETURNS void LANGUAGE plpgsql AS $$
     DECLARE k text; actual_design uuid;
     BEGIN
@@ -88,13 +94,19 @@ def upgrade() -> None:
         VALUES(k,p,v,actual_design)
         ON CONFLICT(scope_key) DO UPDATE SET generation=result_refreshes.generation+1, updated_at=now();
     END $$;
+    """)
+    op.execute("""
     CREATE FUNCTION asaree_run_results_changed() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
       IF TG_OP='DELETE' THEN PERFORM asaree_dirty_results(OLD.protocol_id,OLD.protocol_revision_id,OLD.design_revision_id); RETURN OLD; END IF;
       PERFORM asaree_dirty_results(NEW.protocol_id,NEW.protocol_revision_id,NEW.design_revision_id); RETURN NEW;
     END $$;
+    """)
+    op.execute("""
     CREATE TRIGGER results_changed AFTER INSERT OR DELETE OR UPDATE OF status, attempt_result, usage_summary ON protocol_runs
       FOR EACH ROW EXECUTE FUNCTION asaree_run_results_changed();
+    """)
+    op.execute("""
     CREATE FUNCTION asaree_design_results_changed() RETURNS trigger LANGUAGE plpgsql AS $$
     DECLARE e uuid; p record; d uuid;
     BEGIN
@@ -113,12 +125,20 @@ def upgrade() -> None:
       END LOOP;
       RETURN COALESCE(NEW,OLD);
     END $$;
+    """)
+    op.execute("""
     CREATE TRIGGER protocol_results_changed AFTER INSERT OR UPDATE OF published_revision_id ON protocols
       FOR EACH ROW EXECUTE FUNCTION asaree_design_results_changed();
+    """)
+    op.execute("""
     CREATE TRIGGER cell_results_changed AFTER INSERT OR DELETE OR UPDATE ON factorial_cells
       FOR EACH ROW EXECUTE FUNCTION asaree_design_results_changed();
+    """)
+    op.execute("""
     CREATE TRIGGER replicate_results_changed AFTER INSERT OR DELETE OR UPDATE ON factorial_replicate_results
       FOR EACH ROW EXECUTE FUNCTION asaree_design_results_changed();
+    """)
+    op.execute("""
     CREATE TRIGGER row_results_changed AFTER INSERT OR DELETE OR UPDATE ON factorial_row_results
       FOR EACH ROW EXECUTE FUNCTION asaree_design_results_changed();
     """)

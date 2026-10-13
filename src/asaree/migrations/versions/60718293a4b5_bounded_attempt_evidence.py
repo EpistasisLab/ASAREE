@@ -28,6 +28,8 @@ def upgrade() -> None:
         'unresolved_references',value->'unresolved_references','truncation',value->'truncation'
       )), '{}'::jsonb) FROM jsonb_each(CASE WHEN jsonb_typeof(nodes)='object' THEN nodes ELSE '{}'::jsonb END);
     $$;
+    """)
+    op.execute("""
     CREATE FUNCTION asaree_attempt_preview(doc jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
       SELECT jsonb_build_object(
         'metric_values', CASE WHEN length((doc->'metric_values')::text)<=16384 THEN doc->'metric_values' ELSE '{}'::jsonb END,

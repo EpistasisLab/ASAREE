@@ -23,6 +23,9 @@ async def main() -> None:
                 ON agent_runs(owner_id, (run_metadata ->> 'protocol_run_id'), id)
             """)
             )
+            await connection.execute(
+                text("CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_asaree_step_page ON run_steps(run_id, sequence)")
+            )
         print("Operational telemetry index ready.")
     finally:
         await engine.dispose()

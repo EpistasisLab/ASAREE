@@ -30,9 +30,10 @@ scoring.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import Float, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from asaree.models.base import Base, TimestampMixin, generate_uuid
@@ -53,6 +54,7 @@ class RegisteredDataset(Base, TimestampMixin):
     # dataset_id) -- every dataset registered from here on always has one.
     raw_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     raw_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    row_schema: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # Null until a split is actually produced (quick or manual) -- see this
     # module's own docstring for why splitting isn't part of registration.
     train_path: Mapped[str | None] = mapped_column(Text, nullable=True)

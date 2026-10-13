@@ -375,8 +375,11 @@ export function heatColor(value: number, min: number, max: number): string {
  * "primary" (cyan, some replicates scored) / "muted-foreground" (dim, no cells yet). */
 export function replicatesStatusAccent(replicates: Replicate[] | undefined): string {
   const total = replicates?.length ?? 0
+  return cellsStatusAccent(total, replicates?.filter(replicate => replicate.metric_values).length ?? 0)
+}
+
+export function cellsStatusAccent(total: number, scored: number): string {
   if (total === 0) return 'var(--muted-foreground)'
-  const scored = replicates!.filter((replicate) => replicate.metric_values).length
   if (scored === 0) return 'var(--chart-4)'
   if (scored === total) return 'var(--chart-3)'
   return 'var(--primary)'

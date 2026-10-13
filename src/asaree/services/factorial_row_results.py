@@ -279,7 +279,7 @@ async def claim_row_attempt(
         previous = await db.get(ProtocolRun, expected_run_id, populate_existing=True)
         if previous is None or previous.status not in TERMINAL_PROTOCOL_RUN_STATUSES:
             return None
-        if previous.status not in {"failed", "cancelled"} and not allow_completed:
+        if previous.status not in {"failed", "cancelled", "limit_reached"} and not allow_completed:
             return None
     from asaree.services.protocol_runs import create_protocol_run
 

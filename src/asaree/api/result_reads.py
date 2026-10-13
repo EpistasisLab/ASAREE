@@ -41,6 +41,8 @@ async def selected_scope(
         )
     except RunResultsProjectionError as exc:
         raise HTTPException(status_code=422 if str(exc) == "ambiguous_protocol" else 404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 Scope = Annotated[result_reads.ResultScope, Depends(selected_scope)]
@@ -64,7 +66,7 @@ async def summary(
     response: Response,
     if_none_match: Annotated[str | None, Header()] = None,
 ) -> Any:
-    result = await result_reads.read_summary(db, scope)
+    result = await _read(result_reads.read_summary, db, scope)
     etag = f'"{scope.key}:{result["change_id"]}:{result["generation"]}"'
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "private, no-cache"
@@ -150,3 +152,15 @@ async def conversation(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> dict[str, Any]:
     return await _read(result_reads.read_conversation, db, scope, run_id, limit=limit, offset=offset)
+
+
+@router.get("/attempts/{run_id}/evidence")
+async def evidence(
+    run_id: uuid.UUID,
+    db: DbSession,
+    scope: Scope,
+    document: Annotated[str, Query(pattern="^(attempt_result|node_runs|conversation|dataset_row)$")],
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=16384)] = 16384,
+) -> dict[str, Any]:
+    return await _read(result_reads.read_evidence, db, scope, run_id, document=document, offset=offset, limit=limit)

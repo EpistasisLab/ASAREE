@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { nodeRunBadge } from '@/lib/protocolRun'
 import type { ResultNodeRun } from '@/types/experiments'
 import { ReceivedPromptPanel, RunStepTrace, UnresolvedReferencesNote } from './NodeRunOutputPanel'
+import { ExecutionNodeText, ExecutionNodeTrace, type ExecutionContext } from './ExecutionNodeEvidence'
 
 function formatCurrency(value: number | null): string {
   return value === null || !Number.isFinite(value) ? 'Not reported' : new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value)
@@ -20,7 +21,7 @@ function nodeStatusClass(status: string): string {
   return 'border-transparent bg-muted text-muted-foreground'
 }
 
-export function ResultTimelineNode({ node, defaultOpen = false }: { node: ResultNodeRun; defaultOpen?: boolean }) {
+export function ResultTimelineNode({ node, defaultOpen = false, context }: { node: ResultNodeRun; defaultOpen?: boolean; context?: ExecutionContext }) {
   const [open, setOpen] = useState(defaultOpen)
   const hasDetails = Boolean(node.error || node.output_text || node.agent_run_id)
   const bypassBadge = node.status === 'completed' && node.bypassed ? nodeRunBadge('completed', false, true) : null
@@ -52,15 +53,15 @@ export function ResultTimelineNode({ node, defaultOpen = false }: { node: Result
           {node.error && <section className="space-y-1.5"><h4 className="text-xs font-medium">Error</h4><p className="rounded border border-destructive/30 bg-destructive/5 p-2 text-xs whitespace-pre-wrap break-words text-destructive">{node.error}</p></section>}
           {/* Received before produced, so one node reads as the handoff it
               was: what it was given, then what it made of it. */}
-          {node.agent_run_id && <ReceivedPromptPanel runId={node.agent_run_id} />}
+          {node.agent_run_id && (context ? <ExecutionNodeText context={context} nodeId={node.node_id} field="prompt" /> : <ReceivedPromptPanel runId={node.agent_run_id} />)}
           <UnresolvedReferencesNote names={node.unresolved_reference_labels ?? []} />
-          {node.output_text ? (
+          {context && node.output_text ? <ExecutionNodeText context={context} nodeId={node.node_id} field="output" /> : node.output_text ? (
             <section className="space-y-1.5">
               <h4 className="text-xs font-medium">Output</h4>
               <p className="max-h-64 overflow-y-auto rounded border bg-background/70 p-2 font-mono text-xs whitespace-pre-wrap break-words">{node.output_text}</p>
             </section>
           ) : !node.error && <p className="text-xs text-muted-foreground">No output was recorded for this node.</p>}
-          {node.agent_run_id && <RunStepTrace runId={node.agent_run_id} />}
+          {node.agent_run_id && (context ? <ExecutionNodeTrace context={context} nodeId={node.node_id} /> : <RunStepTrace runId={node.agent_run_id} />)}
         </div>
       )}
     </li>

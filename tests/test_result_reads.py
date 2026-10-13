@@ -7,16 +7,20 @@ This suite never reads application credential files or touches application table
 
 from __future__ import annotations
 
+import json
 import os
+import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from alembic.script import ScriptDirectory
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -27,19 +31,27 @@ from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
+from asaree.models.result_job import ResultJobMember
 from asaree.models.result_read_model import ResultRefresh
 from asaree.models.user import User
+from asaree.services import result_jobs
 from asaree.services.result_reads import (
     ResultScope,
+    cell_predicates,
     decode_cursor,
     encode_cursor,
     page_size,
+    parent_predicates,
+    primary_runtime_metric,
     read_attempt_detail,
     read_attempts,
     read_cells,
+    read_conversation,
+    read_evidence,
     read_executions,
     read_summary,
     resolve_result_scope,
+    runtime_metrics,
     slot_query,
 )
 from asaree.services.result_rollups import rebuild_result_summary, rollup_query
@@ -79,6 +91,65 @@ def test_rollup_query_uses_compact_data_and_database_aggregates():
     assert "protocol_runs.result_summary" in sql
     assert "protocol_runs.attempt_result" not in sql
     assert "protocol_runs.conversation" not in sql
+
+
+def test_publication_cohort_compiles_without_materializing_factor_combinations():
+    selected = scope(design_spec={"factors": [{"name": "model", "levels": ["a", "b"]}], "replicates": 3})
+    sql = str(slot_query(selected).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "factorial_replicate_results.replicate_number <= 3" in sql
+    assert "IN (" in sql and "JSONB" in sql
+    assert "CAST(ARRAY['model'] AS TEXT[])" in sql
+    assert not cell_predicates(scope(versioned=False, design_spec=selected.design_spec))
+    assert not parent_predicates(scope(versioned=False, design_spec=selected.design_spec))
+
+
+def test_scalar_metadata_uses_builtin_binding_identity_and_retains_node_runtime_metrics():
+    selected = scope(
+        design_spec={"metrics": [{"id": "node-tokens", "name": "Tokens for critic", "kind": "custom"}]},
+        measurement_plan={
+            "metrics": [{"id": "node-tokens", "name": "Tokens for critic", "primary": True, "direction": "minimize"}],
+            "producers": [
+                {
+                    "id": "node",
+                    "producer_id": "asaree.node_runtime",
+                    "kind": "runtime",
+                    "outputs": {"total_tokens": "node-tokens"},
+                    "config": {"node_id": "critic"},
+                }
+            ],
+            "inputs": [],
+        },
+    )
+    definition = runtime_metrics(selected)["node-tokens"]
+    assert definition["key"] == "node-tokens"
+    assert definition["name"] == "Tokens for critic"
+    assert definition["aggregation"] == "sum" and definition["valueType"] == "number"
+    assert primary_runtime_metric(selected) == ("node-tokens", "minimize")
+    reported = scope(
+        design_spec=selected.design_spec,
+        measurement_plan={
+            **selected.measurement_plan,
+            "producers": [
+                {
+                    "id": "node",
+                    "producer_id": "asaree.python_script",
+                    "kind": "reported",
+                    "outputs": {"total_tokens": "node-tokens"},
+                    "config": {},
+                }
+            ],
+        },
+    )
+    assert runtime_metrics(reported) == {}
+
+
+def test_catalog_defaults_determine_primary_direction_when_omitted():
+    selected = scope(
+        design_spec={
+            "metrics": [{"id": "cost", "name": "Cost", "kind": "runtime", "catalogKey": "cost_usd", "primary": True}]
+        }
+    )
+    assert primary_runtime_metric(selected) == ("cost_usd", "minimize")
 
 
 def test_cursor_binds_scope_kind_and_filters():
@@ -169,11 +240,12 @@ async def test_current_attempt_history_and_rerun_rollups(results_db):
     db.add(parent)
     await db.flush()
     ids = []
-    for status in ("completed", "failed"):
+    for index, status in enumerate(("completed", "failed")):
         run = ProtocolRun(
             protocol_id=selected.protocol_id,
             owner_id=user.id,
             status=status,
+            created_at=datetime.now(UTC) + timedelta(seconds=index),
             protocol_revision_id=selected.protocol_revision_id,
             design_revision_id=selected.design_revision_id,
             replicate_result_id=parent.id,
@@ -196,7 +268,11 @@ async def test_current_attempt_history_and_rerun_rollups(results_db):
     next_page = await read_attempts(db, selected, slot_id=parent.id, limit=1, cursor=history["next_cursor"])
     assert next_page["items"][0]["run_id"] == str(ids[0])
     detail = await read_attempt_detail(db, selected, ids[0])
-    assert len(detail["node_runs"]["agent"]["output_text"]) == 100000
+    assert len(detail["node_runs"]["agent"]["output_text"]) == 4096
+    messages = await read_conversation(db, selected, ids[0], limit=1)
+    assert messages["items"][0]["truncated"] is True
+    assert len(messages["items"][0]["preview"]) == 4096
+    assert (await read_evidence(db, selected, ids[0], document="node_runs"))["next_offset"] == 16384
     refresh = await db.get(ResultRefresh, selected.key)
     await rebuild_result_summary(db, selected, refresh.generation)
     await db.refresh(refresh)
@@ -237,7 +313,7 @@ async def test_opaque_previews_and_eligibility(results_db):
                         "metric_name": "tokens",
                         "status": "measured",
                         "value": 100,
-                        "producer": {"kind": "runtime"},
+                        "producer": {"kind": "runtime", "producer_id": "asaree.runtime"},
                     },
                 ]
             }
@@ -246,9 +322,213 @@ async def test_opaque_previews_and_eligibility(results_db):
     db.add(run)
     await db.flush()
     preview = (await read_executions(db, selected))["items"][0]["result"]
-    assert preview["metrics"] == {"tokens": 100}
+    assert preview["metrics"] == {"runtime": 100}
     assert len(preview["observations"][0]["preview"]) == 512
     assert preview["observations"][0]["preview_truncated"]
-    assert (await read_attempt_detail(db, selected, run.id))["attempt_result"]["measurement"]["observations"][0][
-        "value"
-    ] == "x" * 100000
+    detail = await read_attempt_detail(db, selected, run.id)
+    assert detail["attempt_result"]["measurement"]["observations"][0]["value_truncated"]
+    chunks = []
+    offset = 0
+    while True:
+        part = await read_evidence(db, selected, run.id, document="attempt_result", offset=offset)
+        chunks.append(part["text"])
+        if part["next_offset"] is None:
+            break
+        offset = part["next_offset"]
+    assert json.loads("".join(chunks))["measurement"]["observations"][0]["value"] == "x" * 100000
+
+
+async def test_version_scope_never_reads_a_different_publication(results_db):
+    db, selected, cell, user = results_db
+    parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=1, replicate_label="parent")
+    db.add(parent)
+    await db.flush()
+    other = ProtocolRevision(
+        protocol_id=selected.protocol_id,
+        revision=2,
+        graph={},
+        experiment_snapshot={"design_spec": {}},
+        design_revision_id=selected.design_revision_id,
+        published_at=datetime.now(UTC),
+    )
+    db.add(other)
+    await db.flush()
+    run = ProtocolRun(
+        protocol_id=selected.protocol_id,
+        owner_id=user.id,
+        status="completed",
+        protocol_revision_id=other.id,
+        design_revision_id=selected.design_revision_id,
+        replicate_result_id=parent.id,
+        replicate_label=parent.replicate_label,
+        factor_values={},
+        node_runs={},
+    )
+    db.add(run)
+    await db.flush()
+    assert (await read_executions(db, selected))["items"][0]["run_id"] is None
+    with pytest.raises(ValueError, match="attempt_not_found"):
+        await read_attempt_detail(db, selected, run.id)
+    with pytest.raises(ValueError, match="protocol_not_found"):
+        await resolve_result_scope(db, experiment_id=uuid.uuid4(), protocol_id=selected.protocol_id)
+
+
+async def test_additive_revision_changes_cannot_expand_a_published_cohort(results_db):
+    db, selected, cell, user = results_db
+    publication = await db.get(ProtocolRevision, selected.protocol_revision_id)
+    publication.experiment_snapshot = {
+        "design_spec": {"factors": [{"name": "model", "levels": ["a"]}], "replicates": 1}
+    }
+    cell.factor_values = {"model": "a"}
+    db.add_all(
+        [
+            FactorialReplicateResult(cell_id=cell.id, replicate_number=1, replicate_label="a-1"),
+            FactorialReplicateResult(cell_id=cell.id, replicate_number=2, replicate_label="a-2"),
+        ]
+    )
+    extra = FactorialCell(
+        experiment_id=selected.experiment_id,
+        design_revision_id=selected.design_revision_id,
+        cell_label="model=b",
+        factor_values={"model": "b"},
+    )
+    db.add(extra)
+    await db.flush()
+    db.add(FactorialReplicateResult(cell_id=extra.id, replicate_number=1, replicate_label="b-1"))
+    await db.flush()
+    pinned = await resolve_result_scope(db, experiment_id=selected.experiment_id, protocol_id=selected.protocol_id)
+    page = await read_executions(db, pinned)
+    assert len(page["items"]) == 1
+    assert page["items"][0]["replicate_label"] == "a-1"
+    refresh = await db.get(ResultRefresh, pinned.key)
+    await rebuild_result_summary(db, pinned, refresh.generation)
+    await db.refresh(refresh)
+    overview = await read_summary(db, pinned)
+    assert overview["cell_count"] == 1 and overview["replicate_count"] == 1
+
+
+async def test_cell_stop_excludes_only_that_cell_from_existing_planners(results_db):
+    db, selected, cell, user = results_db
+    parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=1, replicate_label="parent")
+    db.add(parent)
+    await db.flush()
+    plan = await result_jobs.create_job(db, selected, user.id, kind="plan", request_key="plan", params={})
+    plan.status = "queued"
+    plan.progress = {"validated": True}
+    db.add(ResultJobMember(job_id=plan.id, replicate_id=parent.id, row_index=-1, processed=False, delivered=False))
+    await db.flush()
+    await result_jobs.create_job(
+        db, selected, user.id, kind="cancel", request_key="cell-stop", params={"cell_id": str(cell.id)}
+    )
+    await db.flush()
+    await db.refresh(plan)
+    assert plan.status == "queued"
+    assert plan.params["excluded_cell_ids"] == [str(cell.id)]
+    await result_jobs.plan_step(db, plan, selected)
+    await db.flush()
+    assert plan.progress["skipped"] == 1
+    assert await db.scalar(select(func.count()).select_from(ProtocolRun)) == 0
+
+
+async def test_batch_preview_seals_attempts_and_skips_changed_slots(results_db, monkeypatch):
+    db, selected, cell, user = results_db
+    parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=1, replicate_label="parent")
+    db.add(parent)
+    await db.flush()
+    run = ProtocolRun(
+        protocol_id=selected.protocol_id,
+        owner_id=user.id,
+        status="failed",
+        protocol_revision_id=selected.protocol_revision_id,
+        design_revision_id=selected.design_revision_id,
+        replicate_result_id=parent.id,
+        replicate_label=parent.replicate_label,
+        factor_values={},
+        node_runs={},
+    )
+    db.add(run)
+    await db.flush()
+    planner = AsyncMock(return_value=([], 0))
+    monkeypatch.setattr(result_jobs, "plan_cell_runs", planner)
+    job = await result_jobs.create_job(db, selected, user.id, kind="plan", request_key="retry-key", params={})
+    assert (
+        await result_jobs.create_job(db, selected, user.id, kind="plan", request_key="retry-key", params={})
+    ).id == job.id
+    await result_jobs.prepare_step(db, job, selected)
+    await db.flush()
+    await result_jobs.prepare_step(db, job, selected)
+    assert job.status == "awaiting_confirmation"
+    assert job.progress["planned"] == 1
+    planner.assert_awaited_once()
+    assert planner.call_args.kwargs["replicate_ids"] == set()
+    member = await db.scalar(select(ResultJobMember).where(ResultJobMember.job_id == job.id))
+    assert member.expected_run_id == run.id
+    newer = ProtocolRun(
+        protocol_id=selected.protocol_id,
+        owner_id=user.id,
+        status="completed",
+        protocol_revision_id=selected.protocol_revision_id,
+        design_revision_id=selected.design_revision_id,
+        replicate_result_id=parent.id,
+        replicate_label=parent.replicate_label,
+        factor_values={},
+        node_runs={},
+        created_at=datetime.now(UTC) + timedelta(seconds=1),
+    )
+    db.add(newer)
+    await db.flush()
+    job.status = "queued"
+    await result_jobs.plan_step(db, job, selected)
+    await db.flush()
+    await result_jobs.plan_step(db, job, selected)
+    assert job.status == "completed"
+    assert job.progress["skipped"] == 1
+    planner.assert_awaited_once()  # Confirmation did not re-bill the changed attempt.
+
+
+@pytest.mark.skipif(os.environ.get("ASAREE_RESULTS_RUN_SCALE") != "1", reason="Opt-in live PostgreSQL scale acceptance")
+@pytest.mark.parametrize("count", [15786, 100000, 1000000])
+async def test_scale_pages_and_cached_summary_stay_bounded(results_db, count):
+    db, selected, cell, user = results_db
+    await db.execute(
+        text("""
+        INSERT INTO factorial_replicate_results(id,cell_id,replicate_number,replicate_label)
+        SELECT md5('parent-' || i)::uuid, :cell, i, 'parent-' || i FROM generate_series(1,:count) i
+    """),
+        {"cell": cell.id, "count": count},
+    )
+    await db.execute(
+        text("""
+        INSERT INTO protocol_runs(id,protocol_id,owner_id,status,is_test_run,node_runs,attempt_result,
+            replicate_result_id,replicate_label,factor_values,protocol_revision_id,design_revision_id)
+        SELECT md5('run-' || replicate_number)::uuid, :protocol, :owner, 'completed', false,
+            jsonb_build_object('agent',jsonb_build_object('status','completed','output_text',repeat(md5(id::text),1024))),
+            jsonb_build_object('measurement',jsonb_build_object('observations',jsonb_build_array(
+                jsonb_build_object('metric_id','report','metric_name','Report','status','measured',
+                    'value',repeat(md5(id::text),256),'producer',jsonb_build_object('kind','reported'))))),
+            id,replicate_label,'{}'::jsonb,:publication,:design
+        FROM factorial_replicate_results WHERE cell_id=:cell
+    """),
+        {
+            "protocol": selected.protocol_id,
+            "owner": user.id,
+            "publication": selected.protocol_revision_id,
+            "design": selected.design_revision_id,
+            "cell": cell.id,
+        },
+    )
+    await db.execute(text("ANALYZE factorial_replicate_results"))
+    await db.execute(text("ANALYZE protocol_runs"))
+    refresh = await db.get(ResultRefresh, selected.key)
+    await rebuild_result_summary(db, selected, refresh.generation)
+    await db.refresh(refresh)
+    started = time.monotonic()
+    page = await read_executions(db, selected)
+    summary = await read_summary(db, selected)
+    elapsed = time.monotonic() - started
+    assert len(page["items"]) == 20
+    assert page["next_cursor"]
+    assert len(json.dumps(page, default=str).encode()) < 65536
+    assert len(json.dumps(summary, default=str).encode()) < 16384
+    assert summary["counts"]["completed"] == count
+    assert elapsed < 2, f"Cached summary + page exceeded 2s: {elapsed:.3f}s at {count} runs"

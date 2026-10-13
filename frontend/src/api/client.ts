@@ -32,7 +32,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
-import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary } from '@/types/executionResults'
+import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob } from '@/types/executionResults'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -211,6 +211,22 @@ function rowSelection(options?: RowSelection): RowSelection | undefined {
 }
 
 export const experimentsApi = {
+  getExecutionEvidence: (id: string, runId: string, scope: ResultsScope, document: string, offset: number, signal?: AbortSignal) =>
+    request<{ text: string; next_offset: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/evidence${resultPageQuery(scope, { document, offset })}`, { signal }),
+  getExecutionNodeText: (id: string, runId: string, nodeId: string, scope: ResultsScope, field: 'prompt' | 'output', offset: number, signal?: AbortSignal) =>
+    request<{ text: string; next_offset: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/nodes/${encodeURIComponent(nodeId)}/text${resultPageQuery(scope, { field, offset })}`, { signal }),
+  getExecutionTrace: (id: string, runId: string, nodeId: string, scope: ResultsScope, after: number, signal?: AbortSignal) =>
+    request<{ items: { id: string; sequence: number; iteration: number | null; phase: string; preview: string | null }[]; next_after: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/nodes/${encodeURIComponent(nodeId)}/trace${resultPageQuery(scope, { after })}`, { signal }),
+  getExecutionStep: (id: string, runId: string, nodeId: string, stepId: string, scope: ResultsScope, offset: number, signal?: AbortSignal) =>
+    request<{ text: string; next_offset: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/nodes/${encodeURIComponent(nodeId)}/trace/${stepId}${resultPageQuery(scope, { offset })}`, { signal }),
+  createResultJob: (id: string, scope: ResultsScope, command: { kind: ResultJob['kind']; request_key: string; cell_id?: string; replicate_ids?: string[]; row_indices?: number[]; rerun_slot_ids?: string[]; rerun_completed?: boolean }, signal?: AbortSignal) =>
+    request<ResultJob>(`/experiments/${id}/execution-results/jobs${scopeQuery(scope)}`, { method: 'POST', body: command, signal }),
+  getResultJob: (id: string, jobId: string, signal?: AbortSignal) =>
+    request<ResultJob>(`/experiments/${id}/execution-results/jobs/${jobId}`, { signal }),
+  confirmResultJob: (id: string, jobId: string) =>
+    request<ResultJob>(`/experiments/${id}/execution-results/jobs/${jobId}/confirm`, { method: 'POST' }),
+  cancelResultJob: (id: string, jobId: string, previewOnly = false) =>
+    request<ResultJob>(`/experiments/${id}/execution-results/jobs/${jobId}/cancel${previewOnly ? '?preview_only=true' : ''}`, { method: 'POST' }),
   getExecutionSummary: async (id: string, scope: ResultsScope, signal?: AbortSignal, cached?: ExecutionSummary): Promise<ExecutionSummary> => {
     const res = await authedFetch(`/experiments/${id}/execution-results/summary${scopeQuery(scope)}`, {
       signal, headers: cached?.etag ? { 'If-None-Match': cached.etag } : undefined,
@@ -366,6 +382,7 @@ export const protocolsApi = {
   // point after retaining work that already completed.
   cancelRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}/cancel`, { method: 'POST' }),
   listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
+  listRunHeads: async (id: string) => (await request<CursorPage<{ id: string; status: string; created_at: string }>>(`/protocols/${id}/run-heads?limit=1`)).items,
   // "Run all cells" -- 422 if there's no linked experiment or the graph
   // doesn't have exactly one final node; fans out one ProtocolRun per pending
   // replicate. The optional list explicitly re-runs selected completed rows.

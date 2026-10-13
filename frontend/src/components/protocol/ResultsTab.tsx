@@ -7,6 +7,7 @@ import { OBSERVATION_LABELS } from '@/lib/measurementPlan'
 import type { EvaluationArtifact, Experiment, MetricObservation, ResultReplicate } from '@/types/experiments'
 import { ResultsScorecard as Scorecard } from './ResultsPanel'
 import { ResultTimelineNode } from './ResultTimelineNode'
+import type { ExecutionContext } from './ExecutionNodeEvidence'
 import { ExecutionBrowser } from './ExecutionBrowser'
 import { ExecutionInspector } from './ExecutionInspector'
 
@@ -97,7 +98,8 @@ function ObservationCard({ observation }: { observation: MetricObservation }) {
         : JSON.stringify(observation.value, null, 2)
   return <Card size="sm" className={`gap-0 px-2.5 py-2 ${problem ? 'border-destructive/30 bg-destructive/5' : 'bg-background'}`}>
     <div className="flex items-start justify-between gap-2"><p className="text-xs font-medium">{observation.metric_name}</p><Badge variant="outline" className={problem ? 'border-destructive/50 text-destructive' : ''}>{OBSERVATION_LABELS[observation.status]}</Badge></div>
-    {observation.status === 'measured' && <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-sans font-medium">{measuredValue}</pre>}
+    {observation.status === 'measured' && <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-sans font-medium">{observation.value_truncated ? observation.value_preview : measuredValue}</pre>}
+    {observation.value_truncated && <p className="mt-1 text-xs text-muted-foreground">Preview · open complete recorded JSON for the original value.</p>}
     {observation.error && <p className={`mt-1 text-xs ${problem ? 'text-destructive' : 'text-muted-foreground'}`}>{observation.error}</p>}
     <p className="mt-1 font-mono text-[11px] text-muted-foreground">{observation.producer.producer_id} · v{observation.producer.version}</p>
   </Card>
@@ -123,6 +125,7 @@ function CalibrationArtifact({ artifact }: { artifact: EvaluationArtifact }) {
 }
 
 function artifactPresentation(artifact: EvaluationArtifact) {
+  if (artifact.payload_truncated) return { title: formatMetricLabel(artifact.artifact_key), content: <><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-xs">{artifact.payload_preview}</pre><p className="text-xs text-muted-foreground">Preview · open complete recorded JSON for the original artifact.</p></> }
   const kind = artifact.kind || artifact.artifact_key
   if (kind === 'confusion_matrix') return { title: 'Confusion matrix', content: <ConfusionMatrixArtifact artifact={artifact} /> }
   if (kind === 'binary_calibration_curve' || kind === 'calibration') return { title: 'Calibration', content: <CalibrationArtifact artifact={artifact} /> }
@@ -145,10 +148,12 @@ function usageSummarizesMetric(
 }
 
 
-export function ReplicateResultDetail({ replicate, metricKeys, metricTypes }: {
+export function ReplicateResultDetail({ replicate, metricKeys, metricTypes, executionContext, metricLabels }: {
   replicate: ResultReplicate
   metricKeys: string[]
   metricTypes: ResultMetricTypes
+  executionContext?: ExecutionContext
+  metricLabels?: Record<string, string>
 }) {
   const metrics = metricKeys.filter((key) => {
     if (typeof replicate.metric_values[key] !== 'number') return false
@@ -177,9 +182,9 @@ export function ReplicateResultDetail({ replicate, metricKeys, metricTypes }: {
               <h3 className="text-sm font-medium">Outcome</h3>
             <div className="grid grid-cols-2 gap-2 @lg:grid-cols-3">
               {metrics.map((key) => {
-                const observation = observationForMetric(replicate, undefined, key)
+                const observation = observationForMetric(replicate, key, metricLabels?.[key] ?? key)
                 return <div key={key} className="rounded-md border px-2.5 py-2">
-                  <p className="truncate text-xs text-muted-foreground" title={formatMetricLabel(key)}>{formatMetricLabel(key)}</p>
+                  <p className="truncate text-xs text-muted-foreground" title={metricLabels?.[key] ?? formatMetricLabel(key)}>{metricLabels?.[key] ?? formatMetricLabel(key)}</p>
                   <p className="mt-0.5 font-medium tabular-nums">{formatResultMetricValue(key, replicate.metric_values[key], metricTypes, true)}</p>
                   {observation?.status === 'measured' && <p className="mt-1 font-mono text-[11px] text-muted-foreground">{observation.producer.producer_id} · v{observation.producer.version}</p>}
                 </div>
@@ -207,7 +212,7 @@ export function ReplicateResultDetail({ replicate, metricKeys, metricTypes }: {
             <h3 className="text-sm font-medium">Run timeline</h3>
             {replicate.node_runs.length === 0 ? <p className="text-sm text-muted-foreground">No node-level run details are available.</p> : (
               <ol className={timelineOnly ? 'min-h-0 flex-1 space-y-2' : 'space-y-2'}>
-              {replicate.node_runs.map((node) => <ResultTimelineNode key={`${replicate.run_id ?? replicate.replicate_label}-${node.node_id}`} node={node} defaultOpen={node.node_id === defaultOpenNodeId} />)}
+              {replicate.node_runs.map((node) => <ResultTimelineNode key={`${replicate.run_id ?? replicate.replicate_label}-${node.node_id}`} node={node} defaultOpen={node.node_id === defaultOpenNodeId} context={executionContext} />)}
             </ol>
           )}
         </section>

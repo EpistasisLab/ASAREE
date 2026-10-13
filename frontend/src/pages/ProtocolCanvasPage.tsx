@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ReactFlowProvider } from '@xyflow/react'
-import { AlertTriangle, Lock, Target, Trophy, type LucideIcon } from 'lucide-react'
+import { Lock, Target, Trophy, type LucideIcon } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
@@ -16,7 +16,9 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
-import { bestMetric, formatMetricLabel, groupReplicatesIntoCells, metricValueSuffix, replicatesStatusAccent, scaledMetricValue } from '@/lib/experiment'
+import { cellsStatusAccent, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
+import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
+import type { ExecutionSummary } from '@/types/executionResults'
 import { unboundFactorNames } from '@/lib/factorBindings'
 import {
   applyExperimentRenameToProtocolCache,
@@ -25,7 +27,7 @@ import {
   protocolGraphQueryKey,
   toPersistedGraph,
 } from '@/lib/protocolGraph'
-import type { Experiment, Replicate } from '@/types/experiments'
+import type { Experiment } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
 import type { Node, Edge } from '@xyflow/react'
 
@@ -114,35 +116,16 @@ function TopBarStat({ icon: Icon, value, title, accent }: { icon: LucideIcon; va
 // Same design_type gate the Cells tab uses -- cells/metric_values are a
 // factorial concept, so a future non-factorial experiment gets no chips
 // rather than a nonsensical "0/0 scored".
-function TopBarStats({ experiment, cells, obsoleteRunCount = 0, rowSummary }: { experiment: Experiment; cells: Replicate[] | undefined; obsoleteRunCount?: number; rowSummary?: import('@/types/experiments').RowSummary | null }) {
-  if (rowSummary) return <TopBarStat icon={Target} value={`${rowSummary.cell_count} cells / ${rowSummary.parent_replicate_count} replicates / ${rowSummary.row_count ?? '?'} rows / ${rowSummary.expected ?? '?'} executions`} title={`${rowSummary.completed} completed · ${rowSummary.missing_reported} missing reported`} accent="var(--primary)" />
-  if (experiment.design_type !== 'factorial' || !cells) return null
-  const scored = cells.filter((c) => c.metric_values).length
-  const cellCount = groupReplicatesIntoCells(cells).length
-  const best = bestMetric(experiment, cells)
-  return (
-    <>
-      <TopBarStat
-        icon={Target}
-        value={`${cellCount} ${cellCount === 1 ? 'cell' : 'cells'} · ${scored}/${cells.length} replicates scored`}
-        title="Replicates with a recorded metric, out of every planned replicate in this design"
-        accent={replicatesStatusAccent(cells)}
-      />
-      {obsoleteRunCount > 0 && (
-        <span className="flex items-center gap-1.5 rounded-md border border-[color:var(--chart-4)]/50 bg-[color:var(--chart-4)]/10 px-2 py-1 text-xs font-medium text-[color:var(--chart-4)]" title="Runs against older canvas versions are excluded from current results.">
-          <AlertTriangle className="size-3.5" /> {obsoleteRunCount} obsolete run{obsoleteRunCount === 1 ? '' : 's'}
-        </span>
-      )}
-      {best && (
-        <TopBarStat
-          icon={Trophy}
-          value={`${formatMetricLabel(best.key)} · ${best.valueType === 'boolean' ? `${Math.round(best.value * 100)}%` : `${scaledMetricValue(best.key, best.value).toFixed(4)}${metricValueSuffix(best.key)}`}`}
-          title={`Best mean ${formatMetricLabel(best.key)} across this experiment's cells, using the declared primary metric`}
-          accent="var(--chart-3)"
-        />
-      )}
-    </>
-  )
+function TopBarStats({ experiment, summary }: { experiment: Experiment; summary?: ExecutionSummary }) {
+  if (experiment.design_type !== 'factorial' || !summary?.ready) return null
+  const done = summary.counts?.completed ?? 0
+  const total = summary.expected ?? summary.total ?? 0
+  const accent = cellsStatusAccent(total, summary.scored_count ?? 0)
+  const best = summary.best_cell
+  return <><TopBarStat icon={Target} value={summary.cell_count === 0 ? 'No cells generated' : `${summary.cell_count} cells · ${done}/${total} ${summary.unit === 'row' ? 'row executions' : 'replicates'} complete`}
+    title="Progress in the selected published design" accent={accent} />
+    {best && <TopBarStat icon={Trophy} value={`${summary.metric_labels?.[best.metric_key] ?? formatMetricLabel(best.metric_key)} · ${formatMetricValue(best.metric_key, best.value)}`}
+      title={`Best declared primary metric · ${best.cell_label}`} accent="var(--chart-3)" />}</>
 }
 
 function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { protocol: Protocol; experimentId: string; draftBusy: boolean }) {
@@ -150,15 +133,8 @@ function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { pro
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [versionName, setVersionName] = useState('')
   const [versionNote, setVersionNote] = useState('')
-  const trialsQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'runs'],
-    queryFn: () => experimentsApi.listTrials(experimentId),
-    enabled: protocol.has_unpublished_changes,
-  })
-  // Obsolescence is based on immutable protocol-run provenance. Results that
-  // were scored directly without a ProtocolRun have no canvas version to
-  // become stale against, so do not overstate the impact in this warning.
-  const affectedReplicateCount = (trialsQuery.data ?? []).filter((trial) => !!trial.run_id && !trial.obsolete).length
+  const summary = useExecutionSummary(experimentId, { protocol_id: protocol.id, protocol_revision_id: protocol.published_revision_id ?? undefined }, confirmOpen)
+  const affectedReplicateCount = summary.data?.executed_count ?? 0
   const publishMutation = useMutation({
     mutationFn: async () => {
       const live = queryClient.getQueryData<{ nodes: Node[]; edges: Edge[] }>(protocolGraphQueryKey(protocol.id))
@@ -168,7 +144,7 @@ function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { pro
     onSuccess: (published) => {
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'runs'] })
-      queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'run-results'] })
+      queryClient.invalidateQueries({ queryKey: executionKeys.root(experimentId) })
       queryClient.invalidateQueries({ queryKey: ['protocols', protocol.id, 'revisions'] })
       setConfirmOpen(false)
       setVersionName('')
@@ -196,7 +172,7 @@ function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { pro
           <Button
             size="sm"
             variant="outline"
-            disabled={draftBusy || publishMutation.isPending || trialsQuery.isLoading}
+            disabled={draftBusy || publishMutation.isPending}
             title={draftBusy ? 'Save or generate the pending Design changes before publishing.' : 'Publish the saved canvas and Design together. An unchanged experiment keeps its existing version.'}
             onClick={requestPublish}
           >
@@ -213,7 +189,7 @@ function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { pro
             Publish the canvas and design settings together as a new experiment version. Future runs will use it.
           </p>
           <p className="text-xs text-muted-foreground">Existing runs and results remain available under their earlier experiment version.</p>
-          {affectedReplicateCount > 0 && <p className="text-xs text-muted-foreground">{affectedReplicateCount} existing replicate runs will remain under the earlier version.</p>}
+          {affectedReplicateCount > 0 && <p className="text-xs text-muted-foreground">{affectedReplicateCount} existing executions will remain under the earlier version.</p>}
           <label className="space-y-1 text-sm">Version name (optional)<Input maxLength={120} placeholder="Higher critic threshold" value={versionName} onChange={event => setVersionName(event.target.value)} /></label>
           <label className="space-y-1 text-sm">Version note (optional)<Textarea maxLength={4000} placeholder="What changed, and why?" value={versionNote} onChange={event => setVersionNote(event.target.value)} /></label>
           {!protocol.has_unpublished_changes && <p className="text-xs text-muted-foreground">An unchanged experiment keeps its version and existing name and note. Edit those in version history.</p>}
@@ -282,12 +258,9 @@ export function ProtocolCanvasPage() {
     enabled: !!experimentId,
   })
 
-  const runResultsQuery = useQuery({
-    queryKey: ['experiments', experimentId, 'run-results', protocolQuery.data?.id, protocolQuery.data?.published_revision_id],
-    queryFn: () => experimentsApi.getRunResults(experimentId!, { protocol_id: protocolQuery.data?.id }),
-    enabled: !!experimentId,
-    refetchInterval: 5000,
-  })
+  const runSummary = useExecutionSummary(experimentId ?? '', {
+    protocol_id: protocolQuery.data?.id, protocol_revision_id: protocolQuery.data?.published_revision_id ?? undefined,
+  }, !!experimentId && !!protocolQuery.data?.id)
   const impactQuery = useQuery({
     queryKey: ['experiments', experimentId, 'design-impact'],
     queryFn: () => experimentsApi.getDesignImpact(experimentId!),
@@ -306,14 +279,7 @@ export function ProtocolCanvasPage() {
   const resultsVersion = version ?? versionsQuery.data?.find(item => item.id === protocolQuery.data?.published_revision_id)
   const resultsExperiment = experimentQuery.data && resultsVersion?.experiment_snapshot
     ? { ...experimentQuery.data, ...resultsVersion.experiment_snapshot } : displayedExperiment
-  const resultReplicates: Replicate[] | undefined = runResultsQuery.data?.replicates.map(row => ({
-    id: row.replicate_label, cell_id: row.cell_label, cell_label: row.cell_label,
-    replicate_label: row.replicate_label, replicate_number: row.replicate_number,
-    design_revision_id: resultsVersion?.design_revision_id ?? '',
-    factor_values: row.factor_values, metric_values: Object.keys(row.metric_values).length ? row.metric_values : null,
-    run_id: row.run_id, workspace_id: null, artifacts: null,
-    created_at: row.updated_at, updated_at: row.updated_at,
-  }))
+
 
   return (
     <div className="flex h-svh flex-col bg-muted/30">
@@ -328,7 +294,7 @@ export function ProtocolCanvasPage() {
           </Link>
           {experimentQuery.data && (versionId ? <span className="text-lg font-semibold">{experimentQuery.data.name}</span> : <EditableExperimentName experiment={experimentQuery.data} />)}
           {experimentQuery.data?.locked_at && <span className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-xs font-medium text-primary"><Lock className="size-3" /> Locked</span>}
-          {!versionId && resultsExperiment && <TopBarStats experiment={resultsExperiment} cells={resultReplicates} rowSummary={runResultsQuery.data?.row_summary} obsoleteRunCount={runResultsQuery.data?.overview.obsolete_replicates ?? 0} />}
+          {!versionId && resultsExperiment && <TopBarStats experiment={resultsExperiment} summary={runSummary.data} />}
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border bg-card px-3 py-2 text-xs" aria-label="Experiment version controls">
           <Button variant="ghost" size="sm" disabled={!experimentVersions?.length} onClick={() => { setVersionSearch(''); setVersionBrowserOpen(true) }}>Version history</Button>

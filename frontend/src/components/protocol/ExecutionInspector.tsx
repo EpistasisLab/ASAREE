@@ -7,19 +7,23 @@ import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
 import type { AttemptDetail, ExecutionSlot } from '@/types/executionResults'
 import type { Experiment, ResultReplicate, ResultNodeRun } from '@/types/experiments'
 import { ReplicateResultDetail, type ResultsSelection } from './ResultsTab'
-import { CursorControls, useCursor } from './ExecutionBrowser'
+import { CursorControls } from './ExecutionBrowser'
+import { useCursor } from '@/lib/executionPagination'
 import { ExecutionRows } from './ExecutionBrowser'
 
-export function attemptAsReplicate(slot: ExecutionSlot, detail: AttemptDetail): ResultReplicate {
+function attemptAsReplicate(slot: ExecutionSlot, detail: AttemptDetail): ResultReplicate {
   const usage = detail.usage
   const observations = detail.attempt_result?.measurement?.observations ?? []
   const metrics = { ...detail.attempt_result?.metric_values }
-  for (const observation of observations) if (observation.status === 'measured') metrics[observation.metric_name] = observation.value
+  for (const observation of observations) if (observation.status === 'measured') {
+    metrics[observation.metric_name] = observation.value
+    metrics[observation.metric_id] = observation.value
+  }
   const nodes: ResultNodeRun[] = Object.entries(detail.node_runs).filter(([, node]) =>
     !!node.run_id || !!node.output_text || !!node.error || ['running', 'failed', 'cancelled'].includes(node.status),
   ).map(([id, node]) => ({ node_id: id, node_label: detail.node_labels[id] ?? id, status: node.status,
     bypassed: node.bypassed, output_text: node.output_text ?? null, error: node.error ?? null,
-    agent_run_id: node.run_id ?? null, input_tokens: null, output_tokens: null, total_tokens: null, cost_usd: null,
+    agent_run_id: node.run_id ?? null, input_tokens: usage?.by_node?.[id]?.input_tokens ?? null, output_tokens: usage?.by_node?.[id]?.output_tokens ?? null, total_tokens: usage?.by_node?.[id]?.total_tokens ?? null, cost_usd: usage?.by_node?.[id]?.cost_usd ?? null,
     unresolved_reference_labels: (node.unresolved_references ?? []).map(ref => typeof ref === 'string' ? detail.node_labels[ref] ?? ref : String(ref)),
   }))
   return { replicate_label: slot.replicate_label, replicate_number: slot.replicate_number, cell_label: slot.cell_label,
@@ -28,9 +32,10 @@ export function attemptAsReplicate(slot: ExecutionSlot, detail: AttemptDetail): 
     updated_at: detail.completed_at ?? detail.started_at ?? '', node_runs: nodes,
     duration_seconds: usage?.duration_seconds ?? null, cost_usd: usage?.cost_usd ?? null,
     input_tokens: usage?.input_tokens ?? null, output_tokens: usage?.output_tokens ?? null, total_tokens: usage?.total_tokens ?? null,
-    agent_run_count: usage?.agent_run_count ?? 0, reported_usage_count: usage?.complete ? 1 : 0, reported_cost_count: usage?.cost_usd != null ? 1 : 0,
+    agent_run_count: usage?.agent_run_count ?? 0, reported_usage_count: usage?.reported_usage_count ?? 0, reported_cost_count: usage?.reported_cost_count ?? 0,
     metric_evaluation: detail.attempt_result?.metric_evaluation,
     metric_observations: observations, evaluation_artifacts: detail.attempt_result?.measurement?.artifacts ?? [],
+    legacy_values: Object.entries(detail.attempt_result?.metric_values ?? {}).filter(([name]) => !observations.some(item => item.metric_name === name)).map(([name, value]) => ({ metric_id: `legacy:${name}`, metric_name: name, value, attempt_id: detail.run_id, producer: { binding_id: 'legacy-unknown' as const, producer_id: 'legacy.unknown' as const, kind: 'legacy' as const, version: 'unknown' as const } })),
     obsolete_runs: [], superseded_runs: [] }
 }
 
@@ -48,6 +53,7 @@ function ConversationPage({ experimentId, runId, scope }: { experimentId: string
 function SlotInspector({ experimentId, slotId, scope, onClose }: { experimentId: string; slotId: string; scope: ResultsScope; onClose: () => void }) {
   const [selected, setSelected] = useState<string>()
   const [conversationOpen, setConversationOpen] = useState(false)
+  const [evidenceOpen, setEvidenceOpen] = useState(false)
   const pager = useCursor()
   const summary = useExecutionSummary(experimentId, scope)
   const history = useQuery({ queryKey: [...executionKeys.root(experimentId), 'attempts', scope, slotId, pager.cursor],
@@ -65,12 +71,31 @@ function SlotInspector({ experimentId, slotId, scope, onClose }: { experimentId:
     </div>
     {(history.isPending || detail.isPending && !!runId) && <Skeleton className="my-3 h-32" />}
     {(history.error || detail.error) && <p role="alert" className="text-xs text-destructive">{history.error?.message ?? detail.error?.message}</p>}
-    {slot && detail.data && <div className="mt-3"><ReplicateResultDetail replicate={attemptAsReplicate(slot, detail.data)} metricKeys={Object.keys(summary.data?.metric_types ?? {})} metricTypes={summary.data?.metric_types ?? {}} />
+    {slot && detail.data && <div className="mt-3"><ReplicateResultDetail replicate={attemptAsReplicate(slot, detail.data)} metricKeys={Object.keys(summary.data?.metric_types ?? {})} metricTypes={summary.data?.metric_types ?? {}} metricLabels={summary.data?.metric_labels} executionContext={{ experimentId, runId: detail.data.run_id, scope }} />
+      <Button size="xs" variant="outline" className="my-3" onClick={() => setEvidenceOpen(value => !value)}>{evidenceOpen ? 'Hide recorded JSON' : 'View complete recorded JSON'}</Button>
+      {evidenceOpen && runId && <RecordedEvidence key={runId} experimentId={experimentId} runId={runId} scope={scope} />}
       <Button size="xs" variant="outline" className="my-3" onClick={() => setConversationOpen(value => !value)}>{conversationOpen ? 'Hide conversation' : 'View conversation'}</Button>
       {conversationOpen && runId && <ConversationPage key={runId} experimentId={experimentId} runId={runId} scope={scope} />}
     </div>}
     {history.data && !runId && <p className="text-xs text-muted-foreground">This execution has no attempts.</p>}
+    {history.data?.legacy_result && <section className="mt-3 space-y-2"><h3 className="text-sm">Legacy result</h3><p className="text-xs text-muted-foreground">Original values; producer unknown. These values are not ranked.</p><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border p-2 font-mono text-xs">{JSON.stringify(history.data.legacy_result, null, 2)}</pre></section>}
   </aside>
+}
+
+function RecordedEvidence({ experimentId, runId, scope }: { experimentId: string; runId: string; scope: ResultsScope }) {
+  const [document, setDocument] = useState('attempt_result')
+  return <section className="space-y-2"><select aria-label="Recorded document" className="rounded border bg-background p-1 text-xs" value={document} onChange={event => setDocument(event.target.value)}>{['attempt_result', 'node_runs', 'conversation', 'dataset_row'].map(name => <option key={name} value={name}>{name.replaceAll('_',' ')}</option>)}</select><EvidencePage key={document} experimentId={experimentId} runId={runId} scope={scope} document={document} /></section>
+}
+
+function EvidencePage({ experimentId, runId, scope, document }: { experimentId: string; runId: string; scope: ResultsScope; document: string }) {
+  const [offsets, setOffsets] = useState([0])
+  const offset = offsets.at(-1) ?? 0
+  const query = useQuery({ queryKey: [...executionKeys.root(experimentId), 'evidence', scope, runId, document, offset],
+    queryFn: ({ signal }) => experimentsApi.getExecutionEvidence(experimentId, runId, scope, document, offset, signal) })
+  return <div className="space-y-2"><p className="font-mono text-xs">Recorded JSON · characters {offset.toLocaleString()}–{(offset + (query.data?.text.length ?? 0)).toLocaleString()}</p><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border p-2 font-mono text-xs">{query.data?.text ?? 'Loading…'}</pre>
+    {query.error && <p role="alert" className="text-xs text-destructive">{query.error.message}</p>}
+    <div className="flex gap-2"><Button size="xs" variant="outline" disabled={offsets.length === 1 || query.isFetching} onClick={() => setOffsets(current => current.slice(0,-1))}>Previous JSON</Button><Button size="xs" variant="outline" disabled={query.data?.next_offset == null || query.isFetching} onClick={() => query.data?.next_offset != null && setOffsets(current => [...current, query.data!.next_offset!])}>Next JSON</Button></div>
+  </div>
 }
 
 export function ExecutionInspector({ experimentId, selection, onClose }: { experimentId: string; experiment: Experiment; selection: ResultsSelection | null; onClose: () => void }) {

@@ -7,8 +7,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Float, and_, case, cast, delete, func, literal, select, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import Float, Text, and_, case, cast, delete, func, literal, select, update
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.database import get_session
@@ -17,10 +17,16 @@ from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_run import ProtocolRun
 from asaree.models.result_read_model import ResultCellMetric, ResultCellRollup, ResultRefresh
-from asaree.services.experiment_run_results import _declared_metric_aggregations
 from asaree.services.indexed_row_source import read_indexed_row_source
-from asaree.services.metrics import normalize_metrics
-from asaree.services.result_reads import ResultScope, resolve_result_scope, slot_query
+from asaree.services.result_reads import (
+    ResultScope,
+    cell_predicates,
+    parent_predicates,
+    primary_runtime_metric,
+    resolve_result_scope,
+    runtime_metrics,
+    slot_query,
+)
 
 logger = logging.getLogger(__name__)
 STATUSES = ("not_started", "pending", "running", "finalizing", "completed", "failed", "cancelled", "limit_reached")
@@ -32,23 +38,44 @@ def rollup_query(scope: ResultScope) -> Any:
         FactorialCell.id.label("cell_id"), func.count(FactorialReplicateResult.id).label("replicate_count")
     )
     parents = (
-        parent_query.outerjoin(FactorialReplicateResult, FactorialReplicateResult.cell_id == FactorialCell.id)
+        parent_query.outerjoin(
+            FactorialReplicateResult,
+            and_(FactorialReplicateResult.cell_id == FactorialCell.id, *parent_predicates(scope)),
+        )
         .where(
             FactorialCell.experiment_id == scope.experiment_id,
             FactorialCell.design_revision_id == scope.design_revision_id,
+            *cell_predicates(scope),
         )
         .group_by(FactorialCell.id)
         .cte("parents")
     )
     stats_columns = [slots.c.cell_id, func.count().label("total")]
+    observations = (
+        func.jsonb_array_elements(func.coalesce(slots.c.result["observations"], cast(literal("[]"), JSONB)))
+        .table_valued("value")
+        .lateral("observations")
+    )
+    measured = (
+        select(literal(1))
+        .select_from(observations)
+        .where(cast(observations.c.value, JSONB)["status"].astext == "measured")
+        .correlate(slots)
+        .exists()
+    )
+    stats_columns.append(
+        func.count().filter(and_(slots.c.status == "completed", (slots.c.run_id.is_(None) | measured))).label("scored")
+    )
     stats_columns += [func.count().filter(slots.c.status == status).label(status) for status in STATUSES]
     stats_columns += [
+        func.count().filter(slots.c.run_id.is_not(None)).label("executed"),
         func.count().filter(slots.c.result["truncated"].as_boolean().is_(True)).label("truncated"),
         func.count().filter(slots.c.result["evaluation_state"].as_string() == "running").label("evaluating"),
         func.count().filter(slots.c.usage["complete"].as_boolean().is_(True)).label("usage_complete"),
         func.count()
         .filter(
             and_(
+                slots.c.run_id.is_not(None),
                 slots.c.status.in_(("completed", "failed", "cancelled", "limit_reached")),
                 slots.c.usage["settled"].as_boolean().is_not(True),
             )
@@ -60,11 +87,11 @@ def rollup_query(scope: ResultScope) -> Any:
     stats = select(*stats_columns).group_by(slots.c.cell_id).cte("stats")
     metrics = func.jsonb_each(slots.c.result["metrics"]).table_valued("key", "value").lateral("metrics")
     identities = {
-        metric["id"]: metric.get("catalogKey", metric["name"])
-        for metric in normalize_metrics((scope.design_spec or {}).get("metrics"))
-        if metric.get("catalogKey") and metric.get("kind") != "custom"
+        identifier: metric["key"]
+        for identifier, metric in runtime_metrics(scope).items()
+        if metric["aggregation"] in {"mean", "sum"}
     }
-    metric_key = case(identities, value=metrics.c.key, else_=None) if identities else literal(None)
+    metric_key = case(identities, value=metrics.c.key, else_=None) if identities else metrics.c.key
     metric_query = select(
         slots.c.cell_id,
         metric_key.label("key"),
@@ -76,7 +103,7 @@ def rollup_query(scope: ResultScope) -> Any:
         metric_query.select_from(slots)
         .join(metrics, literal(True))
         .where(
-            metric_key.is_not(None),
+            metric_key.is_not(None) if identities else literal(False),
             slots.c.status == "completed",
             slots.c.result["truncated"].as_boolean().is_(False),
         )
@@ -94,12 +121,33 @@ def rollup_query(scope: ResultScope) -> Any:
         .group_by(values.c.cell_id)
         .cte("metric_stats")
     )
+    usage_keys = ("cost_usd", "input_tokens", "output_tokens", "total_tokens", "duration_seconds", "agent_run_count")
+    all_usage = (
+        select(
+            func.jsonb_build_object(
+                *[part for key in usage_keys for part in (key, func.sum(ProtocolRun.usage_summary[key].as_float()))]
+            ).label("all_attempt_usage")
+        )
+        .where(
+            ProtocolRun.protocol_id == scope.protocol_id,
+            ProtocolRun.protocol_revision_id == scope.protocol_revision_id,
+            ProtocolRun.design_revision_id == scope.design_revision_id,
+            ProtocolRun.is_test_run.is_(False),
+            ProtocolRun.target_node_id.is_(None),
+        )
+        .cte("all_usage")
+    )
     return (
-        select(parents, *[column for column in stats.c if column.key != "cell_id"], metric_stats.c.metrics)
+        select(
+            all_usage.c.all_attempt_usage,
+            parents,
+            *[column for column in stats.c if column.key != "cell_id"],
+            metric_stats.c.metrics,
+        )
         .select_from(
-            parents.outerjoin(stats, stats.c.cell_id == parents.c.cell_id).outerjoin(
-                metric_stats, metric_stats.c.cell_id == parents.c.cell_id
-            )
+            all_usage.outerjoin(parents, literal(True))
+            .outerjoin(stats, stats.c.cell_id == parents.c.cell_id)
+            .outerjoin(metric_stats, metric_stats.c.cell_id == parents.c.cell_id)
         )
         .order_by(parents.c.cell_id)
     )
@@ -115,15 +163,29 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
     existing = await db.get(ResultRefresh, scope.key)
     cached = existing.summary if existing is not None else None
     totals: dict[str, int] = {status: 0 for status in STATUSES}
-    totals.update(total=0, cells=0, replicates=0, truncated=0, evaluating=0, usage_complete=0, usage_pending=0)
+    totals.update(
+        total=0,
+        cells=0,
+        replicates=0,
+        truncated=0,
+        evaluating=0,
+        usage_complete=0,
+        usage_pending=0,
+        executed=0,
+        scored=0,
+    )
     usage: dict[str, float | None] = {
         key: None
         for key in ("cost_usd", "input_tokens", "output_tokens", "total_tokens", "duration_seconds", "agent_run_count")
     }
-    aggregations = _declared_metric_aggregations(scope.design_spec)
+    aggregations = {metric["key"]: metric["aggregation"] for metric in runtime_metrics(scope).values()}
     batch = []
     result = await db.stream(rollup_query(scope))
+    all_usage_totals: dict[str, Any] = {}
     async for row in result.mappings():
+        all_usage_totals = row["all_attempt_usage"]
+        if row["cell_id"] is None:
+            continue
         counts = {status: int(row[status] or 0) for status in STATUSES}
         metrics = row["metrics"] or {}
         data = {
@@ -143,7 +205,16 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
         }
         totals["cells"] += 1
         totals["replicates"] += int(row["replicate_count"])
-        for key in ("total", "truncated", "evaluating", "usage_complete", "usage_pending", *STATUSES):
+        for key in (
+            "total",
+            "truncated",
+            "evaluating",
+            "usage_complete",
+            "usage_pending",
+            "executed",
+            "scored",
+            *STATUSES,
+        ):
             totals[key] += int(row[key] or 0)
         for key in usage:
             if row[key] is not None:
@@ -191,9 +262,103 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
                 row_count = len(indexed.rows)
             except DatasetRowCsvError:
                 row_count = None
+    physical_total = totals["total"]
+    if scope.unit == "row" and row_count is not None:
+        expected = row_count * totals["replicates"]
+        totals["not_started"] += max(0, expected - physical_total)
+        totals["total"] = max(expected, physical_total)
+        # Cell cards use the same forecast as the overview, rather than showing
+        # only slots already materialized by the planner.
+        await db.execute(
+            update(ResultCellRollup)
+            .where(ResultCellRollup.scope_key == scope.key)
+            .values(
+                data=func.jsonb_set(
+                    func.jsonb_set(
+                        ResultCellRollup.data,
+                        cast(literal("{total}"), ARRAY(Text)),
+                        func.to_jsonb(ResultCellRollup.data["replicate_count"].as_integer() * row_count),
+                    ),
+                    cast(literal("{counts,not_started}"), ARRAY(Text)),
+                    func.to_jsonb(
+                        func.greatest(
+                            0,
+                            ResultCellRollup.data["replicate_count"].as_integer() * row_count
+                            - ResultCellRollup.data["total"].as_integer(),
+                        )
+                        + ResultCellRollup.data["counts"]["not_started"].as_integer()
+                    ),
+                )
+            )
+        )
+    primary, direction = primary_runtime_metric(scope)
+    if scope.unit == "replicate" and primary:
+        ranks = (
+            select(
+                ResultCellMetric.cell_id,
+                func.row_number()
+                .over(
+                    order_by=(
+                        ResultCellMetric.value.asc() if direction == "minimize" else ResultCellMetric.value.desc(),
+                        ResultCellMetric.cell_id,
+                    )
+                )
+                .label("rank"),
+            )
+            .where(
+                ResultCellMetric.scope_key == scope.key,
+                ResultCellMetric.metric_key == primary,
+                ResultCellMetric.generation == generation,
+                ResultCellMetric.value.is_not(None),
+            )
+            .cte("primary_ranks")
+        )
+        await db.execute(
+            update(ResultCellRollup)
+            .where(ResultCellRollup.scope_key == scope.key, ResultCellRollup.cell_id == ranks.c.cell_id)
+            .values(
+                data=func.jsonb_set(
+                    ResultCellRollup.data, cast(literal("{primary_rank}"), ARRAY(Text)), func.to_jsonb(ranks.c.rank)
+                )
+            )
+        )
+    best_cell = None
+    if scope.unit == "replicate" and primary:
+        best = (
+            (
+                await db.execute(
+                    select(ResultCellMetric.cell_id, FactorialCell.cell_label, ResultCellMetric.value)
+                    .join(FactorialCell)
+                    .where(
+                        ResultCellMetric.scope_key == scope.key,
+                        ResultCellMetric.metric_key == primary,
+                        ResultCellMetric.generation == generation,
+                        ResultCellMetric.value.is_not(None),
+                    )
+                    .order_by(
+                        ResultCellMetric.value.asc() if direction == "minimize" else ResultCellMetric.value.desc(),
+                        ResultCellMetric.cell_id,
+                    )
+                    .limit(1)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if best:
+            best_cell = {
+                "cell_id": str(best["cell_id"]),
+                "cell_label": best["cell_label"],
+                "metric_key": primary,
+                "value": best["value"],
+            }
     summary = {
         "counts": {status: totals[status] for status in STATUSES},
         "total": totals["total"],
+        "planned_count": physical_total,
+        "executed_count": totals["executed"],
+        "scored_count": totals["scored"],
+        "best_cell": best_cell,
         "cell_count": totals["cells"],
         "replicate_count": totals["replicates"],
         "usage": usage,
@@ -210,22 +375,7 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
         "usage_pending_count": totals["usage_pending"],
         "as_of": datetime.now(UTC).isoformat(),
     }
-    all_usage = (
-        (
-            await db.execute(
-                select(*[func.sum(ProtocolRun.usage_summary[key].as_float()).label(key) for key in usage]).where(
-                    ProtocolRun.protocol_id == scope.protocol_id,
-                    ProtocolRun.protocol_revision_id == scope.protocol_revision_id,
-                    ProtocolRun.design_revision_id == scope.design_revision_id,
-                    ProtocolRun.is_test_run.is_(False),
-                    ProtocolRun.target_node_id.is_(None),
-                )
-            )
-        )
-        .mappings()
-        .one()
-    )
-    summary["all_attempt_usage"] = dict(all_usage)
+    summary["all_attempt_usage"] = all_usage_totals
     # generation may have advanced during this rebuild. Preserve the new dirty
     # generation; the next delivery rebuilds it. Cell/overview publication is one transaction.
     await db.execute(

@@ -11,7 +11,7 @@ from decimal import Decimal
 from math import isfinite
 from typing import Any
 
-from sqlalchemy import and_, cast, func, literal, or_, select, update
+from sqlalchemy import and_, case, cast, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 
 from asaree.models.database import get_session
@@ -20,7 +20,7 @@ from asaree.models.protocol_run import ProtocolRun
 from asaree.services.motoro_telemetry import PAGE_SIZE, read_usage_page
 
 logger = logging.getLogger(__name__)
-BATCH_SIZE = 50
+BATCH_SIZE = 200
 TERMINAL = ("completed", "failed", "cancelled", "limit_reached")
 
 
@@ -37,10 +37,17 @@ class UsageAccumulator:
     calls: int = 0
     reported_tokens: int = 0
     reported_cost: int = 0
+    by_node: dict[str, UsageAccumulator] = field(default_factory=dict)
+    track_nodes: bool = True
+    pending_calls: int = 0
 
     def add(self, row: dict[str, Any]) -> None:
+        node_id = row.get("node_id")
+        if self.track_nodes and isinstance(node_id, str) and node_id:
+            self.by_node.setdefault(node_id, UsageAccumulator(track_nodes=False)).add(row)
         usage = provider_usage(row.get("token_usage"), row.get("cost_estimate"))
         self.calls += 1
+        self.pending_calls += row.get("status") in {"pending", "running", "paused", "awaiting_human"}
         self.reported_tokens += usage["total_tokens"] is not None
         self.reported_cost += usage["cost_usd"] is not None
         for key, value in usage.items():
@@ -53,9 +60,13 @@ class UsageAccumulator:
             "agent_run_count": self.calls,
             "reported_usage_count": self.reported_tokens,
             "reported_cost_count": self.reported_cost,
-            "complete": self.reported_tokens == self.calls and self.reported_cost == self.calls,
-            "settled": True,
+            "complete": self.calls > 0
+            and self.pending_calls == 0
+            and self.reported_tokens == self.calls
+            and self.reported_cost == self.calls,
+            "settled": self.pending_calls == 0,
             "captured_at": datetime.now(UTC).isoformat(),
+            "by_node": {node: totals.finish(None, None) for node, totals in self.by_node.items()},
             "duration_seconds": max(0, (completed_at - started_at).total_seconds())
             if started_at and completed_at
             else None,
@@ -116,7 +127,16 @@ async def capture_result_usage(_ctx: dict[str, Any], *, only_run_id: uuid.UUID |
         if not locked:
             return
         now = datetime.now(UTC)
-        node = func.jsonb_each(ProtocolRun.node_runs).table_valued("key", "value").lateral()
+        node = (
+            func.jsonb_each(
+                case(
+                    (func.jsonb_typeof(ProtocolRun.node_runs) == "object", ProtocolRun.node_runs),
+                    else_=cast(literal("{}"), JSONB),
+                )
+            )
+            .table_valued("key", "value")
+            .lateral()
+        )
         runs = (
             (
                 await db.execute(
@@ -143,13 +163,28 @@ async def capture_result_usage(_ctx: dict[str, Any], *, only_run_id: uuid.UUID |
                         ProtocolRun.id == only_run_id if only_run_id else literal(True),
                         or_(
                             ProtocolRun.usage_summary.is_(None),
+                            ProtocolRun.usage_summary == cast(literal("null"), JSONB),
                             and_(
                                 ProtocolRun.usage_summary["settled"].as_boolean().is_not(True),
                                 ProtocolRun.usage_summary["retry_at"].astext <= now.isoformat(),
                             ),
                         ),
                     )
-                    .order_by(ProtocolRun.created_at, ProtocolRun.id)
+                    .order_by(
+                        case(
+                            (
+                                or_(
+                                    ProtocolRun.usage_summary.is_(None),
+                                    ProtocolRun.usage_summary == cast(literal("null"), JSONB),
+                                ),
+                                0,
+                            ),
+                            else_=1,
+                        ),
+                        ProtocolRun.usage_summary["retry_at"].astext,
+                        ProtocolRun.created_at,
+                        ProtocolRun.id,
+                    )
                     .limit(BATCH_SIZE)
                 )
             )
@@ -204,8 +239,15 @@ async def capture_result_usage(_ctx: dict[str, Any], *, only_run_id: uuid.UUID |
                             after = page[-1]["id"]
                     for run in owned_runs:
                         task_end = run["task_completed_at"]
-                        completed = datetime.fromisoformat(task_end) if task_end else run["completed_at"]
+                        try:
+                            completed = datetime.fromisoformat(task_end) if task_end else run["completed_at"]
+                        except ValueError:
+                            completed = run["completed_at"]
+                        if completed and run["started_at"] and completed.tzinfo is None:
+                            completed = None
                         summary = accumulators[run["id"]].finish(run["started_at"], completed)
+                        if not summary["settled"]:
+                            summary["retry_at"] = (now + timedelta(seconds=5)).isoformat()
                         await db.execute(
                             update(ProtocolRun)
                             .where(ProtocolRun.id == run["id"])

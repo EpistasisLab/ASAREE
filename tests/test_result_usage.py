@@ -59,3 +59,23 @@ def test_missing_provider_fields_and_legacy_timestamps_stay_unknown():
     assert result["total_tokens"] is None
     assert result["settled"]
     assert not result["complete"]
+
+
+def test_node_accounting_includes_rejected_calls_without_double_counting():
+    rows = [
+        {"id": UUID(int=i), "node_id": node, "token_usage": {"total_tokens": 10}, "cost_estimate": 0.01}
+        for i, node in enumerate(("critic", "critic", "worker"), start=1)
+    ]
+    result = summarize_usage([*rows, rows[0]], started_at=None, completed_at=None)
+    assert result["agent_run_count"] == 3
+    assert result["by_node"]["critic"]["agent_run_count"] == 2
+    assert result["by_node"]["critic"]["cost_usd"] == 0.02
+    assert result["by_node"]["worker"]["total_tokens"] == 10
+
+
+def test_unfinished_causal_work_keeps_accounting_pending():
+    result = summarize_usage(
+        [{"id": UUID(int=1), "status": "running", "node_id": "worker"}], started_at=None, completed_at=None
+    )
+    assert not result["settled"]
+    assert not result["by_node"]["worker"]["settled"]

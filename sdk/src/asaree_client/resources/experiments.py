@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import builtins
 import uuid
+from collections.abc import Iterator
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from asaree_client._sentinel import UNSET, UnsetType
@@ -33,6 +35,99 @@ ResourceId = uuid.UUID | str
 class Experiments:
     def __init__(self, client: Any) -> None:
         self._client = client
+
+    def execution_summary(self, experiment_id: ResourceId, *, scope: dict[str, str] | None = None) -> dict[str, Any]:
+        """Small maintained overview; ready=false means the worker is preparing it."""
+        return dict(self._client._get(f"/experiments/{experiment_id}/execution-results/summary", params=scope))
+
+    def iter_executions(
+        self,
+        experiment_id: ResourceId,
+        *,
+        scope: dict[str, str] | None = None,
+        cell_id: ResourceId | None = None,
+        replicate_id: ResourceId | None = None,
+        status: str | None = None,
+        page_size: int = 100,
+    ) -> Iterator[dict[str, Any]]:
+        """Bounded cursor iteration, including unstarted rows once source counts are ready."""
+        if not 1 <= page_size <= 100:
+            raise ValueError("page_size must be between 1 and 100")
+        params: dict[str, Any] = {**(scope or {}), "limit": page_size}
+        for key, value in {"cell_id": cell_id, "replicate_id": replicate_id, "status": status}.items():
+            if value is not None:
+                params[key] = str(value)
+        while True:
+            page = self._client._get(f"/experiments/{experiment_id}/execution-results/executions", params=dict(params))
+            yield from page["items"]
+            if not page["next_cursor"]:
+                return
+            params["cursor"] = page["next_cursor"]
+
+    def create_result_job(
+        self,
+        experiment_id: ResourceId,
+        *,
+        kind: str,
+        scope: dict[str, str] | None = None,
+        request_key: str | None = None,
+        replicate_ids: builtins.list[ResourceId] | None = None,
+        row_indices: builtins.list[int] | None = None,
+        rerun_slot_ids: builtins.list[ResourceId] | None = None,
+        cell_id: ResourceId | None = None,
+        rerun_completed: bool = False,
+    ) -> dict[str, Any]:
+        """Prepare a batch, cancel active scope, or export; preparing never executes work.
+
+        Poll result_job until a plan is awaiting_confirmation, then confirm it.
+        Supply a stable request_key when retrying creation after a network error.
+        """
+        payload: dict[str, Any] = {"kind": kind, "request_key": request_key or str(uuid.uuid4())}
+        if replicate_ids is not None:
+            payload["replicate_ids"] = [str(identifier) for identifier in replicate_ids]
+        if row_indices is not None:
+            payload["row_indices"] = row_indices
+        if rerun_slot_ids is not None:
+            payload["rerun_slot_ids"] = [str(identifier) for identifier in rerun_slot_ids]
+        if cell_id is not None:
+            payload["cell_id"] = str(cell_id)
+        if rerun_completed:
+            payload["rerun_completed"] = True
+        return dict(
+            self._client._post(f"/experiments/{experiment_id}/execution-results/jobs", params=scope, json=payload)
+        )
+
+    def result_job(self, experiment_id: ResourceId, job_id: ResourceId) -> dict[str, Any]:
+        return dict(self._client._get(f"/experiments/{experiment_id}/execution-results/jobs/{job_id}"))
+
+    def iter_evidence_text(
+        self, experiment_id: ResourceId, run_id: ResourceId, *, document: str, scope: dict[str, str] | None = None
+    ) -> Iterator[str]:
+        """Exact JSON text in bounded chunks; concatenate only when a full value is needed."""
+        params: dict[str, Any] = {**(scope or {}), "document": document, "offset": 0}
+        while True:
+            page = self._client._get(
+                f"/experiments/{experiment_id}/execution-results/attempts/{run_id}/evidence", params=dict(params)
+            )
+            yield page["text"]
+            if page["next_offset"] is None:
+                return
+            params["offset"] = page["next_offset"]
+
+    def confirm_result_job(self, experiment_id: ResourceId, job_id: ResourceId) -> dict[str, Any]:
+        return dict(self._client._post(f"/experiments/{experiment_id}/execution-results/jobs/{job_id}/confirm"))
+
+    def cancel_result_job(self, experiment_id: ResourceId, job_id: ResourceId) -> dict[str, Any]:
+        return dict(self._client._post(f"/experiments/{experiment_id}/execution-results/jobs/{job_id}/cancel"))
+
+    def download_result_export(self, experiment_id: ResourceId, job_id: ResourceId, destination: str | Path) -> None:
+        """Download a completed job to disk without holding the entire CSV in memory."""
+        job = self.result_job(experiment_id, job_id)
+        prefix = f"/api/experiments/{experiment_id}/execution-results/jobs/{job_id}/download?"
+        url = job.get("download_url", "")
+        if job.get("status") != "completed" or not url.startswith(prefix):
+            raise ValueError("Export is not completed or its download link is unavailable")
+        self._client._stream_to_file(url, Path(destination))
 
     def create(
         self,

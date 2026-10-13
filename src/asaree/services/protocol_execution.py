@@ -4746,6 +4746,10 @@ async def plan_cell_runs(
     rerun_replicate_labels: set[str] | None = None,
     retry_row_result_ids: Sequence[uuid.UUID] | None = None,
     row_indices: Sequence[int] | None = None,
+    replicate_ids: set[uuid.UUID] | None = None,
+    prevalidated: bool = False,
+    validate_design_impact: bool = True,
+    indexed_source: Any | None = None,
 ) -> tuple[list[ProtocolRun], int]:
     """ "Run all cells": creates one pending :class:`ProtocolRun` per
     not-yet-completed replicate row under *experiment_id*, each carrying its
@@ -4825,6 +4829,7 @@ async def plan_cell_runs(
     # may not apply to this canvas at all -- see is_conversation_strategy.
     publication = await db.get(ProtocolRevision, protocol_revision_id) if protocol_revision_id else None
     from asaree.services.experiment_versions import version_design_spec, version_measurement_plan
+
     design_spec = version_design_spec(publication, experiment.design_spec)
     measurement_plan = (
         experiment.locked_measurement_plan
@@ -4836,52 +4841,53 @@ async def plan_cell_runs(
     measurement_plan = version_measurement_plan(publication, measurement_plan)
     if publication is not None and publication.experiment_snapshot is not None:
         from asaree.services.design_revisions import get_current_revision
+
         generated = await get_current_revision(db, experiment_id)
         if publication.design_revision_id != (generated.id if generated else None):
             raise ProtocolValidationError("Publish the generated draft design before running this experiment.")
-    validate_coordination_strategy(design_spec, graph=graph)
-    validate_stage_plan(design_spec)
-    validate_prompt_references(graph=graph)
-    conversation = is_conversation_strategy(design_spec)
-    topological_order(graph, require_acyclic=not conversation, validate_all_sub_agents=True)
-    if not conversation:
-        sinks = sink_node_ids(graph)
-        if len(sinks) != 1:
-            raise ProtocolValidationError(
-                f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
-            )
-    try:
-        validate_factor_bindings(design_spec, graph)
-        await validate_skill_factors(design_spec, graph, owner_id)
-        await validate_knowledge_factors(design_spec, graph, owner_id)
-        await validate_dataset_factors(design_spec, graph, owner_id, db)
-    except ValueError as exc:
-        raise ProtocolValidationError(str(exc)) from exc
-    measurement_report = await validate_experiment_measurement_plan(
-        db,
-        document=measurement_plan,
-        metrics=(design_spec or {}).get("metrics"),
-        graph=graph,
-        experiment_id=experiment_id,
-        owner_id=owner_id,
-    )
-    if blocking_issues := blocking_measurement_plan_issues(measurement_report):
-        raise ProtocolValidationError("; ".join(issue.message for issue in blocking_issues))
-    impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=design_spec)
-    if impact.regeneration_required:
-        raise ProtocolValidationError(
-            "design_changed: review and regenerate before running all cells. "
-            f"Current {impact.current_cell_count} cells/{impact.current_replicate_count} replicates, "
-            f"proposed {impact.proposed_cell_count} cells/{impact.proposed_replicate_count} replicates."
+    if not prevalidated:
+        validate_coordination_strategy(design_spec, graph=graph)
+        validate_stage_plan(design_spec)
+        validate_prompt_references(graph=graph)
+        conversation = is_conversation_strategy(design_spec)
+        topological_order(graph, require_acyclic=not conversation, validate_all_sub_agents=True)
+        if not conversation:
+            sinks = sink_node_ids(graph)
+            if len(sinks) != 1:
+                raise ProtocolValidationError(
+                    f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
+                )
+        try:
+            validate_factor_bindings(design_spec, graph)
+            await validate_skill_factors(design_spec, graph, owner_id)
+            await validate_knowledge_factors(design_spec, graph, owner_id)
+            await validate_dataset_factors(design_spec, graph, owner_id, db)
+        except ValueError as exc:
+            raise ProtocolValidationError(str(exc)) from exc
+        measurement_report = await validate_experiment_measurement_plan(
+            db,
+            document=measurement_plan,
+            metrics=(design_spec or {}).get("metrics"),
+            graph=graph,
+            experiment_id=experiment_id,
+            owner_id=owner_id,
         )
+        if blocking_issues := blocking_measurement_plan_issues(measurement_report):
+            raise ProtocolValidationError("; ".join(issue.message for issue in blocking_issues))
+        if validate_design_impact:
+            impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=design_spec)
+            if impact.regeneration_required:
+                raise ProtocolValidationError(
+                    "design_changed: review and regenerate before running all cells. "
+                    f"Current {impact.current_cell_count} cells/{impact.current_replicate_count} replicates, "
+                    f"proposed {impact.proposed_cell_count} cells/{impact.proposed_replicate_count} replicates."
+                )
 
     # A row batch is pinned to an immutable published revision. Validate the
     # complete ownership/scope relationship and the caller-supplied snapshot
     # before the shared current-design parents can create any row slots.
     revision = (
-        await db.get(ProtocolRevision, protocol_revision_id, populate_existing=True)
-        if protocol_revision_id
-        else None
+        await db.get(ProtocolRevision, protocol_revision_id, populate_existing=True) if protocol_revision_id else None
     )
     if (
         revision is not None
@@ -4907,7 +4913,7 @@ async def plan_cell_runs(
             if retry_row_result_ids is not None:
                 if current_design is None:
                     raise ProtocolValidationError("invalid_retry_target")
-                parents = await list_replicates(db, experiment_id=experiment_id)
+                parents = await list_replicates(db, experiment_id=experiment_id, replicate_ids=replicate_ids)
                 parents_by_id = {parent.id: parent for parent in parents}
                 retry_targets = []
                 for target_id in retry_row_result_ids:
@@ -4935,7 +4941,7 @@ async def plan_cell_runs(
                         or latest.replicate_result_id != parent.id
                         or latest.design_revision_id != current_design.id
                         or latest.protocol_revision_id != revision.id
-                        or latest.status not in {"failed", "cancelled"}
+                        or latest.status not in {"failed", "cancelled", "limit_reached"}
                     ):
                         raise ProtocolValidationError("invalid_retry_target")
                     retry_targets.append((slot, latest, parent))
@@ -4953,22 +4959,20 @@ async def plan_cell_runs(
             if registration is None or experiment_owner != owner_id:
                 raise ProtocolValidationError("Registered row source is unavailable.")
             try:
-                source = read_row_source(
+                source = indexed_source or read_row_source(
                     dataset_id=str(registration.id),
                     raw_path=registration.raw_path,
                     raw_sha256=registration.raw_sha256,
                 )
             except DatasetRowCsvError as exc:
                 raise ProtocolValidationError(str(exc)) from exc
+            if source.dataset_id != str(registration.id) or source.raw_sha256 != registration.raw_sha256:
+                raise ProtocolValidationError("row_source_changed")
             # Validate the immutable published plan against the verified source
             # header even when the caller selected no parents (and thus would
             # otherwise produce no candidates to project).
             try:
-                source_columns = {
-                    column
-                    for binding in original_row_plan["bindings"]
-                    for column in binding["columns"]
-                }
+                source_columns = {column for binding in original_row_plan["bindings"] for column in binding["columns"]}
                 if not source_columns or source_columns - set(source.columns):
                     raise DatasetRowCsvError(
                         "invalid_columns", "row input columns must exist in the registered CSV header"
@@ -4981,7 +4985,7 @@ async def plan_cell_runs(
                     if slot.dataset_id != registration.id:
                         raise ProtocolValidationError("invalid_retry_target")
                     try:
-                        pinned_source = read_row_source(
+                        pinned_source = indexed_source or read_row_source(
                             dataset_id=str(slot.dataset_id),
                             raw_path=registration.raw_path,
                             raw_sha256=registration.raw_sha256,
@@ -4992,9 +4996,11 @@ async def plan_cell_runs(
                         patched_plan = resolve_dataset_row_plan(patched_graph, design_spec)
                         if patched_plan is None or patched_plan["driver_dataset_id"] != str(slot.dataset_id):
                             raise DatasetRowInputError("driver_mismatch", "factor substitution changed the row driver")
-                        columns = list(dict.fromkeys(
-                            column for binding in patched_plan["bindings"] for column in binding["columns"]
-                        ))
+                        columns = list(
+                            dict.fromkeys(
+                                column for binding in patched_plan["bindings"] for column in binding["columns"]
+                            )
+                        )
                         view = project_row(pinned_source, row_index=slot.row_index, columns=columns)
                     except DatasetRowCsvError as exc:
                         raise ProtocolValidationError(str(exc)) from exc
@@ -5029,7 +5035,7 @@ async def plan_cell_runs(
                 retry_order = {slot_id: index for index, slot_id in enumerate(retry_row_result_ids)}
                 created_retries.sort(key=lambda run: retry_order[run.row_result_id])
                 return created_retries, 0
-            parents = await list_replicates(db, experiment_id=experiment_id)
+            parents = await list_replicates(db, experiment_id=experiment_id, replicate_ids=replicate_ids)
             if current_design is None or any(parent.design_revision_id != current_design.id for parent in parents):
                 raise ProtocolValidationError("design_changed")
             labels = {parent.replicate_label for parent in parents}
@@ -5069,9 +5075,9 @@ async def plan_cell_runs(
                     patched_plan = resolve_dataset_row_plan(patched_graph, design_spec)
                     if patched_plan is None or patched_plan["driver_dataset_id"] != str(registration.id):
                         raise DatasetRowInputError("driver_mismatch", "factor substitution changed the row driver")
-                    columns = list(dict.fromkeys(
-                        column for binding in patched_plan["bindings"] for column in binding["columns"]
-                    ))
+                    columns = list(
+                        dict.fromkeys(column for binding in patched_plan["bindings"] for column in binding["columns"])
+                    )
                     view = project_row(source, row_index=candidate["dataset_row"]["row_index"], columns=columns)
                     planned.append((candidate, view))
             except (DatasetRowInputError, DatasetRowCsvError) as exc:
@@ -5122,7 +5128,7 @@ async def plan_cell_runs(
 
     # Current design only -- list_replicates scopes to the experiment's current
     # revision, so a superseded design's replicates are neither counted nor run.
-    replicates = await list_replicates(db, experiment_id=experiment_id)
+    replicates = await list_replicates(db, experiment_id=experiment_id, replicate_ids=replicate_ids)
     labels = {replicate.replicate_label for replicate in replicates}
     requested_labels = labels if replicate_labels is None else replicate_labels
     unknown_requested = requested_labels - labels
@@ -5547,15 +5553,14 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             or run.row_result_id is not None
             or isinstance(attempt_result.get("row_provenance"), dict)
         )
-        if row_context_mode:
-            if run.status != "pending":
-                return
-            if run.cancel_requested_at is not None:
-                await set_status(db, protocol_run_id, status="cancelled")
-                return
-            # Claim before registry hydration, source reads, workspace writes, or
-            # any provider work. A redelivered job sees running and exits above.
-            await set_status(db, protocol_run_id, status="running")
+        if run.status != "pending":
+            return
+        if run.cancel_requested_at is not None:
+            await set_status(db, protocol_run_id, status="cancelled")
+            return
+        # Every mode claims before registry hydration or provider work. Redis
+        # delivery can repeat after a restart; a second executor exits here.
+        await set_status(db, protocol_run_id, status="running")
         dataset_row = dict(run.dataset_row) if run.dataset_row is not None else None
     # The worker hydrates its MCP registry once, at startup (worker/settings.py),
     # so any server registered SINCE then -- an OKF bundle the user added

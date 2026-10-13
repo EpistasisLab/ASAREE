@@ -846,6 +846,62 @@ async def create_cell_runs_endpoint(
     """Run pending replicates or retry explicitly selected failed row slots."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
     revision = await _require_published_revision(db, protocol)
+    # Keep the synchronous compatibility path small. Production-scale intent
+    # belongs to the durable preview/confirmation API, including unplanned rows.
+    selected_ids = None
+    if protocol.experiment_id is not None:
+        from pathlib import Path
+
+        from asaree.models.factorial_cell import FactorialCell
+        from asaree.models.factorial_replicate_result import FactorialReplicateResult
+        from asaree.models.factorial_row_result import FactorialRowResult
+        from asaree.services.result_reads import resolve_result_scope
+
+        scope = await resolve_result_scope(
+            db, experiment_id=protocol.experiment_id, protocol_id=protocol.id, protocol_revision_id=revision.id
+        )
+        query = (
+            select(FactorialReplicateResult.id)
+            .join(FactorialCell)
+            .where(
+                FactorialCell.experiment_id == protocol.experiment_id,
+                FactorialCell.design_revision_id == scope.design_revision_id,
+            )
+        )
+        if body and body.replicate_labels is not None:
+            query = query.where(FactorialReplicateResult.replicate_label.in_(body.replicate_labels))
+        if body and body.retry_row_result_ids is not None:
+            query = (
+                query.join(FactorialRowResult, FactorialRowResult.replicate_result_id == FactorialReplicateResult.id)
+                .where(FactorialRowResult.id.in_(body.retry_row_result_ids))
+                .distinct()
+            )
+        identifiers = list((await db.scalars(query.limit(501))).all())
+        oversized = len(identifiers) > 500
+        if scope.row_plan is not None:
+            if body and body.retry_row_result_ids is not None:
+                oversized = len(body.retry_row_result_ids) > 100
+            elif body and body.row_indices is not None:
+                oversized = oversized or len(identifiers) * len(body.row_indices) > 100
+            else:
+                dataset = await db.get(RegisteredDataset, uuid.UUID(scope.row_plan["driver_dataset_id"]))
+                try:
+                    if dataset is None or not dataset.raw_path or Path(dataset.raw_path).stat().st_size > 1024 * 1024:
+                        oversized = True
+                    else:
+                        source = read_row_source(
+                            dataset_id=str(dataset.id), raw_path=dataset.raw_path, raw_sha256=dataset.raw_sha256
+                        )
+                        oversized = oversized or len(identifiers) * len(source.rows) > 100
+                except (OSError, DatasetRowCsvError) as exc:
+                    raise HTTPException(
+                        status_code=422, detail="Registered original CSV could not be verified."
+                    ) from exc
+        if oversized:
+            raise HTTPException(
+                status_code=413, detail="Use execution-results/jobs to prepare and confirm a large batch."
+            )
+        selected_ids = set(identifiers)
     try:
         retry_row_result_ids = body.retry_row_result_ids if body is not None else None
         if retry_row_result_ids is not None:
@@ -872,6 +928,7 @@ async def create_cell_runs_endpoint(
             rerun_replicate_labels=set(body.rerun_replicate_labels) if body is not None else None,
             retry_row_result_ids=retry_row_result_ids,
             row_indices=body.row_indices if body is not None else None,
+            replicate_ids=selected_ids,
         )
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -882,9 +939,7 @@ async def create_cell_runs_endpoint(
             try:
                 await enqueue_protocol_run(run.id)
             except Exception as exc:
-                await fail_protocol_run(
-                    db, run.id, error=f"enqueue_failure: {type(exc).__name__}: {exc}"
-                )
+                await fail_protocol_run(db, run.id, error=f"enqueue_failure: {type(exc).__name__}: {exc}")
                 await db.commit()
     else:
         for run in runs:
@@ -895,9 +950,7 @@ async def create_cell_runs_endpoint(
         skipped=skipped,
         protocol_revision_id=revision.id,
         protocol_revision=revision.revision,
-        consumption_mode=(
-            "per_row" if row_mode else "whole_dataset"
-        ),
+        consumption_mode=("per_row" if row_mode else "whole_dataset"),
         row_result_ids=[r.row_result_id for r in runs if r.row_result_id is not None],
     )
 
@@ -907,6 +960,20 @@ async def list_protocol_runs_endpoint(
     protocol_id: uuid.UUID, user: CurrentUser, db: DbSession
 ) -> list[ProtocolRunResponse]:
     await _get_owned_protocol(db, protocol_id, user)
+    identifiers = list(
+        (
+            await db.scalars(
+                select(ProtocolRun.id)
+                .where(ProtocolRun.protocol_id == protocol_id, ProtocolRun.is_test_run.is_(False))
+                .limit(501)
+            )
+        ).all()
+    )
+    if len(identifiers) > 500:
+        raise HTTPException(
+            status_code=413,
+            detail="Use run-heads pagination or execution-results to read large histories.",
+        )
     runs = await list_protocol_runs(db, protocol_id=protocol_id)
     return [_protocol_run_response(r) for r in runs]
 

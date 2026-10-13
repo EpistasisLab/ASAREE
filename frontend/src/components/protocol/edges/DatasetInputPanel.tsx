@@ -29,7 +29,7 @@ export function DatasetInputPanel({ edgeId, source, disabled = false }: { edgeId
     binding.edge.id !== edgeId && binding.input.mode === 'per_row' &&
     binding.config?.dataset_id?.toLowerCase() !== id?.toLowerCase(),
   )
-  const schema = useQuery({ queryKey: ['datasets', id, 'row-schema'], queryFn: () => datasetsApi.getRowSchema(id!), enabled: !!id })
+  const schema = useQuery({ queryKey: ['datasets', id, 'row-schema'], queryFn: () => datasetsApi.getRowSchema(id!), enabled: !!id, refetchInterval: query => query.state.data?.ready === false ? 1000 : false })
   const availableColumns = schema.data?.columns ?? []
   const allColumnsSelected = availableColumns.length > 0 && availableColumns.every(column => columns.includes(column))
   const displayedColumns = [...new Set([...availableColumns, ...columns])]
@@ -44,7 +44,7 @@ export function DatasetInputPanel({ edgeId, source, disabled = false }: { edgeId
   </div>
   const input: DatasetInput = mode === 'per_row' ? { mode, columns } : { mode }
   const graph = { nodes, edges: edges.map(item => item.id === edgeId ? { ...item, data: { ...item.data, dataset_input: input } } : item) }
-  const error = !id ? 'Select a registered Dataset.' : schema.isError ? schema.error.message : schema.isLoading ? 'Loading original columns…' : !schema.data ? 'Source metadata unavailable.' : mode === 'per_row' && !schema.data.row_count ? 'The original Dataset has no rows.' : mode === 'per_row' && columns.some(column => !schema.data.columns.includes(column)) ? 'Saved columns are missing from the original CSV.' : datasetRowTopologyError(graph)
+  const error = !id ? 'Select a registered Dataset.' : schema.isError ? schema.error.message : schema.isLoading || schema.data?.ready === false ? 'Preparing original columns…' : !schema.data ? 'Source metadata unavailable.' : mode === 'per_row' && !schema.data.row_count ? 'The original Dataset has no rows.' : mode === 'per_row' && columns.some(column => !schema.data.columns.includes(column)) ? 'Saved columns are missing from the original CSV.' : datasetRowTopologyError(graph)
   function apply() {
     if (error || disabled || !hasChanges) return
     setEdges(current => current.map(item => {

@@ -155,7 +155,8 @@ export interface DatasetRowSnapshot extends DatasetRowIdentity {
 export interface DatasetRowSchema {
   dataset_id: string
   raw_sha256: string
-  row_count: number
+  row_count: number | null
+  ready?: boolean
   columns: string[]
 }
 

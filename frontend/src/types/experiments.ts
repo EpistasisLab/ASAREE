@@ -327,6 +327,8 @@ export interface ResultNodeRun {
 }
 
 export interface MetricObservation {
+  value_truncated?: boolean
+  value_preview?: string | null
   metric_id: string
   metric_name: string
   value_type?: 'number' | 'boolean' | 'opaque'
@@ -345,6 +347,8 @@ export interface MetricObservation {
 }
 
 export interface EvaluationArtifact {
+  payload_truncated?: boolean
+  payload_preview?: string | null
   artifact_key: string
   kind: string
   payload: unknown

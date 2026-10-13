@@ -840,7 +840,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // list_protocol_runs is newest-first, so [0] is the latest.
   const protocolRunsQuery = useQuery({
     queryKey: ['protocols', protocolId, 'runs'],
-    queryFn: () => protocolsApi.listRuns(protocolId),
+    queryFn: () => protocolsApi.listRunHeads(protocolId),
   })
 
   // Seeded once and only into an empty slot: a run launched here must win over

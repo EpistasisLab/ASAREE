@@ -6,6 +6,8 @@ import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { factorBindingDiscrepancies, type FactorBindingDiscrepancy } from '@/lib/factorBindings'
+import { useBatchPreview } from '@/lib/resultJobs'
+import { ResultJobProgress } from './ResultJobProgress'
 import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
 import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import type { Experiment } from '@/types/experiments'
@@ -17,24 +19,27 @@ import { RunConfirmDialog } from './RunConfirmDialog'
 import { ReplicateRunAction } from './CellPresentation'
 import type { ResultsSelection } from './ResultsTab'
 
-export function RunAllCellsButton({ protocol, experimentId, regenerationRequired, unboundFactors, bindingDiscrepancies, label = 'Run all cells', dialogTitle, compact = false, replicateLabels }: {
+export function RunAllCellsButton({ protocol, experimentId, regenerationRequired, unboundFactors, bindingDiscrepancies, label = 'Run all cells', dialogTitle, compact = false, cellId }: {
   protocol: Protocol | undefined; experimentId: string; regenerationRequired: boolean; unboundFactors: string[]
   bindingDiscrepancies: FactorBindingDiscrepancy[]; label?: string; dialogTitle?: string; compact?: boolean
-  replicateLabels?: string[]; hasCompletedRun?: boolean
+  cellId?: string
 }) {
   const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const [lock, setLock] = useState(false)
   const [reruns, setReruns] = useState<Set<string>>(() => new Set())
+  const [rerunAll, setRerunAll] = useState(false)
   const scope = { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined }
+  const [confirmedId, setConfirmedId] = useState<string>()
+  const preview = useBatchPreview(experimentId, scope, { cell_id: cellId, rerun_slot_ids: [...reruns], rerun_completed: rerunAll }, open)
   const summary = useExecutionSummary(experimentId, scope, open && !!protocol)
   const experiment = useQuery({ queryKey: ['experiments', experimentId], queryFn: () => experimentsApi.get(experimentId), enabled: open })
   const run = useMutation({
     mutationFn: async () => {
       if (lock && !experiment.data?.locked_at) await experimentsApi.lock(experimentId)
-      return protocolsApi.runCells(protocol!.id, { replicateLabels, rerunReplicateLabels: [...reruns] })
+      return experimentsApi.confirmResultJob(experimentId, preview.data!.id)
     },
-    onSuccess: () => { setOpen(false); void client.invalidateQueries({ queryKey: ['experiments', experimentId] }) },
+    onSuccess: job => { setConfirmedId(job.id); setOpen(false); void client.invalidateQueries({ queryKey: ['experiments', experimentId] }) },
   })
   const publish = useMutation({ mutationFn: async () => {
     const live = client.getQueryData<{ nodes: Node[]; edges: Edge[] }>(protocolGraphQueryKey(protocol!.id))
@@ -47,25 +52,30 @@ export function RunAllCellsButton({ protocol, experimentId, regenerationRequired
     setReruns(new Set())
   } })
   const blocked = !protocol || regenerationRequired || unboundFactors.length > 0 || bindingDiscrepancies.length > 0
-  const pending = (summary.data?.counts?.not_started ?? 0) + (summary.data?.counts?.failed ?? 0) + (summary.data?.counts?.cancelled ?? 0)
+  const pending = preview.data?.progress.planned ?? 0
   return <><Button size={compact ? 'xs' : 'sm'} disabled={blocked} onClick={() => { setOpen(true); setReruns(new Set()); setLock(false) }}>{label}</Button>
+    <ResultJobProgress experimentId={experimentId} jobId={confirmedId} />
     {open && protocol && <RunConfirmDialog scope={{ type: 'selected-cells', title: dialogTitle,
-      cellCount: summary.data?.cell_count ?? 0, replicateCount: summary.data?.replicate_count ?? 0,
+      cellCount: preview.data?.progress.cell_count ?? 0, replicateCount: preview.data?.progress.replicate_count ?? 0,
       pendingReplicateCount: summary.data?.unit === 'row' ? 0 : pending, rerunReplicateCount: reruns.size }}
       nodes={protocol.graph.nodes as unknown as Node[]} edges={protocol.graph.edges as Edge[]} queryClient={client}
       onCancel={() => setOpen(false)} onConfirm={() => run.mutate()}
       hasUnpublishedChanges={protocol.has_unpublished_changes} publishedRevision={protocol.published_revision}
       onPublishAndRun={() => publish.mutate()} isPublishing={publish.isPending} publishError={publish.error?.message}
-      confirmLabel={label} confirmDisabled={!summary.data?.ready || run.isPending || publish.isPending}
+      publishDisabled={publish.isPending || run.isPending} publishLabel="Publish & prepare preview"
+      confirmLabel={label} confirmDisabled={preview.data?.status !== 'awaiting_confirmation' || !pending || run.isPending || publish.isPending}
       isConfirming={run.isPending} confirmError={run.error?.message}
       additionalContent={<div className="space-y-3">
-        {!summary.data?.ready && <p role="status" className="text-xs">Preparing execution counts…</p>}
+        {preview.data?.status !== 'awaiting_confirmation' && <p role="status" className="text-xs">Preparing batch preview… {preview.data?.progress.scanned ?? 0} executions checked.</p>}
+        {(preview.error || preview.data?.error) && <p role="alert" className="text-xs text-destructive">{preview.error?.message ?? preview.data?.error}</p>}
+        {preview.data?.status === 'awaiting_confirmation' && <p className="font-mono text-xs">{pending} executions will be queued.</p>}
         {summary.error && <p role="alert" className="text-xs text-destructive">{summary.error.message}</p>}
         {summary.data?.unit === 'row' && <p className="font-mono text-xs">{summary.data.expected ?? '?'} expected row executions across {summary.data.replicate_count ?? 0} replicates.</p>}
         {!experiment.data?.locked_at && <label className="flex items-center gap-2 text-xs"><Checkbox checked={lock} onCheckedChange={checked => setLock(checked === true)} />Lock experiment before running</label>}
         <ExperimentDefinitionDownload experimentId={experimentId} protocol={protocol} />
         <p className="text-xs text-muted-foreground">Completed replicates are skipped unless selected to run again.</p>
-        <ExecutionRows key={summary.data?.scope_key} experimentId={experimentId} scope={scope} summary={summary.data} onSelect={() => {}} actions={row => row.status === 'completed' && <Checkbox aria-label={`Run replicate ${row.replicate_number} again`} checked={reruns.has(row.replicate_label)} onCheckedChange={checked => setReruns(current => { const next = new Set(current); if (checked) next.add(row.replicate_label); else next.delete(row.replicate_label); return next })} />} />
+        <label className="flex items-center gap-2 text-xs"><Checkbox checked={rerunAll} onCheckedChange={checked => setRerunAll(checked === true)} />Run every completed execution again</label>
+        <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}`} experimentId={experimentId} scope={scope} cellId={cellId} summary={summary.data} onSelect={() => {}} actions={row => row.status === 'completed' && <Checkbox aria-label={`Run replicate ${row.replicate_number} again`} checked={reruns.has(row.slot_id)} disabled={rerunAll || !reruns.has(row.slot_id) && reruns.size >= 100} onCheckedChange={checked => setReruns(current => { const next = new Set(current); if (checked) next.add(row.slot_id); else next.delete(row.slot_id); return next })} />} />
       </div>} />}
   </>
 }
@@ -139,14 +149,19 @@ function RunReplicateButton({
 }) {
   const queryClient = useQueryClient()
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [confirmedId, setConfirmedId] = useState<string>()
+  const preview = useBatchPreview(experimentId,
+    { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined },
+    { replicate_ids: row ? [row.replicate_id] : undefined,
+      row_indices: row?.row_index != null ? [row.row_index] : undefined,
+      rerun_slot_ids: hasCompletedRun && row ? [row.slot_id] : [] }, dialogOpen && !!row)
   const runMutation = useMutation({
     mutationFn: async () => {
-      if (row?.row_index != null) await protocolsApi.runCells(protocol!.id, row.row_result_id && ['failed', 'cancelled'].includes(row.status)
-        ? { retry_row_result_ids: [row.row_result_id] }
-        : { replicateLabels: [replicateLabel], row_indices: [row.row_index], rerunReplicateLabels: hasCompletedRun ? [replicateLabel] : [] })
-      else await protocolsApi.run(protocol!.id, replicateLabel)
+      if (row) return experimentsApi.confirmResultJob(experimentId, preview.data!.id)
+      await protocolsApi.run(protocol!.id, replicateLabel)
     },
-    onSuccess: () => {
+    onSuccess: job => {
+      if (job) setConfirmedId(job.id)
       queryClient.invalidateQueries({ queryKey: executionKeys.root(experimentId) })
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'replicates'] })
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'runs'] })
@@ -163,7 +178,6 @@ function RunReplicateButton({
     onSuccess: (published) => {
       queryClient.invalidateQueries({ queryKey: ['protocols', protocol!.id, 'revisions'] })
       queryClient.setQueryData(protocolForExperimentQueryKey(experimentId), published)
-      runMutation.mutate()
     },
   })
   const runBlocked = !protocol || regenerationRequired || unboundFactors.length > 0 || bindingDiscrepancies.length > 0
@@ -193,6 +207,7 @@ function RunReplicateButton({
           {actionLabel}
         </ReplicateRunAction>
       </span>
+      <ResultJobProgress experimentId={experimentId} jobId={confirmedId} />
       {dialogOpen && protocol && (
         <RunConfirmDialog
           scope={{ type: 'replicate', label: `Replicate ${replicateNumber}`, title: `${actionLabel} replicate?` }}
@@ -217,7 +232,11 @@ function RunReplicateButton({
                 : null
           }
           onPublishAndRun={() => publishAndRunMutation.mutate()}
+          publishDisabled={publishAndRunMutation.isPending || runMutation.isPending}
+          publishLabel={row ? 'Publish & prepare preview' : undefined}
           confirmLabel={`${actionLabel} replicate`}
+          confirmDisabled={!!row && (preview.data?.status !== 'awaiting_confirmation' || !preview.data.progress.planned)}
+          additionalContent={row && <p className="text-xs">{preview.data?.status === 'awaiting_confirmation' ? `${preview.data.progress.planned ?? 0} executions will be queued.` : preview.data?.error ?? preview.error?.message ?? 'Preparing batch preview…'}</p>}
           isConfirming={runMutation.isPending}
           confirmError={errorMessage}
         />
@@ -242,11 +261,22 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
         else if (selection.type === 'row') onViewRowResult?.(selection.rowResultId)
         else if (selection.type === 'replicate') onViewResult(selection.replicateLabel)
       }}
-      controls={<RunAllCellsButton protocol={protocol} experimentId={experimentId} regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} />}
+      controls={<><StopAllButton protocol={protocol} experimentId={experimentId} /><RunAllCellsButton protocol={protocol} experimentId={experimentId} regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /></>}
+      cellActions={cell => <><RunAllCellsButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id} label="Run cell" compact regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /><StopAllButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id} /></>}
       actions={row => <RunReplicateButton row={row} protocol={protocol} experimentId={experimentId} replicateLabel={row.replicate_label} replicateNumber={row.replicate_number}
         hasCompletedRun={row.status === 'completed'} truncated={row.result.truncated}
         activeRunId={['pending','running','finalizing'].includes(row.status) ? row.run_id : null}
         regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} />}
     />
   </>
+}
+
+function StopAllButton({ protocol, experimentId, cellId }: { protocol?: Protocol; experimentId: string; cellId?: string }) {
+  const [jobId, setJobId] = useState<string>()
+  const stop = useMutation({ mutationFn: () => experimentsApi.createResultJob(experimentId,
+    { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined },
+    { kind: 'cancel', cell_id: cellId, request_key: crypto.randomUUID() }), onSuccess: job => setJobId(job.id) })
+  return <><Button variant="destructive" size="xs" disabled={!protocol || stop.isPending} onClick={() => stop.mutate()}><Square className="size-3" />{cellId ? 'Stop cell' : 'Stop all'}</Button>
+    <ResultJobProgress experimentId={experimentId} jobId={jobId} />
+    {stop.error && <p role="alert" className="text-xs text-destructive">{stop.error.message}</p>}</>
 }

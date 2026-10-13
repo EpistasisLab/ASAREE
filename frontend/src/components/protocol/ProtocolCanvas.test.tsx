@@ -130,7 +130,7 @@ describe('ProtocolCanvas connector adds', () => {
       unobserve() {}
       disconnect() {}
     })
-    vi.spyOn(protocolsApi, 'listRuns').mockResolvedValue([])
+    vi.spyOn(protocolsApi, 'listRunHeads').mockResolvedValue([])
     vi.spyOn(protocolsApi, 'update').mockImplementation(async (_id, { graph }) => ({
       id: 'protocol-1',
       name: 'Protocol',
@@ -150,7 +150,7 @@ describe('ProtocolCanvas connector adds', () => {
       status: 'completed',
       node_runs: { observer: { status: 'completed', bypassed: true, output_text: 'Upstream answer' } },
     })
-    vi.spyOn(protocolsApi, 'listRuns').mockResolvedValue([run])
+    vi.spyOn(protocolsApi, 'listRunHeads').mockResolvedValue([run])
     vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
     renderCanvas({
       nodes: [{ id: 'observer', type: 'agent', position: { x: 100, y: 100 }, data: defaultAgentNodeData('Observer') }],
@@ -168,7 +168,7 @@ describe('ProtocolCanvas connector adds', () => {
       status: 'completed',
       node_runs: { gate: { status: 'completed', bypassed: true, approved: null, output_text: 'READY' } },
     })
-    vi.spyOn(protocolsApi, 'listRuns').mockResolvedValue([run])
+    vi.spyOn(protocolsApi, 'listRunHeads').mockResolvedValue([run])
     vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
     renderCanvas({
       nodes: [{ id: 'gate', type: 'critic_gate', position: { x: 100, y: 100 }, data: defaultCriticGateNodeData('Marker reviewer') }],
@@ -817,7 +817,7 @@ describe('ProtocolCanvas connector adds', () => {
 
   it('keeps the Test Run label when a production replicate is running', async () => {
     const run = protocolRun()
-    vi.mocked(protocolsApi.listRuns).mockResolvedValue([run])
+    vi.mocked(protocolsApi.listRunHeads).mockResolvedValue([run])
     vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
 
     renderCanvas({ nodes: [], edges: [] })
@@ -830,7 +830,7 @@ describe('ProtocolCanvas connector adds', () => {
   it('stops the active production replicate instead of a completed Test Run', async () => {
     const user = userEvent.setup()
     const run = protocolRun()
-    vi.mocked(protocolsApi.listRuns).mockResolvedValue([run])
+    vi.mocked(protocolsApi.listRunHeads).mockResolvedValue([run])
     vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
     vi.spyOn(protocolsApi, 'getLatestTestRun').mockResolvedValue(testRun())
     const cancelRun = vi.spyOn(protocolsApi, 'cancelRun').mockResolvedValue({

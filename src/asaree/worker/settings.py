@@ -30,8 +30,6 @@ from asaree.config import get_settings
 from asaree.models.database import dispose_engine
 from asaree.redis_client import dispose_redis
 from asaree.services.credential_resolver import resolve as resolve_credentials
-from asaree.services.result_rollups import refresh_result_summaries
-from asaree.services.result_usage import capture_result_usage
 from asaree.services.system_mcp_servers import ensure_system_servers, refresh_system_server_capabilities
 from asaree.worker.tasks import (
     check_stale_runs,
@@ -62,17 +60,12 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
     await dispose_redis()
 
 
-async def maintain_results(ctx: dict[str, Any]) -> None:
-    await capture_result_usage(ctx)
-    await refresh_result_summaries(ctx)
-
-
 class WorkerSettings:
     functions = [
         execute_run_task,
         execute_protocol_run_task,
     ]
-    cron_jobs = [cron(check_stale_runs, second={0, 30}), cron(maintain_results, second=set(range(0, 60, 5)))]
+    cron_jobs = [cron(check_stale_runs, second={0, 30})]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     on_startup = on_startup
     on_shutdown = on_shutdown

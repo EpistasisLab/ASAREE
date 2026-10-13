@@ -19,6 +19,7 @@ export function DatasetExecutionSummary({ graph, protocol, experimentId, cellCou
     queryFn: () => datasetsApi.getRowSchema(datasetId!),
     enabled: !!datasetId,
     retry: false,
+    refetchInterval: query => query.state.data?.ready === false ? 1000 : false,
   })
   const publication = useQuery({
     queryKey: ['protocols', protocol?.id, 'row-published-graph', protocol?.published_revision_id],
@@ -30,15 +31,15 @@ export function DatasetExecutionSummary({ graph, protocol, experimentId, cellCou
   const publishedBinding = publication.data && rowBindingForNode(publication.data.graph)
   const summary = results.data
   const rows = source.data?.row_count
-  const columnsMissing = binding?.input.mode === 'per_row' && source.data && binding.input.columns.some(column => !source.data.columns.includes(column))
+  const columnsMissing = binding?.input.mode === 'per_row' && source.data?.ready !== false && source.data && binding.input.columns.some(column => !source.data.columns.includes(column))
 
   return <Card className="gap-3 p-3" aria-label="Dataset execution">
     <p className="text-sm font-medium">Dataset execution</p>
     <div className="space-y-1 text-xs">
       <p className="font-medium">Experiment draft · proposed design</p>
       {!graph ? <p className="text-muted-foreground">Loading canvas inputs…</p> : binding ? <>
-        <p>Per row · {binding.config?.dataset_name ?? datasetId ?? 'Unregistered Dataset'} · {rows === undefined ? 'row count unavailable' : `${rows} original rows`}</p>
-        <p className="break-words font-mono">{cellCount} cells × {replicateCount} replicates per cell × {rows ?? '?'} rows = {rows === undefined ? '?' : cellCount * replicateCount * rows} executions</p>
+        <p>Per row · {binding.config?.dataset_name ?? datasetId ?? 'Unregistered Dataset'} · {rows == null ? 'preparing row count' : `${rows} original rows`}</p>
+        <p className="break-words font-mono">{cellCount} cells × {replicateCount} replicates per cell × {rows ?? '?'} rows = {rows == null ? '?' : cellCount * replicateCount * rows} executions</p>
         <p className="text-muted-foreground">Each row runs the complete protocol. Agents receive their selected columns.</p>
         {(error || source.error || columnsMissing || rows === 0) && <p role="alert" className="text-destructive">{error || source.error?.message || (columnsMissing ? 'Selected columns are absent from the original CSV.' : 'The original Dataset has no rows.')}</p>}
       </> : <p>Whole dataset · one protocol execution per replicate.</p>}

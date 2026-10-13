@@ -1052,6 +1052,8 @@ async def _factorial_analysis_selection(
             protocol_revision_id=protocol_revision_id,
         )
     except RunResultsProjectionError as exc:
+        if str(exc).startswith("Use execution-results"):
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         status = 422 if str(exc) == "ambiguous_protocol" else 404
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     replicates = [SimpleNamespace(
@@ -1127,6 +1129,8 @@ async def get_experiment_run_results_endpoint(
             protocol_revision_id=protocol_revision_id,
         )
     except RunResultsProjectionError as exc:
+        if str(exc).startswith("Use execution-results"):
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         if str(exc) == "ambiguous_protocol":
             raise HTTPException(status_code=422, detail="ambiguous_protocol") from exc
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1150,6 +1154,8 @@ async def export_run_results_csv_endpoint(
             protocol_id=protocol_id, design_revision_id=design_revision_id, protocol_revision_id=protocol_revision_id,
         )
     except RunResultsProjectionError as exc:
+        if str(exc).startswith("Use execution-results"):
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         if str(exc) == "ambiguous_protocol":
             raise HTTPException(status_code=422, detail="ambiguous_protocol") from exc
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1184,6 +1190,8 @@ async def get_run_results_schema_endpoint(
             protocol_id=protocol_id, design_revision_id=design_revision_id, protocol_revision_id=protocol_revision_id,
         )
     except RunResultsProjectionError as exc:
+        if str(exc).startswith("Use execution-results"):
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         if str(exc) == "ambiguous_protocol":
             raise HTTPException(status_code=422, detail="ambiguous_protocol") from exc
         raise HTTPException(status_code=404, detail=str(exc)) from exc

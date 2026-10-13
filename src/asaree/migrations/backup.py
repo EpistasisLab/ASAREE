@@ -29,6 +29,7 @@ migrating without the snapshot it was promised is worse than not deploying.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.metadata
 import os
 import re
@@ -98,9 +99,26 @@ def pg_dump(url: str, destination: Path) -> None:
     try:
         with open(os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as out:
             subprocess.run(["pg_dump", "--format=custom", "--no-owner"], env=env, stdout=out, check=True)
+        give_to_directory_owner(partial)
         partial.rename(destination)
     finally:
         partial.unlink(missing_ok=True)
+
+
+def give_to_directory_owner(path: Path) -> None:
+    """Hand a dump written as root to whoever owns the backups directory.
+
+    The compose service runs as root so it can always write the bind mount; a
+    fixed non-root UID broke deploys on any Linux host whose user isn't 1000.
+    The mounted directory's owner is the host user, so the dumps end up theirs.
+    Docker Desktop on macOS already maps writes to the host user and may refuse
+    or ignore chown on a bind mount, so a failure here is not an error.
+    """
+    if os.geteuid() != 0:
+        return
+    owner = path.parent.stat()
+    with contextlib.suppress(OSError):
+        os.chown(path, owner.st_uid, owner.st_gid)
 
 
 async def targets(core_url: str, product_url: str) -> list[Target]:

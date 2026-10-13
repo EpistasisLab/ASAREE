@@ -123,3 +123,33 @@ def test_real_dump_restores_the_pre_migration_schema(tmp_path: Path):
         assert "alembic_version" in listing.stdout
     finally:
         asyncio.run(admin('DROP DATABASE IF EXISTS "asaree_t_backup"'))
+
+
+def test_dumps_written_as_root_go_to_the_backups_directory_owner(tmp_path: Path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(backup.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(backup.os, "chown", lambda path, uid, gid: calls.append((Path(path).name, uid, gid)))
+    dump = tmp_path / "x.dump"
+    dump.touch()
+    backup.give_to_directory_owner(dump)
+    owner = tmp_path.stat()
+    assert calls == [("x.dump", owner.st_uid, owner.st_gid)]
+
+
+def test_a_refused_chown_does_not_fail_the_backup(tmp_path: Path, monkeypatch):
+    def refuse(*args):
+        raise PermissionError("bind mount refuses chown")
+
+    monkeypatch.setattr(backup.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(backup.os, "chown", refuse)
+    dump = tmp_path / "x.dump"
+    dump.touch()
+    backup.give_to_directory_owner(dump)  # no exception: Docker Desktop on macOS
+
+
+def test_a_non_root_run_leaves_ownership_alone(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(backup.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(backup.os, "chown", lambda *args: pytest.fail("must not chown"))
+    dump = tmp_path / "x.dump"
+    dump.touch()
+    backup.give_to_directory_owner(dump)

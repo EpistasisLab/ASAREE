@@ -78,7 +78,8 @@ services:
   # Snapshots both databases before either migration chain runs, only when a
   # migration is pending: backups/{db}-{revision}-before-v{release}-{UTC}.dump.
   # Troubleshooting aid, not a backup strategy -- see asaree/migrations/backup.py.
-  # Runs as the host user so the dumps are yours, not root's.
+  # Runs as root so it can always write the mount, then hands each dump to the
+  # owner of ./backups (you), whatever your UID is.
   db-backup:
     build:
       context: .
@@ -87,7 +88,6 @@ services:
       additional_contexts:
         gitdir: ./.git
     container_name: db-backup
-    user: "${ASAREE_BACKUP_UID:-1000}:${ASAREE_BACKUP_GID:-1000}"
     depends_on:
       motoro-postgres:
         condition: service_healthy

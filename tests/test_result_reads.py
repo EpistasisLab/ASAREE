@@ -35,6 +35,7 @@ from asaree.models.result_job import ResultJobMember
 from asaree.models.result_read_model import ResultRefresh
 from asaree.models.user import User
 from asaree.services import result_jobs
+from asaree.services.factorial_cells import summarize_cells
 from asaree.services.result_reads import (
     ResultScope,
     cell_predicates,
@@ -532,3 +533,36 @@ async def test_scale_pages_and_cached_summary_stay_bounded(results_db, count):
     assert len(json.dumps(summary, default=str).encode()) < 16384
     assert summary["counts"]["completed"] == count
     assert elapsed < 2, f"Cached summary + page exceeded 2s: {elapsed:.3f}s at {count} runs"
+
+
+async def test_cell_summaries_aggregate_replicates_in_sql(results_db):
+    db, selected, cell, _ = results_db
+    other = FactorialCell(
+        experiment_id=cell.experiment_id,
+        design_revision_id=cell.design_revision_id,
+        cell_label="other",
+        factor_values={},
+    )
+    db.add(other)
+    await db.flush()
+    db.add_all(
+        [
+            FactorialReplicateResult(cell_id=cell.id, replicate_number=1, replicate_label="condition",
+                                     metric_values={"score": 1, "passed": True, "note": "text"}),
+            FactorialReplicateResult(cell_id=cell.id, replicate_number=2, replicate_label="condition__rep2",
+                                     metric_values={"score": 3.5, "passed": False}),
+            FactorialReplicateResult(cell_id=cell.id, replicate_number=3, replicate_label="condition__rep3"),
+            FactorialReplicateResult(cell_id=other.id, replicate_number=1, replicate_label="other"),
+        ]
+    )
+    await db.flush()
+    summaries = {
+        row["cell_label"]: row
+        for row in await summarize_cells(db, experiment_id=cell.experiment_id, revision_id=cell.design_revision_id)
+    }
+    assert summaries["condition"]["replicate_count"] == 3
+    assert summaries["condition"]["scored_count"] == 2
+    assert summaries["condition"]["metrics"] == {"score": {"sum": 4.5, "count": 2}, "passed": {"sum": 1.0, "count": 2}}
+    assert summaries["other"] == {**summaries["other"], "replicate_count": 1, "scored_count": 0, "metrics": {}}
+    # A revision id from another experiment never leaks its cells.
+    assert await summarize_cells(db, experiment_id=uuid.uuid4(), revision_id=cell.design_revision_id) == []

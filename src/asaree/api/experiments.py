@@ -55,7 +55,7 @@ from asaree.services.factorial_analysis import (
     analyze_experiment_design,
     analyze_factorial,
 )
-from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
+from asaree.services.factorial_cells import get_replicate, list_replicates, summarize_cells, upsert_replicate
 from asaree.services.measurement_engine import (
     ExperimentSnapshot,
     MeasurementEngine,
@@ -382,6 +382,23 @@ class ReplicateResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class MetricAggregate(BaseModel):
+    sum: float
+    count: int
+
+
+class CellSummaryResponse(BaseModel):
+    """One cell's replicate counts and per-metric sum/count, aggregated server-side."""
+
+    cell_id: uuid.UUID
+    cell_label: str
+    factor_values: dict[str, Any]
+    replicate_count: int
+    scored_count: int
+    updated_at: datetime | None
+    metrics: dict[str, MetricAggregate]
 
 
 async def _get_owned_experiment(db: DbSession, experiment_id: uuid.UUID, user: CurrentUser) -> Any:
@@ -1258,6 +1275,16 @@ async def list_replicates_endpoint(
     await _get_owned_experiment(db, experiment_id, user)
     replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=revision_id)
     return [ReplicateResponse.model_validate(replicate) for replicate in replicates]
+
+
+@router.get("/{experiment_id}/cell-summaries", response_model=list[CellSummaryResponse])
+async def list_cell_summaries_endpoint(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession, revision_id: uuid.UUID | None = None
+) -> list[dict[str, Any]]:
+    """Per-cell aggregates for the Cells tab: sized by factor combinations, not
+    replicates, so it stays small however many replicates a design has."""
+    await _get_owned_experiment(db, experiment_id, user)
+    return await summarize_cells(db, experiment_id=experiment_id, revision_id=revision_id)
 
 
 @router.get("/{experiment_id}/replicates.csv")

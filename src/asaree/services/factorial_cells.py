@@ -13,7 +13,8 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Float, and_, case, cast, func, literal, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only, selectinload
 
@@ -143,6 +144,72 @@ async def list_replicates(
         .scalars()
         .all()
     )
+
+
+async def summarize_cells(
+    db: AsyncSession, *, experiment_id: uuid.UUID, revision_id: uuid.UUID | None = None
+) -> list[dict[str, Any]]:
+    """One row per cell with replicate counts and per-metric sum/count.
+
+    Aggregated in SQL so the response grows with the number of factor
+    combinations, not replicates. Sum/count (not a mean) lets callers pool
+    several cells into one replicate-weighted mean, e.g. a heatmap square.
+    Booleans count as 0/1, matching how replicate metrics are averaged.
+    """
+    resolved = await _resolve_revision_id(db, experiment_id, revision_id)
+    if resolved is None:
+        return []
+    cell, replicate = FactorialCell, FactorialReplicateResult
+    in_revision = (cell.experiment_id == experiment_id, cell.design_revision_id == resolved)
+    scored = and_(replicate.metric_values.is_not(None), func.jsonb_typeof(replicate.metric_values) != "null")
+    counts = (
+        await db.execute(
+            select(
+                cell.id,
+                cell.cell_label,
+                cell.factor_values,
+                func.count(replicate.id).label("replicate_count"),
+                func.count(replicate.id).filter(scored).label("scored_count"),
+                func.max(replicate.updated_at).label("updated_at"),
+            )
+            .join(replicate, replicate.cell_id == cell.id)
+            .where(*in_revision)
+            .group_by(cell.id)
+            .order_by(cell.cell_label)
+        )
+    ).all()
+    entry = func.jsonb_each(replicate.metric_values).table_valued("key", "value").render_derived("kv")
+    value_type = func.jsonb_typeof(entry.c.value)
+    numeric = case(
+        (value_type == "boolean", case((entry.c.value == cast(literal("true"), JSONB), 1.0), else_=0.0)),
+        else_=cast(entry.c.value, Float),
+    )
+    metrics = (
+        await db.execute(
+            select(replicate.cell_id, entry.c.key, func.sum(numeric), func.count())
+            .select_from(replicate)
+            .join(cell, replicate.cell_id == cell.id)
+            .join(entry, literal(True))
+            .where(*in_revision, func.jsonb_typeof(replicate.metric_values) == "object")
+            .where(value_type.in_(("number", "boolean")))
+            .group_by(replicate.cell_id, entry.c.key)
+        )
+    ).all()
+    by_cell: dict[uuid.UUID, dict[str, dict[str, float]]] = {}
+    for cell_id, key, total, count in metrics:
+        by_cell.setdefault(cell_id, {})[key] = {"sum": total, "count": count}
+    return [
+        {
+            "cell_id": row.id,
+            "cell_label": row.cell_label,
+            "factor_values": row.factor_values or {},
+            "replicate_count": row.replicate_count,
+            "scored_count": row.scored_count,
+            "updated_at": row.updated_at,
+            "metrics": by_cell.get(row.id, {}),
+        }
+        for row in counts
+    ]
 
 
 async def upsert_replicate(

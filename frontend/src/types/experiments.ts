@@ -553,6 +553,19 @@ export interface RowCell {
   replicates?: Array<{ replicate_result_id: string; replicate_label: string; replicate_number: number }>
 }
 
+/** One cell aggregated server-side (GET /experiments/{id}/cell-summaries):
+ * sized by factor combinations, not replicates. Metrics carry sum/count rather
+ * than a mean so several cells can be pooled into one replicate-weighted mean. */
+export interface CellSummary {
+  cell_id: string
+  cell_label: string
+  factor_values: Record<string, unknown>
+  replicate_count: number
+  scored_count: number
+  updated_at: string | null
+  metrics: Record<string, { sum: number; count: number }>
+}
+
 export interface Replicate {
   // One independently runnable observation within the owning cell.
   id: string

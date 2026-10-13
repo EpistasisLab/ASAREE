@@ -6,16 +6,15 @@ import {
   deriveFactors,
   displayFactorLevel,
   formatMetricLabel,
-  groupReplicatesIntoCells,
   heatColor,
-  meanMetric,
   metricValueSuffix,
   pickDefaultMetric,
+  pooledMean,
   scaledMetricValue,
   type FactorSpec,
 } from '@/lib/experiment'
 import { cn } from '@/lib/utils'
-import type { Experiment, Replicate } from '@/types/experiments'
+import type { CellSummary, Experiment } from '@/types/experiments'
 
 /** Why there's no grid here, said out loud in one dim line rather than
  * rendering nothing at all. The table below still carries every number, so
@@ -48,20 +47,19 @@ function HeatmapUnavailable({ reason }: { reason: string }) {
  * three components to make that happen. The parent marks the container --
  * see CellsTab's own `@container`.
  */
-export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: Replicate[] }) {
+export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; cells: CellSummary[] }) {
   const availableMetrics = useMemo(() => availableMetricKeys(cells), [cells])
   const defaultMetric = useMemo(() => pickDefaultMetric(experiment, cells), [experiment, cells])
   const [metricKey, setMetricKey] = useState<string | null>(defaultMetric)
   const activeMetric = metricKey && availableMetrics.includes(metricKey) ? metricKey : defaultMetric
 
   const factors = useMemo(() => deriveFactors(cells, experiment.design_spec), [cells, experiment.design_spec])
-  const cellCount = useMemo(() => groupReplicatesIntoCells(cells).length, [cells])
 
   if (!factors || factors.length < 1)
     return <HeatmapUnavailable reason="these cells carry no factor values to lay out as axes" />
   if (factors.length > 3)
     return <HeatmapUnavailable reason={`${factors.length} factors here — a heatmap only reads for up to 3`} />
-  if (cellCount < 2) return <HeatmapUnavailable reason="there's only one cell" />
+  if (cells.length < 2) return <HeatmapUnavailable reason="there's only one cell" />
   if (!activeMetric) return <HeatmapUnavailable reason="no replicate has a numeric metric recorded yet" />
 
   const rowFactor = factors[0]
@@ -76,7 +74,7 @@ export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; ce
         if (colFactor.name) match[colFactor.name] = colLevel
         if (facetFactor) match[facetFactor.name] = facetLevel
         const matched = replicatesMatching(cells, match)
-        return { value: meanMetric(matched, activeMetric), count: matched.length }
+        return { value: pooledMean(matched, activeMetric), count: matched.reduce((total, cell) => total + cell.replicate_count, 0) }
       }),
     ),
   )

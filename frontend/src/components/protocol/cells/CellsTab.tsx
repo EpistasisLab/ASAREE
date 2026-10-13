@@ -4,9 +4,8 @@ import { ArrowLeft, Download, Maximize2, Minimize2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { experimentsApi } from '@/api/client'
-import { groupReplicatesIntoCells } from '@/lib/experiment'
 import { sanitizeFilename } from '@/lib/utils'
-import type { Experiment, Replicate } from '@/types/experiments'
+import type { CellSummary, Experiment } from '@/types/experiments'
 import { CellsHeatmap } from './CellsHeatmap'
 import { CellsTable } from './CellsTable'
 import { DesignHistory } from './DesignHistory'
@@ -15,7 +14,7 @@ import { DesignHistory } from './DesignHistory'
 // than the viewport -- the same component renders in a drag-resizable ~320-
 // 1100px panel column and in a full-viewport overlay, and dragging the panel
 // wider has to visibly pay off without a width prop threaded through here.
-function CellsBody({ experiment, cells }: { experiment: Experiment; cells: Replicate[] }) {
+function CellsBody({ experiment, cells }: { experiment: Experiment; cells: CellSummary[] }) {
   return (
     <div className="@container space-y-4">
       <CellsHeatmap experiment={experiment} cells={cells} />
@@ -59,15 +58,14 @@ export function CellsTab({ experiment, perRow = false }: { experiment: Experimen
   // and the CSV button can't disagree about which design they're showing.
   const [revisionId, setRevisionId] = useState<string | null>(null)
 
-  // For the current design this is the same query key the canvas page itself
-  // uses, so it shares one cache entry with the top bar's cells readout and
-  // DesignTab's own invalidation after generating a design -- no second fetch,
-  // no chance of the two disagreeing about how many cells exist. A superseded
-  // revision gets its own key: it's a different set of rows, and it must not
-  // overwrite the shared entry every other reader is looking at.
-  const replicatesQuery = useQuery({
-    queryKey: revisionId ? ['experiments', experiment.id, 'replicates', revisionId] : ['experiments', experiment.id, 'replicates'],
-    queryFn: () => experimentsApi.listReplicates(experiment.id, revisionId ?? undefined),
+  // Server-side per-cell aggregates, never one row per replicate: a design can
+  // carry tens of thousands of replicates. The key sits under
+  // ['experiments', id, 'replicates'] so DesignTab/RunsTab's existing
+  // invalidations after generating or running still refresh it, and a
+  // superseded revision gets its own entry so it never overwrites the current one.
+  const summariesQuery = useQuery({
+    queryKey: ['experiments', experiment.id, 'replicates', 'cell-summaries', revisionId ?? 'current'],
+    queryFn: () => experimentsApi.listCellSummaries(experiment.id, revisionId ?? undefined),
   })
 
   useEffect(() => {
@@ -104,7 +102,7 @@ export function CellsTab({ experiment, perRow = false }: { experiment: Experimen
     )
   }
 
-  if (replicatesQuery.isLoading) {
+  if (summariesQuery.isLoading) {
     return (
       <div className="space-y-3 p-3">
         <Skeleton className="h-8 w-full" />
@@ -113,9 +111,10 @@ export function CellsTab({ experiment, perRow = false }: { experiment: Experimen
     )
   }
 
-  const cells = perRow ? replicatesQuery.data?.map(replicate => ({ ...replicate, metric_values: null })) : replicatesQuery.data
-  const cellCount = cells ? groupReplicatesIntoCells(cells).length : 0
-  const scoredReplicates = cells?.filter((replicate) => replicate.metric_values).length ?? 0
+  const cells = perRow ? summariesQuery.data?.map(cell => ({ ...cell, scored_count: 0, metrics: {} })) : summariesQuery.data
+  const cellCount = cells?.length ?? 0
+  const replicateCount = cells?.reduce((total, cell) => total + cell.replicate_count, 0) ?? 0
+  const scoredReplicates = cells?.reduce((total, cell) => total + cell.scored_count, 0) ?? 0
   const viewingHistory = revisionId !== null
 
   // The history list stays mounted through the error/empty cases below: an
@@ -127,7 +126,7 @@ export function CellsTab({ experiment, perRow = false }: { experiment: Experimen
   )
 
   let body
-  if (replicatesQuery.isError || !cells) {
+  if (summariesQuery.isError || !cells) {
     body = <p className="text-sm text-muted-foreground">Could not load this experiment's cells.</p>
   } else if (cells.length === 0) {
     body = (
@@ -162,7 +161,7 @@ export function CellsTab({ experiment, perRow = false }: { experiment: Experimen
       <div className="fixed inset-0 z-50 flex flex-col bg-background p-4">
         <div className="mb-3 flex items-center justify-between">
           <p className="text-sm font-semibold">
-            Cells — <span className="font-mono text-muted-foreground">{cellCount} {cellCount === 1 ? 'cell' : 'cells'} · {scoredReplicates}/{cells?.length ?? 0} replicates scored</span>
+            Cells — <span className="font-mono text-muted-foreground">{cellCount} {cellCount === 1 ? 'cell' : 'cells'} · {scoredReplicates}/{replicateCount} replicates scored</span>
           </p>
           <div className="flex items-center gap-2">
             <Button disabled={perRow} variant="outline" size="sm" onClick={() => void handleDownloadCsv()}>
@@ -186,7 +185,7 @@ export function CellsTab({ experiment, perRow = false }: { experiment: Experimen
     <div className="flex flex-col gap-3 p-3 text-sm">
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-xs text-muted-foreground">
-          {cellCount} {cellCount === 1 ? 'cell' : 'cells'} · {scoredReplicates}/{cells?.length ?? 0} replicates scored
+          {cellCount} {cellCount === 1 ? 'cell' : 'cells'} · {scoredReplicates}/{replicateCount} replicates scored
         </span>
         <div className="flex items-center gap-2">
           <Button disabled={perRow} variant="outline" size="icon-sm" aria-label="Download replicates CSV" onClick={() => void handleDownloadCsv()}>

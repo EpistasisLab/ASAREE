@@ -24,6 +24,7 @@ import type {
   MetricRecommendationMetadata,
   MeasurementPlanValidationReport,
   Replicate,
+  CellSummary,
   Trial,
 } from '@/types/experiments'
 import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse, ModelCapabilities } from '@/types/llmSettings'
@@ -307,6 +308,10 @@ export const experimentsApi = {
   // superseded revision's instead (the design-history drill-down).
   listReplicates: (id: string, revisionId?: string) =>
     request<Replicate[]>(revisionId ? `/experiments/${id}/replicates?revision_id=${revisionId}` : `/experiments/${id}/replicates`),
+  // Per-cell aggregates for the Cells tab -- never one row per replicate, so it
+  // stays small for designs with tens of thousands of replicates.
+  listCellSummaries: (id: string, revisionId?: string) =>
+    request<CellSummary[]>(revisionId ? `/experiments/${id}/cell-summaries?revision_id=${revisionId}` : `/experiments/${id}/cell-summaries`),
   // Every generation of this experiment's design, newest first -- the first
   // entry (superseded_at === null) is the current one.
   listDesignRevisions: (id: string) => request<DesignRevision[]>(`/experiments/${id}/design-revisions`),

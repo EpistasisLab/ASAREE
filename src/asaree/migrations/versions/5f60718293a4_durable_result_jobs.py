@@ -11,7 +11,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE INDEX ix_protocol_runs_legacy_result_slot ON protocol_runs "
+    op.execute("CREATE INDEX IF NOT EXISTS ix_protocol_runs_legacy_result_slot ON protocol_runs "
         "(protocol_id, protocol_revision_id, design_revision_id, replicate_label, created_at DESC, id DESC) "
         "WHERE replicate_result_id IS NULL AND row_result_id IS NULL")
     op.create_table(
@@ -43,9 +43,8 @@ def upgrade() -> None:
         sa.Column("error", sa.Text),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.UniqueConstraint("owner_id", "request_key"),
-    )
-    op.create_index("ix_result_jobs_pending", "result_jobs", ["status", "created_at"])
+        sa.UniqueConstraint("owner_id", "request_key"), if_not_exists=True)
+    op.create_index("ix_result_jobs_pending", "result_jobs", ["status", "created_at"], if_not_exists=True)
     op.create_table(
         "result_job_members",
         sa.Column(
@@ -62,14 +61,12 @@ def upgrade() -> None:
         sa.Column("expected_run_id", pg.UUID(as_uuid=True)),
         sa.Column("processed", sa.Boolean, nullable=False),
         sa.Column("run_id", pg.UUID(as_uuid=True), sa.ForeignKey("protocol_runs.id", ondelete="SET NULL")),
-        sa.Column("delivered", sa.Boolean, nullable=False),
-    )
+        sa.Column("delivered", sa.Boolean, nullable=False), if_not_exists=True)
     op.create_index(
-        "ix_result_job_members_pending", "result_job_members", ["job_id", "processed", "replicate_id", "row_index"]
-    )
+        "ix_result_job_members_pending", "result_job_members", ["job_id", "processed", "replicate_id", "row_index"], if_not_exists=True)
 
 
 def downgrade() -> None:
-    op.drop_index("ix_protocol_runs_legacy_result_slot", table_name="protocol_runs")
-    op.drop_table("result_job_members")
-    op.drop_table("result_jobs")
+    op.drop_index("ix_protocol_runs_legacy_result_slot", table_name="protocol_runs", if_exists=True)
+    op.drop_table("result_job_members", if_exists=True)
+    op.drop_table("result_jobs", if_exists=True)

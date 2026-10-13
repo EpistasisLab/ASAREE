@@ -1,6 +1,8 @@
 """Compact result previews, durable refresh events and paginated read indexes."""
 
 from alembic import op
+
+from asaree.migrations import guards
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -11,8 +13,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("protocol_runs", sa.Column("result_summary", postgresql.JSONB(), nullable=False, server_default="{}"))
-    op.add_column("protocol_runs", sa.Column("usage_summary", postgresql.JSONB(), nullable=True))
+    op.add_column("protocol_runs", sa.Column("result_summary", postgresql.JSONB(), nullable=False, server_default="{}"), if_not_exists=True)
+    op.add_column("protocol_runs", sa.Column("usage_summary", postgresql.JSONB(), nullable=True), if_not_exists=True)
     op.create_table(
         "result_refreshes",
         sa.Column("scope_key", sa.String(120), primary_key=True),
@@ -22,34 +24,32 @@ def upgrade() -> None:
         sa.Column("generation", sa.BigInteger(), nullable=False, server_default="1"),
         sa.Column("processed_generation", sa.BigInteger(), nullable=False, server_default="0"),
         sa.Column("summary", postgresql.JSONB()), sa.Column("error", sa.Text()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-    )
-    op.create_index("ix_result_refreshes_protocol_id", "result_refreshes", ["protocol_id"])
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()), if_not_exists=True)
+    op.create_index("ix_result_refreshes_protocol_id", "result_refreshes", ["protocol_id"], if_not_exists=True)
     op.create_table(
         "result_cell_rollups",
         sa.Column("scope_key", sa.String(120), sa.ForeignKey("result_refreshes.scope_key", ondelete="CASCADE"), primary_key=True),
         sa.Column("cell_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("factorial_cells.id", ondelete="CASCADE"), primary_key=True),
-        sa.Column("generation", sa.BigInteger(), nullable=False), sa.Column("data", postgresql.JSONB(), nullable=False),
-    )
+        sa.Column("generation", sa.BigInteger(), nullable=False), sa.Column("data", postgresql.JSONB(), nullable=False), if_not_exists=True)
     op.create_table("result_cell_metrics",
         sa.Column("scope_key", sa.String(120), sa.ForeignKey("result_refreshes.scope_key", ondelete="CASCADE"), primary_key=True),
         sa.Column("metric_key", sa.String(255), primary_key=True),
         sa.Column("cell_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("factorial_cells.id", ondelete="CASCADE"), primary_key=True),
-        sa.Column("value", sa.Float()), sa.Column("generation", sa.BigInteger(), nullable=False))
-    op.create_index("ix_result_cell_metric_rank", "result_cell_metrics", ["scope_key", "metric_key", "value", "cell_id"])
+        sa.Column("value", sa.Float()), sa.Column("generation", sa.BigInteger(), nullable=False), if_not_exists=True)
+    op.create_index("ix_result_cell_metric_rank", "result_cell_metrics", ["scope_key", "metric_key", "value", "cell_id"], if_not_exists=True)
     op.create_index("ix_protocol_runs_slot_version_order", "protocol_runs",
                     ["protocol_id", "protocol_revision_id", "design_revision_id", "replicate_result_id", "created_at", "id"],
-                    postgresql_where=sa.text("row_result_id IS NULL"))
+                    postgresql_where=sa.text("row_result_id IS NULL"), if_not_exists=True)
     op.create_index("ix_protocol_runs_row_version_order", "protocol_runs",
                     ["row_result_id", "protocol_revision_id", "created_at", "id"],
-                    postgresql_where=sa.text("row_result_id IS NOT NULL"))
-    op.create_index("ix_factorial_cells_revision_page", "factorial_cells", ["experiment_id", "design_revision_id", "id"])
-    op.create_index("ix_factorial_rows_version_page", "factorial_row_results", ["protocol_revision_id", "replicate_result_id", "id"])
+                    postgresql_where=sa.text("row_result_id IS NOT NULL"), if_not_exists=True)
+    op.create_index("ix_factorial_cells_revision_page", "factorial_cells", ["experiment_id", "design_revision_id", "id"], if_not_exists=True)
+    op.create_index("ix_factorial_rows_version_page", "factorial_row_results", ["protocol_revision_id", "replicate_result_id", "id"], if_not_exists=True)
     # Previews are derived at the persistence seam, including notebook/legacy writes.
     # Reported values stay opaque; only bounded textual previews leave list reads.
     # asyncpg rejects multi-statement strings, so each DDL statement executes on its own.
     op.execute("""
-    CREATE FUNCTION asaree_result_preview(doc jsonb, nodes jsonb) RETURNS jsonb
+    CREATE OR REPLACE FUNCTION asaree_result_preview(doc jsonb, nodes jsonb) RETURNS jsonb
     LANGUAGE sql IMMUTABLE AS $$
       SELECT jsonb_build_object(
         'observations', COALESCE((SELECT jsonb_agg(jsonb_build_object(
@@ -74,15 +74,16 @@ def upgrade() -> None:
     $$;
     """)
     op.execute("""
-    CREATE FUNCTION asaree_preview_run() RETURNS trigger LANGUAGE plpgsql AS $$
+    CREATE OR REPLACE FUNCTION asaree_preview_run() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN NEW.result_summary := asaree_result_preview(NEW.attempt_result, NEW.node_runs); RETURN NEW; END $$;
     """)
+    op.execute("DROP TRIGGER IF EXISTS result_preview ON protocol_runs")
     op.execute("""
     CREATE TRIGGER result_preview BEFORE INSERT OR UPDATE OF attempt_result, node_runs ON protocol_runs
       FOR EACH ROW EXECUTE FUNCTION asaree_preview_run();
     """)
     op.execute("""
-    CREATE FUNCTION asaree_dirty_results(p uuid, v uuid, d uuid) RETURNS void LANGUAGE plpgsql AS $$
+    CREATE OR REPLACE FUNCTION asaree_dirty_results(p uuid, v uuid, d uuid) RETURNS void LANGUAGE plpgsql AS $$
     DECLARE k text; actual_design uuid;
     BEGIN
       IF NOT EXISTS (SELECT 1 FROM protocols WHERE id=p AND experiment_id IS NOT NULL) THEN RETURN; END IF;
@@ -96,18 +97,19 @@ def upgrade() -> None:
     END $$;
     """)
     op.execute("""
-    CREATE FUNCTION asaree_run_results_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+    CREATE OR REPLACE FUNCTION asaree_run_results_changed() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
       IF TG_OP='DELETE' THEN PERFORM asaree_dirty_results(OLD.protocol_id,OLD.protocol_revision_id,OLD.design_revision_id); RETURN OLD; END IF;
       PERFORM asaree_dirty_results(NEW.protocol_id,NEW.protocol_revision_id,NEW.design_revision_id); RETURN NEW;
     END $$;
     """)
+    op.execute("DROP TRIGGER IF EXISTS results_changed ON protocol_runs")
     op.execute("""
     CREATE TRIGGER results_changed AFTER INSERT OR DELETE OR UPDATE OF status, attempt_result, usage_summary ON protocol_runs
       FOR EACH ROW EXECUTE FUNCTION asaree_run_results_changed();
     """)
     op.execute("""
-    CREATE FUNCTION asaree_design_results_changed() RETURNS trigger LANGUAGE plpgsql AS $$
+    CREATE OR REPLACE FUNCTION asaree_design_results_changed() RETURNS trigger LANGUAGE plpgsql AS $$
     DECLARE e uuid; p record; d uuid;
     BEGIN
       IF TG_TABLE_NAME='protocols' THEN
@@ -126,18 +128,22 @@ def upgrade() -> None:
       RETURN COALESCE(NEW,OLD);
     END $$;
     """)
+    op.execute("DROP TRIGGER IF EXISTS protocol_results_changed ON protocols")
     op.execute("""
     CREATE TRIGGER protocol_results_changed AFTER INSERT OR UPDATE OF published_revision_id ON protocols
       FOR EACH ROW EXECUTE FUNCTION asaree_design_results_changed();
     """)
+    op.execute("DROP TRIGGER IF EXISTS cell_results_changed ON factorial_cells")
     op.execute("""
     CREATE TRIGGER cell_results_changed AFTER INSERT OR DELETE OR UPDATE ON factorial_cells
       FOR EACH ROW EXECUTE FUNCTION asaree_design_results_changed();
     """)
+    op.execute("DROP TRIGGER IF EXISTS replicate_results_changed ON factorial_replicate_results")
     op.execute("""
     CREATE TRIGGER replicate_results_changed AFTER INSERT OR DELETE OR UPDATE ON factorial_replicate_results
       FOR EACH ROW EXECUTE FUNCTION asaree_design_results_changed();
     """)
+    op.execute("DROP TRIGGER IF EXISTS row_results_changed ON factorial_row_results")
     op.execute("""
     CREATE TRIGGER row_results_changed AFTER INSERT OR DELETE OR UPDATE ON factorial_row_results
       FOR EACH ROW EXECUTE FUNCTION asaree_design_results_changed();
@@ -151,17 +157,17 @@ def downgrade() -> None:
                            ("factorial_replicate_results", "replicate_results_changed"),
                            ("factorial_cells", "cell_results_changed"), ("protocols", "protocol_results_changed"),
                            ("protocol_runs", "results_changed"), ("protocol_runs", "result_preview")]:
-        op.execute(f"DROP TRIGGER {trigger} ON {table}")
+        op.execute(f"DROP TRIGGER IF EXISTS {trigger} ON {table}")
     for function in ["asaree_design_results_changed()", "asaree_run_results_changed()",
                      "asaree_preview_run()", "asaree_dirty_results(uuid, uuid, uuid)", "asaree_result_preview(jsonb, jsonb)"]:
-        op.execute(f"DROP FUNCTION {function}")
+        op.execute(f"DROP FUNCTION IF EXISTS {function}")
     for table, index in [("protocol_runs", "ix_protocol_runs_slot_version_order"),
                          ("protocol_runs", "ix_protocol_runs_row_version_order"),
                          ("factorial_cells", "ix_factorial_cells_revision_page"),
                          ("factorial_row_results", "ix_factorial_rows_version_page")]:
-        op.drop_index(index, table_name=table)
-    op.drop_table("result_cell_metrics")
-    op.drop_table("result_cell_rollups")
-    op.drop_table("result_refreshes")
-    op.drop_column("protocol_runs", "usage_summary")
-    op.drop_column("protocol_runs", "result_summary")
+        op.drop_index(index, table_name=table, if_exists=True)
+    op.drop_table("result_cell_metrics", if_exists=True)
+    op.drop_table("result_cell_rollups", if_exists=True)
+    op.drop_table("result_refreshes", if_exists=True)
+    guards.drop_column("protocol_runs", "usage_summary")
+    guards.drop_column("protocol_runs", "result_summary")

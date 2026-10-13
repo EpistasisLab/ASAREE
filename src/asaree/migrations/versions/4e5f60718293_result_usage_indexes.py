@@ -10,7 +10,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE INDEX ix_result_cell_metric_rank_desc ON result_cell_metrics "
+    op.execute("CREATE INDEX IF NOT EXISTS ix_result_cell_metric_rank_desc ON result_cell_metrics "
                "(scope_key, metric_key, value DESC, cell_id)")
     op.create_index(
         "ix_protocol_runs_usage_pending",
@@ -19,8 +19,7 @@ def upgrade() -> None:
         postgresql_where=sa.text(
             "status IN ('completed','failed','cancelled','limit_reached') AND NOT is_test_run "
             "AND target_node_id IS NULL AND (usage_summary IS NULL OR usage_summary->>'settled'='false')"
-        ),
-    )
+        ), if_not_exists=True)
     # A producer binding may contain a long rubric/config. List reads need only
     # producer identity, never its full configuration document.
     op.execute("""
@@ -52,6 +51,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_result_cell_metric_rank_desc", table_name="result_cell_metrics")
-    op.drop_index("ix_protocol_runs_usage_pending", table_name="protocol_runs")
+    op.drop_index("ix_result_cell_metric_rank_desc", table_name="result_cell_metrics", if_exists=True)
+    op.drop_index("ix_protocol_runs_usage_pending", table_name="protocol_runs", if_exists=True)
     # The bounded producer identity is backward compatible with the original preview contract.

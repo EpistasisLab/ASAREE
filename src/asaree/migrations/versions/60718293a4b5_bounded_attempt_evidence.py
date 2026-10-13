@@ -1,6 +1,8 @@
 """Bound selected attempt previews; exact evidence remains in chunked reads/exports."""
 
 from alembic import op
+
+from asaree.migrations import guards
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -11,17 +13,17 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.drop_index('ix_protocol_runs_usage_pending', table_name='protocol_runs')
+    op.drop_index('ix_protocol_runs_usage_pending', table_name='protocol_runs', if_exists=True)
     op.create_index('ix_protocol_runs_usage_pending', 'protocol_runs', ['created_at', 'id'],
         postgresql_where=sa.text("status IN ('completed','failed','cancelled','limit_reached') AND NOT is_test_run "
-            "AND target_node_id IS NULL AND (usage_summary IS NULL OR usage_summary='null'::jsonb OR usage_summary->>'settled'='false')"))
-    op.add_column("registered_datasets", sa.Column("row_schema", JSONB, nullable=True))
+            "AND target_node_id IS NULL AND (usage_summary IS NULL OR usage_summary='null'::jsonb OR usage_summary->>'settled'='false')"), if_not_exists=True)
+    op.add_column("registered_datasets", sa.Column("row_schema", JSONB, nullable=True), if_not_exists=True)
     op.create_index("ix_registered_datasets_row_schema_pending", "registered_datasets", ["updated_at"],
-        postgresql_where=sa.text("row_schema->>'status'='pending'"))
-    op.execute("CREATE INDEX ix_protocol_runs_head_page ON protocol_runs (protocol_id, created_at DESC, id DESC) "
+        postgresql_where=sa.text("row_schema->>'status'='pending'"), if_not_exists=True)
+    op.execute("CREATE INDEX IF NOT EXISTS ix_protocol_runs_head_page ON protocol_runs (protocol_id, created_at DESC, id DESC) "
         "WHERE NOT is_test_run AND target_node_id IS NULL")
     op.execute("""
-    CREATE FUNCTION asaree_node_preview(nodes jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+    CREATE OR REPLACE FUNCTION asaree_node_preview(nodes jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
       SELECT COALESCE(jsonb_object_agg(key, jsonb_build_object(
         'status',value->'status','run_id',value->'run_id','bypassed',value->'bypassed',
         'output_text',left(value->>'output_text',4096),'error',left(value->>'error',2048),
@@ -30,7 +32,7 @@ def upgrade() -> None:
     $$;
     """)
     op.execute("""
-    CREATE FUNCTION asaree_attempt_preview(doc jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+    CREATE OR REPLACE FUNCTION asaree_attempt_preview(doc jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
       SELECT jsonb_build_object(
         'metric_values', CASE WHEN length((doc->'metric_values')::text)<=16384 THEN doc->'metric_values' ELSE '{}'::jsonb END,
         'metric_values_deferred', COALESCE(length((doc->'metric_values')::text)>16384,false),
@@ -60,12 +62,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index('ix_protocol_runs_usage_pending', table_name='protocol_runs')
+    op.drop_index('ix_protocol_runs_usage_pending', table_name='protocol_runs', if_exists=True)
     op.create_index('ix_protocol_runs_usage_pending', 'protocol_runs', ['created_at', 'id'],
         postgresql_where=sa.text("status IN ('completed','failed','cancelled','limit_reached') AND NOT is_test_run "
-            "AND target_node_id IS NULL AND (usage_summary IS NULL OR usage_summary->>'settled'='false')"))
-    op.drop_index("ix_registered_datasets_row_schema_pending", table_name="registered_datasets")
-    op.drop_column("registered_datasets", "row_schema")
-    op.drop_index("ix_protocol_runs_head_page", table_name="protocol_runs")
-    op.execute("DROP FUNCTION asaree_attempt_preview(jsonb)")
-    op.execute("DROP FUNCTION asaree_node_preview(jsonb)")
+            "AND target_node_id IS NULL AND (usage_summary IS NULL OR usage_summary->>'settled'='false')"), if_not_exists=True)
+    op.drop_index("ix_registered_datasets_row_schema_pending", table_name="registered_datasets", if_exists=True)
+    guards.drop_column("registered_datasets", "row_schema")
+    op.drop_index("ix_protocol_runs_head_page", table_name="protocol_runs", if_exists=True)
+    op.execute("DROP FUNCTION IF EXISTS asaree_attempt_preview(jsonb)")
+    op.execute("DROP FUNCTION IF EXISTS asaree_node_preview(jsonb)")

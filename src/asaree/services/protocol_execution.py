@@ -4800,7 +4800,9 @@ async def plan_cell_runs(
             await db.execute(
                 select(Protocol)
                 .where(Protocol.id == protocol_id)
-                .with_for_update()
+                # NO KEY UPDATE: see result_jobs.create_job -- FOR UPDATE also
+                # blocked finishing runs' foreign-key checks and deadlocked.
+                .with_for_update(key_share=True)
                 .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()

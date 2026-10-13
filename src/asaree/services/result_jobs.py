@@ -114,8 +114,12 @@ async def create_job(
     job = stored
     if kind == "cancel":
         # Serialize against planning transactions so Stop cannot be refilled by
-        # an already-confirmed batch after this request commits.
-        await db.execute(select(Protocol.id).where(Protocol.id == scope.protocol_id).with_for_update())
+        # an already-confirmed batch after this request commits. NO KEY UPDATE,
+        # like every protocol lock here: it still excludes other planners, Stop
+        # and publishing, but not the foreign-key checks of runs finishing
+        # meanwhile -- FOR UPDATE blocked those, and with the results trigger's
+        # shared refresh row that deadlocked (2 of 485 runs in a large batch).
+        await db.execute(select(Protocol.id).where(Protocol.id == scope.protocol_id).with_for_update(key_share=True))
         job.params = {**job.params, "cutoff": datetime.now(UTC).isoformat()}
         planners = update(ResultJob).where(
             ResultJob.protocol_id == scope.protocol_id,
@@ -318,7 +322,9 @@ async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> 
 
 
 async def plan_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> None:
-    protocol = await db.scalar(select(Protocol).where(Protocol.id == scope.protocol_id).with_for_update())
+    protocol = await db.scalar(
+        select(Protocol).where(Protocol.id == scope.protocol_id).with_for_update(key_share=True)
+    )
     if protocol is None or protocol.published_revision_id != scope.protocol_revision_id:
         raise ValueError("Publication changed. Prepare and confirm a new batch for the current version.")
     members = list(
@@ -481,7 +487,9 @@ async def drain_result_commands(_ctx: dict[str, Any]) -> None:
                             .values(status=status, progress=progress, updated_at=datetime.now(UTC))
                         )
                     continue
-                await db.execute(select(Protocol.id).where(Protocol.id == job.protocol_id).with_for_update())
+                await db.execute(
+                    select(Protocol.id).where(Protocol.id == job.protocol_id).with_for_update(key_share=True)
+                )
                 job = await db.get(ResultJob, identifier, with_for_update=True, populate_existing=True)
                 if not job or job.status not in ("pending", "queued"):
                     continue

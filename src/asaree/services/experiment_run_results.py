@@ -347,22 +347,22 @@ async def _agent_runs_by_id(run_ids: set[uuid.UUID], owner_ids: set[uuid.UUID]) 
     """
     if not run_ids:
         return {}
-    from motoro.models.database import system_session
-    from motoro.models.run import AgentRun
+    from motoro import runner
 
     result = {}
     identifiers = list(run_ids)
     try:
-        async with system_session(reason="asaree.results: bounded compatibility telemetry") as core_db:
-            for offset in range(0, len(identifiers), 200):
-                rows = (
-                    await core_db.execute(
-                        select(AgentRun.id, AgentRun.token_usage, AgentRun.cost_estimate).where(
-                            AgentRun.id.in_(identifiers[offset : offset + 200]), AgentRun.owner_id.in_(owner_ids)
-                        )
+        for offset in range(0, len(identifiers), 200):
+            rows = await runner.list_run_summaries(run_ids=identifiers[offset : offset + 200])
+            result.update(
+                {
+                    row["id"]: SimpleNamespace(
+                        id=row["id"], token_usage=row["token_usage"], cost_estimate=row["cost_estimate"]
                     )
-                ).mappings()
-                result.update({row["id"]: SimpleNamespace(**row) for row in rows})
+                    for row in rows
+                    if row["owner_id"] in owner_ids
+                }
+            )
     except Exception:
         return {}
     return result

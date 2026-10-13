@@ -686,3 +686,15 @@ async def test_per_row_preview_fits_several_replicates_in_one_step(results_db, m
         steps += 1
     assert job.progress["planned"] == job.progress["scanned"] == 100 * 30
     assert steps == 5  # 33 + 33 + 33 + 1 replicates, then finish
+
+
+@pytest.mark.parametrize("versioned", [True, False])
+def test_slot_query_never_binds_boolean_flags(versioned):
+    """A bound True/False can't be folded in a generic plan: a reused connection
+    then couldn't simplify `replicate_result_id = x OR (<legacy> AND ...)` and
+    scanned every run of the design per slot (rebuild 0.4 s -> 64 s)."""
+    statement = slot_query(scope(versioned=versioned), cutoff=datetime.now(UTC))
+    params = statement.compile(dialect=postgresql.dialect()).params
+    assert not [name for name, value in params.items() if isinstance(value, bool)]
+    rollup = rollup_query(scope(versioned=versioned)).compile(dialect=postgresql.dialect()).params
+    assert not [name for name, value in rollup.items() if isinstance(value, bool)]

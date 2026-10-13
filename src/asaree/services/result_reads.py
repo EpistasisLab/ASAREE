@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Text, and_, case, cast, func, literal, or_, select, tuple_
+from sqlalchemy import Text, and_, case, cast, false, func, literal, or_, select, true, tuple_
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, array, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -125,10 +125,10 @@ def cell_predicates(scope: ResultScope) -> list[Any]:
     names = []
     for factor in factors:
         if not isinstance(factor, dict):
-            return [literal(False)]
+            return [false()]
         name, levels = factor.get("name"), factor.get("levels")
         if not isinstance(name, str) or not isinstance(levels, list) or not levels:
-            return [literal(False)]
+            return [false()]
         names.append(name)
         predicates.append(
             FactorialCell.factor_values[name].in_(
@@ -148,7 +148,7 @@ def parent_predicates(scope: ResultScope) -> list[Any]:
     return (
         [FactorialReplicateResult.replicate_number <= count]
         if isinstance(count, int) and count > 0
-        else [literal(False)]
+        else [false()]
     )
 
 
@@ -217,6 +217,19 @@ async def resolve_result_scope(
     )
 
 
+def legacy_flag(scope: ResultScope) -> Any:
+    """Whether pre-versioning (legacy) runs can match, as a SQL constant.
+
+    Written into the statement, never bound as a parameter: Postgres folds a
+    constant away even in a generic plan, so ``replicate_result_id = x OR (false
+    AND ...)`` keeps using the per-replicate index. Bound, a reused connection's
+    generic plan couldn't simplify the OR and scanned every run of the design
+    for each slot -- the summary rebuild of a 15,786-run experiment went from
+    0.4 s to 66 s mid-batch.
+    """
+    return false() if scope.versioned else true()
+
+
 def slot_query(scope: ResultScope, *, cutoff: Any = None) -> Any:
     """One current execution per stable slot, including slots never attempted.
 
@@ -256,7 +269,7 @@ def slot_query(scope: ResultScope, *, cutoff: Any = None) -> Any:
                 row.raw_sha256,
             )
         )
-        match = and_(run.row_result_id == row.id, run.id == row.run_id if cutoff is None else literal(True))
+        match = and_(run.row_result_id == row.id, run.id == row.run_id if cutoff is None else true())
     else:
         base = base.add_columns(
             parent.id.label("slot_id"),
@@ -271,7 +284,7 @@ def slot_query(scope: ResultScope, *, cutoff: Any = None) -> Any:
                 run.replicate_result_id == parent.id,
                 and_(
                     run.replicate_result_id.is_(None),
-                    literal(not scope.versioned),
+                    legacy_flag(scope),
                     run.replicate_label == parent.replicate_label,
                     run.factor_values == cell.factor_values,
                 ),
@@ -293,13 +306,13 @@ def slot_query(scope: ResultScope, *, cutoff: Any = None) -> Any:
             run.protocol_id == scope.protocol_id,
             or_(
                 run.design_revision_id == scope.design_revision_id,
-                and_(literal(not scope.versioned), run.design_revision_id.is_(None)),
+                and_(legacy_flag(scope), run.design_revision_id.is_(None)),
             ),
             run.protocol_revision_id == scope.protocol_revision_id,
             match,
             run.is_test_run.is_(False),
             run.target_node_id.is_(None),
-            run.created_at <= cutoff if cutoff is not None else literal(True),
+            run.created_at <= cutoff if cutoff is not None else true(),
         )
         .order_by(run.created_at.desc(), run.id.desc())
         .limit(1)
@@ -307,14 +320,14 @@ def slot_query(scope: ResultScope, *, cutoff: Any = None) -> Any:
         .lateral("latest")
     )
     imported = and_(
-        literal(not scope.versioned and scope.unit == "replicate"),
+        true() if not scope.versioned and scope.unit == "replicate" else false(),
         parent.metric_values.is_not(None),
         func.jsonb_typeof(parent.metric_values) == "object",
         parent.metric_values != cast(literal("{}"), JSONB),
         or_(parent.run_id.is_(None), ~select(ProtocolRun.id).where(ProtocolRun.id == parent.run_id).exists()),
     )
     status = func.coalesce(latest.c.status, case((imported, "completed"), else_="not_started"))
-    return base.outerjoin(latest, literal(True)).add_columns(
+    return base.outerjoin(latest, true()).add_columns(
         latest.c.run_id,
         status.label("status"),
         latest.c.created_at,
@@ -669,7 +682,7 @@ async def read_attempts(
                 run.replicate_result_id == slot_id,
                 and_(
                     run.replicate_result_id.is_(None),
-                    literal(not scope.versioned),
+                    legacy_flag(scope),
                     run.replicate_label == slot["replicate_label"],
                     run.factor_values == slot["factor_values"],
                 ),
@@ -803,7 +816,7 @@ async def read_attempt_detail(db: AsyncSession, scope: ResultScope, run_id: uuid
         ProtocolRun.protocol_revision_id == scope.protocol_revision_id,
         or_(
             ProtocolRun.design_revision_id == scope.design_revision_id,
-            and_(literal(not scope.versioned), ProtocolRun.design_revision_id.is_(None)),
+            and_(legacy_flag(scope), ProtocolRun.design_revision_id.is_(None)),
         ),
         ProtocolRun.is_test_run.is_(False),
         ProtocolRun.target_node_id.is_(None),
@@ -839,7 +852,7 @@ async def read_evidence(
                     ProtocolRun.protocol_revision_id == scope.protocol_revision_id,
                     or_(
                         ProtocolRun.design_revision_id == scope.design_revision_id,
-                        and_(literal(not scope.versioned), ProtocolRun.design_revision_id.is_(None)),
+                        and_(legacy_flag(scope), ProtocolRun.design_revision_id.is_(None)),
                     ),
                     ProtocolRun.is_test_run.is_(False),
                     ProtocolRun.target_node_id.is_(None),
@@ -895,7 +908,7 @@ async def read_conversation(
             )
         )
         .select_from(ProtocolRun)
-        .join(items, literal(True))
+        .join(items, true())
         .where(
             ProtocolRun.id == run_id,
             ProtocolRun.protocol_id == scope.protocol_id,

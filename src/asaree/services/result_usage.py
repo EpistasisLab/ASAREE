@@ -11,7 +11,7 @@ from decimal import Decimal
 from math import isfinite
 from typing import Any
 
-from sqlalchemy import and_, case, cast, func, literal, or_, select, update
+from sqlalchemy import and_, case, cast, func, literal, or_, select, true, update
 from sqlalchemy.dialects.postgresql import JSONB
 
 from asaree.models.database import get_session
@@ -160,7 +160,7 @@ async def capture_result_usage(_ctx: dict[str, Any], *, only_run_id: uuid.UUID |
                         ProtocolRun.is_test_run.is_(False),
                         ProtocolRun.target_node_id.is_(None),
                         ProtocolRun.status.in_(TERMINAL),
-                        ProtocolRun.id == only_run_id if only_run_id else literal(True),
+                        ProtocolRun.id == only_run_id if only_run_id else true(),
                         or_(
                             ProtocolRun.usage_summary.is_(None),
                             ProtocolRun.usage_summary == cast(literal("null"), JSONB),

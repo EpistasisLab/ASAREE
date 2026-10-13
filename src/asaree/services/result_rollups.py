@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Float, Text, and_, case, cast, delete, func, literal, select, update
+from sqlalchemy import Float, Text, and_, case, cast, delete, false, func, literal, select, true, update
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -101,9 +101,9 @@ def rollup_query(scope: ResultScope) -> Any:
     )
     values = (
         metric_query.select_from(slots)
-        .join(metrics, literal(True))
+        .join(metrics, true())
         .where(
-            metric_key.is_not(None) if identities else literal(False),
+            metric_key.is_not(None) if identities else false(),
             slots.c.status == "completed",
             slots.c.result["truncated"].as_boolean().is_(False),
         )
@@ -145,7 +145,7 @@ def rollup_query(scope: ResultScope) -> Any:
             metric_stats.c.metrics,
         )
         .select_from(
-            all_usage.outerjoin(parents, literal(True))
+            all_usage.outerjoin(parents, true())
             .outerjoin(stats, stats.c.cell_id == parents.c.cell_id)
             .outerjoin(metric_stats, metric_stats.c.cell_id == parents.c.cell_id)
         )

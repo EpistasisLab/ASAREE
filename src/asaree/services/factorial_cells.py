@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import Float, and_, case, cast, func, literal, select
+from sqlalchemy import Float, and_, case, cast, func, literal, select, true
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only, selectinload
@@ -190,7 +190,7 @@ async def summarize_cells(
             select(replicate.cell_id, entry.c.key, func.sum(numeric), func.count())
             .select_from(replicate)
             .join(cell, replicate.cell_id == cell.id)
-            .join(entry, literal(True))
+            .join(entry, true())
             .where(*in_revision, func.jsonb_typeof(replicate.metric_values) == "object")
             .where(value_type.in_(("number", "boolean")))
             .group_by(replicate.cell_id, entry.c.key)

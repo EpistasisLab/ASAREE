@@ -16,11 +16,14 @@ it('sorts agent groups, component groups, and factor choices alphabetically', ()
     { id: 'd-a', source: 'data', target: 'a', targetHandle: 'dataset' },
   ]
   const groups = groupFactorCreationFields(factorCreationFields(nodes, edges))
-  expect(groups.map(group => group.label)).toEqual(['Alpha', 'Shared or unconnected components', 'Zebra'])
-  expect(groups[0].connectors.map(connector => connector.label)).toEqual(['Agent fields', 'Datasets', 'Skills'])
-  expect(groups[0].connectors.find(connector => connector.label === 'Datasets')?.components.map(component => component.label)).toEqual(['Cohort', 'Datasets on this agent'])
-  expect(groups[0].connectors.find(connector => connector.label === 'Skills')?.components[0].fields.map(field => field.fieldLabel)).toEqual(['All skills on/off', 'Skill levels'])
-  expect(groups[1].connectors[0].components.map(component => component.label)).toEqual(['Shared skill', 'Unconnected skill'])
+  // A component shared by several agents gets its own group, named after them in alphabetical order.
+  expect(groups.map(group => group.label)).toEqual(['Alpha', 'Alpha, Zebra', 'Shared or unconnected components', 'Zebra'])
+  expect(groups[0].connectors.map(connector => connector.label)).toEqual(['Agent', 'Datasets'])
+  expect(groups[0].connectors.find(connector => connector.label === 'Datasets')?.components.map(component => component.label)).toEqual(['Cohort', 'Datasets in this group'])
+  expect(groups[1].connectors.map(connector => connector.label)).toEqual(['Skills'])
+  expect(groups[1].connectors[0].components.map(component => component.label)).toEqual(['Shared skill', 'Skills in this group'])
+  expect(groups[1].connectors[0].components[1].fields.map(field => field.fieldLabel)).toEqual(['All skills on/off', 'Skill levels'])
+  expect(groups[2].connectors[0].components.map(component => component.label)).toEqual(['Unconnected skill'])
 })
 
 it('uses connector labels for every model and MCP family and orders components and fields by name', () => {
@@ -32,7 +35,7 @@ it('uses connector labels for every model and MCP family and orders components a
   const edges: Edge[] = kinds.map((kind) => ({ id: kind, source: kind, target: 'agent' }))
   const groups = groupFactorCreationFields(factorCreationFields(nodes, edges))
   const connectors = groups[0].connectors
-  expect(connectors.map((connector) => connector.label)).toEqual(['Agent fields', 'Model', 'Pattern', 'Tools'])
+  expect(connectors.map((connector) => connector.label)).toEqual(['Agent', 'Model', 'Pattern', 'Tools'])
   expect(connectors.find((connector) => connector.label === 'Model')?.components.map((component) => component.label)).toEqual(['model_anthropic', 'model_azure_foundry', 'model_local', 'model_openai', 'model_openrouter'])
   expect(connectors.find((connector) => connector.label === 'Pattern')?.components[0].fields.map((field) => field.fieldLabel)).toEqual(['Include scratchpad', 'Max iterations', 'Observation format', 'Scratchpad window'])
 })

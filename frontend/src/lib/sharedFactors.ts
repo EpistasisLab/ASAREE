@@ -82,5 +82,5 @@ export function graphWithSharedFactor(graph: ProtocolGraph, nodeId: string, kind
 }
 
 export function factorScopeLabel(graph: ProtocolGraph, nodeId: string, kind: SharedFactorKind): string {
-  return factorRecipients(graph, nodeId, kind).map((node) => String(node.data.label || node.id)).join(', ')
+  return factorRecipients(graph, nodeId, kind).map((node) => String(node.data.label || node.id)).sort((a, b) => a.localeCompare(b)).join(', ')
 }

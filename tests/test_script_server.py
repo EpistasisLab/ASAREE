@@ -107,12 +107,27 @@ def test_no_script_wired_is_reported_not_guessed(tmp_path: Path) -> None:
     assert "empty" in _run(ctx=_wire(tmp_path, "   \n"))["error"]
 
 
-def test_explicit_code_wins_over_the_wired_script(tmp_path: Path) -> None:
+def test_explicit_code_wins_over_the_wired_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A genuine one-off is not overridden -- and it still runs from a file, so
     # its traceback keeps real line numbers.
+    cwd = tmp_path / "server-cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
     out = _run(code="print('one-off')", ctx=_wire(tmp_path, "print('wired')"))
     assert out["stdout"] == "one-off\n"
     assert out["script"].startswith("inline-")
+    # ...but that file is temporary: it used to be left in the server's working
+    # directory, which is how stray inline-*.py files kept appearing in the repo.
+    assert list(cwd.iterdir()) == []
+
+
+def test_a_one_off_still_runs_in_the_servers_working_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only the script file is temporary: a one-off that leaves a file for its
+    # next call still finds it there.
+    monkeypatch.chdir(tmp_path)
+    _run(code="open('note.txt', 'w').write('kept')")
+    assert _run(code="print(open('note.txt').read())")["stdout"] == "kept\n"
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["note.txt"]
 
 
 def test_credentials_do_not_reach_the_script(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

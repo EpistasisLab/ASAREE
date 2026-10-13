@@ -11,6 +11,13 @@ export const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>([
   'limit_reached',
 ])
 
+// Mirrors services.protocol_runs.RERUN_ON_REQUEST_STATUSES: executions that
+// finished with a result. "Run all" skips them unless the user ticks them to
+// run again, so re-billing one is always a deliberate choice.
+export function runsAgainOnlyOnRequest(status: string): boolean {
+  return status === 'completed' || status === 'limit_reached'
+}
+
 // Same status-color language the app already uses for cell-scoring progress
 // (replicatesStatusAccent in lib/experiment.ts): amber = in progress/queued, cyan
 // = actively running, emerald = done, dim = not started/skipped, red =

@@ -65,10 +65,10 @@ since preview are skipped, so a retry cannot silently re-bill a newer attempt.
 Publication/design changes require preparing a new batch. Runs already created
 remain pinned to their immutable publications.
 
-Completed executions are skipped unless explicitly selected by slot ID or
-`rerun_completed=true`. Explicit selections cap at 100 IDs; an all-scope command
-does not send a browser-sized ID list. Failed/cancelled/limit-reached work can be
-retried. A plan's cancel action stops remaining planning; already-created runs
+Completed and limit-reached executions (both finished with a result) are
+skipped unless explicitly selected by slot ID or `rerun_completed=true`.
+Explicit selections cap at 100 IDs; an all-scope command does not send a
+browser-sized ID list. Failed/cancelled work is retried automatically. A plan's cancel action stops remaining planning; already-created runs
 continue. The Runs tab's Stop all creates a scoped cancellation command, stops
 matching planners and cancels all active attempts, including earlier attempts
 that are no longer the latest slot result.

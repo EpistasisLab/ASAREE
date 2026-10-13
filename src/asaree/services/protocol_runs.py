@@ -38,6 +38,12 @@ from asaree.services.measurement_migration import normalize_experiment_measureme
 logger = logging.getLogger(__name__)
 
 TERMINAL_PROTOCOL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "limit_reached"})
+# Finished with a result: "Run all" skips these unless the user picks them to
+# run again, so re-billing one is always a deliberate choice. limit_reached
+# belongs here for the reason above -- its truncated result is an outcome.
+RERUN_ON_REQUEST_STATUSES = frozenset({"completed", "limit_reached"})
+# Ended without a result: "Run all" and per-row Retry pick these up again.
+RETRYABLE_PROTOCOL_RUN_STATUSES = frozenset({"failed", "cancelled"})
 
 
 def node_run_truncation(node_runs: Mapping[str, Any] | None) -> dict[str, Any] | None:

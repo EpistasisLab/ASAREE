@@ -32,7 +32,11 @@ from asaree.models.result_job import ResultJob, ResultJobMember
 from asaree.services.dataset_row_csv import RowSource
 from asaree.services.indexed_row_source import IndexedRows, read_indexed_row_source
 from asaree.services.protocol_execution import plan_cell_runs
-from asaree.services.protocol_runs import request_protocol_run_cancellation
+from asaree.services.protocol_runs import (
+    RERUN_ON_REQUEST_STATUSES,
+    RETRYABLE_PROTOCOL_RUN_STATUSES,
+    request_protocol_run_cancellation,
+)
 from asaree.services.result_reads import (
     ResultScope,
     cell_predicates,
@@ -44,7 +48,7 @@ from asaree.worker.enqueue import enqueue_protocol_run
 
 logger = logging.getLogger(__name__)
 ACTIVE = ("pending", "running", "finalizing")
-RETRYABLE = ("not_started", "failed", "cancelled", "limit_reached")
+RETRYABLE = ("not_started", *sorted(RETRYABLE_PROTOCOL_RUN_STATUSES))
 WINDOW = 1000
 
 
@@ -200,7 +204,7 @@ def selected_parents(scope: ResultScope, selection: dict[str, Any]) -> Any:
 
 
 def eligible(status: str, slot_id: str, rerun_slots: set[str], rerun_completed: bool = False) -> bool:
-    return status in RETRYABLE or status == "completed" and (rerun_completed or slot_id in rerun_slots)
+    return status in RETRYABLE or status in RERUN_ON_REQUEST_STATUSES and (rerun_completed or slot_id in rerun_slots)
 
 
 async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> None:
@@ -360,13 +364,14 @@ async def plan_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> Non
             progress["skipped"] = progress.get("skipped", 0) + 1
             continue
         parent = parent_record[0]
-        retry = source and latest and latest["status"] in ("failed", "cancelled", "limit_reached")
+        finished = bool(latest and latest["status"] in RERUN_ON_REQUEST_STATUSES)
+        retry = source and latest and latest["status"] in RETRYABLE_PROTOCOL_RUN_STATUSES
         kwargs = (
             {"retry_row_result_ids": [member.slot_id]}
             if retry
             else {
                 "replicate_labels": {parent},
-                "rerun_replicate_labels": {parent} if latest and latest["status"] == "completed" else set(),
+                "rerun_replicate_labels": {parent} if finished else set(),
                 "row_indices": [member.row_index] if source else None,
             }
         )

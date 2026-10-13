@@ -89,6 +89,8 @@ from asaree.services.knowledge_factors import knowledge_id, validate_knowledge_f
 from asaree.services.model_config import build_model_config
 from asaree.services.protocol_revisions import get_revision
 from asaree.services.protocol_runs import (
+    RERUN_ON_REQUEST_STATUSES,
+    RETRYABLE_PROTOCOL_RUN_STATUSES,
     TERMINAL_PROTOCOL_RUN_STATUSES,
     create_protocol_run,
     get_cancel_requested_at,
@@ -4941,7 +4943,7 @@ async def plan_cell_runs(
                         or latest.replicate_result_id != parent.id
                         or latest.design_revision_id != current_design.id
                         or latest.protocol_revision_id != revision.id
-                        or latest.status not in {"failed", "cancelled", "limit_reached"}
+                        or latest.status not in RETRYABLE_PROTOCOL_RUN_STATUSES
                     ):
                         raise ProtocolValidationError("invalid_retry_target")
                     retry_targets.append((slot, latest, parent))
@@ -5160,7 +5162,9 @@ async def plan_cell_runs(
 
     obsolete_run_ids = {run.id for run in runs_by_id.values() if is_obsolete(run)}
     completed_run_ids = {
-        run.id for run in runs_by_id.values() if run.status == "completed" and run.id not in obsolete_run_ids
+        run.id
+        for run in runs_by_id.values()
+        if run.status in RERUN_ON_REQUEST_STATUSES and run.id not in obsolete_run_ids
     }
     completed_labels = {
         replicate.replicate_label
@@ -5171,7 +5175,8 @@ async def plan_cell_runs(
     not_completed = requested_reruns - completed_labels
     if not_completed:
         raise ProtocolValidationError(
-            f"Only previously completed replicates can be selected to run again: {', '.join(sorted(not_completed))}."
+            "Only replicates whose last run completed or hit its iteration limit can be selected to run again: "
+            f"{', '.join(sorted(not_completed))}."
         )
     pending = [
         replicate

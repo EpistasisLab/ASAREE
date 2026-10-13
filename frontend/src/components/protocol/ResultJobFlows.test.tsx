@@ -58,6 +58,22 @@ describe('asynchronous result commands', () => {
     expect(experimentsApi.confirmResultJob).not.toHaveBeenCalled()
   })
 
+  it('offers iteration-limited work to run again instead of re-running it implicitly', async () => {
+    const status = row.status
+    row.status = 'limit_reached'
+    try {
+      mount(<RunAllCellsButton protocol={protocol} experimentId="experiment" regenerationRequired={false} unboundFactors={[]} bindingDiscrepancies={[]} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Run all cells' }))
+      await screen.findByText('15786 executions will be queued.')
+      expect(screen.getByText(/including ones that hit their iteration limit, are skipped unless selected/)).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Run replicate 1 again' }))
+      await waitFor(() => expect(experimentsApi.createResultJob).toHaveBeenLastCalledWith('experiment', expect.anything(),
+        expect.objectContaining({ rerun_slot_ids: ['stable-slot'] }), expect.any(AbortSignal)))
+    } finally {
+      row.status = status
+    }
+  })
+
   it('allows first publication while the batch preview is unavailable', () => {
     mount(<RunAllCellsButton protocol={{ ...protocol, published_revision_id: null, published_revision: null }} experimentId="experiment" regenerationRequired={false} unboundFactors={[]} bindingDiscrepancies={[]} />)
     fireEvent.click(screen.getByRole('button', { name: 'Run all cells' }))

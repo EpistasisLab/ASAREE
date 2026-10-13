@@ -1710,11 +1710,15 @@ async def test_plan_cell_runs_creates_one_run_per_pending_cell_skips_scored(owne
             await delete_experiment(db, experiment_id)
 
 
-async def test_plan_cell_runs_skips_and_allows_rerun_of_completed_unscored_replicate(owner_id: uuid.UUID) -> None:
+@pytest.mark.parametrize("status", ["completed", "limit_reached"])
+async def test_plan_cell_runs_skips_and_allows_rerun_of_completed_unscored_replicate(
+    owner_id: uuid.UUID, status: str
+) -> None:
     """A successful qualitative run is completed even without numeric metrics.
 
     It must not be re-run and re-billed by a later batch by default, but the
-    caller can deliberately select it from the prior-runs list.
+    caller can deliberately select it from the prior-runs list. An attempt that
+    hit its iteration limit finished with a truncated result, so it's the same.
     """
     graph = _graph(["a", "b"], [("a", "b")])
     async with get_session() as db:
@@ -1725,7 +1729,7 @@ async def test_plan_cell_runs_skips_and_allows_rerun_of_completed_unscored_repli
         )
         protocol_id = protocol.id
         completed_run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
-        completed_run.status = "completed"
+        completed_run.status = status
         await db.flush()
         await upsert_replicate(
             db,

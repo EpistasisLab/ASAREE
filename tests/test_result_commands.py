@@ -11,13 +11,17 @@ from asaree.services import result_exports
 from asaree.services.result_jobs import eligible
 
 
-def test_pending_and_failed_work_never_implicitly_reruns_completed_or_active_slots():
-    for status in ("not_started", "failed", "cancelled", "limit_reached"):
+def test_pending_and_failed_work_never_implicitly_reruns_finished_or_active_slots():
+    for status in ("not_started", "failed", "cancelled"):
         assert eligible(status, "slot", set())
-    for status in ("pending", "running", "finalizing", "completed"):
+    # An iteration-limited attempt finished with a (truncated) result: like a
+    # completed one, it only runs again when the user selects it.
+    for status in ("pending", "running", "finalizing", "completed", "limit_reached"):
         assert not eligible(status, "slot", set())
-    assert eligible("completed", "slot", {"slot"})
-    assert not eligible("completed", "another-slot", {"slot"})
+    for status in ("completed", "limit_reached"):
+        assert eligible(status, "slot", {"slot"})
+        assert eligible(status, "slot", set(), rerun_completed=True)
+        assert not eligible(status, "another-slot", {"slot"})
     assert not eligible("running", "slot", {"slot"})
 
 

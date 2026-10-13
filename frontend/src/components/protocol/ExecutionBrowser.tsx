@@ -82,7 +82,7 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   const summary = useExecutionSummary(experimentId, scope)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [metricPreference, setMetricPreference] = useState<string>()
-  const metric = (metricPreference ?? summary.data?.primary_metric) || undefined
+  const metric = mode === 'results' ? (metricPreference ?? summary.data?.primary_metric) || undefined : undefined
   const [directionPreference, setDirectionPreference] = useState<string>()
   const direction = directionPreference ?? summary.data?.metric_directions[metric ?? ''] ?? 'maximize'
   const sortDirection = direction === 'minimize' ? 'minimize' : 'maximize'
@@ -91,7 +91,14 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
     queryKey: [...executionKeys.root(experimentId), 'cells', scope, pager.cursor, metric, sortDirection],
     queryFn: ({ signal }) => experimentsApi.listExecutionCells(experimentId, scope, { cursor: pager.cursor, metric, direction: sortDirection }, signal),
   })
-  useGenerationRefresh(cells.refetch, summary.data?.generation)
+  const previousGeneration = useRef(summary.data?.generation)
+  useEffect(() => {
+    if (previousGeneration.current !== summary.data?.generation) {
+      pager.reset()
+      void cells.refetch()
+    }
+    previousGeneration.current = summary.data?.generation
+  }, [summary.data?.generation])
   const metricKeys = summary.data?.unit === 'replicate' ? Object.keys(summary.data.metric_types) : []
   const refresh = () => { void summary.refetch(); void cells.refetch() }
   const cellBody = <div className="space-y-2">
@@ -120,7 +127,9 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
     {summary.isPending ? <p className="text-xs text-muted-foreground">Loading progress…</p> : summary.error && !summary.data ? <p role="alert" className="text-xs text-destructive">Progress unavailable. Execution records remain available below.</p> : !summary.data?.ready ? <p role="status" className="text-xs text-muted-foreground">Preparing the version summary. Execution records remain available below.</p> : <>
       <p className="font-mono text-xs">{summary.data.counts?.completed ?? 0}/{summary.data.expected ?? summary.data.total ?? 0} {summary.data.unit === 'row' ? 'row executions' : 'replicates'} complete · {summary.data.counts?.running ?? 0} running · {summary.data.counts?.pending ?? 0} queued · {summary.data.counts?.failed ?? 0} failed</p>
       <Usage usage={summary.data.usage} />
+      {summary.data.all_attempt_usage?.cost_usd != null && <p className="font-mono text-xs text-muted-foreground">All-attempt spend: {new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(summary.data.all_attempt_usage.cost_usd)}</p>}
       <p className="text-xs text-muted-foreground">Usage reported for {summary.data.usage_complete_count ?? 0}/{summary.data.total ?? 0} current executions.{summary.data.refreshing && ' Updating summary…'}</p>
+      {!!summary.data.usage_pending_count && <p role="status" className="text-xs text-muted-foreground">Preparing usage for {summary.data.usage_pending_count} executions. Execution records and evidence remain available.</p>}
     </>}
     {summary.error && summary.data && <p role="alert" className="text-xs text-destructive">Progress refresh failed; showing the last summary.</p>}
   </div>

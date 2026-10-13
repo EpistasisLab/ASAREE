@@ -155,6 +155,13 @@ async def _guarded_protocol_run(
         logger.exception("execute_protocol_run_task_failed", extra={"protocol_run_id": protocol_run_id_str})
         async with get_session() as db:
             await fail_protocol_run(db, protocol_run_id, error=f"{type(e).__name__}: {e}")
+    finally:
+        # Operational accounting is independent of optional declared metrics.
+        # A bounded best-effort capture never turns a successful execution into
+        # a failure. The durable maintenance sweep retries any unfinished capture.
+        from asaree.services.result_usage import capture_result_usage
+
+        await _best_effort(capture_result_usage({}, only_run_id=protocol_run_id))
 
 
 async def _fail_protocol_run_now(protocol_run_id: uuid.UUID, error: str) -> None:

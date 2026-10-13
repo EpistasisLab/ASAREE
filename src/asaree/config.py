@@ -61,6 +61,8 @@ class AsareeSettings(CoreSettings):
     # hashes are what matter; where the bytes physically live is a separate,
     # deliberately deferred decision.
     dataset_storage_dir: str = "./data/datasets"
+    result_export_dir: str = "./data/result-exports"
+    result_row_index_dir: str = "./data/result-row-indexes"
 
     # The one directory a user may browse and register OKF bundles under
     # (GET /okf/browse, POST /okf/bundles -- services/okf_bundles.py). Every

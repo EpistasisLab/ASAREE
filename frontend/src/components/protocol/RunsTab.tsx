@@ -26,7 +26,7 @@ export function RunAllCellsButton({ protocol, experimentId, regenerationRequired
   const [open, setOpen] = useState(false)
   const [lock, setLock] = useState(false)
   const [reruns, setReruns] = useState<Set<string>>(() => new Set())
-  const scope = { protocol_id: protocol?.id }
+  const scope = { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined }
   const summary = useExecutionSummary(experimentId, scope, open && !!protocol)
   const experiment = useQuery({ queryKey: ['experiments', experimentId], queryFn: () => experimentsApi.get(experimentId), enabled: open })
   const run = useMutation({
@@ -233,7 +233,7 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
   onViewRowResult?: (id: string) => void; onSelectResult?: (selection: ResultsSelection) => void
 }) {
   const discrepancies = factorBindingDiscrepancies(designSpec, protocol?.graph)
-  const scope = { protocol_id: protocol?.id }
+  const scope = { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined }
   return <>
     {discrepancies.length > 0 && <div role="alert" className="m-3 flex gap-2 rounded border border-[color:var(--chart-4)]/50 p-3 text-xs"><AlertTriangle className="size-4" /><div><p className="font-medium">Canvas and generated runs disagree</p>{discrepancies.map(issue => <p key={`${issue.nodeId}:${issue.fieldPath}`}>{issue.nodeLabel} · {issue.factorName}: {issue.reason}</p>)}</div></div>}
     <ExecutionBrowser key={JSON.stringify(scope)} experimentId={experimentId} scope={scope} mode="runs"

@@ -25,7 +25,7 @@ export function DatasetExecutionSummary({ graph, protocol, experimentId, cellCou
     queryFn: () => protocolsApi.getRevision(protocol!.id, protocol!.published_revision_id!),
     enabled: !!protocol?.published_revision_id,
   })
-  const results = useExecutionSummary(experimentId, { protocol_id: protocol?.id }, !!protocol?.published_revision_id)
+  const results = useExecutionSummary(experimentId, { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined }, !!protocol?.published_revision_id)
   const error = graph && datasetRowTopologyError(graph)
   const publishedBinding = publication.data && rowBindingForNode(publication.data.graph)
   const summary = results.data

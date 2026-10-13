@@ -15,7 +15,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, selectinload
 
 from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
@@ -108,24 +108,38 @@ async def get_replicate(
 
 
 async def list_replicates(
-    db: AsyncSession, *, experiment_id: uuid.UUID, revision_id: uuid.UUID | None = None
+    db: AsyncSession,
+    *,
+    experiment_id: uuid.UUID,
+    revision_id: uuid.UUID | None = None,
+    replicate_ids: set[uuid.UUID] | None = None,
+    include_evidence: bool = True,
 ) -> Sequence[FactorialReplicateResult]:
     resolved = await _resolve_revision_id(db, experiment_id, revision_id)
     if resolved is None:
         return []
-    return (
-        (
-            await db.execute(
-                select(FactorialReplicateResult)
-                .join(FactorialReplicateResult.cell)
-                .options(selectinload(FactorialReplicateResult.cell))
-                .where(
-                    FactorialCell.experiment_id == experiment_id,
-                    FactorialCell.design_revision_id == resolved,
-                )
-                .order_by(FactorialCell.cell_label, FactorialReplicateResult.replicate_number)
+    query = (
+        select(FactorialReplicateResult)
+        .join(FactorialReplicateResult.cell)
+        .options(
+            selectinload(FactorialReplicateResult.cell),
+        )
+        .where(FactorialCell.experiment_id == experiment_id, FactorialCell.design_revision_id == resolved)
+    )
+    if replicate_ids is not None:
+        query = query.where(FactorialReplicateResult.id.in_(replicate_ids))
+    if not include_evidence:
+        query = query.options(
+            load_only(
+                FactorialReplicateResult.id,
+                FactorialReplicateResult.cell_id,
+                FactorialReplicateResult.replicate_label,
+                FactorialReplicateResult.replicate_number,
+                FactorialReplicateResult.run_id,
             )
         )
+    return (
+        (await db.execute(query.order_by(FactorialCell.cell_label, FactorialReplicateResult.replicate_number)))
         .scalars()
         .all()
     )
@@ -147,9 +161,7 @@ async def upsert_replicate(
 
     cell_label, replicate_number = split_replicate_label(replicate_label)
     supplied_factors = {
-        key: value
-        for key, value in (fields.get("factor_values") or {}).items()
-        if key.lower() not in _NON_FACTOR_KEYS
+        key: value for key, value in (fields.get("factor_values") or {}).items() if key.lower() not in _NON_FACTOR_KEYS
     }
     cell = None
     if supplied_factors:
@@ -165,14 +177,13 @@ async def upsert_replicate(
             )
         ).scalar_one_or_none()
     if cell is None:
-        cell = await get_factorial_cell(
-            db, experiment_id=experiment_id, cell_label=cell_label, revision_id=revision_id
-        )
+        cell = await get_factorial_cell(db, experiment_id=experiment_id, cell_label=cell_label, revision_id=revision_id)
     if cell is None:
         from asaree.models.protocol_revision import ProtocolRevision
-        if await db.scalar(select(ProtocolRevision.id).where(
-            ProtocolRevision.design_revision_id == revision_id
-        ).limit(1)):
+
+        if await db.scalar(
+            select(ProtocolRevision.id).where(ProtocolRevision.design_revision_id == revision_id).limit(1)
+        ):
             raise ValueError("Generate a draft design before adding cells to a published experiment version.")
         cell = FactorialCell(
             experiment_id=experiment_id,
@@ -186,9 +197,10 @@ async def upsert_replicate(
         merged_factors = dict(cell.factor_values or {})
         merged_factors.update(supplied_factors)
         from asaree.models.protocol_revision import ProtocolRevision
-        if merged_factors != (cell.factor_values or {}) and await db.scalar(select(ProtocolRevision.id).where(
-            ProtocolRevision.design_revision_id == revision_id
-        ).limit(1)):
+
+        if merged_factors != (cell.factor_values or {}) and await db.scalar(
+            select(ProtocolRevision.id).where(ProtocolRevision.design_revision_id == revision_id).limit(1)
+        ):
             raise ValueError("Published experiment cell factors are immutable. Generate a draft design first.")
         cell.factor_values = merged_factors
 
@@ -197,9 +209,10 @@ async def upsert_replicate(
     )
     if replicate is None:
         from asaree.models.protocol_revision import ProtocolRevision
-        if await db.scalar(select(ProtocolRevision.id).where(
-            ProtocolRevision.design_revision_id == revision_id
-        ).limit(1)):
+
+        if await db.scalar(
+            select(ProtocolRevision.id).where(ProtocolRevision.design_revision_id == revision_id).limit(1)
+        ):
             raise ValueError("Generate a draft design before adding replicates to a published experiment version.")
         replicate = FactorialReplicateResult(
             cell=cell,

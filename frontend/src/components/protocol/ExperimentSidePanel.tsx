@@ -276,7 +276,7 @@ export function ExperimentSidePanel({
                 />
               ) : activeTab === 'results' ? (
                 <ResultsTab
-                  versionId={version?.id}
+                  versionId={version?.id ?? protocol?.published_revision_id ?? undefined}
                   protocolId={protocol?.id}
                   experimentId={experiment.id}
                   experimentName={experiment.name}

@@ -381,44 +381,57 @@ async def read_cells(
             FactorialCell.design_revision_id == scope.design_revision_id,
         )
     )
+    rows = []
     if metric:
-        statement = statement.outerjoin(
+        refresh = await db.get(ResultRefresh, scope.key)
+        generation = refresh.processed_generation if refresh else 0
+        if position is not None and (len(position) != 4 or position[3] != generation):
+            raise ValueError("stale_sort_cursor")
+        ranked = statement.join(
             ResultCellMetric,
             and_(
                 ResultCellMetric.scope_key == scope.key,
                 ResultCellMetric.cell_id == FactorialCell.id,
                 ResultCellMetric.metric_key == metric,
+                ResultCellMetric.generation == generation,
+                ResultCellMetric.value.is_not(None),
             ),
         )
         value = ResultCellMetric.value
-        # A measured value ranks before an unavailable value. Negation makes
-        # the cursor order ascending for both directions, with UUID tie-break.
-        order_value = -value if direction == "maximize" else value
-        missing = case((value.is_(None), 1), else_=0)
-        if position is not None:
-            if len(position) != 3:
-                raise ValueError("invalid_cursor")
-            m, v, identifier = position
-            statement = statement.where(
-                or_(
-                    missing > m,
-                    and_(
-                        missing == m,
-                        or_(order_value > v, and_(order_value == v, FactorialCell.id > uuid.UUID(identifier)))
-                        if v is not None
-                        else FactorialCell.id > uuid.UUID(identifier),
-                    ),
+        if position is None or position[0] == 0:
+            if position is not None:
+                v, identifier = position[1], uuid.UUID(position[2])
+                ranked = ranked.where(
+                    or_(
+                        value < v if direction == "maximize" else value > v,
+                        and_(value == v, FactorialCell.id > identifier),
+                    )
                 )
+            ranked = ranked.add_columns(literal(0).label("missing"), value.label("order_value"))
+            ranked = ranked.order_by(value.desc() if direction == "maximize" else value.asc(), FactorialCell.id)
+            rows = list((await db.execute(ranked.limit(page_size(limit) + 1))).mappings())
+        if len(rows) <= limit:
+            missing = statement.where(
+                ~select(ResultCellMetric.cell_id)
+                .where(
+                    ResultCellMetric.scope_key == scope.key,
+                    ResultCellMetric.metric_key == metric,
+                    ResultCellMetric.generation == generation,
+                    ResultCellMetric.cell_id == FactorialCell.id,
+                    ResultCellMetric.value.is_not(None),
+                )
+                .exists()
             )
-        statement = statement.add_columns(missing.label("missing"), order_value.label("order_value"))
-        statement = statement.order_by(missing, order_value.asc().nulls_last(), FactorialCell.id)
+            if position is not None and position[0] == 1:
+                missing = missing.where(FactorialCell.id > uuid.UUID(position[2]))
+            missing = missing.add_columns(literal(1).label("missing"), literal(None).label("order_value"))
+            rows += list((await db.execute(missing.order_by(FactorialCell.id).limit(limit + 1 - len(rows)))).mappings())
     else:
         if position is not None:
             if len(position) != 1:
                 raise ValueError("invalid_cursor")
             statement = statement.where(FactorialCell.id > uuid.UUID(position[0]))
-        statement = statement.order_by(FactorialCell.id)
-    rows = (await db.execute(statement.limit(page_size(limit) + 1))).mappings().all()
+        rows = list((await db.execute(statement.order_by(FactorialCell.id).limit(page_size(limit) + 1))).mappings())
     items = [
         {
             "cell_id": str(row["id"]),
@@ -431,7 +444,9 @@ async def read_cells(
     next_position = None
     if len(rows) > limit:
         last = rows[limit - 1]
-        next_position = [last["missing"], last["order_value"], str(last["id"])] if metric else [str(last["id"])]
+        next_position = (
+            [last["missing"], last["order_value"], str(last["id"]), generation] if metric else [str(last["id"])]
+        )
     return {
         "items": items,
         "next_cursor": encode_cursor(scope, "cells", next_position, filters) if next_position else None,

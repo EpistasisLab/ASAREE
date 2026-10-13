@@ -68,9 +68,7 @@ def _validate_factors(factors: list[dict[str, Any]]) -> None:
                 or len(level_labels) != len(levels)
                 or any(not isinstance(label, str) or not label.strip() for label in level_labels)
             ):
-                raise DesignValidationError(
-                    f"factor {name!r} level_labels must contain one non-empty string per level"
-                )
+                raise DesignValidationError(f"factor {name!r} level_labels must contain one non-empty string per level")
             normalized_labels = [label.strip() for label in level_labels]
             if len(set(normalized_labels)) != len(normalized_labels):
                 raise DesignValidationError(f"factor {name!r} level_labels must be unique")
@@ -166,9 +164,7 @@ def _factor_level_label(factor: dict[str, Any], value: Any) -> str | None:
         (
             label.strip()
             for level, label in zip(levels, labels, strict=True)
-            if isinstance(label, str)
-            and label.strip()
-            and json.dumps(level, sort_keys=True, default=str) == value_key
+            if isinstance(label, str) and label.strip() and json.dumps(level, sort_keys=True, default=str) == value_key
         ),
         None,
     )
@@ -291,20 +287,36 @@ async def get_design_impact(
     """Compare the declared factorial matrix to its materialized revision."""
     material = material_design_spec(design_spec)
     incomplete_skills = any(
-        (factor.get("level_type") in {
-                "sub_agent_selection", "script_selection", "tool_selection", "skill_selection",
-                "dataset_selection", "knowledge_selection"
+        (
+            factor.get("level_type")
+            in {
+                "sub_agent_selection",
+                "script_selection",
+                "tool_selection",
+                "skill_selection",
+                "dataset_selection",
+                "knowledge_selection",
             }
-         and len(factor.get("levels") or []) < 2)
-        or (factor.get("level_type") in {
-            "sub_agent_toggle", "script_toggle", "tool_toggle", "skill_toggle", "dataset_toggle", "knowledge_toggle"
-        }
-            and not any(factor.get("levels") or []))
+            and len(factor.get("levels") or []) < 2
+        )
+        or (
+            factor.get("level_type")
+            in {
+                "sub_agent_toggle",
+                "script_toggle",
+                "tool_toggle",
+                "skill_toggle",
+                "dataset_toggle",
+                "knowledge_toggle",
+            }
+            and not any(factor.get("levels") or [])
+        )
         for factor in material["factors"]
     )
     planned = (
         _planned_replicates(material["factors"], material["replicates"])
-        if material["factors"] and not incomplete_skills else []
+        if material["factors"] and not incomplete_skills
+        else []
     )
     planned_labels = {label for label, _, _ in planned}
     planned_cell_keys = {_cell_key(combo, label) for label, combo, _ in planned}
@@ -325,7 +337,9 @@ async def get_design_impact(
             retained_replicate_count=0,
             removed_replicate_count=0,
         )
-    current_replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=current.id)
+    current_replicates = await list_replicates(
+        db, experiment_id=experiment_id, revision_id=current.id, include_evidence=False
+    )
     current_labels = {replicate.replicate_label for replicate in current_replicates}
     current_cell_keys = {
         _cell_key(replicate.factor_values, replicate.replicate_label) for replicate in current_replicates
@@ -434,11 +448,20 @@ async def generate_design_cells(
     except ValueError as exc:
         raise DesignValidationError(str(exc)) from exc
     if any(
-        factor.get("level_type") in {
-            "sub_agent_selection", "sub_agent_toggle",
-            "script_selection", "script_toggle", "tool_selection", "tool_toggle", "skill_selection", "skill_toggle",
-            "dataset_selection", "dataset_toggle",
-            "knowledge_selection", "knowledge_toggle",
+        factor.get("level_type")
+        in {
+            "sub_agent_selection",
+            "sub_agent_toggle",
+            "script_selection",
+            "script_toggle",
+            "tool_selection",
+            "tool_toggle",
+            "skill_selection",
+            "skill_toggle",
+            "dataset_selection",
+            "dataset_toggle",
+            "knowledge_selection",
+            "knowledge_toggle",
         }
         for factor in factors
     ):
@@ -508,11 +531,14 @@ async def generate_design_cells(
         and coordination_strategy_slug(current.design_spec) != coordination_strategy_slug(design_spec)
     )
 
-    published_design_changes = current is not None and (
-        current.design_spec != design_spec or set(existing) != planned_labels or strategy_changed
-    ) and await db.scalar(
-        select(ProtocolRevision.id).where(ProtocolRevision.design_revision_id == current.id).limit(1)
-    ) is not None
+    published_design_changes = (
+        current is not None
+        and (current.design_spec != design_spec or set(existing) != planned_labels or strategy_changed)
+        and await db.scalar(
+            select(ProtocolRevision.id).where(ProtocolRevision.design_revision_id == current.id).limit(1)
+        )
+        is not None
+    )
     if current is not None and not dropped and not strategy_changed and not published_design_changes:
         # Keep the revision and merge into its rows -- factor_values is
         # re-merged because a level's *value* can change without changing its

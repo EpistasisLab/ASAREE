@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Float, and_, cast, delete, func, literal, select, update
+from sqlalchemy import Float, and_, case, cast, delete, func, literal, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,8 +15,11 @@ from asaree.models.database import get_session
 from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.models.protocol import Protocol
+from asaree.models.protocol_run import ProtocolRun
 from asaree.models.result_read_model import ResultCellMetric, ResultCellRollup, ResultRefresh
-from asaree.services.experiment_run_results import _declared_metric_aggregations, _source_row_count
+from asaree.services.experiment_run_results import _declared_metric_aggregations
+from asaree.services.indexed_row_source import read_indexed_row_source
+from asaree.services.metrics import normalize_metrics
 from asaree.services.result_reads import ResultScope, resolve_result_scope, slot_query
 
 logger = logging.getLogger(__name__)
@@ -55,9 +59,15 @@ def rollup_query(scope: ResultScope) -> Any:
         stats_columns.append(func.sum(slots.c.usage[key].as_float()).label(key))
     stats = select(*stats_columns).group_by(slots.c.cell_id).cte("stats")
     metrics = func.jsonb_each(slots.c.result["metrics"]).table_valued("key", "value").lateral("metrics")
+    identities = {
+        metric["id"]: metric.get("catalogKey", metric["name"])
+        for metric in normalize_metrics((scope.design_spec or {}).get("metrics"))
+        if metric.get("catalogKey") and metric.get("kind") != "custom"
+    }
+    metric_key = case(identities, value=metrics.c.key, else_=None) if identities else literal(None)
     metric_query = select(
         slots.c.cell_id,
-        metrics.c.key,
+        metric_key.label("key"),
         func.avg(cast(metrics.c.value, Float)).label("mean"),
         func.sum(cast(metrics.c.value, Float)).label("sum"),
         func.count().label("count"),
@@ -66,10 +76,11 @@ def rollup_query(scope: ResultScope) -> Any:
         metric_query.select_from(slots)
         .join(metrics, literal(True))
         .where(
+            metric_key.is_not(None),
             slots.c.status == "completed",
             slots.c.result["truncated"].as_boolean().is_(False),
         )
-        .group_by(slots.c.cell_id, metrics.c.key)
+        .group_by(slots.c.cell_id, metric_key)
         .cte("metric_values")
     )
     metric_stats = (
@@ -163,9 +174,23 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
         from asaree.models.dataset import RegisteredDataset
 
         dataset = await db.get(RegisteredDataset, uuid.UUID(dataset_id)) if dataset_id else None
-        row_count = await _source_row_count(
-            db, dataset_id=dataset.id if dataset else None, raw_sha256=dataset.raw_sha256 if dataset else None
-        )
+        if dataset is not None:
+            from pathlib import Path
+
+            from asaree.config import get_settings
+            from asaree.services.dataset_row_csv import DatasetRowCsvError
+
+            try:
+                indexed = await asyncio.to_thread(
+                    read_indexed_row_source,
+                    dataset_id=str(dataset.id),
+                    raw_path=dataset.raw_path,
+                    raw_sha256=dataset.raw_sha256,
+                    cache_root=Path(get_settings().result_row_index_dir),
+                )
+                row_count = len(indexed.rows)
+            except DatasetRowCsvError:
+                row_count = None
     summary = {
         "counts": {status: totals[status] for status in STATUSES},
         "total": totals["total"],
@@ -185,6 +210,22 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
         "usage_pending_count": totals["usage_pending"],
         "as_of": datetime.now(UTC).isoformat(),
     }
+    all_usage = (
+        (
+            await db.execute(
+                select(*[func.sum(ProtocolRun.usage_summary[key].as_float()).label(key) for key in usage]).where(
+                    ProtocolRun.protocol_id == scope.protocol_id,
+                    ProtocolRun.protocol_revision_id == scope.protocol_revision_id,
+                    ProtocolRun.design_revision_id == scope.design_revision_id,
+                    ProtocolRun.is_test_run.is_(False),
+                    ProtocolRun.target_node_id.is_(None),
+                )
+            )
+        )
+        .mappings()
+        .one()
+    )
+    summary["all_attempt_usage"] = dict(all_usage)
     # generation may have advanced during this rebuild. Preserve the new dirty
     # generation; the next delivery rebuilds it. Cell/overview publication is one transaction.
     await db.execute(
@@ -278,3 +319,9 @@ async def refresh_result_summaries(_ctx: dict[str, Any]) -> None:
                 await rebuild_result_summary(db, scope, refresh.generation)
         except Exception:
             logger.exception("result_summary_refresh_failed", extra={"scope_key": key})
+            async with get_session() as failed_db:
+                await failed_db.execute(
+                    update(ResultRefresh)
+                    .where(ResultRefresh.scope_key == key)
+                    .values(error="Summary refresh failed; retrying in the background.", updated_at=func.now())
+                )

@@ -28,6 +28,7 @@ export interface ExecutionSummary {
   counts?: Record<string, number>; total?: number; cell_count?: number; replicate_count?: number
   source_row_count?: number | null; expected?: number | null; has_active?: boolean
   usage?: UsageSummary; usage_complete_count?: number; truncated_count?: number; evaluating_count?: number
+  all_attempt_usage?: UsageSummary; usage_pending_count?: number
   design_spec: DesignSpec | null
   metric_types: Record<string, 'number' | 'boolean'>
   metric_aggregations: Record<string, 'mean' | 'sum'>

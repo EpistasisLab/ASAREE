@@ -8,6 +8,8 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as DatabaseTimeout
 
 from asaree.api.experiments import _get_owned_experiment
 from asaree.deps import CurrentUser, DbSession
@@ -51,6 +53,8 @@ async def _read(operation: Callable[..., Awaitable[dict[str, Any]]], *args: Any,
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (DBAPIError, DatabaseTimeout) as exc:
+        raise HTTPException(status_code=503, detail="Results temporarily unavailable; retry shortly.") from exc
 
 
 @router.get("/summary", response_model=None)

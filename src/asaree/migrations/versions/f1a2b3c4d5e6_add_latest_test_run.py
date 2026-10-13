@@ -12,6 +12,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
+from asaree.migrations.guards import create_foreign_key, drop_column
+
 revision: str = "f1a2b3c4d5e6"
 down_revision: str | None = "d7e8f9a0b1c2"
 branch_labels: str | Sequence[str] | None = None
@@ -25,7 +27,7 @@ def upgrade() -> None:
     op.add_column(
         "research_experiments", sa.Column("latest_test_run_id", sa.UUID(), nullable=True), if_not_exists=True
     )
-    op.create_foreign_key(
+    create_foreign_key(
         "fk_research_experiments_latest_test_run",
         "research_experiments",
         "protocol_runs",
@@ -37,6 +39,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_research_experiments_latest_test_run", "research_experiments", type_="foreignkey")
-    op.drop_column("research_experiments", "latest_test_run_id")
-    op.drop_column("protocol_runs", "is_test_run")
+    op.drop_constraint("fk_research_experiments_latest_test_run", "research_experiments", type_="foreignkey", if_exists=True)
+    drop_column("research_experiments", "latest_test_run_id")
+    drop_column("protocol_runs", "is_test_run")

@@ -17,6 +17,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
+from asaree.migrations.guards import has_table
+
 revision: str = "a7b8c9d0e1f2"
 down_revision: str | None = "f9a0b1c2d3e4"
 branch_labels: str | Sequence[str] | None = None
@@ -24,6 +26,11 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # A rename plus data normalization: every statement reads the legacy shape.
+    # The revision is atomic, so the legacy table being gone means all of it
+    # already ran (see guards.has_table).
+    if not has_table("factorial_cell_results"):
+        return
     op.rename_table("factorial_cell_results", "factorial_replicate_results")
     op.alter_column("factorial_replicate_results", "cell_label", new_column_name="replicate_label")
 
@@ -183,6 +190,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if has_table("factorial_cell_results"):  # already denormalized back; see upgrade()
+        return
     op.drop_index("ix_protocol_runs_replicate_result_id", table_name="protocol_runs")
     op.drop_constraint("protocol_runs_replicate_result_id_fkey", "protocol_runs", type_="foreignkey")
     op.drop_column("protocol_runs", "replicate_result_id")

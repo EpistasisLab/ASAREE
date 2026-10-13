@@ -2,7 +2,7 @@
 
 from alembic import op
 
-from asaree.migrations import guards
+from asaree.migrations.guards import drop_column
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -169,5 +169,5 @@ def downgrade() -> None:
     op.drop_table("result_cell_metrics", if_exists=True)
     op.drop_table("result_cell_rollups", if_exists=True)
     op.drop_table("result_refreshes", if_exists=True)
-    guards.drop_column("protocol_runs", "usage_summary")
-    guards.drop_column("protocol_runs", "result_summary")
+    drop_column("protocol_runs", "usage_summary")
+    drop_column("protocol_runs", "result_summary")

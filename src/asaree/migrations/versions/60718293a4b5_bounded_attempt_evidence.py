@@ -2,7 +2,7 @@
 
 from alembic import op
 
-from asaree.migrations import guards
+from asaree.migrations.guards import drop_column
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -67,7 +67,7 @@ def downgrade() -> None:
         postgresql_where=sa.text("status IN ('completed','failed','cancelled','limit_reached') AND NOT is_test_run "
             "AND target_node_id IS NULL AND (usage_summary IS NULL OR usage_summary->>'settled'='false')"), if_not_exists=True)
     op.drop_index("ix_registered_datasets_row_schema_pending", table_name="registered_datasets", if_exists=True)
-    guards.drop_column("registered_datasets", "row_schema")
+    drop_column("registered_datasets", "row_schema")
     op.drop_index("ix_protocol_runs_head_page", table_name="protocol_runs", if_exists=True)
     op.execute("DROP FUNCTION IF EXISTS asaree_attempt_preview(jsonb)")
     op.execute("DROP FUNCTION IF EXISTS asaree_node_preview(jsonb)")

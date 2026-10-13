@@ -30,7 +30,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-from asaree.migrations.guards import create_foreign_key, drop_column
+from asaree.migrations.guards import create_foreign_key, drop_column, has_column, has_table
 
 revision: str = 'd5a3b90c71e4'
 down_revision: str | None = 'c4e8f1a70d92'
@@ -53,13 +53,15 @@ def upgrade() -> None:
     )
     op.create_index("ix_experiment_datasets_dataset_id", "experiment_datasets", ["dataset_id"], if_not_exists=True)
 
-    op.execute(
-        """
-        INSERT INTO experiment_datasets (experiment_id, dataset_id, position)
-        SELECT id, dataset_id, 0 FROM research_experiments WHERE dataset_id IS NOT NULL
-        ON CONFLICT DO NOTHING
-        """
-    )
+    # The backfill reads the scalar column this revision drops; on a re-run it's already gone.
+    if has_column("research_experiments", "dataset_id"):
+        op.execute(
+            """
+            INSERT INTO experiment_datasets (experiment_id, dataset_id, position)
+            SELECT id, dataset_id, 0 FROM research_experiments WHERE dataset_id IS NOT NULL
+            ON CONFLICT DO NOTHING
+            """
+        )
     drop_column("research_experiments", "dataset_id")
 
 
@@ -80,8 +82,9 @@ def downgrade() -> None:
     op.create_index("ix_research_experiments_dataset_id", "research_experiments", ["dataset_id"], if_not_exists=True)
     # Lossy on purpose: only the first-wired dataset survives a collapse back
     # to a scalar column.
-    op.execute(
-        """
+    if has_table("experiment_datasets"):
+        op.execute(
+            """
         UPDATE research_experiments AS e
         SET dataset_id = d.dataset_id
         FROM (
@@ -91,6 +94,6 @@ def downgrade() -> None:
         ) AS d
         WHERE d.experiment_id = e.id
         """
-    )
+        )
     op.drop_index("ix_experiment_datasets_dataset_id", table_name="experiment_datasets", if_exists=True)
     op.drop_table("experiment_datasets", if_exists=True)

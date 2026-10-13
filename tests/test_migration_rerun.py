@@ -49,40 +49,6 @@ SCHEMA_SQL = {
 }
 
 
-# Revisions that predate this test and cannot yet be re-run. They are already
-# applied everywhere, so they only bite on a retried or re-stamped deploy. Listed
-# rather than skipped: each must still fail, so fixing one forces its removal
-# here, and every revision not listed -- including every new one -- is enforced.
-LEGACY_UPGRADE_RERUN = {
-    "d5a3b90c71e4",
-    "e2f7c4a91b60",
-    "a7b8c9d0e1f2",
-    "f1a2b3c4d5e6",
-    "9e4a7b2c1d30",
-    "0a1b2c3d4e5f",
-    "1b2c3d4e5f60",
-    "2c3d4e5f6071",
-}
-LEGACY_DOWNGRADE_RERUN = {
-    "d5a3b90c71e4",
-    "e2f7c4a91b60",
-    "a7b8c9d0e1f2",
-    "b5e6f7a8b9c0",
-    "f1a2b3c4d5e6",
-    "9e4a7b2c1d30",
-    "0a1b2c3d4e5f",
-    "1b2c3d4e5f60",
-    "2c3d4e5f6071",
-}
-
-
-def _check(failures: dict[str, str], legacy: set[str]) -> None:
-    unexpected = [message for revision, message in failures.items() if revision not in legacy]
-    fixed = sorted(legacy - set(failures))
-    assert not unexpected, "\n".join(unexpected)
-    assert not fixed, f"now re-runnable -- remove from the legacy list: {fixed}"
-
-
 def _url_for(db_name: str) -> str:
     base, _, _ = DB_URL.rpartition("/")
     return f"{base}/{db_name}"
@@ -170,7 +136,7 @@ async def test_each_upgrade_survives_a_lost_stamp(scratch: str) -> None:
             continue
         if (actual := await _schema(scratch)) != expected:
             failures[revision] = f"{revision}: re-run changed the schema\n{_diff(expected, actual)}"
-    _check(failures, LEGACY_UPGRADE_RERUN)
+    assert not failures, "\n".join(failures.values())
 
 
 async def test_each_downgrade_survives_a_lost_stamp(scratch: str) -> None:
@@ -192,7 +158,7 @@ async def test_each_downgrade_survives_a_lost_stamp(scratch: str) -> None:
             continue
         if (actual := await _schema(scratch)) != expected:
             failures[revision] = f"{revision}: downgrade re-run changed the schema\n{_diff(expected, actual)}"
-    _check(failures, LEGACY_DOWNGRADE_RERUN)
+    assert not failures, "\n".join(failures.values())
 
     await _run(upgrade, scratch, "head")
     assert await _schema(scratch) == head, _diff(head, await _schema(scratch))

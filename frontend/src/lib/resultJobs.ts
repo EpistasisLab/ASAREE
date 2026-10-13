@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { experimentsApi, type ResultsScope } from '@/api/client'
 import type { ResultJob } from '@/types/executionResults'
+import { newRequestKey } from './requestKey'
 
 export const jobActive = (job?: ResultJob) => !!job && ['pending', 'queued', 'running'].includes(job.status)
 
@@ -13,8 +14,8 @@ export function useResultJob(experimentId: string, id?: string) {
 
 export function useBatchPreview(experimentId: string, scope: ResultsScope, selection: { cell_id?: string; replicate_ids?: string[]; row_indices?: number[]; rerun_slot_ids?: string[]; rerun_completed?: boolean }, enabled: boolean) {
   const key = JSON.stringify({ scope, selection, enabled })
-  const request = useRef({ key, id: crypto.randomUUID() })
-  if (request.current.key !== key) request.current = { key, id: crypto.randomUUID() }
+  const request = useRef({ key, id: newRequestKey() })
+  if (request.current.key !== key) request.current = { key, id: newRequestKey() }
   const requestKey = request.current.id
   const prepare = useQuery({ queryKey: ['experiments', experimentId, 'batch-preview', requestKey],
     queryFn: ({ signal }) => experimentsApi.createResultJob(experimentId, scope, { kind: 'plan', request_key: requestKey, ...selection }, signal),

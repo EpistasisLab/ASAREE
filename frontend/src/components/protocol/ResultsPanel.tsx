@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { sanitizeFilename } from '@/lib/utils'
 import { jobActive, useResultJob } from '@/lib/resultJobs'
+import { newRequestKey } from '@/lib/requestKey'
 import { InfoTooltip } from './InfoTooltip'
 
 export function ResultsScorecard({ label, help, value, note, icon: Icon }: { label: string; help: string; value: string; note?: string; icon: LucideIcon }) {
@@ -27,7 +28,7 @@ export function ResultsPanel({ experimentId, experimentName, scope, controls, su
   const downloaded = useRef<string | undefined>(undefined)
   const job = useResultJob(experimentId, jobId)
   const createExport = useMutation({ mutationFn: () => experimentsApi.createResultJob(experimentId, scope,
-    { kind: 'export', request_key: crypto.randomUUID() }), onSuccess: created => setJobId(created.id) })
+    { kind: 'export', request_key: newRequestKey() }), onSuccess: created => setJobId(created.id) })
   const downloading = createExport.isPending || (!!jobId && !job.data && !job.error) || jobActive(job.data)
   const error = createExport.error?.message ?? job.error?.message ?? job.data?.error
   useEffect(() => {

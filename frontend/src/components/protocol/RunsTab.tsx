@@ -15,6 +15,7 @@ import type { Protocol } from '@/types/protocols'
 import type { ExecutionSlot } from '@/types/executionResults'
 import { ExecutionBrowser, ExecutionRows } from './ExecutionBrowser'
 import { runsAgainOnlyOnRequest } from '@/lib/protocolRun'
+import { newRequestKey } from '@/lib/requestKey'
 import { ExperimentDefinitionDownload } from './ExperimentDefinitionDownload'
 import { RunConfirmDialog } from './RunConfirmDialog'
 import { ReplicateRunAction } from './CellPresentation'
@@ -276,7 +277,7 @@ function StopAllButton({ protocol, experimentId, cellId }: { protocol?: Protocol
   const [jobId, setJobId] = useState<string>()
   const stop = useMutation({ mutationFn: () => experimentsApi.createResultJob(experimentId,
     { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined },
-    { kind: 'cancel', cell_id: cellId, request_key: crypto.randomUUID() }), onSuccess: job => setJobId(job.id) })
+    { kind: 'cancel', cell_id: cellId, request_key: newRequestKey() }), onSuccess: job => setJobId(job.id) })
   return <><Button variant="destructive" size="xs" disabled={!protocol || stop.isPending} onClick={() => stop.mutate()}><Square className="size-3" />{cellId ? 'Stop cell' : 'Stop all'}</Button>
     <ResultJobProgress experimentId={experimentId} jobId={jobId} />
     {stop.error && <p role="alert" className="text-xs text-destructive">{stop.error.message}</p>}</>

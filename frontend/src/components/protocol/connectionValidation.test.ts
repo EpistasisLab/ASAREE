@@ -5,6 +5,11 @@ import { isProtocolConnectionValid } from './connectionValidation'
 const target: Node = { id: 'agent', type: 'agent', position: { x: 0, y: 0 }, data: {} }
 
 describe('isProtocolConnectionValid', () => {
+  it('allows the same Sub-Agent to connect to multiple parent Agents', () => {
+    const child: Node = { id: 'child', type: 'sub_agent', position: { x: 0, y: 0 }, data: {} }
+    const other = { ...target, id: 'other' }
+    expect(isProtocolConnectionValid({ source: 'child', sourceHandle: 'sub_agents', target: 'other', targetHandle: 'sub_agents' }, [child, target, other], [{ id: 'first', source: 'child', target: 'agent', targetHandle: 'sub_agents' }], false)).toBe(true)
+  })
   const cappedSlots = [
     ['model', 'model_openai'],
     ['memory', 'memory'],

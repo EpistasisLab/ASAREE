@@ -119,10 +119,9 @@ async def discover_models(*, provider: str, setting: UserLLMSetting | None) -> t
         # id/object/created/owned_by/shutdown_date -- no capability data at
         # all, and no other endpoint exposes it. Listing it live would mean
         # 124 entries (mostly embeddings/TTS/image/realtime models that can't
-        # serve a chat turn) with every one of them falling back to
-        # DEFAULT_CAPABILITIES, i.e. a Temperature slider offered for the
-        # whole reasoning lineup. Until that's addressed, the curated catalog
-        # is the more honest answer. See the module docstring.
+        # serve a chat turn) without any capability metadata. The curated
+        # catalog keeps known temperature-only entries distinct from the
+        # effort-only fallback. See the module docstring.
         return _static_catalog(provider), "static", None
 
     if provider == "azure_foundry":
@@ -155,7 +154,7 @@ def _static_catalog(provider: str) -> list[ModelInfo]:
     ]
 
 
-def _capabilities_from_anthropic(caps: dict[str, Any]) -> ModelCapabilities:
+def _capabilities_from_anthropic(caps: dict[str, Any], model: str = "") -> ModelCapabilities:
     """Map Anthropic's own capability tree onto ModelCapabilities.
 
     Shape confirmed live against GET /v1/models::
@@ -177,6 +176,8 @@ def _capabilities_from_anthropic(caps: dict[str, Any]) -> ModelCapabilities:
     "adaptive": true) and 400 on an explicit temperature.
     """
     effort = caps.get("effort") or {}
+    if "supported" not in effort:
+        return get_capabilities(model)
     supports_effort = bool(effort.get("supported"))
     levels = [level for level in EFFORT_LEVELS_FULL if (effort.get(level) or {}).get("supported")]
     return ModelCapabilities(
@@ -240,7 +241,7 @@ async def _discover_anthropic(setting: UserLLMSetting) -> tuple[list[ModelInfo],
         ModelInfo(
             id=entry["id"],
             label=entry.get("display_name"),
-            capabilities=_capabilities_from_anthropic(entry.get("capabilities") or {}),
+            capabilities=_capabilities_from_anthropic(entry.get("capabilities") or {}, entry["id"]),
         )
         for entry in entries
         if entry.get("id")

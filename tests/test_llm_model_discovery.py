@@ -303,17 +303,16 @@ async def test_anthropic_follows_pagination(monkeypatch: pytest.MonkeyPatch) -> 
     assert captured["params"][1]["after_id"] == "first"
 
 
-async def test_anthropic_missing_capability_tree_defaults_to_temperature(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A model published before the capabilities field existed, or any shape we
-    # don't recognise, must not silently claim effort support.
+async def test_anthropic_missing_capability_tree_defaults_to_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Missing metadata uses the same effort fallback as request construction.
     page = {"data": [{"id": "mystery-model", "display_name": "Mystery"}], "has_more": False}
     monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], {}))
 
     models, _, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
 
-    assert models[0].capabilities.supports_effort is False
-    assert models[0].capabilities.supports_temperature is True
-    assert models[0].capabilities.default_effort is None
+    assert models[0].capabilities.supports_effort is True
+    assert models[0].capabilities.supports_temperature is False
+    assert models[0].capabilities.default_effort == 'medium'
 
 
 async def test_anthropic_failure_falls_back_to_the_catalog_and_scrubs_the_key(

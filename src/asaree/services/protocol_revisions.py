@@ -149,9 +149,26 @@ async def publish_protocol(
         raise ValueError("Experiment is locked. Unlock it before publishing a changed experiment.")
     if experiment is not None:
         from asaree.services.design_generation import get_design_impact
-        impact = await get_design_impact(db, experiment_id=experiment.id, design_spec=experiment.design_spec)
-        if impact.regeneration_required:
-            raise ValueError("Generate cells for the draft design before publishing the experiment.")
+        incomplete_skills = any(
+            (factor.get("level_type") in {
+                "sub_agent_selection", "script_selection", "tool_selection", "skill_selection",
+                "dataset_selection", "knowledge_selection"
+            }
+             and len(factor.get("levels") or []) < 2)
+            or (factor.get("level_type") in {
+                "sub_agent_toggle", "script_toggle", "tool_toggle", "skill_toggle", "dataset_toggle", "knowledge_toggle"
+            }
+            and not any(factor.get("levels") or []))
+            for factor in (experiment.design_spec or {}).get("factors") or []
+        )
+        if incomplete_skills:
+            # This publication can be tested with an available choice, but it
+            # owns no generated design and cannot create production cell runs.
+            design = None
+        else:
+            impact = await get_design_impact(db, experiment_id=experiment.id, design_spec=experiment.design_spec)
+            if impact.regeneration_required:
+                raise ValueError("Generate cells for the draft design before publishing the experiment.")
 
     highest = (
         await db.execute(

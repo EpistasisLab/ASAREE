@@ -246,7 +246,7 @@ def test_sub_agent_is_a_callable_connector_not_a_pipeline_sink() -> None:
     assert pe._can_deliver_communication(graph, "child", "parent") is False
 
 
-def test_sub_agent_cannot_have_two_parents() -> None:
+def test_sub_agent_can_be_shared_by_two_parents() -> None:
     parent_a, parent_a_model = _agent_with_llm("parent-a", "model-a")
     parent_b, parent_b_model = _agent_with_llm("parent-b", "model-b")
     child = _node("child", "sub_agent")
@@ -261,8 +261,9 @@ def test_sub_agent_cannot_have_two_parents() -> None:
         ],
     }
 
-    with pytest.raises(ProtocolValidationError, match="exactly one parent"):
-        topological_order(graph)
+    topological_order(graph)
+    assert pe._sub_agent_ids(graph, "parent-a") == ["child"]
+    assert pe._sub_agent_ids(graph, "parent-b") == ["child"]
 
 
 def test_only_active_connected_sub_agents_require_a_model() -> None:
@@ -1254,6 +1255,7 @@ async def test_gated_worker_sends_and_forwards_payload_only_output(monkeypatch: 
     assert worker_run["payload"] == {"score": 0.91}
     assert gate_run["output_text"] == ""
     assert gate_run["payload"] == {"score": 0.91}
+    assert "bypassed" not in gate_run
 
 
 @pytest.mark.parametrize(("max_revisions", "enabled"), [(0, True), (1, False)])
@@ -1272,6 +1274,7 @@ async def test_gated_worker_forwards_payload_when_review_is_skipped(
     _worker_run, gate_run = await _run(*_worker_gate(max_revisions=max_revisions, enabled=enabled))
 
     assert gate_run["payload"] == {"score": 0.91}
+    assert gate_run.get("bypassed", False) is (not enabled)
 
 
 async def test_gated_worker_rejected_then_approved_on_revision(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1390,6 +1393,9 @@ async def test_gated_worker_disabled_skips_critic_entirely(monkeypatch: pytest.M
     assert worker_run["attempts"] == 1
     assert critic_calls == []
     assert gate_run["approved"] is None
+    assert gate_run["status"] == "completed"
+    assert gate_run["bypassed"] is True
+    assert "bypassed" not in worker_run
 
 
 async def test_gated_worker_worker_failure_stops_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1704,11 +1710,15 @@ async def test_plan_cell_runs_creates_one_run_per_pending_cell_skips_scored(owne
             await delete_experiment(db, experiment_id)
 
 
-async def test_plan_cell_runs_skips_and_allows_rerun_of_completed_unscored_replicate(owner_id: uuid.UUID) -> None:
+@pytest.mark.parametrize("status", ["completed", "limit_reached"])
+async def test_plan_cell_runs_skips_and_allows_rerun_of_completed_unscored_replicate(
+    owner_id: uuid.UUID, status: str
+) -> None:
     """A successful qualitative run is completed even without numeric metrics.
 
     It must not be re-run and re-billed by a later batch by default, but the
-    caller can deliberately select it from the prior-runs list.
+    caller can deliberately select it from the prior-runs list. An attempt that
+    hit its iteration limit finished with a truncated result, so it's the same.
     """
     graph = _graph(["a", "b"], [("a", "b")])
     async with get_session() as db:
@@ -1719,7 +1729,7 @@ async def test_plan_cell_runs_skips_and_allows_rerun_of_completed_unscored_repli
         )
         protocol_id = protocol.id
         completed_run = await create_protocol_run(db, protocol_id=protocol_id, owner_id=owner_id)
-        completed_run.status = "completed"
+        completed_run.status = status
         await db.flush()
         await upsert_replicate(
             db,
@@ -2170,6 +2180,9 @@ async def test_run_protocol_deactivated_node_passes_through(
             assert fetched is not None
             assert fetched.status == "completed"
             assert fetched.node_runs["b"]["status"] == "completed"
+            assert fetched.node_runs["b"]["bypassed"] is True
+            assert "bypassed" not in fetched.node_runs["a"]
+            assert "bypassed" not in fetched.node_runs["c"]
             assert fetched.node_runs["b"]["output_text"] == "real output from a"
             assert fetched.node_runs["c"]["output_text"] == "real output from c"
     finally:
@@ -2221,14 +2234,15 @@ def test_an_all_null_payload_is_flagged_as_a_failed_read() -> None:
     }
 
 
-def test_a_ceiling_truncated_run_is_flagged_even_though_it_completed() -> None:
+@pytest.mark.parametrize("location", ["run_metadata", "pattern_overrides"])
+def test_a_ceiling_truncated_run_is_flagged_even_though_it_completed(location: str) -> None:
     """Motoro reports a cap-exhausted Reason+Act run as `completed` with the
     last tool result as its output, so the only thing that distinguishes it
     from a finished run is the loop summary the pattern persists."""
 
     class _Run:
         def __init__(self, overrides: dict[str, object] | None) -> None:
-            self.pattern_overrides = overrides
+            setattr(self, location, overrides)
 
     hit = {
         "reason_act_state": {
@@ -2255,6 +2269,14 @@ def test_a_ceiling_truncated_run_is_flagged_even_though_it_completed() -> None:
     assert pe._truncation_fields(_Run(done)) is None
     assert pe._truncation_fields(_Run({"other_pattern_state": {}})) is None
     assert pe._truncation_fields(_Run(None)) is None
+
+
+def test_new_reason_act_telemetry_takes_precedence_over_legacy_state() -> None:
+    run = SimpleNamespace(
+        run_metadata={"reason_act_state": {"max_iterations_hit": False}},
+        pattern_overrides={"reason_act_state": {"max_iterations_hit": True}},
+    )
+    assert pe._truncation_fields(run) is None
 
 
 async def test_run_protocol_stores_the_extraction_beside_the_output_text(

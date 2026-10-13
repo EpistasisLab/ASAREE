@@ -247,6 +247,31 @@ async def test_a_run_with_no_reviewer_skips_only_the_review(stubs: dict[str, Any
     assert sorted(_ran(stubs)) == ["sup", "sup", "w1", "w2", "w3"]
 
 
+@pytest.mark.parametrize("parallel", [False, True])
+async def test_agent_factors_skip_disabled_workers_and_the_optional_reviewer(
+    stubs: dict[str, Any], parallel: bool
+) -> None:
+    graph = _graph()
+    for node in graph["nodes"]:
+        if node["id"] in {"w2", "qc"}:
+            node["data"]["factor_bindings"] = {"active": "Enabled"}
+    graph = pe.apply_factor_bindings(graph, {"Enabled": False})
+    final, status = await _run(stubs, graph, parallel_workers=parallel)
+    assert status == "completed"
+    assert sorted(_ran(stubs)) == ["sup", "sup", "w1", "w3"]
+    assert final["output_text"] == "sup did its part."
+
+
+@pytest.mark.parametrize("disabled", [{"sup"}, {"w1", "w2", "w3"}])
+def test_agent_factors_cannot_disable_required_supervisor_roles(disabled: set[str]) -> None:
+    graph = _graph()
+    for node in graph["nodes"]:
+        if node["id"] in disabled:
+            node["data"]["active"] = False
+    with pytest.raises(pe.ProtocolValidationError, match="must remain active|at least one worker"):
+        pe.resolve_supervisor_roles(graph)
+
+
 async def test_nobody_is_offered_a_peer_schema(stubs: dict[str, Any]) -> None:
     """`resolve_available_agents` raises in the fixture. Passing peers here
     would give the supervisor an `ask_<worker>` function *alongside* the forced

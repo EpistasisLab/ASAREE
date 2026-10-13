@@ -56,6 +56,10 @@ class ProtocolRun(Base, TimestampMixin):
     #         "task_completed_at": iso, "evaluation_started_at": iso,
     #         "evaluation_completed_at": iso}.
     attempt_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Small database-maintained preview, separate from potentially enormous evidence.
+    result_summary: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    # Operational usage is captured independently of declared measurement bindings.
+    usage_summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     # The agent-to-agent transcript, present only once a run's agents actually
     # communicate -- including a pipeline Agent delegating to a Sub-Agent.
     # Shape: {"state": <A2A TaskState>, "messages": [{"message_id", "sequence",

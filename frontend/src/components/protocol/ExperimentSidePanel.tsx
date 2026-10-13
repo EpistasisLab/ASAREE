@@ -271,11 +271,12 @@ export function ExperimentSidePanel({
                   regenerationRequired={regenerationRequired}
                   unboundFactors={unboundFactors}
                   onViewRowResult={rowResultId => { onResultSelection({ type: 'row', rowResultId, scope: { protocol_id: protocol?.id } }); openPanel('results') }}
+                  onSelectResult={selection => { onResultSelection(selection); openPanel('results') }}
                   onViewResult={viewReplicateResult}
                 />
               ) : activeTab === 'results' ? (
                 <ResultsTab
-                  versionId={version?.id}
+                  versionId={version?.id ?? protocol?.published_revision_id ?? undefined}
                   protocolId={protocol?.id}
                   experimentId={experiment.id}
                   experimentName={experiment.name}

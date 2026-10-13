@@ -39,7 +39,6 @@ from asaree_workspace_core import (
 from motoro.mcp.registry import get_registry
 from motoro.models.run import RunStatus
 from motoro.runner import create_agent, create_run, execute_run, get_agent_by_name, get_run, update_agent
-from motoro.schemas.agent import ModelConfig
 from motoro.schemas.output import OutputEnvelope, parse_envelope
 from motoro.schemas.pattern import PatternConfig
 from motoro.security.prompt_injection import (
@@ -63,6 +62,7 @@ from asaree.models.protocol_run import ProtocolRun
 from asaree.services import prompt_references
 from asaree.services.agent_cards import AgentCard, build_agent_card
 from asaree.services.coordination import coordination_strategy_slug
+from asaree.services.dataset_factors import validate_dataset_factors
 from asaree.services.dataset_row_csv import DatasetRowCsvError, project_row, read_row_source
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 from asaree.services.dataset_row_planning import enumerate_row_candidates
@@ -85,8 +85,12 @@ from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
 from asaree.services.factorial_row_results import claim_row_attempt, ensure_row_result, get_row_result
+from asaree.services.knowledge_factors import knowledge_id, validate_knowledge_factors
+from asaree.services.model_config import build_model_config
 from asaree.services.protocol_revisions import get_revision
 from asaree.services.protocol_runs import (
+    RERUN_ON_REQUEST_STATUSES,
+    RETRYABLE_PROTOCOL_RUN_STATUSES,
     TERMINAL_PROTOCOL_RUN_STATUSES,
     create_protocol_run,
     get_cancel_requested_at,
@@ -98,8 +102,10 @@ from asaree.services.protocol_runs import (
     update_node_run,
 )
 from asaree.services.protocols import get_protocol
-from asaree.services.run_tools import gather_tools
-from asaree.services.runtime_metrics import finalize_attempt_measurement
+from asaree.services.run_tools import PINNED_TOOL_CONFIG, gather_run_tools
+from asaree.services.runtime_metrics import _reason_act_state, finalize_attempt_measurement
+from asaree.services.shared_factors import GROUP_SPECS, validate_shared_factor_groups
+from asaree.services.skill_factors import validate_skill_factors
 from asaree.services.system_mcp_servers import (
     DATASET_DICTIONARY_AGENT_TOOLS,
     EDA_SERVER_NAME,
@@ -605,13 +611,8 @@ def derive_stage_plan(graph: dict[str, Any]) -> Any:
         node = nodes[nid]
         if node.get("type") not in ("agent", "sub_agent"):
             continue
-        for edge in _edges_with_handle(graph, nid, "tool", direction="incoming"):
-            source = nodes.get(str(edge.get("source")))
-            if source is None or source.get("type") not in _MCP_TOOL_NODE_TYPES:
-                continue
+        for source in _resolve_tool_nodes(graph, nid):
             config = (source.get("data") or {}).get("config") or {}
-            if not config.get("enabled", True):
-                continue
             stage_id = STAGE_WRITING_SERVERS.get(str(config.get("server_name") or ""))
             if stage_id is not None and stage_id not in stage_ids:
                 stage_ids.append(stage_id)
@@ -668,10 +669,25 @@ def validate_stage_plan(design_spec: dict[str, Any] | None) -> None:
         raise ProtocolValidationError(f"This experiment's stage plan is not usable: {e}") from e
 
 
+def validate_agent_activity(graph: dict[str, Any]) -> None:
+    """Availability must leave executable work and preserve required gated roles."""
+    agents = {node["id"]: node for node in graph.get("nodes") or [] if node.get("type") == "agent"}
+    if agents and not any(_is_node_active(node) for node in agents.values()):
+        raise ProtocolValidationError("This cell disables every Agent. Keep at least one executable Agent active.")
+    for worker_id in find_gated_pairs(graph):
+        worker = agents.get(worker_id)
+        if worker is not None and not _is_node_active(worker):
+            raise ProtocolValidationError(
+                f"Agent node {_node_display_name(worker)!r} is gated by a Critic Gate and can't be "
+                "deactivated -- deactivate the Critic Gate instead."
+            )
+
+
 def validate_coordination_strategy(design_spec: dict[str, Any] | None, *, graph: dict[str, Any]) -> None:
     """Checks the experiment's declared strategy against the protocol it will
     run. Takes the whole graph rather than a pre-computed fact about it because
     each strategy asks a different question of the canvas."""
+    validate_agent_activity(graph)
     slug = coordination_strategy_slug(design_spec)
     if slug == "sequential":
         validate_sequential_chain(graph)
@@ -1039,7 +1055,9 @@ def _kahn_order(graph: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[
     return nodes, ordered, complete
 
 
-def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) -> list[dict[str, Any]]:
+def topological_order(
+    graph: dict[str, Any], *, require_acyclic: bool = True, validate_all_sub_agents: bool = False
+) -> list[dict[str, Any]]:
     """Kahn's algorithm. Raises :class:`ProtocolValidationError` on an empty
     graph, a cycle (any node Kahn's algorithm can't reach stays with a
     nonzero in-degree, which is exactly the cycle signature), or a malformed
@@ -1058,10 +1076,24 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
     premise gone there is no order left to claim.
     """
     try:
+        for kind in GROUP_SPECS:
+            validate_shared_factor_groups(graph, kind)
         resolve_dataset_row_plan(graph)
-    except DatasetRowInputError as exc:
+    except (DatasetRowInputError, ValueError) as exc:
         raise ProtocolValidationError(str(exc)) from exc
     _, downstream, _ = _adjacency(graph)
+    # Production must validate workers from every connector level, including
+    # those disabled in the baseline. Previews only need their selected workers.
+    factor_parents = {
+        node["id"] for node in graph.get("nodes") or []
+        if node.get("type") == "agent"
+        and ((node.get("data") or {}).get("factor_bindings") or {}).get("sub_agent_selection")
+    } if validate_all_sub_agents else set()
+    selectable_sub_agents = {
+        edge.get("source") for edge in graph.get("edges") or []
+        if edge.get("target") in factor_parents and edge.get("targetHandle") == "sub_agents"
+    }
+    graph = graph_with_sub_agent_selection(graph)
     nodes, ordered, complete = _kahn_order(graph)
     if not nodes:
         raise ProtocolValidationError("This protocol has no nodes.")
@@ -1103,7 +1135,7 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
 
         sub_agent_is_callable = (
             node_type == "sub_agent"
-            and _is_node_active(node)
+            and (_is_node_active(node) or nid in selectable_sub_agents)
             and bool(_edges_with_handle(graph, nid, "sub_agents", direction="outgoing"))
         )
         if node_type in ("agent", "critic_gate") or sub_agent_is_callable:
@@ -1268,10 +1300,6 @@ def topological_order(graph: dict[str, Any], *, require_acyclic: bool = True) ->
 
         if node_type == "sub_agent":
             parent_edges = _edges_with_handle(graph, nid, "sub_agents", direction="outgoing")
-            if len(parent_edges) > 1:
-                raise ProtocolValidationError(
-                    f"Sub-Agent node {name!r} can have exactly one parent (found {len(parent_edges)})."
-                )
             for edge in parent_edges:
                 parent = nodes.get(str(edge.get("target")))
                 if parent is None or parent.get("type") != "agent":
@@ -1370,7 +1398,7 @@ def apply_factor_bindings(graph: dict[str, Any], factor_values: dict[str, Any]) 
         for field_path, factor_name in bindings.items():
             if factor_name in factor_values:
                 _set_path(data, field_path, factor_values[factor_name])
-    return patched
+    return graph_with_sub_agent_selection(patched, copy_graph=False)
 
 
 def find_gated_pairs(graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1972,6 +2000,11 @@ def _resolve_dataset_configs(
     nodes, _downstream, _upstream = _adjacency(graph)
     configs: list[dict[str, Any]] = []
     seen: set[str] = set()
+    agent_data = (nodes.get(node_id) or {}).get("data") or {}
+    selection = (
+        agent_data.get("dataset_selection")
+        if (agent_data.get("factor_bindings") or {}).get("dataset_selection") else None
+    )
     # Edges first, handles second: an agent's Dataset nodes should come out in
     # the order they were wired, not grouped by which handle spelling they
     # happen to be saved under.
@@ -1982,7 +2015,9 @@ def _resolve_dataset_configs(
         if source is None or source.get("type") not in _DATASET_NODE_TYPES:
             continue
         config = (source.get("data") or {}).get("config") or {}
-        if not config.get("enabled", True) or not config.get("dataset_name"):
+        if (selection is None and not config.get("enabled", True)) or not config.get("dataset_name"):
+            continue
+        if selection is not None and config.get("dataset_id") not in selection:
             continue
         key = str(config.get("dataset_id") or config["dataset_name"])
         if key in seen:
@@ -2004,11 +2039,17 @@ def _resolve_script_configs(graph: dict[str, Any], node_id: str) -> list[dict[st
     selectable script to the wired agent.
     """
     nodes, _downstream, _upstream = _adjacency(graph)
+    data = (nodes.get(node_id) or {}).get("data") or {}
+    selection = data.get("script_selection") if (data.get("factor_bindings") or {}).get("script_selection") else None
     configs: list[dict[str, Any]] = []
     for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
         source = nodes.get(edge["source"])
         if source is not None and source.get("type") in _SCRIPT_NODE_TYPES:
             config = (source.get("data") or {}).get("config") or {}
+            if selection is not None and source["id"] not in selection:
+                continue
+            if selection is None and config.get("enabled") is False:
+                continue
             configs.append({**config, "node_id": str(source.get("id") or "")})
     return configs
 
@@ -2031,14 +2072,20 @@ def _resolve_skill_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]
     resolved ``skill_id`` is skipped, matching ``_resolve_tool_config``."""
     nodes, _downstream, _upstream = _adjacency(graph)
     skill_ids: list[str] = []
+    agent_data = (nodes.get(node_id) or {}).get("data") or {}
+    selection = (
+        agent_data.get("skill_selection") if (agent_data.get("factor_bindings") or {}).get("skill_selection") else None
+    )
     for edge in _edges_with_handle(graph, node_id, "skill", direction="incoming"):
         source = nodes.get(edge["source"])
         if source is None or source.get("type") not in _SKILL_NODE_TYPES:
             continue
         skill_node_config = (source.get("data") or {}).get("config") or {}
-        if not skill_node_config.get("enabled", True):
+        if selection is None and not skill_node_config.get("enabled", True):
             continue
         skill_id = skill_node_config.get("skill_id")
+        if selection is not None and skill_id not in selection:
+            continue
         if skill_id and str(skill_id) not in skill_ids:
             skill_ids.append(str(skill_id))
     return {"skill_ids": skill_ids} if skill_ids else {}
@@ -2240,7 +2287,13 @@ def resolve_supervisor_roles(graph: dict[str, Any]) -> SupervisorRoles:
                 "report to the supervisor, not to each other. Remove that connection, or switch the strategy to "
                 "'Peer Collaboration' on the Design tab."
             )
-    return SupervisorRoles(supervisor=supervisor, workers=workers, reviewer=reviewer)
+    if not _is_node_active(nodes[supervisor]):
+        raise ProtocolValidationError(f"The supervisor {_name(supervisor)!r} must remain active in every cell.")
+    active_workers = tuple(nid for nid in workers if _is_node_active(nodes[nid]))
+    if not active_workers:
+        raise ProtocolValidationError("A supervisor cell must keep at least one worker Agent active.")
+    active_reviewer = reviewer if reviewer is not None and _is_node_active(nodes[reviewer]) else None
+    return SupervisorRoles(supervisor=supervisor, workers=active_workers, reviewer=active_reviewer)
 
 
 def _connected_agent_ids(graph: dict[str, Any], node_id: str) -> list[str]:
@@ -2267,11 +2320,36 @@ def _connected_agent_ids(graph: dict[str, Any], node_id: str) -> list[str]:
     return peers
 
 
+def graph_with_sub_agent_selection(graph: dict[str, Any], *, copy_graph: bool = True) -> dict[str, Any]:
+    """Materialize parent-owned availability for all execution consumers."""
+    patched = copy.deepcopy(graph) if copy_graph else graph
+    nodes = {node["id"]: node for node in patched.get("nodes") or []}
+    for parent in nodes.values():
+        data = parent.get("data") or {}
+        if parent.get("type") != "agent" or not (data.get("factor_bindings") or {}).get("sub_agent_selection"):
+            continue
+        selected = data.get("sub_agent_selection") or []
+        for edge in patched.get("edges") or []:
+            child = nodes.get(edge.get("source"))
+            if (
+                edge.get("target") == parent["id"]
+                and edge.get("targetHandle") == "sub_agents"
+                and child
+                and child.get("type") == "sub_agent"
+            ):
+                child.setdefault("data", {})["active"] = child["id"] in selected
+    return patched
+
+
 def _sub_agent_ids(graph: dict[str, Any], parent_id: str) -> list[str]:
     """Active Sub-Agents owned by *parent_id*, in canvas wiring order."""
     nodes = {str(n.get("id")): n for n in graph.get("nodes") or [] if n.get("id")}
     if (nodes.get(parent_id) or {}).get("type") != "agent":
         return []
+    data = (nodes[parent_id].get("data") or {})
+    selected = (
+        data.get("sub_agent_selection") if (data.get("factor_bindings") or {}).get("sub_agent_selection") else None
+    )
     children: list[str] = []
     for edge in graph.get("edges") or []:
         if edge.get("target") != parent_id or edge.get("targetHandle") != "sub_agents":
@@ -2281,7 +2359,7 @@ def _sub_agent_ids(graph: dict[str, Any], parent_id: str) -> list[str]:
         if (
             child is not None
             and child.get("type") == "sub_agent"
-            and _is_node_active(child)
+            and (child_id in selected if selected is not None else _is_node_active(child))
             and child_id not in children
         ):
             children.append(child_id)
@@ -2407,6 +2485,32 @@ def _resolve_pattern_config(graph: dict[str, Any], node_id: str) -> dict[str, An
     return {"execution_pattern": slug, "pattern_params": {slug: (source.get("data") or {}).get("config") or {}}}
 
 
+def _resolve_tool_nodes(graph: dict[str, Any], node_id: str) -> list[dict[str, Any]]:
+    """Tool sources selected for this agent, in connector wiring order.
+
+    A bound selection overrides source enabled flags for this agent only.
+    Stage planning and tool access must use the same treatment.
+    """
+    nodes, _downstream, _upstream = _adjacency(graph)
+    agent_data = (nodes.get(node_id) or {}).get("data") or {}
+    selected = (
+        agent_data.get("tool_selection")
+        if (agent_data.get("factor_bindings") or {}).get("tool_selection") else None
+    )
+    sources: list[dict[str, Any]] = []
+    for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
+        source = nodes.get(edge.get("source"))
+        if source is None or source.get("type") not in _MCP_TOOL_NODE_TYPES:
+            continue
+        config = (source.get("data") or {}).get("config") or {}
+        if selected is not None and source["id"] not in selected:
+            continue
+        if selected is None and not config.get("enabled", True):
+            continue
+        sources.append(source)
+    return sources
+
+
 def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     """``{"server_names": [...], "tool_names": [...]}`` -- built from every
     ``mcp_tool`` node wired into this agent's Tool connector -- replaces the
@@ -2441,22 +2545,38 @@ def _resolve_tool_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
     server's tools are offered, never which server). An empty allow-list is a
     meaningful level: the server still connects (its ``server_name`` is still
     reported) but contributes no tools to that cell."""
-    nodes, _downstream, _upstream = _adjacency(graph)
     server_names: list[str] = []
     tool_names: list[str] = []
-    for edge in _edges_with_handle(graph, node_id, "tool", direction="incoming"):
-        source = nodes.get(edge["source"])
-        if source is None or source.get("type") not in _MCP_TOOL_NODE_TYPES:
-            continue
+    for source in _resolve_tool_nodes(graph, node_id):
         tool_node_config = (source.get("data") or {}).get("config") or {}
-        if not tool_node_config.get("enabled", True):
-            continue
         server_name = tool_node_config.get("server_name")
         node_tool_names = tool_node_config.get("tool_names") or []
         if server_name:
             server_names.append(server_name)
             tool_names.extend(f"{server_name}.{name}" for name in node_tool_names)
     return {"server_names": server_names, "tool_names": tool_names}
+
+
+def _resolve_knowledge_nodes(graph: dict[str, Any], node_id: str) -> list[dict[str, Any]]:
+    """Knowledge sources selected for this agent's tools and prompt catalog."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    agent_data = (nodes.get(node_id) or {}).get("data") or {}
+    selection = (
+        agent_data.get("knowledge_selection")
+        if (agent_data.get("factor_bindings") or {}).get("knowledge_selection") else None
+    )
+    sources: list[dict[str, Any]] = []
+    for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
+            continue
+        config = (source.get("data") or {}).get("config") or {}
+        if selection is not None and knowledge_id(source) not in selection:
+            continue
+        if selection is None and not config.get("enabled", True):
+            continue
+        sources.append(source)
+    return sources
 
 
 def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]:
@@ -2484,17 +2604,11 @@ def _resolve_knowledge_config(graph: dict[str, Any], node_id: str) -> dict[str, 
 
     De-duplicated by server: two nodes pointing at the same bundle are one
     server, and listing it twice would just double every tool name."""
-    nodes, _downstream, _upstream = _adjacency(graph)
     server_names: list[str] = []
     tool_names: list[str] = []
     tool_descriptions: dict[str, str] = {}
-    for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
-        source = nodes.get(edge["source"])
-        if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
-            continue
+    for source in _resolve_knowledge_nodes(graph, node_id):
         bundle_config = (source.get("data") or {}).get("config") or {}
-        if not bundle_config.get("enabled", True):
-            continue
         server_name = bundle_config.get("server_name")
         if not server_name or server_name in server_names:
             continue
@@ -3368,15 +3482,9 @@ def _resource_catalog(
             lines.append(f"- {name}: {detail}" if detail else f"- {name}")
         sections.append("Available datasets:\n" + "\n".join(lines))
 
-    nodes, _downstream, _upstream = _adjacency(graph)
     knowledge_lines: list[str] = []
-    for edge in _edges_with_handle(graph, node_id, "knowledge", direction="incoming"):
-        source = nodes.get(edge["source"])
-        if source is None or source.get("type") not in _KNOWLEDGE_NODE_TYPES:
-            continue
+    for source in _resolve_knowledge_nodes(graph, node_id):
         config = (source.get("data") or {}).get("config") or {}
-        if not config.get("enabled", True):
-            continue
         label = str(
             config.get("document_title")
             or config.get("bundle_label")
@@ -3990,11 +4098,13 @@ async def _sync_durable_agent(*, name: str, owner_id: uuid.UUID, fields: dict[st
     durable Motoro Agent is keyed by owner/name, so a losing create retries as
     an update of the row the concurrent request just inserted.
 
-    **Never put per-run state in ``fields``.** Every entry here must come from
-    the node's canvas config or its wired connectors -- i.e. from the protocol
-    itself, which is what this row is a projection of. Run-scoped configuration
-    belongs on the run: ``create_run`` already takes ``model_config_overrides``
-    and ``config_snapshot``. The rule needs stating because this write path
+    **Never put per-run state in ``fields``.** This stable canvas-node identity
+    holds the baseline config from the run's published graph, before factor
+    substitution or prompt-reference resolution. Cell and row values belong
+    in ``create_run(config_snapshot=...)``; tool grants are pinned separately
+    in run metadata because Motoro's snapshot omits tool config. Concurrent
+    runs may sync different published baselines, but execution never reads
+    those mutable settings. The rule needs stating because this write path
     makes the mistake cheap to make and expensive to notice: ``update_agent``
     reads ``None`` as "leave unchanged", so a field written once during one run
     is never cleared by any later run and quietly contaminates every future one
@@ -4070,8 +4180,8 @@ def _truncation_fields(run: Any) -> dict[str, Any] | None:
     agent that finished -- which is how a run whose report was never written
     ends up handed to an Output Parser that can only find nulls in a tool dump.
 
-    Read from ``agent_runs.pattern_overrides`` rather than rederived from the
-    step list: the ReasonAct pattern already records exactly this
+    Read from ``agent_runs.run_metadata`` with a legacy ``pattern_overrides``
+    fallback rather than rederived from the step list: ReasonAct records this
     (``reason_act_state``, see its ``_state``/``_persist_state``), and the step
     rows cannot answer it -- the persisted Act step carries the pre-hook
     ``should_continue`` and is ``false`` on every run, truncated or not.
@@ -4082,7 +4192,7 @@ def _truncation_fields(run: Any) -> dict[str, Any] | None:
     and the answer for a truncated run is still yes -- its work up to the
     ceiling is real. This is a flag on a completed run, the way ``caveats`` is.
     """
-    state = (getattr(run, "pattern_overrides", None) or {}).get("reason_act_state")
+    state = _reason_act_state(run)
     if not isinstance(state, Mapping) or not state.get("max_iterations_hit"):
         return None
     return {
@@ -4091,6 +4201,86 @@ def _truncation_fields(run: Any) -> dict[str, Any] | None:
             "iterations": state.get("iterations"),
             "max_iterations": state.get("max_iterations"),
         }
+    }
+
+
+async def _baseline_graph_for_run(protocol_run_id: uuid.UUID) -> dict[str, Any]:
+    """Read the unfactored publication, including for peer and single-node runs.
+
+    Legacy runs without a publication use the protocol's canvas baseline.
+    Never reconstruct the baseline from a cell's substituted graph.
+    """
+    async with get_session() as db:
+        run = await get_protocol_run(db, protocol_run_id)
+        if run is None:
+            raise ProtocolValidationError("protocol run no longer exists")
+        if run.protocol_revision_id is not None:
+            revision = await get_revision(db, run.protocol_revision_id)
+            if revision is None:
+                raise ProtocolValidationError("published protocol revision no longer exists")
+            return revision.graph
+        protocol = await get_protocol(db, run.protocol_id)
+        if protocol is None:
+            raise ProtocolValidationError("protocol no longer exists")
+        return protocol.graph
+
+
+async def _resolve_agent_fields(
+    node: dict[str, Any],
+    graph: dict[str, Any],
+    *,
+    owner_id: uuid.UUID,
+    system_prompt: str | None = None,
+    unsplit_dataset: str = "",
+    row_mode: bool = False,
+) -> dict[str, Any]:
+    """Resolve a baseline or a cell's complete execution settings."""
+    config = node["data"]["config"]
+    label = node.get("data", {}).get("label")
+    description = config.get("description") or ""
+    if label:
+        description = f"{description} (canvas label: {label})".strip()
+    model_config = await build_model_config(_resolve_model_config(graph, node["id"]), owner_id=owner_id)
+    tool_config = _merge_tool_configs(
+        _resolve_tool_config(graph, node["id"]),
+        _resolve_knowledge_config(graph, node["id"]),
+        _resolve_dataset_tool_config(graph, node["id"], unsplit_dataset=unsplit_dataset, row_mode=row_mode),
+        _resolve_script_tool_config(graph, node["id"]),
+    )
+    if row_mode:
+        allowed = {
+            f"{WORKSPACE_SERVER_NAME}.open_workspace", f"{WORKSPACE_SERVER_NAME}.workspace_status",
+            f"{SCIKIT_LEARN_SERVER_NAME}.describe_dataset",
+        }
+        unsafe_managed_servers = {WORKSPACE_SERVER_NAME, EDA_SERVER_NAME, SCIKIT_LEARN_SERVER_NAME}
+        unsafe_names = {
+            f"{server}.{tool}"
+            for server in unsafe_managed_servers
+            for tool in WORKSPACE_AGENT_TOOLS + DATASET_DICTIONARY_AGENT_TOOLS + UNSPLIT_DATASET_AGENT_TOOLS
+        }
+        tool_config["tool_names"] = [
+            name for name in tool_config.get("tool_names", []) if name not in unsafe_names or name in allowed
+        ]
+        tool_config["server_names"] = [
+            server for server in tool_config.get("server_names", [])
+            if server not in unsafe_managed_servers
+            or any(name.startswith(server + ".") for name in tool_config["tool_names"])
+        ]
+    pattern = _resolve_pattern_config(graph, node["id"])
+    return {
+        "goal": config.get("goal") or "",
+        "description": description,
+        "system_prompt": system_prompt or config.get("system_prompt") or _default_system_prompt(label, "Agent"),
+        "model_config": model_config,
+        "pattern_config": PatternConfig(
+            execution_pattern=pattern.get("execution_pattern"), pattern_params=pattern.get("pattern_params") or {},
+        ).model_dump(),
+        "tool_config": tool_config,
+        # Explicit empty config detaches skills rather than retaining earlier grants.
+        "skill_config": _resolve_skill_config(graph, node["id"]) or {"skill_ids": []},
+        "output_contract": _resolve_output_contract(graph, node["id"]),
+        "budget_limit_usd": config.get("budget_limit_usd"),
+        "max_run_duration_seconds": config.get("max_run_duration_seconds"),
     }
 
 
@@ -4138,102 +4328,16 @@ async def _run_agent_node(
     ``_sync_durable_agent``'s fields -- the card is per-run and derived, and
     writing it onto the durable agent row is exactly the contamination this
     design avoids."""
-    config = node["data"]["config"]
-    # Deterministic, not config["name"]: Agent.name is unique per OWNER, not
-    # per protocol, so trusting the freeform (often identically-defaulted)
-    # config.name directly risks two unrelated nodes silently overwriting
-    # each other's agent definition on every run. config.name is folded
-    # into the description instead, purely as a human label.
-    row_attempt = bool(ambient_meta and ambient_meta.get("dataset_mode") == "per_row")
-    agent_name = f"protocol-{protocol_id}-{node['id']}" + (f"-row-{protocol_run_id}" if row_attempt else "")
-    # Model/tool/execution-pattern are no longer fields on the agent's own
-    # config -- resolved from its required Model connector, its (optional,
-    # repeatable) Tool connectors, and its optional Architectural Pattern
-    # connector instead (topological_order already validated their shape).
-    # output_contract joined them, with one extra argument the others didn't
-    # need: extraction is a second LLM call per run, so its cost belongs on the
-    # canvas. Unlike the three above, the node's own field is still read as a
-    # fallback and always will be -- see _resolve_output_contract.
-    model_config_data = {k: v for k, v in _resolve_model_config(graph, node["id"]).items() if v is not None}
-    model_config = ModelConfig(**model_config_data)
-    # Four connectors feed one allow-list. The Knowledge connector's OKF
-    # bundles and documents are MCP servers like any other, so they land here
-    # rather than in a slot of their own (see _resolve_knowledge_config), and
-    # the Dataset and Script connectors imply ASAREE's own workspace and
-    # script-running tools (see _resolve_dataset_tool_config /
-    # _resolve_script_tool_config) -- the split between the four is about
-    # what the user is declaring, not about how the engine consumes it.
-    tool_config = _merge_tool_configs(
-        _resolve_tool_config(graph, node["id"]),
-        _resolve_knowledge_config(graph, node["id"]),
-        _resolve_dataset_tool_config(
-            graph, node["id"], unsplit_dataset=unsplit_dataset,
-            row_mode=bool(ambient_meta and ambient_meta.get("dataset_mode") == "per_row"),
-        ),
-        _resolve_script_tool_config(graph, node["id"]),
+    agent_name = f"protocol-{protocol_id}-{node['id']}"
+    fields = await _resolve_agent_fields(
+        node, graph, owner_id=owner_id, system_prompt=system_prompt,
+        unsplit_dataset=unsplit_dataset,
+        row_mode=bool(ambient_meta and ambient_meta.get("dataset_mode") == "per_row"),
     )
-    if ambient_meta and ambient_meta.get("dataset_mode") == "per_row":
-        allowed = {
-            f"{WORKSPACE_SERVER_NAME}.open_workspace", f"{WORKSPACE_SERVER_NAME}.workspace_status",
-            f"{SCIKIT_LEARN_SERVER_NAME}.describe_dataset",
-        }
-        unsafe_managed_servers = {WORKSPACE_SERVER_NAME, EDA_SERVER_NAME, SCIKIT_LEARN_SERVER_NAME}
-        tool_config["tool_names"] = [
-            name for name in tool_config.get("tool_names", [])
-            if name not in {f"{server}.{tool}" for server in unsafe_managed_servers for tool in
-                            (WORKSPACE_AGENT_TOOLS + DATASET_DICTIONARY_AGENT_TOOLS + UNSPLIT_DATASET_AGENT_TOOLS)}
-            or name in allowed
-        ]
-        tool_config["server_names"] = [
-            server for server in tool_config.get("server_names", [])
-            if server not in unsafe_managed_servers
-            or any(name.startswith(server + ".") for name in tool_config["tool_names"])
-        ]
-    pattern_config_data = _resolve_pattern_config(graph, node["id"])
-    pattern_config = PatternConfig(
-        execution_pattern=pattern_config_data.get("execution_pattern"),
-        pattern_params=pattern_config_data.get("pattern_params") or {},
-    ).model_dump()
-    # Always a dict, never None, even with nothing wired: Motoro's update_agent
-    # reads None as "leave unchanged", so an agent that had skills and then had
-    # them unwired on the canvas would silently keep running with them. An
-    # explicit empty list is how you detach.
-    skill_config = _resolve_skill_config(graph, node["id"]) or {"skill_ids": []}
-    description = config.get("description") or ""
-    label = node.get("data", {}).get("label")
-    if label:
-        description = f"{description} (canvas label: {label})".strip()
-    # Explicit, ASAREE-owned default -- Motoro's own fallback
-    # ("You are {name}. {description}") would use `agent_name` here, an
-    # internal "protocol-{protocol_id}-{node_id}" bookkeeping id no user
-    # ever sees, not this agent's actual canvas identity.
-    #
-    # The *system_prompt* argument, when given, is that same authored field
-    # with its ``{{...}}`` references already resolved (:func:`_build_system_prompt`) --
-    # resolution needs `node_runs`, which this function does not have. Falling
-    # back to the raw field keeps the call sites that have nothing to resolve
-    # against (a single-node run) working unchanged.
-    resolved_system_prompt = system_prompt or config.get("system_prompt") or _default_system_prompt(label, "Agent")
-
-    agent = await _sync_durable_agent(
-        name=agent_name,
-        owner_id=owner_id,
-        fields={
-            "goal": config.get("goal") or "",
-            "description": description,
-            "system_prompt": resolved_system_prompt,
-            "model_config": model_config,
-            "pattern_config": pattern_config,
-            "tool_config": tool_config,
-            "skill_config": skill_config,
-            # From the wired Output Parser node, falling back to the agent's own
-            # stored field for graphs that predate it -- see
-            # _resolve_output_contract for why that fallback is permanent.
-            "output_contract": _resolve_output_contract(graph, node["id"]),
-            "budget_limit_usd": config.get("budget_limit_usd"),
-            "max_run_duration_seconds": config.get("max_run_duration_seconds"),
-        },
-    )
+    baseline_graph = await _baseline_graph_for_run(protocol_run_id)
+    baseline_node = next(n for n in baseline_graph["nodes"] if n["id"] == node["id"])
+    baseline_fields = await _resolve_agent_fields(baseline_node, baseline_graph, owner_id=owner_id)
+    agent = await _sync_durable_agent(name=agent_name, owner_id=owner_id, fields=baseline_fields)
     assert agent is not None
 
     resolved_ambient = (
@@ -4258,7 +4362,12 @@ async def _run_agent_node(
         agent_id=agent.id,
         user_input=user_input,
         owner_id=owner_id,
+        config_snapshot={
+            **{key: value for key, value in fields.items() if key != "tool_config"},
+            "model_config": fields["model_config"].model_dump(mode="json"),
+        },
         metadata={
+            PINNED_TOOL_CONFIG: copy.deepcopy(fields["tool_config"]),
             "protocol_id": str(protocol_id),
             "protocol_run_id": str(protocol_run_id),
             "node_id": node["id"],
@@ -4269,12 +4378,12 @@ async def _run_agent_node(
             **({"ambient_meta": resolved_ambient} if resolved_ambient else {}),
         },
     )
-    timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
+    timeout = fields["max_run_duration_seconds"] or get_settings().worker_job_timeout_seconds
     try:
         await _execute_run_cancellable(
             run_id=run.id,
             protocol_run_id=protocol_run_id,
-            available_tools=gather_tools(agent),
+            available_tools=gather_run_tools(run),
             timeout=timeout,
             available_agents=available_agents,
             agent_messenger=agent_messenger,
@@ -4310,6 +4419,34 @@ async def _run_agent_node(
     return output_text, None, run.id, node_fields or None
 
 
+async def _resolve_critic_fields(
+    gate: dict[str, Any], graph: dict[str, Any], *, owner_id: uuid.UUID,
+) -> dict[str, Any]:
+    config = gate["data"]["config"]
+    model_config = await build_model_config(_resolve_model_config(graph, gate["id"]), owner_id=owner_id)
+    pattern_config = PatternConfig(execution_pattern="single_agent_baseline").model_dump()
+    goal = config.get("goal") or "Review the given output and return an approval verdict with feedback."
+    description = config.get("description") or ""
+    label = gate.get("data", {}).get("label")
+    if label:
+        description = f"{description} (canvas label: {label})".strip()
+    system_prompt = config.get("system_prompt") or _default_system_prompt(label, "Critic Gate")
+    tool_config: dict[str, list[str]] = {"server_names": [], "tool_names": []}
+
+    return {
+        "goal": goal,
+        "description": description,
+        "system_prompt": system_prompt,
+        "model_config": model_config,
+        "pattern_config": pattern_config,
+        "tool_config": tool_config,
+        "skill_config": {"skill_ids": []},
+        "output_contract": CRITIC_OUTPUT_CONTRACT,
+        "budget_limit_usd": config.get("budget_limit_usd"),
+        "max_run_duration_seconds": config.get("max_run_duration_seconds"),
+    }
+
+
 async def _run_critic(
     gate: dict[str, Any],
     *,
@@ -4318,7 +4455,6 @@ async def _run_critic(
     owner_id: uuid.UUID,
     worker_output: str,
     graph: dict[str, Any],
-    row_attempt: bool = False,
 ) -> tuple[dict[str, Any] | None, str | None, str | None]:
     """Create-or-sync the gate's own critic agent and run it once. Returns
     ``(verdict, error, critic_run_id)`` -- exactly one of verdict/error is
@@ -4330,32 +4466,12 @@ async def _run_critic(
     ``output_contract`` is always :data:`CRITIC_OUTPUT_CONTRACT` -- not
     whatever (if anything) is in the node's own config. Model is resolved
     from its required Model connector, same as an agent node."""
-    config = gate["data"]["config"]
-    agent_name = f"protocol-{protocol_id}-{gate['id']}" + (f"-row-{protocol_run_id}" if row_attempt else "")
-    model_config_data = {k: v for k, v in _resolve_model_config(graph, gate["id"]).items() if v is not None}
-    model_config = ModelConfig(**model_config_data)
-    pattern_config = PatternConfig(execution_pattern="single_agent_baseline").model_dump()
-    goal = config.get("goal") or "Review the given output and return an approval verdict with feedback."
-    description = config.get("description") or ""
-    label = gate.get("data", {}).get("label")
-    if label:
-        description = f"{description} (canvas label: {label})".strip()
-    system_prompt = config.get("system_prompt") or _default_system_prompt(label, "Critic Gate")
-    tool_config: dict[str, list[str]] = {"server_names": [], "tool_names": []}
-
-    agent = await _sync_durable_agent(
-        name=agent_name,
-        owner_id=owner_id,
-        fields={
-            "goal": goal,
-            "description": description,
-            "system_prompt": system_prompt,
-            "model_config": model_config,
-            "pattern_config": pattern_config,
-            "tool_config": tool_config,
-            "output_contract": CRITIC_OUTPUT_CONTRACT,
-        },
-    )
+    agent_name = f"protocol-{protocol_id}-{gate['id']}"
+    fields = await _resolve_critic_fields(gate, graph, owner_id=owner_id)
+    baseline_graph = await _baseline_graph_for_run(protocol_run_id)
+    baseline_gate = next(n for n in baseline_graph["nodes"] if n["id"] == gate["id"])
+    baseline_fields = await _resolve_critic_fields(baseline_gate, baseline_graph, owner_id=owner_id)
+    agent = await _sync_durable_agent(name=agent_name, owner_id=owner_id, fields=baseline_fields)
     assert agent is not None
 
     instruction = f"Review the following output and return your verdict.\n\nOutput to review:\n\n{worker_output}"
@@ -4363,7 +4479,12 @@ async def _run_critic(
         agent_id=agent.id,
         user_input=instruction,
         owner_id=owner_id,
+        config_snapshot={
+            **{key: value for key, value in fields.items() if key != "tool_config"},
+            "model_config": fields["model_config"].model_dump(mode="json"),
+        },
         metadata={
+            PINNED_TOOL_CONFIG: copy.deepcopy(fields["tool_config"]),
             "protocol_id": str(protocol_id),
             "protocol_run_id": str(protocol_run_id),
             "node_id": gate["id"],
@@ -4371,10 +4492,10 @@ async def _run_critic(
         },
     )
     critic_run_id = str(run.id)
-    timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
+    timeout = fields["max_run_duration_seconds"] or get_settings().worker_job_timeout_seconds
     try:
         await _execute_run_cancellable(
-            run_id=run.id, protocol_run_id=protocol_run_id, available_tools=gather_tools(agent), timeout=timeout
+            run_id=run.id, protocol_run_id=protocol_run_id, available_tools=gather_run_tools(run), timeout=timeout
         )
     except TimeoutError:
         return None, f"critic run exceeded its {timeout}s execution budget", critic_run_id
@@ -4535,6 +4656,7 @@ async def _run_gated_worker(
                 _completed_worker_record(output_text, attempt, run_id_str, extraction),
                 {
                     "status": "completed",
+                    "bypassed": True,
                     "output_text": output_text,
                     "approved": None,
                     "revisions_used": 0,
@@ -4567,7 +4689,6 @@ async def _run_gated_worker(
             owner_id=owner_id,
             worker_output=complete_output,
             graph=graph,
-            row_attempt=row_source is not None,
         )
         if verdict_error == _AGENT_CANCELLED:
             # The worker's own output is real and already complete -- only
@@ -4627,6 +4748,10 @@ async def plan_cell_runs(
     rerun_replicate_labels: set[str] | None = None,
     retry_row_result_ids: Sequence[uuid.UUID] | None = None,
     row_indices: Sequence[int] | None = None,
+    replicate_ids: set[uuid.UUID] | None = None,
+    prevalidated: bool = False,
+    validate_design_impact: bool = True,
+    indexed_source: Any | None = None,
 ) -> tuple[list[ProtocolRun], int]:
     """ "Run all cells": creates one pending :class:`ProtocolRun` per
     not-yet-completed replicate row under *experiment_id*, each carrying its
@@ -4675,7 +4800,9 @@ async def plan_cell_runs(
             await db.execute(
                 select(Protocol)
                 .where(Protocol.id == protocol_id)
-                .with_for_update()
+                # NO KEY UPDATE: see result_jobs.create_job -- FOR UPDATE also
+                # blocked finishing runs' foreign-key checks and deadlocked.
+                .with_for_update(key_share=True)
                 .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
@@ -4706,6 +4833,7 @@ async def plan_cell_runs(
     # may not apply to this canvas at all -- see is_conversation_strategy.
     publication = await db.get(ProtocolRevision, protocol_revision_id) if protocol_revision_id else None
     from asaree.services.experiment_versions import version_design_spec, version_measurement_plan
+
     design_spec = version_design_spec(publication, experiment.design_spec)
     measurement_plan = (
         experiment.locked_measurement_plan
@@ -4717,49 +4845,53 @@ async def plan_cell_runs(
     measurement_plan = version_measurement_plan(publication, measurement_plan)
     if publication is not None and publication.experiment_snapshot is not None:
         from asaree.services.design_revisions import get_current_revision
+
         generated = await get_current_revision(db, experiment_id)
         if publication.design_revision_id != (generated.id if generated else None):
             raise ProtocolValidationError("Publish the generated draft design before running this experiment.")
-    validate_coordination_strategy(design_spec, graph=graph)
-    validate_stage_plan(design_spec)
-    validate_prompt_references(graph=graph)
-    conversation = is_conversation_strategy(design_spec)
-    topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
-    if not conversation:
-        sinks = sink_node_ids(graph)
-        if len(sinks) != 1:
-            raise ProtocolValidationError(
-                f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
-            )
-    try:
-        validate_factor_bindings(design_spec, graph)
-    except ValueError as exc:
-        raise ProtocolValidationError(str(exc)) from exc
-    measurement_report = await validate_experiment_measurement_plan(
-        db,
-        document=measurement_plan,
-        metrics=(design_spec or {}).get("metrics"),
-        graph=graph,
-        experiment_id=experiment_id,
-        owner_id=owner_id,
-    )
-    if blocking_issues := blocking_measurement_plan_issues(measurement_report):
-        raise ProtocolValidationError("; ".join(issue.message for issue in blocking_issues))
-    impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=design_spec)
-    if impact.regeneration_required:
-        raise ProtocolValidationError(
-            "design_changed: review and regenerate before running all cells. "
-            f"Current {impact.current_cell_count} cells/{impact.current_replicate_count} replicates, "
-            f"proposed {impact.proposed_cell_count} cells/{impact.proposed_replicate_count} replicates."
+    if not prevalidated:
+        validate_coordination_strategy(design_spec, graph=graph)
+        validate_stage_plan(design_spec)
+        validate_prompt_references(graph=graph)
+        conversation = is_conversation_strategy(design_spec)
+        topological_order(graph, require_acyclic=not conversation, validate_all_sub_agents=True)
+        if not conversation:
+            sinks = sink_node_ids(graph)
+            if len(sinks) != 1:
+                raise ProtocolValidationError(
+                    f"This protocol must have exactly one final node to run per replicate (found {len(sinks)})."
+                )
+        try:
+            validate_factor_bindings(design_spec, graph)
+            await validate_skill_factors(design_spec, graph, owner_id)
+            await validate_knowledge_factors(design_spec, graph, owner_id)
+            await validate_dataset_factors(design_spec, graph, owner_id, db)
+        except ValueError as exc:
+            raise ProtocolValidationError(str(exc)) from exc
+        measurement_report = await validate_experiment_measurement_plan(
+            db,
+            document=measurement_plan,
+            metrics=(design_spec or {}).get("metrics"),
+            graph=graph,
+            experiment_id=experiment_id,
+            owner_id=owner_id,
         )
+        if blocking_issues := blocking_measurement_plan_issues(measurement_report):
+            raise ProtocolValidationError("; ".join(issue.message for issue in blocking_issues))
+        if validate_design_impact:
+            impact = await get_design_impact(db, experiment_id=experiment_id, design_spec=design_spec)
+            if impact.regeneration_required:
+                raise ProtocolValidationError(
+                    "design_changed: review and regenerate before running all cells. "
+                    f"Current {impact.current_cell_count} cells/{impact.current_replicate_count} replicates, "
+                    f"proposed {impact.proposed_cell_count} cells/{impact.proposed_replicate_count} replicates."
+                )
 
     # A row batch is pinned to an immutable published revision. Validate the
     # complete ownership/scope relationship and the caller-supplied snapshot
     # before the shared current-design parents can create any row slots.
     revision = (
-        await db.get(ProtocolRevision, protocol_revision_id, populate_existing=True)
-        if protocol_revision_id
-        else None
+        await db.get(ProtocolRevision, protocol_revision_id, populate_existing=True) if protocol_revision_id else None
     )
     if (
         revision is not None
@@ -4785,7 +4917,7 @@ async def plan_cell_runs(
             if retry_row_result_ids is not None:
                 if current_design is None:
                     raise ProtocolValidationError("invalid_retry_target")
-                parents = await list_replicates(db, experiment_id=experiment_id)
+                parents = await list_replicates(db, experiment_id=experiment_id, replicate_ids=replicate_ids)
                 parents_by_id = {parent.id: parent for parent in parents}
                 retry_targets = []
                 for target_id in retry_row_result_ids:
@@ -4813,7 +4945,7 @@ async def plan_cell_runs(
                         or latest.replicate_result_id != parent.id
                         or latest.design_revision_id != current_design.id
                         or latest.protocol_revision_id != revision.id
-                        or latest.status not in {"failed", "cancelled"}
+                        or latest.status not in RETRYABLE_PROTOCOL_RUN_STATUSES
                     ):
                         raise ProtocolValidationError("invalid_retry_target")
                     retry_targets.append((slot, latest, parent))
@@ -4831,22 +4963,20 @@ async def plan_cell_runs(
             if registration is None or experiment_owner != owner_id:
                 raise ProtocolValidationError("Registered row source is unavailable.")
             try:
-                source = read_row_source(
+                source = indexed_source or read_row_source(
                     dataset_id=str(registration.id),
                     raw_path=registration.raw_path,
                     raw_sha256=registration.raw_sha256,
                 )
             except DatasetRowCsvError as exc:
                 raise ProtocolValidationError(str(exc)) from exc
+            if source.dataset_id != str(registration.id) or source.raw_sha256 != registration.raw_sha256:
+                raise ProtocolValidationError("row_source_changed")
             # Validate the immutable published plan against the verified source
             # header even when the caller selected no parents (and thus would
             # otherwise produce no candidates to project).
             try:
-                source_columns = {
-                    column
-                    for binding in original_row_plan["bindings"]
-                    for column in binding["columns"]
-                }
+                source_columns = {column for binding in original_row_plan["bindings"] for column in binding["columns"]}
                 if not source_columns or source_columns - set(source.columns):
                     raise DatasetRowCsvError(
                         "invalid_columns", "row input columns must exist in the registered CSV header"
@@ -4859,19 +4989,22 @@ async def plan_cell_runs(
                     if slot.dataset_id != registration.id:
                         raise ProtocolValidationError("invalid_retry_target")
                     try:
-                        pinned_source = read_row_source(
+                        pinned_source = indexed_source or read_row_source(
                             dataset_id=str(slot.dataset_id),
                             raw_path=registration.raw_path,
                             raw_sha256=registration.raw_sha256,
                             expected_sha256=slot.raw_sha256,
                         )
                         patched_graph = apply_factor_bindings(revision.graph, parent.factor_values or {})
+                        validate_coordination_strategy(design_spec, graph=patched_graph)
                         patched_plan = resolve_dataset_row_plan(patched_graph, design_spec)
                         if patched_plan is None or patched_plan["driver_dataset_id"] != str(slot.dataset_id):
                             raise DatasetRowInputError("driver_mismatch", "factor substitution changed the row driver")
-                        columns = list(dict.fromkeys(
-                            column for binding in patched_plan["bindings"] for column in binding["columns"]
-                        ))
+                        columns = list(
+                            dict.fromkeys(
+                                column for binding in patched_plan["bindings"] for column in binding["columns"]
+                            )
+                        )
                         view = project_row(pinned_source, row_index=slot.row_index, columns=columns)
                     except DatasetRowCsvError as exc:
                         raise ProtocolValidationError(str(exc)) from exc
@@ -4906,7 +5039,7 @@ async def plan_cell_runs(
                 retry_order = {slot_id: index for index, slot_id in enumerate(retry_row_result_ids)}
                 created_retries.sort(key=lambda run: retry_order[run.row_result_id])
                 return created_retries, 0
-            parents = await list_replicates(db, experiment_id=experiment_id)
+            parents = await list_replicates(db, experiment_id=experiment_id, replicate_ids=replicate_ids)
             if current_design is None or any(parent.design_revision_id != current_design.id for parent in parents):
                 raise ProtocolValidationError("design_changed")
             labels = {parent.replicate_label for parent in parents}
@@ -4942,12 +5075,13 @@ async def plan_cell_runs(
                 planned = []
                 for candidate in candidates:
                     patched_graph = apply_factor_bindings(revision.graph, candidate["factor_values"])
+                    validate_coordination_strategy(design_spec, graph=patched_graph)
                     patched_plan = resolve_dataset_row_plan(patched_graph, design_spec)
                     if patched_plan is None or patched_plan["driver_dataset_id"] != str(registration.id):
                         raise DatasetRowInputError("driver_mismatch", "factor substitution changed the row driver")
-                    columns = list(dict.fromkeys(
-                        column for binding in patched_plan["bindings"] for column in binding["columns"]
-                    ))
+                    columns = list(
+                        dict.fromkeys(column for binding in patched_plan["bindings"] for column in binding["columns"])
+                    )
                     view = project_row(source, row_index=candidate["dataset_row"]["row_index"], columns=columns)
                     planned.append((candidate, view))
             except (DatasetRowInputError, DatasetRowCsvError) as exc:
@@ -4998,7 +5132,7 @@ async def plan_cell_runs(
 
     # Current design only -- list_replicates scopes to the experiment's current
     # revision, so a superseded design's replicates are neither counted nor run.
-    replicates = await list_replicates(db, experiment_id=experiment_id)
+    replicates = await list_replicates(db, experiment_id=experiment_id, replicate_ids=replicate_ids)
     labels = {replicate.replicate_label for replicate in replicates}
     requested_labels = labels if replicate_labels is None else replicate_labels
     unknown_requested = requested_labels - labels
@@ -5030,7 +5164,9 @@ async def plan_cell_runs(
 
     obsolete_run_ids = {run.id for run in runs_by_id.values() if is_obsolete(run)}
     completed_run_ids = {
-        run.id for run in runs_by_id.values() if run.status == "completed" and run.id not in obsolete_run_ids
+        run.id
+        for run in runs_by_id.values()
+        if run.status in RERUN_ON_REQUEST_STATUSES and run.id not in obsolete_run_ids
     }
     completed_labels = {
         replicate.replicate_label
@@ -5041,13 +5177,22 @@ async def plan_cell_runs(
     not_completed = requested_reruns - completed_labels
     if not_completed:
         raise ProtocolValidationError(
-            f"Only previously completed replicates can be selected to run again: {', '.join(sorted(not_completed))}."
+            "Only replicates whose last run completed or hit its iteration limit can be selected to run again: "
+            f"{', '.join(sorted(not_completed))}."
         )
     pending = [
         replicate
         for replicate in replicates
         if replicate.replicate_label not in completed_labels or replicate.replicate_label in requested_reruns
     ]
+    # Validate every requested cell before creating any run in this batch.
+    for replicate in pending:
+        try:
+            validate_coordination_strategy(
+                design_spec, graph=apply_factor_bindings(graph, replicate.factor_values or {})
+            )
+        except ProtocolValidationError as exc:
+            raise ProtocolValidationError(f"Replicate {replicate.replicate_label!r}: {exc}") from exc
     runs = [
         await create_protocol_run(
             db,
@@ -5111,7 +5256,7 @@ async def plan_single_replicate_run(
     validate_stage_plan(design_spec)
     validate_prompt_references(graph=graph)
     conversation = is_conversation_strategy(design_spec)
-    topological_order(graph, require_acyclic=not conversation)  # also raises on an empty graph
+    topological_order(graph, require_acyclic=not conversation, validate_all_sub_agents=True)
     if not conversation:
         sinks = sink_node_ids(graph)
         if len(sinks) != 1:
@@ -5120,6 +5265,9 @@ async def plan_single_replicate_run(
             )
     try:
         validate_factor_bindings(design_spec, graph)
+        await validate_skill_factors(design_spec, graph, owner_id)
+        await validate_knowledge_factors(design_spec, graph, owner_id)
+        await validate_dataset_factors(design_spec, graph, owner_id, db)
     except ValueError as exc:
         raise ProtocolValidationError(str(exc)) from exc
     measurement_report = await validate_experiment_measurement_plan(
@@ -5148,6 +5296,7 @@ async def plan_single_replicate_run(
         if replicate_label is not None:
             raise ProtocolValidationError(f"No such replicate: {replicate_label!r}")
         raise ProtocolValidationError("No current design replicate is available for row execution.")
+    validate_coordination_strategy(design_spec, graph=apply_factor_bindings(graph, replicate.factor_values or {}))
     if row_plan is not None:
         if protocol_revision_id is None:
             raise ProtocolValidationError("A published protocol revision is required for row execution.")
@@ -5260,6 +5409,10 @@ def validate_conversation_entry(graph: dict[str, Any], node_id: str) -> dict[str
         raise ProtocolValidationError(f"No such node: {node_id!r}")
     if node.get("type") != "agent":
         raise ProtocolValidationError("Only Agent nodes can start a conversation.")
+    if not _is_node_active(node):
+        raise ProtocolValidationError(
+            f"The conversation lead {_node_display_name(node)!r} must remain active in every cell."
+        )
 
     peers = _connected_agent_ids(graph, node_id)
     if not peers:
@@ -5271,6 +5424,8 @@ def validate_conversation_entry(graph: dict[str, Any], node_id: str) -> dict[str
     # or the consultation fails partway through a run the user already paid for.
     for participant_id in [node_id, *peers]:
         participant = nodes[participant_id]
+        if not _is_node_active(participant):
+            continue
         model_edges = _edges_with_handle(graph, participant_id, "model", direction="incoming")
         if len(model_edges) != 1:
             raise ProtocolValidationError(
@@ -5298,8 +5453,8 @@ async def _run_single_node(
     dataset_row: dict[str, Any] | None = None,
 ) -> None:
     """The canvas's per-node Play run: one Agent node, no upstream, no gated
-    pair, no factor substitution, no coordination-strategy check -- none of
-    those concepts apply to a single node run in isolation. A deliberately
+    pair and no coordination-strategy check. A preview skill choice has
+    already been substituted in the supplied graph. A deliberately
     separate path from the main topological walk below, not a special case
     bolted onto it."""
     try:
@@ -5405,15 +5560,14 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             or run.row_result_id is not None
             or isinstance(attempt_result.get("row_provenance"), dict)
         )
-        if row_context_mode:
-            if run.status != "pending":
-                return
-            if run.cancel_requested_at is not None:
-                await set_status(db, protocol_run_id, status="cancelled")
-                return
-            # Claim before registry hydration, source reads, workspace writes, or
-            # any provider work. A redelivered job sees running and exits above.
-            await set_status(db, protocol_run_id, status="running")
+        if run.status != "pending":
+            return
+        if run.cancel_requested_at is not None:
+            await set_status(db, protocol_run_id, status="cancelled")
+            return
+        # Every mode claims before registry hydration or provider work. Redis
+        # delivery can repeat after a restart; a second executor exits here.
+        await set_status(db, protocol_run_id, status="running")
         dataset_row = dict(run.dataset_row) if run.dataset_row is not None else None
     # The worker hydrates its MCP registry once, at startup (worker/settings.py),
     # so any server registered SINCE then -- an OKF bundle the user added
@@ -5530,6 +5684,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 return
 
     if target_node_id:
+        if factor_values:
+            graph = apply_factor_bindings(graph, factor_values)
         await _run_single_node(
             protocol_run_id,
             protocol_id=protocol_id,
@@ -5548,8 +5704,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
     # values into whichever fields the canvas bound to a matching factor
     # name before doing anything else, so every node below (including
     # topological_order's own validation) sees the already-patched graph.
-    if factor_values:
-        graph = apply_factor_bindings(graph, factor_values)
+    graph = apply_factor_bindings(graph, factor_values or {})
 
     try:
         validate_coordination_strategy(design_spec, graph=graph)
@@ -5960,6 +6115,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         else:
             node_runs[node_id] = {
                 "status": "failed" if error else "completed",
+                **({"bypassed": True} if not _is_node_active(node) else {}),
                 "output_text": output_text,
                 "error": error,
                 "run_id": str(run_id) if run_id else None,

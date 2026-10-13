@@ -3,6 +3,7 @@ import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { Wrench } from 'lucide-react'
 import type { McpToolNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
 
 // One hue for the kind, not per instance: all mcp_tool nodes share this, and
@@ -23,7 +24,9 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
   const toolNames = data.config?.tool_names ?? []
   const summary = toolNames.length > 0 ? `${data.config.server_name ?? '?'}: ${toolNames.join(', ')}` : null
   const { updateNodeData } = useReactFlow()
-  const enabled = data.config?.enabled ?? true
+  const { requestToolFactor, experimentLocked } = useProtocolCanvasActions()
+  const controlled = !!data.toolFactorControlled
+  const enabled = controlled || (data.config?.enabled ?? true)
   // Every MCP node already HAS its server (picked in the browser at creation
   // time), so telling its user to go pick one would send them looking for a
   // dropdown that isn't there -- only the allow-list can be empty. Not shown
@@ -43,10 +46,11 @@ export function McpToolNode({ id, data, selected }: NodeProps & { data: McpToolN
       placeholder="MCP Tool"
       handleId="tool"
       warning={summary ? undefined : warning}
-      factorCount={boundFactorCount(data)}
+      factorCount={controlled ? 1 : boundFactorCount(data)}
+      onMakeFactor={!experimentLocked && requestToolFactor ? () => requestToolFactor(id) : undefined}
       dimmed={!enabled}
       isActive={enabled}
-      onToggleActive={() => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
+      onToggleActive={controlled ? undefined : () => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
     />
   )
 }

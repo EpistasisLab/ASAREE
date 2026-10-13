@@ -11,13 +11,21 @@ export const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>([
   'limit_reached',
 ])
 
+// Mirrors services.protocol_runs.RERUN_ON_REQUEST_STATUSES: executions that
+// finished with a result. "Run all" skips them unless the user ticks them to
+// run again, so re-billing one is always a deliberate choice.
+export function runsAgainOnlyOnRequest(status: string): boolean {
+  return status === 'completed' || status === 'limit_reached'
+}
+
 // Same status-color language the app already uses for cell-scoring progress
 // (replicatesStatusAccent in lib/experiment.ts): amber = in progress/queued, cyan
 // = actively running, emerald = done, dim = not started/skipped, red =
 // failed. A different status domain, but the same color meanings everywhere
 // reads as one consistent system rather than two competing ones.
 //
-// *truncated* is the one thing that overrides the status it is paired with: a
+// Bypassed nodes completed by passing input through, without executing.
+// *truncated* also overrides the status it is paired with: a
 // run cut off by its iteration ceiling is recorded as `completed` on purpose
 // (its work is real and downstream nodes consumed it), but a green "Done" is
 // the wrong thing to tell someone whose agent never got to write its answer.
@@ -25,7 +33,11 @@ export const TERMINAL_RUN_STATUSES = new Set<ProtocolRun['status']>([
 export function nodeRunBadge(
   status: NodeRunStatus | undefined,
   truncated = false,
+  bypassed = false,
 ): { label: string; className: string } | null {
+  if (status === 'completed' && bypassed) {
+    return { label: 'Bypassed', className: 'border-transparent bg-muted text-muted-foreground' }
+  }
   if (status === 'completed' && truncated) {
     return {
       label: 'Hit iteration limit',

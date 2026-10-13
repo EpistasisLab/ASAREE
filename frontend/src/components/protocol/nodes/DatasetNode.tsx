@@ -4,6 +4,7 @@ import { Database } from 'lucide-react'
 import type { DatasetNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 
 // Declares which registered dataset an Agent's workspace tools operate on --
 // a real runtime effect once wired (see DatasetNodeData's own comment in
@@ -22,7 +23,9 @@ const ACCENT = nodeAccent('dataset')
 
 export function DatasetNode({ id, data, selected }: NodeProps & { data: DatasetNodeData }) {
   const { updateNodeData } = useReactFlow()
-  const enabled = data.config?.enabled ?? true
+  const { requestDatasetFactor, experimentLocked } = useProtocolCanvasActions()
+  const controlled = !!data.datasetFactorControlled
+  const enabled = controlled || (data.config?.enabled ?? true)
 
   return (
     <CircleNode
@@ -37,10 +40,11 @@ export function DatasetNode({ id, data, selected }: NodeProps & { data: DatasetN
       // agent's own top edge), same as an Architectural Pattern node.
       handlePosition="bottom"
       warning={data.config?.dataset_id ? undefined : 'No dataset selected'}
-      factorCount={boundFactorCount(data)}
+      factorCount={controlled ? 1 : boundFactorCount(data)}
+      onMakeFactor={!experimentLocked && requestDatasetFactor ? () => requestDatasetFactor(id) : undefined}
       dimmed={!enabled}
       isActive={enabled}
-      onToggleActive={() => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
+      onToggleActive={controlled ? undefined : () => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
     />
   )
 }

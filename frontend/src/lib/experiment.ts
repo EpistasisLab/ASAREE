@@ -1,4 +1,7 @@
-import type { Experiment, Replicate } from '@/types/experiments'
+import type { CellSummary, Experiment, Replicate } from '@/types/experiments'
+
+/** Anything carrying a cell's factor combination -- a replicate or a cell summary. */
+type FactorCarrier = { factor_values?: Record<string, unknown> | null }
 
 export function factorCount(designSpec: Experiment['design_spec']): number | null {
   const factors = (designSpec as { factors?: unknown } | null)?.factors
@@ -178,7 +181,7 @@ export function groupReplicatesIntoCells(replicates: Replicate[]): ExperimentalC
  * the Cells table/heatmap (components/protocol/cells/) and the Run button's
  * replicate picker (SelectReplicateDialog) -- both need the same "what factors/
  * levels exist across these cells" answer. */
-export function deriveFactors(replicates: Replicate[], designSpec: Experiment['design_spec']): FactorSpec[] | null {
+export function deriveFactors(replicates: FactorCarrier[], designSpec: Experiment['design_spec']): FactorSpec[] | null {
   const declared = getFactors(designSpec)
 
   const keys: string[] = []
@@ -234,12 +237,10 @@ function selectionMetricHint(experiment: Experiment | undefined): string | undef
 
 /** Every top-level numeric key actually observed across scored replicates --
  * what a metric "Color by" selector can offer, with zero setup required. */
-export function availableMetricKeys(replicates: Replicate[]): string[] {
+export function availableMetricKeys(cells: CellSummary[]): string[] {
   const keys = new Set<string>()
-  for (const replicate of replicates) {
-    for (const [k, v] of Object.entries(replicate.metric_values ?? {})) {
-      if (typeof v === 'number' || typeof v === 'boolean') keys.add(k)
-    }
+  for (const cell of cells) {
+    for (const [k, { count }] of Object.entries(cell.metrics)) if (count > 0) keys.add(k)
   }
   return Array.from(keys).sort()
 }
@@ -285,8 +286,8 @@ export function metricValueSuffix(key: string): string {
   return METRIC_VALUE_SUFFIXES[key] ?? ''
 }
 
-export function pickDefaultMetric(experiment: Experiment | undefined, replicates: Replicate[]): string | null {
-  const available = availableMetricKeys(replicates)
+export function pickDefaultMetric(experiment: Experiment | undefined, cells: CellSummary[]): string | null {
+  const available = availableMetricKeys(cells)
   const hint = selectionMetricHint(experiment)
   if (hint && available.includes(hint)) return hint
   for (const p of PREFERRED_METRICS) if (available.includes(p)) return p
@@ -299,8 +300,8 @@ export function pickDefaultMetric(experiment: Experiment | undefined, replicates
  * Same preference order as pickDefaultMetric (hint, then PREFERRED_METRICS),
  * filled out alphabetically so the table still has *some* metric columns
  * when nothing on the preferred list is present. */
-export function pickMetricColumns(experiment: Experiment | undefined, replicates: Replicate[], max = 4): string[] {
-  const available = availableMetricKeys(replicates)
+export function pickMetricColumns(experiment: Experiment | undefined, cells: CellSummary[], max = 4): string[] {
+  const available = availableMetricKeys(cells)
   const hint = selectionMetricHint(experiment)
   const ordered: string[] = []
   if (hint && available.includes(hint)) ordered.push(hint)
@@ -347,7 +348,7 @@ export function formatMetricValue(key: string, value: unknown): string {
 /** Every cell whose factor_values match `match` on all of its keys -- i.e. one
  * combination's replicates. Compared via factorValueKey so dict-valued levels
  * match by content, not by reference. */
-export function replicatesMatching(replicates: Replicate[], match: Record<string, unknown>): Replicate[] {
+export function replicatesMatching<T extends FactorCarrier>(replicates: T[], match: Record<string, unknown>): T[] {
   return replicates.filter((replicate) => Object.entries(match).every(([k, v]) => factorValueKey(replicate.factor_values?.[k]) === factorValueKey(v)))
 }
 
@@ -360,6 +361,18 @@ export function meanMetric(replicates: Replicate[], metricKey: string): number |
     .filter((value): value is number => typeof value === 'number')
   if (values.length === 0) return null
   return values.reduce((a, b) => a + b, 0) / values.length
+}
+
+/** The replicate-weighted mean of `metricKey` across these cells -- the same
+ * number meanMetric gives over their replicates, from server-side sums. */
+export function pooledMean(cells: CellSummary[], metricKey: string): number | null {
+  let sum = 0
+  let count = 0
+  for (const cell of cells) {
+    const metric = cell.metrics[metricKey]
+    if (metric) { sum += metric.sum; count += metric.count }
+  }
+  return count === 0 ? null : sum / count
 }
 
 /** Low values read as a dim, muted box; high values glow in the theme's own
@@ -375,8 +388,11 @@ export function heatColor(value: number, min: number, max: number): string {
  * "primary" (cyan, some replicates scored) / "muted-foreground" (dim, no cells yet). */
 export function replicatesStatusAccent(replicates: Replicate[] | undefined): string {
   const total = replicates?.length ?? 0
+  return cellsStatusAccent(total, replicates?.filter(replicate => replicate.metric_values).length ?? 0)
+}
+
+export function cellsStatusAccent(total: number, scored: number): string {
   if (total === 0) return 'var(--muted-foreground)'
-  const scored = replicates!.filter((replicate) => replicate.metric_values).length
   if (scored === 0) return 'var(--chart-4)'
   if (scored === total) return 'var(--chart-3)'
   return 'var(--primary)'

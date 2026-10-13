@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react'
+import type { DesignFactor } from '@/types/experiments'
 
 export type ConnectorSlot =
   | 'model'
@@ -62,6 +63,17 @@ interface ProtocolCanvasActions {
   // node). Selecting one creates it near the requesting node, wires the
   // edge into the right handle, and opens its Inspector immediately.
   requestConnectorAdd: (request: ConnectorAddRequest) => void
+  // Opens the consolidated factor dialog from a Skill node's hover toolbar.
+  requestDatasetFactor?: (nodeId: string) => void
+  requestAgentFactor?: (nodeId: string) => void
+  requestKnowledgeFactor?: (nodeId: string) => void
+  requestModelFactor?: (nodeId: string, levelIndex?: number) => void
+  requestPatternFactor?: (nodeId: string) => void
+  modelFactorForNode?: (nodeId: string) => DesignFactor | undefined
+  requestSubAgentFactor?: (nodeId: string) => void
+  requestScriptFactor?: (nodeId: string) => void
+  requestToolFactor?: (nodeId: string) => void
+  requestSkillFactor?: (nodeId: string) => void
   // Same idea for the main pipeline handle -- always creates and wires
   // another Agent node (see MainEdgeAddRequest's own comment).
   requestMainEdgeAdd: (request: MainEdgeAddRequest) => void

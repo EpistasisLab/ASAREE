@@ -17,11 +17,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from sqlalchemy import cast, func, or_, select
 from sqlalchemy.dialects.postgresql import JSONPATH
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.models.dataset import RegisteredDataset
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.dataset_factors import test_dataset_factor_values
 from asaree.services.dataset_row_csv import DatasetRowCsvError, project_row, read_row_source
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 from asaree.services.experiment_measurements import (
@@ -31,6 +33,7 @@ from asaree.services.experiment_measurements import (
 from asaree.services.experiment_versions import publication_matches_experiment, version_design_spec
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
+from asaree.services.knowledge_factors import test_knowledge_factor_values
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
     is_conversation_strategy,
@@ -66,7 +69,11 @@ from asaree.services.protocols import (
     list_protocols,
     update_protocol,
 )
+from asaree.services.script_factors import test_script_factor_values
+from asaree.services.skill_factors import test_skill_factor_values
+from asaree.services.sub_agent_factors import test_sub_agent_factor_values
 from asaree.services.test_run_results import FreshnessReason, project_test_run_result
+from asaree.services.tool_factors import test_tool_factor_values
 from asaree.worker.enqueue import enqueue_protocol_run
 
 router = APIRouter(prefix="/protocols", tags=["protocols"])
@@ -275,12 +282,40 @@ class TestRunRequest(BaseModel):
     """Optional original Dataset row selection for a row-mode Test Run."""
 
     row_index: StrictInt | None = Field(default=None, ge=0)
+    knowledge_selections: dict[str, str] | None = None
+    sub_agent_selections: dict[str, str] | None = None
+    script_selections: dict[str, str] | None = None
+    tool_selections: dict[str, str] | None = None
+    skill_selections: dict[str, str] | None = None
+    dataset_selections: dict[str, str] | None = None
 
 
 class NodePlayRequest(BaseModel):
     """Optional original Dataset row selection for an eligible node Play."""
 
     row_index: StrictInt | None = Field(default=None, ge=0)
+    knowledge_selections: dict[str, str] | None = None
+    sub_agent_selections: dict[str, str] | None = None
+    script_selections: dict[str, str] | None = None
+    tool_selections: dict[str, str] | None = None
+    skill_selections: dict[str, str] | None = None
+    dataset_selections: dict[str, str] | None = None
+
+
+async def _node_test_factor_values(
+    graph: dict[str, Any], body: NodePlayRequest | None, owner_id: uuid.UUID, node_id: str, db: AsyncSession
+) -> dict[str, Any]:
+    try:
+        return {
+            **await test_sub_agent_factor_values(graph, body.sub_agent_selections if body else None, owner_id, node_id),
+            **await test_script_factor_values(graph, body.script_selections if body else None, node_id),
+            **await test_tool_factor_values(graph, body.tool_selections if body else None, owner_id, node_id),
+            **await test_skill_factor_values(graph, body.skill_selections if body else None, owner_id, node_id),
+            **await test_knowledge_factor_values(graph, body.knowledge_selections if body else None, owner_id, node_id),
+            **await test_dataset_factor_values(graph, body.dataset_selections if body else None, owner_id, db, node_id),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class CellRunBatchRequest(BaseModel):
@@ -438,7 +473,9 @@ async def publish_protocol_endpoint(
         validate_stage_plan(design_spec)
         validate_prompt_references(graph=protocol.graph)
         topological_order(protocol.graph, require_acyclic=not is_conversation_strategy(design_spec))
-        validate_factor_bindings(design_spec, protocol.graph)
+        # An incomplete skill comparison can still be published for a selected
+        # test. Generation and production planning enforce complete choices.
+        validate_factor_bindings(design_spec, protocol.graph, complete_skills=False)
         if experiment is not None:
             report = await validate_experiment_measurement_plan(
                 db,
@@ -664,6 +701,20 @@ async def create_test_run_endpoint(
             owner_id=user.id,
             protocol_revision_id=revision.id,
             dataset_row=dataset_row,
+            factor_values={
+                **await test_sub_agent_factor_values(
+                    revision.graph, body.sub_agent_selections if body else None, user.id
+                ),
+                **await test_script_factor_values(revision.graph, body.script_selections if body else None),
+                **await test_tool_factor_values(revision.graph, body.tool_selections if body else None, user.id),
+                **await test_skill_factor_values(revision.graph, body.skill_selections if body else None, user.id),
+                **await test_knowledge_factor_values(
+                    revision.graph, body.knowledge_selections if body else None, user.id
+                ),
+                **await test_dataset_factor_values(
+                    revision.graph, body.dataset_selections if body else None, user.id, db
+                ),
+            },
         )
     except (ProtocolValidationError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -753,6 +804,7 @@ async def run_single_node_endpoint(
         target_node_id=node_id,
         protocol_revision_id=revision.id,
         dataset_row=dataset_row,
+        factor_values=await _node_test_factor_values(revision.graph, body, user.id, node_id, db),
     )
     await db.commit()
     await enqueue_protocol_run(run.id)
@@ -794,6 +846,62 @@ async def create_cell_runs_endpoint(
     """Run pending replicates or retry explicitly selected failed row slots."""
     protocol = await _get_owned_protocol(db, protocol_id, user)
     revision = await _require_published_revision(db, protocol)
+    # Keep the synchronous compatibility path small. Production-scale intent
+    # belongs to the durable preview/confirmation API, including unplanned rows.
+    selected_ids = None
+    if protocol.experiment_id is not None:
+        from pathlib import Path
+
+        from asaree.models.factorial_cell import FactorialCell
+        from asaree.models.factorial_replicate_result import FactorialReplicateResult
+        from asaree.models.factorial_row_result import FactorialRowResult
+        from asaree.services.result_reads import resolve_result_scope
+
+        scope = await resolve_result_scope(
+            db, experiment_id=protocol.experiment_id, protocol_id=protocol.id, protocol_revision_id=revision.id
+        )
+        query = (
+            select(FactorialReplicateResult.id)
+            .join(FactorialCell)
+            .where(
+                FactorialCell.experiment_id == protocol.experiment_id,
+                FactorialCell.design_revision_id == scope.design_revision_id,
+            )
+        )
+        if body and body.replicate_labels is not None:
+            query = query.where(FactorialReplicateResult.replicate_label.in_(body.replicate_labels))
+        if body and body.retry_row_result_ids is not None:
+            query = (
+                query.join(FactorialRowResult, FactorialRowResult.replicate_result_id == FactorialReplicateResult.id)
+                .where(FactorialRowResult.id.in_(body.retry_row_result_ids))
+                .distinct()
+            )
+        identifiers = list((await db.scalars(query.limit(501))).all())
+        oversized = len(identifiers) > 500
+        if scope.row_plan is not None:
+            if body and body.retry_row_result_ids is not None:
+                oversized = len(body.retry_row_result_ids) > 100
+            elif body and body.row_indices is not None:
+                oversized = oversized or len(identifiers) * len(body.row_indices) > 100
+            else:
+                dataset = await db.get(RegisteredDataset, uuid.UUID(scope.row_plan["driver_dataset_id"]))
+                try:
+                    if dataset is None or not dataset.raw_path or Path(dataset.raw_path).stat().st_size > 1024 * 1024:
+                        oversized = True
+                    else:
+                        source = read_row_source(
+                            dataset_id=str(dataset.id), raw_path=dataset.raw_path, raw_sha256=dataset.raw_sha256
+                        )
+                        oversized = oversized or len(identifiers) * len(source.rows) > 100
+                except (OSError, DatasetRowCsvError) as exc:
+                    raise HTTPException(
+                        status_code=422, detail="Registered original CSV could not be verified."
+                    ) from exc
+        if oversized:
+            raise HTTPException(
+                status_code=413, detail="Use execution-results/jobs to prepare and confirm a large batch."
+            )
+        selected_ids = set(identifiers)
     try:
         retry_row_result_ids = body.retry_row_result_ids if body is not None else None
         if retry_row_result_ids is not None:
@@ -820,6 +928,7 @@ async def create_cell_runs_endpoint(
             rerun_replicate_labels=set(body.rerun_replicate_labels) if body is not None else None,
             retry_row_result_ids=retry_row_result_ids,
             row_indices=body.row_indices if body is not None else None,
+            replicate_ids=selected_ids,
         )
     except ProtocolValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -830,9 +939,7 @@ async def create_cell_runs_endpoint(
             try:
                 await enqueue_protocol_run(run.id)
             except Exception as exc:
-                await fail_protocol_run(
-                    db, run.id, error=f"enqueue_failure: {type(exc).__name__}: {exc}"
-                )
+                await fail_protocol_run(db, run.id, error=f"enqueue_failure: {type(exc).__name__}: {exc}")
                 await db.commit()
     else:
         for run in runs:
@@ -843,9 +950,7 @@ async def create_cell_runs_endpoint(
         skipped=skipped,
         protocol_revision_id=revision.id,
         protocol_revision=revision.revision,
-        consumption_mode=(
-            "per_row" if row_mode else "whole_dataset"
-        ),
+        consumption_mode=("per_row" if row_mode else "whole_dataset"),
         row_result_ids=[r.row_result_id for r in runs if r.row_result_id is not None],
     )
 
@@ -855,6 +960,20 @@ async def list_protocol_runs_endpoint(
     protocol_id: uuid.UUID, user: CurrentUser, db: DbSession
 ) -> list[ProtocolRunResponse]:
     await _get_owned_protocol(db, protocol_id, user)
+    identifiers = list(
+        (
+            await db.scalars(
+                select(ProtocolRun.id)
+                .where(ProtocolRun.protocol_id == protocol_id, ProtocolRun.is_test_run.is_(False))
+                .limit(501)
+            )
+        ).all()
+    )
+    if len(identifiers) > 500:
+        raise HTTPException(
+            status_code=413,
+            detail="Use run-heads pagination or execution-results to read large histories.",
+        )
     runs = await list_protocol_runs(db, protocol_id=protocol_id)
     return [_protocol_run_response(r) for r in runs]
 

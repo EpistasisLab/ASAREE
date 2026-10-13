@@ -9,6 +9,8 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+
+from asaree.migrations.guards import drop_column
 from sqlalchemy.dialects import postgresql
 
 revision: str = "9e4a7b2c1d30"
@@ -23,8 +25,9 @@ def upgrade() -> None:
     op.add_column(
         "research_experiments",
         sa.Column("metric_recommendations", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        if_not_exists=True,
     )
 
 
 def downgrade() -> None:
-    op.drop_column("research_experiments", "metric_recommendations")
+    drop_column("research_experiments", "metric_recommendations")

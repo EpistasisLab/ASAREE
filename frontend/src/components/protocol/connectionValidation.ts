@@ -81,8 +81,7 @@ export function isProtocolConnectionValid(
     case 'sub_agents':
       return (
         sourceNode.type === 'sub_agent' &&
-        targetNode.type === 'agent' &&
-        !edges.some((edge) => edge.source === sourceNode.id && edge.targetHandle === 'sub_agents')
+        targetNode.type === 'agent'
       )
     default: {
       const sourceCanFeedMainFlow =

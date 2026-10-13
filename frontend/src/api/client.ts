@@ -24,14 +24,16 @@ import type {
   MetricRecommendationMetadata,
   MeasurementPlanValidationReport,
   Replicate,
+  CellSummary,
   Trial,
 } from '@/types/experiments'
-import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse } from '@/types/llmSettings'
+import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse, ModelCapabilities } from '@/types/llmSettings'
 import type { McpOAuthAuthorization, McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
+import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob } from '@/types/executionResults'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -138,7 +140,7 @@ async function authedFetch(path: string, options: RequestOptions = {}): Promise<
     }
   }
 
-  if (!res.ok) {
+  if (!res.ok && res.status !== 304) {
     let detail: string | ApiErrorDetail = res.statusText
     try {
       const data = await res.json()
@@ -187,12 +189,18 @@ export interface ResultsScope {
   protocol_revision_id?: string
 }
 
-export interface RowSelection { row_index?: number | null }
+export interface RowSelection { row_index?: number | null; sub_agent_selections?: Record<string, string>; script_selections?: Record<string, string>; tool_selections?: Record<string, string>; skill_selections?: Record<string, string>; dataset_selections?: Record<string, string>; knowledge_selections?: Record<string, string> }
 
 function scopeQuery(scope?: ResultsScope): string {
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(scope ?? {})) if (value !== undefined) params.set(key, value)
   return params.size ? `?${params}` : ''
+}
+
+function resultPageQuery(scope: ResultsScope, params: Record<string, string | number | undefined>): string {
+  const query = new URLSearchParams(scopeQuery(scope).replace(/^\?/, ''))
+  for (const [key, value] of Object.entries(params)) if (value !== undefined) query.set(key, String(value))
+  return query.size ? `?${query}` : ''
 }
 
 function rowSelection(options?: RowSelection): RowSelection | undefined {
@@ -204,6 +212,43 @@ function rowSelection(options?: RowSelection): RowSelection | undefined {
 }
 
 export const experimentsApi = {
+  getExecutionEvidence: (id: string, runId: string, scope: ResultsScope, document: string, offset: number, signal?: AbortSignal) =>
+    request<{ text: string; next_offset: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/evidence${resultPageQuery(scope, { document, offset })}`, { signal }),
+  getExecutionNodeText: (id: string, runId: string, nodeId: string, scope: ResultsScope, field: 'prompt' | 'output', offset: number, signal?: AbortSignal) =>
+    request<{ text: string; next_offset: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/nodes/${encodeURIComponent(nodeId)}/text${resultPageQuery(scope, { field, offset })}`, { signal }),
+  getExecutionTrace: (id: string, runId: string, nodeId: string, scope: ResultsScope, after: number, signal?: AbortSignal) =>
+    request<{ items: { id: string; sequence: number; iteration: number | null; phase: string; preview: string | null }[]; next_after: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/nodes/${encodeURIComponent(nodeId)}/trace${resultPageQuery(scope, { after })}`, { signal }),
+  getExecutionStep: (id: string, runId: string, nodeId: string, stepId: string, scope: ResultsScope, offset: number, signal?: AbortSignal) =>
+    request<{ text: string; next_offset: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/nodes/${encodeURIComponent(nodeId)}/trace/${stepId}${resultPageQuery(scope, { offset })}`, { signal }),
+  createResultJob: (id: string, scope: ResultsScope, command: { kind: ResultJob['kind']; request_key: string; cell_id?: string; replicate_ids?: string[]; row_indices?: number[]; rerun_slot_ids?: string[]; rerun_completed?: boolean }, signal?: AbortSignal) =>
+    request<ResultJob>(`/experiments/${id}/execution-results/jobs${scopeQuery(scope)}`, { method: 'POST', body: command, signal }),
+  getResultJob: (id: string, jobId: string, signal?: AbortSignal) =>
+    request<ResultJob>(`/experiments/${id}/execution-results/jobs/${jobId}`, { signal }),
+  confirmResultJob: (id: string, jobId: string) =>
+    request<ResultJob>(`/experiments/${id}/execution-results/jobs/${jobId}/confirm`, { method: 'POST' }),
+  cancelResultJob: (id: string, jobId: string, previewOnly = false) =>
+    request<ResultJob>(`/experiments/${id}/execution-results/jobs/${jobId}/cancel${previewOnly ? '?preview_only=true' : ''}`, { method: 'POST' }),
+  getExecutionSummary: async (id: string, scope: ResultsScope, signal?: AbortSignal, cached?: ExecutionSummary): Promise<ExecutionSummary> => {
+    const res = await authedFetch(`/experiments/${id}/execution-results/summary${scopeQuery(scope)}`, {
+      signal, headers: cached?.etag ? { 'If-None-Match': cached.etag } : undefined,
+    })
+    if (res.status === 304 && cached) return cached
+    return { ...await res.json() as ExecutionSummary, etag: res.headers.get('ETag') ?? undefined }
+  },
+  listExecutionCells: (id: string, scope: ResultsScope, params: Record<string, string | number | undefined> = {}, signal?: AbortSignal) =>
+    request<CursorPage<ExecutionCell>>(`/experiments/${id}/execution-results/cells${resultPageQuery(scope, params)}`, { signal }),
+  listExecutions: (id: string, scope: ResultsScope, params: Record<string, string | number | undefined> = {}, signal?: AbortSignal) =>
+    request<CursorPage<ExecutionSlot>>(`/experiments/${id}/execution-results/executions${resultPageQuery(scope, params)}`, { signal }),
+  listExecutionAttempts: (id: string, slotId: string, scope: ResultsScope, cursor?: string, signal?: AbortSignal) =>
+    request<AttemptPage>(`/experiments/${id}/execution-results/slots/${slotId}/attempts${resultPageQuery(scope, { cursor })}`, { signal }),
+  lookupExecution: (id: string, replicateLabel: string, scope: ResultsScope, signal?: AbortSignal) =>
+    request<ExecutionSlot>(`/experiments/${id}/execution-results/lookup${resultPageQuery(scope, { replicate_label: replicateLabel })}`, { signal }),
+  getExecutionCell: (id: string, scope: ResultsScope, selection: { cell_id?: string; cell_label?: string }, signal?: AbortSignal) =>
+    request<ExecutionCell>(`/experiments/${id}/execution-results/cell${resultPageQuery(scope, selection)}`, { signal }),
+  getExecutionAttempt: (id: string, runId: string, scope: ResultsScope, signal?: AbortSignal) =>
+    request<AttemptDetail>(`/experiments/${id}/execution-results/attempts/${runId}${scopeQuery(scope)}`, { signal }),
+  getExecutionConversation: (id: string, runId: string, scope: ResultsScope, offset = 0, signal?: AbortSignal) =>
+    request<{ items: unknown[]; next_offset: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/conversation${resultPageQuery(scope, { offset })}`, { signal }),
   list: (opts?: { includeArchived?: boolean }) =>
     request<Experiment[]>(opts?.includeArchived ? '/experiments?include_archived=true' : '/experiments'),
   get: (id: string) => request<Experiment>(`/experiments/${id}`),
@@ -263,6 +308,10 @@ export const experimentsApi = {
   // superseded revision's instead (the design-history drill-down).
   listReplicates: (id: string, revisionId?: string) =>
     request<Replicate[]>(revisionId ? `/experiments/${id}/replicates?revision_id=${revisionId}` : `/experiments/${id}/replicates`),
+  // Per-cell aggregates for the Cells tab -- never one row per replicate, so it
+  // stays small for designs with tens of thousands of replicates.
+  listCellSummaries: (id: string, revisionId?: string) =>
+    request<CellSummary[]>(revisionId ? `/experiments/${id}/cell-summaries?revision_id=${revisionId}` : `/experiments/${id}/cell-summaries`),
   // Every generation of this experiment's design, newest first -- the first
   // entry (superseded_at === null) is the current one.
   listDesignRevisions: (id: string) => request<DesignRevision[]>(`/experiments/${id}/design-revisions`),
@@ -286,7 +335,8 @@ export const experimentsApi = {
   // labels carry forward, the rest stay in history (see
   // services.design_generation). Nothing is ever deleted here.
   generateDesign: (id: string, declaration?: { hypothesis?: string | null; design_spec?: DesignSpec | null; measurement_plan?: MeasurementPlan | null; measurement_validation_protocol_id?: string | null }) =>
-    request<Replicate[]>(`/experiments/${id}/generate-design`, { method: 'POST', body: declaration }),
+    // The canvas re-reads cells/summaries afterwards, so skip the full replicate list (megabytes on large designs).
+    request<void>(`/experiments/${id}/generate-design?include_replicates=false`, { method: 'POST', body: declaration }),
   // One row per replicate (a "trial"), not per ProtocolRun -- a replicate that's never
   // been run is still listed, with status "not_started" (see TrialResponse /
   // services.protocol_runs.list_experiment_trials).
@@ -338,6 +388,7 @@ export const protocolsApi = {
   // point after retaining work that already completed.
   cancelRun: (id: string, runId: string) => request<ProtocolRun>(`/protocols/${id}/runs/${runId}/cancel`, { method: 'POST' }),
   listRuns: (id: string) => request<ProtocolRun[]>(`/protocols/${id}/runs`),
+  listRunHeads: async (id: string) => (await request<CursorPage<{ id: string; status: string; created_at: string }>>(`/protocols/${id}/run-heads?limit=1`)).items,
   // "Run all cells" -- 422 if there's no linked experiment or the graph
   // doesn't have exactly one final node; fans out one ProtocolRun per pending
   // replicate. The optional list explicitly re-runs selected completed rows.
@@ -578,6 +629,8 @@ export const llmSettingsApi = {
   // works for anthropic/openai too, and answers even with no credential
   // saved (see llm_model_discovery.py's static catalog fallback).
   listModels: (provider: string) => request<LLMSettingModelsResponse>(`/llm-settings/${provider}/models`),
+  modelCapabilities: (provider: string, model: string) =>
+    request<ModelCapabilities>(`/llm-settings/${provider}/model-capabilities?${new URLSearchParams({ model })}`),
   // Zero-token liveness check against the stored credential -- a free
   // authenticated GET per provider, never an inference call. On demand only
   // (a button, not an on-render fetch): it's free in tokens but it's still

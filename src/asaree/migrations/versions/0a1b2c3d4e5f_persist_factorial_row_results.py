@@ -10,6 +10,8 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+
+from asaree.migrations.guards import create_foreign_key, drop_column
 from sqlalchemy.dialects import postgresql
 
 revision: str = "0a1b2c3d4e5f"
@@ -52,18 +54,21 @@ def upgrade() -> None:
             "row_index",
             name="uq_factorial_row_results_row_identity",
         ),
+        if_not_exists=True,
     )
-    op.create_index("ix_factorial_row_results_dataset_id", "factorial_row_results", ["dataset_id"])
+    op.create_index("ix_factorial_row_results_dataset_id", "factorial_row_results", ["dataset_id"], if_not_exists=True)
     op.create_index(
-        "ix_factorial_row_results_protocol_revision_id", "factorial_row_results", ["protocol_revision_id"]
+        "ix_factorial_row_results_protocol_revision_id", "factorial_row_results", ["protocol_revision_id"],
+        if_not_exists=True,
     )
     op.create_index(
-        "ix_factorial_row_results_replicate_result_id", "factorial_row_results", ["replicate_result_id"]
+        "ix_factorial_row_results_replicate_result_id", "factorial_row_results", ["replicate_result_id"],
+        if_not_exists=True,
     )
-    op.create_index("ix_factorial_row_results_run_id", "factorial_row_results", ["run_id"])
-    op.add_column("protocol_runs", sa.Column("row_result_id", postgresql.UUID(as_uuid=True), nullable=True))
-    op.add_column("protocol_runs", sa.Column("dataset_row", postgresql.JSONB(astext_type=sa.Text()), nullable=True))
-    op.create_foreign_key(
+    op.create_index("ix_factorial_row_results_run_id", "factorial_row_results", ["run_id"], if_not_exists=True)
+    op.add_column("protocol_runs", sa.Column("row_result_id", postgresql.UUID(as_uuid=True), nullable=True), if_not_exists=True)
+    op.add_column("protocol_runs", sa.Column("dataset_row", postgresql.JSONB(astext_type=sa.Text()), nullable=True), if_not_exists=True)
+    create_foreign_key(
         "fk_protocol_runs_row_result_id_factorial_row_results",
         "protocol_runs",
         "factorial_row_results",
@@ -71,16 +76,16 @@ def upgrade() -> None:
         ["id"],
         ondelete="SET NULL",
     )
-    op.create_index("ix_protocol_runs_row_result_id", "protocol_runs", ["row_result_id"])
+    op.create_index("ix_protocol_runs_row_result_id", "protocol_runs", ["row_result_id"], if_not_exists=True)
 
 
 def downgrade() -> None:
-    op.drop_index("ix_protocol_runs_row_result_id", table_name="protocol_runs")
-    op.drop_constraint("fk_protocol_runs_row_result_id_factorial_row_results", "protocol_runs", type_="foreignkey")
-    op.drop_column("protocol_runs", "dataset_row")
-    op.drop_column("protocol_runs", "row_result_id")
-    op.drop_index("ix_factorial_row_results_run_id", table_name="factorial_row_results")
-    op.drop_index("ix_factorial_row_results_replicate_result_id", table_name="factorial_row_results")
-    op.drop_index("ix_factorial_row_results_protocol_revision_id", table_name="factorial_row_results")
-    op.drop_index("ix_factorial_row_results_dataset_id", table_name="factorial_row_results")
-    op.drop_table("factorial_row_results")
+    op.drop_index("ix_protocol_runs_row_result_id", table_name="protocol_runs", if_exists=True)
+    op.drop_constraint("fk_protocol_runs_row_result_id_factorial_row_results", "protocol_runs", type_="foreignkey", if_exists=True)
+    drop_column("protocol_runs", "dataset_row")
+    drop_column("protocol_runs", "row_result_id")
+    op.drop_index("ix_factorial_row_results_run_id", table_name="factorial_row_results", if_exists=True)
+    op.drop_index("ix_factorial_row_results_replicate_result_id", table_name="factorial_row_results", if_exists=True)
+    op.drop_index("ix_factorial_row_results_protocol_revision_id", table_name="factorial_row_results", if_exists=True)
+    op.drop_index("ix_factorial_row_results_dataset_id", table_name="factorial_row_results", if_exists=True)
+    op.drop_table("factorial_row_results", if_exists=True)

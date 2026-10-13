@@ -1,8 +1,9 @@
+import { modelCapabilities } from '@/lib/modelCapabilities'
 import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import { toPersistedGraph } from '@/lib/protocolGraph'
 import { isUnderIterated, raiseForTruncation, suggestedMaxIterations } from '@/lib/reasonActIterations'
-import type { LLMSettingModelsResponse } from '@/types/llmSettings'
+import type { LLMSettingModelsResponse, ModelCapabilities } from '@/types/llmSettings'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { Skill } from '@/types/skills'
 import type {
@@ -17,7 +18,7 @@ import type {
   SkillNodeData,
 } from '@/types/protocols'
 import { PROVIDER_META } from './nodes/ModelNode'
-import { providerModelsKey } from './useProviderModels'
+import { modelCapabilitiesKey, providerModelsKey } from './useProviderModels'
 
 export interface NodeConfigIssue {
   nodeId: string
@@ -41,9 +42,8 @@ export interface NodeConfigIssue {
 // among the provider's own discovered list (ModelNode.tsx's own richer
 // check) -- read from cache only, via the exact same queryKey ModelNode.tsx
 // already populates by rendering on this same canvas, so this never fires
-// its own network request or makes clicking Run wait on one. A cache miss
-// (that query never ran, or hasn't resolved yet) just means "can't tell,"
-// same as ModelNode.tsx's own empty-list case -- not treated as an issue.
+// its own network request or makes clicking Run wait on one. An unresolved
+// custom model is flagged until its sampling capabilities load.
 // `truncatedCaps` maps a Reason + Act node id to the `max_iterations` the last
 // run of its agent actually hit (ProtocolCanvas.tsx's truncationByPattern).
 // Optional because the callers that run from a stored `Protocol.graph` alone
@@ -106,11 +106,14 @@ export function findNodeConfigIssues(
           }
         }
         if (config?.max_tokens == null) issues.push('Max tokens is required')
-        // Same "unrecognized model defaults to temperature-only" fallback as
-        // ModelNodeInspector.tsx's own showTemperature -- required whenever
-        // it's the field actually offered for this model, so it's never
-        // Motoro's own silent ModelConfig default (0.7) filling the gap.
-        if ((selectedModelInfo?.supports_temperature ?? true) && config?.temperature == null) {
+        const customKey = modelCapabilitiesKey(config?.provider, config?.model)
+        const resolved = config?.resolved_capabilities ?? selectedModelInfo ?? queryClient.getQueryData<ModelCapabilities>(customKey)
+        if (config?.model && !resolved) {
+          issues.push(queryClient.getQueryState(customKey)?.status === 'error'
+            ? 'Could not resolve model capabilities. Try again.'
+            : 'Model capabilities are still loading')
+        }
+        if (resolved && modelCapabilities(resolved).supports_temperature && config?.temperature == null) {
           issues.push('Temperature is required')
         }
         break

@@ -129,8 +129,10 @@ async def test_transport_failure_scrubs_the_api_key(monkeypatch: pytest.MonkeyPa
 
 
 async def test_azure_success_delegates_to_deployment_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    deployments = [object(), object()]
+
     async def fake_discover(*, provider: str, setting: UserLLMSetting):
-        return [object(), object()], "api", None
+        return deployments, "api", None
 
     monkeypatch.setattr(check, "discover_models", fake_discover)
 
@@ -140,6 +142,7 @@ async def test_azure_success_delegates_to_deployment_discovery(monkeypatch: pyte
     assert result.status == "ok"
     assert "2 deployment" in result.detail
     assert result.endpoint == _PROJECT_ENDPOINT
+    assert result.models is deployments
 
 
 async def test_azure_without_a_project_endpoint_is_unknown_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:

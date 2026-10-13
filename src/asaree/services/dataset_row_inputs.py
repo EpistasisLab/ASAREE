@@ -118,6 +118,10 @@ def resolve_dataset_row_plan(graph: dict[str, Any], design_spec: dict[str, Any] 
             raise DatasetRowInputError("invalid_dataset_config", "dataset_name must be a string")
 
         if normalized["mode"] == "per_row":
+            if ((target.get("data") or {}).get("factor_bindings") or {}).get("dataset_selection"):
+                raise DatasetRowInputError(
+                    "factorized_driver", "a row-driving Dataset connector cannot be factor-bound"
+                )
             if not isinstance(dataset_id, str):
                 raise DatasetRowInputError(
                     "invalid_dataset_id",

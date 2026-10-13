@@ -13,14 +13,12 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
 from asaree.deps import CurrentUser, DbSession
 from asaree.models.dataset_workspace_event import WorkspaceEventType
-from asaree.services.dataset_row_csv import DatasetRowCsvError, read_row_source
-from asaree.services.dataset_row_inputs import DatasetRowInputError
 from asaree.services.dataset_workspace_events import list_events, record_event
 from asaree.services.datasets import (
     DatasetNameConflictError,
@@ -99,7 +97,8 @@ class DatasetRowSchemaResponse(BaseModel):
     dataset_id: uuid.UUID
     raw_sha256: str
     columns: list[str]
-    row_count: int
+    row_count: int | None
+    ready: bool = True
 
 
 def _dataset_response(d: Any) -> DatasetResponse:
@@ -246,25 +245,28 @@ async def get_dataset_endpoint(dataset_id: uuid.UUID, db: DbSession, user: Curre
 
 @router.get("/{dataset_id}/row-schema", response_model=DatasetRowSchemaResponse)
 async def get_dataset_row_schema_endpoint(
-    dataset_id: uuid.UUID, db: DbSession, user: CurrentUser
+    dataset_id: uuid.UUID, db: DbSession, user: CurrentUser, response: Response
 ) -> DatasetRowSchemaResponse:
     dataset = await _get_owned_dataset(db, dataset_id, user)
-    try:
-        source = read_row_source(
-            dataset_id=str(dataset.id),
-            raw_path=dataset.raw_path,
-            raw_sha256=dataset.raw_sha256,
+    if not dataset.raw_path or not dataset.raw_sha256:
+        raise HTTPException(status_code=422, detail="Registered original CSV is unavailable.")
+    metadata = dataset.row_schema or {}
+    if metadata.get("raw_sha256") != dataset.raw_sha256:
+        metadata = {}
+    if metadata.get("status") == "failed":
+        raise HTTPException(status_code=422, detail=metadata["error"])
+    if not metadata.get("ready"):
+        if metadata.get("status") != "pending":
+            dataset.row_schema = {"status": "pending", "raw_sha256": dataset.raw_sha256}
+        response.status_code = 202
+        return DatasetRowSchemaResponse(
+            dataset_id=dataset.id, raw_sha256=dataset.raw_sha256, columns=[], row_count=None, ready=False
         )
-    except DatasetRowCsvError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=str(DatasetRowInputError(exc.code, exc.message)),
-        ) from exc
     return DatasetRowSchemaResponse(
         dataset_id=dataset.id,
-        raw_sha256=source.raw_sha256,
-        columns=list(source.columns),
-        row_count=len(source.rows),
+        raw_sha256=dataset.raw_sha256,
+        columns=metadata["columns"],
+        row_count=metadata["row_count"],
     )
 
 

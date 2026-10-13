@@ -19,7 +19,7 @@ from typing import Any
 
 from motoro.mcp.registry import get_registry
 from motoro.models.run import RunStatus
-from motoro.runner import execute_run, fail_run, get_agent, get_run, list_runs
+from motoro.runner import effective_agent_config, execute_run, fail_run, get_run, list_runs
 
 # The worker process never imports asaree.api.*/asaree.deps (unlike the API
 # process, where every router module transitively imports these already) --
@@ -36,7 +36,7 @@ from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.services.protocol_execution import run_protocol
 from asaree.services.protocol_runs import fail_protocol_run, get_protocol_run, list_stale_protocol_runs
-from asaree.services.run_tools import gather_tools
+from asaree.services.run_tools import gather_run_tools
 
 logger = logging.getLogger(__name__)
 
@@ -66,15 +66,14 @@ async def execute_run_task(ctx: dict[str, Any], run_id_str: str) -> None:
         )
         return
 
-    agent = await get_agent(run.agent_id)
-    if agent is None:
+    if run.agent is None or run.agent.deleted_at is not None:
         await fail_run(run_id, error=f"agent {run.agent_id} no longer exists")
         return
 
-    timeout = agent.max_run_duration_seconds or get_settings().worker_job_timeout_seconds
+    timeout = effective_agent_config(run).max_run_duration_seconds or get_settings().worker_job_timeout_seconds
     try:
         await asyncio.wait_for(
-            execute_run(run_id=run_id, registry=get_registry(), available_tools=gather_tools(agent)),
+            execute_run(run_id=run_id, registry=get_registry(), available_tools=gather_run_tools(run)),
             timeout=timeout,
         )
     except TimeoutError:
@@ -156,6 +155,13 @@ async def _guarded_protocol_run(
         logger.exception("execute_protocol_run_task_failed", extra={"protocol_run_id": protocol_run_id_str})
         async with get_session() as db:
             await fail_protocol_run(db, protocol_run_id, error=f"{type(e).__name__}: {e}")
+    finally:
+        # Operational accounting is independent of optional declared metrics.
+        # A bounded best-effort capture never turns a successful execution into
+        # a failure. The durable maintenance sweep retries any unfinished capture.
+        from asaree.services.result_usage import capture_result_usage
+
+        await _best_effort(capture_result_usage({}, only_run_id=protocol_run_id))
 
 
 async def _fail_protocol_run_now(protocol_run_id: uuid.UUID, error: str) -> None:

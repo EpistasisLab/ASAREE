@@ -183,6 +183,12 @@ servers (`asaree-sklearn-dc`, `-eda`, `-fs`, `-fte`, `-model`, `-stats`, from
 `mcp-servers/`) — ships as a dependency of the app and registers itself each
 time the app or worker starts (see `asaree.services.system_mcp_servers`).
 
+## Large experiment results
+
+For large experiment results, the dedicated result worker handles summaries,
+batch commands and exports. Deployment, recovery, API/SDK usage and pending
+PostgreSQL acceptance checks are documented in [RESULTS_OPERATIONS.md](RESULTS_OPERATIONS.md).
+
 ## Resetting your dev environment
 
 One Postgres server hosts two databases in a single volume — `motoro` (core's

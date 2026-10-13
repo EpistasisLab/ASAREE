@@ -40,7 +40,7 @@ from typing import Literal
 import httpx
 
 from asaree.models.user_llm_setting import UserLLMSetting
-from asaree.services.llm_model_discovery import discover_models
+from asaree.services.llm_model_discovery import ModelInfo, discover_models
 from asaree.services.user_llm_settings import decrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,9 @@ class ConnectionCheck:
     # guessing which base URL the credential resolved to. Never contains the
     # key -- every provider here authenticates by header, not query string.
     endpoint: str | None
+    # Azure already lists deployments to check the connection. Keep that
+    # exact result so the model menu cannot disagree with the checked count.
+    models: list[ModelInfo] | None = None
 
 
 def _models_url(base: str) -> str:
@@ -162,6 +165,7 @@ async def _check_azure(setting: UserLLMSetting) -> ConnectionCheck:
             status="ok",
             detail=f"Reached the Azure resource and listed {len(models)} deployment(s).",
             endpoint=endpoint,
+            models=models,
         )
     return ConnectionCheck(status="failed", detail=note or "Could not reach the Azure resource.", endpoint=endpoint)
 

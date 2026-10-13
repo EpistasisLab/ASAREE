@@ -12,7 +12,7 @@ import csv
 import io
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -594,7 +594,22 @@ def _row_results_schema(
     }
 
 
-def _row_results_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, Any] | None) -> str:
+@dataclass(frozen=True)
+class ResultCsvLayout:
+    """The analysis CSV's columns, row order and per-row projection.
+
+    Built from every row once, then applied row by row -- so the background
+    export can build it from compact :func:`layout_stub` rows in one pass and
+    stream full rows through :meth:`write_row` in a second, while
+    :func:`result_rows_to_csv` keeps producing identical output in memory.
+    """
+
+    fields: list[str]
+    write_row: Callable[[dict[str, Any]], dict[str, Any]]
+    sort_key: Callable[[dict[str, Any]], tuple[Any, ...]] | None
+
+
+def _row_results_layout(rows: Sequence[dict[str, Any]], design_spec: dict[str, Any] | None) -> ResultCsvLayout:
     metric_columns, _ = _row_metric_layout(rows, design_spec)
     factors = _factor_columns(rows, reserved=_ROW_FIXED_FIELDS, design_spec=design_spec)
     fields = [
@@ -603,10 +618,8 @@ def _row_results_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, A
         *(name for _, name in metric_columns),
         *(name + suffix for _, name in metric_columns for suffix in ("__status", "__producer")),
     ]
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
-    writer.writeheader()
-    for source in rows:
+
+    def write_row(source: dict[str, Any]) -> dict[str, Any]:
         dataset = source.get("dataset_row") or {}
         attempt = source.get("latest_attempt") or {}
         row = {key: source.get(key, "") for key in _ROW_FIXED_FIELDS}
@@ -658,27 +671,14 @@ def _row_results_to_csv(rows: Sequence[dict[str, Any]], design_spec: dict[str, A
                 if obs
                 else ""
             )
-        writer.writerow(row)
-    return output.getvalue()
+        return row
+
+    return ResultCsvLayout(fields=fields, write_row=write_row, sort_key=None)
 
 
-def result_rows_to_csv(
-    rows: Sequence[dict[str, Any]],
-    design_spec: dict[str, Any] | None = None,
-    *,
-    consumption_mode: str = "whole_dataset",
-) -> str:
-    """Export the enriched Results response as an analysis-ready CSV.
-
-    Unlike :func:`replicates_to_csv`, this receives the read-only Results
-    projection.  That lets a CSV include selected runtime metrics without
-    pretending those execution facts were manually persisted score values.
-    Boolean and numeric factors are projected directly; categorical values
-    become their short persisted level labels rather than raw prompt or
-    configuration payloads.
-    """
-    if consumption_mode == "per_row":
-        return _row_results_to_csv(rows, design_spec)
+def _replicate_results_layout(
+    rows: Sequence[dict[str, Any]], design_spec: dict[str, Any] | None
+) -> ResultCsvLayout:
     factor_columns, metric_keys, script_columns = _result_csv_layout(rows, design_spec)
     declared_custom_metric_names = {
         metric["name"]
@@ -698,11 +698,8 @@ def result_rows_to_csv(
         *metric_fields,
         *metadata_fields,
     ]
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
-    writer.writeheader()
 
-    def row_sort_key(source: dict[str, Any]) -> tuple[Any, ...]:
+    def sort_key(source: dict[str, Any]) -> tuple[Any, ...]:
         factors = source.get("factor_values") or {}
         factor_keys: list[Any] = []
         for _column_name, factor_key, kind, labels in factor_columns:
@@ -717,7 +714,7 @@ def result_rows_to_csv(
         replicate_number = source.get("replicate_number")
         return (*factor_keys, replicate_number if isinstance(replicate_number, int) else 0)
 
-    for source in sorted(rows, key=row_sort_key):
+    def write_row(source: dict[str, Any]) -> dict[str, Any]:
         legacy_value_names = _legacy_value_names(source)
         raw_metrics = source.get("metric_values") or {}
         metrics = {
@@ -773,8 +770,94 @@ def result_rows_to_csv(
             for field, column_name in columns.metadata.items():
                 if field in envelope:
                     row[column_name] = _csv_value(envelope[field])
-        writer.writerow(row)
+        return row
+
+    return ResultCsvLayout(fields=fields, write_row=write_row, sort_key=sort_key)
+
+
+def result_csv_layout(
+    rows: Sequence[dict[str, Any]],
+    design_spec: dict[str, Any] | None = None,
+    *,
+    consumption_mode: str = "whole_dataset",
+) -> ResultCsvLayout:
+    if consumption_mode == "per_row":
+        return _row_results_layout(rows, design_spec)
+    return _replicate_results_layout(rows, design_spec)
+
+
+def layout_stub(row: dict[str, Any], *, consumption_mode: str = "whole_dataset") -> dict[str, Any]:
+    """The part of a Results row :func:`result_csv_layout` reads, and nothing else.
+
+    Factor values, metric names, script-result field names and the sort keys --
+    not measured values, outputs or evidence -- so a background export can lay
+    out an arbitrarily large experiment from a first pass without holding it.
+    """
+    if consumption_mode == "per_row":
+        measurement = row.get("measurement")
+        observations = measurement.get("observations") if isinstance(measurement, dict) else []
+        return {
+            "factor_values": row.get("factor_values"),
+            "measurement": {
+                "observations": [
+                    {"metric_id": item.get("metric_id"), "metric_name": item.get("metric_name")}
+                    for item in observations or []
+                    if isinstance(item, dict)
+                ]
+            },
+        }
+
+    def metric_value_stub(value: Any) -> Any:
+        envelope = _script_result_envelope(value)
+        return {field: None for field in envelope} if envelope is not None else None
+
+    return {
+        "factor_values": row.get("factor_values"),
+        "replicate_number": row.get("replicate_number"),
+        "metric_values": {key: metric_value_stub(value) for key, value in (row.get("metric_values") or {}).items()},
+        "metric_observations": [
+            {"metric_name": item.get("metric_name"), "producer": item.get("producer")}
+            for item in row.get("metric_observations") or []
+            if isinstance(item, dict)
+        ],
+        _LEGACY_VALUES_FIELD: [
+            {"metric_name": item.get("metric_name")}
+            for item in row.get(_LEGACY_VALUES_FIELD) or []
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def result_rows_to_csv(
+    rows: Sequence[dict[str, Any]],
+    design_spec: dict[str, Any] | None = None,
+    *,
+    consumption_mode: str = "whole_dataset",
+) -> str:
+    """Export the enriched Results response as an analysis-ready CSV.
+
+    Unlike :func:`replicates_to_csv`, this receives the read-only Results
+    projection.  That lets a CSV include selected runtime metrics without
+    pretending those execution facts were manually persisted score values.
+    Boolean and numeric factors are projected directly; categorical values
+    become their short persisted level labels rather than raw prompt or
+    configuration payloads.
+    """
+    layout = result_csv_layout(rows, design_spec, consumption_mode=consumption_mode)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=layout.fields, extrasaction="ignore")
+    writer.writeheader()
+    for source in sorted(rows, key=layout.sort_key) if layout.sort_key else rows:
+        writer.writerow(layout.write_row(source))
     return buf.getvalue()
 
 
-__all__ = ["replicates_that_ran", "replicates_to_csv", "result_rows_schema", "result_rows_to_csv"]
+__all__ = [
+    "ResultCsvLayout",
+    "layout_stub",
+    "replicates_that_ran",
+    "replicates_to_csv",
+    "result_csv_layout",
+    "result_rows_schema",
+    "result_rows_to_csv",
+]

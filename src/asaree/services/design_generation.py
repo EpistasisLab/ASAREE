@@ -30,10 +30,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.experiment_design_revision import ExperimentDesignRevision
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.services.coordination import coordination_strategy_slug
+from asaree.services.dataset_factors import validate_dataset_factors
 from asaree.services.design_revisions import get_current_revision, supersede_and_create
-from asaree.services.factorial_cells import list_replicates, upsert_replicate
+from asaree.services.factorial_cells import list_replicates, materialize_replicates
+from asaree.services.knowledge_factors import validate_knowledge_factors
+from asaree.services.script_factors import validate_script_factors, validate_tool_step_script_factors
+from asaree.services.skill_factors import validate_skill_factors
+from asaree.services.sub_agent_factors import validate_sub_agent_factor_structure
+from asaree.services.tool_factors import validate_tool_factors
 
 
 class DesignValidationError(ValueError):
@@ -61,9 +68,7 @@ def _validate_factors(factors: list[dict[str, Any]]) -> None:
                 or len(level_labels) != len(levels)
                 or any(not isinstance(label, str) or not label.strip() for label in level_labels)
             ):
-                raise DesignValidationError(
-                    f"factor {name!r} level_labels must contain one non-empty string per level"
-                )
+                raise DesignValidationError(f"factor {name!r} level_labels must contain one non-empty string per level")
             normalized_labels = [label.strip() for label in level_labels]
             if len(set(normalized_labels)) != len(normalized_labels):
                 raise DesignValidationError(f"factor {name!r} level_labels must be unique")
@@ -159,9 +164,7 @@ def _factor_level_label(factor: dict[str, Any], value: Any) -> str | None:
         (
             label.strip()
             for level, label in zip(levels, labels, strict=True)
-            if isinstance(label, str)
-            and label.strip()
-            and json.dumps(level, sort_keys=True, default=str) == value_key
+            if isinstance(label, str) and label.strip() and json.dumps(level, sort_keys=True, default=str) == value_key
         ),
         None,
     )
@@ -283,7 +286,38 @@ async def get_design_impact(
 ) -> DesignImpact:
     """Compare the declared factorial matrix to its materialized revision."""
     material = material_design_spec(design_spec)
-    planned = _planned_replicates(material["factors"], material["replicates"]) if material["factors"] else []
+    incomplete_skills = any(
+        (
+            factor.get("level_type")
+            in {
+                "sub_agent_selection",
+                "script_selection",
+                "tool_selection",
+                "skill_selection",
+                "dataset_selection",
+                "knowledge_selection",
+            }
+            and len(factor.get("levels") or []) < 2
+        )
+        or (
+            factor.get("level_type")
+            in {
+                "sub_agent_toggle",
+                "script_toggle",
+                "tool_toggle",
+                "skill_toggle",
+                "dataset_toggle",
+                "knowledge_toggle",
+            }
+            and not any(factor.get("levels") or [])
+        )
+        for factor in material["factors"]
+    )
+    planned = (
+        _planned_replicates(material["factors"], material["replicates"])
+        if material["factors"] and not incomplete_skills
+        else []
+    )
     planned_labels = {label for label, _, _ in planned}
     planned_cell_keys = {_cell_key(combo, label) for label, combo, _ in planned}
     current = await get_current_revision(db, experiment_id)
@@ -303,7 +337,9 @@ async def get_design_impact(
             retained_replicate_count=0,
             removed_replicate_count=0,
         )
-    current_replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=current.id)
+    current_replicates = await list_replicates(
+        db, experiment_id=experiment_id, revision_id=current.id, include_evidence=False
+    )
     current_labels = {replicate.replicate_label for replicate in current_replicates}
     current_cell_keys = {
         _cell_key(replicate.factor_values, replicate.replicate_label) for replicate in current_replicates
@@ -404,6 +440,45 @@ async def generate_design_cells(
     ).scalar_one_or_none()
     if experiment is None:
         raise DesignValidationError("Experiment not found")
+    protocol_for_scripts = await db.scalar(select(Protocol).where(Protocol.experiment_id == experiment_id))
+    try:
+        validate_tool_step_script_factors(
+            {"factors": factors}, protocol_for_scripts.graph if protocol_for_scripts else {}
+        )
+    except ValueError as exc:
+        raise DesignValidationError(str(exc)) from exc
+    if any(
+        factor.get("level_type")
+        in {
+            "sub_agent_selection",
+            "sub_agent_toggle",
+            "script_selection",
+            "script_toggle",
+            "tool_selection",
+            "tool_toggle",
+            "skill_selection",
+            "skill_toggle",
+            "dataset_selection",
+            "dataset_toggle",
+            "knowledge_selection",
+            "knowledge_toggle",
+        }
+        for factor in factors
+    ):
+        protocol = protocol_for_scripts
+        try:
+            validate_sub_agent_factor_structure({"factors": factors}, protocol.graph if protocol else {})
+            validate_script_factors({"factors": factors}, protocol.graph if protocol else {})
+            await validate_tool_factors({"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id)
+            await validate_skill_factors({"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id)
+            await validate_knowledge_factors(
+                {"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id
+            )
+            await validate_dataset_factors(
+                {"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id, db
+            )
+        except ValueError as exc:
+            raise DesignValidationError(str(exc)) from exc
     # An empty factor declaration is a meaningful replacement when an
     # existing design's final factor was removed: it retires every current
     # cell into history and leaves an empty current revision.  Do not call
@@ -456,11 +531,14 @@ async def generate_design_cells(
         and coordination_strategy_slug(current.design_spec) != coordination_strategy_slug(design_spec)
     )
 
-    published_design_changes = current is not None and (
-        current.design_spec != design_spec or set(existing) != planned_labels or strategy_changed
-    ) and await db.scalar(
-        select(ProtocolRevision.id).where(ProtocolRevision.design_revision_id == current.id).limit(1)
-    ) is not None
+    published_design_changes = (
+        current is not None
+        and (current.design_spec != design_spec or set(existing) != planned_labels or strategy_changed)
+        and await db.scalar(
+            select(ProtocolRevision.id).where(ProtocolRevision.design_revision_id == current.id).limit(1)
+        )
+        is not None
+    )
     if current is not None and not dropped and not strategy_changed and not published_design_changes:
         # Keep the revision and merge into its rows -- factor_values is
         # re-merged because a level's *value* can change without changing its
@@ -482,7 +560,7 @@ async def generate_design_cells(
             }
         )
 
-    replicate_results = []
+    rows: list[tuple[str, dict[str, Any]]] = []
     for label, combo, replicate_number in planned:
         fields: dict[str, Any] = {"factor_values": combo}
         previous = carry_over.get((_cell_key(combo, label), replicate_number))
@@ -499,14 +577,10 @@ async def generate_design_cells(
             # planned this time, and the carried dict is the same combination
             # anyway.
             fields["factor_values"] = combo
-        replicate_result = await upsert_replicate(
-            db,
-            experiment_id=experiment_id,
-            replicate_label=label,
-            fields=fields,
-            revision_id=revision_id,
-        )
-        replicate_results.append(replicate_result)
+        rows.append((label, fields))
+    replicate_results = await materialize_replicates(
+        db, experiment_id=experiment_id, revision_id=revision_id, planned=rows
+    )
     if randomization_seed is not None:
         random.Random(randomization_seed).shuffle(replicate_results)
     return replicate_results

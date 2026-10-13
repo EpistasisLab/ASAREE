@@ -17,9 +17,11 @@ earns its place.
   (`pickMetricColumns` — same preference order as the heatmap's default metric, capped because
   a real scored cell can have 6-7 numeric keys and showing all of them makes the table
   unreadably wide). One table row is one true cell (a unique factor combination): its metric
-  columns are replicate means and its status reports scored/total replicates. The API's legacy
-  `Replicate` rows are individual observations and must be grouped first via
-  `groupReplicatesIntoCells`. `table-fixed` isn't used since the column set is dynamic; instead:
+  columns are replicate means and its status reports scored/total replicates. The tab reads
+  `GET /experiments/{id}/cell-summaries` (one row per cell, metrics as sum/count, aggregated in
+  SQL), **never** `listReplicates`: a 15,786-replicate design shipped every replicate's
+  `artifacts` to the browser just to average them. Pool cells with `pooledMean` so a heatmap
+  square stays replicate-weighted. `table-fixed` isn't used since the column set is dynamic; instead:
   `truncate` on free-text cells, a shaded uppercase sortable header row, subtle zebra striping,
   `font-mono` on technical values. It's styled to the side panel's own compact table idiom (a
   plain `text-xs` `<table>` in a bordered box, like `RunsTab`/`ResultsTab`), not

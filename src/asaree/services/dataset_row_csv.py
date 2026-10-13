@@ -25,7 +25,7 @@ class RowSource:
     dataset_id: str
     raw_sha256: str
     columns: tuple[str, ...]
-    rows: tuple[tuple[str, ...], ...]
+    rows: Sequence[tuple[str, ...]]
 
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")

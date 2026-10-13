@@ -445,6 +445,34 @@ def test_a_disabled_tool_node_is_not_a_stage() -> None:
     assert pe.derive_stage_plan(_staged_graph("asaree-sklearn-dc", enabled=False)) is None
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("mode", ["tool_selection", "tool_toggle"])
+def test_tool_factor_stages_follow_the_selected_tools(enabled: bool, mode: str) -> None:
+    graph = _staged_graph("asaree-sklearn-dc", "asaree-sklearn-fte", enabled=enabled)
+    # Both alternatives belong to the same Agent connector.
+    graph["nodes"] = [node for node in graph["nodes"] if node["id"] != "a1"]
+    graph["edges"] = [edge for edge in graph["edges"] if edge.get("targetHandle") == "tool"]
+    for edge in graph["edges"]:
+        edge["target"] = "a0"
+    graph["nodes"][0]["data"].update(
+        factor_bindings={"tool_selection": "Tools"}, tool_factor_mode=mode, tool_selection=["t0"]
+    )
+    for node in graph["nodes"][1:]:
+        node["data"]["config"]["tool_names"] = ["run"]
+
+    choices = [["t0"], ["t1"]] if mode == "tool_selection" else [["t0", "t1"], []]
+    for chosen in choices:
+        patched = pe.apply_factor_bindings(graph, {"Tools": chosen})
+        plan = pe.stage_plan_spec({}, graph=patched)
+        if not chosen:
+            assert plan is None
+            continue
+        stages = resolve_stage_plan(plan)
+        assert stages.ids == [stage for node_id, stage in [("t0", "dc"), ("t1", "fte")] if node_id in chosen]
+        assert stages.previous(stages.ids[0]) is None
+        assert stages.stages[0].version_id == f"v1_{stages.ids[0]}"
+
+
 def test_a_declared_plan_wins_over_the_canvas() -> None:
     """The SDK escape hatch. Deriving is how the GUI gets a plan, because there
     is no field for one; a notebook that names a plan outright is describing a

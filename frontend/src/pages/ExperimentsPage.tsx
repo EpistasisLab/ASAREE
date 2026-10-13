@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useQueries, useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery, type Query } from '@tanstack/react-query'
 import {
   Archive,
   ArrowDown,
@@ -20,10 +20,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { formatDate, formatRelative } from '@/lib/format'
-import { factorCount, replicatesStatusAccent } from '@/lib/experiment'
+import { cellsStatusAccent, factorCount } from '@/lib/experiment'
+import { executionKeys } from '@/lib/executionQueries'
 import { cardAccent } from '@/lib/utils'
 import { experimentsApi } from '@/api/client'
 import type { Experiment } from '@/types/experiments'
+import type { ExecutionSummary } from '@/types/executionResults'
 
 type SortKey = 'name' | 'design_type' | 'created_at'
 type SortDir = 'asc' | 'desc'
@@ -67,18 +69,16 @@ export function ExperimentsPage() {
   const currentPage = Math.min(page, totalPages)
   const paged = sorted?.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
-  // One replicate-list fetch per visible tile, to tint each by completion status --
-  // the same N+1 tradeoff already accepted for the Agents section on the
-  // detail page. Fine at a page size of 9; revisit with a real aggregate
-  // endpoint if this page ever needs to show many more at once.
-  const replicateQueries = useQueries({
+  // Only maintained summaries cross the list/detail navigation boundary.
+  const summaryQueries = useQueries({
     queries: (paged ?? []).map((experiment) => ({
-      queryKey: ['experiments', experiment.id, 'replicates'],
-      queryFn: () => experimentsApi.listReplicates(experiment.id),
+      queryKey: executionKeys.summary(experiment.id, {}),
+      queryFn: ({ signal }) => experimentsApi.getExecutionSummary(experiment.id, {}, signal),
+      refetchInterval: (query: Query<ExecutionSummary>) => query.state.error && !query.state.data ? false : !query.state.data?.ready || query.state.data.refreshing || query.state.data.has_active ? 5000 : false,
     })),
   })
   const accentByExperiment = new Map(
-    (paged ?? []).map((experiment, i) => [experiment.id, replicatesStatusAccent(replicateQueries[i]?.data)]),
+    (paged ?? []).map((experiment, i) => [experiment.id, cellsStatusAccent(summaryQueries[i]?.data?.total ?? 0, summaryQueries[i]?.data?.scored_count ?? 0)]),
   )
 
   return (

@@ -83,6 +83,12 @@ export function RegisterDatasetDialog({
       })
     },
     onSuccess: (dataset) => {
+      // The inspector opens immediately and reads this list. Seed it before
+      // the handoff so its actions don't depend on the background refresh.
+      queryClient.setQueryData<Dataset[]>(['datasets'], (datasets = []) => [
+        ...datasets.filter((existing) => existing.id !== dataset.id),
+        dataset,
+      ])
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
       onCreated?.(dataset)
       reset()

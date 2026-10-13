@@ -29,7 +29,7 @@ from asaree_client._models.experiments import (
     Replicate,
     Trial,
 )
-from asaree_client._models.llm import LLMConnectionCheck, LLMModelInfo, LLMModels, LLMSetting
+from asaree_client._models.llm import LLMConnectionCheck, LLMModelCapabilities, LLMModelInfo, LLMModels, LLMSetting
 from asaree_client._models.mcp import MCPAuthenticationStatus, MCPOAuthAuthorization, MCPServer, ToolCallResult
 from asaree_client._models.okf import DirectoryEntry, DirectoryListing, OKFBundle, OKFDocument
 from asaree_client._models.protocols import (
@@ -67,6 +67,7 @@ __all__ = [
     "ExperimentRunResults",
     "LLMConnectionCheck",
     "LLMModelInfo",
+    "LLMModelCapabilities",
     "LLMModels",
     "LLMSetting",
     "MCPAuthenticationStatus",

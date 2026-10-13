@@ -31,6 +31,10 @@ export function cardAccent(color: string): CSSProperties {
 export const HUD_ACCENT_RING_CLASSNAME =
   "ring-1 ring-[color:var(--card-accent,var(--primary))]/15 shadow-[0_0_24px_-12px_var(--card-accent,var(--primary))] before:pointer-events-none before:absolute before:top-1 before:left-1 before:size-3 before:border-t-2 before:border-l-2 before:border-[color:var(--card-accent,var(--primary))]/60 before:content-[''] after:pointer-events-none after:absolute after:right-1 after:bottom-1 after:size-3 after:border-r-2 after:border-b-2 after:border-[color:var(--card-accent,var(--primary))]/60 after:content-['']"
 
+/** Shared outline for collapsible agent groups in the factor and metric pickers. */
+export const PICKER_GROUP_CLASSNAME =
+  'mb-2 rounded-md border border-primary/40 shadow-[0_0_16px_-6px_var(--primary)]'
+
 const CHART_HUES = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)']
 
 /** Deterministically maps a string (e.g. a model name) to one of the theme's

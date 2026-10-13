@@ -22,6 +22,18 @@ export interface DesignFactor {
     | 'script_config'
     | 'dataset_config'
     | 'tool_names'
+    | 'script_selection'
+    | 'script_toggle'
+    | 'tool_selection'
+    | 'tool_toggle'
+    | 'skill_selection'
+    | 'skill_toggle'
+    | 'sub_agent_selection'
+    | 'sub_agent_toggle'
+  | 'dataset_selection'
+  | 'dataset_toggle'
+  | 'knowledge_selection'
+  | 'knowledge_toggle'
 }
 
 export interface DesignMetric {
@@ -299,6 +311,7 @@ export interface ResultNodeRun {
   node_id: string
   node_label: string
   status: string
+  bypassed?: boolean
   output_text: string | null
   error: string | null
   // Senders this node's prompt referenced that produced nothing, by label
@@ -314,6 +327,8 @@ export interface ResultNodeRun {
 }
 
 export interface MetricObservation {
+  value_truncated?: boolean
+  value_preview?: string | null
   metric_id: string
   metric_name: string
   value_type?: 'number' | 'boolean' | 'opaque'
@@ -332,6 +347,8 @@ export interface MetricObservation {
 }
 
 export interface EvaluationArtifact {
+  payload_truncated?: boolean
+  payload_preview?: string | null
   artifact_key: string
   kind: string
   payload: unknown
@@ -534,6 +551,19 @@ export interface RowCell {
   factor_values: Record<string, unknown>
   replicate_count: number
   replicates?: Array<{ replicate_result_id: string; replicate_label: string; replicate_number: number }>
+}
+
+/** One cell aggregated server-side (GET /experiments/{id}/cell-summaries):
+ * sized by factor combinations, not replicates. Metrics carry sum/count rather
+ * than a mean so several cells can be pooled into one replicate-weighted mean. */
+export interface CellSummary {
+  cell_id: string
+  cell_label: string
+  factor_values: Record<string, unknown>
+  replicate_count: number
+  scored_count: number
+  updated_at: string | null
+  metrics: Record<string, { sum: number; count: number }>
 }
 
 export interface Replicate {

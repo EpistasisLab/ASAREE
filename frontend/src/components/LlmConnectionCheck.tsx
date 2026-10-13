@@ -1,8 +1,9 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { CircleCheck, CircleHelp, CircleX } from 'lucide-react'
 import { llmSettingsApi } from '@/api/client'
 import { cn } from '@/lib/utils'
 import type { LLMConnectionStatus, LLMProvider } from '@/types/llmSettings'
+import { providerModelsKey } from './protocol/useProviderModels'
 
 // Shared by all three places a credential's health is shown -- the Profile
 // page's credentials table, the save step in CreateCredentialDialog, and the
@@ -38,7 +39,23 @@ export const CONNECTION_STATUS_META: Record<
  * one outbound request against a rate-limited endpoint (10/min per provider).
  */
 export function useConnectionCheck(provider: LLMProvider | null | undefined) {
-  return useMutation({ mutationFn: () => llmSettingsApi.testConnection(provider!) })
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => llmSettingsApi.testConnection(provider!),
+    onSuccess: async (result) => {
+      if (result.provider === 'azure_foundry' && result.status === 'ok') {
+        const queryKey = providerModelsKey(result.provider)
+        if (result.models != null) {
+          // A stale in-flight list must not overwrite the checked deployments.
+          await queryClient.cancelQueries({ queryKey })
+          queryClient.setQueryData(queryKey, { models: result.models, source: 'api', note: null })
+        } else {
+          // Compatibility with a backend that predates the checked-model list.
+          await queryClient.invalidateQueries({ queryKey })
+        }
+      }
+    },
+  })
 }
 
 export function ConnectionStatusBadge({

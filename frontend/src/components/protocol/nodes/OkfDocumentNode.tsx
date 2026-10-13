@@ -3,6 +3,7 @@ import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { FileText } from 'lucide-react'
 import type { OkfDocumentNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
 
 // Names one uploaded OKF concept document -- the Knowledge connector's other
@@ -17,7 +18,9 @@ const ACCENT = nodeAccent('okf_document')
 
 export function OkfDocumentNode({ id, data, selected }: NodeProps & { data: OkfDocumentNodeData }) {
   const { updateNodeData } = useReactFlow()
-  const enabled = data.config?.enabled ?? true
+  const { requestKnowledgeFactor, experimentLocked } = useProtocolCanvasActions()
+  const controlled = !!data.knowledgeFactorControlled
+  const enabled = controlled || (data.config?.enabled ?? true)
   // server_name, not document_id, is what a run reads -- same as the bundle
   // node, and for the same reason.
   const warning = !data.config?.server_name
@@ -37,10 +40,11 @@ export function OkfDocumentNode({ id, data, selected }: NodeProps & { data: OkfD
       handleId="knowledge"
       handlePosition="bottom"
       warning={warning}
-      factorCount={boundFactorCount(data)}
+      factorCount={controlled ? 1 : boundFactorCount(data)}
+      onMakeFactor={!experimentLocked && requestKnowledgeFactor ? () => requestKnowledgeFactor(id) : undefined}
       dimmed={!enabled}
       isActive={enabled}
-      onToggleActive={() => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
+      onToggleActive={controlled ? undefined : () => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
     />
   )
 }

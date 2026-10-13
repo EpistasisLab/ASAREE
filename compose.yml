@@ -75,6 +75,32 @@ services:
   # Runs to completion and exits 0 -- `Exited (0)` in `docker compose ps` is
   # success, hence restart: "no". `--url` is passed explicitly because core's CLI
   # otherwise reads a bare DATABASE_URL, which nothing here sets.
+  # Snapshots both databases before either migration chain runs, only when a
+  # migration is pending: backups/{db}-{revision}-before-v{release}-{UTC}.dump.
+  # Troubleshooting aid, not a backup strategy -- see asaree/migrations/backup.py.
+  # Runs as root so it can always write the mount, then hands each dump to the
+  # owner of ./backups (you), whatever your UID is.
+  db-backup:
+    build:
+      context: .
+      secrets:
+        - gh_token
+      additional_contexts:
+        gitdir: ./.git
+    container_name: db-backup
+    depends_on:
+      motoro-postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/motoro
+      ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/asaree
+    entrypoint: ["python", "-m", "asaree.migrations"]
+    command: ["backup", "--dir", "/app/backups"]
+    volumes:
+      - ./backups:/app/backups
+    restart: "no"
+
   motoro-migrate:
     build:
       context: .
@@ -88,6 +114,9 @@ services:
       # running initdb, which races the creation of the database being migrated.
       motoro-postgres:
         condition: service_healthy
+      # No migration runs until both databases are snapshotted (or need none).
+      db-backup:
+        condition: service_completed_successfully
     entrypoint: ["python", "-m", "motoro.migrations"]
     command:
       - deploy
@@ -215,6 +244,32 @@ services:
       # workspaces and OKF bundle need to survive a restart. The worker is the
       # process that actually spawns the MCP subprocesses for a run, so it
       # reads and writes the same workspace tree the API does.
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # Result maintenance and bulk commands never compete for LLM worker slots.
+  asaree-results-worker:
+    build:
+      context: .
+      secrets:
+        - gh_token
+      additional_contexts:
+        gitdir: ./.git
+    depends_on:
+      # asaree-migrate itself waits for motoro-migrate, which creates the core
+      # indexes the usage/trace reads rely on.
+      asaree-migrate:
+        condition: service_completed_successfully
+      motoro-redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      ASAREE_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/motoro
+      ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/asaree
+      ASAREE_REDIS_URL: redis://motoro-redis:6379/0
+      ASAREE_OKF_BUNDLE_ROOT: /app/data
+    command: ["arq", "asaree.worker.result_settings.ResultWorkerSettings"]
+    volumes:
       - ./data:/app/data
     restart: unless-stopped
 

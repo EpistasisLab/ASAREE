@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Collection
 from datetime import UTC, datetime
 
 from sqlalchemy import exists, select, update
@@ -20,7 +21,7 @@ from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.design_revisions import get_current_revision
-from asaree.services.protocol_runs import TERMINAL_PROTOCOL_RUN_STATUSES
+from asaree.services.protocol_runs import RETRYABLE_PROTOCOL_RUN_STATUSES, TERMINAL_PROTOCOL_RUN_STATUSES
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ROW_PROJECTION_FIELDS = frozenset({"workspace_id", "metric_values", "artifacts"})
@@ -129,6 +130,7 @@ async def list_row_results(
     experiment_id: uuid.UUID,
     design_revision_id: uuid.UUID | None = None,
     protocol_revision_id: uuid.UUID,
+    replicate_ids: Collection[uuid.UUID] | None = None,
 ) -> list[FactorialRowResult]:
     revision_id = await _revision_id(db, experiment_id, design_revision_id)
     if revision_id is None:
@@ -141,7 +143,10 @@ async def list_row_results(
                 .join(FactorialCell, FactorialReplicateResult.cell_id == FactorialCell.id)
                 .join(ProtocolRevision, ProtocolRevision.id == FactorialRowResult.protocol_revision_id)
                 .join(Protocol, Protocol.id == ProtocolRevision.protocol_id)
-                .where(*_slot_scope(experiment_id, revision_id, protocol_revision_id))
+                .where(
+                    *_slot_scope(experiment_id, revision_id, protocol_revision_id),
+                    *([FactorialReplicateResult.id.in_(replicate_ids)] if replicate_ids is not None else []),
+                )
                 .order_by(
                     FactorialCell.cell_label,
                     FactorialReplicateResult.replicate_number,
@@ -279,7 +284,7 @@ async def claim_row_attempt(
         previous = await db.get(ProtocolRun, expected_run_id, populate_existing=True)
         if previous is None or previous.status not in TERMINAL_PROTOCOL_RUN_STATUSES:
             return None
-        if previous.status not in {"failed", "cancelled"} and not allow_completed:
+        if previous.status not in RETRYABLE_PROTOCOL_RUN_STATUSES and not allow_completed:
             return None
     from asaree.services.protocol_runs import create_protocol_run
 

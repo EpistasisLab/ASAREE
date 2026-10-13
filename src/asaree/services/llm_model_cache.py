@@ -130,6 +130,16 @@ async def discover_models_cached(
     return models, source, note
 
 
+async def store_models_cache(*, user_id: uuid.UUID, provider: str, models: list[ModelInfo]) -> None:
+    """Reuse a successful live connection check as the cached model list."""
+    try:
+        await get_redis().set(
+            _key(user_id, provider), _dump(models, "api", None, now=time.time()), ex=_RETAIN_SECONDS
+        )
+    except Exception as e:  # noqa: BLE001 -- caching must not fail the connection check
+        logger.warning("model_cache_write_failed", extra={"error": str(e)})
+
+
 async def invalidate_models_cache(*, user_id: uuid.UUID, provider: str) -> None:
     """Drop a cached list after its credential changed.
 

@@ -38,6 +38,7 @@ export function AgentNode({
     // Paired with runStatus, never derivable from it: a truncated run is still
     // `completed` (see NodeRunState.truncation).
     runTruncated?: boolean
+    runBypassed?: boolean
     missingModel?: boolean
     missingOutputParser?: boolean
     canRunAlone?: boolean
@@ -62,7 +63,7 @@ export function AgentNode({
 }) {
   const isSubAgent = data.isSubAgent === true
   const accent = nodeAccent(isSubAgent ? 'sub_agent' : 'agent')
-  const badge = nodeRunBadge(data.runStatus, data.runTruncated)
+  const badge = nodeRunBadge(data.runStatus, data.runTruncated, data.runBypassed)
   // Peers are offered to the model as function schemas -- that is the only
   // channel a consultation can be *chosen* through -- so an agent on a model
   // that can't accept them would know its peers exist and never be able to
@@ -82,8 +83,10 @@ export function AgentNode({
     ...(peerNeedsToolCalling ? ["This model can't call tools, so this agent can't consult or delegate to connected agents"] : []),
   ]
   const { updateNodeData } = useReactFlow()
-  const { requestRunNode } = useProtocolCanvasActions()
-  const isActive = data.active ?? true
+  const { requestRunNode, requestAgentFactor, requestSubAgentFactor, requestEditFactor, experimentLocked } = useProtocolCanvasActions()
+  const controlled = isSubAgent && !!data.subAgentFactorControlled
+  const isActive = controlled || (data.active ?? true)
+  const factorCount = boundFactorCount(data) + (controlled ? 1 : 0)
 
   // Ids are stored, labels are only ever displayed -- the same invariant the
   // inspector's editor upholds via `toDisplayPrompt`. Without this the summary
@@ -127,7 +130,8 @@ export function AgentNode({
       <NodeHoverToolbar
         nodeId={id}
         isActive={isActive}
-        onToggleActive={() => updateNodeData(id, { active: !isActive })}
+        onToggleActive={controlled ? undefined : () => updateNodeData(id, { active: !isActive })}
+        onMakeFactor={experimentLocked ? undefined : isSubAgent ? requestSubAgentFactor && (() => requestSubAgentFactor(id)) : requestAgentFactor && (() => requestAgentFactor(id))}
         runAlone={{ canRun: !!data.canRunAlone, onRun: () => requestRunNode(id) }}
       />
       {/* Sits inside the top-right corner so it stays clear of the Knowledge
@@ -145,7 +149,7 @@ export function AgentNode({
           node" anyway. Top-center (on hover) is NodeHoverToolbar, and the
           Architectural Pattern connector's own label/stub live OUTSIDE the
           card on the left of this edge, so neither competes for this corner. */}
-      {hasBoundFactor(data) && <NodeFactorBadge count={boundFactorCount(data)} className="-top-3 -right-3" />}
+      {factorCount > 0 && <NodeFactorBadge count={factorCount} className="-top-3 -right-3" />}
       {/* Main flow is left-to-right -- the bottom sub-connectors stay on the
           bottom edge regardless, since a config source hangs below a node no
           matter which way the main flow runs.
@@ -225,20 +229,16 @@ export function AgentNode({
           w-72 rather than the w-60 it was with three: at 240px the margins are
           64px each, which two centered captions won't fit in; at 288px they're
           88px. Hence a Pattern/Skill pair in the left margin (5% / 18%) and a
-          Dataset/Knowledge pair in the right (71% / 90%) -- the numbers
+          Dataset/Knowledge pair in the right (73% / 90%) -- the numbers
           themselves live in layout.ts's CONNECTOR_X, because addNode() has to
           place a connector's node at that same x -- each spaced so neither
           their ~26px stubs nor their centered captions collide. Every
           caption is centered directly above its own handle, mirroring the
           bottom row (see ConnectorHandleLabel's side="top" branch).
 
-          Dataset is at 71% rather than the 74% it started at: "Dataset" and
-          "Knowledge" are the two longest captions on this edge, and centered
-          at 74/90 they were within a pixel or two of touching. 71% is about
-          as far left as it can go -- the toolbar's right edge is at ~69%, and
-          the stub's own padding already overlaps it slightly (harmless, the
-          toolbar is above the stub's z-index and only there on hover, and the
-          visible "+" glyph still clears it).
+          Dataset sits at 73%, nudged slightly right from its previous 71%
+          position on both Agent and Sub-Agent cards. Its handle, caption,
+          "+" stub and newly added dataset nodes share that same position.
 
           The bottom sub-connectors: required Model (exactly one), optional
           repeatable Sub-Agents on parent Agents, optional max-1 Memory (visual
@@ -287,7 +287,7 @@ export function AgentNode({
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.skill} side="top">Skill</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="skill" left={CONNECTOR_LEFT.skill} side="top" alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="skill" left={CONNECTOR_LEFT.skill} side="top" alwaysVisible factorName={data.factor_bindings?.skill_selection} factorLevelCount={data.skillFactorLevelCount as number | undefined} factorOnOff={data.skill_factor_mode === 'skill_toggle'} />
       {/* Dataset -- the data an agent works ON, as opposed to the Tool
           connector's "capabilities it works WITH". UNCAPPED, like
           Skill/Knowledge/Tool: a cell's workspace holds one dataset per named
@@ -321,7 +321,7 @@ export function AgentNode({
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.dataset} side="top">Dataset</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="dataset" left={CONNECTOR_LEFT.dataset} side="top" alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="dataset" left={CONNECTOR_LEFT.dataset} side="top" alwaysVisible factorName={data.factor_bindings?.dataset_selection} factorLevelCount={data.datasetFactorLevelCount as number | undefined} factorOnOff={data.dataset_factor_mode === 'dataset_toggle'} />
       {/* Knowledge -- registered OKF bundles, each a directory of Markdown
           concepts on the SERVER's disk that the agent reads AND writes as it
           works (see OkfBundleNodeData). Its own slot rather than sharing
@@ -351,7 +351,7 @@ export function AgentNode({
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.knowledge} side="top">Knowledge</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="knowledge" left={CONNECTOR_LEFT.knowledge} side="top" alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="knowledge" left={CONNECTOR_LEFT.knowledge} side="top" alwaysVisible factorName={data.factor_bindings?.knowledge_selection} factorLevelCount={data.knowledgeFactorLevelCount as number | undefined} factorOnOff={data.knowledge_factor_mode === 'knowledge_toggle'} />
       {/* Handle id `model`; graphs saved before the rename carry these edges on
           `ai` or `llm` -- ProtocolCanvas.tsx rewrites those on load
           (migrateLegacyHandles) and the backend keeps accepting both (see
@@ -379,7 +379,7 @@ export function AgentNode({
             className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
           />
           <ConnectorHandleLabel left={CONNECTOR_LEFT.sub_agents}>Sub-Agents</ConnectorHandleLabel>
-          <ConnectorAddStub nodeId={id} slot="sub_agents" left={CONNECTOR_LEFT.sub_agents} alwaysVisible />
+          <ConnectorAddStub nodeId={id} slot="sub_agents" left={CONNECTOR_LEFT.sub_agents} alwaysVisible factorName={data.factor_bindings?.sub_agent_selection} factorLevelCount={data.subAgentFactorLevelCount as number | undefined} factorOnOff={data.sub_agent_factor_mode === 'sub_agent_toggle'} />
         </>
       )}
       <Handle
@@ -402,7 +402,8 @@ export function AgentNode({
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.tool}>Tool</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="tool" left={CONNECTOR_LEFT.tool} alwaysVisible />
+      <ConnectorAddStub nodeId={id} slot="tool" left={CONNECTOR_LEFT.tool} alwaysVisible factorName={data.factor_bindings?.tool_selection} factorLevelCount={data.toolFactorLevelCount as number | undefined} factorOnOff={data.tool_factor_mode === 'tool_toggle'} />
+      {data.factor_bindings?.script_selection && <button type="button" className="nodrag absolute text-[10px] text-chart-2" style={{ left: `calc(${CONNECTOR_LEFT.tool} + 12px)`, bottom: -34 }} onClick={() => requestEditFactor(data.factor_bindings!.script_selection)}>Scripts: {data.script_factor_mode === 'script_toggle' ? 'on/off' : `${data.scriptFactorLevelCount ?? 0} levels`}</button>}
       {/* Output Parser -- the field spec the agent's answer is written to and
           read back out of. Last on the bottom edge, at 95%: it's the only
           connector here whose work outlives the agent's own turn, so it sits

@@ -42,7 +42,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 
 from alembic import op
-from asaree.migrations.guards import create_foreign_key, drop_column
+from asaree.migrations.guards import create_foreign_key, create_unique_constraint, drop_column, has_table
 
 revision: str = 'e2f7c4a91b60'
 down_revision: str | None = 'd5a3b90c71e4'
@@ -80,62 +80,65 @@ def upgrade() -> None:
         if_not_exists=True,
     )
 
-    # One revision 1 per experiment that actually has cells. Experiments with
-    # none are left alone -- a revision is created lazily on first write, so
-    # inventing an empty one here would only add rows nothing points at.
-    op.execute(
-        """
-        INSERT INTO experiment_design_revisions (id, experiment_id, revision, design_spec, superseded_at)
-        SELECT gen_random_uuid(), e.id, 1, e.design_spec, NULL
-        FROM research_experiments AS e
-        WHERE EXISTS (SELECT 1 FROM factorial_cell_results AS c WHERE c.experiment_id = e.id)
-        ON CONFLICT DO NOTHING
-        """
-    )
+    # Cell results are only backfilled while the legacy table exists; a later
+    # revision (a7b8c9d0e1f2) renames it, after which this part is long done.
+    if has_table("factorial_cell_results"):
+        # One revision 1 per experiment that actually has cells. Experiments with
+        # none are left alone -- a revision is created lazily on first write, so
+        # inventing an empty one here would only add rows nothing points at.
+        op.execute(
+            """
+            INSERT INTO experiment_design_revisions (id, experiment_id, revision, design_spec, superseded_at)
+            SELECT gen_random_uuid(), e.id, 1, e.design_spec, NULL
+            FROM research_experiments AS e
+            WHERE EXISTS (SELECT 1 FROM factorial_cell_results AS c WHERE c.experiment_id = e.id)
+            ON CONFLICT DO NOTHING
+            """
+        )
 
-    op.add_column(
-        "factorial_cell_results",
-        sa.Column("design_revision_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
-        if_not_exists=True,
-    )
-    op.execute(
-        """
-        UPDATE factorial_cell_results AS c
-        SET design_revision_id = r.id
-        FROM experiment_design_revisions AS r
-        WHERE r.experiment_id = c.experiment_id AND r.revision = 1 AND c.design_revision_id IS NULL
-        """
-    )
-    # Only safe because the backfill above covers every experiment that has a
-    # cell -- any row still null here would mean a cell pointing at an
-    # experiment that doesn't exist, which the existing FK already rules out.
-    op.alter_column("factorial_cell_results", "design_revision_id", nullable=False)
-    create_foreign_key(
-        "factorial_cell_results_design_revision_id_fkey",
-        "factorial_cell_results",
-        "experiment_design_revisions",
-        ["design_revision_id"],
-        ["id"],
-        ondelete="CASCADE",
-    )
-    op.create_index(
-        "ix_factorial_cell_results_design_revision_id",
-        "factorial_cell_results",
-        ["design_revision_id"],
-        if_not_exists=True,
-    )
+        op.add_column(
+            "factorial_cell_results",
+            sa.Column("design_revision_id", sa.dialects.postgresql.UUID(as_uuid=True), nullable=True),
+            if_not_exists=True,
+        )
+        op.execute(
+            """
+            UPDATE factorial_cell_results AS c
+            SET design_revision_id = r.id
+            FROM experiment_design_revisions AS r
+            WHERE r.experiment_id = c.experiment_id AND r.revision = 1 AND c.design_revision_id IS NULL
+            """
+        )
+        # Only safe because the backfill above covers every experiment that has a
+        # cell -- any row still null here would mean a cell pointing at an
+        # experiment that doesn't exist, which the existing FK already rules out.
+        op.alter_column("factorial_cell_results", "design_revision_id", nullable=False)
+        create_foreign_key(
+            "factorial_cell_results_design_revision_id_fkey",
+            "factorial_cell_results",
+            "experiment_design_revisions",
+            ["design_revision_id"],
+            ["id"],
+            ondelete="CASCADE",
+        )
+        op.create_index(
+            "ix_factorial_cell_results_design_revision_id",
+            "factorial_cell_results",
+            ["design_revision_id"],
+            if_not_exists=True,
+        )
 
-    op.drop_constraint(
-        "uq_factorial_cell_results_experiment_cell",
-        "factorial_cell_results",
-        type_="unique",
-        if_exists=True,
-    )
-    op.create_unique_constraint(
-        "uq_factorial_cell_results_revision_cell",
-        "factorial_cell_results",
-        ["design_revision_id", "cell_label"],
-    )
+        op.drop_constraint(
+            "uq_factorial_cell_results_experiment_cell",
+            "factorial_cell_results",
+            type_="unique",
+            if_exists=True,
+        )
+        create_unique_constraint(
+            "uq_factorial_cell_results_revision_cell",
+            "factorial_cell_results",
+            ["design_revision_id", "cell_label"],
+        )
 
     # A cell run remembers the design it was planned under, so a result that
     # lands after the user has regenerated still writes back to its own
@@ -167,13 +170,14 @@ def downgrade() -> None:
 
     # Lossy on purpose: one design per experiment can only keep one design's
     # cells, and keeping more would break the unique constraint restored below.
-    op.execute(
-        """
+    if has_table("experiment_design_revisions"):
+        op.execute(
+            """
         DELETE FROM factorial_cell_results AS c
         USING experiment_design_revisions AS r
         WHERE c.design_revision_id = r.id AND r.superseded_at IS NOT NULL
         """
-    )
+        )
     op.drop_constraint(
         "uq_factorial_cell_results_revision_cell",
         "factorial_cell_results",
@@ -184,7 +188,7 @@ def downgrade() -> None:
         "ix_factorial_cell_results_design_revision_id", table_name="factorial_cell_results", if_exists=True
     )
     drop_column("factorial_cell_results", "design_revision_id")
-    op.create_unique_constraint(
+    create_unique_constraint(
         "uq_factorial_cell_results_experiment_cell",
         "factorial_cell_results",
         ["experiment_id", "cell_label"],

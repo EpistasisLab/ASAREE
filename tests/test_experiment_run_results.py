@@ -678,3 +678,4 @@ def test_execution_evidence_excludes_completed_configuration_nodes() -> None:
     assert _has_execution_evidence({"status": "completed", "output_text": None, "error": None}) is False
     assert _has_execution_evidence({"status": "completed", "run_id": "agent-run"}) is True
     assert _has_execution_evidence({"status": "failed", "error": "boom"}) is True
+    assert _has_execution_evidence({"status": "completed", "bypassed": True, "output_text": ""}) is True

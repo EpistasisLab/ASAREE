@@ -37,6 +37,23 @@ function testRun(overrides: Partial<TestRun> = {}): TestRun {
 }
 
 describe('TestRunResults', () => {
+  it('distinguishes bypassed nodes from completed execution', () => {
+    render(<TestRunResults run={testRun({
+      status: 'completed',
+      execution_summary: {
+        node_runs: {
+          active: { status: 'completed', output_text: 'Answer' },
+          observer: { status: 'completed', bypassed: true, output_text: 'Answer' },
+        },
+        started_at: null, completed_at: null, cancel_requested_at: null,
+      },
+    })} onClose={vi.fn()} />)
+
+    const progress = screen.getByRole('region', { name: 'Node progress' })
+    expect(within(progress).getByText('Bypassed')).toBeInTheDocument()
+    expect(within(progress).getByText('Done')).toBeInTheDocument()
+  })
+
   it.each([
     ['completed', 'Completed'],
     ['failed', 'Failed'],

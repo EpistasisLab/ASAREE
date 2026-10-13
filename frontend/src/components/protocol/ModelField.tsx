@@ -33,12 +33,14 @@ export function ModelField({
   value,
   models,
   isLoading,
+  disabledModelIds = [],
   onChange,
 }: {
   id?: string
   value: string
   models: LLMModelInfo[]
   isLoading: boolean
+  disabledModelIds?: string[]
   onChange: (model: string) => void
 }) {
   const known = models.find((m) => m.id === value)
@@ -84,7 +86,7 @@ export function ModelField({
     <Select
       value={value || NONE_VALUE}
       onValueChange={(next) => {
-        if (!next || next === NONE_VALUE) return
+        if (!next || next === NONE_VALUE || (next !== value && disabledModelIds.includes(next))) return
         // Keep whatever was selected as the starting text rather than blanking
         // it -- "custom" is usually a variant of a listed model (a dated
         // snapshot, a newer point release), so it's an edit, not a fresh start.
@@ -100,7 +102,7 @@ export function ModelField({
           Select a model…
         </SelectItem>
         {models.map((m) => (
-          <SelectItem key={m.id} value={m.id}>
+          <SelectItem key={m.id} value={m.id} disabled={m.id !== value && disabledModelIds.includes(m.id)}>
             {m.label ?? m.id}
           </SelectItem>
         ))}

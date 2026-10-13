@@ -50,6 +50,7 @@ export function RunConfirmDialog({
   confirmLabel,
   confirmDisabled = false,
   publishDisabled = confirmDisabled,
+  publishLabel,
   isConfirming = false,
   confirmError = null,
 }: {
@@ -75,6 +76,7 @@ export function RunConfirmDialog({
   confirmLabel?: string
   confirmDisabled?: boolean
   publishDisabled?: boolean
+  publishLabel?: string
   isConfirming?: boolean
   confirmError?: string | null
 }) {
@@ -222,7 +224,7 @@ export function RunConfirmDialog({
                 </Button>
               )}
               <Button disabled={isPublishing || isConfirming || publishDisabled} onClick={onPublishAndRun}>
-                {isPublishing ? 'Publishing…' : isConfirming ? 'Starting…' : `Publish & ${actionLabel}`}
+                {isPublishing ? 'Publishing…' : isConfirming ? 'Starting…' : publishLabel ?? `Publish & ${actionLabel}`}
               </Button>
             </>
           ) : (

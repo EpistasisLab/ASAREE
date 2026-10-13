@@ -1,3 +1,9 @@
+import { subAgentFactorIssues } from '@/lib/subAgentFactors'
+import { sharedGroupIssues } from '@/lib/sharedFactors'
+import { knowledgeFactorIssues, isKnowledgeFactor } from '@/lib/knowledgeFactors'
+import { useKnowledgeLibrary } from './useKnowledgeLibrary'
+import { datasetsApi } from '@/api/client'
+import { datasetFactorIssues } from '@/lib/datasetFactors'
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
@@ -9,16 +15,20 @@ import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
+import { ApiError, experimentsApi, protocolsApi, skillsApi } from '@/api/client'
 import { coordinationStrategyIssues } from '@/lib/coordinationStrategy'
 import { unboundFactorNames } from '@/lib/factorBindings'
+import { scriptFactorIssues } from '@/lib/scriptFactors'
+import { toolFactorIssues } from '@/lib/toolFactors'
+import { mcpServersApi } from '@/api/client'
+import { skillFactorIssues } from '@/lib/skillFactors'
 import { promptReferenceScope } from '@/lib/promptReferences'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import {
   factorBoundField,
   revealsHiddenMcpServers,
   toolFactorServerId,
-  unboundBindableFields,
+  factorCreationFields,
   type UnboundField,
 } from './bindableFields'
 import { LEVEL_TYPE_LABELS, levelTypeOf } from './factorLevels'
@@ -171,7 +181,7 @@ function AddFactorButton({
     },
   })
 
-  const fields = unboundBindableFields(graphQuery.data?.nodes ?? [], graphQuery.data?.edges ?? [])
+  const fields = factorCreationFields(graphQuery.data?.nodes ?? [], graphQuery.data?.edges ?? [])
 
   return (
     <>
@@ -181,12 +191,18 @@ function AddFactorButton({
 
       {dialogOpen && (
         <FactorEditorDialog
+          graph={graphQuery.data as unknown as ProtocolGraph | undefined}
           open
           onOpenChange={setDialogOpen}
           factor={{ name: '', levels: [], level_type: 'string' }}
           revealHiddenServers={revealsHiddenMcpServers(graphQuery.data?.nodes ?? [])}
           promptScopeFor={promptScopeFor}
           pickableFields={fields}
+          canvasAgentCount={(graphQuery.data?.nodes ?? []).filter(node => node.type === 'agent' || node.type === 'sub_agent').length}
+          onPickConnectorFactor={(field) => {
+            canvasRef.current?.openConnectorFactor(field)
+            setDialogOpen(false)
+          }}
           existingNames={existingNames}
           onSave={(factor, field) => {
             if (field) return createMutation.mutateAsync({ factor, field })
@@ -256,6 +272,7 @@ function FactorsEditor({
   const editMutation = useMutation({
     mutationFn: async ({ oldName, next }: { oldName: string; next: DesignFactor }) => {
       const fresh = await experimentsApi.get(experiment.id)
+      if (next.name !== oldName && (fresh.design_spec?.factors ?? []).some((factor) => factor.name === next.name)) throw new Error('A factor with this name already exists.')
       const nextFactors = (fresh.design_spec?.factors ?? []).map((f) => (f.name === oldName ? next : f))
       await experimentsApi.update(experiment.id, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
       return { oldName, next }
@@ -296,6 +313,7 @@ function FactorsEditor({
             variant="ghost"
             size="icon-sm"
             aria-label="Remove factor"
+            title={factor.level_type === 'sub_agent_selection' || factor.level_type === 'sub_agent_toggle' ? 'Remove factor and enable all connected sub-agents' : (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle') ? 'Remove factor and enable all connected skills' : 'Remove factor'}
             disabled={disabled || deleteMutation.isPending}
             onClick={() => deleteMutation.mutate(factor.name)}
           >
@@ -307,6 +325,7 @@ function FactorsEditor({
 
       {editingFactor && (
         <FactorEditorDialog
+          graph={graphQuery.data as unknown as ProtocolGraph | undefined}
           open
           onOpenChange={(open) => {
             if (!open) setEditingFactor(null)
@@ -465,7 +484,13 @@ export function DesignTab({
     // Submit the pending declaration with the generation request. This is
     // deliberately one API operation: the first click cannot generate from a
     // pre-save database snapshot and leave the changed cells pending.
-    mutationFn: () => experimentsApi.generateDesign(experiment.id, isDirty ? designDraft() : undefined),
+    // Resolves to the replicate total, counted here rather than from the
+    // response: listing every replicate back was megabytes on large designs.
+    mutationFn: async () => {
+      const total = combinations * Math.max(replicates ?? 1, 1)
+      await experimentsApi.generateDesign(experiment.id, isDirty ? designDraft() : undefined)
+      return total
+    },
     onSuccess: () => {
       // The local draft is compared with this experiment query. Refresh it
       // along with the generated rows; otherwise the old declaration remains
@@ -490,6 +515,17 @@ export function DesignTab({
     ? ({ nodes: graphQuery.data.nodes, edges: graphQuery.data.edges } as unknown as ProtocolGraph)
     : undefined
   const unboundFactors = unboundFactorNames(experiment.design_spec, draftGraph)
+  const knowledgeLibrary = useKnowledgeLibrary(factors.some(isKnowledgeFactor))
+  const knowledgeIssues = knowledgeFactorIssues(draftGraph, factors, knowledgeLibrary.data ? new Set(knowledgeLibrary.data.map((item) => item.id)) : undefined)
+  const skillLibrary = useQuery({ queryKey: ['skills'], queryFn: () => skillsApi.list(), enabled: factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) })
+  const datasetLibrary = useQuery({ queryKey: ['datasets'], queryFn: () => datasetsApi.list(), enabled: factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') })
+  const datasetIssues = datasetFactorIssues(draftGraph, factors, datasetLibrary.data ? new Set(datasetLibrary.data.map((dataset) => dataset.id)) : undefined)
+  const subAgentIssues = subAgentFactorIssues(draftGraph, factors)
+  const patternIssues = sharedGroupIssues(draftGraph, factors, 'pattern')
+  const toolLibrary = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list(), enabled: factors.some((factor) => factor.level_type === 'tool_selection' || factor.level_type === 'tool_toggle') })
+  const scriptIssues = scriptFactorIssues(draftGraph, factors)
+  const toolIssues = toolFactorIssues(draftGraph, factors, toolLibrary.data ? new Set(toolLibrary.data.map((server) => server.id)) : undefined)
+  const skillIssues = skillFactorIssues(draftGraph, factors, skillLibrary.data ? new Set(skillLibrary.data.map((skill) => skill.id)) : undefined)
   const impact = impactQuery.data
 
   // A design-time mirror of the backend's own strategy validation, so an
@@ -858,22 +894,23 @@ export function DesignTab({
             Unbound factor{unboundFactors.length === 1 ? '' : 's'}: {unboundFactors.join(', ')}. Rebind on the canvas or remove from this design.
           </p>
         )}
+        {[...patternIssues, ...scriptIssues, ...toolIssues, ...subAgentIssues, ...skillIssues, ...datasetIssues, ...knowledgeIssues].map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
         <Button
           size="sm"
           disabled={
             generateMutation.isPending ||
             isAutosavingMetadata ||
             !canGenerate ||
-            unboundFactors.length > 0
+            patternIssues.length > 0 || scriptIssues.length > 0 || toolIssues.length > 0 || (factors.some((factor) => factor.level_type === 'tool_selection' || factor.level_type === 'tool_toggle') && !toolLibrary.isSuccess) || unboundFactors.length > 0 || subAgentIssues.length > 0 || knowledgeIssues.length > 0 || (factors.some(isKnowledgeFactor) && !knowledgeLibrary.isSuccess) || skillIssues.length > 0 || datasetIssues.length > 0 || (factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') && !datasetLibrary.isSuccess) || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
           }
           onClick={() => generateMutation.mutate()}
         >
           {generateMutation.isPending ? 'Generating cells…' : needsDesignUpdate ? 'Apply changes to cells' : 'Generate cells'}
         </Button>
-        {generateMutation.data && (
+        {generateMutation.data !== undefined && (
           <p className="text-xs text-muted-foreground">
-            {combinations} {combinations === 1 ? 'cell' : 'cells'} · {generateMutation.data.length}{' '}
-            {generateMutation.data.length === 1 ? 'replicate' : 'replicates'} total
+            {combinations} {combinations === 1 ? 'cell' : 'cells'} · {generateMutation.data.toLocaleString()}{' '}
+            {generateMutation.data === 1 ? 'replicate' : 'replicates'} total
           </p>
         )}
         {generateError && (

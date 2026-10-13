@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -112,6 +113,13 @@ class AsareeClient:
         response = self._http.request("GET", f"/api{path}", **kwargs)
         raise_for_status(response)
         return response.content
+
+    def _stream_to_file(self, api_path: str, destination: Path) -> None:
+        with self._http.stream("GET", api_path) as response:
+            raise_for_status(response)
+            with destination.open("wb") as output:
+                for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                    output.write(chunk)
 
     def _post(self, path: str, **kwargs: Any) -> Any:
         return self._request("POST", path, **kwargs)

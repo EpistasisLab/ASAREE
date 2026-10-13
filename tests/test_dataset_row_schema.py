@@ -14,6 +14,9 @@ from fastapi import FastAPI
 from asaree.api import datasets
 from asaree.deps import get_current_user
 from asaree.models.database import get_db
+from asaree.services.dataset_row_csv import DatasetRowCsvError
+from asaree.services.indexed_row_source import read_indexed_row_source
+from asaree.services.row_schema_reads import schema_payload
 
 
 @pytest.fixture
@@ -43,12 +46,22 @@ def row_schema_app(monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, uuid.UUID,
 
 
 def _dataset(dataset_id: uuid.UUID, owner_id: uuid.UUID, path: Path, content: bytes) -> SimpleNamespace:
+    sha = hashlib.sha256(content).hexdigest()
+    try:
+        cached = schema_payload(
+            read_indexed_row_source(
+                dataset_id=str(dataset_id), raw_path=str(path), raw_sha256=sha, cache_root=path.parent / "indexes"
+            )
+        )
+    except DatasetRowCsvError as exc:
+        cached = {"status": "failed", "raw_sha256": sha, "error": str(exc)}
     return SimpleNamespace(
         id=dataset_id,
         owner_id=owner_id,
         name="private-dataset-name",
         raw_path=str(path),
         raw_sha256=hashlib.sha256(content).hexdigest(),
+        row_schema=cached,
     )
 
 
@@ -74,6 +87,7 @@ async def test_row_schema_returns_ordered_metadata_without_source_disclosure(
         "raw_sha256": hashlib.sha256(content).hexdigest(),
         "columns": ["subject", "value", "label"],
         "row_count": 3,
+        "ready": True,
     }
     assert "alpha" not in response.text
     assert "private-dataset-name" not in response.text
@@ -132,4 +146,25 @@ async def test_row_schema_accepts_header_only_csv(
         "raw_sha256": hashlib.sha256(content).hexdigest(),
         "columns": ["first", "second"],
         "row_count": 0,
+        "ready": True,
     }
+
+
+async def test_missing_row_metadata_is_prepared_outside_http(tmp_path, row_schema_app, monkeypatch):
+    app, dataset_id, state = row_schema_app
+    content = b"id,value\n1,private\n"
+    path = tmp_path / "source.csv"
+    path.write_bytes(content)
+    dataset = _dataset(dataset_id, state["user_id"], path, content)
+    dataset.row_schema = None
+    state["dataset"] = dataset
+
+    def forbidden_read(*_args, **_kwargs):
+        raise AssertionError("HTTP must not read the original CSV")
+
+    monkeypatch.setattr(Path, "open", forbidden_read)
+    response = await _get_schema(app, dataset_id)
+    assert response.status_code == 202
+    assert response.json()["ready"] is False
+    assert response.json()["row_count"] is None
+    assert dataset.row_schema["status"] == "pending"

@@ -38,6 +38,12 @@ from asaree.services.measurement_migration import normalize_experiment_measureme
 logger = logging.getLogger(__name__)
 
 TERMINAL_PROTOCOL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "limit_reached"})
+# Finished with a result: "Run all" skips these unless the user picks them to
+# run again, so re-billing one is always a deliberate choice. limit_reached
+# belongs here for the reason above -- its truncated result is an outcome.
+RERUN_ON_REQUEST_STATUSES = frozenset({"completed", "limit_reached"})
+# Ended without a result: "Run all" and per-row Retry pick these up again.
+RETRYABLE_PROTOCOL_RUN_STATUSES = frozenset({"failed", "cancelled"})
 
 
 def node_run_truncation(node_runs: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -326,6 +332,7 @@ async def create_test_run(
     owner_id: uuid.UUID,
     protocol_revision_id: uuid.UUID,
     dataset_row: dict[str, Any] | None = None,
+    factor_values: dict[str, Any] | None = None,
 ) -> ProtocolRun:
     """Create the experiment's next canvas validation attempt.
 
@@ -352,6 +359,7 @@ async def create_test_run(
         protocol_revision_id=protocol_revision_id,
         dataset_row=dataset_row,
         is_test_run=True,
+        factor_values=factor_values,
     )
     experiment.latest_test_run_id = run.id
     await db.flush()
@@ -857,7 +865,11 @@ class ExperimentTrial:
 
 
 async def list_experiment_trials(
-    db: AsyncSession, *, experiment_id: uuid.UUID, revision_id: uuid.UUID | None = None
+    db: AsyncSession,
+    *,
+    experiment_id: uuid.UUID,
+    revision_id: uuid.UUID | None = None,
+    replicate_ids: set[uuid.UUID] | None = None,
 ) -> list[ExperimentTrial]:
     """Every cell of *experiment_id*'s current design (or of *revision_id*,
     to inspect a superseded one), cross-referenced with its most recent run
@@ -872,7 +884,9 @@ async def list_experiment_trials(
     ``FactorialReplicateResult`` without joining its cell: that query would also
     return every superseded design's cells, which is exactly what design
     revisions exist to keep out of the current view."""
-    replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=revision_id)
+    replicates = await list_replicates(
+        db, experiment_id=experiment_id, revision_id=revision_id, replicate_ids=replicate_ids
+    )
     run_ids = [replicate.run_id for replicate in replicates if replicate.run_id is not None]
     runs_by_id: dict[uuid.UUID, ProtocolRun] = {}
     if run_ids:

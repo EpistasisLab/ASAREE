@@ -45,6 +45,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -377,24 +378,25 @@ def run_wired_script(
     # A one-off `code` argument has no file of its own, so it is written next to
     # the workspace-resolved script when there is one and to a temp file
     # otherwise -- running a file (rather than piping to `python -`) keeps
-    # tracebacks pointing at real line numbers.
+    # tracebacks pointing at real line numbers. The temp file is removed after
+    # the run; it used to land in the server's own working directory and pile up.
     workspace_id = _ambient(ctx, _META_KEY_WORKSPACE_ID)
+    inline_dir: Path | None = None
     if script_path:
         script_file = Path(script_path)
     else:
         # _working_dir falls back to a script file's parent, so give it a
         # file-shaped candidate rather than the cwd directory itself.
-        cwd = _working_dir(workspace_id, Path.cwd() / "inline.py")
-        script_file = cwd / f"inline-{code_sha256[:12]}.py"
+        run_dir = _working_dir(workspace_id, Path.cwd() / "inline.py")
         try:
+            if run_dir == Path.cwd():
+                inline_dir = Path(tempfile.mkdtemp(prefix=".asaree-inline-"))
+            script_file = (inline_dir or run_dir) / f"inline-{code_sha256[:12]}.py"
             script_file.write_text(source)
         except OSError as e:
-            return json.dumps(
-                {
-                    "error": f"could not write the inline script to {script_file}: {e}",
-                    "code_sha256": code_sha256,
-                }
-            )
+            if inline_dir is not None:
+                shutil.rmtree(inline_dir, ignore_errors=True)
+            return json.dumps({"error": f"could not write the inline script: {e}", "code_sha256": code_sha256})
 
     env = {k: os.environ[k] for k in _ENV_PASSTHROUGH if k in os.environ}
     if not workspace_id:
@@ -405,7 +407,9 @@ def run_wired_script(
     # printed -- the whole value of a partial result is that it survives.
     env["PYTHONUNBUFFERED"] = "1"
     result: dict[str, Any] = {"code_sha256": code_sha256, "script": script_file.name}
-    cwd = _working_dir(workspace_id, script_file)
+    # Only the script file moved to the temp dir; it still runs where it always
+    # did, so a one-off that writes a file for its next call keeps working.
+    cwd = Path.cwd() if inline_dir is not None else _working_dir(workspace_id, script_file)
     manifest = _runtime_manifest(ctx, workspace_id)
     # Preserve the invoking Agent's private workspace cwd for ordinary scripts.
     # The isolated legacy view is only needed when the source expects the old
@@ -422,6 +426,8 @@ def run_wired_script(
             cwd = compatibility_dir
             (cwd / "state.json").write_text(json.dumps(legacy_state), encoding="utf-8")
         except OSError as e:
+            if inline_dir is not None:
+                shutil.rmtree(inline_dir, ignore_errors=True)
             return json.dumps({**result, "error": f"could not prepare the unsplit dataset view: {e}"})
     try:
         with tempfile.TemporaryDirectory(prefix=".asaree-script-context-", dir=cwd) as context_dir:
@@ -460,6 +466,8 @@ def run_wired_script(
                 compatibility_dir.rmdir()  # succeeds only when the script left no artifacts
             except OSError:
                 pass
+        if inline_dir is not None:
+            shutil.rmtree(inline_dir, ignore_errors=True)
 
     result["exit_code"] = completed.returncode
     result["stdout"] = _clip(completed.stdout, _STDOUT_CHARS)

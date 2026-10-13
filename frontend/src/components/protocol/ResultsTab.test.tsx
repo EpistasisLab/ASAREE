@@ -1,374 +1,142 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { experimentsApi } from '@/api/client'
-import type { Experiment, ExperimentRunResults } from '@/types/experiments'
+import type { AttemptDetail, ExecutionCell, ExecutionSlot, ExecutionSummary } from '@/types/executionResults'
+import type { Experiment } from '@/types/experiments'
 import { ResultsInspectorPanel, ResultsTab } from './ResultsTab'
 
-vi.mock('@/api/client', async (importOriginal) => {
+vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
-  return { ...actual, experimentsApi: { ...actual.experimentsApi, getRunResults: vi.fn() } }
+  return { ...actual, experimentsApi: { ...actual.experimentsApi,
+    getExecutionSummary: vi.fn(), listExecutionCells: vi.fn(), listExecutions: vi.fn(),
+    listExecutionAttempts: vi.fn(), getExecutionAttempt: vi.fn(), getRunResults: vi.fn(),
+  } }
 })
+vi.mock('./NodeRunOutputPanel', () => ({ ReceivedPromptPanel: () => null, RunStepTrace: () => null, UnresolvedReferencesNote: () => null }))
 
-function renderWithQuery(ui: React.ReactNode) {
+const experiment = { id: 'experiment', name: 'Measurements', design_spec: { metrics: [] } } as unknown as Experiment
+const summary: ExecutionSummary = {
+  scope_key: 'scope', unit: 'replicate', ready: true, protocol_id: 'protocol', protocol_revision_id: 'v1', design_revision_id: 'design',
+  generation: 1, change_id: 1, refreshing: false, updated_at: '', counts: { completed: 15786 }, total: 15786,
+  has_active: false, design_spec: null, metric_types: { duration_seconds: 'number' }, metric_aggregations: { duration_seconds: 'mean' },
+  metric_directions: { duration_seconds: 'minimize' }, primary_metric: 'duration_seconds', primary_metric_direction: 'minimize',
+}
+const cell: ExecutionCell = { cell_id: 'cell-1', cell_label: 'model=a', factor_values: { model: 'a' },
+  replicate_count: 15786, total: 15786, counts: { completed: 15786 }, metric_values: { duration_seconds: 65 } }
+const slot: ExecutionSlot = { slot_id: 'slot-1', cell_id: 'cell-1', cell_label: 'model=a', factor_values: { model: 'a' },
+  replicate_id: 'parent-1', replicate_label: 'replicate-1', replicate_number: 1, row_result_id: null, row_index: null,
+  dataset_id: null, raw_sha256: null, run_id: 'run-1', status: 'completed', updated_at: '', error: null, result: {}, usage: null }
+const detail: AttemptDetail = { run_id: 'run-1', status: 'completed', error: null, started_at: '', completed_at: '',
+  protocol_revision_id: 'v1', dataset_row: null, node_runs: {}, node_labels: {},
+  usage: { cost_usd: 0.0123, total_tokens: 200, input_tokens: 100, output_tokens: 100, duration_seconds: 65, agent_run_count: 1 },
+  attempt_result: { measurement: { observations: [], artifacts: [] } } }
+
+function mount(ui: React.ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+  return { ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>), client }
 }
+beforeEach(() => {
+  vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue(summary)
+  vi.mocked(experimentsApi.listExecutionCells).mockResolvedValue({ items: [cell], next_cursor: null })
+  vi.mocked(experimentsApi.listExecutions).mockResolvedValue({ items: [slot], next_cursor: null })
+  vi.mocked(experimentsApi.listExecutionAttempts).mockResolvedValue({ slot, items: [{ run_id: 'run-1', status: 'completed',
+    created_at: '', completed_at: '', error: null, current: true, result: {}, usage: null }], next_cursor: null })
+  vi.mocked(experimentsApi.getExecutionAttempt).mockResolvedValue(detail)
+})
+afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
 
-const overview = {
-  total_replicates: 1,
-  completed_replicates: 1,
-  running_replicates: 0,
-  queued_replicates: 0,
-  failed_replicates: 0,
-  not_started_replicates: 0,
-  obsolete_replicates: 0,
-  total_cost_usd: null,
-  total_input_tokens: null,
-  total_output_tokens: null,
-  total_tokens: null,
-  total_duration_seconds: null,
-  agent_run_count: 0,
-  reported_usage_count: 0,
-  reported_cost_count: 0,
-}
+describe('bounded Results reads', () => {
+  it('renders cells independently of summary preparation and fetches records only on expansion', async () => {
+    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, ready: false })
+    mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
+    expect(await screen.findByText(/Preparing the version summary/)).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'View results' })).toBeInTheDocument()
+    expect(experimentsApi.listExecutions).not.toHaveBeenCalled()
+    expect(experimentsApi.getRunResults).not.toHaveBeenCalled()
+    expect(experimentsApi.getExecutionAttempt).not.toHaveBeenCalled()
+  })
 
-const experiment = {
-  id: 'experiment-1',
-  name: 'Measurement UX',
-  design_spec: { metrics: [] },
-} as unknown as Experiment
-
-function orderedMetricsFixture() {
-  const orderedExperiment = {
-    ...experiment,
-    design_spec: {
-      metrics: [
-        { id: 'clarity', name: 'Clarity', kind: 'custom', valueType: 'number', direction: 'maximize', primary: false },
-        { id: 'safety', name: 'Safety', kind: 'custom', valueType: 'number', direction: 'maximize', primary: false },
-      ],
-    },
-    measurement_plan: {
-      metrics: [
-        { id: 'safety', name: 'Safety', value_type: 'number', direction: 'maximize', aggregation: 'mean', primary: false },
-        { id: 'clarity', name: 'Clarity', value_type: 'number', direction: 'maximize', aggregation: 'mean', primary: false },
-      ],
-      producers: [],
-      inputs: [],
-    },
-  } as unknown as Experiment
-  const results = {
-    overview,
-    metric_keys: ['Clarity', 'Safety'],
-    metric_types: { Clarity: 'number', Safety: 'number' },
-    metric_aggregations: { Clarity: 'mean', Safety: 'mean' },
-    metric_directions: { Clarity: 'maximize', Safety: 'maximize' },
-    primary_metric: null,
-    primary_metric_direction: null,
-    cells: [{
-      cell_label: 'model_a', factor_values: { model: 'a' }, replicate_count: 1,
-      completed_count: 1, current_completed_count: 1, obsolete_count: 0,
-      metric_means: { Clarity: 0.7, Safety: 0.9 }, metric_counts: { Clarity: 1, Safety: 1 },
-      cost_usd: null, total_tokens: null, duration_seconds: null,
-    }],
-    replicates: [],
-  } satisfies ExperimentRunResults
-  return { orderedExperiment, results }
-}
-
-describe('results measurement states', () => {
-  it('uses the shared maximize controls for whole-dataset results', async () => {
-    const { orderedExperiment, results } = orderedMetricsFixture()
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue(results)
-    renderWithQuery(<ResultsTab experimentId="experiment-1" experimentName="Measurement UX" experiment={orderedExperiment} onSelectResult={vi.fn()} />)
+  it('uses server metric ordering and preserves the shared maximize controls', async () => {
+    mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Maximize Results' }))
     expect(document.body.style.overflow).toBe('hidden')
-    expect(screen.getByRole('button', { name: 'Restore Results' })).toBeInTheDocument()
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(document.body.style.overflow).not.toBe('hidden')
     expect(screen.getByRole('button', { name: 'Download CSV' })).toBeInTheDocument()
+    await screen.findByRole('combobox', { name: 'Choose comparison metric' })
+    await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenCalledWith('experiment', expect.anything(),
+      expect.objectContaining({ metric: 'duration_seconds', direction: 'minimize' }), expect.any(AbortSignal)))
   })
 
-  it('shows explicit units for cost and duration in an individual replicate result', async () => {
-    const replicate = {
-      replicate_label: 'replicate-1', replicate_number: 1, cell_label: 'model_a', factor_values: { model: 'a' },
-      metric_values: { cost_usd: 0.0123, duration_seconds: 65 }, status: 'completed' as const, obsolete: false,
-      error: null, run_id: 'run-1', protocol_revision_id: 'revision-1', updated_at: '2026-01-01T00:00:00Z',
-      duration_seconds: 65, node_runs: [], input_tokens: null, output_tokens: null, total_tokens: null, cost_usd: 0.0123,
-      agent_run_count: 0, reported_usage_count: 0, reported_cost_count: 0, metric_evaluation: null,
-      metric_observations: [], evaluation_artifacts: [], obsolete_runs: [], superseded_runs: [],
-    }
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue({
-      overview,
-      metric_keys: ['cost_usd', 'duration_seconds'],
-      metric_types: { cost_usd: 'number', duration_seconds: 'number' },
-      metric_aggregations: { cost_usd: 'sum', duration_seconds: 'sum' },
-      metric_directions: { cost_usd: 'minimize', duration_seconds: 'minimize' },
-      primary_metric: null,
-      primary_metric_direction: null,
-      cells: [],
-      replicates: [replicate],
-    } satisfies ExperimentRunResults)
+  it('paginates execution records on the server', async () => {
+    vi.mocked(experimentsApi.listExecutions).mockImplementation(async (_id, _scope, params) =>
+      params?.cursor ? { items: [{ ...slot, slot_id: 'slot-2', replicate_number: 2 }], next_cursor: null }
+        : { items: [slot], next_cursor: 'page-2' })
+    mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
+    await screen.findByText('Replicate 1')
+    const next = await screen.findAllByRole('button', { name: 'Next' })
+    fireEvent.click(next.find(button => !button.hasAttribute('disabled'))!)
+    expect(await screen.findByText('Replicate 2')).toBeInTheDocument()
+    expect(experimentsApi.listExecutions).toHaveBeenCalledWith('experiment', expect.anything(),
+      { cell_id: 'cell-1', cursor: 'page-2' }, expect.any(AbortSignal))
+  })
 
-    renderWithQuery(<ResultsInspectorPanel experimentId="experiment-1" experiment={experiment} selection={{ type: 'replicate', replicateLabel: 'replicate-1' }} onClose={vi.fn()} />)
+  it('labels per-row executions by source row and only inspects attempted slots', async () => {
+    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, unit: 'row', primary_metric: null })
+    vi.mocked(experimentsApi.listExecutions).mockResolvedValue({ items: [
+      { ...slot, row_result_id: 'slot-1', row_index: 0 },
+      { ...slot, slot_id: 'unplanned:parent-1:1', replicate_number: 2, row_index: 1, run_id: null, status: 'not_started' },
+    ], next_cursor: null })
+    const select = vi.fn()
+    mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={select} />)
+    fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
+    expect(await screen.findByText(/Source row 1/)).toBeInTheDocument()
+    expect(screen.getByText(/Source row 2/).closest('button')).toBeDisabled()
+    fireEvent.click(screen.getByText(/Source row 1/).closest('button')!)
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ type: 'execution', slotId: 'slot-1' }))
+  })
 
+  it('fetches the selected attempt independently of the experiment list', async () => {
+    mount(<ResultsInspectorPanel experimentId="experiment" experiment={experiment}
+      selection={{ type: 'execution', slotId: 'slot-1', scope: { protocol_revision_id: 'v1' } }} onClose={vi.fn()} />)
     expect(await screen.findByText('$0.01')).toBeInTheDocument()
     expect(screen.getByText('1.1 min')).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Outcome' })).not.toBeInTheDocument()
-    const usage = screen.getByRole('heading', { name: 'Usage' }).parentElement!
-    expect(within(usage).getAllByText(/^(Estimated cost|Duration|Total tokens|Agent calls)$/).map((label) => label.textContent)).toEqual([
-      'Estimated cost',
-      'Duration',
-      'Total tokens',
-      'Agent calls',
-    ])
+    expect(experimentsApi.getExecutionAttempt).toHaveBeenCalledWith('experiment', 'run-1',
+      { protocol_revision_id: 'v1' }, expect.any(AbortSignal))
+    expect(experimentsApi.getRunResults).not.toHaveBeenCalled()
+    expect(experimentsApi.listExecutions).not.toHaveBeenCalled()
   })
 
-  it('shows a measured observation once in Outcome and keeps its provenance there', async () => {
-    const producer = { binding_id: 'judge', producer_id: 'asaree.judge', kind: 'reported' as const, version: '1' }
-    const replicate = {
-      replicate_label: 'replicate-1', replicate_number: 1, cell_label: 'model_a', factor_values: { model: 'a' },
-      metric_values: { Quality: 0.9 }, status: 'completed' as const, obsolete: false, error: null, run_id: 'run-1',
-      protocol_revision_id: 'revision-1', updated_at: '2026-01-01T00:00:00Z', duration_seconds: null,
-      node_runs: [], input_tokens: null, output_tokens: null, total_tokens: null, cost_usd: null,
-      agent_run_count: 0, reported_usage_count: 0, reported_cost_count: 0, metric_evaluation: null,
-      metric_observations: [{ metric_id: 'quality', metric_name: 'Quality', value_type: 'number' as const, status: 'measured' as const, value: 0.9, error: null, attempt_id: 'run-1', producer, input_provenance: {} }],
-      evaluation_artifacts: [], obsolete_runs: [], superseded_runs: [],
-    }
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue({
-      overview,
-      metric_keys: ['Quality'], metric_types: { Quality: 'number' }, metric_aggregations: { Quality: 'mean' },
-      metric_directions: { Quality: 'maximize' }, primary_metric: null, primary_metric_direction: null,
-      cells: [], replicates: [replicate],
-    } satisfies ExperimentRunResults)
-
-    renderWithQuery(<ResultsInspectorPanel experimentId="experiment-1" experiment={experiment} selection={{ type: 'replicate', replicateLabel: 'replicate-1' }} onClose={vi.fn()} />)
-
-    expect(await screen.findByRole('heading', { name: 'Outcome' })).toBeInTheDocument()
-    expect(screen.getAllByText('0.9')).toHaveLength(1)
-    expect(screen.getByText('asaree.judge · v1')).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Measurement observations' })).not.toBeInTheDocument()
+  it('preserves measured-null versus unavailable reported values and provenance', async () => {
+    vi.mocked(experimentsApi.getExecutionAttempt).mockResolvedValue({ ...detail, attempt_result: { measurement: { observations: [
+      { metric_id: 'report', metric_name: 'Report', status: 'measured', value: null, error: null, attempt_id: 'run-1',
+        producer: { binding_id: 'reported', producer_id: 'asaree.agent_output', kind: 'reported', version: '1' }, input_provenance: {} },
+      { metric_id: 'absent', metric_name: 'Absent', status: 'unavailable', value: null, error: 'Agent did not complete', attempt_id: 'run-1',
+        producer: { binding_id: 'reported', producer_id: 'asaree.agent_output', kind: 'reported', version: '1' }, input_provenance: {} },
+    ], artifacts: [] } } })
+    mount(<ResultsInspectorPanel experimentId="experiment" experiment={experiment} selection={{ type: 'execution', slotId: 'slot-1', scope: {} }} onClose={vi.fn()} />)
+    expect(await screen.findByText('Report')).toBeInTheDocument()
+    expect(screen.getByText('null')).toBeInTheDocument()
+    expect(screen.getByText('Agent did not complete')).toBeInTheDocument()
+    expect(screen.getAllByText('asaree.agent_output · v1')).toHaveLength(2)
   })
 
-  it('presents metrics in the measurement-plan order declared by the designer', async () => {
-    const { orderedExperiment, results } = orderedMetricsFixture()
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue(results)
-
-    renderWithQuery(<ResultsTab experimentId="experiment-1" experimentName="Measurement UX" experiment={orderedExperiment} onSelectResult={vi.fn()} />)
-
-    expect(await screen.findByRole('combobox', { name: 'Choose comparison metric' })).toHaveTextContent('Safety')
-    expect(screen.getAllByText(/Safety/).length).toBeGreaterThan(0)
+  it('stops polling settled experiments', async () => {
+    vi.useFakeTimers()
+    mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+    const calls = vi.mocked(experimentsApi.getExecutionSummary).mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000) })
+    expect(experimentsApi.getExecutionSummary).toHaveBeenCalledTimes(calls)
   })
 
-  it('uses measurement-plan order in the separate cell result details', async () => {
-    const { orderedExperiment, results } = orderedMetricsFixture()
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue(results)
-
-    renderWithQuery(<ResultsInspectorPanel experimentId="experiment-1" experiment={orderedExperiment} selection={{ type: 'cell', cellLabel: 'model_a' }} onClose={vi.fn()} />)
-
-    const summary = await screen.findByRole('region', { name: 'Cell result summary' })
-    expect(within(summary).getAllByText(/^(Safety|Clarity) · average$/).map((label) => label.textContent)).toEqual([
-      'Safety · average',
-      'Clarity · average',
-    ])
-  })
-
-  it('shows condition-level cost and duration once under Usage', async () => {
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue({
-      overview,
-      metric_keys: ['cost_usd', 'duration_seconds'],
-      metric_types: { cost_usd: 'number', duration_seconds: 'number' },
-      metric_aggregations: { cost_usd: 'sum', duration_seconds: 'sum' },
-      metric_directions: { cost_usd: 'minimize', duration_seconds: 'minimize' },
-      primary_metric: null,
-      primary_metric_direction: null,
-      cells: [{
-        cell_label: 'model_a', factor_values: { model: 'a' }, replicate_count: 2, completed_count: 2,
-        current_completed_count: 2, obsolete_count: 0, metric_means: { cost_usd: 0.0123, duration_seconds: 65 },
-        metric_counts: { cost_usd: 2, duration_seconds: 2 }, cost_usd: 0.0123, total_tokens: null, duration_seconds: 65,
-      }],
-      replicates: [],
-    } satisfies ExperimentRunResults)
-
-    renderWithQuery(<ResultsInspectorPanel experimentId="experiment-1" experiment={experiment} selection={{ type: 'cell', cellLabel: 'model_a' }} onClose={vi.fn()} />)
-
-    expect(await screen.findByText('$0.01')).toBeInTheDocument()
-    expect(screen.getByText('1.1 min')).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Outcome metrics' })).not.toBeInTheDocument()
-  })
-
-  it('ranks measured minimize values before missing values without skipping rank one', async () => {
-    const results = {
-      overview: { ...overview, total_replicates: 2, completed_replicates: 2 },
-      metric_keys: ['loss'],
-      metric_types: { loss: 'number' },
-      metric_aggregations: { loss: 'mean' },
-      metric_directions: { loss: 'minimize' },
-      primary_metric: 'loss',
-      primary_metric_direction: 'minimize',
-      cells: [
-        { cell_label: 'missing', factor_values: { model: 'missing' }, replicate_count: 1, completed_count: 1, current_completed_count: 1, obsolete_count: 0, metric_means: {} as Record<string, number>, metric_counts: {} as Record<string, number>, cost_usd: null, total_tokens: null, duration_seconds: null },
-        { cell_label: 'measured', factor_values: { model: 'measured' }, replicate_count: 1, completed_count: 1, current_completed_count: 1, obsolete_count: 0, metric_means: { loss: 0.2 }, metric_counts: { loss: 1 }, cost_usd: null, total_tokens: null, duration_seconds: null },
-      ],
-      replicates: [],
-    } satisfies ExperimentRunResults
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue(results)
-
-    renderWithQuery(<ResultsTab experimentId="experiment-1" experimentName="Measurement UX" experiment={experiment} onSelectResult={vi.fn()} />)
-
-    const rows = await screen.findAllByRole('row')
-    expect(rows[1]).toHaveTextContent('model: measured')
-    expect(rows[1].firstElementChild).toHaveTextContent('1')
-    expect(rows[2]).toHaveTextContent('No measured observations')
-  })
-
-  it('summarizes unavailable condition observations instead of collapsing them into a blank', async () => {
-    const producer = { binding_id: 'python', producer_id: 'asaree.python_script', kind: 'reported' as const, version: '1' }
-    const results = {
-      overview,
-      metric_keys: ['ROC-AUC'],
-      metric_types: { 'ROC-AUC': 'number' },
-      metric_aggregations: { 'ROC-AUC': 'mean' },
-      metric_directions: { 'ROC-AUC': 'maximize' },
-      primary_metric: 'ROC-AUC',
-      primary_metric_direction: 'maximize',
-      cells: [{ cell_label: 'model_a', factor_values: { model: 'a' }, replicate_count: 2, completed_count: 2, current_completed_count: 2, obsolete_count: 0, metric_means: { 'ROC-AUC': 0.8 }, metric_counts: { 'ROC-AUC': 1 }, cost_usd: null, total_tokens: null, duration_seconds: null }],
-      replicates: [{
-        replicate_label: 'replicate-1', replicate_number: 1, cell_label: 'model_a', factor_values: { model: 'a' }, metric_values: {}, status: 'completed' as const, obsolete: false, error: null, run_id: 'run-1', protocol_revision_id: 'revision-1', updated_at: '2026-01-01T00:00:00Z', duration_seconds: null, node_runs: [], input_tokens: null, output_tokens: null, total_tokens: null, cost_usd: null, agent_run_count: 0, reported_usage_count: 0, reported_cost_count: 0, metric_evaluation: null,
-        metric_observations: [{ metric_id: 'auc', metric_name: 'ROC-AUC', value_type: 'number' as const, status: 'unavailable' as const, value: null, error: 'Probability output is missing.', attempt_id: 'run-1', producer, input_provenance: {} }],
-        evaluation_artifacts: [], obsolete_runs: [], superseded_runs: [],
-      }],
-    } satisfies ExperimentRunResults
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue(results)
-
-    renderWithQuery(<ResultsTab experimentId="experiment-1" experimentName="Measurement UX" experiment={experiment} onSelectResult={vi.fn()} />)
-
-    expect(await screen.findByText('Unavailable (1)')).toBeInTheDocument()
-  })
-
-  it('keeps a neutral scalar comparable without declaring a winner', async () => {
-    const results = {
-      overview,
-      metric_keys: ['variance'],
-      metric_types: { variance: 'number' },
-      metric_aggregations: { variance: 'mean' },
-      metric_directions: { variance: 'neutral' },
-      primary_metric: null,
-      primary_metric_direction: null,
-      cells: [{
-        cell_label: 'model_a', factor_values: { model: 'a' }, replicate_count: 1,
-        completed_count: 1, current_completed_count: 1, obsolete_count: 0,
-        metric_means: { variance: 0.2 }, metric_counts: { variance: 1 },
-        cost_usd: null, total_tokens: null, duration_seconds: null,
-      }],
-      replicates: [],
-    } satisfies ExperimentRunResults
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue(results)
-
-    renderWithQuery(<ResultsTab experimentId="experiment-1" experimentName="Measurement UX" experiment={experiment} onSelectResult={vi.fn()} />)
-
-    expect(await screen.findByText('Comparison only')).toBeInTheDocument()
-    expect(screen.getByText(/No primary metric is declared/)).toBeInTheDocument()
-    expect(screen.queryByText('Best current result')).not.toBeInTheDocument()
-    expect(screen.getAllByText('0.2').length).toBeGreaterThan(0)
-  })
-
-  it('compares directional metrics without ranking or naming a winner when no primary is declared', async () => {
-    const results = {
-      overview: { ...overview, total_replicates: 2, completed_replicates: 2 },
-      metric_keys: ['quality'],
-      metric_types: { quality: 'number' },
-      metric_aggregations: { quality: 'mean' },
-      metric_directions: { quality: 'maximize' },
-      primary_metric: null,
-      primary_metric_direction: null,
-      cells: [
-        { cell_label: 'b', factor_values: { model: 'b' }, replicate_count: 1, completed_count: 1, current_completed_count: 1, obsolete_count: 0, metric_means: { quality: 0.9 }, metric_counts: { quality: 1 }, cost_usd: null, total_tokens: null, duration_seconds: null },
-        { cell_label: 'a', factor_values: { model: 'a' }, replicate_count: 1, completed_count: 1, current_completed_count: 1, obsolete_count: 0, metric_means: { quality: 0.2 }, metric_counts: { quality: 1 }, cost_usd: null, total_tokens: null, duration_seconds: null },
-      ],
-      replicates: [],
-    } satisfies ExperimentRunResults
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue(results)
-
-    renderWithQuery(<ResultsTab experimentId="experiment-1" experimentName="Measurement UX" experiment={experiment} onSelectResult={vi.fn()} />)
-
-    expect(await screen.findByText('Comparison only')).toBeInTheDocument()
-    expect(screen.getByText(/No primary metric is declared/)).toBeInTheDocument()
-    expect(screen.queryByText('Best current result')).not.toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /Cell comparison/ })).toBeInTheDocument()
-    const rows = screen.getAllByRole('row')
-    expect(rows[1]).toHaveTextContent('model: a')
-    expect(rows[1].firstElementChild).toHaveTextContent('—')
-  })
-
-  it('does not rank an inspected metric that is not the declared primary', async () => {
-    const user = userEvent.setup()
-    const results = {
-      overview: { ...overview, total_replicates: 2, completed_replicates: 2 },
-      metric_keys: ['loss', 'quality'],
-      metric_types: { loss: 'number', quality: 'number' },
-      metric_aggregations: { loss: 'mean', quality: 'mean' },
-      metric_directions: { loss: 'minimize', quality: 'maximize' },
-      primary_metric: 'loss',
-      primary_metric_direction: 'minimize',
-      cells: [
-        { cell_label: 'a', factor_values: { model: 'a' }, replicate_count: 1, completed_count: 1, current_completed_count: 1, obsolete_count: 0, metric_means: { loss: 0.8, quality: 0.9 }, metric_counts: { loss: 1, quality: 1 }, cost_usd: null, total_tokens: null, duration_seconds: null },
-        { cell_label: 'b', factor_values: { model: 'b' }, replicate_count: 1, completed_count: 1, current_completed_count: 1, obsolete_count: 0, metric_means: { loss: 0.2, quality: 0.2 }, metric_counts: { loss: 1, quality: 1 }, cost_usd: null, total_tokens: null, duration_seconds: null },
-      ],
-      replicates: [],
-    } satisfies ExperimentRunResults
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue(results)
-
-    renderWithQuery(<ResultsTab experimentId="experiment-1" experimentName="Measurement UX" experiment={experiment} onSelectResult={vi.fn()} />)
-    await screen.findByText('Best current result')
-    await user.click(screen.getByRole('combobox', { name: 'Choose comparison metric' }))
-    await user.click(screen.getByRole('option', { name: 'quality' }))
-
-    expect(screen.getByText('Comparison only')).toBeInTheDocument()
-    expect(screen.getByText(/quality is not the declared primary metric/)).toBeInTheDocument()
-    expect(screen.queryByText('Best current result')).not.toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /Cell comparison/ })).toBeInTheDocument()
-  })
-
-  it('renders unavailable, failed, and not-applicable observations plus diagnostic artifacts', async () => {
-    const producer = { binding_id: 'python', producer_id: 'asaree.python_script', kind: 'reported' as const, version: '1' }
-    const replicate = {
-      replicate_label: 'replicate-1', replicate_number: 1, cell_label: 'model_a', factor_values: { model: 'a' },
-      metric_values: {}, status: 'completed' as const, obsolete: false, error: null, run_id: 'run-1',
-      protocol_revision_id: 'revision-1', updated_at: '2026-01-01T00:00:00Z', duration_seconds: 1,
-      node_runs: [], input_tokens: null, output_tokens: null, total_tokens: null, cost_usd: null,
-      agent_run_count: 0, reported_usage_count: 0, reported_cost_count: 0, metric_evaluation: null,
-      metric_observations: [
-        { metric_id: 'auc', metric_name: 'ROC-AUC', value_type: 'number' as const, status: 'unavailable' as const, value: null, error: 'Probability output is missing.', attempt_id: 'run-1', producer, input_provenance: {} },
-        { metric_id: 'loss', metric_name: 'Log loss', value_type: 'number' as const, status: 'failed' as const, value: null, error: 'Evaluator crashed.', attempt_id: 'run-1', producer, input_provenance: {} },
-        { metric_id: 'mcc', metric_name: 'MCC', value_type: 'number' as const, status: 'not_applicable' as const, value: null, error: 'Regression task.', attempt_id: 'run-1', producer, input_provenance: {} },
-      ],
-      evaluation_artifacts: [
-        { artifact_key: 'confusion_matrix', kind: 'confusion_matrix', payload: { labels: ['no', 'yes'], matrix: [[8, 1], [2, 9]] }, attempt_id: 'run-1', producer, input_provenance: {} },
-        { artifact_key: 'calibration', kind: 'calibration', payload: { probability: [0.2], observed: [0.1] }, attempt_id: 'run-1', producer, input_provenance: {} },
-        { artifact_key: 'per_class', kind: 'per_class', payload: [{ label: 'yes', precision: 0.9, recall: 0.82, f1: 0.86, support: 11 }], attempt_id: 'run-1', producer, input_provenance: {} },
-      ],
-      obsolete_runs: [], superseded_runs: [],
-    }
-    const results = {
-      overview,
-      metric_keys: [], metric_types: {}, metric_aggregations: {}, metric_directions: {},
-      primary_metric: null, primary_metric_direction: null,
-      cells: [], replicates: [replicate],
-    } satisfies ExperimentRunResults
-    vi.mocked(experimentsApi.getRunResults).mockResolvedValue(results)
-
-    renderWithQuery(<ResultsInspectorPanel experimentId="experiment-1" experiment={experiment} selection={{ type: 'replicate', replicateLabel: 'replicate-1' }} onClose={vi.fn()} />)
-
-    expect(await screen.findByText('Unavailable')).toBeInTheDocument()
-    expect(screen.getByText('Probability output is missing.')).toBeInTheDocument()
-    expect(screen.getByText('Failed')).toBeInTheDocument()
-    expect(screen.getByText('Evaluator crashed.')).toBeInTheDocument()
-    expect(screen.getByText('Not applicable')).toBeInTheDocument()
-    expect(screen.getByText('Regression task.')).toBeInTheDocument()
-    expect(screen.getByText('Confusion matrix')).toBeInTheDocument()
-    expect(screen.getByText('Calibration')).toBeInTheDocument()
-    expect(screen.getByText('Per-class report')).toBeInTheDocument()
+  it('aborts abandoned list requests', async () => {
+    vi.mocked(experimentsApi.listExecutionCells).mockImplementation(() => new Promise(() => {}))
+    const view = mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
+    const signal = vi.mocked(experimentsApi.listExecutionCells).mock.calls[0][3]!
+    view.unmount()
+    expect(signal.aborted).toBe(true)
   })
 })

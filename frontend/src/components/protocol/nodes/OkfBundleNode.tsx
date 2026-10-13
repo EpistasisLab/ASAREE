@@ -3,6 +3,7 @@ import { useReactFlow, type NodeProps } from '@xyflow/react'
 import { BookMarked } from 'lucide-react'
 import type { OkfBundleNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 import { CircleNode } from './CircleNode'
 
 // Names one registered OKF bundle -- a directory of Markdown concepts on the
@@ -16,7 +17,9 @@ const ACCENT = nodeAccent('okf_bundle')
 
 export function OkfBundleNode({ id, data, selected }: NodeProps & { data: OkfBundleNodeData }) {
   const { updateNodeData } = useReactFlow()
-  const enabled = data.config?.enabled ?? true
+  const { requestKnowledgeFactor, experimentLocked } = useProtocolCanvasActions()
+  const controlled = !!data.knowledgeFactorControlled
+  const enabled = controlled || (data.config?.enabled ?? true)
   // server_name, not bundle_id, decides whether this node does anything: it's
   // the field the run namespaces tools against, so a node without it silently
   // contributes nothing.
@@ -37,10 +40,11 @@ export function OkfBundleNode({ id, data, selected }: NodeProps & { data: OkfBun
       handleId="knowledge"
       handlePosition="bottom"
       warning={warning}
-      factorCount={boundFactorCount(data)}
+      factorCount={controlled ? 1 : boundFactorCount(data)}
+      onMakeFactor={!experimentLocked && requestKnowledgeFactor ? () => requestKnowledgeFactor(id) : undefined}
       dimmed={!enabled}
       isActive={enabled}
-      onToggleActive={() => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
+      onToggleActive={controlled ? undefined : () => updateNodeData(id, { config: { ...data.config, enabled: !enabled } })}
     />
   )
 }

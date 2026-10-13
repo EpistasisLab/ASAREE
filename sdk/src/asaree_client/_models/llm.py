@@ -9,12 +9,16 @@ class LLMSetting(BaseModel):
     azure_project_endpoint: str | None = None
 
 
-class LLMModelInfo(BaseModel):
-    id: str
-    label: str | None
+class LLMModelCapabilities(BaseModel):
     supports_temperature: bool
     supports_effort: bool
     effort_levels: list[str]
+    default_effort: str | None = None
+
+
+class LLMModelInfo(LLMModelCapabilities):
+    id: str
+    label: str | None
     supports_tool_calling: bool | None
 
 
@@ -29,3 +33,4 @@ class LLMConnectionCheck(BaseModel):
     status: str
     detail: str
     endpoint: str | None
+    models: list[LLMModelInfo] | None = None

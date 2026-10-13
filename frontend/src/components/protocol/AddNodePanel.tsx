@@ -33,7 +33,7 @@ type NodeCategory = (typeof NODE_CATEGORIES)[number]['id']
 // allowedTypes, IS that picker.
 const NODE_CATALOG = [
   { type: 'agent', category: 'agents', label: 'Agent', description: 'An LLM agent stage in the pipeline', icon: Bot },
-  { type: 'sub_agent', category: 'agents', label: 'Sub-Agent', description: 'A delegated worker callable by one parent Agent', icon: Bot },
+  { type: 'sub_agent', category: 'agents', label: 'Sub-Agent', description: 'A delegated worker callable by connected Agents', icon: Bot },
   // Not a node type -- picking this opens the server browser
   // (McpServerBrowserPanel), and the node gets created from whichever
   // server is chosen there. It replaced a plain "MCP Tool" entry that made

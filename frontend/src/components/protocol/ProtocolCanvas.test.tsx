@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactFlowProvider } from '@xyflow/react'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { datasetsApi, experimentsApi, protocolsApi } from '@/api/client'
+import { datasetsApi, experimentsApi, mcpServersApi, protocolsApi, skillsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
+import type { Experiment } from '@/types/experiments'
 import {
   defaultAgentNodeData,
   defaultAnthropicModelNodeData,
@@ -15,6 +16,7 @@ import {
   defaultOutputParserNodeData,
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
+  type AgentNodeData,
   type ProtocolGraph,
   type ProtocolRun,
   type TestRun,
@@ -128,7 +130,7 @@ describe('ProtocolCanvas connector adds', () => {
       unobserve() {}
       disconnect() {}
     })
-    vi.spyOn(protocolsApi, 'listRuns').mockResolvedValue([])
+    vi.spyOn(protocolsApi, 'listRunHeads').mockResolvedValue([])
     vi.spyOn(protocolsApi, 'update').mockImplementation(async (_id, { graph }) => ({
       id: 'protocol-1',
       name: 'Protocol',
@@ -141,6 +143,300 @@ describe('ProtocolCanvas connector adds', () => {
       created_at: '',
       updated_at: '',
     }))
+  })
+
+  it('shows the bypass marker on the canvas Agent badge', async () => {
+    const run = protocolRun({
+      status: 'completed',
+      node_runs: { observer: { status: 'completed', bypassed: true, output_text: 'Upstream answer' } },
+    })
+    vi.spyOn(protocolsApi, 'listRunHeads').mockResolvedValue([run])
+    vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
+    renderCanvas({
+      nodes: [{ id: 'observer', type: 'agent', position: { x: 100, y: 100 }, data: defaultAgentNodeData('Observer') }],
+      edges: [],
+    })
+    await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('[data-testid="rf__node-observer"]')
+      expect(node).not.toBeNull()
+      expect(within(node!).getByText('Bypassed')).toBeInTheDocument()
+    })
+  })
+
+  it('shows the bypass marker on a disabled Critic Gate badge', async () => {
+    const run = protocolRun({
+      status: 'completed',
+      node_runs: { gate: { status: 'completed', bypassed: true, approved: null, output_text: 'READY' } },
+    })
+    vi.spyOn(protocolsApi, 'listRunHeads').mockResolvedValue([run])
+    vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
+    renderCanvas({
+      nodes: [{ id: 'gate', type: 'critic_gate', position: { x: 100, y: 100 }, data: defaultCriticGateNodeData('Marker reviewer') }],
+      edges: [],
+    })
+    await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('[data-testid="rf__node-gate"]')
+      expect(node).not.toBeNull()
+      expect(within(node!).getByText('Bypassed')).toBeInTheDocument()
+    })
+  })
+
+  it.each(['sub_agent_selection', 'sub_agent_toggle'] as const)('creates a %s Sub-Agent factor from the node hover menu and preserves connected nodes', async (mode) => {
+    const experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    vi.spyOn(skillsApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        ...['a', 'b'].map((id) => ({ id, type: 'sub_agent', position: { x: 100, y: 0 }, data: { ...defaultAgentNodeData(`Worker ${id}`), active: false } })),
+      ],
+      edges: ['a', 'b'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'sub_agents' })),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
+    expect(makeFactor).not.toBeNull()
+    fireEvent.click(makeFactor!)
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: mode === 'sub_agent_toggle' ? 'All sub-agents on/off' : 'Sub-Agent levels' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Sub-Agents', level_type: mode, levels: mode === 'sub_agent_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'sub_agent_toggle' ? ['All enabled', 'All disabled'] : ['Worker a', 'Worker b'] }] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ sub_agent_selection: 'Writer:Sub-Agents' })
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.sub_agent_factor_mode).toBe(mode)
+      expect(persisted?.nodes.filter((node) => node.type === 'sub_agent')).toHaveLength(2)
+    })
+  })
+
+  it.each(['skill_selection', 'skill_toggle'] as const)('creates a %s skill factor from a shared node and binds every connected Agent', async (mode) => {
+    const experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    vi.spyOn(skillsApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        { id: 'other', type: 'agent', position: { x: 300, y: 200 }, data: defaultAgentNodeData('Other') },
+        ...['a', 'b'].map((id) => ({ id, type: 'skill', position: { x: 100, y: 0 }, data: { label: `Skill ${id}`, config: { skill_id: id, skill_name: `Skill ${id}` } } })),
+      ],
+      edges: ['a', 'b'].flatMap((id) => ['agent', 'other'].map((target) => ({ id: `${id}-${target}`, source: id, target, targetHandle: 'skill' }))),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
+    expect(makeFactor).not.toBeNull()
+    fireEvent.click(makeFactor!)
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: mode === 'skill_toggle' ? 'All skills on/off' : 'Skill levels' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Skills', level_type: mode, levels: mode === 'skill_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'skill_toggle' ? ['All enabled', 'All disabled'] : ['Skill a', 'Skill b'] }] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ skill_selection: 'Writer:Skills' })
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.skill_factor_mode).toBe(mode)
+      expect(persisted?.nodes.find((node) => node.id === 'other')?.data.factor_bindings).toEqual({ skill_selection: 'Writer:Skills' })
+      expect(persisted?.nodes.find((node) => node.id === 'other')?.data.skill_factor_mode).toBe(mode)
+      expect(persisted?.nodes.filter((node) => node.type === 'skill')).toHaveLength(2)
+    })
+  })
+
+  it.each(['tool_selection', 'tool_toggle'] as const)('creates a %s tool factor from the node hover menu and preserves connected nodes', async (mode) => {
+    const experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    vi.spyOn(mcpServersApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        ...['a', 'b'].map((id) => ({ id, type: 'mcp_tool', position: { x: 100, y: 0 }, data: { label: `Tool ${id}`, config: { server_id: id, server_name: `Server ${id}`, tool_names: ['run'] } } })),
+      ],
+      edges: ['a', 'b'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'tool' })),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
+    expect(makeFactor).not.toBeNull()
+    fireEvent.click(makeFactor!)
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: mode === 'tool_toggle' ? 'All tools on/off' : 'Tool levels' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Tools', level_type: mode, levels: mode === 'tool_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'tool_toggle' ? ['All enabled', 'All disabled'] : ['Tool a', 'Tool b'] }] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ tool_selection: 'Writer:Tools' })
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.tool_factor_mode).toBe(mode)
+      expect(persisted?.nodes.filter((node) => node.type === 'mcp_tool')).toHaveLength(2)
+    })
+  })
+
+  it.each(['script_selection', 'script_toggle'] as const)('creates a %s script factor from the node hover menu and preserves connected nodes', async (mode) => {
+    const experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        ...['a', 'b'].map((id) => ({ id, type: 'script', position: { x: 100, y: 0 }, data: { label: `Script ${id}`, config: { name: `Script ${id}`, language: 'python', code: 'print(1)'  } } })),
+      ],
+      edges: ['a', 'b'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'tool' })),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
+    expect(makeFactor).not.toBeNull()
+    fireEvent.click(makeFactor!)
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: mode === 'script_toggle' ? 'All scripts on/off' : 'Script levels' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Scripts', level_type: mode, levels: mode === 'script_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'script_toggle' ? ['All enabled', 'All disabled'] : ['Script a', 'Script b'] }] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ script_selection: 'Writer:Scripts' })
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.script_factor_mode).toBe(mode)
+      expect(persisted?.nodes.filter((node) => node.type === 'script')).toHaveLength(2)
+    })
+  })
+
+  it('creates and removes a whole-pattern factor from the Pattern toolbar, clearing every shared Agent override', async () => {
+    let experiment: Experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockImplementation(async () => experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockImplementation(async (_id, patch) => {
+      experiment = { ...experiment, ...patch }
+      return experiment
+    })
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        { id: 'other', type: 'agent', position: { x: 300, y: 200 }, data: defaultAgentNodeData('Other') },
+        { id: 'pattern', type: 'pattern_reason_act', position: { x: 100, y: 0 }, data: defaultReasonActPatternNodeData() },
+      ],
+      edges: ['agent', 'other'].map((target) => ({ id: `pattern-${target}`, source: 'pattern', target, targetHandle: 'architectural_pattern' })),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const toolbar = () => document.querySelector<HTMLButtonElement>('[data-testid="rf__node-pattern"] button[aria-label="Make experimental factor"]')!
+    fireEvent.click(toolbar())
+    await screen.findByRole('dialog', { name: 'Pattern factor' })
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [expect.objectContaining({ name: 'Reason + Act:Pattern levels', level_type: 'pattern' })] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))!
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ pattern_override: 'Reason + Act:Pattern levels' })
+      expect(persisted.nodes.find((node) => node.id === 'other')?.data.factor_bindings).toEqual({ pattern_override: 'Reason + Act:Pattern levels' })
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.pattern_override).toEqual({ execution_pattern: 'reason_act', pattern_params: { reason_act: graph.nodes.find((node) => node.id === 'pattern')!.data.config } })
+      expect(persisted.nodes.find((node) => node.id === 'pattern')?.data.factor_bindings).toBeUndefined()
+      expect(persisted.edges).toHaveLength(2)
+    })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    fireEvent.click(toolbar())
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove factor' }))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))!
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({})
+      expect(persisted.nodes.find((node) => node.id === 'other')?.data.factor_bindings).toEqual({})
+      expect(persisted.nodes.find((node) => node.id === 'other')?.data.pattern_override).toBeUndefined()
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.pattern_override).toBeUndefined()
+      expect(experiment.design_spec?.factors).toEqual([])
+    })
+  })
+
+  it.each(['dataset_selection', 'dataset_toggle'] as const)('creates a %s dataset factor from the node hover menu and preserves connected nodes', async (mode) => {
+    const experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    vi.spyOn(datasetsApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        ...['a', 'b'].map((id) => ({ id, type: 'dataset', position: { x: 100, y: 0 }, data: { label: `Dataset ${id}`, config: { dataset_id: id, dataset_name: `Dataset ${id}` } } })),
+      ],
+      edges: ['a', 'b'].map((id) => ({ id, source: id, target: 'agent', targetHandle: 'dataset' })),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
+    expect(makeFactor).not.toBeNull()
+    fireEvent.click(makeFactor!)
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: mode === 'dataset_toggle' ? 'All datasets on/off' : 'Dataset levels' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Datasets', level_type: mode, levels: mode === 'dataset_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'dataset_toggle' ? ['All enabled', 'All disabled'] : ['Dataset a', 'Dataset b'] }] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ dataset_selection: 'Writer:Datasets' })
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.dataset_factor_mode).toBe(mode)
+      expect(persisted?.nodes.filter((node) => node.type === 'dataset')).toHaveLength(2)
+    })
+  })
+
+  it.each(['dataset', 'resource', 'tool'])('removes a Dataset factor on %s without enabling unrelated Tools or Scripts', async (handle) => {
+    let experiment: Experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [{ name: 'Datasets', level_type: 'dataset_toggle', levels: [['dataset-id'], []], level_labels: ['All enabled', 'All disabled'] }], metrics: [] },
+      measurement_plan: null, dataset_ids: ['dataset-id'], dataset_id: 'dataset-id',
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockImplementation(async () => experiment)
+    vi.spyOn(experimentsApi, 'update').mockImplementation(async (_id, patch) => {
+      experiment = { ...experiment, ...patch }
+      return experiment
+    })
+    vi.spyOn(datasetsApi, 'list').mockResolvedValue([])
+    vi.spyOn(mcpServersApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: { ...defaultAgentNodeData('Writer'), dataset_selection: ['dataset-id'], dataset_factor_mode: 'dataset_toggle', factor_bindings: { dataset_selection: 'Datasets' } } },
+        { id: 'dataset', type: 'dataset', position: { x: 100, y: 0 }, data: { ...defaultDatasetNodeData(), config: { dataset_id: 'dataset-id', dataset_name: 'Dataset', enabled: false } } },
+        { id: 'tool', type: 'mcp_tool', position: { x: 300, y: 0 }, data: { label: 'Tool', config: { server_id: 'server', server_name: 'Server', tool_names: ['run'], enabled: false } } },
+        { id: 'script', type: 'script', position: { x: 500, y: 0 }, data: { ...defaultScriptNodeData(), config: { name: 'Script', language: 'python', code: 'print(1)', enabled: false } } },
+      ],
+      edges: [
+        { id: 'dataset-edge', source: 'dataset', target: 'agent', targetHandle: handle },
+        ...['tool', 'script'].map((id) => ({ id: `${id}-edge`, source: id, target: 'agent', targetHandle: 'tool' })),
+      ],
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    await waitFor(() => expect(client.getQueryData<Experiment>(['experiments', 'experiment-1'])?.design_spec?.factors?.[0]?.name).toBe('Datasets'))
+    fireEvent.click(document.querySelector<HTMLButtonElement>('[data-testid="rf__node-dataset"] button[aria-label="Make experimental factor"]')!)
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove factor' }))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))!
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({})
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.dataset_selection).toBeUndefined()
+      expect(persisted.nodes.find((node) => node.id === 'agent')?.data.dataset_factor_mode).toBeUndefined()
+      expect(persisted.nodes.find((node) => node.id === 'dataset')?.data.config).toMatchObject({ enabled: true })
+      for (const id of ['tool', 'script']) {
+        expect(persisted.nodes.find((node) => node.id === id)?.data.config).toEqual(graph.nodes.find((node) => node.id === id)?.data.config)
+      }
+      expect(experiment.design_spec?.factors).toEqual([])
+    })
   })
 
   it.each([null, 1])('selects a draft row for Publish & Test Run with published version %s', async publishedRevision => {
@@ -376,6 +672,41 @@ describe('ProtocolCanvas connector adds', () => {
     expect(screen.queryByRole('button', { name: /Create (another )?metric/ })).not.toBeInTheDocument()
   })
 
+  it.each([false, true])('keeps factor declarations when a bound Skill node is deleted (shared: %s)', async (shared) => {
+    const factorName = 'Skill enabled'
+    const experiment: Experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [{ name: factorName, levels: [true, false], level_type: 'boolean' }], metrics: [] },
+      measurement_plan: null, dataset_ids: [], dataset_id: null, locked_at: null,
+      locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+    vi.spyOn(skillsApi, 'list').mockResolvedValue([])
+    const graph: ProtocolGraph = {
+      nodes: (shared ? ['a', 'b'] : ['a']).map((id) => ({
+        id, type: 'skill', position: { x: id === 'a' ? 100 : 300, y: 100 },
+        data: {
+          label: `Skill ${id}`, config: { skill_id: id, skill_name: `Skill ${id}`, enabled: true },
+          factor_bindings: { 'config.enabled': factorName },
+        },
+      })),
+      edges: [],
+    }
+    const { client } = renderCanvas(graph, experiment.id)
+    fireEvent.doubleClick(await screen.findByText('Skill a'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete node' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.some((node) => node.id === 'a')).toBe(false)
+    })
+    expect(save).not.toHaveBeenCalled()
+    expect(client.getQueryData<Experiment>(['experiments', experiment.id])?.design_spec?.factors).toEqual(experiment.design_spec?.factors)
+  })
+
   it('opens a bound factor from the Script inspector', async () => {
     const user = userEvent.setup()
     const scriptData = defaultScriptNodeData('Score script')
@@ -404,30 +735,89 @@ describe('ProtocolCanvas connector adds', () => {
     expect(screen.getByText('Factor name')).toBeInTheDocument()
   })
 
-  it('binds the Agent inspector header action directly to Active', async () => {
+  it('moves Agent factor creation to the hover toolbar and saves a prompt baseline', async () => {
     const user = userEvent.setup()
-    vi.spyOn(experimentsApi, 'get').mockResolvedValue({
+    const experiment: Experiment = {
       id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
       design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
       locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
       created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockImplementation(async () => experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockImplementation(async (_id, patch) => {
+      Object.assign(experiment, patch)
+      return experiment
     })
-    renderCanvas({
+    const { client } = renderCanvas({
       nodes: [{ id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: defaultAgentNodeData('Writer') }],
       edges: [],
     }, 'experiment-1')
 
     fireEvent.doubleClick(await screen.findByText('Writer'))
-    await user.click(screen.getAllByRole('button', { name: 'Make experimental factor' })[0])
-
-    expect(await screen.findByText('Writer:Active')).toBeInTheDocument()
-    expect(screen.getByText('Levels: false, true')).toBeInTheDocument()
+    expect(screen.getByText(/has moved to the node toolbar/)).toHaveTextContent('Hover over the Agent node')
+    expect(screen.getByRole('img', { name: /Node toolbar preview/ })).toBeInTheDocument()
+    // The inspector has no inline creation buttons.
+    expect(within(screen.getByRole('dialog')).queryByRole('button', { name: 'Make experimental factor' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByTitle('Make experimental factor'))
+    expect(await screen.findByRole('heading', { name: 'Agent factor' })).toBeInTheDocument()
     expect(screen.queryByText('Bind to a field on the canvas')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Prompt levels' }))
+    fireEvent.change(screen.getByLabelText('Level 1 prompt'), { target: { value: 'Baseline task' } })
+    fireEvent.change(screen.getByLabelText('Level 2 prompt'), { target: { value: 'Alternate task' } })
+    await user.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [expect.objectContaining({ name: 'Writer:Prompt', levels: ['Baseline task', 'Alternate task'] })] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes[0].data.factor_bindings).toEqual({ 'config.prompt': 'Writer:Prompt' })
+      expect((persisted?.nodes[0]?.data as AgentNodeData | undefined)?.config.prompt).toBe('Baseline task')
+    })
+    fireEvent.doubleClick(await screen.findByText('Writer'))
+    await user.click(await screen.findByText('Factor: Writer:Prompt'))
+    expect(await screen.findByRole('heading', { name: 'Agent factor' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Factor name')).toHaveValue('Writer:Prompt')
+    await user.click(screen.getByRole('button', { name: 'This agent on/off' }))
+    await user.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes[0].data.active).toBe(true)
+      expect(persisted?.nodes[0].data.factor_bindings).toEqual({ 'config.prompt': 'Writer:Prompt', active: 'Writer:Enabled' })
+    })
+  })
+
+  it('keeps an inactive Agent inactive when an on/off factor is created for it', async () => {
+    const user = userEvent.setup()
+    const experiment: Experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockImplementation(async () => experiment)
+    vi.spyOn(experimentsApi, 'update').mockImplementation(async (_id, patch) => {
+      Object.assign(experiment, patch)
+      return experiment
+    })
+    const { client } = renderCanvas({
+      nodes: [{ id: 'agent-1', type: 'agent', position: { x: 100, y: 100 }, data: { ...defaultAgentNodeData('Writer'), active: false } }],
+      edges: [],
+    }, 'experiment-1')
+
+    await screen.findByText('Writer')
+    fireEvent.click(screen.getByTitle('Make experimental factor'))
+    expect(await screen.findByRole('heading', { name: 'Agent factor' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'This agent on/off' }))
+    await user.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes[0].data.factor_bindings).toEqual({ active: 'Writer:Enabled' })
+      expect(persisted?.nodes[0].data.active).toBe(false)
+    })
   })
 
   it('keeps the Test Run label when a production replicate is running', async () => {
     const run = protocolRun()
-    vi.mocked(protocolsApi.listRuns).mockResolvedValue([run])
+    vi.mocked(protocolsApi.listRunHeads).mockResolvedValue([run])
     vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
 
     renderCanvas({ nodes: [], edges: [] })
@@ -440,7 +830,7 @@ describe('ProtocolCanvas connector adds', () => {
   it('stops the active production replicate instead of a completed Test Run', async () => {
     const user = userEvent.setup()
     const run = protocolRun()
-    vi.mocked(protocolsApi.listRuns).mockResolvedValue([run])
+    vi.mocked(protocolsApi.listRunHeads).mockResolvedValue([run])
     vi.spyOn(protocolsApi, 'getRun').mockResolvedValue(run)
     vi.spyOn(protocolsApi, 'getLatestTestRun').mockResolvedValue(testRun())
     const cancelRun = vi.spyOn(protocolsApi, 'cancelRun').mockResolvedValue({

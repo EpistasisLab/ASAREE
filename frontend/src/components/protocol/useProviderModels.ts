@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { llmSettingsApi } from '@/api/client'
+import type { ModelCapabilities } from '@/types/llmSettings'
 
 // The one place the provider model list is fetched. Every consumer -- the
 // canvas node cards, the inspector, a model_config factor level -- goes
@@ -18,6 +20,8 @@ import { llmSettingsApi } from '@/api/client'
 // immediately seeing the right models depends on that -- don't "tidy" this
 // into a disjoint key like ['provider-models', provider].
 export const providerModelsKey = (provider: string | undefined) => ['llm-settings', provider, 'models'] as const
+export const modelCapabilitiesKey = (provider: string | undefined, model: string | undefined) =>
+  ['llm-settings', provider, 'model-capabilities', model] as const
 
 // Model lists turn over on the order of weeks, but the default QueryClient
 // (main.tsx) sets no staleTime, so every inspector open, canvas mount and
@@ -27,13 +31,17 @@ export const providerModelsKey = (provider: string | undefined) => ['llm-setting
 // 10-per-60s limiter on GET /llm-settings/{provider}/models, so the old
 // behaviour could 429 a canvas with a few nodes and some tab-switching.
 //
-// Kept deliberately shorter than the server-side cache TTL: a credential
-// change busts both (via the prefix above and the server's own bust), so
-// this only bounds how long a list edited *outside* this app -- a new Azure
-// deployment, a model released mid-session -- stays hidden.
+// staleTime only marks data stale; it doesn't refresh a mounted menu.
+// Poll at the same cadence, sharing the cache across consumers, so external
+// changes eventually appear even without navigation or window refocus.
 const MODEL_LIST_STALE_TIME_MS = 10 * 60 * 1000
 
-export function useProviderModels(provider: string | undefined) {
+export function useProviderModels(provider: string | undefined, model?: string, override?: ModelCapabilities | null) {
+  const [settledModel, setSettledModel] = useState(model)
+  useEffect(() => {
+    const timer = setTimeout(() => setSettledModel(model), 300)
+    return () => clearTimeout(timer)
+  }, [model])
   const credentialsQuery = useQuery({
     queryKey: ['llm-settings'],
     queryFn: () => llmSettingsApi.list(),
@@ -50,12 +58,35 @@ export function useProviderModels(provider: string | undefined) {
     queryFn: () => llmSettingsApi.listModels(provider!),
     enabled: !!provider && (provider !== 'azure_foundry' || hasCredential),
     staleTime: MODEL_LIST_STALE_TIME_MS,
+    refetchInterval: MODEL_LIST_STALE_TIME_MS,
   })
+
+  const models = modelsQuery.data?.models ?? []
+  const listedModel = models.find((entry) => entry.id === model)
+  const listReady = modelsQuery.isFetched || (provider === 'azure_foundry' && credentialsQuery.isSuccess && !hasCredential)
+  // Custom IDs must use execution's registry lookup too. Reuse the same query
+  // across nodes, inspectors and factor editors; pause while the user types.
+  const customCapabilitiesQuery = useQuery({
+    queryKey: modelCapabilitiesKey(provider, settledModel),
+    queryFn: () => llmSettingsApi.modelCapabilities(provider!, settledModel!),
+    enabled: !!provider && !!model && settledModel === model && listReady && !listedModel && !override,
+    staleTime: MODEL_LIST_STALE_TIME_MS,
+    refetchInterval: MODEL_LIST_STALE_TIME_MS,
+  })
+  const capabilities = override ?? listedModel ?? (settledModel === model ? customCapabilitiesQuery.data : undefined)
+  const capabilitiesPending = !!model && !capabilities
+  const capabilitiesError = capabilitiesPending && settledModel === model && customCapabilitiesQuery.isError
+    ? 'Could not resolve model capabilities. Try again.'
+    : undefined
 
   return {
     credentialsQuery,
     hasCredential,
     modelsQuery,
-    models: modelsQuery.data?.models ?? [],
+    models,
+    capabilities,
+    capabilitiesPending,
+    capabilitiesError,
+    retryCapabilities: () => customCapabilitiesQuery.refetch(),
   }
 }

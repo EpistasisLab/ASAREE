@@ -82,6 +82,8 @@ def create_foreign_key(
     remote_cols: Sequence[str],
     *,
     ondelete: str | None = None,
+    deferrable: bool = False,
+    initially: str | None = None,
 ) -> None:
     """``op.create_foreign_key`` that tolerates the constraint already being there.
 
@@ -93,6 +95,8 @@ def create_foreign_key(
     local = ", ".join(f'"{col}"' for col in local_cols)
     remote = ", ".join(f'"{col}"' for col in remote_cols)
     clause = f" ON DELETE {ondelete}" if ondelete else ""
+    if deferrable:
+        clause += " DEFERRABLE" + (f" INITIALLY {initially}" if initially else "")
     op.execute(
         sa.text(
             f"""
@@ -104,3 +108,40 @@ def create_foreign_key(
             """
         )
     )
+
+
+def create_unique_constraint(name: str, table: str, columns: Sequence[str]) -> None:
+    """``op.create_unique_constraint`` that tolerates the constraint already being there.
+
+    Same ``DO`` shape as :func:`create_foreign_key`. A unique constraint is
+    backed by an index of the same name, so a re-run fails with
+    ``duplicate_table`` (the index) rather than ``duplicate_object``; both mean
+    "already there".
+    """
+    cols = ", ".join(f'"{col}"' for col in columns)
+    op.execute(
+        sa.text(
+            f"""
+            DO $$ BEGIN
+                ALTER TABLE "{table}" ADD CONSTRAINT "{name}" UNIQUE ({cols});
+            EXCEPTION WHEN duplicate_object OR duplicate_table THEN NULL;
+            END $$;
+            """
+        )
+    )
+
+
+def has_table(table: str) -> bool:
+    """Whether ``table`` exists, for steps no ``IF [NOT] EXISTS`` clause covers.
+
+    Data backfills and renames read the shape a revision is about to replace, so
+    on a re-run they would read what is already gone. Each revision runs in one
+    transaction, so its defining change is either wholly applied or not at all:
+    checking for it is a sound "already applied" test, not a guess.
+    """
+    return sa.inspect(op.get_bind()).has_table(table)
+
+
+def has_column(table: str, column: str) -> bool:
+    """Whether ``table.column`` exists; see :func:`has_table` for when to use it."""
+    return has_table(table) and column in {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}

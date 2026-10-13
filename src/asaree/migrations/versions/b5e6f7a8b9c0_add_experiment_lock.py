@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+
+from asaree.migrations.guards import drop_column
 from sqlalchemy.dialects import postgresql
 
 revision: str = "b5e6f7a8b9c0"
@@ -23,6 +25,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("research_experiments", "locked_design_spec")
-    op.drop_column("research_experiments", "locked_protocol_revision_id")
-    op.drop_column("research_experiments", "locked_at")
+    drop_column("research_experiments", "locked_design_spec")
+    drop_column("research_experiments", "locked_protocol_revision_id")
+    drop_column("research_experiments", "locked_at")

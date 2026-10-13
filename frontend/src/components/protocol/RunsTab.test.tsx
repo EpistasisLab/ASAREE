@@ -54,3 +54,33 @@ describe('RunsTab factor discrepancy warning', () => {
     expect(screen.getByRole('button', { name: 'Run all cells' })).toBeDisabled()
   })
 })
+
+describe('RunsTab stop controls', () => {
+  afterEach(() => vi.restoreAllMocks())
+  const protocol = { id: 'protocol-1', published_revision_id: 'revision-1', published_revision: 1, has_unpublished_changes: false,
+    graph: { nodes: [], edges: [] } } as unknown as Protocol
+  const cell = (counts: Record<string, number>) => ({ cell_id: 'cell-1', cell_label: 'model=a', factor_values: { model: 'a' },
+    replicate_count: 3, total: 3, counts })
+
+  async function mount(hasActive: boolean, counts: Record<string, number>) {
+    vi.spyOn(experimentsApi, 'getExecutionSummary').mockResolvedValue(
+      { ready: true, has_active: hasActive, counts, metric_types: {}, metric_directions: {} } as never)
+    vi.spyOn(experimentsApi, 'listExecutionCells').mockResolvedValue({ items: [cell(counts)], next_cursor: null } as never)
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <RunsTab experimentId="experiment-1" designSpec={{}} protocol={protocol} regenerationRequired={false} unboundFactors={[]} onViewResult={vi.fn()} />
+    </QueryClientProvider>)
+    await screen.findByRole('button', { name: 'Run cell' })
+  }
+
+  it('hides Stop all and Stop cell when nothing is pending or running', async () => {
+    await mount(false, { completed: 2, failed: 1 })
+    expect(screen.queryByRole('button', { name: 'Stop all' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop cell' })).not.toBeInTheDocument()
+  })
+
+  it('offers Stop all and Stop cell while executions are active', async () => {
+    await mount(true, { completed: 1, running: 1, pending: 1 })
+    expect(await screen.findByRole('button', { name: 'Stop all' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop cell' })).toBeInTheDocument()
+  })
+})

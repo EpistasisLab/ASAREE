@@ -255,6 +255,8 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
 }) {
   const discrepancies = factorBindingDiscrepancies(designSpec, protocol?.graph)
   const scope = { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined }
+  // Same query (and cache entry) the browser below already polls.
+  const summary = useExecutionSummary(experimentId, scope, !!protocol)
   return <>
     {discrepancies.length > 0 && <div role="alert" className="m-3 flex gap-2 rounded border border-[color:var(--chart-4)]/50 p-3 text-xs"><AlertTriangle className="size-4" /><div><p className="font-medium">Canvas and generated runs disagree</p>{discrepancies.map(issue => <p key={`${issue.nodeId}:${issue.fieldPath}`}>{issue.nodeLabel} · {issue.factorName}: {issue.reason}</p>)}</div></div>}
     <ExecutionBrowser key={JSON.stringify(scope)} experimentId={experimentId} scope={scope} mode="runs"
@@ -263,8 +265,8 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
         else if (selection.type === 'row') onViewRowResult?.(selection.rowResultId)
         else if (selection.type === 'replicate') onViewResult(selection.replicateLabel)
       }}
-      controls={<><StopAllButton protocol={protocol} experimentId={experimentId} /><RunAllCellsButton protocol={protocol} experimentId={experimentId} regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /></>}
-      cellActions={cell => <><RunAllCellsButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id} label="Run cell" compact regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /><StopAllButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id} /></>}
+      controls={<><StopAllButton protocol={protocol} experimentId={experimentId} active={!!summary.data?.has_active} /><RunAllCellsButton protocol={protocol} experimentId={experimentId} regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /></>}
+      cellActions={cell => <><RunAllCellsButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id} label="Run cell" compact regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /><StopAllButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id} active={ACTIVE_STATUSES.some(status => (cell.counts?.[status] ?? 0) > 0)} /></>}
       actions={row => <RunReplicateButton row={row} protocol={protocol} experimentId={experimentId} replicateLabel={row.replicate_label} replicateNumber={row.replicate_number}
         hasCompletedRun={runsAgainOnlyOnRequest(row.status)} truncated={row.result.truncated}
         activeRunId={['pending','running','finalizing'].includes(row.status) ? row.run_id : null}
@@ -273,11 +275,16 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
   </>
 }
 
-function StopAllButton({ protocol, experimentId, cellId }: { protocol?: Protocol; experimentId: string; cellId?: string }) {
+const ACTIVE_STATUSES = ['pending', 'running', 'finalizing']
+
+// Only while something can actually be stopped, like StopRunsButton for a single
+// replicate. Once clicked it stays up so the cancellation's progress is visible.
+function StopAllButton({ protocol, experimentId, cellId, active }: { protocol?: Protocol; experimentId: string; cellId?: string; active: boolean }) {
   const [jobId, setJobId] = useState<string>()
   const stop = useMutation({ mutationFn: () => experimentsApi.createResultJob(experimentId,
     { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined },
     { kind: 'cancel', cell_id: cellId, request_key: newRequestKey() }), onSuccess: job => setJobId(job.id) })
+  if (!active && !jobId && !stop.isPending) return null
   return <><Button variant="destructive" size="xs" disabled={!protocol || stop.isPending} onClick={() => stop.mutate()}><Square className="size-3" />{cellId ? 'Stop cell' : 'Stop all'}</Button>
     <ResultJobProgress experimentId={experimentId} jobId={jobId} />
     {stop.error && <p role="alert" className="text-xs text-destructive">{stop.error.message}</p>}</>

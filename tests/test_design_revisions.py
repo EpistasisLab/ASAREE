@@ -17,6 +17,7 @@ import pytest
 import pytest_asyncio
 
 import asaree.models.dataset  # noqa: F401 -- registers registered_datasets for the FK
+import asaree.models.protocol_run  # noqa: F401 -- registers protocol_runs for research_experiments.latest_test_run_id
 from asaree.models.database import dispose_engine, get_session
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.factorial_cell import FactorialCell
@@ -486,3 +487,53 @@ def _cells_of(experiment_id: uuid.UUID):  # type: ignore[no-untyped-def]
         .options(contains_eager(FactorialReplicateResult.cell))
         .where(FactorialCell.experiment_id == experiment_id)
     )
+
+
+async def test_generating_the_reported_15786_replicate_design_is_fast(experiment_id: uuid.UUID) -> None:
+    """A user generated a 6-cell x 2,631-replicate design and the request ran for
+    minutes: each replicate was upserted separately, and each upsert reloaded every
+    replicate already in its cell. It must now be one bounded pass."""
+    import time
+
+    factors = [{"name": "Prompt", "levels": [f"p{i}" for i in range(6)]}]
+    started = time.monotonic()
+    async with get_session() as db:
+        first = await generate_design_cells(db, experiment_id=experiment_id, factors=factors, replicates=2631)
+    elapsed = time.monotonic() - started
+    assert len(first) == 15786
+    assert [r.replicate_number for r in first[:3]] == [1, 2, 3]  # planned order, cell by cell
+    assert first[0].cell_label == first[2630].cell_label != first[2631].cell_label
+    assert elapsed < 30, f"generating 15,786 replicates took {elapsed:.1f}s"
+
+    async with get_session() as db:
+        again = await generate_design_cells(db, experiment_id=experiment_id, factors=factors, replicates=2631)
+    assert [r.id for r in again] == [r.id for r in first]  # regenerating reuses every row
+
+
+async def test_generate_design_endpoint_can_skip_listing_replicates(
+    experiment_id: uuid.UUID, owner_id: uuid.UUID
+) -> None:
+    """The canvas passes include_replicates=false and re-reads what it needs; the
+    SDK default still returns the list."""
+    from types import SimpleNamespace
+
+    import httpx
+    from fastapi import FastAPI
+
+    from asaree.api import experiments
+    from asaree.deps import get_current_user
+
+    async def _auth() -> SimpleNamespace:
+        return SimpleNamespace(id=owner_id)
+
+    app = FastAPI()
+    app.include_router(experiments.router, prefix="/api")
+    app.dependency_overrides[get_current_user] = _auth
+    design = {"design_spec": {"factors": _TWO_BY_ONE, "replicates": 3}}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        quiet = await client.post(
+            f"/api/experiments/{experiment_id}/generate-design?include_replicates=false", json=design
+        )
+        listed = await client.post(f"/api/experiments/{experiment_id}/generate-design", json=design)
+    assert quiet.status_code == 204 and quiet.content == b""
+    assert listed.status_code == 200 and len(listed.json()) == 6

@@ -335,7 +335,8 @@ export const experimentsApi = {
   // labels carry forward, the rest stay in history (see
   // services.design_generation). Nothing is ever deleted here.
   generateDesign: (id: string, declaration?: { hypothesis?: string | null; design_spec?: DesignSpec | null; measurement_plan?: MeasurementPlan | null; measurement_validation_protocol_id?: string | null }) =>
-    request<Replicate[]>(`/experiments/${id}/generate-design`, { method: 'POST', body: declaration }),
+    // The canvas re-reads cells/summaries afterwards, so skip the full replicate list (megabytes on large designs).
+    request<void>(`/experiments/${id}/generate-design?include_replicates=false`, { method: 'POST', body: declaration }),
   // One row per replicate (a "trial"), not per ProtocolRun -- a replicate that's never
   // been run is still listed, with status "not_started" (see TrialResponse /
   // services.protocol_runs.list_experiment_trials).

@@ -484,7 +484,13 @@ export function DesignTab({
     // Submit the pending declaration with the generation request. This is
     // deliberately one API operation: the first click cannot generate from a
     // pre-save database snapshot and leave the changed cells pending.
-    mutationFn: () => experimentsApi.generateDesign(experiment.id, isDirty ? designDraft() : undefined),
+    // Resolves to the replicate total, counted here rather than from the
+    // response: listing every replicate back was megabytes on large designs.
+    mutationFn: async () => {
+      const total = combinations * Math.max(replicates ?? 1, 1)
+      await experimentsApi.generateDesign(experiment.id, isDirty ? designDraft() : undefined)
+      return total
+    },
     onSuccess: () => {
       // The local draft is compared with this experiment query. Refresh it
       // along with the generated rows; otherwise the old declaration remains
@@ -901,10 +907,10 @@ export function DesignTab({
         >
           {generateMutation.isPending ? 'Generating cells…' : needsDesignUpdate ? 'Apply changes to cells' : 'Generate cells'}
         </Button>
-        {generateMutation.data && (
+        {generateMutation.data !== undefined && (
           <p className="text-xs text-muted-foreground">
-            {combinations} {combinations === 1 ? 'cell' : 'cells'} · {generateMutation.data.length}{' '}
-            {generateMutation.data.length === 1 ? 'replicate' : 'replicates'} total
+            {combinations} {combinations === 1 ? 'cell' : 'cells'} · {generateMutation.data.toLocaleString()}{' '}
+            {generateMutation.data === 1 ? 'replicate' : 'replicates'} total
           </p>
         )}
         {generateError && (

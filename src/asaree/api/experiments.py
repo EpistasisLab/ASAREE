@@ -815,8 +815,12 @@ async def delete_experiment_endpoint(experiment_id: uuid.UUID, user: CurrentUser
 
 @router.post("/{experiment_id}/generate-design", response_model=list[ReplicateResponse])
 async def generate_design_endpoint(
-    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession, body: GenerateDesignRequest | None = None
-) -> list[ReplicateResponse]:
+    experiment_id: uuid.UUID,
+    user: CurrentUser,
+    db: DbSession,
+    body: GenerateDesignRequest | None = None,
+    include_replicates: bool = True,
+) -> list[ReplicateResponse] | Response:
     """Materialize one result row per replicate of every cell in the
     experiment's declared factor cross product.
 
@@ -824,7 +828,11 @@ async def generate_design_endpoint(
     the current revision, and one producing a different set opens a new
     revision, carrying forward the results of every combination the two share.
     The previous design's cells become history rather than lingering in the
-    current view (see ``generate_design_cells``)."""
+    current view (see ``generate_design_cells``).
+
+    ``include_replicates=false`` answers 204 instead of listing every replicate:
+    the canvas re-reads what it needs, and a 15,786-replicate list is megabytes
+    nobody looks at. The SDK keeps the default, which returns the list."""
     experiment = await _get_owned_experiment(db, experiment_id, user)
     if body is not None:
         fields = body.model_dump(exclude_unset=True)
@@ -867,6 +875,8 @@ async def generate_design_endpoint(
         )
     except DesignValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not include_replicates:
+        return Response(status_code=204)
     return [ReplicateResponse.model_validate(replicate) for replicate in replicates]
 
 

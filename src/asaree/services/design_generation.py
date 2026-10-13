@@ -35,7 +35,7 @@ from asaree.models.protocol_revision import ProtocolRevision
 from asaree.services.coordination import coordination_strategy_slug
 from asaree.services.dataset_factors import validate_dataset_factors
 from asaree.services.design_revisions import get_current_revision, supersede_and_create
-from asaree.services.factorial_cells import list_replicates, upsert_replicate
+from asaree.services.factorial_cells import list_replicates, materialize_replicates
 from asaree.services.knowledge_factors import validate_knowledge_factors
 from asaree.services.script_factors import validate_script_factors, validate_tool_step_script_factors
 from asaree.services.skill_factors import validate_skill_factors
@@ -560,7 +560,7 @@ async def generate_design_cells(
             }
         )
 
-    replicate_results = []
+    rows: list[tuple[str, dict[str, Any]]] = []
     for label, combo, replicate_number in planned:
         fields: dict[str, Any] = {"factor_values": combo}
         previous = carry_over.get((_cell_key(combo, label), replicate_number))
@@ -577,14 +577,10 @@ async def generate_design_cells(
             # planned this time, and the carried dict is the same combination
             # anyway.
             fields["factor_values"] = combo
-        replicate_result = await upsert_replicate(
-            db,
-            experiment_id=experiment_id,
-            replicate_label=label,
-            fields=fields,
-            revision_id=revision_id,
-        )
-        replicate_results.append(replicate_result)
+        rows.append((label, fields))
+    replicate_results = await materialize_replicates(
+        db, experiment_id=experiment_id, revision_id=revision_id, planned=rows
+    )
     if randomization_seed is not None:
         random.Random(randomization_seed).shuffle(replicate_results)
     return replicate_results

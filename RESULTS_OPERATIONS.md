@@ -121,8 +121,8 @@ hash; execution still verifies the pinned source identity before running.
 ## Deployment and recovery
 
 0. Compose's `db-backup` runs first: when either database has a pending
-   migration, it writes `backups/{db}-pre-v{release}-{revision}-{UTC}.dump`
-   (the database as it was before that release migrated it) and keeps the newest
+   migration, it writes `backups/{db}-{revision}-before-v{release}-{UTC}.dump`
+   (the database at that schema revision, saved before that release migrated it) and keeps the newest
    five per database; manual dumps in `backups/` are left alone. If it fails, no
    migration runs. Outside compose, run `python -m asaree.migrations backup`
    before migrating. To restore one (stop the app first):

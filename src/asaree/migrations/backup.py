@@ -7,12 +7,14 @@ Runs as the deploy step before ``motoro.migrations deploy`` (compose's
 schema's current revision with the head of the code being deployed and, only
 when a migration is pending, writes ``pg_dump -Fc`` output to::
 
-    {db}-pre-v{version}-{revision}-{UTC timestamp}.dump
+    {db}-{revision}-before-v{version}-{UTC timestamp}.dump
 
-``version`` is the release about to be applied (``asaree``'s version for the
-product database, ``motoro``'s for core's) and ``revision`` is the schema the
-dump holds, so ``asaree-pre-v0.11.0-2c3d4e5f6071-...`` reads "the database as it
-was before v0.11.0 migrated it". Restore with the same image's ``pg_restore``
+``revision`` is the schema the dump holds; ``version`` is the release whose
+migrations were about to run (``asaree``'s version for the product database,
+``motoro``'s for core's), so ``asaree-2c3d4e5f6071-before-v0.11.0-...`` reads
+"the database at schema 2c3d4e5f6071, saved before v0.11.0 migrated it". The
+release it came *from* isn't recorded anywhere, so the revision identifies it.
+Restore with the same image's ``pg_restore``
 (``pg_restore --clean --if-exists -d <db> <file>``). The image's client is newer
 than a pg16 server, so a restore reports one ignorable error about
 ``transaction_timeout`` (a setting older servers don't have).
@@ -58,12 +60,12 @@ def _safe(text: str) -> str:
 
 
 def dump_name(name: str, version: str, revision: str, now: datetime) -> str:
-    return f"{name}-pre-v{_safe(version)}-{_safe(revision)}-{now.strftime('%Y%m%dT%H%M%SZ')}.dump"
+    return f"{name}-{_safe(revision)}-before-v{_safe(version)}-{now.strftime('%Y%m%dT%H%M%SZ')}.dump"
 
 
 def automatic_dumps(directory: Path, name: str) -> list[Path]:
     """This database's automatic dumps, oldest first (names sort by timestamp last)."""
-    pattern = re.compile(rf"^{re.escape(name)}-pre-v[A-Za-z0-9._-]+-[A-Za-z0-9._-]+-\d{{8}}T\d{{6}}Z\.dump$")
+    pattern = re.compile(rf"^{re.escape(name)}-[A-Za-z0-9._-]+-before-v[A-Za-z0-9._-]+-\d{{8}}T\d{{6}}Z\.dump$")
     dumps = [path for path in directory.iterdir() if pattern.match(path.name)]
     return sorted(dumps, key=lambda path: path.name.rsplit("-", 1)[1])
 

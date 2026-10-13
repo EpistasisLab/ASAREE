@@ -23,10 +23,12 @@ def target(name: str = "asaree", current: str | None = "aaa", heads: tuple[str, 
 
 
 def test_dump_name_records_release_and_schema_revision():
-    assert dump_name("asaree", "0.11.0", "2c3d4e5f6071", NOW) == "asaree-pre-v0.11.0-2c3d4e5f6071-20261013T190005Z.dump"
+    assert dump_name("asaree", "0.11.0", "2c3d4e5f6071", NOW) == (
+        "asaree-2c3d4e5f6071-before-v0.11.0-20261013T190005Z.dump"
+    )
     # Dev builds carry local-version characters that don't belong in a file name.
     assert dump_name("asaree", "0.10.1.post1.dev47+gbc4012f", "r", NOW) == (
-        "asaree-pre-v0.10.1.post1.dev47_gbc4012f-r-20261013T190005Z.dump"
+        "asaree-r-before-v0.10.1.post1.dev47_gbc4012f-20261013T190005Z.dump"
     )
 
 
@@ -69,7 +71,7 @@ def test_backup_dumps_only_pending_databases(tmp_path: Path, monkeypatch):
     )
 
     assert dumped == ["postgresql+asyncpg://u:p@localhost:5432/motoro"]
-    assert [path.name for path in tmp_path.iterdir()] == ["motoro-pre-v0.12.0-6a4d-20261013T190005Z.dump"]
+    assert [path.name for path in tmp_path.iterdir()] == ["motoro-6a4d-before-v0.12.0-20261013T190005Z.dump"]
     assert report[1] == "asaree: already at bbb, no backup needed"
 
 
@@ -115,7 +117,7 @@ def test_real_dump_restores_the_pre_migration_schema(tmp_path: Path):
         report = backup.backup([found], tmp_path, keep=5)
 
         (dump,) = tmp_path.iterdir()
-        assert dump.name.startswith("asaree-pre-v") and f"-{current}-" in dump.name, report
+        assert dump.name.startswith(f"asaree-{current}-before-v"), report
         assert stat.S_IMODE(dump.stat().st_mode) == 0o600
         listing = subprocess.run(["pg_restore", "--list", str(dump)], capture_output=True, text=True, check=True)
         assert "alembic_version" in listing.stdout

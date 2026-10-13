@@ -76,7 +76,7 @@ services:
   # success, hence restart: "no". `--url` is passed explicitly because core's CLI
   # otherwise reads a bare DATABASE_URL, which nothing here sets.
   # Snapshots both databases before either migration chain runs, only when a
-  # migration is pending: backups/{db}-pre-v{release}-{revision}-{UTC}.dump.
+  # migration is pending: backups/{db}-{revision}-before-v{release}-{UTC}.dump.
   # Troubleshooting aid, not a backup strategy -- see asaree/migrations/backup.py.
   # Runs as the host user so the dumps are yours, not root's.
   db-backup:

@@ -1,4 +1,3 @@
-import type { ModelCapabilities } from './llmSettings'
 import type { EvaluationArtifact, MetricObservation } from './experiments'
 
 export interface Protocol {
@@ -34,6 +33,7 @@ export interface ProtocolNode {
     | DatasetNodeData
     | ScriptNodeData
     | SkillNodeData
+    | PersonaNodeData
     | OkfBundleNodeData
     | OkfDocumentNodeData
     | ReasonActPatternNodeData
@@ -77,8 +77,6 @@ export type NodeRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'sk
 
 export interface NodeRunState {
   status: NodeRunStatus
-  // Completed by passing upstream output through; this node's logic did not run.
-  bypassed?: boolean
   run_id?: string | null
   output_text?: string | null
   error?: string | null
@@ -155,8 +153,7 @@ export interface DatasetRowSnapshot extends DatasetRowIdentity {
 export interface DatasetRowSchema {
   dataset_id: string
   raw_sha256: string
-  row_count: number | null
-  ready?: boolean
+  row_count: number
   columns: string[]
 }
 
@@ -282,7 +279,6 @@ export interface AgentModelConfigData {
   model: string
   temperature?: number | null
   effort?: string | null
-  resolved_capabilities?: ModelCapabilities | null
   // Nullable so ModelNodeInspector's Input can be backspaced to empty without
   // snapping to a forced value -- null is a real, persisted "not set yet"
   // state flagged by ModelNode's warning triangle and nodeConfigIssues.ts's
@@ -362,19 +358,6 @@ export interface AgentNodeConfig {
 }
 
 export interface AgentNodeData {
-  // Connector-owned selection: one skill per level, or every skill versus none.
-  dataset_selection?: string[]
-  dataset_factor_mode?: 'dataset_selection' | 'dataset_toggle'
-  knowledge_selection?: string[]
-  knowledge_factor_mode?: 'knowledge_selection' | 'knowledge_toggle'
-  sub_agent_selection?: string[]
-  sub_agent_factor_mode?: 'sub_agent_selection' | 'sub_agent_toggle'
-  script_selection?: string[]
-  script_factor_mode?: 'script_selection' | 'script_toggle'
-  tool_selection?: string[]
-  tool_factor_mode?: 'tool_selection' | 'tool_toggle'
-  skill_selection?: string[]
-  skill_factor_mode?: 'skill_selection' | 'skill_toggle'
   label: string
   config: AgentNodeConfig
   // field path (e.g. "model_config_data.temperature") -> factor name, for
@@ -694,11 +677,16 @@ export function defaultDatasetNodeData(label = 'Dataset'): DatasetNodeData {
   return { label, config: { dataset_id: null, dataset_name: null, enabled: true } }
 }
 
-// Script source stays outside the prompt and is staged in the run workspace.
-// Agents can execute available Scripts through run_wired_script; Tool Steps
-// can send a wired Script's source through a script_code argument. Python-only.
+// A "Script" node -- carries a fixed piece of code an Agent passes verbatim
+// as some tool's own code-shaped argument (e.g. a domain MCP server's
+// run_model_script's `code`). Not executed by ASAREE itself -- same "pure
+// config source" status as every other connector; _build_user_input folds
+// the code, fenced, into the wired agent's own instruction. Python-only for
+// now (language is fixed, not a picker) -- matches the one real use case in
+// evidence (a fixed XGBoost+Optuna scoring script whose only per-cell
+// variation is the hyperparameters an upstream agent proposes, not the code
+// itself).
 export interface ScriptNodeConfig {
-  enabled?: boolean
   name: string
   description?: string
   language: 'python'
@@ -756,6 +744,46 @@ export interface SkillNodeData {
 // builds it from the skill picked in the browser, since a node whose whole
 // identity is one skill would be meaningless without it -- same as the
 // server-dedicated MCP node types.
+
+// A "Persona" node. Configures an agent's personality traits for experimental
+// manipulation (OCEAN framework). Three modes: (1) Library - select validated
+// personas (Analyst, Explorer, Critic, etc.), (2) Text - direct input, (3) File
+// - upload .md skill file. Persona text prepends to agent's system_prompt.
+// Unlike Memory (which is dashed/no runtime effect), Persona has real runtime
+// effect via _resolve_persona_configs in protocol_execution.py.
+export interface PersonaNodeConfig {
+  // Which mode: library selection, direct text, or file upload
+  mode: 'library' | 'text' | 'file'
+  // Library mode: persona_id from registered personas (e.g., "analyst_v1")
+  persona_id?: string | null
+  // Text mode: direct persona prompt text
+  persona_text?: string | null
+  // File mode: path to uploaded .md file with persona definition
+  persona_file?: string | null
+  // Display metadata from library (cached to avoid fetch on render)
+  persona_label?: string | null
+  persona_description?: string | null
+  // Absent means enabled, matching other connector conventions
+  enabled?: boolean
+}
+
+export interface PersonaNodeData {
+  label: string
+  config: PersonaNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultPersonaNodeData(label = 'Persona'): PersonaNodeData {
+  return {
+    label,
+    config: {
+      mode: 'text',
+      persona_text: '',
+      enabled: true,
+    },
+  }
+}
 
 // An "OKF Bundle" node. Names a registered OKF bundle: a directory of Markdown
 // concept files (Open Knowledge Format) that the wired agent can read from and

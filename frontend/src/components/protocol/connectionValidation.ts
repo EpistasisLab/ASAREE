@@ -74,6 +74,8 @@ export function isProtocolConnectionValid(
       return PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') && targetIsAgentLike
     case 'skill':
       return sourceNode.type === 'skill' && targetIsAgentLike
+    case 'persona':
+      return sourceNode.type === 'persona' && targetIsAgentLike
     case 'dataset':
       return sourceNode.type === 'dataset' && targetIsAgentLike
     case 'knowledge':
@@ -81,7 +83,8 @@ export function isProtocolConnectionValid(
     case 'sub_agents':
       return (
         sourceNode.type === 'sub_agent' &&
-        targetNode.type === 'agent'
+        targetNode.type === 'agent' &&
+        !edges.some((edge) => edge.source === sourceNode.id && edge.targetHandle === 'sub_agents')
       )
     default: {
       const sourceCanFeedMainFlow =
@@ -91,6 +94,7 @@ export function isProtocolConnectionValid(
         !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
         sourceNode.type !== 'dataset' &&
         sourceNode.type !== 'skill' &&
+        sourceNode.type !== 'persona' &&
         !KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') &&
         sourceNode.type !== 'script' &&
         !PATTERN_NODE_TYPES.includes(sourceNode.type ?? '') &&

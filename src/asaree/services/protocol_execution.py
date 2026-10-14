@@ -326,6 +326,12 @@ _SCRIPT_NODE_TYPES = frozenset({"script"})
 # normal case, since level-1 metadata is ~100 tokens each and a body only
 # loads when the model asks for it.
 _SKILL_NODE_TYPES = frozenset({"skill"})
+# A Persona node configures OCEAN personality traits (Openness, Conscientiousness,
+# Extraversion, Agreeableness, Neuroticism) that are prepended to an agent's
+# system prompt for experimental manipulation of conversational style and behavior.
+# Like other config sources it gets its own connector slot rather than being a
+# field, because it's a treatment to vary across cells, not a static setting.
+_PERSONA_NODE_TYPES = frozenset({"persona"})
 # An OKF Bundle node names one registered OKF bundle -- a directory of
 # markdown concepts the user pointed ASAREE at, served by its own MCP server
 # process (see asaree.services.okf_bundles for why it's a server per bundle
@@ -395,6 +401,7 @@ _PURE_CONFIG_SOURCE_TYPES = (
     | _DATASET_NODE_TYPES
     | _SCRIPT_NODE_TYPES
     | _SKILL_NODE_TYPES
+    | _PERSONA_NODE_TYPES
     | _KNOWLEDGE_NODE_TYPES
     | _OUTPUT_PARSER_NODE_TYPES
     | _SUB_AGENT_NODE_TYPES
@@ -425,6 +432,7 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "dataset" for t in _DATASET_NODE_TYPES},
     **{t: "tool" for t in _SCRIPT_NODE_TYPES},
     **{t: "skill" for t in _SKILL_NODE_TYPES},
+    **{t: "persona" for t in _PERSONA_NODE_TYPES},
     **{t: "knowledge" for t in _KNOWLEDGE_NODE_TYPES},
     **{t: "output_parser" for t in _OUTPUT_PARSER_NODE_TYPES},
     **{t: "sub_agents" for t in _SUB_AGENT_NODE_TYPES},
@@ -2089,6 +2097,33 @@ def _resolve_skill_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]
         if skill_id and str(skill_id) not in skill_ids:
             skill_ids.append(str(skill_id))
     return {"skill_ids": skill_ids} if skill_ids else {}
+
+
+def _resolve_persona_config(graph: dict[str, Any], node_id: str) -> str:
+    """Persona text from the ONE Persona node wired into this agent's Persona
+    connector -- ``""`` when none is connected.
+
+    Unlike Skills (which pass ids to Motoro for progressive disclosure), Personas
+    prepend text directly to system_prompt for OCEAN trait manipulation. Three
+    modes: library (persona_id from validated library), text (direct input), or
+    file (uploaded .md). Only ONE persona allowed (connector is not repeatable):
+    multiple personas would create undefined trait conflicts. A node with
+    ``enabled: False`` or no resolved text is skipped."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    for edge in _edges_with_handle(graph, node_id, "persona", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") not in _PERSONA_NODE_TYPES:
+            continue
+        persona_config = (source.get("data") or {}).get("config") or {}
+        if not persona_config.get("enabled", True):
+            continue
+        # All three modes use persona_text field (library mode populates it from
+        # library selection, text mode has direct input, file mode would load from
+        # persona_file path once upload endpoint exists)
+        persona_text = persona_config.get("persona_text", "")
+        if persona_text:
+            return persona_text
+    return ""
 
 
 def _is_peer_edge(edge: dict[str, Any], nodes: dict[str, dict[str, Any]]) -> bool:
@@ -4329,8 +4364,17 @@ async def _run_agent_node(
     writing it onto the durable agent row is exactly the contamination this
     design avoids."""
     agent_name = f"protocol-{protocol_id}-{node['id']}"
+    # Prepend persona text if a Persona node is wired. Personas configure OCEAN
+    # personality traits for experimental manipulation (see PersonaNodeData).
+    persona_text = _resolve_persona_config(graph, node["id"])
+    if persona_text:
+        config = node["data"]["config"]
+        base_system_prompt = system_prompt or config.get("system_prompt") or ""
+        combined_system_prompt = f"{persona_text}\n\n{base_system_prompt}"
+    else:
+        combined_system_prompt = system_prompt
     fields = await _resolve_agent_fields(
-        node, graph, owner_id=owner_id, system_prompt=system_prompt,
+        node, graph, owner_id=owner_id, system_prompt=combined_system_prompt,
         unsplit_dataset=unsplit_dataset,
         row_mode=bool(ambient_meta and ambient_meta.get("dataset_mode") == "per_row"),
     )

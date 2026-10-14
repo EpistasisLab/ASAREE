@@ -35,6 +35,9 @@ const CONNECTOR_X: {
     // one arrives. Unlike the rest, this one is usually not rendered at all --
     // see AgentNode's own showOutputParser.
     output_parser: 0.95,
+    // Persona connector -- added for personality trait configuration (OCEAN
+    // framework). Positioned on the top edge between Skill and Dataset.
+    persona: 0.45,
   },
   critic_gate: { model: 0.5 },
   tool_step: { tool: 0.5 },

@@ -1,0 +1,674 @@
+{
+  "name": "The cascade, the real one",
+  "description": null,
+  "graph": {
+    "nodes": [
+      {
+        "id": "node-mv2sz6x2-ei474l9g",
+        "type": "dataset",
+        "position": {
+          "x": 684.2705338089554,
+          "y": 86.19853832103587
+        },
+        "data": {
+          "label": "BixBench",
+          "config": {
+            "enabled": true,
+            "dataset_id": "6cd1c99b-79eb-464a-9e4f-66f9d5e1e3ab",
+            "description": null,
+            "split_state": "unsplit",
+            "dataset_name": "BixBench",
+            "target_column": "answer",
+            "dictionary_available": false
+          }
+        }
+      },
+      {
+        "id": "node-mv2szdhe-frbyieag",
+        "type": "agent",
+        "position": {
+          "x": 327.0966231734663,
+          "y": 435.64837872540505
+        },
+        "data": {
+          "label": "Generator",
+          "config": {
+            "goal": "Generate a thoughtful answer to whether the result supports the hypothesis. Provide clear reasoning and a definitive yes/no conclusion.",
+            "prompt": "You will receive a JSON object called \"Dataset row input\" containing:\n - question: the research question\n - hypothesis: the hypothesis being tested\n - result: the experimental result\n - categories: relevant topic categories\n\nExtract these values from the JSON and analyze whether the result supports the hypothesis. The question and categories provide context for topics that may be relevant\nto understanding the hypothesis and result. Provide your reasoning and a clear yes or no answer. Provide a confidence level for your answer.",
+            "description": "",
+            "system_prompt": "",
+            "output_contract": null,
+            "budget_limit_usd": null,
+            "require_output_parser": true,
+            "max_run_duration_seconds": null
+          }
+        }
+      },
+      {
+        "id": "node-mv2szdhe-8hfjn16f",
+        "type": "pattern_reason_act",
+        "position": {
+          "x": 303.4966231734663,
+          "y": 275.64837872540505
+        },
+        "data": {
+          "label": "Reason + Act",
+          "config": {
+            "max_iterations": 3,
+            "scratchpad_window": 10,
+            "include_scratchpad": true,
+            "observation_format": "raw"
+          }
+        }
+      },
+      {
+        "id": "node-mv2t0vf2-ub7jtyqs",
+        "type": "model_azure_foundry",
+        "position": {
+          "x": 629.1336602105033,
+          "y": 797.9719737017595
+        },
+        "data": {
+          "label": "Azure AI Foundry",
+          "config": {
+            "model": "claude-haiku-5-5",
+            "provider": "azure_foundry",
+            "max_tokens": 64000,
+            "temperature": 1
+          }
+        }
+      },
+      {
+        "id": "node-mv2t8ldf-66g1drsd",
+        "type": "persona",
+        "position": {
+          "x": 428.2077342845773,
+          "y": 229.16689724392353
+        },
+        "data": {
+          "label": "Persona",
+          "config": {
+            "mode": "text",
+            "enabled": true,
+            "persona_text": {
+              "mode": "library",
+              "persona_id": "none_v1",
+              "persona_file": null,
+              "persona_text": "",
+              "persona_label": "None (baseline)"
+            }
+          },
+          "factor_bindings": {
+            "config.persona_text": "Persona:Persona text"
+          }
+        }
+      },
+      {
+        "id": "node-mv2ti53q-7krcc913",
+        "type": "agent",
+        "position": {
+          "x": 745.6151416919847,
+          "y": 435.64837872540494
+        },
+        "data": {
+          "label": "Critic",
+          "config": {
+            "goal": "Critically evaluate whether the Generator's answer properly addresses the hypothesis and evidence. Identify logical flaws or gaps in reasoning. Your role is to check the facts and address any flaws in the Generator's reasoning, if applicable.",
+            "prompt": "You will receive:\n1. A JSON object called \"Dataset row input\" containing the original question, hypothesis, result, and categories\n2. The Generator's structured output with reasoning, answer, and confidence\n\n Extract the question, hypothesis, and result from the JSON. Then evaluate the Generator's reasoning and conclusion against this evidence. Is their analysis sound? Are\n there logical flaws? Provide your critical assessment and your own yes/no answer, along with a confidence level for your final answer.",
+            "description": "",
+            "system_prompt": "",
+            "output_contract": null,
+            "budget_limit_usd": null,
+            "max_run_duration_seconds": null
+          }
+        }
+      },
+      {
+        "id": "node-mv2ti53q-wj1y14wn",
+        "type": "pattern_reason_act",
+        "position": {
+          "x": 640.9781046549477,
+          "y": 308.98171205873825
+        },
+        "data": {
+          "label": "Reason + Act",
+          "config": {
+            "max_iterations": 3,
+            "scratchpad_window": 10,
+            "include_scratchpad": true,
+            "observation_format": "raw"
+          }
+        }
+      },
+      {
+        "id": "node-mv2tmq3x-v4erdpci",
+        "type": "output_parser",
+        "position": {
+          "x": 631.2151416919849,
+          "y": 566.9446750217014
+        },
+        "data": {
+          "label": "Output Parser",
+          "config": {
+            "enabled": true,
+            "output_contract": {
+              "name": "generator_response",
+              "fields": [
+                {
+                  "name": "reasoning",
+                  "type": "string",
+                  "description": "Step-by-step analysis of whether the evidence supports the hypothesis"
+                },
+                {
+                  "name": "answer",
+                  "type": "string",
+                  "description": "Final yes or no answer"
+                },
+                {
+                  "name": "confidence",
+                  "type": "string",
+                  "description": "Confidence level in answer"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": "node-mv2u0udd-wh30i3n4",
+        "type": "persona",
+        "position": {
+          "x": 765.7979250307435,
+          "y": 303.24097131799743
+        },
+        "data": {
+          "label": "Persona",
+          "config": {
+            "mode": "text",
+            "enabled": true,
+            "persona_text": {
+              "mode": "library",
+              "persona_id": "none_v1",
+              "persona_file": null,
+              "persona_text": "",
+              "persona_label": "None (baseline)"
+            }
+          },
+          "factor_bindings": {
+            "config.persona_text": "Persona:Persona text (2)"
+          }
+        }
+      },
+      {
+        "id": "node-mv2u3pe5-a0ldblpb",
+        "type": "output_parser",
+        "position": {
+          "x": 883.9929194697626,
+          "y": 645.6483787254048
+        },
+        "data": {
+          "label": "Output Parser",
+          "config": {
+            "enabled": true,
+            "output_contract": {
+              "name": "critic_answer",
+              "fields": [
+                {
+                  "name": "reasoning",
+                  "type": "string",
+                  "description": "Detailed reasoning for the answer"
+                },
+                {
+                  "name": "answer",
+                  "type": "string",
+                  "description": "Final yes or no answer"
+                },
+                {
+                  "name": "confidence",
+                  "type": "string",
+                  "description": "Confidence level in answer"
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "node-mv2szdhe-5zqafu2o",
+        "source": "node-mv2szdhe-8hfjn16f",
+        "target": "node-mv2szdhe-frbyieag",
+        "sourceHandle": "architectural_pattern",
+        "targetHandle": "architectural_pattern"
+      },
+      {
+        "id": "xy-edge__node-mv2sz6x2-ei474l9gdataset-node-mv2szdhe-frbyieagdataset",
+        "source": "node-mv2sz6x2-ei474l9g",
+        "target": "node-mv2szdhe-frbyieag",
+        "sourceHandle": "dataset",
+        "targetHandle": "dataset",
+        "data": {
+          "dataset_input": {
+            "mode": "per_row",
+            "columns": [
+              "question",
+              "hypothesis",
+              "result",
+              "categories"
+            ]
+          }
+        }
+      },
+      {
+        "id": "xy-edge__node-mv2t8ldf-66g1drsdpersona-node-mv2szdhe-frbyieagpersona",
+        "source": "node-mv2t8ldf-66g1drsd",
+        "target": "node-mv2szdhe-frbyieag",
+        "sourceHandle": "persona",
+        "targetHandle": "persona"
+      },
+      {
+        "id": "node-mv2ti53q-m1qf48yx",
+        "source": "node-mv2ti53q-wj1y14wn",
+        "target": "node-mv2ti53q-7krcc913",
+        "sourceHandle": "architectural_pattern",
+        "targetHandle": "architectural_pattern"
+      },
+      {
+        "id": "node-mv2tmq3x-jbxfh8x7",
+        "source": "node-mv2tmq3x-v4erdpci",
+        "target": "node-mv2szdhe-frbyieag",
+        "sourceHandle": "output_parser",
+        "targetHandle": "output_parser"
+      },
+      {
+        "id": "xy-edge__node-mv2szdhe-frbyieag-node-mv2ti53q-7krcc913",
+        "source": "node-mv2szdhe-frbyieag",
+        "target": "node-mv2ti53q-7krcc913"
+      },
+      {
+        "id": "xy-edge__node-mv2u0udd-wh30i3n4persona-node-mv2ti53q-7krcc913persona",
+        "source": "node-mv2u0udd-wh30i3n4",
+        "target": "node-mv2ti53q-7krcc913",
+        "sourceHandle": "persona",
+        "targetHandle": "persona"
+      },
+      {
+        "id": "node-mv2u3pe5-61y75z4c",
+        "source": "node-mv2u3pe5-a0ldblpb",
+        "target": "node-mv2ti53q-7krcc913",
+        "sourceHandle": "output_parser",
+        "targetHandle": "output_parser"
+      },
+      {
+        "id": "xy-edge__node-mv2t0vf2-ub7jtyqsmodel-node-mv2szdhe-frbyieagmodel",
+        "source": "node-mv2t0vf2-ub7jtyqs",
+        "target": "node-mv2szdhe-frbyieag",
+        "sourceHandle": "model",
+        "targetHandle": "model"
+      },
+      {
+        "id": "xy-edge__node-mv2t0vf2-ub7jtyqsmodel-node-mv2ti53q-7krcc913model",
+        "source": "node-mv2t0vf2-ub7jtyqs",
+        "target": "node-mv2ti53q-7krcc913",
+        "sourceHandle": "model",
+        "targetHandle": "model"
+      },
+      {
+        "id": "xy-edge__node-mv2sz6x2-ei474l9gdataset-node-mv2ti53q-7krcc913dataset",
+        "source": "node-mv2sz6x2-ei474l9g",
+        "target": "node-mv2ti53q-7krcc913",
+        "sourceHandle": "dataset",
+        "targetHandle": "dataset",
+        "data": {
+          "dataset_input": {
+            "mode": "per_row",
+            "columns": [
+              "question",
+              "hypothesis",
+              "result",
+              "categories"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "design_spec": {
+    "factors": [
+      {
+        "name": "Persona:Persona text",
+        "levels": [
+          {
+            "mode": "library",
+            "persona_id": "none_v1",
+            "persona_file": null,
+            "persona_text": "",
+            "persona_label": "None (baseline)"
+          },
+          {
+            "mode": "library",
+            "persona_id": "analyst_v1",
+            "persona_file": null,
+            "persona_text": "You are extremely organized, very responsible, and very hardworking. You are extremely orderly and very thorough. You are a bit uncreative and a bit predictable. You are a bit curious. You are moderately relaxed and emotionally stable. You are moderately cooperative.",
+            "persona_label": "Analyst"
+          },
+          {
+            "mode": "library",
+            "persona_id": "explorer_v1",
+            "persona_file": null,
+            "persona_text": "You are extremely curious and very spontaneous. You are very creative and very imaginative. You are extremely energetic. You are very adventurous and daring. You are very talkative and very extraverted. You are moderately organized. You are moderately agreeable and cooperative. You are very relaxed and emotionally stable.",
+            "persona_label": "Explorer"
+          },
+          {
+            "mode": "library",
+            "persona_id": "critic_v1",
+            "persona_file": null,
+            "persona_text": "You are extremely organized, very thorough, and very self-disciplined. You are a bit unsympathetic and a bit distrustful. You are a bit cooperative. You are moderately curious. You are a bit anxious and a bit tense.",
+            "persona_label": "Critic"
+          },
+          {
+            "mode": "library",
+            "persona_id": "agreeable_evaluator_v1",
+            "persona_file": null,
+            "persona_text": "You are extremely altruistic and very cooperative. You are very lazy and extremely irresponsible.",
+            "persona_label": "Pushover"
+          }
+        ],
+        "level_type": "persona_text",
+        "level_labels": [
+          "Baseline",
+          "Analyst",
+          "Explorer",
+          "Critic",
+          "Pushover"
+        ]
+      },
+      {
+        "name": "Persona:Persona text (2)",
+        "levels": [
+          {
+            "mode": "library",
+            "persona_id": "none_v1",
+            "persona_file": null,
+            "persona_text": "",
+            "persona_label": "None (baseline)"
+          },
+          {
+            "mode": "library",
+            "persona_id": "analyst_v1",
+            "persona_file": null,
+            "persona_text": "You are extremely organized, very responsible, and very hardworking. You are extremely orderly and very thorough. You are a bit uncreative and a bit predictable. You are a bit curious. You are moderately relaxed and emotionally stable. You are moderately cooperative.",
+            "persona_label": "Analyst"
+          },
+          {
+            "mode": "library",
+            "persona_id": "explorer_v1",
+            "persona_file": null,
+            "persona_text": "You are extremely curious and very spontaneous. You are very creative and very imaginative. You are extremely energetic. You are very adventurous and daring. You are very talkative and very extraverted. You are moderately organized. You are moderately agreeable and cooperative. You are very relaxed and emotionally stable.",
+            "persona_label": "Explorer"
+          },
+          {
+            "mode": "library",
+            "persona_id": "critic_v1",
+            "persona_file": null,
+            "persona_text": "You are extremely organized, very thorough, and very self-disciplined. You are a bit unsympathetic and a bit distrustful. You are a bit cooperative. You are moderately curious. You are a bit anxious and a bit tense.",
+            "persona_label": "Critic"
+          },
+          {
+            "mode": "library",
+            "persona_id": "agreeable_evaluator_v1",
+            "persona_file": null,
+            "persona_text": "You are extremely altruistic and very cooperative. You are very lazy and extremely irresponsible.",
+            "persona_label": "Pushover"
+          }
+        ],
+        "level_type": "persona_text",
+        "level_labels": [
+          "Baseline",
+          "Analyst",
+          "Explorer",
+          "Critic",
+          "Pushover"
+        ]
+      }
+    ],
+    "metrics": [
+      {
+        "id": "runtime-cost",
+        "kind": "runtime",
+        "name": "Cost",
+        "unit": "USD",
+        "primary": false,
+        "direction": "minimize",
+        "valueType": "number",
+        "catalogKey": "cost_usd",
+        "aggregation": "sum",
+        "description": "Estimated provider cost for the run."
+      },
+      {
+        "id": "runtime-duration",
+        "kind": "runtime",
+        "name": "Duration",
+        "unit": "seconds",
+        "primary": false,
+        "direction": "minimize",
+        "valueType": "number",
+        "catalogKey": "duration_seconds",
+        "aggregation": "sum",
+        "description": "Wall-clock duration of the run."
+      },
+      {
+        "id": "metric-mv2unp1o-ntwchpp0",
+        "kind": "runtime",
+        "name": "Input tokens",
+        "unit": "tokens",
+        "primary": false,
+        "direction": "minimize",
+        "valueType": "number",
+        "catalogKey": "input_tokens",
+        "aggregation": "sum",
+        "description": "Tokens sent to the model during the run."
+      },
+      {
+        "id": "metric-mv2unp1o-vo2s0rry",
+        "kind": "runtime",
+        "name": "Output tokens",
+        "unit": "tokens",
+        "primary": false,
+        "direction": "minimize",
+        "valueType": "number",
+        "catalogKey": "output_tokens",
+        "aggregation": "sum",
+        "description": "Tokens generated by the model during the run."
+      },
+      {
+        "id": "runtime-total-tokens",
+        "kind": "runtime",
+        "name": "Total tokens",
+        "unit": "tokens",
+        "primary": false,
+        "direction": "minimize",
+        "valueType": "number",
+        "catalogKey": "total_tokens",
+        "aggregation": "sum",
+        "description": "Combined input and output tokens for the run."
+      },
+      {
+        "id": "metric-mv2un149-8o715sjk",
+        "kind": "runtime",
+        "name": "Agent-loop iterations",
+        "unit": "iterations",
+        "primary": false,
+        "direction": "minimize",
+        "valueType": "number",
+        "catalogKey": "agent_loop_iterations",
+        "aggregation": "sum",
+        "description": "Distinct Agent reasoning-loop iterations in the run."
+      },
+      {
+        "id": "metric-mv2up5xr-l4p9pogz",
+        "kind": "runtime",
+        "name": "Reason+Act runs",
+        "unit": "runs",
+        "primary": false,
+        "direction": "neutral",
+        "valueType": "number",
+        "catalogKey": "react_runs",
+        "aggregation": "sum",
+        "description": "Runs that went through a Reason+Act loop."
+      },
+      {
+        "id": "metric-mv2unf4u-hwic1kjy",
+        "kind": "runtime",
+        "name": "Reason+Act turns",
+        "unit": "turns",
+        "primary": false,
+        "direction": "minimize",
+        "valueType": "number",
+        "catalogKey": "react_turns",
+        "aggregation": "sum",
+        "description": "Loop iterations reported by Reason+Act runs."
+      },
+      {
+        "id": "metric-mv2undfs-5bo43ubo",
+        "kind": "runtime",
+        "name": "Reason+Act tool calls",
+        "unit": "calls",
+        "primary": false,
+        "direction": "neutral",
+        "valueType": "number",
+        "catalogKey": "react_tool_calls",
+        "aggregation": "sum",
+        "description": "Tool calls counted by Reason+Act loops."
+      }
+    ],
+    "replicates": 3,
+    "randomization_seed": null,
+    "coordination_strategy": {
+      "slug": "sequential",
+      "params": {}
+    }
+  },
+  "measurement_plan": {
+    "metrics": [
+      {
+        "id": "runtime-cost",
+        "name": "Cost",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Estimated provider cost for the run.",
+        "unit": "USD"
+      },
+      {
+        "id": "runtime-duration",
+        "name": "Duration",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Wall-clock duration of the run.",
+        "unit": "seconds"
+      },
+      {
+        "id": "metric-mv2unp1o-ntwchpp0",
+        "name": "Input tokens",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Tokens sent to the model during the run.",
+        "unit": "tokens"
+      },
+      {
+        "id": "metric-mv2unp1o-vo2s0rry",
+        "name": "Output tokens",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Tokens generated by the model during the run.",
+        "unit": "tokens"
+      },
+      {
+        "id": "runtime-total-tokens",
+        "name": "Total tokens",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Combined input and output tokens for the run.",
+        "unit": "tokens"
+      },
+      {
+        "id": "metric-mv2un149-8o715sjk",
+        "name": "Agent-loop iterations",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Distinct Agent reasoning-loop iterations in the run.",
+        "unit": "iterations"
+      },
+      {
+        "id": "metric-mv2up5xr-l4p9pogz",
+        "name": "Reason+Act runs",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Runs that went through a Reason+Act loop.",
+        "unit": "runs"
+      },
+      {
+        "id": "metric-mv2unf4u-hwic1kjy",
+        "name": "Reason+Act turns",
+        "value_type": "number",
+        "direction": "minimize",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Loop iterations reported by Reason+Act runs.",
+        "unit": "turns"
+      },
+      {
+        "id": "metric-mv2undfs-5bo43ubo",
+        "name": "Reason+Act tool calls",
+        "value_type": "number",
+        "direction": "neutral",
+        "aggregation": "sum",
+        "primary": false,
+        "description": "Tool calls counted by Reason+Act loops.",
+        "unit": "calls"
+      }
+    ],
+    "producers": [
+      {
+        "id": "runtime",
+        "producer_id": "asaree.runtime",
+        "kind": "runtime",
+        "outputs": {
+          "cost_usd": "runtime-cost",
+          "react_runs": "metric-mv2up5xr-l4p9pogz",
+          "react_turns": "metric-mv2unf4u-hwic1kjy",
+          "input_tokens": "metric-mv2unp1o-ntwchpp0",
+          "total_tokens": "runtime-total-tokens",
+          "output_tokens": "metric-mv2unp1o-vo2s0rry",
+          "duration_seconds": "runtime-duration",
+          "react_tool_calls": "metric-mv2undfs-5bo43ubo",
+          "agent_loop_iterations": "metric-mv2un149-8o715sjk"
+        },
+        "artifacts": [],
+        "config": {}
+      }
+    ],
+    "inputs": [
+      {
+        "producer_binding_id": "runtime",
+        "input_key": "facts",
+        "source_key": "attempt.runtime"
+      }
+    ]
+  }
+}

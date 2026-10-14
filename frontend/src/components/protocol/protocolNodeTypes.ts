@@ -13,6 +13,7 @@ import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatte
 import { OkfBundleNode } from './nodes/OkfBundleNode'
 import { OkfDocumentNode } from './nodes/OkfDocumentNode'
 import { SkillNode } from './nodes/SkillNode'
+import { PersonaNode } from './nodes/PersonaNode'
 
 export const NODE_TYPES = {
   agent: AgentNode, sub_agent: AgentNode,
@@ -24,4 +25,5 @@ export const NODE_TYPES = {
   skill: SkillNode, okf_bundle: OkfBundleNode, okf_document: OkfDocumentNode,
   script: ScriptNode, pattern_reason_act: ReasonActPatternNode,
   pattern_single_agent_baseline: SingleAgentBaselinePatternNode,
+  persona: PersonaNode,
 }

@@ -113,7 +113,8 @@ async def upgrade_async(url: str | None = None, revision: str = "head") -> None:
 
 
 async def current_revision(url: str | None = None) -> str | None:
-    """The revision ASAREE's schema is stamped at, or ``None`` if unmigrated."""
+    """The stamped revision, or ``None`` if the database is missing or unmigrated."""
+    from asyncpg import InvalidCatalogNameError
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -124,6 +125,10 @@ async def current_revision(url: str | None = None) -> str | None:
                 return None
             version_num = await conn.scalar(text("SELECT version_num FROM alembic_version LIMIT 1"))
             return str(version_num) if version_num is not None else None
+    except InvalidCatalogNameError:
+        # The pre-deploy backup runs before upgrade creates a fresh database.
+        # There is nothing to snapshot yet; other connection failures must fail.
+        return None
     finally:
         await engine.dispose()
 

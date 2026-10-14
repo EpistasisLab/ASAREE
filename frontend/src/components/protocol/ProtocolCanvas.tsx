@@ -1958,6 +1958,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | OkfBundleNodeData
       | OkfDocumentNodeData
       | ScriptNodeData
+      | PersonaNodeData
       | ReasonActPatternNodeData
       | SingleAgentBaselinePatternNodeData,
   ) {
@@ -2302,7 +2303,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           <PersonaNodeInspector
             node={{ id: selectedNode.id, type: 'persona', position: selectedNode.position, data: selectedNode.data as PersonaNodeData }}
             experimentId={experimentId}
-            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}

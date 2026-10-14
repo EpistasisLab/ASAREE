@@ -44,14 +44,12 @@ const PERSONA_LIBRARY = [
 export function PersonaNodeInspector({
   node,
   experimentId,
-  factorNodeLabel,
   onChange,
   onDelete,
   onClose,
 }: {
   node: (ProtocolNode & { data: PersonaNodeData }) | null
   experimentId: string | null
-  factorNodeLabel: string
   onChange: (nodeId: string, data: PersonaNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
@@ -62,14 +60,17 @@ export function PersonaNodeInspector({
   const bindings = data.factor_bindings ?? {}
 
   function patchConfig(patch: Partial<PersonaNodeData['config']>) {
+    if (!node) return
     onChange(node.id, { ...data, config: { ...config, ...patch } })
   }
 
   function bindFactor(fieldPath: string, factorName: string) {
+    if (!node) return
     onChange(node.id, { ...data, factor_bindings: { ...bindings, [fieldPath]: factorName } })
   }
 
   function unbindFactor(fieldPath: string) {
+    if (!node) return
     const next = { ...bindings }
     delete next[fieldPath]
     onChange(node.id, { ...data, factor_bindings: next })
@@ -99,7 +100,6 @@ export function PersonaNodeInspector({
       }
       onDelete={() => onDelete(node.id)}
       onClose={onClose}
-      factorNodeLabel={factorNodeLabel}
     >
       <div className="space-y-6">
         {/* Enable/disable switch */}

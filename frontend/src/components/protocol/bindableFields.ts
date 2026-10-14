@@ -287,6 +287,14 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       // Keep config discoverable for editing existing variant bindings.
       // New factors compare separate Script nodes through Script levels.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }, { fieldPath: 'config', label: 'Script variants (existing factors)', levelType: 'script_config' }]
+    case 'persona':
+      // Persona text is what varies across cells -- each level can select from
+      // the persona library, upload a .md file, or use custom text. The persona
+      // node's own `enabled` toggle is a canvas-only control (whether it
+      // contributes to its connected agent's system prompt), not a cell-level factor.
+      return [
+        { fieldPath: 'config.persona_text', label: 'Persona text', levelType: 'persona_text' },
+      ]
     default:
       return []
   }

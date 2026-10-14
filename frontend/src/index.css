@@ -159,6 +159,9 @@
        deterministic, model-free step. A dimmer steel (0.86/0.025) was tried
        first and read as washed-out rather than distinct. */
     --node-11: oklch(0.95 0.015 240);
+    /* Persona (kind sixteen) uses a warm purple/magenta for personality
+       configuration, distinct from Skill while in behavioral config family. */
+    --node-12: oklch(0.75 0.15 320);
     /* Connector captions (Pattern/Skill/Dataset/Knowledge/Model/Memory/Tool on
        AgentNode and CriticGateNode). One fixed yellow rather than the host
        node's own accent: these sit outside the card on the canvas backdrop,

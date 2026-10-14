@@ -33,6 +33,7 @@ export type LevelType =
   | 'dataset_toggle'
   | 'knowledge_selection'
   | 'knowledge_toggle'
+  | 'persona_text'
 
 export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   string: 'String',
@@ -57,6 +58,7 @@ export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   dataset_toggle: 'All datasets on/off',
   knowledge_selection: 'Knowledge levels',
   knowledge_toggle: 'All knowledge on/off',
+  persona_text: 'Persona',
 }
 
 // Whether a level of this kind is a structured value (an object, or -- for
@@ -83,7 +85,8 @@ export function isStructuredLevelType(type: LevelType): boolean {
     type === 'dataset_selection' ||
     type === 'dataset_toggle' ||
     type === 'knowledge_selection' ||
-    type === 'knowledge_toggle'
+    type === 'knowledge_toggle' ||
+    type === 'persona_text'
   )
 }
 
@@ -158,6 +161,8 @@ export function emptyStructuredLevel(type: LevelType): unknown {
     // rather than an unconfigured placeholder.
     case 'tool_names':
       return []
+    case 'persona_text':
+      return { mode: 'custom', persona_id: null, persona_label: null, persona_file: null, persona_text: '' }
     default:
       return ''
   }

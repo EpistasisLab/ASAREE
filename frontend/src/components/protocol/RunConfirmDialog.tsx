@@ -8,8 +8,6 @@ import { summarizeRun, type RunScope } from './runSummary'
 
 function scopeTitle(scope: RunScope): string {
   switch (scope.type) {
-    case 'batch':
-      return scope.title
     case 'graph':
       return 'Start a Test Run?'
     case 'replicate':
@@ -111,8 +109,6 @@ export function RunConfirmDialog({
           <DialogDescription>This makes real LLM calls and may incur cost -- review what's about to run before continuing.</DialogDescription>
         </DialogHeader>
 
-        {scope.type === 'batch' && <p className="text-xs">Experiment version: {publishedRevision === null ? 'not published' : `Published v${publishedRevision}`}</p>}
-
         <div className="space-y-2 text-sm">
           {scope.type === 'all-cells' && (
             <p>
@@ -133,7 +129,7 @@ export function RunConfirmDialog({
                 : ''}
             </p>
           )}
-          <details open={scope.type !== 'batch'}><summary className="cursor-pointer text-xs text-muted-foreground">Technical details</summary><p>
+          <p>
             {summary.agentCount} agent{summary.agentCount === 1 ? '' : 's'}
             {summary.criticGateCount > 0 ? `, ${summary.criticGateCount} critic gate${summary.criticGateCount === 1 ? '' : 's'}` : ''} will run
             {scope.type === 'all-cells' ? ' per replicate' : ''}.
@@ -170,7 +166,7 @@ export function RunConfirmDialog({
                 {summary.knowledgeSources.length > 0 ? summary.knowledgeSources.join(', ') : 'none wired'}
               </dd>
             </div>
-          </dl></details>
+          </dl>
         </div>
 
         {additionalContent}

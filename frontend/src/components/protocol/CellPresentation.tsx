@@ -39,8 +39,8 @@ export function ReplicateRow({ number, detail, badges, status, actions, onView, 
 }) {
   const content = <><div className="min-w-0 flex-1"><div className="flex items-center gap-1.5"><p className="text-sm font-medium">Replicate {number}</p>{badges}</div>{detail && <p className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted-foreground">{detail}</p>}</div>
     <div className="flex shrink-0 items-center gap-2">{status}{results ? onView && <ExternalLink className="size-3.5 text-muted-foreground" /> : <>{onView && <Button variant="outline" size="xs" className="h-5 px-1.5 text-[0.65rem]" aria-label={viewAriaLabel} onClick={onView}>{viewLabel}</Button>}{actions}</>}</div></>
-  if (results) return <li className="space-y-1"><button type="button" disabled={!onView} aria-label={viewAriaLabel} onClick={onView} className="flex w-full flex-wrap items-center gap-2 rounded-md border bg-background px-2.5 py-2 text-left transition-colors enabled:hover:border-primary/30 enabled:hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{content}</button>{actions && <div className="flex justify-end">{actions}</div>}</li>
-  return <ReplicateFrame><div className="flex flex-wrap items-center justify-between gap-3">{content}</div>{error && <p className="mt-2 break-words rounded bg-destructive/10 px-2 py-1.5 text-xs text-destructive">{error}</p>}</ReplicateFrame>
+  if (results) return <li><button type="button" disabled={!onView} aria-label={viewAriaLabel} onClick={onView} className="flex w-full items-center gap-2 rounded-md border bg-background px-2.5 py-2 text-left transition-colors enabled:hover:border-primary/30 enabled:hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{content}</button></li>
+  return <ReplicateFrame><div className="flex items-center justify-between gap-3">{content}</div>{error && <p className="mt-2 rounded bg-destructive/10 px-2 py-1.5 text-xs text-destructive">{error}</p>}</ReplicateFrame>
 }
 
 export function CellFrame({ children, results = false, expanded = false }: { children: ReactNode; results?: boolean; expanded?: boolean }) {

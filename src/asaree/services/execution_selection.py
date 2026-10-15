@@ -1,7 +1,8 @@
 """Shared predicates for browsing and sealing a batch's execution selection."""
 from typing import Any
 
-from sqlalchemy import Text, and_, cast, func, or_
+from sqlalchemy import Text, and_, case, cast, func, literal, or_, select
+from sqlalchemy.dialects.postgresql import ARRAY, aggregate_order_by
 
 
 def cell_filters(cell: Any, search: str = '', factors: dict[str, Any] | None = None) -> list[Any]:
@@ -30,28 +31,15 @@ def slot_filters(slots: Any, status: str | None = None) -> list[Any]:
     return [slots.c.status == status] if status else []
 
 
-def effective_status(row: dict[str, Any]) -> str:
-    result = row.get('result') or {}
-    if result.get('truncated') or row['status'] == 'limit_reached':
-        return 'limit_reached'
-    if row['status'] == 'completed' and result.get('evaluation_state') == 'failed':
-        return 'scoring_failed'
-    return str(row['status'])
-
-
-def action_eligible(status: str, mode: str | None, truncated: bool = False) -> bool:
-    if mode == 'pending':
-        return status == 'not_started'
-    if mode == 'retry':
-        return status == 'failed' and not truncated
-    if mode == 'rerun':
-        return status in {'failed', 'cancelled', 'completed', 'limit_reached'}
-    return False
-
-
 def natural_label(value: Any) -> Any:
     """PostgreSQL numeric collation without requiring a deployment-level collation."""
-    # Pad a numeric suffix (Cell 2 / Cell 10); factor-value sorts have their own key.
-    suffix = func.substring(value, r'[0-9]+$')
-    return cast(func.regexp_replace(func.lower(value), r'[0-9]+$', ''), Text) + cast(
-        func.coalesce(func.lpad(suffix, 30, '0'), ''), Text)
+    parts = func.regexp_matches(func.lower(value), r'([0-9]+|[^0-9]+)', 'g').table_valued(
+        'part', with_ordinality='position').render_derived()
+    part = cast(parts.c.part, ARRAY(Text))[1]
+    digits = func.coalesce(func.nullif(func.ltrim(part, '0'), ''), '0')
+    # Length before digits handles numbers of any size, including embedded factors.
+    number = cast(func.lpad(cast(func.length(digits), Text), 10, '0'), Text) + literal(':') + cast(digits, Text)
+    normalized = case((part.op('~')(r'^[0-9]+$'), number), else_=part)
+    return select(func.coalesce(func.string_agg(
+        normalized, aggregate_order_by(literal(''), parts.c.position)), '')).select_from(
+            parts).correlate_except(parts).scalar_subquery()

@@ -10,7 +10,6 @@ import { ResultTimelineNode } from './ResultTimelineNode'
 import type { ExecutionContext } from './ExecutionNodeEvidence'
 import { ExecutionBrowser } from './ExecutionBrowser'
 import { ExecutionInspector } from './ExecutionInspector'
-import type { ExecutionFocus } from '@/types/executionResults'
 
 function formatNumber(value: number | null, maximumFractionDigits = 0): string {
   if (value === null || !Number.isFinite(value)) return 'Not reported'
@@ -177,7 +176,6 @@ export function ReplicateResultDetail({ replicate, metricKeys, metricTypes, exec
             {evaluationStatusLabel(replicate) && <Badge variant="outline" className={replicate.metric_evaluation?.status === 'failed' ? 'border-destructive/50 text-destructive' : ''}>{evaluationStatusLabel(replicate)}</Badge>}
             {replicate.obsolete && <span className="text-xs text-[color:var(--chart-2)]">This result used an older canvas version.</span>}
           </div>
-          {replicate.metric_observations.length > 0 && <p className="text-xs text-muted-foreground">{replicate.metric_observations.filter(observation => observation.status === 'measured').length} of {replicate.metric_observations.length} metrics measured. Missing measurements remain listed below.</p>}
           {replicate.metric_evaluation?.status === 'failed' && replicate.metric_evaluation.error && <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">Scoring failed: {replicate.metric_evaluation.error}</p>}
           {metrics.length > 0 && (
             <section className="space-y-2">
@@ -233,12 +231,11 @@ export function ResultsInspectorPanel(props: {
   experimentId: string; experiment: Experiment; selection: ResultsSelection | null; onClose: () => void
 }) { return <ExecutionInspector {...props} /> }
 
-export function ResultsTab({ protocolId, experimentId, experiment, onSelectResult, versionId, onOpenRuns }: {
+export function ResultsTab({ protocolId, experimentId, experiment, onSelectResult, versionId }: {
   protocolId?: string; experimentId: string; experimentName: string; experiment: Experiment
   onSelectResult: (selection: ResultsSelection) => void; versionId?: string
-  onOpenRuns?: (focus: ExecutionFocus) => void
 }) {
   const scope = { protocol_id: protocolId, protocol_revision_id: versionId }
   return <ExecutionBrowser key={JSON.stringify(scope)} experimentId={experimentId} scope={scope}
-    experiment={experiment} mode="results" onSelect={onSelectResult} onOpenRuns={onOpenRuns} />
+    experiment={experiment} mode="results" onSelect={onSelectResult} />
 }

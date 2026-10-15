@@ -118,7 +118,7 @@ function CellInspector({ experimentId, selection, scope, onClose }: { experiment
   if (slot) return <SlotInspector experimentId={experimentId} slotId={slot} scope={scope} onClose={() => setSlot(undefined)} />
   return <aside className="absolute inset-0 z-20 overflow-y-auto border-l bg-card p-3" aria-label="Cell result details"><div className="mb-3 flex justify-between"><h2 className="text-sm font-medium">Cell results</h2><Button size="xs" variant="ghost" onClick={onClose}>Close</Button></div>
     {cell.data && <><p className="font-mono text-xs">{cell.data.cell_label}</p><dl className="my-3 grid grid-cols-2 gap-2 text-xs">{Object.entries(cell.data.metric_values ?? {}).map(([name, value]) => <div key={name}><dt>{name}</dt><dd className="font-mono">{String(value)}</dd></div>)}</dl>
-      <ExecutionRows experimentId={experimentId} scope={scope} cellId={cell.data.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={item => { if (item.type === 'execution') setSlot(item.slotId) }} />
+      <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}`} experimentId={experimentId} scope={scope} cellId={cell.data.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={item => { if (item.type === 'execution') setSlot(item.slotId) }} />
     </>}{cell.error && <p role="alert">{cell.error.message}</p>}
   </aside>
 }

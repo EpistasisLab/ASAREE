@@ -2,44 +2,15 @@ import type { DesignSpec, EvaluationArtifact, MetricObservation, MeasurementDire
 import type { DatasetRowSnapshot, NodeRunState } from './protocols'
 
 export interface CursorPage<T> { items: T[]; next_cursor: string | null }
-export type BatchMode = 'pending' | 'retry' | 'rerun'
-export interface ExecutionFocus { cellId: string; replicateId?: string; rowIndex?: number }
 export interface ExecutionFilters {
   search: string
   status: string
   factors: Record<string, unknown>
 }
-export interface BatchSelection {
-  mode?: BatchMode
-  source_job_id?: string
-  row_selections?: { replicate_id: string; row_index: number }[]
-  excluded_rows?: { replicate_id: string; row_index: number }[]
-  all_matching?: boolean
-  cell_id?: string
-  replicate_id?: string
-  cell_ids?: string[]
-  slot_ids?: string[]
-  excluded_slot_ids?: string[]
-  excluded_replicate_ids?: string[]
-  excluded_cell_ids?: string[]
-  replicate_ids?: string[]
-  row_indices?: number[]
-  rerun_slot_ids?: string[]
-  rerun_completed?: boolean
-  search?: string
-  status?: string
-  factors?: Record<string, unknown>
-}
-export interface ExecutionReplicate {
-  cell_id: string
-  replicate_id: string; replicate_number: number; replicate_label: string
-  total: number; matching: number; counts: Record<string, number>
-}
 export interface ResultJob {
   id: string; kind: 'plan' | 'cancel' | 'export'
   status: 'pending' | 'awaiting_confirmation' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'expired'
-  execution_counts?: Record<string, number>
-  progress: { scanned?: number; planned?: number; created?: number; skipped?: number; cancelled?: number; bytes?: number; cell_count?: number; replicate_count?: number; selected_cell_count?: number; selected_replicate_count?: number; statuses?: Record<string, number>; active_skipped?: number; limited?: number; previous_version?: boolean; unit?: 'row' | 'replicate' }
+  progress: { scanned?: number; planned?: number; created?: number; skipped?: number; cancelled?: number; bytes?: number; cell_count?: number; replicate_count?: number }
   error: string | null; protocol_revision_id: string | null; download_url?: string; schema_url?: string
 }
 export interface UsageSummary {
@@ -85,10 +56,8 @@ export interface ExecutionCell {
   cell_id: string; cell_label: string; factor_values: Record<string, unknown>
   replicate_count?: number; total?: number; counts?: Record<string, number>; truncated?: number
   usage?: UsageSummary; metric_values?: Record<string, number>; metric_counts?: Record<string, number>
-  matching_count?: number; matching_replicate_count?: number
 }
 export interface ExecutionSlot {
-  attempt_count?: number; has_previous_success?: boolean
   slot_id: string; cell_id: string; cell_label: string; factor_values: Record<string, unknown>
   replicate_id: string; replicate_label: string; replicate_number: number; row_result_id: string | null
   row_index: number | null; dataset_id: string | null; raw_sha256: string | null

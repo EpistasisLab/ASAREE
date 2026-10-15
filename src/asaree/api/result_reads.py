@@ -92,20 +92,15 @@ async def cells(
     scope: Scope,
     limit: Limit = result_reads.PAGE_SIZE,
     cursor: str | None = None,
-    metric: str | None = None,
-    direction: str = "maximize",
     search: Annotated[str, Query(max_length=200)] = '',
-    status: str | None = None,
+    status: Annotated[str | None, Query(pattern=(
+        "^(not_started|pending|running|finalizing|completed|failed|cancelled|limit_reached|scoring_failed)$"
+    ))] = None,
     factors: Annotated[str | None, Query(max_length=10000)] = None,
-    sort: str = 'label',
-    sort_direction: str = 'asc',
-    job_id: uuid.UUID | None = None,
-    cell_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     return await _read(
-        result_reads.read_cells, db, scope, limit=limit, cursor=cursor, metric=metric, direction=direction,
-        search=search, status=status, factors=factor_selection(factors), sort=sort,
-        sort_direction=sort_direction, job_id=job_id, cell_id=cell_id,
+        result_reads.read_cells, db, scope, limit=limit, cursor=cursor,
+        search=search, status=status, factors=factor_selection(factors),
     )
 
 
@@ -125,10 +120,6 @@ async def executions(
     ] = None,
     search: Annotated[str, Query(max_length=200)] = '',
     factors: Annotated[str | None, Query(max_length=10000)] = None,
-    sort: str = 'number',
-    sort_direction: str = 'asc',
-    job_id: uuid.UUID | None = None,
-    row_index: Annotated[int | None, Query(ge=0)] = None,
 ) -> dict[str, Any]:
     return await _read(
         result_reads.read_executions,
@@ -139,19 +130,8 @@ async def executions(
         cell_id=cell_id,
         replicate_id=replicate_id,
         status=status,
-        search=search, factors=factor_selection(factors), sort=sort, sort_direction=sort_direction,
-        job_id=job_id, row_index=row_index,
+        search=search, factors=factor_selection(factors),
     )
-
-
-@router.get('/replicates')
-async def replicates(db: DbSession, scope: Scope, cell_id: uuid.UUID,
-                     limit: Limit = result_reads.PAGE_SIZE, cursor: str | None = None,
-                     status: str | None = None, sort: str = 'number', sort_direction: str = 'asc',
-                     job_id: uuid.UUID | None = None, replicate_id: uuid.UUID | None = None) -> dict[str, Any]:
-    return await _read(result_reads.read_execution_replicates, db, scope, cell_id=cell_id, limit=limit,
-                       cursor=cursor, status=status, sort=sort, sort_direction=sort_direction,
-                       job_id=job_id, replicate_id=replicate_id)
 
 
 @router.get('/factor-options')

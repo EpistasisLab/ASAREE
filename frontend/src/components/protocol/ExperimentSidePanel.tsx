@@ -8,7 +8,6 @@ import { ExperimentVersionDesign, ExperimentVersionRuns } from './ExperimentVers
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import { RunsTab } from './RunsTab'
 import { ResultsTab, type ResultsSelection } from './ResultsTab'
-import type { ExecutionFocus } from '@/types/executionResults'
 import type { Experiment } from '@/types/experiments'
 import type { Protocol, ProtocolRevision } from '@/types/protocols'
 
@@ -94,7 +93,6 @@ export function ExperimentSidePanel({
   const [width, setWidth] = useState(readStoredPanelWidth)
   const [collapsed, setCollapsed] = useState(readStoredCollapsed)
   const [activeTab, setActiveTab] = useState<PanelTab>('design')
-  const [runFocus, setRunFocus] = useState<ExecutionFocus>()
   const [hasPendingDesignUpdate, setHasPendingDesignUpdate] = useState(false)
   const [dragging, setDragging] = useState(false)
   const dragStart = useRef<{ x: number; width: number } | null>(null)
@@ -265,10 +263,8 @@ export function ExperimentSidePanel({
                   onDraftBusyChange={onDraftBusyChange}
                 />
               </div>
-              {viewingHistory && !version ? <p role="status" className="p-3 text-xs text-muted-foreground">The selected version is unavailable. Return to draft to continue.</p> : activeTab === 'design' && version ? <ExperimentVersionDesign version={version} /> : activeTab === 'runs' && version ? <ExperimentVersionRuns key={version.id} protocolId={protocol?.id} experimentId={experiment.id} version={version} onSelectResult={onResultSelection} focus={runFocus} onClearFocus={() => setRunFocus(undefined)} /> : activeTab === 'runs' ? (
+              {viewingHistory && !version ? <p role="status" className="p-3 text-xs text-muted-foreground">The selected version is unavailable. Return to draft to continue.</p> : activeTab === 'design' && version ? <ExperimentVersionDesign version={version} /> : activeTab === 'runs' && version ? <ExperimentVersionRuns key={version.id} protocolId={protocol?.id} experimentId={experiment.id} version={version} onSelectResult={onResultSelection} /> : activeTab === 'runs' ? (
                 <RunsTab
-                  focus={runFocus}
-                  onClearFocus={() => setRunFocus(undefined)}
                   experimentId={experiment.id}
                   designSpec={experiment.design_spec}
                   protocol={protocol}
@@ -280,7 +276,6 @@ export function ExperimentSidePanel({
                 />
               ) : activeTab === 'results' ? (
                 <ResultsTab
-                  onOpenRuns={focus => { setRunFocus(focus); openPanel('runs') }}
                   versionId={version?.id ?? protocol?.published_revision_id ?? undefined}
                   protocolId={protocol?.id}
                   experimentId={experiment.id}

@@ -25,9 +25,11 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from asaree.models.experiment import ResearchExperiment
+from asaree.models.dataset import RegisteredDataset
 from asaree.models.experiment_design_revision import ExperimentDesignRevision
 from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.models.factorial_row_result import FactorialRowResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
@@ -48,7 +50,6 @@ from asaree.services.result_reads import (
     read_cells,
     read_conversation,
     read_evidence,
-    read_execution_replicates,
     read_executions,
     read_summary,
     resolve_result_scope,
@@ -284,12 +285,13 @@ async def test_current_attempt_history_and_rerun_rollups(results_db):
     assert len((await read_cells(db, selected))["items"]) == 1
 
 
-async def test_run_browser_natural_order_filters_and_cursor_scope(results_db):
+@pytest.mark.parametrize('labels', [('Cell 10', 'Cell 2'), ('size=10|model=A', 'size=2|model=A')])
+async def test_run_browser_natural_order_filters_and_cursor_scope(results_db, labels):
     db, selected, first, user = results_db
-    first.cell_label = 'Cell 10'
+    first.cell_label = labels[0]
     first.factor_values = {'model': 'B', 'temperature': 10}
     second = FactorialCell(experiment_id=selected.experiment_id, design_revision_id=selected.design_revision_id,
-                           cell_label='Cell 2', factor_values={'model': 'A', 'temperature': 2})
+                           cell_label=labels[1], factor_values={'model': 'A', 'temperature': 2})
     db.add(second)
     await db.flush()
     for cell in (first, second):
@@ -305,14 +307,13 @@ async def test_run_browser_natural_order_filters_and_cursor_scope(results_db):
                                status='failed' if number == 2 else 'completed', node_runs={}))
     await db.flush()
     page = await read_cells(db, selected, limit=1)
-    assert [cell['cell_label'] for cell in page['items']] == ['Cell 2']
+    assert [cell['cell_label'] for cell in page['items']] == [labels[1]]
     next_page = await read_cells(db, selected, limit=1, cursor=page['next_cursor'])
-    assert [cell['cell_label'] for cell in next_page['items']] == ['Cell 10']
+    assert [cell['cell_label'] for cell in next_page['items']] == [labels[0]]
     with pytest.raises(ValueError, match='cursor_scope_mismatch'):
         await read_cells(db, selected, limit=1, cursor=page['next_cursor'], status='failed')
     filtered = await read_cells(db, selected, search='model', status='failed', factors={'temperature': 2})
-    assert [cell['cell_label'] for cell in filtered['items']] == ['Cell 2']
-    assert filtered['items'][0]['matching_count'] == 1
+    assert [cell['cell_label'] for cell in filtered['items']] == [labels[1]]
     replicates = await read_executions(db, selected, cell_id=second.id)
     assert [item['replicate_number'] for item in replicates['items']] == [2, 10]
     assert all(item['row_index'] is None for item in replicates['items'])
@@ -324,42 +325,6 @@ async def test_run_browser_natural_order_filters_and_cursor_scope(results_db):
     failed = await read_executions(db, selected, cell_id=second.id, status='failed')
     assert [item['replicate_number'] for item in failed['items']] == [2]
     assert (await read_cells(db, selected, search='%'))['items'] == []
-
-
-async def test_explicit_metric_sort_excludes_failed_limited_and_missing_values(results_db):
-    from dataclasses import replace
-
-    db, selected, cell, user = results_db
-    selected = replace(selected, design_spec={'metrics': [{
-        'id': 'duration', 'name': 'Duration', 'kind': 'runtime', 'catalogKey': 'duration_seconds',
-    }]})
-    for number, status, value, truncated in [(1, 'completed', 20, False), (2, 'completed', 10, False),
-                                             (3, 'failed', 1, False), (4, 'completed', 0, True),
-                                             (5, 'completed', None, False)]:
-        parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=number, replicate_label=f'rep{number}')
-        db.add(parent)
-        await db.flush()
-        db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
-                           protocol_revision_id=selected.protocol_revision_id,
-                           design_revision_id=selected.design_revision_id, replicate_result_id=parent.id,
-                           replicate_label=parent.replicate_label, status=status,
-                           node_runs={'node': {'truncation': {}}} if truncated else {},
-                           attempt_result={'measurement': {'observations': [{
-                               'metric_id': 'duration', 'metric_name': 'duration_seconds',
-                               'status': 'measured' if value is not None else 'unavailable', 'value': value,
-                               'producer': {'kind': 'runtime', 'producer_id': 'asaree.runtime'},
-                           }]}}))
-    await db.flush()
-    first = await read_executions(db, selected, sort='metric:duration_seconds', limit=1)
-    second = await read_executions(db, selected, sort='metric:duration_seconds', limit=1,
-                                   cursor=first['next_cursor'])
-    assert [item['replicate_number'] for item in first['items'] + second['items']] == [2, 1]
-    rest = await read_executions(db, selected, sort='metric:duration_seconds', cursor=second['next_cursor'])
-    assert {item['replicate_number'] for item in rest['items']} == {3, 4, 5}
-    descending = await read_executions(db, selected, sort='metric:duration_seconds', sort_direction='desc')
-    assert [item['replicate_number'] for item in descending['items'][:2]] == [1, 2]
-    focused = await read_executions(db, selected, replicate_id=uuid.UUID(first['items'][0]['replicate_id']))
-    assert len(focused['items']) == 1
 
 
 async def test_cached_primary_summary_fields_are_inert(results_db):
@@ -377,31 +342,6 @@ async def test_cached_primary_summary_fields_are_inert(results_db):
     assert summary['primary_metric'] is None
     assert summary['primary_metric_direction'] is None
     assert summary['best_cell'] is None
-
-
-async def test_focused_batch_preview_respects_replicate_constraint_and_exclusions(results_db, monkeypatch):
-    db, selected, cell, user = results_db
-    parents = [FactorialReplicateResult(cell_id=cell.id, replicate_number=number, replicate_label=f'rep{number}')
-               for number in (1, 2)]
-    db.add_all(parents)
-    await db.flush()
-    for parent in parents:
-        db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
-                           protocol_revision_id=selected.protocol_revision_id,
-                           design_revision_id=selected.design_revision_id, replicate_result_id=parent.id,
-                           replicate_label=parent.replicate_label, status='failed', node_runs={}))
-    await db.flush()
-    monkeypatch.setattr(result_jobs, 'plan_cell_runs', AsyncMock(return_value=([], 0)))
-    selection = {'mode': 'retry', 'replicate_id': str(parents[0].id), 'all_matching': True}
-    job = await result_jobs.create_job(db, selected, user.id, kind='plan', request_key='focused', params=selection)
-    await result_jobs.prepare_step(db, job, selected)
-    await db.flush()
-    await result_jobs.prepare_step(db, job, selected)
-    assert job.progress['planned'] == 1
-    excluded = await result_jobs.create_job(db, selected, user.id, kind='plan', request_key='excluded',
-                                           params={**selection, 'excluded_replicate_ids': [str(parents[0].id)]})
-    await result_jobs.prepare_step(db, excluded, selected)
-    assert excluded.progress['planned'] == 0
 
 
 async def test_unplanned_dataset_rows_remain_browsable_when_filtered(results_db):
@@ -429,9 +369,65 @@ async def test_unplanned_dataset_rows_remain_browsable_when_filtered(results_db)
                                    search='model', factors={'model': 'A'}, limit=2, cursor=first['next_cursor'])
     assert [(row['replicate_number'], row['row_index']) for row in second['items']] == [(2, 2), (10, 0)]
     assert all(row['status'] == 'not_started' for row in first['items'])
-    groups = await read_execution_replicates(db, selected, cell_id=cell.id, status='not_started')
-    assert [(group['replicate_number'], group['matching']) for group in groups['items']] == [(2, 3), (10, 3)]
     assert len((await read_cells(db, selected, status='not_started'))['items']) == 1
+
+
+@pytest.mark.parametrize('status', [None, 'not_started'])
+async def test_large_unplanned_source_returns_contiguous_bounded_pages(results_db, status):
+    from dataclasses import replace
+
+    db, selected, cell, _user = results_db
+    db.add(FactorialReplicateResult(cell_id=cell.id, replicate_number=1, replicate_label='rep1'))
+    await db.flush()
+    selected = replace(selected, row_plan={'driver_dataset_id': str(uuid.uuid4())})
+    refresh = await db.get(ResultRefresh, selected.key)
+    if refresh is None:
+        refresh = ResultRefresh(scope_key=selected.key, protocol_id=selected.protocol_id,
+                                protocol_revision_id=selected.protocol_revision_id,
+                                design_revision_id=selected.design_revision_id)
+        db.add(refresh)
+    refresh.summary = {'source_row_count': 1_000_000}
+    await db.flush()
+    first = await read_executions(db, selected, status=status)
+    second = await read_executions(db, selected, status=status, cursor=first['next_cursor'])
+    assert [row['row_index'] for row in first['items']] == list(range(20))
+    assert [row['row_index'] for row in second['items']] == list(range(20, 40))
+    assert second['next_cursor'] is not None
+
+
+async def test_unstarted_row_pages_skip_occupied_rows_and_keep_gaps(results_db):
+    from dataclasses import replace
+
+    db, selected, cell, user = results_db
+    dataset = RegisteredDataset(name='Row gaps', owner_id=user.id)
+    parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=1, replicate_label='rep1')
+    db.add_all([dataset, parent])
+    await db.flush()
+    selected = replace(selected, row_plan={'driver_dataset_id': str(dataset.id)})
+    for index, status in [(0, 'completed'), (1, None), (2, 'failed'), (4, 'completed')]:
+        row = FactorialRowResult(replicate_result_id=parent.id, protocol_revision_id=selected.protocol_revision_id,
+                                 dataset_id=dataset.id, raw_sha256='a' * 64, row_index=index)
+        db.add(row)
+        await db.flush()
+        if status is not None:
+            db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
+                               protocol_revision_id=selected.protocol_revision_id,
+                               design_revision_id=selected.design_revision_id, replicate_result_id=parent.id,
+                               row_result_id=row.id, replicate_label=parent.replicate_label, status=status, node_runs={}))
+    await db.flush()
+    refresh = await db.get(ResultRefresh, selected.key)
+    if refresh is None:
+        refresh = ResultRefresh(scope_key=selected.key, protocol_id=selected.protocol_id,
+                                protocol_revision_id=selected.protocol_revision_id,
+                                design_revision_id=selected.design_revision_id)
+        db.add(refresh)
+    refresh.summary = {'source_row_count': 7}
+    await db.flush()
+    first = await read_executions(db, selected, status='not_started', limit=2)
+    second = await read_executions(db, selected, status='not_started', limit=2, cursor=first['next_cursor'])
+    assert [row['row_index'] for row in first['items']] == [1, 3]
+    assert [row['row_index'] for row in second['items']] == [5, 6]
+    assert second['next_cursor'] is None
 
 
 async def test_opaque_previews_and_eligibility(results_db):

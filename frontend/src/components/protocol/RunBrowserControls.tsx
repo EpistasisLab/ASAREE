@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { experimentsApi, type ResultsScope } from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -18,40 +17,14 @@ export function filterParams(filters: ExecutionFilters) {
 export function hasExecutionFilters(filters: ExecutionFilters) {
   return !!(filters.search || filters.status || Object.keys(filters.factors).length)
 }
-export interface RunBrowserSettings {
-  filters: ExecutionFilters; sort: string; sortDirection: string
-  replicateSort: string; replicateDirection: string; expanded: string[]
-  comparisonMetric?: string
-  expandedReplicates?: string[]
-}
-const defaults: RunBrowserSettings = { filters: emptyExecutionFilters, sort: 'label', sortDirection: 'asc',
-  replicateSort: 'number', replicateDirection: 'asc', expanded: [] }
-
-export function useRunBrowserSettings(experimentId: string, initialFilters?: ExecutionFilters, persist = true, mode: 'runs' | 'results' = 'runs') {
-  const key = `asaree:${mode}:${experimentId}`
-  const [settings, setSettings] = useState<RunBrowserSettings>(() => {
-    if (!persist) return { ...defaults, filters: initialFilters ?? emptyExecutionFilters }
-    try { return { ...defaults, ...JSON.parse(sessionStorage.getItem(key) ?? '{}') } }
-    catch { return defaults }
-  })
-  const update = (patch: Partial<RunBrowserSettings>) => setSettings(current => {
-    const next = { ...current, ...patch }
-    try { if (persist) sessionStorage.setItem(key, JSON.stringify(next)) } catch { /* Storage is optional. */ }
-    return next
-  })
-  return { settings, update }
-}
-
 const selectClass = 'max-w-full rounded border bg-background px-2 py-1 text-xs'
-export function RunBrowserControls({ experimentId, scope, settings, onChange, metrics, metricDirections, metricLabels }: {
-  experimentId: string; scope: ResultsScope; settings: RunBrowserSettings
-  onChange: (patch: Partial<RunBrowserSettings>) => void
-  metrics?: string[]; metricDirections?: Record<string, string>; metricLabels?: Record<string, string>
+export function RunBrowserControls({ experimentId, scope, filters, onChange }: {
+  experimentId: string; scope: ResultsScope; filters: ExecutionFilters
+  onChange: (filters: ExecutionFilters) => void
 }) {
   const options = useQuery({ queryKey: ['experiments', experimentId, 'execution-results', 'factor-options', scope],
     queryFn: ({ signal }) => experimentsApi.getExecutionFactorOptions(experimentId, scope, signal), staleTime: 60000 })
-  const filters = settings.filters
-  const updateFilters = (patch: Partial<ExecutionFilters>) => onChange({ filters: { ...filters, ...patch } })
+  const updateFilters = (patch: Partial<ExecutionFilters>) => onChange({ ...filters, ...patch })
   return <div className="space-y-2">
     <Input type="search" aria-label="Search cells and factors" placeholder="Search cells or factor values…" maxLength={200}
       value={filters.search} onChange={event => updateFilters({ search: event.target.value })} />
@@ -59,7 +32,6 @@ export function RunBrowserControls({ experimentId, scope, settings, onChange, me
       <select aria-label="Filter by status" className={selectClass} value={filters.status} onChange={event => updateFilters({ status: event.target.value })}>
         <option value="">All statuses</option>{Object.entries(statusLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
       </select>
-      <Button size="xs" variant={filters.status === 'failed' ? 'default' : 'outline'} onClick={() => updateFilters({ status: filters.status === 'failed' ? '' : 'failed' })}>Failed</Button>
       {Object.entries(options.data?.factors ?? {}).map(([name, values]) => <select key={name} aria-label={`Filter ${name}`} className={selectClass}
         value={name in filters.factors ? JSON.stringify(filters.factors[name]) : ''} onChange={event => {
           const factors = { ...filters.factors }
@@ -67,24 +39,7 @@ export function RunBrowserControls({ experimentId, scope, settings, onChange, me
           else delete factors[name]
           updateFilters({ factors })
         }}><option value="">All {name}</option>{values.map(value => <option key={JSON.stringify(value)} value={JSON.stringify(value)}>{typeof value === 'string' ? value : JSON.stringify(value)}</option>)}</select>)}
-      {hasExecutionFilters(filters) && <Button size="xs" variant="ghost" onClick={() => onChange({ filters: emptyExecutionFilters })}>Clear filters</Button>}
-    </div>
-    <div className="flex flex-wrap items-center gap-2 text-xs">
-      {metrics && metrics.length > 0 && <label>Compare metric <select aria-label="Choose comparison metric" className={selectClass} value={settings.comparisonMetric ?? ''} onChange={event => onChange({
-        comparisonMetric: event.target.value,
-        ...(!event.target.value ? { sort: settings.sort === 'metric' ? 'label' : settings.sort, replicateSort: settings.replicateSort === 'metric' ? 'number' : settings.replicateSort } : {}),
-      })}><option value="">No metric selected</option>{metrics.map(key => <option key={key} value={key}>{metricLabels?.[key] ?? key}</option>)}</select></label>}
-      <label>Cells <select aria-label="Sort cells" className={selectClass} value={settings.sort} onChange={event => onChange({ sort: event.target.value, sortDirection: event.target.value === 'metric' ? metricDirections?.[settings.comparisonMetric ?? ''] === 'minimize' ? 'asc' : 'desc' : ['failed', 'updated'].includes(event.target.value) ? 'desc' : 'asc' })}>
-        <option value="label">Cell label</option><option value="failed">Failure count</option><option value="updated">Recent activity</option>
-        {metrics && <option value="metric" disabled={!settings.comparisonMetric}>Selected metric</option>}
-        {Object.keys(options.data?.factors ?? {}).map(name => <option key={name} value={`factor:${name}`}>{name}</option>)}
-      </select></label>
-      <select aria-label="Cell sort direction" className={selectClass} value={settings.sortDirection} onChange={event => onChange({ sortDirection: event.target.value })}><option value="asc">Ascending</option><option value="desc">Descending</option></select>
-      <label>Replicates <select aria-label="Sort replicates" className={selectClass} value={settings.replicateSort} onChange={event => onChange({ replicateSort: event.target.value, replicateDirection: event.target.value === 'metric' ? metricDirections?.[settings.comparisonMetric ?? ''] === 'minimize' ? 'asc' : 'desc' : event.target.value === 'updated' ? 'desc' : 'asc' })}>
-        <option value="number">Replicate number</option><option value="status">Status</option><option value="updated">Recent activity</option>
-        {metrics && <option value="metric" disabled={!settings.comparisonMetric}>Selected metric</option>}
-      </select></label>
-      <select aria-label="Replicate sort direction" className={selectClass} value={settings.replicateDirection} onChange={event => onChange({ replicateDirection: event.target.value })}><option value="asc">Ascending</option><option value="desc">Descending</option></select>
+      {hasExecutionFilters(filters) && <Button size="xs" variant="ghost" onClick={() => onChange(emptyExecutionFilters)}>Clear filters</Button>}
     </div>
     {options.error && <p role="alert" className="text-xs text-destructive">Factor filters unavailable: {options.error.message}</p>}
     {options.data?.truncated && <p className="text-xs text-muted-foreground">Some factor levels are omitted. Use search to find them.</p>}

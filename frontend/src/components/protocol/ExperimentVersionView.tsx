@@ -46,7 +46,7 @@ export function ExperimentVersionDesign({ version }: { version: ProtocolRevision
   </div>
 }
 
-export function ExperimentVersionRuns({ experimentId, protocolId, version, onSelectResult, focus, onClearFocus }: { experimentId: string; protocolId?: string; version: ProtocolRevision; onSelectResult: (selection: ResultsSelection) => void; focus?: import('@/types/executionResults').ExecutionFocus; onClearFocus?: () => void }) {
+export function ExperimentVersionRuns({ experimentId, protocolId, version, onSelectResult }: { experimentId: string; protocolId?: string; version: ProtocolRevision; onSelectResult: (selection: ResultsSelection) => void }) {
   const scope = { protocol_id: protocolId, protocol_revision_id: version.id }
-  return <ExecutionBrowser key={`${version.id}:${JSON.stringify(focus)}`} experimentId={experimentId} scope={scope} mode="runs" onSelect={onSelectResult} focus={focus} onClearFocus={onClearFocus} />
+  return <ExecutionBrowser key={version.id} experimentId={experimentId} scope={scope} mode="runs" onSelect={onSelectResult} />
 }

@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Integer, Text, and_, case, cast, false, func, literal, or_, select, true, tuple_
+from sqlalchemy import BigInteger, Integer, Text, and_, case, cast, false, func, literal, or_, select, true, tuple_
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, array, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -276,7 +276,7 @@ def slot_query(scope: ResultScope, *, cutoff: Any = None) -> Any:
         base = base.add_columns(
             parent.id.label("slot_id"),
             literal(None).label("row_result_id"),
-            literal(None).label("row_index"),
+            cast(literal(None), BigInteger).label("row_index"),
             literal(None).label("dataset_id"),
             literal(None).label("raw_sha256"),
         )
@@ -357,7 +357,7 @@ def preview_slots(scope: ResultScope, job_id: uuid.UUID) -> Any:
          if scope.unit == 'row' else cast(parent.id, Text)).label('slot_id'),
         (func.coalesce(member.slot_id, run.row_result_id) if scope.unit == 'row'
          else literal(None)).label('row_result_id'),
-        member.row_index.label('row_index') if scope.unit == 'row' else literal(None).label('row_index'),
+        (member.row_index if scope.unit == 'row' else cast(literal(None), BigInteger)).label('row_index'),
         literal(None).label('dataset_id'), literal(None).label('raw_sha256'),
         run.id.label('run_id'), func.coalesce(run.status, 'not_started').label('status'),
         run.updated_at, run.error, run.result_summary.label('result'), run.usage_summary.label('usage'),
@@ -515,7 +515,7 @@ async def read_executions(
     order_value = (func.coalesce(func.extract('epoch', slots.c.updated_at), 0) if sort == 'updated' else
                    status_order if sort == 'status' else slots.c.replicate_number)
     # Include the dataset row in the ordering; the slot id breaks remaining ties.
-    row_order = func.coalesce(slots.c.row_index, -1)
+    row_order = func.coalesce(cast(slots.c.row_index, BigInteger), -1)
     if position is not None:
         if len(position) != 3:
             raise ValueError("invalid_cursor")

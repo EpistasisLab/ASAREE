@@ -41,7 +41,9 @@ from asaree.services.users import get_user_by_email
 
 
 @pytest_asyncio.fixture
-async def node_play_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[dict]:
+async def node_play_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, row_test_users: None
+) -> AsyncIterator[dict]:
     engine = create_async_engine(os.environ["ASAREE_PRODUCT_DATABASE_URL"])
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     core_engine = create_async_engine(os.environ["DATABASE_URL"])

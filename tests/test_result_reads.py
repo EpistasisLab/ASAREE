@@ -316,6 +316,12 @@ async def test_run_browser_natural_order_filters_and_cursor_scope(results_db):
     assert filtered['items'][0]['matching_count'] == 1
     replicates = await read_executions(db, selected, cell_id=second.id)
     assert [item['replicate_number'] for item in replicates['items']] == [2, 10]
+    assert all(item['row_index'] is None for item in replicates['items'])
+    first_replicate = await read_executions(db, selected, cell_id=second.id, limit=1)
+    next_replicate = await read_executions(db, selected, cell_id=second.id, limit=1,
+                                         cursor=first_replicate['next_cursor'])
+    assert [item['replicate_number'] for item in first_replicate['items']] == [2]
+    assert [item['replicate_number'] for item in next_replicate['items']] == [10]
     failed = await read_executions(db, selected, cell_id=second.id, status='failed')
     assert [item['replicate_number'] for item in failed['items']] == [2]
     assert (await read_cells(db, selected, search='%'))['items'] == []

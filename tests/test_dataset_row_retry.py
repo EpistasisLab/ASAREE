@@ -31,7 +31,7 @@ from asaree.services.users import get_user_by_email
 
 
 @pytest_asyncio.fixture
-async def retry_setup(tmp_path: Path) -> AsyncIterator[dict]:
+async def retry_setup(tmp_path: Path, row_test_users: None) -> AsyncIterator[dict]:
     engine = create_async_engine(os.environ["ASAREE_PRODUCT_DATABASE_URL"])
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     try:

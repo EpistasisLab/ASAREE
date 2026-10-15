@@ -3,6 +3,8 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+
 from asaree.services.csv_export import result_rows_to_csv
 from asaree.services.derived_metrics import FEATURE_PIPELINE_OUTPUTS
 from asaree.services.measurement_migration import normalize_experiment_measurement_plan
@@ -17,12 +19,16 @@ BDM = Path(__file__).parents[1] / "publications" / "BDM"
 USE_CASES = sorted(BDM.glob("myocardial-*.json"))
 
 
+@pytest.fixture(autouse=True)
+def require_myocardial_use_cases() -> None:
+    assert len(USE_CASES) == 3, f"Expected 3 myocardial JSON fixtures in {BDM}; found {len(USE_CASES)}"
+
+
 def test_myocardial_use_cases_normalize_reported_metrics_as_named_observations() -> None:
     documents = [json.loads(path.read_text()) for path in USE_CASES]
     expected_metrics = documents[0]["design_spec"]["metrics"]
     expected_plan_metrics = documents[0]["measurement_plan"]["metrics"]
 
-    assert len(USE_CASES) == 3
     for document in documents:
         metrics = document["design_spec"]["metrics"]
         plan = document["measurement_plan"]

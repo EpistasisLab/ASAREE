@@ -1,10 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { experimentsApi } from '@/api/client'
+import { ApiError, experimentsApi } from '@/api/client'
+import { executionKeys } from '@/lib/executionQueries'
 import type { AttemptDetail, ExecutionCell, ExecutionSlot, ExecutionSummary } from '@/types/executionResults'
 import type { Experiment } from '@/types/experiments'
 import { ResultsInspectorPanel, ResultsTab } from './ResultsTab'
+import { ExecutionBrowser } from './ExecutionBrowser'
 
 vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
@@ -138,5 +140,111 @@ describe('bounded Results reads', () => {
     const signal = vi.mocked(experimentsApi.listExecutionCells).mock.calls[0][3]!
     view.unmount()
     expect(signal.aborted).toBe(true)
+  })
+})
+
+describe('cell pagination during summary refreshes', () => {
+  const page = (number: number) => ({
+    items: [{ ...cell, cell_id: `cell-${number}`, cell_label: `page-${number}`, factor_values: { page: number } }],
+    next_cursor: number < 3 ? `page-${number + 1}` : null,
+  })
+
+  it.each([
+    { mode: 'runs' as const, primary_metric: null },
+    { mode: 'results' as const, primary_metric: null },
+    { mode: 'results' as const, primary_metric: 'duration_seconds' },
+  ])('keeps the last $mode page and its history after a progress refresh (metric=$primary_metric)', async ({ mode, primary_metric }) => {
+    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, primary_metric })
+    vi.mocked(experimentsApi.listExecutionCells).mockImplementation(async (_id, _scope, params) =>
+      page(params?.cursor === 'page-3' ? 3 : params?.cursor === 'page-2' ? 2 : 1))
+    const { client } = mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode={mode} onSelect={vi.fn()} />)
+    await screen.findByRole('button', { name: /page: 1/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await screen.findByRole('button', { name: /page: 2/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await screen.findByRole('button', { name: /page: 3/ })
+    vi.mocked(experimentsApi.listExecutionCells).mockClear()
+
+    await act(async () => {
+      client.setQueryData(executionKeys.summary('experiment', {}), { ...summary, primary_metric, generation: 2 })
+    })
+
+    await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenCalled())
+    expect(vi.mocked(experimentsApi.listExecutionCells).mock.calls.every(call => call[2]?.cursor === 'page-3')).toBe(true)
+    expect(screen.getByRole('button', { name: /page: 3/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Previous' }))
+    expect(await screen.findByRole('button', { name: /page: 2/ })).toBeInTheDocument()
+  })
+
+  it('does not cancel last-page navigation when a new generation arrives mid-request', async () => {
+    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, primary_metric: null })
+    let finishLastPage!: (value: ReturnType<typeof page>) => void
+    const lastPage = new Promise<ReturnType<typeof page>>(resolve => { finishLastPage = resolve })
+    vi.mocked(experimentsApi.listExecutionCells).mockImplementation(async (_id, _scope, params) =>
+      params?.cursor === 'page-3' ? lastPage : page(params?.cursor === 'page-2' ? 2 : 1))
+    const { client } = mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode="runs" onSelect={vi.fn()} />)
+    await screen.findByRole('button', { name: /page: 1/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await screen.findByRole('button', { name: /page: 2/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
+      expect.objectContaining({ cursor: 'page-3' }), expect.any(AbortSignal)))
+
+    await act(async () => {
+      client.setQueryData(executionKeys.summary('experiment', {}), { ...summary, primary_metric: null, generation: 2 })
+      finishLastPage(page(3))
+    })
+
+    expect(await screen.findByRole('button', { name: /page: 3/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled()
+  })
+
+  it('preserves ranked pages on refresh until the server expires their cursor, then offers an explicit restart', async () => {
+    let expired = false
+    vi.mocked(experimentsApi.listExecutionCells).mockImplementation(async (_id, _scope, params) => {
+      if (expired && params?.cursor) throw new ApiError(422, 'stale_sort_cursor')
+      return page(params?.cursor === 'page-2' ? 2 : 1)
+    })
+    const { client } = mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode="results" onSelect={vi.fn()} />)
+    await screen.findByRole('button', { name: /page: 1/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await screen.findByRole('button', { name: /page: 2/ })
+    expired = true
+    vi.mocked(experimentsApi.listExecutionCells).mockClear()
+
+    await act(async () => {
+      client.setQueryData(executionKeys.summary('experiment', {}), { ...summary, generation: 2 })
+    })
+
+    const reload = await screen.findByRole('button', { name: 'Reload ranking' })
+    expect(screen.getByRole('button', { name: /page: 2/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled()
+    expect(experimentsApi.listExecutionCells).toHaveBeenCalledTimes(1)
+    fireEvent.click(reload)
+    expect(await screen.findByRole('button', { name: /page: 1/ })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload ranking' })).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled()
+    await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
+      expect.objectContaining({ cursor: undefined, metric: 'duration_seconds' }), expect.any(AbortSignal)))
+  })
+
+  it('offers a restart when a cursor expires while loading a page for the first time', async () => {
+    vi.mocked(experimentsApi.listExecutionCells).mockImplementation(async (_id, _scope, params) => {
+      if (params?.cursor) throw new ApiError(422, 'stale_sort_cursor')
+      return page(1)
+    })
+    mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode="results" onSelect={vi.fn()} />)
+    await screen.findByRole('button', { name: /page: 1/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+
+    const reload = await screen.findByRole('button', { name: 'Reload ranking' })
+    expect(screen.queryByText('stale_sort_cursor')).not.toBeInTheDocument()
+    fireEvent.click(reload)
+    expect(await screen.findByRole('button', { name: /page: 1/ })).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled())
   })
 })

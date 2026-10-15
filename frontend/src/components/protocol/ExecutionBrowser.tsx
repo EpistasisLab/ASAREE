@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { experimentsApi, type ResultsScope } from '@/api/client'
+import { ApiError, experimentsApi, type ResultsScope } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -67,6 +67,10 @@ function useGenerationRefresh(refetch: () => unknown, generation?: number) {
   }, [generation, refetch])
 }
 
+function isStaleSortCursor(error: unknown) {
+  return error instanceof ApiError && error.status === 422 && error.detail === 'stale_sort_cursor'
+}
+
 export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSelect, controls, actions, cellActions }: {
   experimentId: string; scope: ResultsScope; experiment?: Experiment; mode: 'runs' | 'results'
   onSelect: (selection: ResultsSelection) => void; controls?: React.ReactNode
@@ -85,17 +89,12 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   const cells = useQuery({
     queryKey: [...executionKeys.root(experimentId), 'cells', scope, pager.cursor, metric, sortDirection],
     queryFn: ({ signal }) => experimentsApi.listExecutionCells(experimentId, scope, { cursor: pager.cursor, metric, direction: sortDirection }, signal),
+    retry: (failureCount, error) => !isStaleSortCursor(error) && failureCount < 3,
   })
-  const previousGeneration = useRef(summary.data?.generation)
-  const resetCells = pager.reset
-  const refetchCells = cells.refetch
-  useEffect(() => {
-    if (previousGeneration.current !== summary.data?.generation) {
-      resetCells()
-      void refetchCells()
-    }
-    previousGeneration.current = summary.data?.generation
-  }, [summary.data?.generation, resetCells, refetchCells])
+  // Progress updates do not change condition-order cursors. Ranked cursors may
+  // expire, but restarting that pagination must be an explicit user action.
+  useGenerationRefresh(cells.refetch, summary.data?.generation)
+  const staleRanking = isStaleSortCursor(cells.error)
   const metricKeys = summary.data?.unit === 'replicate' ? Object.keys(summary.data.metric_types) : []
   const refresh = () => { void summary.refetch(); void cells.refetch() }
   const cellBody = <div className="space-y-2">
@@ -105,7 +104,11 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
       <label>Compare metric <select aria-label="Choose comparison metric" className="rounded border bg-background p-1" value={metric ?? ''} onChange={event => { setMetricPreference(event.target.value); setDirectionPreference(undefined); pager.reset() }}><option value="">Condition order</option>{metricKeys.map(key => <option key={key} value={key}>{summary.data?.metric_labels?.[key] ?? formatMetricLabel(key)}</option>)}</select></label>
       {metric && <select aria-label="Sort direction" className="rounded border bg-background p-1" value={sortDirection} onChange={event => { setDirectionPreference(event.target.value); pager.reset() }}><option value="maximize">Highest first</option><option value="minimize">Lowest first</option></select>}
     </div>}
-    {cells.isPending ? <Skeleton className="h-20" /> : cells.error && !cells.data ? <p role="alert" className="text-xs text-destructive">{cells.error.message}</p> : <>
+    {staleRanking && <div role="status" className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      <span>The ranking has changed. Reload from the first page to continue.</span>
+      <Button size="xs" variant="outline" onClick={pager.reset}>Reload ranking</Button>
+    </div>}
+    {cells.isPending ? <Skeleton className="h-20" /> : cells.error && !cells.data ? !staleRanking && <p role="alert" className="text-xs text-destructive">{cells.error.message}</p> : <>
       {!cells.data?.items.length && <p className="text-xs text-muted-foreground">No generated cells in this version.</p>}
       {mode === 'results' && metric && <div className="overflow-x-auto rounded border"><table className="w-full text-left text-xs"><thead className="border-b text-muted-foreground"><tr><th className="p-2">{ranking ? 'Rank' : '—'}</th><th className="p-2">Condition</th><th className="p-2">{summary.data?.metric_labels?.[metric] ?? formatMetricLabel(metric)}</th><th className="p-2">Measured</th></tr></thead><tbody>{cells.data?.items.map(cell => <tr key={cell.cell_id} className="border-b"><td className="p-2 font-mono">{ranking ? cell.primary_rank ?? '—' : '—'}</td><td className="p-2 font-mono">{cell.cell_label}</td><td className="p-2 font-mono">{cell.metric_values?.[metric] !== undefined ? formatMetricValue(metric, cell.metric_values[metric]) : 'Unavailable'}</td><td className="p-2 font-mono">{cell.metric_counts?.[metric] ?? 0}/{cell.replicate_count ?? '?'}</td></tr>)}</tbody></table></div>}
       {cells.data?.items.map(cell => <CellCard key={cell.cell_id} label={cell.cell_label} results={mode === 'results'}
@@ -117,8 +120,8 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
         actions={<>{cellActions?.(cell)}<Button size="xs" variant="outline" onClick={() => onSelect({ type: 'cell', cellId: cell.cell_id, cellLabel: cell.cell_label, scope })}>View results</Button></>}>
         {expanded.has(cell.cell_id) && <ExecutionRows key={`${summary.data?.scope_key}:${cell.cell_id}:${summary.data?.source_row_count}`} experimentId={experimentId} scope={scope} cellId={cell.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={onSelect} actions={actions} />}
       </CellCard>)}
-      {cells.error && cells.data && <p role="alert" className="text-xs text-destructive">Refresh failed; showing the last loaded cells.</p>}
-      <CursorControls next={cells.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={cells.isFetching} />
+      {cells.error && cells.data && !staleRanking && <p role="alert" className="text-xs text-destructive">Refresh failed; showing the last loaded cells.</p>}
+      <CursorControls next={cells.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={cells.isFetching || staleRanking} />
     </>}
   </div>
   const overview = <div className="space-y-2"><div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-medium">{mode === 'runs' ? 'Production runs' : 'Current results'}</h2><Button variant="outline" size="xs" onClick={refresh}>Refresh</Button>{controls}</div>

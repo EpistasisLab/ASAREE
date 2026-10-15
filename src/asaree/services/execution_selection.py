@@ -1,7 +1,7 @@
 """Shared predicates for browsing and sealing a batch's execution selection."""
 from typing import Any
 
-from sqlalchemy import Text, and_, case, cast, func, literal, or_, select
+from sqlalchemy import Text, and_, case, cast, func, literal, or_, select, type_coerce
 from sqlalchemy.dialects.postgresql import ARRAY, aggregate_order_by
 
 
@@ -35,7 +35,9 @@ def natural_label(value: Any) -> Any:
     """PostgreSQL numeric collation without requiring a deployment-level collation."""
     parts = func.regexp_matches(func.lower(value), r'([0-9]+|[^0-9]+)', 'g').table_valued(
         'part', with_ordinality='position').render_derived()
-    part = cast(parts.c.part, ARRAY(Text))[1]
+    # regexp_matches already returns text[]. A SQL CAST here is emitted without
+    # the grouping PostgreSQL requires before an array subscript.
+    part = type_coerce(parts.c.part, ARRAY(Text))[1]
     digits = func.coalesce(func.nullif(func.ltrim(part, '0'), ''), '0')
     # Length before digits handles numbers of any size, including embedded factors.
     number = cast(func.lpad(cast(func.length(digits), Text), 10, '0'), Text) + literal(':') + cast(digits, Text)

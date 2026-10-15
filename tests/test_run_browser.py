@@ -1,4 +1,5 @@
 """Search and status filtering happen before bounded execution pages are returned."""
+import re
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -39,3 +40,5 @@ async def test_search_and_status_are_applied_on_server_before_pagination(reader)
     assert 21 in parameters
     assert 'LIMIT' in sql
     assert 'ORDER BY' in sql
+    # PostgreSQL requires grouping before a CAST result can be subscripted.
+    assert not re.search(r'CAST\([^)]* AS TEXT\[\]\)\[', sql)

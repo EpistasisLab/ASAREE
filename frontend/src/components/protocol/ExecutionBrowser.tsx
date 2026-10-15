@@ -89,7 +89,7 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   const refresh = () => { void summary.refetch(); void cells.refetch() }
   const cellBody = <div className="space-y-2">
     {summary.data?.unit === 'row' && <p className="text-xs text-muted-foreground">Per-row outcomes are reported individually. Aggregation, ranking and factorial analysis are unavailable.</p>}
-    <RunBrowserControls experimentId={experimentId} scope={scope} filters={filters}
+    <RunBrowserControls filters={filters}
       onChange={next => { pager.reset(); setFilters(next) }} />
     {hasExecutionFilters(filters) && <p className="text-xs text-muted-foreground">Filters narrow the records shown. Summary counts and cell aggregates cover the entire version.{mode === 'runs' && ' Run all cells covers the entire design; Run cell covers the whole cell.'}</p>}
     {cells.isPending ? <Skeleton className="h-20" /> : cells.error && !cells.data ? <p role="alert" className="text-xs text-destructive">{cells.error.message}</p> : <>

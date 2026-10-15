@@ -70,32 +70,33 @@ describe('bounded Results reads', () => {
     expect(screen.queryByRole('combobox', { name: 'Choose comparison metric' })).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Sort cells' })).not.toBeInTheDocument()
     expect(experimentsApi.listExecutionCells).toHaveBeenCalledWith('experiment', expect.anything(),
-      { cursor: undefined, search: undefined, status: undefined, factors: undefined }, expect.any(AbortSignal))
+      { cursor: undefined, search: undefined, status: undefined }, expect.any(AbortSignal))
   })
 
-  it.each(['runs', 'results'] as const)('combines search, status and factors across pages in %s', async mode => {
+  it.each(['runs', 'results'] as const)('combines search and status across pages in %s', async mode => {
     vi.mocked(experimentsApi.listExecutionCells).mockImplementation(async (_id, _scope, params) => ({
       items: [{ ...cell, cell_id: params?.cursor ? 'cell-2' : 'cell-1' }], next_cursor: params?.cursor ? null : 'page-2',
     }))
     mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode={mode} onSelect={vi.fn()} />)
     fireEvent.change(await screen.findByRole('searchbox'), { target: { value: 'model' } })
     fireEvent.change(screen.getByRole('combobox', { name: 'Filter by status' }), { target: { value: 'failed' } })
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Filter model' }), { target: { value: '"a"' } })
+    expect(screen.getAllByRole('combobox')).toHaveLength(1)
+    expect(experimentsApi.getExecutionFactorOptions).not.toHaveBeenCalled()
     await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
-      { cursor: undefined, search: 'model', status: 'failed', factors: '{"model":"a"}' }, expect.any(AbortSignal)))
+      { cursor: undefined, search: 'model', status: 'failed' }, expect.any(AbortSignal)))
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
-      expect.objectContaining({ cursor: 'page-2', search: 'model', status: 'failed', factors: '{"model":"a"}' }), expect.any(AbortSignal)))
+      expect.objectContaining({ cursor: 'page-2', search: 'model', status: 'failed' }), expect.any(AbortSignal)))
     fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
     await screen.findByText('Replicate 1')
     expect(experimentsApi.listExecutions).toHaveBeenLastCalledWith('experiment', {},
-      expect.objectContaining({ cell_id: 'cell-2', cursor: undefined, search: 'model', status: 'failed', factors: '{"model":"a"}' }), expect.any(AbortSignal))
+      expect.objectContaining({ cell_id: 'cell-2', cursor: undefined, search: 'model', status: 'failed' }), expect.any(AbortSignal))
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
     await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
-      { cursor: undefined, search: undefined, status: undefined, factors: undefined }, expect.any(AbortSignal)))
+      { cursor: undefined, search: undefined, status: undefined }, expect.any(AbortSignal)))
     expect(screen.getByRole('searchbox')).toHaveValue('')
     expect(screen.getByRole('combobox', { name: 'Filter by status' })).toHaveValue('')
-    expect(screen.getByRole('combobox', { name: 'Filter model' })).toHaveValue('')
+    expect(screen.getAllByRole('combobox')).toHaveLength(1)
     expect(screen.getAllByRole('button', { name: 'Previous' }).every(button => button.hasAttribute('disabled'))).toBe(true)
   })
 

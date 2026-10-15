@@ -5,7 +5,6 @@ export interface CursorPage<T> { items: T[]; next_cursor: string | null }
 export interface ExecutionFilters {
   search: string
   status: string
-  factors: Record<string, unknown>
 }
 export interface ResultJob {
   id: string; kind: 'plan' | 'cancel' | 'export'

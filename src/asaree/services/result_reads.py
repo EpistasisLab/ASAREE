@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import BigInteger, Integer, Text, and_, case, cast, false, func, literal, or_, select, true, tuple_
+from sqlalchemy import BigInteger, Float, Integer, Text, and_, case, cast, false, func, literal, or_, select, true, tuple_
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, array, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -98,20 +98,8 @@ def runtime_metrics(scope: ResultScope) -> dict[str, dict[str, Any]]:
                 "direction": declaration.direction
                 or previous.get("direction")
                 or defaults.get("defaultDirection", "neutral"),
-                "primary": declaration.primary if declaration.primary is not None else previous.get("primary", False),
             }
     return definitions
-
-
-def primary_runtime_metric(scope: ResultScope) -> tuple[str | None, str | None]:
-    for metric in runtime_metrics(scope).values():
-        if (
-            metric.get("primary")
-            and metric.get("direction") in {"maximize", "minimize"}
-            and metric.get("aggregation") in {"mean", "sum"}
-        ):
-            return metric["key"], metric["direction"]
-    return None, None
 
 
 def cell_predicates(scope: ResultScope) -> list[Any]:
@@ -443,7 +431,6 @@ async def read_summary(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
     if refresh is None:
         await request_refresh(db, scope)
     metrics = list(runtime_metrics(scope).values())
-    primary, direction = primary_runtime_metric(scope)
     return {
         "scope_key": scope.key,
         "unit": scope.unit,
@@ -462,9 +449,11 @@ async def read_summary(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
         "metric_labels": {metric["key"]: metric["name"] for metric in metrics},
         "metric_aggregations": {metric["key"]: metric["aggregation"] for metric in metrics},
         "metric_directions": {metric["key"]: metric["direction"] for metric in metrics},
-        "primary_metric": primary if scope.unit == "replicate" else None,
-        "primary_metric_direction": direction,
         **(refresh.summary if refresh and refresh.summary is not None else {}),
+        # Compatibility fields are inert, even while an old summary is cached.
+        "primary_metric": None,
+        "primary_metric_direction": None,
+        "best_cell": None,
     }
 
 
@@ -482,15 +471,23 @@ async def read_executions(
     sort: str = 'number',
     sort_direction: str = 'asc',
     job_id: uuid.UUID | None = None,
+    row_index: int | None = None,
 ) -> dict[str, Any]:
-    if sort not in {'number', 'status', 'updated'} or sort_direction not in {'asc', 'desc'}:
+    metric_key = sort.removeprefix('metric:') if sort.startswith('metric:') else None
+    if (sort not in {'number', 'status', 'updated'} and metric_key is None) or sort_direction not in {'asc', 'desc'}:
         raise ValueError('invalid_sort')
+    definitions = runtime_metrics(scope) if metric_key else {}
+    metric_ids = [identifier for identifier, metric in definitions.items()
+                  if metric['key'] == metric_key and metric['aggregation'] in {'mean', 'sum'} and metric['valueType'] == 'number']
+    if metric_key is not None and (not metric_ids or scope.unit == 'row'):
+        raise ValueError('invalid_sort_metric')
     filters = {
         "cell_id": str(cell_id) if cell_id else None,
         "replicate_id": str(replicate_id) if replicate_id else None,
         "status": status,
         'search': search, 'factors': factors or {}, 'sort': sort, 'sort_direction': sort_direction,
         'job_id': str(job_id) if job_id else None,
+        'row_index': row_index,
     }
     refresh = await db.get(ResultRefresh, scope.key) if scope.unit == "row" else None
     row_count = (refresh.summary or {}).get("source_row_count") if refresh else None
@@ -505,6 +502,8 @@ async def read_executions(
         query = query.where(FactorialReplicateResult.id == replicate_id)
     slots = query.subquery("slots")
     statement = select(slots)
+    if row_index is not None:
+        statement = statement.where(slots.c.row_index == row_index)
     statement = statement.where(*slot_filters(slots, status))
     status_order = case((slots.c.status == 'failed', 0),
                         (or_(slots.c.status == 'limit_reached', slots.c.result['truncated'].astext == 'true'), 1),
@@ -514,23 +513,35 @@ async def read_executions(
                         (slots.c.status == 'not_started', 7), else_=8)
     order_value = (func.coalesce(func.extract('epoch', slots.c.updated_at), 0) if sort == 'updated' else
                    status_order if sort == 'status' else slots.c.replicate_number)
+    missing = literal(0)
+    if metric_key:
+        numeric = [case((func.jsonb_typeof(slots.c.result['metrics'][identifier]) == 'number',
+                         cast(slots.c.result['metrics'][identifier].astext, Float)), else_=None)
+                   for identifier in dict.fromkeys([*metric_ids, metric_key])]
+        value = func.coalesce(*numeric) if len(numeric) > 1 else numeric[0]
+        value = case((and_(slots.c.status == 'completed',
+                          func.coalesce(slots.c.result['truncated'].astext, 'false') != 'true'), value), else_=None)
+        missing = case((value.is_(None), 1), else_=0)
+        order_value = func.coalesce(value, 0.0)
     # Include the dataset row in the ordering; the slot id breaks remaining ties.
     row_order = func.coalesce(cast(slots.c.row_index, BigInteger), -1)
     if position is not None:
-        if len(position) != 3:
+        if len(position) != 4:
             raise ValueError("invalid_cursor")
         key = tuple_(order_value, row_order, cast(slots.c.slot_id, Text))
-        bound = (position[0], position[1], position[2])
-        statement = statement.where(key > bound if sort_direction == 'asc' else key < bound)
+        bound = (position[1], position[2], position[3])
+        statement = statement.where(or_(missing > position[0], and_(missing == position[0],
+            key > bound if sort_direction == 'asc' else key < bound)))
     orders = [order_value, row_order, cast(slots.c.slot_id, Text)]
-    rows = (await db.execute(statement.add_columns(order_value.label('order_value')).order_by(
-        *[value.asc() if sort_direction == 'asc' else value.desc() for value in orders]
+    rows = (await db.execute(statement.add_columns(order_value.label('order_value'), missing.label('missing_order')).order_by(
+        missing.asc(), *[value.asc() if sort_direction == 'asc' else value.desc() for value in orders]
     ).limit(page_size(limit) + 1))).mappings().all()
     items = [execution_payload(dict(row)) for row in rows[:limit]]
     return {
         "items": items,
         "next_cursor": encode_cursor(scope, "executions", [
-            float(rows[limit - 1]['order_value']) if sort == 'updated' else rows[limit - 1]['order_value'],
+            rows[limit - 1]['missing_order'],
+            float(rows[limit - 1]['order_value']) if sort == 'updated' or metric_key else rows[limit - 1]['order_value'],
             rows[limit - 1]['row_index'] if rows[limit - 1]['row_index'] is not None else -1,
             str(rows[limit - 1]['slot_id'])], filters)
         if len(rows) > limit
@@ -579,6 +590,7 @@ async def read_cells(
     sort: str = 'label',
     sort_direction: str = 'asc',
     job_id: uuid.UUID | None = None,
+    cell_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     if sort not in {'label', 'failed', 'updated'} and not sort.startswith('factor:'):
         raise ValueError('invalid_sort')
@@ -592,7 +604,7 @@ async def read_cells(
         raise ValueError("invalid_sort_direction")
     filters = {"metric": metric, "direction": direction, 'search': search, 'status': status,
                'factors': factors or {}, 'sort': sort, 'sort_direction': sort_direction,
-               'job_id': str(job_id) if job_id else None}
+               'job_id': str(job_id) if job_id else None, 'cell_id': str(cell_id) if cell_id else None}
     position = decode_cursor(cursor, scope, "cells", filters)
     cached = ResultCellRollup
     statement = (
@@ -609,6 +621,8 @@ async def read_cells(
         )
     )
     matching = (preview_slots(scope, job_id) if job_id else slot_query(scope)).subquery('matching_slots')
+    if cell_id is not None:
+        statement = statement.where(FactorialCell.id == cell_id)
     if status or job_id:
         has_match = select(matching.c.slot_id).where(
             matching.c.cell_id == FactorialCell.id, *slot_filters(matching, status)).exists()
@@ -708,6 +722,8 @@ async def read_cells(
         }
         for row in rows[:limit]
     ]
+    for item in items:
+        item.pop('primary_rank', None)
     next_position = None
     if len(rows) > limit:
         last = rows[limit - 1]
@@ -737,12 +753,14 @@ async def read_execution_replicates(
     db: AsyncSession, scope: ResultScope, *, cell_id: uuid.UUID, cursor: str | None = None,
     limit: int = PAGE_SIZE, status: str | None = None, sort: str = 'number', sort_direction: str = 'asc',
     job_id: uuid.UUID | None = None,
+    replicate_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Page row-mode parents without expanding the dataset Cartesian product."""
     if sort not in {'number', 'status', 'updated'} or sort_direction not in {'asc', 'desc'}:
         raise ValueError('invalid_sort')
     filters = {'cell_id': str(cell_id), 'status': status, 'sort': sort,
-               'sort_direction': sort_direction, 'job_id': str(job_id) if job_id else None}
+               'sort_direction': sort_direction, 'job_id': str(job_id) if job_id else None,
+               'replicate_id': str(replicate_id) if replicate_id else None}
     position = decode_cursor(cursor, scope, 'replicates', filters)
     slots = (preview_slots(scope, job_id) if job_id else slot_query(scope)).subquery('replicate_slots')
     aggregate = select(
@@ -769,6 +787,8 @@ async def read_execution_replicates(
         *cell_predicates(scope), *parent_predicates(scope))
     if status or job_id:
         statement = statement.where(matching > 0)
+    if replicate_id is not None:
+        statement = statement.where(parent.id == replicate_id)
     status_order = case((aggregate.c.failed > 0, 0), (aggregate.c.limited > 0, 1),
                         (aggregate.c.scoring_failed > 0, 2), (aggregate.c.cancelled > 0, 3),
                         (aggregate.c.running > 0, 4), (aggregate.c.finalizing > 0, 5),

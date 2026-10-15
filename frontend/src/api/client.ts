@@ -345,11 +345,8 @@ export const experimentsApi = {
   // been run is still listed, with status "not_started" (see TrialResponse /
   // services.protocol_runs.list_experiment_trials).
   listTrials: (id: string) => request<Trial[]>(`/experiments/${id}/runs`),
-  // Derives analyze_factorial's own condition_factors/positive_levels/
-  // reference_condition/primary_metric from this experiment's Design tab
-  // declarations -- no request body needed (see
-  // services.factorial_analysis.analyze_experiment_design).
-  getResults: (id: string) => request<ExperimentResults>(`/experiments/${id}/results`),
+  // Factorial analysis uses an explicit comparison metric and declared factors.
+  getResults: (id: string, metric?: string) => request<ExperimentResults>(`/experiments/${id}/results${metric ? `?metric=${encodeURIComponent(metric)}` : ''}`),
   // A current-design scorecard and the per-cell/per-replicate evidence behind
   // it. Unlike getResults(), no balanced-factorial assumptions are required.
   getRunResults: (id: string, scope?: ResultsScope) => request<ExperimentRunResults>(`/experiments/${id}/run-results${scopeQuery(scope)}`),

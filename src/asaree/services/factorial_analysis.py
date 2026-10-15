@@ -522,13 +522,13 @@ def analyze_experiment_design(
     replicates: Sequence[Any],
     *,
     consumption_mode: str = "whole_dataset",
+    metric_name: str | None = None,
 ) -> dict[str, Any]:
     """The Results tab's own entry point -- a thin wrapper around
-    ``analyze_factorial`` that needs no caller-supplied parameters at all.
+    ``analyze_factorial`` using an explicit comparison-metric choice.
     ``condition_factors``/``positive_levels``/``reference_condition``/
-    ``primary_metric`` are all derived from the experiment's own Design tab
-    declarations (``design_spec.factors``/``metrics``) instead of a second,
-    separate configuration UI.
+    factor declarations are derived from the experiment's Design tab. Historical
+    primary flags never choose the comparison metric.
 
     ``analyze_factorial``'s own effect-coding methodology requires every
     condition factor to have exactly 2 levels (see this module's own
@@ -564,7 +564,7 @@ def analyze_experiment_design(
     design_spec = design_spec or {}
     factors = design_spec.get("factors") or []
     metrics = design_spec.get("metrics") or []
-    primary = next((m for m in metrics if m.get("primary")), None)
+    metric = next((m for m in metrics if m.get('name') == metric_name), None) if metric_name else None
 
     if not factors:
         return {
@@ -573,10 +573,10 @@ def analyze_experiment_design(
             "analysis": None,
             "best_condition": None,
         }
-    if primary is None:
+    if metric is None:
         return {
             "available": False,
-            "reason": "No primary metric declared yet -- set one on the Design tab.",
+            "reason": "Select a comparison metric to analyze.",
             "analysis": None,
             "best_condition": None,
         }
@@ -602,15 +602,15 @@ def analyze_experiment_design(
                 condition_factors=condition_factors,
                 positive_levels=positive_levels,
                 reference_condition=reference_condition,
-                primary_metric=primary["name"],
+                primary_metric=metric["name"],
             )
-            if primary.get("valueType") == "boolean"
+            if metric.get("valueType") == "boolean"
             else analyze_factorial(
                 replicates,
                 condition_factors=condition_factors,
                 positive_levels=positive_levels,
                 reference_condition=reference_condition,
-                primary_metric=primary["name"],
+                primary_metric=metric["name"],
             )
         )
     except FactorialAnalysisError as exc:
@@ -634,7 +634,7 @@ def analyze_experiment_design(
     emm_cells = analysis.get("emm_cells") or []
     best_condition = None
     if emm_cells:
-        pick = max if primary.get("direction", "maximize") == "maximize" else min
+        pick = max if metric.get("direction", "maximize") == "maximize" else min
         best_condition = pick(emm_cells, key=lambda c: c["mean"])
 
     return {"available": True, "reason": None, "analysis": analysis, "best_condition": best_condition}

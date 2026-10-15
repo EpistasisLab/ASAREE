@@ -12,7 +12,7 @@ import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph 
 import { newRequestKey } from '@/lib/requestKey'
 import type { Experiment } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
-import type { BatchMode, BatchSelection, ExecutionReplicate } from '@/types/executionResults'
+import type { BatchMode, BatchSelection, ExecutionFocus, ExecutionReplicate } from '@/types/executionResults'
 import { ExecutionBrowser } from './ExecutionBrowser'
 import { ResultJobProgress } from './ResultJobProgress'
 import { ExperimentDefinitionDownload } from './ExperimentDefinitionDownload'
@@ -132,10 +132,11 @@ export function RunAllCellsButton(props: RunGuard & { label?: string; dialogTitl
   </>
 }
 
-export function RunsTab({ experimentId, designSpec, protocol, regenerationRequired, unboundFactors, onViewResult, onViewRowResult, onSelectResult }: {
+export function RunsTab({ experimentId, designSpec, protocol, regenerationRequired, unboundFactors, onViewResult, onViewRowResult, onSelectResult, focus, onClearFocus }: {
   experimentId: string; designSpec: Experiment['design_spec']; protocol: Protocol | undefined
   regenerationRequired: boolean; unboundFactors: string[]; onViewResult: (label: string) => void
   onViewRowResult?: (id: string) => void; onSelectResult?: (selection: ResultsSelection) => void
+  focus?: ExecutionFocus; onClearFocus?: () => void
 }) {
   const discrepancies = factorBindingDiscrepancies(designSpec, protocol?.graph)
   const guard = { experimentId, protocol, regenerationRequired, unboundFactors, bindingDiscrepancies: discrepancies }
@@ -143,6 +144,15 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
   const scope = { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined }
   const summary = useExecutionSummary(experimentId, scope, !!protocol)
   const { settings, update } = useRunBrowserSettings(experimentId)
+  const focusKey = JSON.stringify(focus)
+  const appliedFocus = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!focus) appliedFocus.current = undefined
+    if (focus && appliedFocus.current !== focusKey) {
+      appliedFocus.current = focusKey
+      update({ filters: { search: '', status: '', factors: {} }, expanded: [...new Set([...settings.expanded, focus.cellId])] })
+    }
+  }, [focus, focusKey, settings.expanded, update])
   const [request, setRequest] = useState<BatchRequest>()
   const [viewedJob, setViewedJob] = useState<string>()
   const [jobIds, setJobIds] = useState<string[]>(() => {
@@ -160,8 +170,10 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
     try { sessionStorage.setItem(`asaree:run-batches:${experimentId}`, JSON.stringify(ids)) } catch { /* optional */ }
   }
   const clearSelection = () => setSelected(emptySelection)
-  const filtered = hasExecutionFilters(settings.filters)
-  const filterSelection = { search: settings.filters.search || undefined, status: settings.filters.status || undefined, factors: settings.filters.factors }
+  const filtered = hasExecutionFilters(settings.filters) || !!focus
+  const filterSelection = { search: settings.filters.search || undefined, status: settings.filters.status || undefined, factors: settings.filters.factors,
+    cell_id: focus?.cellId, replicate_id: focus?.replicateId,
+    row_indices: focus?.rowIndex != null ? [focus.rowIndex] : undefined }
   const selectedScope: BatchSelection = { ...filterSelection,
     all_matching: selected.all, cell_ids: selected.cells, slot_ids: selected.slots.filter(id => !id.startsWith('unplanned:')), replicate_ids: selected.replicates,
     row_selections: selected.slots.filter(id => id.startsWith('unplanned:')).map(id => selected.slotRows[id]),
@@ -208,9 +220,9 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
     {jobIds.map(id => <div key={id} className="space-y-1 px-3"><ResultJobProgress experimentId={experimentId} jobId={id} />
       <div className="flex flex-wrap gap-2"><Button size="xs" variant="ghost" onClick={() => { clearSelection(); update({ filters: { search: '', status: '', factors: {} } }); setViewedJob(id) }}>View affected cells</Button>
         <Button size="xs" variant="ghost" onClick={() => saveJobIds(jobIds.filter(jobId => jobId !== id))}>Dismiss batch</Button></div></div>)}
-    <ExecutionBrowser key={`${JSON.stringify(scope)}:${JSON.stringify(settings.filters)}:${settings.sort}:${settings.sortDirection}:${viewedJob ?? ''}`}
+    <ExecutionBrowser key={`${JSON.stringify(scope)}:${JSON.stringify(settings.filters)}:${settings.sort}:${settings.sortDirection}:${viewedJob ?? ''}:${focusKey}`}
       experimentId={experimentId} scope={scope} mode="runs" settings={settings} onExpand={expanded => update({ expanded })}
-      jobId={viewedJob} replicateActions={replicateActions}
+      jobId={viewedJob} replicateActions={replicateActions} focus={focus} onClearFocus={onClearFocus}
       onSelect={selection => {
         if (onSelectResult) onSelectResult(selection)
         else if (selection.type === 'row') onViewRowResult?.(selection.rowResultId)

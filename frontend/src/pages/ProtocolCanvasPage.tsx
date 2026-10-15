@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ReactFlowProvider } from '@xyflow/react'
-import { Lock, Target, Trophy, type LucideIcon } from 'lucide-react'
+import { Lock, Target, type LucideIcon } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
 import { ExperimentSidePanel } from '@/components/protocol/ExperimentSidePanel'
@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
-import { cellsStatusAccent, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
+import { cellsStatusAccent } from '@/lib/experiment'
 import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
 import type { ExecutionSummary } from '@/types/executionResults'
 import { unboundFactorNames } from '@/lib/factorBindings'
@@ -121,11 +121,9 @@ function TopBarStats({ experiment, summary }: { experiment: Experiment; summary?
   const done = summary.counts?.completed ?? 0
   const total = summary.expected ?? summary.total ?? 0
   const accent = cellsStatusAccent(total, summary.scored_count ?? 0)
-  const best = summary.best_cell
   return <><TopBarStat icon={Target} value={summary.cell_count === 0 ? 'No cells generated' : `${summary.cell_count} cells · ${done}/${total} ${summary.unit === 'row' ? 'row executions' : 'replicates'} complete`}
     title="Progress in the selected published design" accent={accent} />
-    {best && <TopBarStat icon={Trophy} value={`${summary.metric_labels?.[best.metric_key] ?? formatMetricLabel(best.metric_key)} · ${formatMetricValue(best.metric_key, best.value)}`}
-      title={`Best declared primary metric · ${best.cell_label}`} accent="var(--chart-3)" />}</>
+    </>
 }
 
 function ProtocolPublicationControl({ protocol, experimentId, draftBusy }: { protocol: Protocol; experimentId: string; draftBusy: boolean }) {

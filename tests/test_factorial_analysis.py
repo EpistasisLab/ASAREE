@@ -40,17 +40,17 @@ def test_no_factors_is_unavailable() -> None:
     assert result["best_condition"] is None
 
 
-def test_no_primary_metric_is_unavailable() -> None:
+def test_historical_primary_does_not_choose_a_comparison_metric() -> None:
     result = analyze_experiment_design(
-        _design_spec(metrics=[{"name": "accuracy", "primary": False, "direction": "maximize"}]), []
+        _design_spec(metrics=[{"name": "accuracy", "primary": True, "direction": "maximize"}]), []
     )
     assert result["available"] is False
-    assert "primary metric" in result["reason"]
+    assert "comparison metric" in result["reason"]
 
 
 def test_non_binary_factor_is_unavailable() -> None:
     spec = _design_spec(factors=[{"name": "tier", "levels": ["small", "medium", "large"]}])
-    result = analyze_experiment_design(spec, [])
+    result = analyze_experiment_design(spec, [], metric_name='accuracy')
     assert result["available"] is False
     assert "exactly 2 levels" in result["reason"]
     assert "tier" in result["reason"]
@@ -62,7 +62,7 @@ def test_none_design_spec_is_unavailable() -> None:
     assert result["analysis"] is None
 
 
-def test_boolean_primary_metric_uses_binomial_logistic_analysis() -> None:
+def test_explicit_boolean_metric_uses_binomial_logistic_analysis() -> None:
     spec = _design_spec(metrics=[{"name": "passed", "primary": True, "direction": "maximize", "valueType": "boolean"}])
     replicates = [
         _FakeReplicate(factor_values={"tier": "small"}, metric_values={"passed": value})
@@ -72,7 +72,7 @@ def test_boolean_primary_metric_uses_binomial_logistic_analysis() -> None:
         for value in [True, True, False, True]
     ]
 
-    result = analyze_experiment_design(spec, replicates)
+    result = analyze_experiment_design(spec, replicates, metric_name=spec['metrics'][0]['name'])
 
     assert result["available"] is True
     assert result["analysis"]["analysis_type"] == "binary_logistic"
@@ -90,7 +90,7 @@ def test_not_enough_scored_data_is_unavailable_not_a_crash() -> None:
         _FakeReplicate(factor_values={"tier": "small"}, metric_values={"accuracy": 0.8}, cell_label="tier_small"),
         _FakeReplicate(factor_values={"tier": "large"}, metric_values={"accuracy": 0.9}, cell_label="tier_large"),
     ]
-    result = analyze_experiment_design(_design_spec(), replicates)
+    result = analyze_experiment_design(_design_spec(), replicates, metric_name='accuracy')
     assert result["available"] is False
     assert result["reason"]
     assert result["analysis"] is None
@@ -114,7 +114,7 @@ def test_reference_condition_with_one_replicate_surfaces_real_analyze_factorial_
         _FakeReplicate(factor_values={"tier": "large", "effort": "high"}, metric_values={"accuracy": 0.90}),
         _FakeReplicate(factor_values={"tier": "large", "effort": "high"}, metric_values={"accuracy": 0.92}),
     ]
-    result = analyze_experiment_design(spec, replicates)
+    result = analyze_experiment_design(spec, replicates, metric_name=spec['metrics'][0]['name'])
     assert result["available"] is False
     assert "replicate" in result["reason"]
 
@@ -128,7 +128,7 @@ def test_happy_path_returns_analysis_and_best_condition_maximize() -> None:
         _FakeReplicate(factor_values={"tier": "large"}, metric_values={"accuracy": 0.89}, cell_label="tier_large"),
         _FakeReplicate(factor_values={"tier": "large"}, metric_values={"accuracy": 0.93}, cell_label="tier_large"),
     ]
-    result = analyze_experiment_design(_design_spec(), replicates)
+    result = analyze_experiment_design(_design_spec(), replicates, metric_name='accuracy')
     assert result["available"] is True
     assert result["reason"] is None
     assert result["analysis"] is not None
@@ -147,7 +147,7 @@ def test_happy_path_best_condition_respects_minimize_direction() -> None:
         _FakeReplicate(factor_values={"tier": "large"}, metric_values={"latency": 3.2}, cell_label="tier_large"),
         _FakeReplicate(factor_values={"tier": "large"}, metric_values={"latency": 2.8}, cell_label="tier_large"),
     ]
-    result = analyze_experiment_design(spec, replicates)
+    result = analyze_experiment_design(spec, replicates, metric_name=spec['metrics'][0]['name'])
     assert result["available"] is True
     # "small" has the lower mean latency and direction is "minimize".
     assert result["best_condition"]["_condition_label"] == "tier_small"

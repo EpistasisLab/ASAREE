@@ -26,7 +26,6 @@ from asaree.services.measurement_engine import (
 )
 from asaree.services.protocol_revisions import publish_protocol
 from asaree.services.protocol_runs import (
-    _required_metric_was_measured,
     create_protocol_run,
     create_test_run,
     fail_protocol_run,
@@ -79,7 +78,7 @@ async def protocol_id(owner_id: uuid.UUID) -> AsyncIterator[uuid.UUID]:
         await delete_protocol(db, pid)
 
 
-def test_primary_measurement_is_required_before_projecting_a_scored_replicate() -> None:
+async def test_legacy_required_metric_does_not_hide_other_measured_observations(owner_id: uuid.UUID) -> None:
     evaluation = MeasurementEvaluation(
         replicate_id="replicate",
         attempt_id="attempt",
@@ -120,8 +119,29 @@ def test_primary_measurement_is_required_before_projecting_a_scored_replicate() 
         artifacts=(),
     )
 
-    assert _required_metric_was_measured(evaluation, None)
-    assert not _required_metric_was_measured(evaluation, "pr-auc")
+    from dataclasses import replace
+    from asaree.services.design_revisions import get_current_revision
+
+    async with get_session() as db:
+        experiment = await create_experiment(db, name=f'partial-metrics-{uuid.uuid4()}', owner_id=owner_id)
+        protocol = await create_protocol(db, name='Partial measurements', owner_id=owner_id, experiment_id=experiment.id)
+        replicate = await upsert_replicate(db, experiment_id=experiment.id, replicate_label='partial',
+                                          fields={'factor_values': {}})
+        revision = await get_current_revision(db, experiment.id)
+        assert revision is not None
+        run = await create_protocol_run(db, protocol_id=protocol.id, owner_id=owner_id,
+                                        replicate_result_id=replicate.id, replicate_label=replicate.replicate_label,
+                                        design_revision_id=revision.id)
+        run.status = 'completed'
+        await upsert_replicate(db, experiment_id=experiment.id, replicate_label='partial', fields={'run_id': run.id})
+        evaluation = replace(evaluation, replicate_id=str(replicate.id), attempt_id=str(run.id), observations=tuple(
+            replace(observation, attempt_id=str(run.id)) for observation in evaluation.observations))
+        await record_measurement_evaluation(db, run.id, evaluation, required_metric_id='pr-auc')
+        await db.refresh(replicate)
+        assert replicate.metric_values == {'n_features_after_fs': 20}
+        assert run.attempt_result['measurement']['observations'][1]['status'] == 'unavailable'
+        await delete_protocol(db, protocol.id)
+        await delete_experiment(db, experiment.id)
 
 
 async def test_create_get_and_node_run_progress(owner_id: uuid.UUID, protocol_id: uuid.UUID) -> None:

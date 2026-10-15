@@ -29,6 +29,7 @@ class Command(BaseModel):
     kind: str = Field(pattern="^(plan|cancel|export)$")
     request_key: str = Field(min_length=1, max_length=100)
     cell_id: uuid.UUID | None = None
+    replicate_id: uuid.UUID | None = None
     replicate_ids: list[uuid.UUID] | None = Field(default=None, max_length=100)
     row_indices: list[int] | None = Field(default=None, max_length=100)
     rerun_slot_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
@@ -105,8 +106,7 @@ async def _committed(db: DbSession, job: ResultJob) -> dict[str, Any]:
 async def create(command: Command, user: CurrentUser, db: DbSession, scope: Scope) -> dict[str, Any]:
     if command.row_indices is not None and (
         scope.unit != "row"
-        or command.replicate_ids is None
-        or len(command.replicate_ids) != 1
+        or (command.replicate_id is None and (command.replicate_ids is None or len(command.replicate_ids) != 1))
         or any(index < 0 for index in command.row_indices)
     ):
         raise HTTPException(status_code=422, detail="Row selection requires one replicate and nonnegative indices.")

@@ -3,6 +3,7 @@ import type { DatasetRowSnapshot, NodeRunState } from './protocols'
 
 export interface CursorPage<T> { items: T[]; next_cursor: string | null }
 export type BatchMode = 'pending' | 'retry' | 'rerun'
+export interface ExecutionFocus { cellId: string; replicateId?: string; rowIndex?: number }
 export interface ExecutionFilters {
   search: string
   status: string
@@ -15,6 +16,7 @@ export interface BatchSelection {
   excluded_rows?: { replicate_id: string; row_index: number }[]
   all_matching?: boolean
   cell_id?: string
+  replicate_id?: string
   cell_ids?: string[]
   slot_ids?: string[]
   excluded_slot_ids?: string[]
@@ -67,7 +69,7 @@ export interface ExecutionSummary {
   generation: number; change_id: number; refreshing: boolean; updated_at: string | null; as_of?: string
   counts?: Record<string, number>; total?: number; cell_count?: number; replicate_count?: number
   source_row_count?: number | null; expected?: number | null; has_active?: boolean
-  executed_count?: number; scored_count?: number; best_cell?: { cell_id: string; cell_label: string; metric_key: string; value: number } | null
+  executed_count?: number; scored_count?: number
   usage?: UsageSummary; usage_complete_count?: number; truncated_count?: number; evaluating_count?: number
   all_attempt_usage?: UsageSummary; usage_pending_count?: number
   design_spec: DesignSpec | null
@@ -75,14 +77,14 @@ export interface ExecutionSummary {
   metric_labels?: Record<string, string>
   metric_aggregations: Record<string, 'mean' | 'sum'>
   metric_directions: Record<string, MeasurementDirection>
-  primary_metric: string | null; primary_metric_direction: string | null
+  /** Historical API fields; never select a metric or affect ordering. */
+  primary_metric?: string | null; primary_metric_direction?: string | null
   etag?: string
 }
 export interface ExecutionCell {
   cell_id: string; cell_label: string; factor_values: Record<string, unknown>
   replicate_count?: number; total?: number; counts?: Record<string, number>; truncated?: number
   usage?: UsageSummary; metric_values?: Record<string, number>; metric_counts?: Record<string, number>
-  primary_rank?: number
   matching_count?: number; matching_replicate_count?: number
 }
 export interface ExecutionSlot {

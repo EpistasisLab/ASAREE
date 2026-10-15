@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Experiment } from '@/types/experiments'
-import { displayFactorLevel, primaryMetric } from './experiment'
+import { displayFactorLevel } from './experiment'
 import { normalizeDesignMetrics } from './metricCatalog'
 
 describe('displayFactorLevel', () => {
@@ -47,10 +46,8 @@ describe('custom metric observations', () => {
       aggregation: 'mean',
       primary: true,
     }])
-    const experiment = { design_spec: { metrics } } as Experiment
 
     expect(metrics[0]).toEqual({ id: 'pr-auc', name: 'pr_auc', kind: 'custom' })
-    expect(primaryMetric(experiment)).toBeNull()
   })
 
   it('keeps only the identity and label of a custom draft', () => {

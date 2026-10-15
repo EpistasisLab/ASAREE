@@ -114,8 +114,7 @@ def test_measurement_plan_document_round_trips_in_normalized_collections() -> No
         **document,
         "metrics": [document["metrics"][0], {**document["metrics"][0], "id": "helpfulness", "name": "Helpfulness"}],
     }
-    with pytest.raises(ValueError, match="at most one primary"):
-        normalize_measurement_plan(multiple_primary)
+    assert len(normalize_measurement_plan(multiple_primary)["metrics"]) == 2
 
 
 @pytest.mark.asyncio
@@ -467,9 +466,9 @@ def test_validation_reports_every_required_plan_problem() -> None:
         "incompatible_input_type",
         "duplicate_metric_name",
         "invalid_aggregation",
-        "invalid_direction",
         "unknown_input",
     }
+    assert not any('primary' in issue.code or issue.code == 'invalid_direction' for issue in report.issues)
 
 
 @pytest.mark.asyncio

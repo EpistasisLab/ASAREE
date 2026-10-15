@@ -43,7 +43,6 @@ from asaree.services.result_reads import (
     encode_cursor,
     page_size,
     parent_predicates,
-    primary_runtime_metric,
     read_attempt_detail,
     read_attempts,
     read_cells,
@@ -126,7 +125,7 @@ def test_scalar_metadata_uses_builtin_binding_identity_and_retains_node_runtime_
     assert definition["key"] == "node-tokens"
     assert definition["name"] == "Tokens for critic"
     assert definition["aggregation"] == "sum" and definition["valueType"] == "number"
-    assert primary_runtime_metric(selected) == ("node-tokens", "minimize")
+    assert definition['direction'] == 'minimize'
     reported = scope(
         design_spec=selected.design_spec,
         measurement_plan={
@@ -145,13 +144,13 @@ def test_scalar_metadata_uses_builtin_binding_identity_and_retains_node_runtime_
     assert runtime_metrics(reported) == {}
 
 
-def test_catalog_defaults_determine_primary_direction_when_omitted():
+def test_catalog_defaults_determine_comparison_direction_when_omitted():
     selected = scope(
         design_spec={
             "metrics": [{"id": "cost", "name": "Cost", "kind": "runtime", "catalogKey": "cost_usd", "primary": True}]
         }
     )
-    assert primary_runtime_metric(selected) == ("cost_usd", "minimize")
+    assert runtime_metrics(selected)['cost']['direction'] == 'minimize'
 
 
 def test_cursor_binds_scope_kind_and_filters():
@@ -325,6 +324,84 @@ async def test_run_browser_natural_order_filters_and_cursor_scope(results_db):
     failed = await read_executions(db, selected, cell_id=second.id, status='failed')
     assert [item['replicate_number'] for item in failed['items']] == [2]
     assert (await read_cells(db, selected, search='%'))['items'] == []
+
+
+async def test_explicit_metric_sort_excludes_failed_limited_and_missing_values(results_db):
+    from dataclasses import replace
+
+    db, selected, cell, user = results_db
+    selected = replace(selected, design_spec={'metrics': [{
+        'id': 'duration', 'name': 'Duration', 'kind': 'runtime', 'catalogKey': 'duration_seconds',
+    }]})
+    for number, status, value, truncated in [(1, 'completed', 20, False), (2, 'completed', 10, False),
+                                             (3, 'failed', 1, False), (4, 'completed', 0, True),
+                                             (5, 'completed', None, False)]:
+        parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=number, replicate_label=f'rep{number}')
+        db.add(parent)
+        await db.flush()
+        db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
+                           protocol_revision_id=selected.protocol_revision_id,
+                           design_revision_id=selected.design_revision_id, replicate_result_id=parent.id,
+                           replicate_label=parent.replicate_label, status=status,
+                           node_runs={'node': {'truncation': {}}} if truncated else {},
+                           attempt_result={'measurement': {'observations': [{
+                               'metric_id': 'duration', 'metric_name': 'duration_seconds',
+                               'status': 'measured' if value is not None else 'unavailable', 'value': value,
+                               'producer': {'kind': 'runtime', 'producer_id': 'asaree.runtime'},
+                           }]}}))
+    await db.flush()
+    first = await read_executions(db, selected, sort='metric:duration_seconds', limit=1)
+    second = await read_executions(db, selected, sort='metric:duration_seconds', limit=1,
+                                   cursor=first['next_cursor'])
+    assert [item['replicate_number'] for item in first['items'] + second['items']] == [2, 1]
+    rest = await read_executions(db, selected, sort='metric:duration_seconds', cursor=second['next_cursor'])
+    assert {item['replicate_number'] for item in rest['items']} == {3, 4, 5}
+    descending = await read_executions(db, selected, sort='metric:duration_seconds', sort_direction='desc')
+    assert [item['replicate_number'] for item in descending['items'][:2]] == [1, 2]
+    focused = await read_executions(db, selected, replicate_id=uuid.UUID(first['items'][0]['replicate_id']))
+    assert len(focused['items']) == 1
+
+
+async def test_cached_primary_summary_fields_are_inert(results_db):
+    db, selected, _cell, _user = results_db
+    refresh = await db.get(ResultRefresh, selected.key)
+    if refresh is None:
+        refresh = ResultRefresh(scope_key=selected.key, protocol_id=selected.protocol_id,
+                                protocol_revision_id=selected.protocol_revision_id,
+                                design_revision_id=selected.design_revision_id)
+        db.add(refresh)
+    refresh.summary = {'primary_metric': 'duration_seconds', 'primary_metric_direction': 'minimize',
+                       'best_cell': {'cell_label': 'Old winner'}}
+    await db.flush()
+    summary = await read_summary(db, selected)
+    assert summary['primary_metric'] is None
+    assert summary['primary_metric_direction'] is None
+    assert summary['best_cell'] is None
+
+
+async def test_focused_batch_preview_respects_replicate_constraint_and_exclusions(results_db, monkeypatch):
+    db, selected, cell, user = results_db
+    parents = [FactorialReplicateResult(cell_id=cell.id, replicate_number=number, replicate_label=f'rep{number}')
+               for number in (1, 2)]
+    db.add_all(parents)
+    await db.flush()
+    for parent in parents:
+        db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
+                           protocol_revision_id=selected.protocol_revision_id,
+                           design_revision_id=selected.design_revision_id, replicate_result_id=parent.id,
+                           replicate_label=parent.replicate_label, status='failed', node_runs={}))
+    await db.flush()
+    monkeypatch.setattr(result_jobs, 'plan_cell_runs', AsyncMock(return_value=([], 0)))
+    selection = {'mode': 'retry', 'replicate_id': str(parents[0].id), 'all_matching': True}
+    job = await result_jobs.create_job(db, selected, user.id, kind='plan', request_key='focused', params=selection)
+    await result_jobs.prepare_step(db, job, selected)
+    await db.flush()
+    await result_jobs.prepare_step(db, job, selected)
+    assert job.progress['planned'] == 1
+    excluded = await result_jobs.create_job(db, selected, user.id, kind='plan', request_key='excluded',
+                                           params={**selection, 'excluded_replicate_ids': [str(parents[0].id)]})
+    await result_jobs.prepare_step(db, excluded, selected)
+    assert excluded.progress['planned'] == 0
 
 
 async def test_unplanned_dataset_rows_remain_browsable_when_filtered(results_db):

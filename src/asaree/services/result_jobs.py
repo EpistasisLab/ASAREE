@@ -217,6 +217,8 @@ def selected_parents(scope: ResultScope, selection: dict[str, Any]) -> Any:
     )
     if selection.get("cell_id"):
         query = query.where(FactorialCell.id == uuid.UUID(selection["cell_id"]))
+    if selection.get('replicate_id'):
+        query = query.where(FactorialReplicateResult.id == uuid.UUID(selection['replicate_id']))
     query = query.where(*cell_filters(FactorialCell, selection.get('search', ''), selection.get('factors')))
     if selection.get('source_job_id'):
         query = query.where(FactorialReplicateResult.id.in_(select(ResultJobMember.replicate_id).where(

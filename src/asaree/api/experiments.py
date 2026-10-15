@@ -64,7 +64,6 @@ from asaree.services.measurement_engine import (
 from asaree.services.measurement_migration import normalize_experiment_measurement_plan
 from asaree.services.metrics import (
     CURRENT_RECOMMENDATION_SET_VERSION,
-    declared_primary_metric,
     normalize_design_spec,
     validate_metric_values,
 )
@@ -1007,20 +1006,21 @@ async def analyze_factorial_endpoint(
     )
     if selection["consumption_mode"] == "per_row":
         return _row_analysis_unavailable()
+    # The request's legacy field name means an explicit comparison choice,
+    # never an experiment-owned primary declaration.
     selected_design = selection["design_spec"]
-    declared_primary = declared_primary_metric((selected_design or {}).get("metrics"))
-    if declared_primary is None:
-        raise HTTPException(status_code=422, detail="This experiment has no declared primary metric.")
-    if declared_primary["name"] != body.primary_metric:
+    metric = next((metric for metric in (selected_design or {}).get('metrics', [])
+                   if metric.get('name') == body.primary_metric or metric.get('catalogKey') == body.primary_metric), None)
+    if metric is None:
         raise HTTPException(
             status_code=422,
-            detail=f"{body.primary_metric!r} is not the experiment's declared primary metric.",
+            detail=f"{body.primary_metric!r} is not a declared comparison metric.",
         )
     replicates = selection["replicates"]
     try:
         analysis = (
             analyze_binary_factorial
-            if declared_primary and declared_primary["valueType"] == "boolean"
+            if metric.get("valueType") == "boolean"
             else analyze_factorial
         )
         return analysis(
@@ -1043,12 +1043,12 @@ async def analyze_factorial_endpoint(
 class ResultsResponse(BaseModel):
     available: bool
     # Set only when available is False -- why there's nothing to show yet
-    # (no factors/primary metric declared, a factor with other than 2
+    # (no factors/comparison metric selected, a factor with other than 2
     # levels, or not enough scored replicates), surfaced as one consistent
     # state for the Results tab regardless of which precondition failed.
     reason: str | None
     analysis: dict[str, Any] | None
-    # analysis["emm_cells"], picked by the declared primary metric's own
+    # analysis["emm_cells"], picked by the explicitly selected metric's
     # direction -- analyze_factorial itself has no notion of "best," only
     # non-inferiority vs. a reference condition.
     best_condition: dict[str, Any] | None
@@ -1119,6 +1119,7 @@ async def get_experiment_results_endpoint(
     protocol_id: uuid.UUID | None = None,
     design_revision_id: uuid.UUID | None = None,
     protocol_revision_id: uuid.UUID | None = None,
+    metric: str | None = None,
 ) -> ResultsResponse:
     """See services.factorial_analysis.analyze_experiment_design -- this
     endpoint is a thin pass-through, all the real derivation/wrapping logic
@@ -1131,7 +1132,8 @@ async def get_experiment_results_endpoint(
     if selection["consumption_mode"] == "per_row":
         return ResultsResponse(**_row_analysis_unavailable())
     replicates = selection["replicates"]
-    result = analyze_experiment_design(selection["design_spec"], replicates, consumption_mode="whole_dataset")
+    result = analyze_experiment_design(
+        selection["design_spec"], replicates, consumption_mode="whole_dataset", metric_name=metric)
     return ResultsResponse(**result)
 
 

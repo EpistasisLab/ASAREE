@@ -648,7 +648,7 @@ def validate_runtime_measurement_plan(
         },
     )
     report = MeasurementEngine([RuntimeMetricProducer(), NodeRuntimeMetricProducer()]).validate(
-        plan, snapshot, require_primary=False
+        plan, snapshot
     )
     producer_path = re.compile(r"^producers\[(\d+)\]")
     input_path = re.compile(r"^inputs\[(\d+)\]")
@@ -938,12 +938,10 @@ async def finalize_attempt_measurement(
     attempt_result = dict(run.attempt_result or {})
     attempt_result["evaluation_summary"] = {"cost_usd": 0.0}
     run.attempt_result = attempt_result
-    primary_metric_id = next((metric.id for metric in declared.metrics if metric.primary), None)
     await record_measurement_evaluation(
         db,
         run.id,
         evaluation,
-        required_metric_id=primary_metric_id,
     )
     completed_result = dict(run.attempt_result or {})
     completed_result["evaluation_state"] = "completed"

@@ -298,7 +298,10 @@ async def test_create_experiment_preserves_a_caller_supplied_measurement_plan(ow
                 await db.delete(persisted)
 
 
-async def test_explicit_analysis_requires_the_stored_primary_metric(owner_id: uuid.UUID) -> None:
+async def test_explicit_analysis_ignores_historical_primary_flags(owner_id: uuid.UUID, monkeypatch) -> None:
+    monkeypatch.setattr(experiments_api, 'analyze_factorial', lambda _replicates, **options: {
+        'compared_metric': options['primary_metric'],
+    })
     plan = {
         "metrics": [
             {
@@ -329,9 +332,9 @@ async def test_explicit_analysis_requires_the_stored_primary_metric(owner_id: uu
             reference_condition={},
             primary_metric="Duration",
         )
-        with pytest.raises(experiments_api.HTTPException, match="no declared primary metric") as exc_info:
-            await experiments_api.analyze_factorial_endpoint(experiment.id, request, owner, db)
-        assert exc_info.value.status_code == 422
+        assert await experiments_api.analyze_factorial_endpoint(experiment.id, request, owner, db) == {
+            'compared_metric': 'Duration',
+        }
 
         experiment.design_spec = {
             "metrics": [
@@ -353,8 +356,12 @@ async def test_explicit_analysis_requires_the_stored_primary_metric(owner_id: uu
         }
         await db.flush()
         mismatched_request = request.model_copy(update={"primary_metric": "Cost"})
-        with pytest.raises(experiments_api.HTTPException, match="not the experiment's declared primary metric"):
-            await experiments_api.analyze_factorial_endpoint(experiment.id, mismatched_request, owner, db)
+        assert await experiments_api.analyze_factorial_endpoint(experiment.id, mismatched_request, owner, db) == {
+            'compared_metric': 'Cost',
+        }
+        unknown = request.model_copy(update={'primary_metric': 'Unknown'})
+        with pytest.raises(experiments_api.HTTPException, match='not a declared comparison metric'):
+            await experiments_api.analyze_factorial_endpoint(experiment.id, unknown, owner, db)
 
         await db.delete(experiment)
 

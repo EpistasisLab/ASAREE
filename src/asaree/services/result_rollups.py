@@ -22,7 +22,6 @@ from asaree.services.result_reads import (
     ResultScope,
     cell_predicates,
     parent_predicates,
-    primary_runtime_metric,
     resolve_result_scope,
     runtime_metrics,
     slot_query,
@@ -291,74 +290,12 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
                 )
             )
         )
-    primary, direction = primary_runtime_metric(scope)
-    if scope.unit == "replicate" and primary:
-        ranks = (
-            select(
-                ResultCellMetric.cell_id,
-                func.row_number()
-                .over(
-                    order_by=(
-                        ResultCellMetric.value.asc() if direction == "minimize" else ResultCellMetric.value.desc(),
-                        ResultCellMetric.cell_id,
-                    )
-                )
-                .label("rank"),
-            )
-            .where(
-                ResultCellMetric.scope_key == scope.key,
-                ResultCellMetric.metric_key == primary,
-                ResultCellMetric.generation == generation,
-                ResultCellMetric.value.is_not(None),
-            )
-            .cte("primary_ranks")
-        )
-        await db.execute(
-            update(ResultCellRollup)
-            .where(ResultCellRollup.scope_key == scope.key, ResultCellRollup.cell_id == ranks.c.cell_id)
-            .values(
-                data=func.jsonb_set(
-                    ResultCellRollup.data, cast(literal("{primary_rank}"), ARRAY(Text)), func.to_jsonb(ranks.c.rank)
-                )
-            )
-        )
-    best_cell = None
-    if scope.unit == "replicate" and primary:
-        best = (
-            (
-                await db.execute(
-                    select(ResultCellMetric.cell_id, FactorialCell.cell_label, ResultCellMetric.value)
-                    .join(FactorialCell)
-                    .where(
-                        ResultCellMetric.scope_key == scope.key,
-                        ResultCellMetric.metric_key == primary,
-                        ResultCellMetric.generation == generation,
-                        ResultCellMetric.value.is_not(None),
-                    )
-                    .order_by(
-                        ResultCellMetric.value.asc() if direction == "minimize" else ResultCellMetric.value.desc(),
-                        ResultCellMetric.cell_id,
-                    )
-                    .limit(1)
-                )
-            )
-            .mappings()
-            .one_or_none()
-        )
-        if best:
-            best_cell = {
-                "cell_id": str(best["cell_id"]),
-                "cell_label": best["cell_label"],
-                "metric_key": primary,
-                "value": best["value"],
-            }
     summary = {
         "counts": {status: totals[status] for status in STATUSES},
         "total": totals["total"],
         "planned_count": physical_total,
         "executed_count": totals["executed"],
         "scored_count": totals["scored"],
-        "best_cell": best_cell,
         "cell_count": totals["cells"],
         "replicate_count": totals["replicates"],
         "usage": usage,

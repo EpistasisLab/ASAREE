@@ -8,7 +8,6 @@ from asaree.services.measurement_engine import normalize_measurement_plan
 from asaree.services.metrics import (
     METRIC_CATALOG,
     RECOMMENDED_RUNTIME_METRIC_KEYS,
-    declared_primary_metric,
     design_metrics_from_measurement_plan,
     normalize_design_spec,
     normalize_metrics,
@@ -75,38 +74,21 @@ def test_normalization_preserves_an_explicitly_primary_less_metric_set() -> None
     assert all("primary" not in metric for metric in normalized)
 
 
-def test_normalization_rejects_multiple_primary_metrics() -> None:
-    with pytest.raises(ValueError, match="at most one primary"):
-        normalize_metrics(
-            [
-                {"name": "Cost", "catalogKey": "cost_usd", "kind": "runtime", "direction": "minimize", "primary": True},
-                {
-                    "name": "Duration",
-                    "catalogKey": "duration_seconds",
-                    "kind": "runtime",
-                    "direction": "minimize",
-                    "primary": True,
-                },
-            ]
-        )
-
-
-def test_declared_primary_metric_does_not_fall_back_to_an_unselected_metric() -> None:
-    assert (
-        declared_primary_metric(
-            [{"name": "Duration", "catalogKey": "duration_seconds", "kind": "runtime", "primary": False}]
-        )
-        is None
+def test_normalization_accepts_historical_primary_flags_without_a_selection_rule() -> None:
+    normalized = normalize_metrics(
+        [
+            {"name": "Cost", "catalogKey": "cost_usd", "kind": "runtime", "direction": "minimize", "primary": True},
+            {
+                "name": "Duration",
+                "catalogKey": "duration_seconds",
+                "kind": "runtime",
+                "direction": "minimize",
+                "primary": True,
+            },
+        ]
     )
-    assert (
-        declared_primary_metric(
-            [
-                {"name": "Duration", "catalogKey": "duration_seconds", "kind": "runtime", "primary": True},
-                {"name": "Cost", "catalogKey": "cost_usd", "kind": "runtime", "primary": False},
-            ]
-        )["name"]
-        == "Duration"
-    )
+    assert len(normalized) == 2
+    assert all('primary' not in metric for metric in normalized)
 
 
 def test_recommended_runtime_measurements_form_one_normalized_non_primary_plan() -> None:
@@ -117,7 +99,7 @@ def test_recommended_runtime_measurements_form_one_normalized_non_primary_plan()
         "duration_seconds",
         "total_tokens",
     ]
-    assert [metric["primary"] for metric in declarations] == [False, False, False]
+    assert all('primary' not in metric for metric in declarations)
     assert normalize_measurement_plan(plan) == plan
     assert plan["producers"][0]["outputs"] == {
         "cost_usd": "runtime-cost",
@@ -161,7 +143,6 @@ def test_design_metrics_are_derived_from_a_caller_supplied_plan() -> None:
             "kind": "runtime",
             "valueType": "number",
             "direction": "minimize",
-            "primary": False,
             "aggregation": "sum",
             "unit": "seconds",
         }

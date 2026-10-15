@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import type { Experiment, ExperimentRunResults, Replicate } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
+import type { ExecutionFocus } from '@/types/executionResults'
 import { RunsTab } from './RunsTab'
 
 describe('RunsTab factor discrepancy warning', () => {
@@ -64,15 +65,15 @@ describe('RunsTab stop controls', () => {
   const cell = (counts: Record<string, number>) => ({ cell_id: 'cell-1', cell_label: 'model=a', factor_values: { model: 'a' },
     replicate_count: 3, total: 3, counts })
 
-  async function mount(hasActive: boolean, counts: Record<string, number>, rowMode = false, unpublished = false) {
+  async function mount(hasActive: boolean, counts: Record<string, number>, rowMode = false, unpublished = false, focus?: ExecutionFocus) {
     vi.spyOn(experimentsApi, 'getExecutionFactorOptions').mockResolvedValue({ factors: { model: ['a', 'b'] }, truncated: false })
     vi.spyOn(experimentsApi, 'getExecutionSummary').mockResolvedValue(
       { ready: true, unit: rowMode ? 'row' : 'replicate', has_active: hasActive, counts, metric_types: {}, metric_directions: {} } as never)
     vi.spyOn(experimentsApi, 'listExecutionCells').mockResolvedValue({ items: [cell(counts)], next_cursor: null } as never)
     render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <RunsTab experimentId="experiment-1" designSpec={{}} protocol={{ ...protocol, has_unpublished_changes: unpublished }} regenerationRequired={false} unboundFactors={[]} onViewResult={vi.fn()} />
+      <RunsTab experimentId="experiment-1" designSpec={{}} protocol={{ ...protocol, has_unpublished_changes: unpublished }} regenerationRequired={false} unboundFactors={[]} onViewResult={vi.fn()} focus={focus} />
     </QueryClientProvider>)
-    await screen.findByRole('button', { name: 'Run cell' })
+    await screen.findByRole('button', { name: focus ? 'Run matching in cell' : 'Run cell' })
   }
 
   it('hides Stop all and Stop cell when nothing is pending or running', async () => {
@@ -123,6 +124,20 @@ describe('RunsTab stop controls', () => {
     await waitFor(() => expect(confirm).toHaveBeenCalledWith('experiment-1', 'batch-1'))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'View affected cells' })).toBeInTheDocument()
+  })
+
+  it('keeps matching retries scoped to the row opened from Results', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(experimentsApi, 'listExecutionReplicates').mockResolvedValue({ items: [], next_cursor: null })
+    const job = { id: 'focused-batch', kind: 'plan', status: 'awaiting_confirmation', progress: { planned: 1 }, error: null, protocol_revision_id: 'revision-1' } as const
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue({ id: 'experiment-1' } as never)
+    vi.spyOn(protocolsApi, 'getRevision').mockResolvedValue({ graph: { nodes: [], edges: [] } } as never)
+    const create = vi.spyOn(experimentsApi, 'createResultJob').mockResolvedValue(job)
+    vi.spyOn(experimentsApi, 'getResultJob').mockResolvedValue(job)
+    await mount(false, { failed: 2 }, true, false, { cellId: 'cell-1', replicateId: 'rep-1', rowIndex: 7 })
+    await user.click(screen.getByRole('button', { name: 'Retry matching failed' }))
+    await waitFor(() => expect(create).toHaveBeenCalledWith('experiment-1', expect.anything(),
+      expect.objectContaining({ mode: 'retry', cell_id: 'cell-1', replicate_id: 'rep-1', row_indices: [7] }), expect.anything()))
   })
 
   it('marks parent selections partial and offers rerun for an iteration-limited failure', async () => {

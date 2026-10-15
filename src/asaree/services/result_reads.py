@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Text, and_, case, cast, false, func, literal, or_, select, true, tuple_
+from sqlalchemy import Integer, Text, and_, case, cast, false, func, literal, or_, select, true, tuple_
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, array, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,8 +23,10 @@ from asaree.models.factorial_row_result import FactorialRowResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
+from asaree.models.result_job import ResultJob, ResultJobMember
 from asaree.models.result_read_model import ResultCellMetric, ResultCellRollup, ResultRefresh
 from asaree.services.dataset_row_inputs import resolve_dataset_row_plan
+from asaree.services.execution_selection import cell_filters, natural_label, slot_filters
 from asaree.services.experiment_run_results import (
     RunResultsProjectionError,
     _node_labels,
@@ -269,7 +271,7 @@ def slot_query(scope: ResultScope, *, cutoff: Any = None) -> Any:
                 row.raw_sha256,
             )
         )
-        match = and_(run.row_result_id == row.id, run.id == row.run_id if cutoff is None else true())
+        match = run.row_result_id == row.id
     else:
         base = base.add_columns(
             parent.id.label("slot_id"),
@@ -301,6 +303,8 @@ def slot_query(scope: ResultScope, *, cutoff: Any = None) -> Any:
             func.left(run.error, 512).label("error"),
             run.result_summary,
             run.usage_summary,
+            func.count().over().label('attempt_count'),
+            func.bool_or(run.status == 'completed').over().label('has_previous_success'),
         )
         .where(
             run.protocol_id == scope.protocol_id,
@@ -337,7 +341,58 @@ def slot_query(scope: ResultScope, *, cutoff: Any = None) -> Any:
         latest.c.error,
         func.coalesce(latest.c.result_summary, cast(literal("{}"), JSONB)).label("result"),
         latest.c.usage_summary.label("usage"),
+        func.coalesce(latest.c.attempt_count, 0).label('attempt_count'),
+        latest.c.has_previous_success,
     )
+
+
+def preview_slots(scope: ResultScope, job_id: uuid.UUID) -> Any:
+    """Read exactly the sealed members, including row slots not materialized yet."""
+    member, parent, cell, run, job = ResultJobMember, FactorialReplicateResult, FactorialCell, ProtocolRun, ResultJob
+    return select(
+        cell.id.label('cell_id'), cell.cell_label, cell.factor_values,
+        parent.id.label('replicate_id'), parent.replicate_label, parent.replicate_number,
+        (func.coalesce(cast(member.slot_id, Text), cast(run.row_result_id, Text),
+                       literal('unplanned:') + cast(parent.id, Text) + literal(':') + cast(member.row_index, Text))
+         if scope.unit == 'row' else cast(parent.id, Text)).label('slot_id'),
+        (func.coalesce(member.slot_id, run.row_result_id) if scope.unit == 'row'
+         else literal(None)).label('row_result_id'),
+        member.row_index.label('row_index') if scope.unit == 'row' else literal(None).label('row_index'),
+        literal(None).label('dataset_id'), literal(None).label('raw_sha256'),
+        run.id.label('run_id'), func.coalesce(run.status, 'not_started').label('status'),
+        run.updated_at, run.error, run.result_summary.label('result'), run.usage_summary.label('usage'),
+    ).select_from(member).join(job, job.id == member.job_id).join(parent, parent.id == member.replicate_id).join(
+        cell, cell.id == parent.cell_id).outerjoin(run, run.id == case(
+            (job.status.in_(('pending', 'awaiting_confirmation', 'cancelled')), member.expected_run_id),
+            else_=func.coalesce(member.run_id, member.expected_run_id))).where(
+        job.id == job_id, job.experiment_id == scope.experiment_id, job.protocol_id == scope.protocol_id,
+        job.protocol_revision_id == scope.protocol_revision_id, job.design_revision_id == scope.design_revision_id,
+        cell.experiment_id == scope.experiment_id, cell.design_revision_id == scope.design_revision_id)
+
+
+def forecast_slots(scope: ResultScope, row_count: int) -> Any:
+    """Forecast rows in SQL so unstarted-row filters include unmaterialized slots.
+
+    Only a bounded ordered page leaves PostgreSQL; no Cartesian product is
+    constructed in the API process or sent to the browser.
+    """
+    parent, cell = FactorialReplicateResult, FactorialCell
+    indexes = func.generate_series(0, row_count - 1).table_valued('row_index').render_derived()
+    actual = slot_query(scope).subquery('actual_rows')
+    return select(
+        cell.id.label('cell_id'), cell.cell_label, cell.factor_values,
+        parent.id.label('replicate_id'), parent.replicate_label, parent.replicate_number,
+        func.coalesce(cast(actual.c.slot_id, Text), literal('unplanned:') + cast(parent.id, Text) +
+                      literal(':') + cast(indexes.c.row_index, Text)).label('slot_id'),
+        actual.c.row_result_id, indexes.c.row_index,
+        actual.c.dataset_id, actual.c.raw_sha256, actual.c.run_id,
+        func.coalesce(actual.c.status, 'not_started').label('status'),
+        actual.c.updated_at, actual.c.error, actual.c.result, actual.c.usage,
+        actual.c.attempt_count, actual.c.has_previous_success,
+    ).select_from(cell).join(parent, parent.cell_id == cell.id).join(indexes, true()).outerjoin(
+        actual, and_(actual.c.replicate_id == parent.id, actual.c.row_index == indexes.c.row_index)
+    ).where(cell.experiment_id == scope.experiment_id, cell.design_revision_id == scope.design_revision_id,
+            *cell_predicates(scope), *parent_predicates(scope))
 
 
 def encode_cursor(scope: ResultScope, kind: str, position: list[Any], filters: dict[str, Any]) -> str:
@@ -422,111 +477,63 @@ async def read_executions(
     cell_id: uuid.UUID | None = None,
     replicate_id: uuid.UUID | None = None,
     status: str | None = None,
+    search: str = '',
+    factors: dict[str, Any] | None = None,
+    sort: str = 'number',
+    sort_direction: str = 'asc',
+    job_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
+    if sort not in {'number', 'status', 'updated'} or sort_direction not in {'asc', 'desc'}:
+        raise ValueError('invalid_sort')
     filters = {
         "cell_id": str(cell_id) if cell_id else None,
         "replicate_id": str(replicate_id) if replicate_id else None,
         "status": status,
+        'search': search, 'factors': factors or {}, 'sort': sort, 'sort_direction': sort_direction,
+        'job_id': str(job_id) if job_id else None,
     }
     refresh = await db.get(ResultRefresh, scope.key) if scope.unit == "row" else None
     row_count = (refresh.summary or {}).get("source_row_count") if refresh else None
-    if scope.unit == "row" and row_count is not None and status is None:
-        return await _read_row_window(db, scope, int(row_count), filters, cursor, page_size(limit))
     position = decode_cursor(cursor, scope, "executions", filters)
-    query = slot_query(scope)
+    query = (preview_slots(scope, job_id) if job_id else
+             forecast_slots(scope, int(row_count)) if scope.unit == 'row' and row_count is not None
+             and status in {None, 'not_started'} else slot_query(scope))
+    query = query.where(*cell_filters(FactorialCell, search, factors))
     if cell_id is not None:
         query = query.where(FactorialCell.id == cell_id)
     if replicate_id is not None:
         query = query.where(FactorialReplicateResult.id == replicate_id)
     slots = query.subquery("slots")
     statement = select(slots)
-    if status is not None:
-        statement = statement.where(slots.c.status == status)
+    statement = statement.where(*slot_filters(slots, status))
+    status_order = case((slots.c.status == 'failed', 0),
+                        (or_(slots.c.status == 'limit_reached', slots.c.result['truncated'].astext == 'true'), 1),
+                        (slots.c.result['evaluation_state'].astext == 'failed', 2),
+                        (slots.c.status == 'cancelled', 3), (slots.c.status == 'running', 4),
+                        (slots.c.status == 'finalizing', 5), (slots.c.status == 'pending', 6),
+                        (slots.c.status == 'not_started', 7), else_=8)
+    order_value = (func.coalesce(func.extract('epoch', slots.c.updated_at), 0) if sort == 'updated' else
+                   status_order if sort == 'status' else slots.c.replicate_number)
+    # Include the dataset row in the ordering; the slot id breaks remaining ties.
+    row_order = func.coalesce(slots.c.row_index, -1)
     if position is not None:
-        if len(position) != 1:
+        if len(position) != 3:
             raise ValueError("invalid_cursor")
-        statement = statement.where(slots.c.slot_id > uuid.UUID(position[0]))
-    rows = (await db.execute(statement.order_by(slots.c.slot_id).limit(page_size(limit) + 1))).mappings().all()
+        key = tuple_(order_value, row_order, cast(slots.c.slot_id, Text))
+        bound = (position[0], position[1], position[2])
+        statement = statement.where(key > bound if sort_direction == 'asc' else key < bound)
+    orders = [order_value, row_order, cast(slots.c.slot_id, Text)]
+    rows = (await db.execute(statement.add_columns(order_value.label('order_value')).order_by(
+        *[value.asc() if sort_direction == 'asc' else value.desc() for value in orders]
+    ).limit(page_size(limit) + 1))).mappings().all()
     items = [execution_payload(dict(row)) for row in rows[:limit]]
     return {
         "items": items,
-        "next_cursor": encode_cursor(scope, "executions", [str(rows[limit - 1]["slot_id"])], filters)
+        "next_cursor": encode_cursor(scope, "executions", [
+            float(rows[limit - 1]['order_value']) if sort == 'updated' else rows[limit - 1]['order_value'],
+            rows[limit - 1]['row_index'] if rows[limit - 1]['row_index'] is not None else -1,
+            str(rows[limit - 1]['slot_id'])], filters)
         if len(rows) > limit
-        else None,
-    }
-
-
-async def _read_row_window(
-    db: AsyncSession, scope: ResultScope, row_count: int, filters: dict[str, Any], cursor: str | None, limit: int
-) -> dict[str, Any]:
-    """Materialize one page, never the design × source Cartesian product."""
-    position = decode_cursor(cursor, scope, "row_executions", filters)
-    if position is not None and (len(position) != 2 or not 0 <= int(position[1]) < row_count):
-        raise ValueError("invalid_cursor")
-    parents = (
-        select(
-            FactorialReplicateResult.id.label("replicate_id"),
-            FactorialReplicateResult.replicate_label,
-            FactorialReplicateResult.replicate_number,
-            FactorialCell.id.label("cell_id"),
-            FactorialCell.cell_label,
-            FactorialCell.factor_values,
-        )
-        .join(FactorialCell)
-        .where(
-            FactorialCell.experiment_id == scope.experiment_id,
-            FactorialCell.design_revision_id == scope.design_revision_id,
-            *cell_predicates(scope),
-            *parent_predicates(scope),
-        )
-    )
-    if filters["cell_id"]:
-        parents = parents.where(FactorialCell.id == uuid.UUID(filters["cell_id"]))
-    if filters["replicate_id"]:
-        parents = parents.where(FactorialReplicateResult.id == uuid.UUID(filters["replicate_id"]))
-    if position:
-        parents = parents.where(FactorialReplicateResult.id >= uuid.UUID(position[0]))
-    records = list((await db.execute(parents.order_by(FactorialReplicateResult.id).limit(limit + 1))).mappings())
-    candidates: list[dict[str, Any]] = []
-    for parent in records:
-        start = int(position[1]) + 1 if position and str(parent["replicate_id"]) == position[0] else 0
-        for index in range(start, min(row_count, start + limit + 1 - len(candidates))):
-            candidates.append({**dict(parent), "row_index": index})
-        if len(candidates) > limit:
-            break
-    pairs = [(item["replicate_id"], item["row_index"]) for item in candidates]
-    existing: Any = (
-        (
-            await db.execute(
-                slot_query(scope).where(tuple_(FactorialReplicateResult.id, FactorialRowResult.row_index).in_(pairs))
-            )
-        ).mappings()
-        if pairs
-        else []
-    )
-    by_slot = {(row["replicate_id"], row["row_index"]): dict(row) for row in existing}
-    items = []
-    for candidate in candidates[:limit]:
-        pair = (candidate["replicate_id"], candidate["row_index"])
-        actual = by_slot.get(pair)
-        items.append(
-            execution_payload(
-                actual
-                if actual
-                else {
-                    **candidate,
-                    "slot_id": f"unplanned:{pair[0]}:{pair[1]}",
-                    "dataset_id": scope.row_plan["driver_dataset_id"] if scope.row_plan else None,
-                    "status": "not_started",
-                    "result": {},
-                }
-            )
-        )
-    last = candidates[limit - 1] if len(candidates) > limit else None
-    return {
-        "items": items,
-        "next_cursor": encode_cursor(scope, "row_executions", [str(last["replicate_id"]), last["row_index"]], filters)
-        if last
         else None,
     }
 
@@ -549,6 +556,8 @@ def execution_payload(row: dict[str, Any]) -> dict[str, Any]:
                 "status",
                 "error",
                 "updated_at",
+                'attempt_count',
+                'has_previous_success',
             )
         },
         "result": row.get("result") or {},
@@ -564,14 +573,26 @@ async def read_cells(
     limit: int = PAGE_SIZE,
     metric: str | None = None,
     direction: str = "maximize",
+    search: str = '',
+    status: str | None = None,
+    factors: dict[str, Any] | None = None,
+    sort: str = 'label',
+    sort_direction: str = 'asc',
+    job_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
+    if sort not in {'label', 'failed', 'updated'} and not sort.startswith('factor:'):
+        raise ValueError('invalid_sort')
+    if sort_direction not in {'asc', 'desc'}:
+        raise ValueError('invalid_sort_direction')
     if metric is not None and (
         scope.unit == "row" or metric not in {m["key"] for m in runtime_metrics(scope).values()}
     ):
         raise ValueError("invalid_sort_metric")
     if direction not in {"minimize", "maximize"}:
         raise ValueError("invalid_sort_direction")
-    filters = {"metric": metric, "direction": direction}
+    filters = {"metric": metric, "direction": direction, 'search': search, 'status': status,
+               'factors': factors or {}, 'sort': sort, 'sort_direction': sort_direction,
+               'job_id': str(job_id) if job_id else None}
     position = decode_cursor(cursor, scope, "cells", filters)
     cached = ResultCellRollup
     statement = (
@@ -584,8 +605,22 @@ async def read_cells(
             FactorialCell.experiment_id == scope.experiment_id,
             FactorialCell.design_revision_id == scope.design_revision_id,
             *cell_predicates(scope),
+            *cell_filters(FactorialCell, search, factors),
         )
     )
+    matching = (preview_slots(scope, job_id) if job_id else slot_query(scope)).subquery('matching_slots')
+    if status or job_id:
+        has_match = select(matching.c.slot_id).where(
+            matching.c.cell_id == FactorialCell.id, *slot_filters(matching, status)).exists()
+        if scope.unit == 'row' and status == 'not_started' and not job_id:
+            refresh = await db.get(ResultRefresh, scope.key)
+            expected_rows = (refresh.summary or {}).get('source_row_count', 0) if refresh else 0
+            actual_rows = select(func.count()).select_from(matching).where(
+                matching.c.cell_id == FactorialCell.id).scalar_subquery()
+            parents = select(func.count()).select_from(FactorialReplicateResult).where(
+                FactorialReplicateResult.cell_id == FactorialCell.id, *parent_predicates(scope)).scalar_subquery()
+            has_match = or_(has_match, actual_rows < parents * expected_rows)
+        statement = statement.where(has_match)
     rows = []
     if metric:
         refresh = await db.get(ResultRefresh, scope.key)
@@ -632,17 +667,44 @@ async def read_cells(
             missing = missing.add_columns(literal(1).label("missing"), literal(None).label("order_value"))
             rows += list((await db.execute(missing.order_by(FactorialCell.id).limit(limit + 1 - len(rows)))).mappings())
     else:
+        if sort == 'failed':
+            order_value = cast(func.coalesce(cached.data['counts']['failed'].astext, '0'), Integer)
+        elif sort == 'updated':
+            order_value = select(func.coalesce(func.max(func.extract('epoch', matching.c.updated_at)), 0)).where(
+                matching.c.cell_id == FactorialCell.id).scalar_subquery()
+        elif sort.startswith('factor:'):
+            factor = FactorialCell.factor_values[sort[7:]]
+            # JSONB retains numeric ordering for numeric levels and type identity.
+            order_value = func.coalesce(factor, cast(literal('null'), JSONB))
+        else:
+            order_value = natural_label(FactorialCell.cell_label)
         if position is not None:
-            if len(position) != 1:
+            if len(position) != 2:
                 raise ValueError("invalid_cursor")
-            statement = statement.where(FactorialCell.id > uuid.UUID(position[0]))
-        rows = list((await db.execute(statement.order_by(FactorialCell.id).limit(page_size(limit) + 1))).mappings())
+            bound_value = cast(literal(json.dumps(position[0])), JSONB) if sort.startswith('factor:') else position[0]
+            key = tuple_(order_value, FactorialCell.id)
+            bound = (bound_value, uuid.UUID(position[1]))
+            statement = statement.where(key > bound if sort_direction == 'asc' else key < bound)
+        statement = statement.add_columns(order_value.label('order_value'))
+        rows = list((await db.execute(statement.order_by(
+            order_value.asc() if sort_direction == 'asc' else order_value.desc(),
+            FactorialCell.id.asc() if sort_direction == 'asc' else FactorialCell.id.desc()
+        ).limit(page_size(limit) + 1))).mappings())
+    matching_counts = {}
+    if rows and (status or job_id):
+        counts = (await db.execute(select(
+            matching.c.cell_id, func.count().label('matching_count'),
+            func.count(func.distinct(matching.c.replicate_id)).label('matching_replicate_count'),
+        ).where(matching.c.cell_id.in_([row['id'] for row in rows[:limit]]),
+                *slot_filters(matching, status)).group_by(matching.c.cell_id))).mappings().all()
+        matching_counts = {row['cell_id']: dict(row) for row in counts}
     items = [
         {
             "cell_id": str(row["id"]),
             "cell_label": row["cell_label"],
             "factor_values": row["factor_values"] or {},
             **(row["data"] or {}),
+            **{key: value for key, value in matching_counts.get(row['id'], {}).items() if key != 'cell_id'},
         }
         for row in rows[:limit]
     ]
@@ -650,12 +712,86 @@ async def read_cells(
     if len(rows) > limit:
         last = rows[limit - 1]
         next_position = (
-            [last["missing"], last["order_value"], str(last["id"]), generation] if metric else [str(last["id"])]
+            [last["missing"], last["order_value"], str(last["id"]), generation] if metric else [
+                float(last['order_value']) if sort == 'updated' else last['order_value'], str(last['id'])]
         )
     return {
         "items": items,
         "next_cursor": encode_cursor(scope, "cells", next_position, filters) if next_position else None,
     }
+
+
+async def read_factor_options(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
+    pairs = func.jsonb_each(FactorialCell.factor_values).table_valued('key', 'value').lateral()
+    rows = (await db.execute(select(pairs.c.key, pairs.c.value).select_from(FactorialCell).join(pairs, true()).where(
+        FactorialCell.experiment_id == scope.experiment_id,
+        FactorialCell.design_revision_id == scope.design_revision_id, *cell_predicates(scope)
+    ).distinct().order_by(pairs.c.key, pairs.c.value).limit(1001))).all()
+    options: dict[str, list[Any]] = {}
+    for key, value in rows[:1000]:
+        options.setdefault(key, []).append(value)
+    return {'factors': options, 'truncated': len(rows) > 1000}
+
+
+async def read_execution_replicates(
+    db: AsyncSession, scope: ResultScope, *, cell_id: uuid.UUID, cursor: str | None = None,
+    limit: int = PAGE_SIZE, status: str | None = None, sort: str = 'number', sort_direction: str = 'asc',
+    job_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """Page row-mode parents without expanding the dataset Cartesian product."""
+    if sort not in {'number', 'status', 'updated'} or sort_direction not in {'asc', 'desc'}:
+        raise ValueError('invalid_sort')
+    filters = {'cell_id': str(cell_id), 'status': status, 'sort': sort,
+               'sort_direction': sort_direction, 'job_id': str(job_id) if job_id else None}
+    position = decode_cursor(cursor, scope, 'replicates', filters)
+    slots = (preview_slots(scope, job_id) if job_id else slot_query(scope)).subquery('replicate_slots')
+    aggregate = select(
+        slots.c.replicate_id, func.count().label('total'),
+        *[func.count().filter(slots.c.status == value).label(value) for value in
+          ('not_started', 'pending', 'running', 'finalizing', 'completed', 'failed', 'cancelled', 'limit_reached')],
+        func.max(slots.c.updated_at).label('updated_at'),
+        func.count().filter(and_(true(), *slot_filters(slots, status))).label('matching'),
+        func.count().filter(and_(*slot_filters(slots, 'scoring_failed'))).label('scoring_failed'),
+        func.count().filter(and_(*slot_filters(slots, 'limit_reached'))).label('limited'),
+    ).where(slots.c.cell_id == cell_id).group_by(slots.c.replicate_id).subquery()
+    parent = FactorialReplicateResult
+    refresh = await db.get(ResultRefresh, scope.key)
+    expected = (refresh.summary or {}).get('source_row_count', 0) if refresh else 0
+    total = (func.coalesce(aggregate.c.total, 0) if job_id else
+             func.greatest(func.coalesce(aggregate.c.total, 0), expected or 0))
+    matching = (total - func.coalesce(aggregate.c.total, 0) + func.coalesce(aggregate.c.not_started, 0)
+                if status == 'not_started' else func.coalesce(aggregate.c.matching, 0))
+    statement = select(parent.id, parent.replicate_number, parent.replicate_label, total.label('total'),
+                       matching.label('matching'), aggregate).select_from(parent).join(FactorialCell).outerjoin(
+        aggregate, aggregate.c.replicate_id == parent.id).where(
+        FactorialCell.id == cell_id, FactorialCell.experiment_id == scope.experiment_id,
+        FactorialCell.design_revision_id == scope.design_revision_id,
+        *cell_predicates(scope), *parent_predicates(scope))
+    if status or job_id:
+        statement = statement.where(matching > 0)
+    status_order = case((aggregate.c.failed > 0, 0), (aggregate.c.limited > 0, 1),
+                        (aggregate.c.scoring_failed > 0, 2), (aggregate.c.cancelled > 0, 3),
+                        (aggregate.c.running > 0, 4), (aggregate.c.finalizing > 0, 5),
+                        (aggregate.c.pending > 0, 6), (total > func.coalesce(aggregate.c.total, 0), 7),
+                        (aggregate.c.not_started > 0, 7), else_=8)
+    order = (func.coalesce(func.extract('epoch', aggregate.c.updated_at), 0) if sort == 'updated' else
+             status_order if sort == 'status' else parent.replicate_number)
+    if position:
+        key, bound = tuple_(order, parent.id), (position[0], uuid.UUID(position[1]))
+        statement = statement.where(key > bound if sort_direction == 'asc' else key < bound)
+    rows = list((await db.execute(statement.add_columns(order.label('order_value')).order_by(
+        order.asc() if sort_direction == 'asc' else order.desc(),
+        parent.id.asc() if sort_direction == 'asc' else parent.id.desc()).limit(page_size(limit) + 1))).mappings())
+    items = [{'cell_id': str(cell_id), 'replicate_id': str(row['id']), 'replicate_number': row['replicate_number'],
+              'replicate_label': row['replicate_label'], 'total': row['total'], 'matching': row['matching'],
+              'counts': {key: row[key] or 0 for key in
+                         ('pending', 'running', 'finalizing', 'completed', 'failed', 'cancelled', 'limit_reached')}}
+             for row in rows[:limit]]
+    last = rows[limit - 1] if len(rows) > limit else None
+    next_position = ([float(last['order_value']) if sort == 'updated' else last['order_value'], str(last['id'])]
+                     if last else None)
+    return {'items': items, 'next_cursor': encode_cursor(scope, 'replicates', next_position, filters)
+            if next_position else None}
 
 
 async def read_attempts(

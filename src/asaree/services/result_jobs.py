@@ -16,7 +16,7 @@ from math import prod
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Text, cast, func, literal, select, update
+from sqlalchemy import Text, cast, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +31,7 @@ from asaree.models.protocol import Protocol
 from asaree.models.protocol_run import ProtocolRun
 from asaree.models.result_job import ResultJob, ResultJobMember
 from asaree.services.dataset_row_csv import RowSource
+from asaree.services.execution_selection import action_eligible, cell_filters, effective_status
 from asaree.services.indexed_row_source import IndexedRows, read_indexed_row_source
 from asaree.services.protocol_execution import plan_cell_runs
 from asaree.services.protocol_runs import (
@@ -85,6 +86,14 @@ async def create_job(
         return previous
     if kind == "plan" and scope.protocol_revision_id is None:
         raise ValueError("Publish the protocol before preparing a production batch.")
+    if params.get('source_job_id'):
+        source_job = await db.get(ResultJob, uuid.UUID(params['source_job_id']))
+        if (source_job is None or source_job.owner_id != owner_id or source_job.kind != 'plan'
+                or source_job.experiment_id != scope.experiment_id
+                or source_job.protocol_id != scope.protocol_id
+                or source_job.design_revision_id != scope.design_revision_id
+                or source_job.status not in {'awaiting_confirmation', 'cancelled'}):
+            raise ValueError('Previous preview is unavailable. Select the work again.')
     job = ResultJob(
         owner_id=owner_id,
         experiment_id=scope.experiment_id,
@@ -208,9 +217,27 @@ def selected_parents(scope: ResultScope, selection: dict[str, Any]) -> Any:
     )
     if selection.get("cell_id"):
         query = query.where(FactorialCell.id == uuid.UUID(selection["cell_id"]))
-    if selection.get("replicate_ids") is not None:
-        query = query.where(FactorialReplicateResult.id.in_([uuid.UUID(i) for i in selection["replicate_ids"]]))
-    if selection.get("excluded_cell_ids"):
+    query = query.where(*cell_filters(FactorialCell, selection.get('search', ''), selection.get('factors')))
+    if selection.get('source_job_id'):
+        query = query.where(FactorialReplicateResult.id.in_(select(ResultJobMember.replicate_id).where(
+            ResultJobMember.job_id == uuid.UUID(selection['source_job_id']))))
+    has_selection = any(selection.get(key) is not None for key in ('cell_ids', 'replicate_ids', 'slot_ids'))
+    if not selection.get('all_matching') and (has_selection or selection.get('row_selections')):
+        ids = [uuid.UUID(i) for i in selection.get('replicate_ids', [])]
+        ids += [uuid.UUID(row['replicate_id']) for row in selection.get('row_selections', [])]
+        slots = [uuid.UUID(i) for i in selection.get('slot_ids', [])]
+        query = query.where(or_(
+            FactorialCell.id.in_([uuid.UUID(i) for i in selection.get('cell_ids', [])]),
+            FactorialReplicateResult.id.in_(ids),
+            FactorialReplicateResult.id.in_(
+                select(FactorialRowResult.replicate_result_id).where(FactorialRowResult.id.in_(slots)))
+            if scope.unit == 'row' else FactorialReplicateResult.id.in_(slots),
+        ))
+    explicit = bool(selection.get('slot_ids') or selection.get('row_selections') or selection.get('replicate_ids'))
+    if selection.get('excluded_replicate_ids') and not explicit:
+        query = query.where(FactorialReplicateResult.id.not_in(
+            [uuid.UUID(i) for i in selection['excluded_replicate_ids']]))
+    if selection.get("excluded_cell_ids") and not explicit:
         query = query.where(FactorialCell.id.not_in([uuid.UUID(i) for i in selection["excluded_cell_ids"]]))
     return query.order_by(FactorialReplicateResult.id)
 
@@ -221,7 +248,9 @@ def eligible(status: str, slot_id: str, rerun_slots: set[str], rerun_completed: 
 
 async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> None:
     progress = dict(job.progress)
-    selection = {**job.params["selection"], "excluded_cell_ids": job.params.get("excluded_cell_ids", [])}
+    progress['unit'] = scope.unit
+    selection = {**job.params["selection"], "excluded_cell_ids": [
+        *job.params['selection'].get('excluded_cell_ids', []), *job.params.get("excluded_cell_ids", [])]}
     if not progress.get("validated"):
         source = restored_source(progress) or await indexed_source(db, scope, job.owner_id)
         await plan_cell_runs(
@@ -278,6 +307,15 @@ async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> 
         progress["planned"] = await db.scalar(
             select(func.count()).select_from(ResultJobMember).where(ResultJobMember.job_id == job.id)
         )
+        members = select(ResultJobMember.replicate_id).where(ResultJobMember.job_id == job.id).subquery()
+        progress['selected_replicate_count'] = await db.scalar(
+            select(func.count(func.distinct(members.c.replicate_id))))
+        progress['selected_cell_count'] = await db.scalar(
+            select(func.count(func.distinct(FactorialCell.id))).join(FactorialReplicateResult)
+            .where(FactorialReplicateResult.id.in_(select(members.c.replicate_id)),
+                   FactorialCell.experiment_id == scope.experiment_id,
+                   FactorialCell.design_revision_id == scope.design_revision_id)
+        )
         job.status = "awaiting_confirmation"
         job.progress = progress
         return
@@ -311,6 +349,73 @@ async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> 
             for index in indexes
         ]
     reruns = set(selection.get("rerun_slot_ids", []))
+    previous = {}
+    if selection.get('source_job_id'):
+        prior = (await db.execute(select(ResultJobMember.replicate_id, ResultJobMember.row_index,
+                                         ProtocolRun.status, ProtocolRun.result_summary)
+                                 .outerjoin(ProtocolRun, ProtocolRun.id == ResultJobMember.expected_run_id)
+                                 .where(ResultJobMember.job_id == uuid.UUID(selection['source_job_id']),
+                                        ResultJobMember.replicate_id.in_(identifiers)))).mappings()
+        previous = {(row['replicate_id'], row['row_index']): dict(row) for row in prior}
+        rows = [row for row in rows if (row['replicate_id'], row['row_index'] if source else -1) in previous]
+        progress['previous_version'] = True
+        if source:
+            source_job = await db.get(ResultJob, uuid.UUID(selection['source_job_id']))
+            old_source = (source_job.progress or {}).get('source', {}) if source_job else {}
+            if old_source.get('sha256') != source.raw_sha256 or old_source.get('dataset_id') != source.dataset_id:
+                raise ValueError('Dataset source changed. Select and review the work again.')
+    if selection.get('status') and not previous:
+        rows = [row for row in rows if effective_status(row) == selection['status']]
+    explicit_selection = selection.get('slot_ids') is not None or selection.get('cell_ids') is not None
+    if not selection.get('source_job_id') and (explicit_selection or selection.get('row_selections')):
+        selected_cells = set(selection.get('cell_ids', []))
+        cell_parents = set()
+        if source and selected_cells:
+            cell_parents = set((await db.scalars(selected_parents(scope, {'cell_ids': list(selected_cells)}).where(
+                FactorialReplicateResult.id.in_(identifiers)))).all())
+        selected_replicates = set(selection.get('replicate_ids', []))
+        selected_slots = set(selection.get('slot_ids', []))
+        selected_rows = {(row['replicate_id'], row['row_index']) for row in selection.get('row_selections', [])}
+        excluded_cells = set(selection.get('excluded_cell_ids', []))
+        excluded_replicates = set(selection.get('excluded_replicate_ids', []))
+        # Synthetic source rows need their owning cell for hierarchical selection.
+        parent_cells = {}
+        if source:
+            parent_cells = dict((await db.execute(select(FactorialReplicateResult.id, FactorialCell.id).join(
+                FactorialCell).where(FactorialReplicateResult.id.in_(identifiers),
+                                    FactorialCell.experiment_id == scope.experiment_id,
+                                    FactorialCell.design_revision_id == scope.design_revision_id))).all())
+        rows = [row for row in rows if (
+            ((selection.get('all_matching') and
+              str(row.get('cell_id', parent_cells.get(row['replicate_id']))) not in excluded_cells
+              or str(row.get('cell_id')) in selected_cells or row['replicate_id'] in cell_parents)
+             and str(row['replicate_id']) not in excluded_replicates)
+            or str(row['replicate_id']) in selected_replicates or str(row['slot_id']) in selected_slots
+            or (str(row['replicate_id']), row['row_index']) in selected_rows)]
+    if selection.get('excluded_slot_ids'):
+        rows = [row for row in rows if str(row['slot_id']) not in selection['excluded_slot_ids']]
+    if selection.get('excluded_rows'):
+        excluded_rows = {(row['replicate_id'], row['row_index']) for row in selection['excluded_rows']}
+        rows = [row for row in rows if (str(row['replicate_id']), row['row_index']) not in excluded_rows]
+    mode = selection.get('mode')
+    def eligible_row(row: dict[str, Any]) -> bool:
+        prior = previous.get((row['replicate_id'], row['row_index'] if source else -1))
+        # Publishing a fix creates a new cohort. Reuse the exact reviewed targets,
+        # never the old attempt's results, and only while the new slot is unstarted.
+        if prior and row['status'] == 'not_started':
+            return True
+        return (
+            action_eligible(row['status'], mode, (row.get('result') or {}).get('truncated', False)) if mode else
+            eligible(row['status'], str(row['slot_id']), reruns, selection.get('rerun_completed', False))
+        )
+    selected_rows = [row for row in rows if eligible_row(row)]
+    statuses = dict(progress.get('statuses', {}))
+    for row in selected_rows:
+        statuses[row['status']] = statuses.get(row['status'], 0) + 1
+    progress['statuses'] = statuses
+    progress['active_skipped'] = progress.get('active_skipped', 0) + sum(row['status'] in ACTIVE for row in rows)
+    progress['limited'] = progress.get('limited', 0) + sum(
+        row['status'] == 'limit_reached' or bool((row.get('result') or {}).get('truncated')) for row in selected_rows)
     members = [
         {
             "job_id": job.id,
@@ -321,8 +426,7 @@ async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> 
             "processed": False,
             "delivered": False,
         }
-        for row in rows
-        if eligible(row["status"], str(row["slot_id"]), reruns, selection.get("rerun_completed", False))
+        for row in selected_rows
     ]
     if members:
         await db.execute(insert(ResultJobMember).values(members).on_conflict_do_nothing())

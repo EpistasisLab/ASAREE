@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
@@ -48,6 +49,16 @@ async def selected_scope(
 Scope = Annotated[result_reads.ResultScope, Depends(selected_scope)]
 
 
+def factor_selection(factors: str | None) -> dict[str, Any]:
+    try:
+        value = json.loads(factors or '{}')
+        if not isinstance(value, dict) or len(value) > 50:
+            raise ValueError
+        return value
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail='Invalid factor filters.') from exc
+
+
 async def _read(operation: Callable[..., Awaitable[dict[str, Any]]], *args: Any, **kwargs: Any) -> dict[str, Any]:
     try:
         return await operation(*args, **kwargs)
@@ -83,9 +94,17 @@ async def cells(
     cursor: str | None = None,
     metric: str | None = None,
     direction: str = "maximize",
+    search: Annotated[str, Query(max_length=200)] = '',
+    status: str | None = None,
+    factors: Annotated[str | None, Query(max_length=10000)] = None,
+    sort: str = 'label',
+    sort_direction: str = 'asc',
+    job_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     return await _read(
-        result_reads.read_cells, db, scope, limit=limit, cursor=cursor, metric=metric, direction=direction
+        result_reads.read_cells, db, scope, limit=limit, cursor=cursor, metric=metric, direction=direction,
+        search=search, status=status, factors=factor_selection(factors), sort=sort,
+        sort_direction=sort_direction, job_id=job_id,
     )
 
 
@@ -98,8 +117,16 @@ async def executions(
     cell_id: uuid.UUID | None = None,
     replicate_id: uuid.UUID | None = None,
     status: Annotated[
-        str | None, Query(pattern="^(not_started|pending|running|finalizing|completed|failed|cancelled|limit_reached)$")
+        str | None,
+        Query(pattern=(
+            "^(not_started|pending|running|finalizing|completed|failed|cancelled|limit_reached|scoring_failed)$"
+        )),
     ] = None,
+    search: Annotated[str, Query(max_length=200)] = '',
+    factors: Annotated[str | None, Query(max_length=10000)] = None,
+    sort: str = 'number',
+    sort_direction: str = 'asc',
+    job_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     return await _read(
         result_reads.read_executions,
@@ -110,7 +137,22 @@ async def executions(
         cell_id=cell_id,
         replicate_id=replicate_id,
         status=status,
+        search=search, factors=factor_selection(factors), sort=sort, sort_direction=sort_direction, job_id=job_id,
     )
+
+
+@router.get('/replicates')
+async def replicates(db: DbSession, scope: Scope, cell_id: uuid.UUID,
+                     limit: Limit = result_reads.PAGE_SIZE, cursor: str | None = None,
+                     status: str | None = None, sort: str = 'number', sort_direction: str = 'asc',
+                     job_id: uuid.UUID | None = None) -> dict[str, Any]:
+    return await _read(result_reads.read_execution_replicates, db, scope, cell_id=cell_id, limit=limit,
+                       cursor=cursor, status=status, sort=sort, sort_direction=sort_direction, job_id=job_id)
+
+
+@router.get('/factor-options')
+async def factor_options(db: DbSession, scope: Scope) -> dict[str, Any]:
+    return await _read(result_reads.read_factor_options, db, scope)
 
 
 @router.get("/slots/{slot_id}/attempts")

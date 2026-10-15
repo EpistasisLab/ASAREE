@@ -49,6 +49,7 @@ from asaree.services.result_reads import (
     read_cells,
     read_conversation,
     read_evidence,
+    read_execution_replicates,
     read_executions,
     read_summary,
     resolve_result_scope,
@@ -282,6 +283,72 @@ async def test_current_attempt_history_and_rerun_rollups(results_db):
     assert summary["counts"]["failed"] == 1
     assert summary["counts"]["completed"] == 0
     assert len((await read_cells(db, selected))["items"]) == 1
+
+
+async def test_run_browser_natural_order_filters_and_cursor_scope(results_db):
+    db, selected, first, user = results_db
+    first.cell_label = 'Cell 10'
+    first.factor_values = {'model': 'B', 'temperature': 10}
+    second = FactorialCell(experiment_id=selected.experiment_id, design_revision_id=selected.design_revision_id,
+                           cell_label='Cell 2', factor_values={'model': 'A', 'temperature': 2})
+    db.add(second)
+    await db.flush()
+    for cell in (first, second):
+        for number in (10, 2):
+            parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=number,
+                                             replicate_label=f'{cell.cell_label}__rep{number}')
+            db.add(parent)
+            await db.flush()
+            db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
+                               protocol_revision_id=selected.protocol_revision_id,
+                               design_revision_id=selected.design_revision_id, replicate_result_id=parent.id,
+                               replicate_label=parent.replicate_label, factor_values=cell.factor_values,
+                               status='failed' if number == 2 else 'completed', node_runs={}))
+    await db.flush()
+    page = await read_cells(db, selected, limit=1)
+    assert [cell['cell_label'] for cell in page['items']] == ['Cell 2']
+    next_page = await read_cells(db, selected, limit=1, cursor=page['next_cursor'])
+    assert [cell['cell_label'] for cell in next_page['items']] == ['Cell 10']
+    with pytest.raises(ValueError, match='cursor_scope_mismatch'):
+        await read_cells(db, selected, limit=1, cursor=page['next_cursor'], status='failed')
+    filtered = await read_cells(db, selected, search='model', status='failed', factors={'temperature': 2})
+    assert [cell['cell_label'] for cell in filtered['items']] == ['Cell 2']
+    assert filtered['items'][0]['matching_count'] == 1
+    replicates = await read_executions(db, selected, cell_id=second.id)
+    assert [item['replicate_number'] for item in replicates['items']] == [2, 10]
+    failed = await read_executions(db, selected, cell_id=second.id, status='failed')
+    assert [item['replicate_number'] for item in failed['items']] == [2]
+    assert (await read_cells(db, selected, search='%'))['items'] == []
+
+
+async def test_unplanned_dataset_rows_remain_browsable_when_filtered(results_db):
+    from dataclasses import replace
+
+    db, selected, cell, _user = results_db
+    cell.factor_values = {'model': 'A'}
+    parents = [FactorialReplicateResult(cell_id=cell.id, replicate_number=number, replicate_label=f'rep{number}')
+               for number in (10, 2)]
+    db.add_all(parents)
+    await db.flush()
+    selected = replace(selected, row_plan={'driver_dataset_id': str(uuid.uuid4())})
+    refresh = await db.get(ResultRefresh, selected.key)
+    if refresh is None:
+        refresh = ResultRefresh(scope_key=selected.key, protocol_id=selected.protocol_id,
+                                protocol_revision_id=selected.protocol_revision_id,
+                                design_revision_id=selected.design_revision_id)
+        db.add(refresh)
+    refresh.summary = {'source_row_count': 3}
+    await db.flush()
+    first = await read_executions(db, selected, cell_id=cell.id, status='not_started',
+                                  search='model', factors={'model': 'A'}, limit=2)
+    assert [(row['replicate_number'], row['row_index']) for row in first['items']] == [(2, 0), (2, 1)]
+    second = await read_executions(db, selected, cell_id=cell.id, status='not_started',
+                                   search='model', factors={'model': 'A'}, limit=2, cursor=first['next_cursor'])
+    assert [(row['replicate_number'], row['row_index']) for row in second['items']] == [(2, 2), (10, 0)]
+    assert all(row['status'] == 'not_started' for row in first['items'])
+    groups = await read_execution_replicates(db, selected, cell_id=cell.id, status='not_started')
+    assert [(group['replicate_number'], group['matching']) for group in groups['items']] == [(2, 3), (10, 3)]
+    assert len((await read_cells(db, selected, status='not_started'))['items']) == 1
 
 
 async def test_opaque_previews_and_eligibility(results_db):

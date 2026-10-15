@@ -2,19 +2,27 @@
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import case, func, select, text
 
 from asaree.api.result_reads import Scope
 from asaree.deps import CurrentUser, DbSession
-from asaree.models.result_job import ResultJob
+from asaree.models.experiment_design_revision import ExperimentDesignRevision
+from asaree.models.protocol import Protocol
+from asaree.models.protocol_run import ProtocolRun
+from asaree.models.result_job import ResultJob, ResultJobMember
 from asaree.services import result_exports, result_jobs
 
 router = APIRouter(prefix="/experiments/{experiment_id}/execution-results/jobs", tags=["execution-results"])
+
+
+class RowSelection(BaseModel):
+    replicate_id: uuid.UUID
+    row_index: int = Field(ge=0)
 
 
 class Command(BaseModel):
@@ -25,6 +33,22 @@ class Command(BaseModel):
     row_indices: list[int] | None = Field(default=None, max_length=100)
     rerun_slot_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
     rerun_completed: bool = False
+    mode: Literal['pending', 'retry', 'rerun'] | None = None
+    search: str = Field(default='', max_length=200)
+    status: str | None = Field(
+        default=None,
+        pattern='^(not_started|pending|running|finalizing|completed|failed|cancelled|limit_reached|scoring_failed)$',
+    )
+    factors: dict[str, Any] = Field(default_factory=dict, max_length=50)
+    cell_ids: list[uuid.UUID] | None = Field(default=None, max_length=1000)
+    slot_ids: list[uuid.UUID] | None = Field(default=None, max_length=1000)
+    excluded_slot_ids: list[uuid.UUID] = Field(default_factory=list, max_length=1000)
+    excluded_replicate_ids: list[uuid.UUID] = Field(default_factory=list, max_length=1000)
+    excluded_cell_ids: list[uuid.UUID] = Field(default_factory=list, max_length=1000)
+    source_job_id: uuid.UUID | None = None
+    row_selections: list[RowSelection] = Field(default_factory=list, max_length=1000)
+    excluded_rows: list[RowSelection] = Field(default_factory=list, max_length=1000)
+    all_matching: bool = False
 
 
 def payload(job: ResultJob) -> dict[str, Any]:
@@ -36,7 +60,11 @@ def payload(job: ResultJob) -> dict[str, Any]:
             key: value
             for key, value in job.progress.items()
             if key
-            in {"scanned", "planned", "created", "skipped", "cancelled", "bytes", "cell_count", "replicate_count"}
+            in {
+                "scanned", "planned", "created", "skipped", "cancelled", "bytes", "cell_count", "replicate_count",
+                "statuses", "active_skipped", "limited", "selected_cell_count", "selected_replicate_count",
+                "previous_version", "unit",
+            }
         },
         "error": job.error,
         "protocol_revision_id": str(job.protocol_revision_id) if job.protocol_revision_id else None,
@@ -98,7 +126,17 @@ async def create(command: Command, user: CurrentUser, db: DbSession, scope: Scop
 
 @router.get("/{job_id}")
 async def get(experiment_id: uuid.UUID, job_id: uuid.UUID, user: CurrentUser, db: DbSession) -> dict[str, Any]:
-    return payload(await owned_job(db, experiment_id, job_id, user.id))
+    job = await owned_job(db, experiment_id, job_id, user.id)
+    result = payload(job)
+    if job.kind == 'plan' and job.status in {'queued', 'completed', 'failed', 'cancelled'}:
+        status = case((ProtocolRun.result_summary['truncated'].astext == 'true', 'limit_reached'),
+                      (ProtocolRun.result_summary['evaluation_state'].astext == 'failed', 'scoring_failed'),
+                      else_=ProtocolRun.status)
+        rows = (await db.execute(select(status, func.count()).join(
+            ResultJobMember, ResultJobMember.run_id == ProtocolRun.id).where(
+            ResultJobMember.job_id == job.id).group_by(status))).all()
+        result['execution_counts'] = dict(rows)
+    return result
 
 
 @router.post("/{job_id}/confirm", status_code=202)
@@ -113,6 +151,18 @@ async def confirm(experiment_id: uuid.UUID, job_id: uuid.UUID, user: CurrentUser
     if job.kind != "plan" or job.status not in ("awaiting_confirmation", "queued", "completed"):
         raise HTTPException(status_code=409, detail="Batch preview is not ready for confirmation.")
     if job.status == "awaiting_confirmation":
+        protocol = await db.scalar(
+            select(Protocol).where(Protocol.id == job.protocol_id).with_for_update(key_share=True)
+        )
+        current_design = await db.scalar(select(ExperimentDesignRevision.id).where(
+            ExperimentDesignRevision.experiment_id == experiment_id,
+            ExperimentDesignRevision.superseded_at.is_(None)))
+        if (protocol is None or protocol.published_revision_id != job.protocol_revision_id
+                or current_design != job.design_revision_id):
+            raise HTTPException(
+                status_code=409,
+                detail='The published version or design changed. Refresh the preview before running.',
+            )
         job.status = "queued"
     return await _committed(db, job)
 

@@ -43,6 +43,7 @@ const DEPENDENCY_HANDLES = new Set([
 
 export type RunScope =
   | { type: 'graph' }
+  | { type: 'batch'; title: string }
   | { type: 'replicate'; label: string; title?: string }
   | { type: 'all-cells'; cellCount: number; replicateCount: number; pendingReplicateCount: number }
   | {

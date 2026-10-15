@@ -33,7 +33,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
-import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob } from '@/types/executionResults'
+import type { AttemptDetail, AttemptPage, BatchSelection, CursorPage, ExecutionCell, ExecutionReplicate, ExecutionSlot, ExecutionSummary, ResultJob } from '@/types/executionResults'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -220,7 +220,7 @@ export const experimentsApi = {
     request<{ items: { id: string; sequence: number; iteration: number | null; phase: string; preview: string | null }[]; next_after: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/nodes/${encodeURIComponent(nodeId)}/trace${resultPageQuery(scope, { after })}`, { signal }),
   getExecutionStep: (id: string, runId: string, nodeId: string, stepId: string, scope: ResultsScope, offset: number, signal?: AbortSignal) =>
     request<{ text: string; next_offset: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/nodes/${encodeURIComponent(nodeId)}/trace/${stepId}${resultPageQuery(scope, { offset })}`, { signal }),
-  createResultJob: (id: string, scope: ResultsScope, command: { kind: ResultJob['kind']; request_key: string; cell_id?: string; replicate_ids?: string[]; row_indices?: number[]; rerun_slot_ids?: string[]; rerun_completed?: boolean }, signal?: AbortSignal) =>
+  createResultJob: (id: string, scope: ResultsScope, command: BatchSelection & { kind: ResultJob['kind']; request_key: string }, signal?: AbortSignal) =>
     request<ResultJob>(`/experiments/${id}/execution-results/jobs${scopeQuery(scope)}`, { method: 'POST', body: command, signal }),
   getResultJob: (id: string, jobId: string, signal?: AbortSignal) =>
     request<ResultJob>(`/experiments/${id}/execution-results/jobs/${jobId}`, { signal }),
@@ -235,6 +235,10 @@ export const experimentsApi = {
     if (res.status === 304 && cached) return cached
     return { ...await res.json() as ExecutionSummary, etag: res.headers.get('ETag') ?? undefined }
   },
+  getExecutionFactorOptions: (id: string, scope: ResultsScope, signal?: AbortSignal) =>
+    request<{ factors: Record<string, unknown[]>; truncated: boolean }>(`/experiments/${id}/execution-results/factor-options${scopeQuery(scope)}`, { signal }),
+  listExecutionReplicates: (id: string, scope: ResultsScope, params: Record<string, string | number | undefined> = {}, signal?: AbortSignal) =>
+    request<CursorPage<ExecutionReplicate>>(`/experiments/${id}/execution-results/replicates${resultPageQuery(scope, params)}`, { signal }),
   listExecutionCells: (id: string, scope: ResultsScope, params: Record<string, string | number | undefined> = {}, signal?: AbortSignal) =>
     request<CursorPage<ExecutionCell>>(`/experiments/${id}/execution-results/cells${resultPageQuery(scope, params)}`, { signal }),
   listExecutions: (id: string, scope: ResultsScope, params: Record<string, string | number | undefined> = {}, signal?: AbortSignal) =>

@@ -18,6 +18,8 @@ def cell_filters(cell: Any, search: str = '', factors: dict[str, Any] | None = N
 
 
 def slot_filters(slots: Any, status: str | None = None) -> list[Any]:
+    if status == 'running':
+        return [slots.c.status.in_(('running', 'finalizing'))]
     if status == 'scoring_failed':
         return [and_(slots.c.status == 'completed', slots.c.result['evaluation_state'].astext == 'failed',
                      func.coalesce(slots.c.result['truncated'].astext, 'false') != 'true')]

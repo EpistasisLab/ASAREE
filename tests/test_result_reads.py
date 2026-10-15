@@ -309,10 +309,12 @@ async def test_run_browser_natural_order_filters_and_cursor_scope(results_db, la
     page = await read_cells(db, selected, limit=1)
     assert [cell['cell_label'] for cell in page['items']] == [labels[1]]
     next_page = await read_cells(db, selected, limit=1, cursor=page['next_cursor'])
+    assert page['total'] == next_page['total'] == 2
     assert [cell['cell_label'] for cell in next_page['items']] == [labels[0]]
     with pytest.raises(ValueError, match='cursor_scope_mismatch'):
         await read_cells(db, selected, limit=1, cursor=page['next_cursor'], status='failed')
     filtered = await read_cells(db, selected, search='model', status='failed', factors={'temperature': 2})
+    assert filtered['total'] == 1
     assert [cell['cell_label'] for cell in filtered['items']] == [labels[1]]
     replicates = await read_executions(db, selected, cell_id=second.id)
     assert [item['replicate_number'] for item in replicates['items']] == [2, 10]
@@ -323,6 +325,8 @@ async def test_run_browser_natural_order_filters_and_cursor_scope(results_db, la
     assert [item['replicate_number'] for item in first_replicate['items']] == [2]
     assert [item['replicate_number'] for item in next_replicate['items']] == [10]
     failed = await read_executions(db, selected, cell_id=second.id, status='failed')
+    assert failed['total'] == 1
+    assert first_replicate['total'] == next_replicate['total'] == 2
     assert [item['replicate_number'] for item in failed['items']] == [2]
     assert (await read_cells(db, selected, search='%'))['items'] == []
 
@@ -392,6 +396,7 @@ async def test_large_unplanned_source_returns_contiguous_bounded_pages(results_d
     second = await read_executions(db, selected, status=status, cursor=first['next_cursor'])
     assert [row['row_index'] for row in first['items']] == list(range(20))
     assert [row['row_index'] for row in second['items']] == list(range(20, 40))
+    assert first['total'] == second['total'] == 1_000_000
     assert second['next_cursor'] is not None
 
 
@@ -427,6 +432,7 @@ async def test_unstarted_row_pages_skip_occupied_rows_and_keep_gaps(results_db):
     second = await read_executions(db, selected, status='not_started', limit=2, cursor=first['next_cursor'])
     assert [row['row_index'] for row in first['items']] == [1, 3]
     assert [row['row_index'] for row in second['items']] == [5, 6]
+    assert first['total'] == second['total'] == 4
     assert second['next_cursor'] is None
 
 

@@ -1,7 +1,7 @@
 import type { DesignSpec, EvaluationArtifact, MetricObservation, MeasurementDirection } from './experiments'
 import type { DatasetRowSnapshot, NodeRunState } from './protocols'
 
-export interface CursorPage<T> { items: T[]; next_cursor: string | null }
+export interface CursorPage<T> { items: T[]; next_cursor: string | null; total?: number }
 export interface ExecutionFilters {
   search: string
   status: string

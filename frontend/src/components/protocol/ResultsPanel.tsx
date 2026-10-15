@@ -50,7 +50,7 @@ export function ResultsPanel({ experimentId, experimentName, scope, controls, su
   return <div className={maximized ? '@container fixed inset-0 z-50 space-y-4 overflow-auto bg-background p-4' : '@container space-y-4 p-3'}>
     <section className="space-y-2">
       {controls}
-      <Card size="sm" className="flex-row flex-wrap items-start justify-between gap-3 border-primary/25 bg-primary/5 p-3">
+      <Card size="sm" className="flex-row flex-wrap items-start justify-between gap-3 p-3">
         {summary}
         <div className="flex shrink-0 flex-wrap gap-1.5">
           <Button variant="outline" size="xs" onClick={() => setMaximized(value => !value)}>{maximized ? <Minimize2 className="size-3" /> : <Maximize2 className="size-3" />}{maximized ? 'Restore Results' : 'Maximize Results'}</Button>

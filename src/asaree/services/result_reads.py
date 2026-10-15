@@ -433,6 +433,7 @@ async def read_executions(
         query = query.where(FactorialReplicateResult.id == replicate_id)
     slots = query.subquery("slots")
     statement = select(slots).where(*slot_filters(slots, status))
+    count_statement = select(func.count()).select_from(statement.subquery())
     label_order = natural_label(slots.c.cell_label)
     # Keep cells together, then order replicates numerically and rows by source position.
     row_order = func.coalesce(cast(slots.c.row_index, BigInteger), -1)
@@ -442,11 +443,13 @@ async def read_executions(
             raise ValueError("invalid_cursor")
         statement = statement.where(tuple_(*orders) > (
             position[0], uuid.UUID(position[1]), position[2], position[3], position[4]))
+    total = int(await db.scalar(count_statement) or 0)
     rows = (await db.execute(statement.add_columns(label_order.label("label_order")).order_by(*orders)
                              .limit(page_size(limit) + 1))).mappings().all()
     last = rows[limit - 1] if len(rows) > limit else None
     return {
         "items": [execution_payload(dict(row)) for row in rows[:limit]],
+        "total": total,
         "next_cursor": encode_cursor(scope, "executions", [
             last["label_order"], str(last["cell_id"]), last["replicate_number"],
             last["row_index"] if last["row_index"] is not None else -1, str(last["slot_id"])], filters)
@@ -462,7 +465,7 @@ async def _read_row_window(
     if position is not None and (len(position) != 5 or not 0 <= int(position[4]) < row_count):
         raise ValueError("invalid_cursor")
     if row_count == 0:
-        return {"items": [], "next_cursor": None}
+        return {"items": [], "next_cursor": None, "total": 0}
     parent, cell = FactorialReplicateResult, FactorialCell
     label_order = natural_label(cell.cell_label)
     orders = (label_order, cell.id, parent.replicate_number, parent.id)
@@ -480,8 +483,15 @@ async def _read_row_window(
     if filters["status"] == "not_started":
         slots = slot_query(scope).subquery("attempted_rows")
         attempted = select(func.count()).select_from(slots).where(
-            slots.c.replicate_id == parent.id, slots.c.status != "not_started").scalar_subquery()
+            slots.c.replicate_id == parent.id, slots.c.status != "not_started",
+            slots.c.row_index >= 0, slots.c.row_index < row_count).correlate(parent).scalar_subquery()
         parents = parents.where(attempted < row_count)
+        remaining = parents.with_only_columns(
+            func.greatest(row_count - attempted, 0).label("remaining"), maintain_column_froms=True).subquery()
+        count_statement = select(func.coalesce(func.sum(remaining.c.remaining), 0))
+    else:
+        count_statement = select(func.count() * row_count).select_from(parents.with_only_columns(parent.id).subquery())
+    total = int(await db.scalar(count_statement) or 0)
     if position:
         parents = parents.where(tuple_(*orders) >= (
             position[0], uuid.UUID(position[1]), position[2], uuid.UUID(position[3])))
@@ -511,7 +521,7 @@ async def _read_row_window(
             "status": "not_started", "result": {},
         }))
     last = candidates[limit - 1] if len(candidates) > limit else None
-    return {"items": items, "next_cursor": encode_cursor(scope, "row_executions", [
+    return {"items": items, "total": total, "next_cursor": encode_cursor(scope, "row_executions", [
         last["label_order"], str(last["cell_id"]), last["replicate_number"],
         str(last["replicate_id"]), last["row_index"]], filters) if last else None}
 
@@ -594,10 +604,12 @@ async def read_cells(
             has_match = or_(has_match, actual_rows < parents * expected_rows)
         statement = statement.where(has_match)
     order_value = natural_label(FactorialCell.cell_label)
+    count_statement = select(func.count()).select_from(statement.subquery())
     if position is not None:
         if len(position) != 2:
             raise ValueError("invalid_cursor")
         statement = statement.where(tuple_(order_value, FactorialCell.id) > (position[0], uuid.UUID(position[1])))
+    total = int(await db.scalar(count_statement) or 0)
     rows = (await db.execute(statement.add_columns(order_value.label("order_value"))
                              .order_by(order_value, FactorialCell.id).limit(page_size(limit) + 1))).mappings().all()
     items = []
@@ -608,6 +620,7 @@ async def read_cells(
         items.append(item)
     return {
         "items": items,
+        "total": total,
         "next_cursor": encode_cursor(scope, "cells", [
             rows[limit - 1]["order_value"], str(rows[limit - 1]["id"])], filters) if len(rows) > limit else None,
     }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import { BarChart3, ListChecks, PanelLeftClose, PencilRuler } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
@@ -92,7 +93,9 @@ export function ExperimentSidePanel({
 }) {
   const [width, setWidth] = useState(readStoredPanelWidth)
   const [collapsed, setCollapsed] = useState(readStoredCollapsed)
-  const [activeTab, setActiveTab] = useState<PanelTab>('design')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = searchParams.get('tab')
+  const activeTab: PanelTab = requestedTab === 'runs' || requestedTab === 'results' ? requestedTab : 'design'
   const [hasPendingDesignUpdate, setHasPendingDesignUpdate] = useState(false)
   const [dragging, setDragging] = useState(false)
   const dragStart = useRef<{ x: number; width: number } | null>(null)
@@ -160,7 +163,11 @@ export function ExperimentSidePanel({
   }
 
   function openPanel(tab: PanelTab) {
-    setActiveTab(tab)
+    if (searchParams.get('tab') !== tab) setSearchParams(previous => {
+      const next = new URLSearchParams(previous)
+      next.set('tab', tab)
+      return next
+    })
     setPanelCollapsed(false)
     // Result selection owns the canvas-side inspector. Leaving Results via
     // the persistent rail should not leave a stale detail panel over the

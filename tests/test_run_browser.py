@@ -15,7 +15,8 @@ def scope():
 
 
 @pytest.mark.parametrize('reader', [read_cells, read_executions])
-async def test_search_and_status_are_applied_on_server_before_pagination(reader):
+@pytest.mark.parametrize('status', ['failed', 'running'])
+async def test_search_and_status_are_applied_on_server_before_pagination(reader, status):
     statements = []
     parameters = []
 
@@ -30,12 +31,15 @@ async def test_search_and_status_are_applied_on_server_before_pagination(reader)
         parameters.extend(compiled.params.values())
         return Empty()
 
-    db = SimpleNamespace(execute=capture, get=AsyncMock(return_value=None))
-    page = await reader(db, scope(), search='model 2', status='failed', factors={'model': 'A'})
+    db = SimpleNamespace(execute=capture, scalar=AsyncMock(return_value=0), get=AsyncMock(return_value=None))
+    page = await reader(db, scope(), search='model 2', status=status, factors={'model': 'A'})
     assert page['items'] == []
     sql = '\n'.join(statements)
     assert 'ILIKE' in sql
-    assert 'failed' in parameters
+    if status == 'running':
+        assert ['running', 'finalizing'] in parameters
+    else:
+        assert 'failed' in parameters
     assert {'model': 'A'} in parameters
     assert 21 in parameters
     assert 'LIMIT' in sql

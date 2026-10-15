@@ -248,6 +248,11 @@ function RunReplicateButton({
   )
 }
 
+function allExecutionsFinished(counts: Record<string, number> | undefined, total: number | null | undefined) {
+  return !!total && ['completed', 'failed', 'cancelled', 'limit_reached', 'scoring_failed']
+    .reduce((finished, status) => finished + (counts?.[status] ?? 0), 0) >= total
+}
+
 export function RunsTab({ experimentId, designSpec, protocol, regenerationRequired, unboundFactors, onViewResult, onViewRowResult, onSelectResult }: {
   experimentId: string; designSpec: Experiment['design_spec']; protocol: Protocol | undefined
   regenerationRequired: boolean; unboundFactors: string[]; onViewResult: (label: string) => void
@@ -265,8 +270,12 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
         else if (selection.type === 'row') onViewRowResult?.(selection.rowResultId)
         else if (selection.type === 'replicate') onViewResult(selection.replicateLabel)
       }}
-      controls={<><StopAllButton protocol={protocol} experimentId={experimentId} active={!!summary.data?.has_active} /><RunAllCellsButton protocol={protocol} experimentId={experimentId} regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /></>}
-      cellActions={cell => <><RunAllCellsButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id} label="Run cell" compact regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /><StopAllButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id} active={ACTIVE_STATUSES.some(status => (cell.counts?.[status] ?? 0) > 0)} /></>}
+      controls={<><StopAllButton protocol={protocol} experimentId={experimentId} active={!!summary.data?.has_active} /><RunAllCellsButton protocol={protocol} experimentId={experimentId}
+        label={summary.data?.ready && allExecutionsFinished(summary.data.counts, summary.data.expected ?? summary.data.total) ? 'Re-run all cells' : 'Run all cells'}
+        regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /></>}
+      cellActions={cell => <><RunAllCellsButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id}
+        label={allExecutionsFinished(cell.counts, cell.total) ? 'Re-run cell' : 'Run cell'}
+        compact regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /><StopAllButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id} active={ACTIVE_STATUSES.some(status => (cell.counts?.[status] ?? 0) > 0)} /></>}
       actions={row => <RunReplicateButton row={row} protocol={protocol} experimentId={experimentId} replicateLabel={row.replicate_label} replicateNumber={row.replicate_number}
         hasCompletedRun={runsAgainOnlyOnRequest(row.status)} truncated={row.result.truncated}
         activeRunId={['pending','running','finalizing'].includes(row.status) ? row.run_id : null}

@@ -2,9 +2,10 @@ import type { ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ChevronDown, ExternalLink } from 'lucide-react'
+import { executionStatusColor, executionStatusLabels } from '@/lib/executionStatus'
 
 /** Both execution modes use this layout; callers supply their progress and actions. */
-export function CellCard({ label, conditions, replicateCount, expanded, onToggle, progress, badges, actions, metric, children, results = false, listId, toggleLabel }: {
+export function CellCard({ conditions, replicateCount, expanded, onToggle, progress, badges, actions, metric, children, results = false, listId, toggleLabel }: {
   label: string; conditions: string[]; replicateCount: number; expanded: boolean; onToggle: () => void
   progress?: ReactNode; badges?: ReactNode; actions?: ReactNode; metric?: ReactNode; children: ReactNode
   results?: boolean; listId: string; toggleLabel?: string
@@ -18,11 +19,10 @@ export function CellCard({ label, conditions, replicateCount, expanded, onToggle
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <p className="min-w-0 flex-1 truncate text-sm font-medium" title={summary}>{summary}</p>
-            <Badge variant="outline" className="shrink-0 border-[color:var(--chart-2)] text-[color:var(--chart-2)]" title="Total generated replicates for this condition">{replicateCount} {replicateCount === 1 ? 'replicate' : 'replicates'}</Badge>
+            <Badge variant="outline" className="h-[1.1rem] shrink-0 border-[color:var(--chart-2)] px-[0.4125rem] py-0 text-[0.715rem] text-[color:var(--chart-2)] opacity-70" title="Total generated replicates for this condition">{replicateCount} {replicateCount === 1 ? 'replicate' : 'replicates'}</Badge>
             {badges}
           </div>
           {!results && conditions.length > 2 && <div className="mt-1.5 flex flex-wrap gap-1">{conditions.slice(2).map((condition, index) => <Badge key={index} variant="outline" className="max-w-full font-mono text-[0.65rem] font-normal"><span className="truncate">{condition}</span></Badge>)}</div>}
-          {!results && <p className="mt-1 font-mono text-[0.65rem] text-muted-foreground" title={label}>Cell ID: {label}</p>}
           {progress && <p className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">{progress}</p>}
         </div>
         {metric}
@@ -52,9 +52,8 @@ export function ReplicateFrame({ children }: { children: ReactNode }) {
 }
 
 export function ReplicateStatus({ status }: { status: string }) {
-  const classes = status === 'completed' ? 'bg-[color:var(--chart-3)]/10 text-[color:var(--chart-3)]' : status === 'failed' ? 'bg-destructive/10 text-destructive' : ['running', 'queued', 'pending', 'finalizing'].includes(status) ? 'bg-[color:var(--primary)]/10 text-[color:var(--primary)]' : 'bg-muted text-muted-foreground'
-  const label = status === 'pending' ? 'Queued' : status === 'not_started' ? 'Not started' : status.replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase())
-  return <Badge className={`border-transparent ${classes}`}>{label}</Badge>
+  const label = executionStatusLabels[status] ?? (status === 'queued' ? 'Queued' : status.replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase()))
+  return <Badge variant="outline" className={`h-[1.1rem] border-current px-[0.4125rem] py-0 text-[0.715rem] opacity-70 ${executionStatusColor(status)}`}>{label}</Badge>
 }
 
 export function CellRunAction({ children, onClick, disabled, label }: { children: ReactNode; onClick: () => void; disabled?: boolean; label?: string }) {

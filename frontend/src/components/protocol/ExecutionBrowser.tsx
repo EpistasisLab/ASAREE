@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Card } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { cardAccent } from '@/lib/utils'
 import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
 import { EXECUTION_PAGE_SIZE, useCursor } from '@/lib/executionPagination'
@@ -14,7 +15,7 @@ import type { Experiment } from '@/types/experiments'
 import type { ResultsSelection } from './ResultsTab'
 import { ResultsPanel } from './ResultsPanel'
 import { CellCard, ReplicateRow, ReplicateStatus } from './CellPresentation'
-import { executionStatusColor, executionStatusCount } from '@/lib/executionStatus'
+import { executionStatusColor, executionStatusCount, executionStatusPillColor } from '@/lib/executionStatus'
 import { emptyExecutionFilters, filterParams, hasExecutionFilters, statusLabels, RunBrowserControls } from './RunBrowserControls'
 
 const summaryStatuses = [
@@ -44,6 +45,30 @@ function Usage({ usage }: { usage: ExecutionSummary['usage'] }) {
   </span>
 }
 
+function ResultsUsageSummary({ summary }: { summary: ExecutionSummary }) {
+  return <section aria-label="Results usage summary" className="space-y-2">
+    <Table aria-label="Usage by attempt scope" className="text-xs">
+      <TableHeader><TableRow>
+        <TableHead className="h-7">Scope</TableHead>
+        <TableHead className="h-7 text-right">Cost</TableHead>
+        <TableHead className="h-7 text-right">Tokens</TableHead>
+        <TableHead className="h-7 text-right" title="Sum of execution durations">Duration</TableHead>
+      </TableRow></TableHeader>
+      <TableBody>{([
+        ['Current results', summary.usage, 'Latest attempt for each execution'],
+        ['All attempts', summary.all_attempt_usage, 'Includes earlier attempts and re-runs'],
+      ] as const).map(([label, usage, description]) => <TableRow key={label}>
+        <TableHead scope="row" className="h-auto py-1.5 text-xs whitespace-normal" title={description}>{label}</TableHead>
+        <TableCell className="py-1.5 text-right font-mono tabular-nums">{usage?.cost_usd == null ? '—' : new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(usage.cost_usd)}</TableCell>
+        <TableCell className="py-1.5 text-right font-mono tabular-nums">{usage?.total_tokens == null ? '—' : usage.total_tokens.toLocaleString()}</TableCell>
+        <TableCell className="py-1.5 text-right font-mono tabular-nums">{usage?.duration_seconds == null ? '—' : `${usage.duration_seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })} s`}</TableCell>
+      </TableRow>)}</TableBody>
+    </Table>
+    <p className="text-xs text-muted-foreground">Usage available for {summary.usage_complete_count ?? 0} of {summary.total ?? 0} executions.{summary.refreshing && ' Updating summary…'}</p>
+    {!!summary.usage_pending_count && <p role="status" className="text-xs text-muted-foreground">Preparing usage for {summary.usage_pending_count} executions.</p>}
+  </section>
+}
+
 export function ExecutionRows({ experimentId, scope, cellId, generation, summary, onSelect, actions, filters = emptyExecutionFilters, mode = 'results' }: {
   experimentId: string; scope: ResultsScope; cellId?: string; generation?: number; summary?: ExecutionSummary; filters?: ExecutionFilters
   onSelect: (selection: ResultsSelection) => void; actions?: (row: ExecutionSlot) => React.ReactNode; mode?: 'runs' | 'results'
@@ -62,9 +87,8 @@ export function ExecutionRows({ experimentId, scope, cellId, generation, summary
       {!query.data?.items.length && <p className="text-xs text-muted-foreground">No executions planned in this scope.</p>}
       <ul className="space-y-1.5">{query.data?.items.map(row => <ReplicateRow key={row.slot_id} number={row.replicate_number} results={mode === 'results' && !actions}
         onView={mode === 'results' && !actions && (row.run_id || row.status === 'completed') ? () => onSelect({ type: 'execution', slotId: row.slot_id, scope }) : undefined}
-        detail={mode === 'results' || row.row_index !== null ? <>{row.row_index !== null && <span className="font-mono">Source row {row.row_index + 1}</span>}{mode === 'results' && <><Usage usage={row.usage ?? undefined} />
-          {row.result.observations?.map(observation => <span key={observation.metric_id} className="block max-w-full truncate font-mono" title={observation.preview_truncated ? 'Preview; inspect for the complete value.' : undefined}>{observation.metric_name}: {observation.status === 'measured' ? observation.preview : observation.status}{observation.preview_truncated && '…'}</span>)}</>}</> : undefined}
-        status={<><ReplicateStatus status={row.status} />{row.result.truncated && row.status !== 'limit_reached' && <ReplicateStatus status="limit_reached" />}{row.result.evaluation_state === 'failed' && <ReplicateStatus status="scoring_failed" />}</>}
+        detail={row.row_index !== null ? <span className="font-mono">Source row {row.row_index + 1}</span> : undefined}
+        status={<><ReplicateStatus status={row.status} filter={filters.status} />{row.result.truncated && row.status !== 'limit_reached' && <ReplicateStatus status="limit_reached" filter={filters.status} />}{row.result.evaluation_state === 'failed' && <ReplicateStatus status="scoring_failed" filter={filters.status} />}</>}
         error={row.error} actions={actions?.(row)} />)}</ul>
       {query.error && query.data && <p role="alert" className="text-xs text-destructive">Refresh failed; showing the last loaded page.</p>}
       <CursorControls next={query.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={query.isFetching} pageIndex={pager.pageIndex} count={query.data?.items.length} total={query.data?.total} />
@@ -110,15 +134,15 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
         conditions={Object.entries(cell.factor_values).map(([name, value]) => displayFactorCondition(name, value, summary.data?.design_spec ?? experiment?.design_spec, cell.cell_label))}
         replicateCount={cell.replicate_count ?? 0} expanded={expanded.has(cell.cell_id)} listId={`executions-${cell.cell_id}`}
         onToggle={() => setExpanded(current => { const next = new Set(current); if (next.has(cell.cell_id)) next.delete(cell.cell_id); else next.add(cell.cell_id); return next })}
-        progress={<>{mode === 'results' && <><span>{cell.counts?.completed ?? 0}/{cell.total ?? '?'} complete</span><Usage usage={cell.usage} /></>}
+        progress={mode === 'results' ? (cell.usage ? <Usage usage={cell.usage} /> : undefined) : <>
           <span aria-label="Cell status counts" className="mt-1 flex w-full flex-wrap gap-1" title="Counts for the whole cell; use the overview tiles to filter replicates.">
             {summaryStatuses.filter(status => status && executionStatusCount(cell.counts, status) > 0).map(status =>
-              <Badge key={status} variant="outline" className={`h-[1.1rem] border-current px-[0.4125rem] py-0 text-[0.715rem] opacity-70 ${executionStatusColor(status)}`}>
+              <Badge key={status} variant="outline" className={`h-[1.1rem] border-current px-[0.4125rem] py-0 text-[0.715rem] ${executionStatusPillColor(status, filters.status)}`}>
                 {executionStatusCount(cell.counts, status).toLocaleString()} {statusLabels[status]}
               </Badge>)}
           </span>
         </>}
-        badges={cell.truncated ? <Badge variant="outline" className={`h-[1.1rem] px-[0.4125rem] py-0 text-[0.715rem] opacity-70 ${executionStatusColor('limit_reached')}`}>{cell.truncated} hit iteration limit</Badge> : undefined}
+        badges={mode === 'runs' && cell.truncated ? <Badge variant="outline" className={`h-[1.1rem] px-[0.4125rem] py-0 text-[0.715rem] ${executionStatusPillColor('limit_reached', filters.status)}`}>{cell.truncated} hit iteration limit</Badge> : undefined}
         actions={<>{cellActions?.(cell)}{mode === 'results' && <Button size="xs" variant="outline" onClick={() => onSelect({ type: 'cell', cellId: cell.cell_id, cellLabel: cell.cell_label, scope })}>View results</Button>}</>}>
         {expanded.has(cell.cell_id) && <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}:${cell.cell_id}:${JSON.stringify(filters)}`} experimentId={experimentId} scope={scope} cellId={cell.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={onSelect} actions={actions} filters={filters} mode={mode} />}
       </CellCard>)}
@@ -126,9 +150,9 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
       <CursorControls next={cells.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={cells.isFetching} pageIndex={pager.pageIndex} count={cells.data?.items.length} total={cells.data?.total} />
     </>}
   </div>
-  const overview = <div className="w-full min-w-0 space-y-2"><div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-medium">{mode === 'runs' ? 'Execution overview' : 'Current results'}</h2>{(summary.isError || cells.isError) && <Button variant="outline" size="xs" disabled={summary.isFetching || cells.isFetching} onClick={refresh}>Refresh</Button>}{controls && <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{controls}</div>}</div>
+  const overview = (headerActions?: React.ReactNode) => <div className="w-full min-w-0 space-y-2"><div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-medium">{mode === 'runs' ? 'Execution overview' : 'Current results'}</h2>{(summary.isError || cells.isError) && <Button variant="outline" size="xs" disabled={summary.isFetching || cells.isFetching} onClick={refresh}>Refresh</Button>}{(controls || headerActions) && <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{controls}{headerActions}</div>}</div>
     {summary.isPending ? <p className="text-xs text-muted-foreground">Loading progress…</p> : summary.error && !summary.data ? <p role="alert" className="text-xs text-destructive">Progress unavailable. Execution records remain available below.</p> : !summary.data?.ready ? <p role="status" className="text-xs text-muted-foreground">Preparing the version summary. Execution records remain available below.</p> : <>
-      <ul aria-label="Execution status counts" className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-1.5">
+      {mode === 'runs' && <ul aria-label="Execution status counts" className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-1.5">
         {summaryStatuses.map(status => <li key={status}>
           <Card style={cardAccent('currentColor')} className={`h-full gap-0 bg-[color-mix(in_oklch,currentColor,transparent_94%)] p-0 text-center ${status ? executionStatusColor(status) : 'text-foreground'}`}>
             <Button variant="ghost" aria-label={`Filter by ${status ? statusLabels[status] : 'All'}`} aria-pressed={filters.status === status}
@@ -140,17 +164,12 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
             </Button>
           </Card>
         </li>)}
-      </ul>
-      {mode === 'results' && <>
-      <Usage usage={summary.data.usage} />
-      {summary.data.all_attempt_usage?.cost_usd != null && <p className="font-mono text-xs text-muted-foreground">All-attempt spend: {new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(summary.data.all_attempt_usage.cost_usd)}</p>}
-      <p className="text-xs text-muted-foreground">Usage reported for {summary.data.usage_complete_count ?? 0}/{summary.data.total ?? 0} current executions.{summary.data.refreshing && ' Updating summary…'}</p>
-      {!!summary.data.usage_pending_count && <p role="status" className="text-xs text-muted-foreground">Preparing usage for {summary.data.usage_pending_count} executions. Execution records and evidence remain available.</p>}
-      </>}
+      </ul>}
+      {mode === 'results' && <ResultsUsageSummary summary={summary.data} />}
     </>}
     {summary.error && summary.data && <p role="alert" className="text-xs text-destructive">Progress refresh failed; showing the last summary.</p>}
   </div>
   return mode === 'results' && experiment
     ? <ResultsPanel experimentId={experimentId} experimentName={experiment.name} scope={scope} summary={overview} cells={cellBody} />
-    : <div className="@container space-y-3 p-3"><Card className="p-3">{overview}</Card>{cellBody}</div>
+    : <div className="@container space-y-3 p-3"><Card className="p-3">{overview()}</Card>{cellBody}</div>
 }

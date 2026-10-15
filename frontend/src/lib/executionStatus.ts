@@ -24,3 +24,8 @@ export function executionStatusColor(status: string): string {
 export function executionStatusCount(counts: Record<string, number> | undefined, status: string): number {
   return (counts?.[status] ?? 0) + (status === 'running' ? counts?.finalizing ?? 0 : 0)
 }
+
+export function executionStatusPillColor(status: string, filter = ''): string {
+  const matches = !filter || status === filter || (filter === 'running' && status === 'finalizing')
+  return matches ? `opacity-70 ${executionStatusColor(status)}` : 'opacity-50 text-muted-foreground'
+}

@@ -50,7 +50,80 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
 
 describe('bounded Results reads', () => {
-  it.each(['runs', 'results'] as const)('reports every execution status in the %s summary', async mode => {
+  it('keeps measurements and usage in the details view instead of Results replicate rows', async () => {
+    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, design_spec: { metrics: [
+      { id: 'runtime-cost', name: 'Cost', kind: 'runtime', catalogKey: 'cost_usd' },
+      { id: 'runtime-duration', name: 'Duration', kind: 'runtime', catalogKey: 'duration_seconds' },
+      { id: 'runtime-tokens', name: 'Total tokens', kind: 'runtime', catalogKey: 'total_tokens' },
+    ] } })
+    vi.mocked(experimentsApi.listExecutions).mockResolvedValue({ items: [{ ...slot, usage: detail.usage,
+      result: { observations: [
+        { metric_id: 'roc', metric_name: 'ROC AUC', preview: '0.97', status: 'measured', preview_truncated: false },
+        { metric_id: 'runtime-cost', metric_name: 'Cost', preview: '0.0123', status: 'measured', preview_truncated: false },
+        { metric_id: 'runtime-duration', metric_name: 'Duration', preview: '65', status: 'measured', preview_truncated: false },
+        { metric_id: 'runtime-tokens', metric_name: 'Total tokens', preview: '200', status: 'measured', preview_truncated: false },
+      ] } }], next_cursor: null })
+    const select = vi.fn()
+    mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode="results" onSelect={select} />)
+    await screen.findByText(/Usage available for/)
+    fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
+    const row = (await screen.findByText('Replicate 1')).closest('button')!
+    expect(within(row).queryByText('ROC AUC: 0.97')).not.toBeInTheDocument()
+    expect(within(row).getByText('Completed')).toBeInTheDocument()
+    expect(within(row).queryByText(/Cost:|Duration:|Total tokens:|\$0\.01|200 tokens/)).not.toBeInTheDocument()
+    fireEvent.click(row)
+    expect(select).toHaveBeenCalledWith({ type: 'execution', slotId: 'slot-1', scope: {} })
+  })
+
+  it('compares current-result and all-attempt cost, tokens and duration', async () => {
+    const usage = { cost_usd: 0, total_tokens: 0, duration_seconds: 0, input_tokens: null, output_tokens: null, agent_run_count: null }
+    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, usage,
+      all_attempt_usage: { ...usage, cost_usd: 0.12, total_tokens: 1200, duration_seconds: 65 }, usage_complete_count: 29, total: 576 })
+    mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode="results" onSelect={vi.fn()} />)
+    const table = within(await screen.findByRole('table', { name: 'Usage by attempt scope' }))
+    const current = within(table.getByRole('row', { name: /Current results/ }))
+    expect(current.getByText('$0.00')).toBeInTheDocument()
+    expect(current.getByText('0')).toBeInTheDocument()
+    expect(current.getByText('0 s')).toBeInTheDocument()
+    const all = within(table.getByRole('row', { name: /All attempts/ }))
+    expect(all.getByText('$0.12')).toBeInTheDocument()
+    expect(all.getByText('1,200')).toBeInTheDocument()
+    expect(all.getByText('65 s')).toBeInTheDocument()
+    expect(screen.getByText('Usage available for 29 of 576 executions.')).toBeInTheDocument()
+    expect(screen.queryByText(/spend/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps Results search, usage, status badges and export without execution tiles', async () => {
+    mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
+    await screen.findByText(/Usage available for/)
+    expect(screen.queryByRole('list', { name: 'Execution status counts' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Filter by All' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download CSV' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Cell status counts')).not.toBeInTheDocument()
+    expect(screen.queryByText('15786/15786 complete')).not.toBeInTheDocument()
+    expect(screen.getByText('15786 replicates')).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'model' } })
+    await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', expect.anything(),
+      { cursor: undefined, limit: 10, search: 'model', status: undefined }, expect.any(AbortSignal)))
+    fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
+    await screen.findByText('Replicate 1')
+    expect(screen.getByText('Completed')).toBeInTheDocument()
+  })
+
+  it('grays out cell status pills excluded by the Runs overview filter', async () => {
+    const mode = 'runs'
+    vi.mocked(experimentsApi.listExecutionCells).mockResolvedValue({ items: [{ ...cell, counts: { cancelled: 2, failed: 3 } }], next_cursor: null })
+    mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode={mode} onSelect={vi.fn()} />)
+    await screen.findByLabelText('Cell status counts')
+    fireEvent.click(await screen.findByRole('button', { name: 'Filter by Cancelled' }))
+    await waitFor(() => expect(within(screen.getByLabelText('Cell status counts')).getByText('3 Failed')).toHaveClass('text-muted-foreground', 'opacity-50'))
+    expect(within(screen.getByLabelText('Cell status counts')).getByText('2 Cancelled')).not.toHaveClass('text-muted-foreground')
+    fireEvent.click(screen.getByRole('button', { name: 'Filter by All' }))
+    await waitFor(() => expect(within(screen.getByLabelText('Cell status counts')).getByText('3 Failed')).toHaveClass('text-destructive', 'opacity-70'))
+  })
+
+  it('reports every execution status in the Runs summary', async () => {
+    const mode = 'runs'
     vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, total: 576,
       counts: { completed: 26, running: 1, pending: 2, failed: 5, not_started: 533, finalizing: 3, cancelled: 4, limit_reached: 2 } })
     mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode={mode} onSelect={vi.fn()} />)
@@ -103,6 +176,9 @@ describe('bounded Results reads', () => {
 
   it('uses fixed ordering without primary-metric controls and preserves maximize/export', async () => {
     mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
+    const header = within(screen.getByRole('heading', { name: 'Current results' }).parentElement!)
+    expect(header.getByRole('button', { name: 'Maximize Results' })).toBeInTheDocument()
+    expect(header.getByRole('button', { name: 'Download CSV' })).toBeInTheDocument()
     fireEvent.click(await screen.findByRole('button', { name: 'Maximize Results' }))
     expect(document.body.style.overflow).toBe('hidden')
     fireEvent.keyDown(document, { key: 'Escape' })
@@ -114,7 +190,8 @@ describe('bounded Results reads', () => {
       { cursor: undefined, limit: 10, search: undefined, status: undefined }, expect.any(AbortSignal))
   })
 
-  it.each(['runs', 'results'] as const)('combines search and status across pages in %s', async mode => {
+  it('combines search and status across pages in Runs', async () => {
+    const mode = 'runs'
     vi.mocked(experimentsApi.listExecutionCells).mockImplementation(async (_id, _scope, params) => ({
       items: [{ ...cell, cell_id: params?.cursor ? 'cell-2' : 'cell-1' }], next_cursor: params?.cursor ? null : 'page-2',
     }))
@@ -131,7 +208,7 @@ describe('bounded Results reads', () => {
       expect.objectContaining({ cursor: 'page-2', search: 'model', status: 'failed' }), expect.any(AbortSignal)))
     fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
     await screen.findByText('Replicate 1')
-    if (mode === 'runs') expect(screen.queryByRole('button', { name: /View result/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /View result/ })).not.toBeInTheDocument()
     expect(experimentsApi.listExecutions).toHaveBeenLastCalledWith('experiment', {},
       expect.objectContaining({ cell_id: 'cell-2', cursor: undefined, search: 'model', status: 'failed' }), expect.any(AbortSignal))
     fireEvent.click(screen.getByRole('button', { name: 'Filter by All' }))

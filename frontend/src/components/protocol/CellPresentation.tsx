@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ChevronDown, ExternalLink } from 'lucide-react'
-import { executionStatusColor, executionStatusLabels } from '@/lib/executionStatus'
+import { executionStatusPillColor, executionStatusLabels } from '@/lib/executionStatus'
 
 /** Both execution modes use this layout; callers supply their progress and actions. */
 export function CellCard({ conditions, replicateCount, expanded, onToggle, progress, badges, actions, metric, children, results = false, listId, toggleLabel }: {
@@ -51,9 +51,9 @@ export function ReplicateFrame({ children }: { children: ReactNode }) {
   return <li className="rounded-md border bg-background px-2.5 py-2">{children}</li>
 }
 
-export function ReplicateStatus({ status }: { status: string }) {
+export function ReplicateStatus({ status, filter = '' }: { status: string; filter?: string }) {
   const label = executionStatusLabels[status] ?? (status === 'queued' ? 'Queued' : status.replaceAll('_', ' ').replace(/^./, letter => letter.toUpperCase()))
-  return <Badge variant="outline" className={`h-[1.1rem] border-current px-[0.4125rem] py-0 text-[0.715rem] opacity-70 ${executionStatusColor(status)}`}>{label}</Badge>
+  return <Badge variant="outline" className={`h-[1.1rem] border-current px-[0.4125rem] py-0 text-[0.715rem] ${executionStatusPillColor(status, filter)}`}>{label}</Badge>
 }
 
 export function CellRunAction({ children, onClick, disabled, label }: { children: ReactNode; onClick: () => void; disabled?: boolean; label?: string }) {

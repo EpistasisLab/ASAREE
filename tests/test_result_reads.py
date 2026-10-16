@@ -47,9 +47,11 @@ from asaree.services.result_reads import (
     parent_predicates,
     read_attempt_detail,
     read_attempts,
+    read_cell,
     read_cells,
     read_conversation,
     read_evidence,
+    read_execution_neighbors,
     read_executions,
     read_summary,
     resolve_result_scope,
@@ -234,6 +236,69 @@ async def results_db():
             yield db, selected, cell, user
         await transaction.rollback()
     await engine.dispose()
+
+
+async def test_execution_neighbors_stay_in_cell_and_publication_and_skip_unstarted(results_db):
+    db, selected, cell, user = results_db
+    other_cell = FactorialCell(experiment_id=selected.experiment_id, design_revision_id=selected.design_revision_id,
+                               cell_label="other", factor_values={"model": "other"})
+    other_publication = ProtocolRevision(protocol_id=selected.protocol_id, revision=2, graph={},
+        experiment_snapshot={"design_spec": {"factors": []}}, design_revision_id=selected.design_revision_id,
+        published_at=datetime.now(UTC))
+    db.add_all([other_cell, other_publication])
+    await db.flush()
+    parents = {number: FactorialReplicateResult(cell_id=cell.id, replicate_number=number,
+               replicate_label=f"replicate-{number}") for number in range(1, 13)}
+    foreign = FactorialReplicateResult(cell_id=other_cell.id, replicate_number=2, replicate_label="other-2")
+    db.add_all([*parents.values(), foreign])
+    await db.flush()
+    for parent, publication, status in [
+        (parents[1], selected.protocol_revision_id, "completed"),
+        (parents[2], other_publication.id, "completed"),
+        (foreign, selected.protocol_revision_id, "completed"),
+        (parents[10], selected.protocol_revision_id, "completed"),
+        (parents[11], selected.protocol_revision_id, "failed"),
+        (parents[12], selected.protocol_revision_id, "cancelled"),
+    ]:
+        db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id, status=status,
+            protocol_revision_id=publication, design_revision_id=selected.design_revision_id,
+            replicate_result_id=parent.id, replicate_label=parent.replicate_label, factor_values={}))
+    await db.flush()
+    assert await read_execution_neighbors(db, selected, slot_id=parents[10].id) == {
+        "previous_slot_id": str(parents[1].id), "next_slot_id": str(parents[11].id)}
+    assert await read_execution_neighbors(db, selected, slot_id=parents[1].id) == {
+        "previous_slot_id": None, "next_slot_id": str(parents[10].id)}
+    assert await read_execution_neighbors(db, selected, slot_id=parents[12].id) == {
+        "previous_slot_id": str(parents[11].id), "next_slot_id": None}
+    with pytest.raises(ValueError, match="slot_not_found"):
+        await read_execution_neighbors(db, selected, slot_id=uuid.uuid4())
+
+
+async def test_row_neighbors_follow_replicate_then_source_row_order(results_db):
+    from dataclasses import replace
+
+    db, selected, cell, user = results_db
+    dataset = RegisteredDataset(name="Navigation rows", owner_id=user.id)
+    parents = {number: FactorialReplicateResult(cell_id=cell.id, replicate_number=number,
+               replicate_label=f"rep{number}") for number in (2, 10)}
+    db.add_all([dataset, *parents.values()])
+    await db.flush()
+    selected = replace(selected, row_plan={"driver_dataset_id": str(dataset.id)})
+    rows = []
+    for number, index, status in [(2, 0, "completed"), (2, 1, None), (2, 9, "failed"), (10, 0, "completed")]:
+        parent = parents[number]
+        row = FactorialRowResult(replicate_result_id=parent.id, protocol_revision_id=selected.protocol_revision_id,
+            dataset_id=dataset.id, raw_sha256="a" * 64, row_index=index)
+        db.add(row)
+        await db.flush()
+        rows.append(row)
+        if status:
+            db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id, status=status,
+                protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+                replicate_result_id=parent.id, row_result_id=row.id, replicate_label=parent.replicate_label))
+    await db.flush()
+    assert await read_execution_neighbors(db, selected, slot_id=rows[2].id) == {
+        "previous_slot_id": str(rows[0].id), "next_slot_id": str(rows[3].id)}
 
 
 async def test_current_attempt_history_and_rerun_rollups(results_db):
@@ -452,9 +517,20 @@ async def test_run_browser_natural_order_filters_and_cursor_scope(results_db, la
     await db.flush()
     page = await read_cells(db, selected, limit=1)
     assert [cell['cell_label'] for cell in page['items']] == [labels[1]]
+    assert page['items'][0]['cell_number'] == 1
     next_page = await read_cells(db, selected, limit=1, cursor=page['next_cursor'])
     assert page['total'] == next_page['total'] == 2
     assert [cell['cell_label'] for cell in next_page['items']] == [labels[0]]
+    assert next_page['items'][0]['cell_number'] == 2
+    filtered_second = await read_cells(db, selected, search='model', status='failed', factors={'temperature': 10})
+    assert filtered_second['items'][0]['cell_number'] == 2
+    assert (await read_cell(db, selected, first.id, None))['cell_number'] == 2
+    first_detail = await read_cell(db, selected, second.id, None)
+    last_detail = await read_cell(db, selected, first.id, None)
+    assert first_detail['previous_cell_id'] is None
+    assert first_detail['next_cell_id'] == str(first.id)
+    assert last_detail['previous_cell_id'] == str(second.id)
+    assert last_detail['next_cell_id'] is None
     with pytest.raises(ValueError, match='cursor_scope_mismatch'):
         await read_cells(db, selected, limit=1, cursor=page['next_cursor'], status='failed')
     filtered = await read_cells(db, selected, search='model', status='failed', factors={'temperature': 2})

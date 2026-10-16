@@ -243,6 +243,8 @@ export const experimentsApi = {
     request<CursorPage<ExecutionSlot>>(`/experiments/${id}/execution-results/executions${resultPageQuery(scope, params)}`, { signal }),
   listExecutionAttempts: (id: string, slotId: string, scope: ResultsScope, cursor?: string, signal?: AbortSignal) =>
     request<AttemptPage>(`/experiments/${id}/execution-results/slots/${slotId}/attempts${resultPageQuery(scope, { cursor })}`, { signal }),
+  getExecutionNeighbors: (id: string, slotId: string, scope: ResultsScope, signal?: AbortSignal) =>
+    request<{ previous_slot_id: string | null; next_slot_id: string | null }>(`/experiments/${id}/execution-results/slots/${slotId}/neighbors${scopeQuery(scope)}`, { signal }),
   lookupExecution: (id: string, replicateLabel: string, scope: ResultsScope, signal?: AbortSignal) =>
     request<ExecutionSlot>(`/experiments/${id}/execution-results/lookup${resultPageQuery(scope, { replicate_label: replicateLabel })}`, { signal }),
   getExecutionCell: (id: string, scope: ResultsScope, selection: { cell_id?: string; cell_label?: string }, signal?: AbortSignal) =>

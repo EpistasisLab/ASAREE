@@ -589,6 +589,17 @@ def execution_payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def cell_numbers_query(scope: ResultScope):
+    """Number the full version before applying browser filters or pagination."""
+    ordering = (natural_label(FactorialCell.cell_label), FactorialCell.id)
+    return select(FactorialCell.id.label("cell_id"), func.row_number().over(
+        order_by=ordering).label("cell_number"),
+        func.lag(FactorialCell.id).over(order_by=ordering).label("previous_cell_id"),
+        func.lead(FactorialCell.id).over(order_by=ordering).label("next_cell_id")
+    ).where(FactorialCell.experiment_id == scope.experiment_id,
+            FactorialCell.design_revision_id == scope.design_revision_id, *cell_predicates(scope)).subquery("cell_numbers")
+
+
 async def read_cells(
     db: AsyncSession,
     scope: ResultScope,
@@ -603,8 +614,10 @@ async def read_cells(
     filters = {"search": search, "status": status, "result_status": result_status, "factors": factors or {}}
     position = decode_cursor(cursor, scope, "cells", filters)
     cached = ResultCellRollup
+    numbers = cell_numbers_query(scope)
     statement = (
-        select(FactorialCell.id, FactorialCell.cell_label, FactorialCell.factor_values, cached.data)
+        select(FactorialCell.id, FactorialCell.cell_label, FactorialCell.factor_values, cached.data, numbers.c.cell_number)
+        .join(numbers, numbers.c.cell_id == FactorialCell.id)
         .outerjoin(cached, and_(cached.cell_id == FactorialCell.id, cached.scope_key == scope.key))
         .where(FactorialCell.experiment_id == scope.experiment_id,
                FactorialCell.design_revision_id == scope.design_revision_id,
@@ -639,6 +652,7 @@ async def read_cells(
         item = {"cell_id": str(row["id"]), "cell_label": row["cell_label"],
                 "factor_values": row["factor_values"] or {}, **(row["data"] or {})}
         item.pop("primary_rank", None)
+        item["cell_number"] = row["cell_number"]
         items.append(item)
     return {
         "items": items,
@@ -658,6 +672,25 @@ async def read_factor_options(db: AsyncSession, scope: ResultScope) -> dict[str,
     for key, value in rows[:1000]:
         options.setdefault(key, []).append(value)
     return {'factors': options, 'truncated': len(rows) > 1000}
+
+
+async def read_execution_neighbors(db: AsyncSession, scope: ResultScope, *, slot_id: uuid.UUID) -> dict[str, Any]:
+    """Adjacent inspectable results within the selected cell, across list pages."""
+    slots = slot_query(scope).subquery("slots")
+    current = (await db.execute(select(slots.c.cell_id, slots.c.replicate_number, slots.c.row_index,
+                                       slots.c.slot_id).where(slots.c.slot_id == slot_id))).mappings().one_or_none()
+    if current is None:
+        raise RunResultsProjectionError("slot_not_found")
+    ordering = (slots.c.replicate_number, func.coalesce(cast(slots.c.row_index, BigInteger), -1), cast(slots.c.slot_id, Text))
+    position = (current["replicate_number"], current["row_index"] if current["row_index"] is not None else -1,
+                str(current["slot_id"]))
+    available = select(slots.c.slot_id).where(slots.c.cell_id == current["cell_id"],
+                                            or_(slots.c.run_id.is_not(None), slots.c.status == "completed"))
+    previous = await db.scalar(available.where(tuple_(*ordering) < position)
+                               .order_by(*(column.desc() for column in ordering)).limit(1))
+    following = await db.scalar(available.where(tuple_(*ordering) > position).order_by(*ordering).limit(1))
+    return {"previous_slot_id": str(previous) if previous else None,
+            "next_slot_id": str(following) if following else None}
 
 
 async def read_attempts(
@@ -774,8 +807,11 @@ async def lookup_slot(db: AsyncSession, scope: ResultScope, replicate_label: str
 async def read_cell(
     db: AsyncSession, scope: ResultScope, cell_id: uuid.UUID | None, cell_label: str | None
 ) -> dict[str, Any]:
+    numbers = cell_numbers_query(scope)
     query = (
-        select(FactorialCell.id, FactorialCell.cell_label, FactorialCell.factor_values, ResultCellRollup.data)
+        select(FactorialCell.id, FactorialCell.cell_label, FactorialCell.factor_values, ResultCellRollup.data,
+               numbers.c.cell_number, numbers.c.previous_cell_id, numbers.c.next_cell_id)
+        .join(numbers, numbers.c.cell_id == FactorialCell.id)
         .outerjoin(
             ResultCellRollup,
             and_(ResultCellRollup.cell_id == FactorialCell.id, ResultCellRollup.scope_key == scope.key),
@@ -795,6 +831,9 @@ async def read_cell(
         "cell_label": row["cell_label"],
         "factor_values": row["factor_values"] or {},
         **(row["data"] or {}),
+        "cell_number": row["cell_number"],
+        "previous_cell_id": str(row["previous_cell_id"]) if row["previous_cell_id"] else None,
+        "next_cell_id": str(row["next_cell_id"]) if row["next_cell_id"] else None,
     }
 
 

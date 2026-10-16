@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { experimentsApi, type ResultsScope } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -54,12 +55,17 @@ function ConversationPage({ experimentId, runId, scope }: { experimentId: string
   </section>
 }
 
-function SlotInspector({ experimentId, slotId, scope, onClose }: { experimentId: string; slotId: string; scope: ResultsScope; onClose: () => void }) {
+function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onSelectSlot }: {
+  experimentId: string; slotId: string; scope: ResultsScope; onClose: () => void
+  onBackToCell?: () => void; onSelectSlot?: (slotId: string) => void
+}) {
   const [selected, setSelected] = useState<string>()
   const [conversationOpen, setConversationOpen] = useState(false)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
   const pager = useCursor()
   const summary = useExecutionSummary(experimentId, scope)
+  const neighbors = useQuery({ queryKey: [...executionKeys.root(experimentId), 'neighbors', scope, slotId],
+    queryFn: ({ signal }) => experimentsApi.getExecutionNeighbors(experimentId, slotId, scope, signal), enabled: !!onSelectSlot })
   const history = useQuery({ queryKey: [...executionKeys.root(experimentId), 'attempts', scope, slotId, pager.cursor],
     queryFn: ({ signal }) => experimentsApi.listExecutionAttempts(experimentId, slotId, scope, pager.cursor, signal) })
   const runId = selected ?? history.data?.slot.run_id ?? history.data?.items[0]?.run_id
@@ -67,10 +73,41 @@ function SlotInspector({ experimentId, slotId, scope, onClose }: { experimentId:
     queryFn: ({ signal }) => experimentsApi.getExecutionAttempt(experimentId, runId!, scope, signal), enabled: !!runId,
     refetchInterval: query => query.state.data && ['pending','running','finalizing'].includes(query.state.data.status) ? 5000 : false })
   const slot = history.data?.slot
+  const cell = useQuery({ queryKey: [...executionKeys.root(experimentId), 'cell', scope, slot?.cell_id],
+    queryFn: ({ signal }) => experimentsApi.getExecutionCell(experimentId, scope, { cell_id: slot!.cell_id }, signal),
+    enabled: !!slot?.cell_id })
+  const cellLabel = slot ? Object.entries(slot.factor_values).map(([name, value]) =>
+    displayFactorCondition(name, value, summary.data?.design_spec, slot.cell_label)).join(' · ') || slot.cell_label : ''
   return <aside className="absolute inset-0 z-20 flex flex-col overflow-y-auto border-l bg-card p-3" aria-label="Result details">
-    <div className="flex items-start justify-between gap-2"><h2 className="text-sm font-medium">{slot?.row_index != null ? `Source row ${slot.row_index+1} · ` : ''}Replicate {slot?.replicate_number ?? ''}</h2><Button variant="ghost" size="xs" onClick={onClose}>Close</Button></div>
-    {slot && <p className="my-2 break-all font-mono text-xs text-muted-foreground">{slot.cell_label}</p>}
-    <div className="space-y-2"><h3 className="text-xs font-medium">Attempts</h3>{history.data?.items.map(attempt => <Button key={attempt.run_id} size="xs" variant={runId === attempt.run_id ? 'default' : 'outline'} className="mr-1 mb-1" onClick={() => { setSelected(attempt.run_id); setConversationOpen(false) }}>{new Date(attempt.created_at).toLocaleString()} · {attempt.status}{attempt.current ? ' · current' : ' · prior'}</Button>)}
+    <div className="mb-3 flex items-center justify-between gap-2">
+      {onBackToCell && <Button variant="outline" size="xs" onClick={onBackToCell}>Back to cell</Button>}
+      <Button variant="ghost" size="xs" className="ml-auto" onClick={onClose}>Close</Button>
+    </div>
+    <div className="-mx-3 mb-4 shrink-0 border-b bg-muted/20 px-3 pb-4 pt-2">
+      <div className={onSelectSlot ? 'grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-stretch gap-2' : ''}>
+        {onSelectSlot && <Button variant="outline" size="icon" className="h-auto w-full"
+          aria-label={summary.data?.unit === 'row' ? 'Previous row' : 'Previous replicate'} title={summary.data?.unit === 'row' ? 'Previous row' : 'Previous replicate'}
+          disabled={neighbors.isFetching || neighbors.isError || !neighbors.data?.previous_slot_id}
+          onClick={() => neighbors.data?.previous_slot_id && onSelectSlot(neighbors.data.previous_slot_id)}>
+          <ChevronLeft aria-hidden="true" />
+        </Button>}
+    <Card className="min-w-0 gap-1 p-2">
+      <h2 className="font-mono text-base font-semibold">{slot ? `Replicate ${slot.replicate_number} details` : 'Replicate details'}</h2>
+      <p className="truncate text-xs text-muted-foreground" title={cell.data?.cell_number != null ? `Cell ${cell.data.cell_number}: ${cellLabel}` : cellLabel}>
+        {cell.data?.cell_number != null && <span className="font-mono">Cell {cell.data.cell_number}: </span>}{cellLabel || 'Loading cell…'}
+      </p>
+      {slot?.row_index != null && <p className="font-mono text-xs text-muted-foreground">Source row {slot.row_index + 1}</p>}
+    </Card>
+        {onSelectSlot && <Button variant="outline" size="icon" className="h-auto w-full"
+          aria-label={summary.data?.unit === 'row' ? 'Next row' : 'Next replicate'} title={summary.data?.unit === 'row' ? 'Next row' : 'Next replicate'}
+          disabled={neighbors.isFetching || neighbors.isError || !neighbors.data?.next_slot_id}
+          onClick={() => neighbors.data?.next_slot_id && onSelectSlot(neighbors.data.next_slot_id)}>
+          <ChevronRight aria-hidden="true" />
+        </Button>}
+      </div>
+      {neighbors.error && <p role="alert" className="mt-2 text-xs text-destructive">Navigation unavailable. <Button variant="ghost" size="xs" disabled={neighbors.isFetching} onClick={() => void neighbors.refetch()}>Refresh</Button></p>}
+    </div>
+    <div className="mt-2 space-y-2"><h3 className="text-xs font-medium">Attempts</h3>{history.data?.items.map(attempt => <Button key={attempt.run_id} size="xs" variant={runId === attempt.run_id ? 'default' : 'outline'} className="mr-1 mb-1" onClick={() => { setSelected(attempt.run_id); setConversationOpen(false) }}>{new Date(attempt.created_at).toLocaleString()} · {attempt.status}{attempt.current ? ' · current' : ' · prior'}</Button>)}
       <CursorControls next={history.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={history.isFetching} />
     </div>
     {(history.isPending || detail.isPending && !!runId) && <Skeleton className="my-3 h-32" />}
@@ -115,20 +152,46 @@ export function ExecutionInspector({ experimentId, selection, onClose }: { exper
 }
 
 function CellInspector({ experimentId, selection, scope, onClose }: { experimentId: string; selection: Extract<ResultsSelection, { type: 'cell' }>; scope: ResultsScope; onClose: () => void }) {
+  const [navigation, setNavigation] = useState({ origin: selection, current: selection })
+  const current = navigation.origin === selection ? navigation.current : selection
+  return <CellInspectorContent key={current.cellId ?? current.cellLabel} experimentId={experimentId} selection={current}
+    scope={scope} onClose={onClose} onSelectCell={cellId => setNavigation({ origin: selection, current: { type: 'cell', cellId, scope } })} />
+}
+
+function CellInspectorContent({ experimentId, selection, scope, onClose, onSelectCell }: {
+  experimentId: string; selection: Extract<ResultsSelection, { type: 'cell' }>; scope: ResultsScope
+  onClose: () => void; onSelectCell: (cellId: string) => void
+}) {
   const [slot, setSlot] = useState<string>()
+  const listPanel = useRef<HTMLElement>(null)
+  const savedScroll = useRef(0)
   const cell = useQuery({ queryKey: [...executionKeys.root(experimentId), 'cell', scope, selection.cellId ?? selection.cellLabel],
     queryFn: ({ signal }) => experimentsApi.getExecutionCell(experimentId, scope, { cell_id: selection.cellId, cell_label: selection.cellLabel }, signal) })
   const summary = useExecutionSummary(experimentId, scope)
   useGenerationRefresh(cell.refetch, summary.data?.generation)
-  if (slot) return <SlotInspector experimentId={experimentId} slotId={slot} scope={scope} onClose={() => setSlot(undefined)} />
-  return <aside className="@container absolute inset-0 z-20 overflow-y-auto border-l bg-card p-3" aria-label="Cell result details"><div className="mb-3 flex justify-between"><h2 className="text-sm font-medium">Cell results</h2><Button size="xs" variant="ghost" onClick={onClose}>Close</Button></div>
+  useEffect(() => { if (!slot && listPanel.current) listPanel.current.scrollTop = savedScroll.current }, [slot])
+  const cellLabel = cell.data ? Object.entries(cell.data.factor_values).map(([name, value]) =>
+    displayFactorCondition(name, value, summary.data?.design_spec, cell.data!.cell_label)).join(' · ') || cell.data.cell_label : ''
+  return <><aside ref={listPanel} hidden={!!slot} className="@container absolute inset-0 z-20 overflow-y-auto border-l bg-card p-3" aria-label="Cell result details"><div className="mb-3 flex justify-end"><Button size="xs" variant="ghost" onClick={onClose}>Close</Button></div>
     {cell.isPending && <Skeleton className="h-24" />}
     {cell.data && <>
-      <Card className="gap-1 p-3">
-        <p className="text-sm font-medium break-words">{Object.entries(cell.data.factor_values).map(([name, value]) =>
-          displayFactorCondition(name, value, summary.data?.design_spec, cell.data!.cell_label)).join(' · ') || cell.data.cell_label}</p>
-        <p className="text-xs text-muted-foreground">{(cell.data.replicate_count ?? 0).toLocaleString()} replicates</p>
-      </Card>
+      <div className="-mx-3 mb-4 grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-stretch gap-2 border-b bg-muted/20 px-3 pb-4 pt-2">
+        <Button variant="outline" size="icon" className="h-auto w-full" aria-label="Previous cell" title="Previous cell"
+          disabled={cell.isFetching || !cell.data.previous_cell_id} onClick={() => cell.data?.previous_cell_id && onSelectCell(cell.data.previous_cell_id)}>
+          <ChevronLeft aria-hidden="true" />
+        </Button>
+        <Card className="min-w-0 gap-1 p-2">
+          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            {cell.data.cell_number != null && <p className="font-mono">Cell {cell.data.cell_number}</p>}
+            <p className="shrink-0">{(cell.data.replicate_count ?? 0).toLocaleString()} replicates</p>
+          </div>
+          <p className="truncate text-sm font-medium" title={cellLabel}>{cellLabel}</p>
+        </Card>
+        <Button variant="outline" size="icon" className="h-auto w-full" aria-label="Next cell" title="Next cell"
+          disabled={cell.isFetching || !cell.data.next_cell_id} onClick={() => cell.data?.next_cell_id && onSelectCell(cell.data.next_cell_id)}>
+          <ChevronRight aria-hidden="true" />
+        </Button>
+      </div>
       <CellResultStatus cell={cell.data} unit={summary.data?.unit} />
       <section aria-label="Cell measurements" className="my-4 space-y-2">
         <h3 className="text-sm font-medium">Measurements</h3>
@@ -150,7 +213,12 @@ function CellInspector({ experimentId, selection, scope, onClose }: { experiment
         </dl> : <p className="text-xs text-muted-foreground">No aggregated measurements available yet.</p>}
       </section>
       <h3 className="mb-2 text-sm font-medium">Replicates</h3>
-      <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}`} experimentId={experimentId} scope={scope} cellId={cell.data.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={item => { if (item.type === 'execution') setSlot(item.slotId) }} />
+      <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}`} experimentId={experimentId} scope={scope} cellId={cell.data.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={item => {
+        if (item.type === 'execution') { savedScroll.current = listPanel.current?.scrollTop ?? 0; setSlot(item.slotId) }
+      }} />
     </>}{cell.error && <p role="alert">{cell.error.message}</p>}
   </aside>
+    {slot && <SlotInspector key={slot} experimentId={experimentId} slotId={slot} scope={scope} onClose={onClose}
+      onBackToCell={() => setSlot(undefined)} onSelectSlot={setSlot} />}
+  </>
 }

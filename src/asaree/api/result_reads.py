@@ -140,6 +140,11 @@ async def factor_options(db: DbSession, scope: Scope) -> dict[str, Any]:
     return await _read(result_reads.read_factor_options, db, scope)
 
 
+@router.get("/slots/{slot_id}/neighbors")
+async def neighbors(slot_id: uuid.UUID, db: DbSession, scope: Scope) -> dict[str, Any]:
+    return await _read(result_reads.read_execution_neighbors, db, scope, slot_id=slot_id)
+
+
 @router.get("/slots/{slot_id}/attempts")
 async def attempts(
     slot_id: uuid.UUID,

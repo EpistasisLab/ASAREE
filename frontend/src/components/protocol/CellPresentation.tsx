@@ -5,21 +5,22 @@ import { ChevronDown, ExternalLink } from 'lucide-react'
 import { executionStatusPillColor, executionStatusLabels, STATUS_PILL_SIZE } from '@/lib/executionStatus'
 
 /** Both execution modes use this layout; callers supply their progress and actions. */
-export function CellCard({ conditions, replicateCount, expanded, onToggle, progress, badges, actions, metric, children, results = false, listId, toggleLabel }: {
+export function CellCard({ conditions, cellNumber, replicateCount, expanded, onToggle, progress, badges, actions, metric, children, results = false, listId, toggleLabel }: {
   label: string; conditions: string[]; replicateCount: number; expanded: boolean; onToggle: () => void
   progress?: ReactNode; badges?: ReactNode; actions?: ReactNode; metric?: ReactNode; children: ReactNode
-  results?: boolean; listId: string; toggleLabel?: string
+  results?: boolean; listId: string; toggleLabel?: string; cellNumber?: number
 }) {
   const summary = (results ? conditions : conditions.slice(0, 2)).join(' · ') || (results ? 'No varying factors' : 'Cell')
   return <CellFrame results={results} expanded={expanded}>
-    <div className={results ? 'flex items-center gap-2 px-3 py-3' : 'flex items-start gap-2 px-3 py-2.5'}>
-      <button type="button" onClick={onToggle} aria-label={toggleLabel} aria-expanded={expanded} aria-controls={listId}
+    <div className="relative flex items-start gap-2 px-3 py-2">
+      <button type="button" onClick={onToggle} aria-label={toggleLabel} aria-expanded={results ? undefined : expanded} aria-controls={results ? undefined : listId}
         className={`flex min-w-0 flex-1 cursor-pointer gap-3 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${results ? 'items-center' : 'items-start'}`}>
-        <ChevronDown className={`${results ? '' : 'mt-0.5'} size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`} />
+        {!results && <ChevronDown className={`mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? '' : '-rotate-90'}`} />}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <p className="min-w-0 flex-1 truncate text-sm font-medium" title={summary}>{summary}</p>
-            <Badge variant="outline" className={`${STATUS_PILL_SIZE} border-[color:var(--chart-2)] text-[color:var(--chart-2)] opacity-70`} title="Total generated replicates for this condition">{replicateCount} {replicateCount === 1 ? 'replicate' : 'replicates'}</Badge>
+            <p className="min-w-0 flex-1 truncate text-sm font-medium" title={cellNumber != null ? `Cell ${cellNumber}: ${summary}` : summary}>
+              {cellNumber != null && <span className="font-mono text-muted-foreground">Cell {cellNumber}: </span>}{summary}
+            </p>
             {!results && badges}
           </div>
           {results && badges && <div className="mt-1 flex flex-wrap gap-1">{badges}</div>}
@@ -27,10 +28,14 @@ export function CellCard({ conditions, replicateCount, expanded, onToggle, progr
           {progress && <p className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">{progress}</p>}
         </div>
         {metric}
+        {results && <ExternalLink aria-hidden="true" className="absolute right-1.5 top-1.5 size-3 text-muted-foreground" />}
       </button>
-      {actions && <div className="flex shrink-0 flex-col items-end gap-1.5">{actions}</div>}
+      <div className="flex shrink-0 self-end items-center gap-1.5">
+        <Badge variant="outline" className={`${STATUS_PILL_SIZE} border-[color:var(--chart-2)] text-[color:var(--chart-2)] opacity-70`} title="Total generated replicates for this condition">{replicateCount} {replicateCount === 1 ? 'replicate' : 'replicates'}</Badge>
+        {actions && <div className="flex items-center gap-1.5">{actions}</div>}
+      </div>
     </div>
-    {expanded && <div id={listId} className={results ? 'border-t bg-muted/15 px-3 py-3' : 'border-t bg-muted/20 px-3 py-2.5'}>{children}</div>}
+    {!results && expanded && <div id={listId} className="border-t bg-muted/20 px-3 py-2.5">{children}</div>}
   </CellFrame>
 }
 

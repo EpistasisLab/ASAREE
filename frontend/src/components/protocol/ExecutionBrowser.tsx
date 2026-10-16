@@ -137,12 +137,16 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
       <CursorControls next={cells.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={cells.isFetching} pageIndex={pager.pageIndex} count={cells.data?.items.length} total={cells.data?.total} recordLabel="cells" />
       {!cells.data?.items.length && <p className="text-xs text-muted-foreground">{hasExecutionFilters(filters) ? 'No cells match these filters.' : 'No generated cells in this version.'}</p>}
       {cells.data?.items.map(cell => <CellCard key={cell.cell_id} label={cell.cell_label} results={mode === 'results'}
+        cellNumber={cell.cell_number}
         conditions={Object.entries(cell.factor_values).map(([name, value]) => displayFactorCondition(name, value, summary.data?.design_spec ?? experiment?.design_spec, cell.cell_label))}
-        replicateCount={cell.replicate_count ?? 0} expanded={expanded.has(cell.cell_id)} listId={`executions-${cell.cell_id}`}
+        replicateCount={cell.replicate_count ?? 0} expanded={mode === 'runs' && expanded.has(cell.cell_id)} listId={`executions-${cell.cell_id}`}
         onToggle={() => {
+          if (mode === 'results') {
+            onSelect({ type: 'cell', cellId: cell.cell_id, cellLabel: cell.cell_label, scope })
+            return
+          }
           const opening = !expanded.has(cell.cell_id)
           setExpanded(current => { const next = new Set(current); if (opening) next.add(cell.cell_id); else next.delete(cell.cell_id); return next })
-          if (opening && mode === 'results') onSelect({ type: 'cell', cellId: cell.cell_id, cellLabel: cell.cell_label, scope })
         }}
         progress={mode === 'results' ? (cell.usage ? <Usage usage={cell.usage} /> : undefined) : <>
           <span aria-label="Cell status counts" className="mt-1 flex w-full flex-wrap gap-1" title="Counts for the whole cell; use the overview tiles to filter replicates.">
@@ -155,7 +159,7 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
         badges={mode === 'results' && cell.result_status ? <CellResultStatusBadge status={cell.result_status} />
           : mode === 'runs' && cell.truncated ? <Badge variant="outline" className={`${STATUS_PILL_SIZE} ${executionStatusPillColor('limit_reached', filters.status)}`}>{cell.truncated} hit iteration limit</Badge> : undefined}
         actions={cellActions?.(cell)}>
-        {expanded.has(cell.cell_id) && <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}:${cell.cell_id}:${JSON.stringify(filters)}`} experimentId={experimentId} scope={scope} cellId={cell.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={onSelect} actions={actions} filters={filters} mode={mode} />}
+        {mode === 'runs' && expanded.has(cell.cell_id) && <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}:${cell.cell_id}:${JSON.stringify(filters)}`} experimentId={experimentId} scope={scope} cellId={cell.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={onSelect} actions={actions} filters={filters} mode={mode} />}
       </CellCard>)}
       {cells.error && cells.data && <p role="alert" className="text-xs text-destructive">Refresh failed; showing the last loaded cells.</p>}
     </>}

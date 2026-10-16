@@ -66,7 +66,7 @@ export function ResultsPanel({ experimentId, experimentName, scope, controls, me
     </section>
     {comparison}
     <section className="space-y-2">
-      <div><h2 className="flex items-center gap-1 text-sm font-medium">Cell results<InfoTooltip>Each card groups replicates that share the same experimental factor levels. Expand one to compare individual runs.</InfoTooltip></h2><p className="text-xs text-muted-foreground">Expand a condition to inspect its replicates, metrics, usage, outputs, and node activity.</p></div>
+      <div><h2 className="flex items-center gap-1 text-sm font-medium">Cell results<InfoTooltip>Each cell groups replicates that share the same experimental factor levels. Select a cell to review its results and replicates in the inspector.</InfoTooltip></h2><p className="text-xs text-muted-foreground">Select a cell to inspect its replicates, measurements, usage, and outputs.</p></div>
       {cells}
     </section>
     {details}

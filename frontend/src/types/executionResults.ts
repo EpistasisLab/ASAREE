@@ -58,6 +58,8 @@ export interface ExecutionSummary {
 }
 export interface ExecutionCell {
   cell_id: string; cell_label: string; factor_values: Record<string, unknown>
+  cell_number?: number
+  previous_cell_id?: string | null; next_cell_id?: string | null
   result_status?: CellResultStatus
   usable_results?: number; results_needing_attention?: number
   result_issues?: Partial<Record<'failed' | 'cancelled' | 'limit_reached' | 'measurement_failed' | 'no_measurements' | 'measurements_missing', number>>

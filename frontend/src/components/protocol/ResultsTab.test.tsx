@@ -50,6 +50,21 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
 
 describe('bounded Results reads', () => {
+  it.each(['runs', 'results'] as const)('expands a %s cell and opens the inspector only in Results', async mode => {
+    const select = vi.fn()
+    mount(<ExecutionBrowser experimentId="experiment" scope={{ protocol_revision_id: 'v1' }} mode={mode} onSelect={select} />)
+    const toggle = await screen.findByRole('button', { name: /model: a/ })
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    if (mode === 'results') expect(select).toHaveBeenCalledWith({ type: 'cell', cellId: 'cell-1', cellLabel: 'model=a', scope: { protocol_revision_id: 'v1' } })
+    else expect(select).not.toHaveBeenCalled()
+    expect(await screen.findByText('Replicate 1')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'View results' })).not.toBeInTheDocument()
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(select).toHaveBeenCalledTimes(mode === 'results' ? 1 : 0)
+  })
+
   it('shows an informational Results cell status pill while keeping filtering global', async () => {
     vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, cell_count: 1,
       cell_result_counts: { ready: 0, needs_attention: 1, awaiting_results: 0 } })
@@ -214,8 +229,7 @@ describe('bounded Results reads', () => {
   it.each(['runs', 'results'] as const)('shows Refresh only after a failed load or refresh in %s', async mode => {
     const { client } = mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode={mode} onSelect={vi.fn()} />)
     await screen.findByRole('button', { name: /model: a/ })
-    if (mode === 'runs') expect(screen.queryByRole('button', { name: 'View results' })).not.toBeInTheDocument()
-    else expect(screen.getByRole('button', { name: 'View results' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'View results' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument()
 
     vi.mocked(experimentsApi.listExecutionCells).mockRejectedValue(new Error('Cells unavailable'))
@@ -241,7 +255,7 @@ describe('bounded Results reads', () => {
     vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, ready: false })
     mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
     expect(await screen.findByText(/Preparing the version summary/)).toBeInTheDocument()
-    expect(await screen.findByRole('button', { name: 'View results' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /model: a/ })).toBeInTheDocument()
     expect(experimentsApi.listExecutions).not.toHaveBeenCalled()
     expect(experimentsApi.getRunResults).not.toHaveBeenCalled()
     expect(experimentsApi.getExecutionAttempt).not.toHaveBeenCalled()

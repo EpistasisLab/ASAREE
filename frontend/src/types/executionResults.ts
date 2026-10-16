@@ -59,6 +59,8 @@ export interface ExecutionSummary {
 export interface ExecutionCell {
   cell_id: string; cell_label: string; factor_values: Record<string, unknown>
   result_status?: CellResultStatus
+  usable_results?: number; results_needing_attention?: number
+  result_issues?: Partial<Record<'failed' | 'cancelled' | 'limit_reached' | 'measurement_failed' | 'no_measurements' | 'measurements_missing', number>>
   replicate_count?: number; total?: number; counts?: Record<string, number>; truncated?: number
   usage?: UsageSummary; metric_values?: Record<string, number>; metric_counts?: Record<string, number>
 }

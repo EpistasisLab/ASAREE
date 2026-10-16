@@ -10,7 +10,8 @@ import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
 import type { AttemptDetail, ExecutionSlot } from '@/types/executionResults'
 import type { Experiment, ResultReplicate, ResultNodeRun } from '@/types/experiments'
 import { ReplicateResultDetail, type ResultsSelection } from './ResultsTab'
-import { CursorControls } from './ExecutionBrowser'
+import { CursorControls, useGenerationRefresh } from './ExecutionBrowser'
+import { CellResultStatus } from './CellResultStatus'
 import { useCursor } from '@/lib/executionPagination'
 import { ExecutionRows } from './ExecutionBrowser'
 
@@ -118,6 +119,7 @@ function CellInspector({ experimentId, selection, scope, onClose }: { experiment
   const cell = useQuery({ queryKey: [...executionKeys.root(experimentId), 'cell', scope, selection.cellId ?? selection.cellLabel],
     queryFn: ({ signal }) => experimentsApi.getExecutionCell(experimentId, scope, { cell_id: selection.cellId, cell_label: selection.cellLabel }, signal) })
   const summary = useExecutionSummary(experimentId, scope)
+  useGenerationRefresh(cell.refetch, summary.data?.generation)
   if (slot) return <SlotInspector experimentId={experimentId} slotId={slot} scope={scope} onClose={() => setSlot(undefined)} />
   return <aside className="@container absolute inset-0 z-20 overflow-y-auto border-l bg-card p-3" aria-label="Cell result details"><div className="mb-3 flex justify-between"><h2 className="text-sm font-medium">Cell results</h2><Button size="xs" variant="ghost" onClick={onClose}>Close</Button></div>
     {cell.isPending && <Skeleton className="h-24" />}
@@ -127,6 +129,7 @@ function CellInspector({ experimentId, selection, scope, onClose }: { experiment
           displayFactorCondition(name, value, summary.data?.design_spec, cell.data!.cell_label)).join(' · ') || cell.data.cell_label}</p>
         <p className="text-xs text-muted-foreground">{(cell.data.replicate_count ?? 0).toLocaleString()} replicates</p>
       </Card>
+      <CellResultStatus cell={cell.data} unit={summary.data?.unit} />
       <section aria-label="Cell measurements" className="my-4 space-y-2">
         <h3 className="text-sm font-medium">Measurements</h3>
         {Object.keys(cell.data.metric_values ?? {}).length ? <dl className="grid grid-cols-2 gap-2 @min-[600px]:grid-cols-3">

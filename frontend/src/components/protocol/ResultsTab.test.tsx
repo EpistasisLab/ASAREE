@@ -50,6 +50,21 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
 
 describe('bounded Results reads', () => {
+  it('shows an informational Results cell status pill while keeping filtering global', async () => {
+    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, cell_count: 1,
+      cell_result_counts: { ready: 0, needs_attention: 1, awaiting_results: 0 } })
+    vi.mocked(experimentsApi.listExecutionCells).mockResolvedValue({ items: [{ ...cell, result_status: 'needs_attention' }], total: 1, next_cursor: null })
+    mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode="results" onSelect={vi.fn()} />)
+    const cellToggle = await screen.findByRole('button', { name: /model: a/ })
+    expect(within(cellToggle).getByText('Needs attention')).toBeInTheDocument()
+    expect(within(cellToggle).queryByRole('button')).not.toBeInTheDocument()
+    fireEvent.click(cellToggle)
+    await screen.findByText('Replicate 1')
+    expect(screen.getByRole('button', { name: 'Filter cells by Total cells' })).toHaveAttribute('aria-pressed', 'true')
+    expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
+      { cursor: undefined, limit: 10, search: undefined, status: undefined }, expect.any(AbortSignal))
+  })
+
   it.each([
     ['ready', 'Ready to review'], ['needs_attention', 'Needs attention'], ['awaiting_results', 'Awaiting results'],
   ] as const)('filters Results cells by %s across pages and combines with search', async (status, label) => {
@@ -163,15 +178,20 @@ describe('bounded Results reads', () => {
     expect(screen.getByText('Completed')).toBeInTheDocument()
   })
 
-  it('grays out cell status pills excluded by the Runs overview filter', async () => {
+  it('keeps per-status counts in Runs and grays out those excluded by the global filter', async () => {
     const mode = 'runs'
-    vi.mocked(experimentsApi.listExecutionCells).mockResolvedValue({ items: [{ ...cell, counts: { cancelled: 2, failed: 3 } }], next_cursor: null })
+    vi.mocked(experimentsApi.listExecutionCells).mockResolvedValue({ items: [{ ...cell, result_status: 'needs_attention', counts: { cancelled: 2, failed: 3 } }], next_cursor: null })
     mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode={mode} onSelect={vi.fn()} />)
     await screen.findByLabelText('Cell status counts')
+    expect(screen.queryByText('Needs attention')).not.toBeInTheDocument()
     fireEvent.click(await screen.findByRole('button', { name: 'Filter by Cancelled' }))
-    await waitFor(() => expect(within(screen.getByLabelText('Cell status counts')).getByText('3 Failed')).toHaveClass('text-muted-foreground', 'opacity-50'))
-    expect(within(screen.getByLabelText('Cell status counts')).getByText('2 Cancelled')).not.toHaveClass('text-muted-foreground')
+    await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
+      expect.objectContaining({ status: 'cancelled' }), expect.any(AbortSignal)))
+    const counts = within(screen.getByLabelText('Cell status counts'))
+    expect(counts.getByText('3 Failed')).toHaveClass('text-muted-foreground', 'opacity-50')
+    expect(counts.getByText('2 Cancelled')).not.toHaveClass('text-muted-foreground')
     fireEvent.click(screen.getByRole('button', { name: 'Filter by All' }))
+    expect(screen.getByRole('button', { name: 'Filter by All' })).toHaveAttribute('aria-pressed', 'true')
     await waitFor(() => expect(within(screen.getByLabelText('Cell status counts')).getByText('3 Failed')).toHaveClass('text-destructive', 'opacity-70'))
   })
 
@@ -293,15 +313,15 @@ describe('bounded Results reads', () => {
     mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
     fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
     await screen.findByText('Replicate 1')
-    expect(screen.getByText('Showing 1–10 of 13')).toBeInTheDocument()
+    expect(screen.getByText('Showing 1–10 of 13 replicates')).toBeInTheDocument()
     const next = await screen.findAllByRole('button', { name: 'Next' })
     fireEvent.click(next.find(button => !button.hasAttribute('disabled'))!)
     expect(await screen.findByText('Replicate 11')).toBeInTheDocument()
-    expect(screen.getByText('Showing 11–13 of 13')).toBeInTheDocument()
+    expect(screen.getByText('Showing 11–13 of 13 replicates')).toBeInTheDocument()
     expect(experimentsApi.listExecutions).toHaveBeenCalledWith('experiment', expect.anything(),
       expect.objectContaining({ cell_id: 'cell-1', cursor: 'page-2', limit: 10 }), expect.any(AbortSignal))
     fireEvent.click(screen.getByRole('button', { name: 'Previous' }))
-    expect(await screen.findByText('Showing 1–10 of 13')).toBeInTheDocument()
+    expect(await screen.findByText('Showing 1–10 of 13 replicates')).toBeInTheDocument()
   })
 
   it.each(['runs', 'results'] as const)('shows record ranges for ten-cell pages in %s', async mode => {
@@ -311,11 +331,11 @@ describe('bounded Results reads', () => {
       next_cursor: params?.cursor ? null : 'page-2',
     }))
     mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode={mode} onSelect={vi.fn()} />)
-    expect(await screen.findByText('Showing 1–10 of 12')).toBeInTheDocument()
+    expect(await screen.findByText('Showing 1–10 of 12 cells')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    expect(await screen.findByText('Showing 11–12 of 12')).toBeInTheDocument()
+    expect(await screen.findByText('Showing 11–12 of 12 cells')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Previous' }))
-    expect(await screen.findByText('Showing 1–10 of 12')).toBeInTheDocument()
+    expect(await screen.findByText('Showing 1–10 of 12 cells')).toBeInTheDocument()
   })
 
   it('labels per-row executions by source row and only inspects attempted slots', async () => {

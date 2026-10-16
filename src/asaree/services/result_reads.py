@@ -380,8 +380,9 @@ async def read_summary(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
     refresh = await db.get(ResultRefresh, scope.key)
     if refresh is None:
         await request_refresh(db, scope)
-    elif refresh.summary is not None and "cell_result_counts" not in refresh.summary and refresh.generation == refresh.processed_generation:
-        # Older cached summaries need one rebuild to acquire cell result counts.
+    elif (refresh.summary is not None and refresh.summary.get("cell_result_details_version") != 1
+          and refresh.generation == refresh.processed_generation):
+        # Older cached summaries need one rebuild to acquire cell result details.
         refresh.generation += 1
         await db.flush()
     metrics = list(runtime_metrics(scope).values())

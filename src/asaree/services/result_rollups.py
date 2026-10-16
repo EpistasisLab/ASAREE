@@ -30,6 +30,7 @@ from asaree.services.result_reads import (
 
 logger = logging.getLogger(__name__)
 STATUSES = ("not_started", "pending", "running", "finalizing", "completed", "failed", "cancelled", "limit_reached")
+RESULT_ISSUES = ("failed", "cancelled", "limit_reached", "measurement_failed", "no_measurements", "measurements_missing")
 
 
 def rollup_query(scope: ResultScope) -> Any:
@@ -83,9 +84,18 @@ def rollup_query(scope: ResultScope) -> Any:
                   obtained == len(expected_ids), has_measurement)
     needs_attention = or_(slots.c.status.in_(("failed", "cancelled", "limit_reached")),
                           and_(slots.c.status == "completed", ~scoring_pending, ~usable))
+    issue = case(
+        (slots.c.status == "failed", "failed"),
+        (slots.c.status == "cancelled", "cancelled"),
+        (or_(slots.c.status == "limit_reached", slots.c.result["truncated"].as_boolean().is_(True)), "limit_reached"),
+        (evaluation == "failed", "measurement_failed"),
+        (literal(not expected_ids), "no_measurements"),
+        else_="measurements_missing",
+    )
     stats_columns += [
         func.count().filter(usable).label("usable_results"),
         func.count().filter(needs_attention).label("results_needing_attention"),
+        *[func.count().filter(and_(needs_attention, issue == reason)).label(f"issue_{reason}") for reason in RESULT_ISSUES],
     ]
     stats_columns += [func.count().filter(slots.c.status == status).label(status) for status in STATUSES]
     stats_columns += [
@@ -216,6 +226,7 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
             "truncated": int(row["truncated"] or 0),
             "usable_results": int(row["usable_results"] or 0),
             "results_needing_attention": int(row["results_needing_attention"] or 0),
+            "result_issues": {reason: int(row[f"issue_{reason}"] or 0) for reason in RESULT_ISSUES},
             "usage": {key: row[key] for key in usage},
             "metric_values": {
                 key: value["sum" if aggregations.get(key) == "sum" else "mean"] for key, value in metrics.items()
@@ -337,6 +348,7 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
         "executed_count": totals["executed"],
         "scored_count": totals["scored"],
         "cell_result_counts": {key: int(value) for key, value in result_counts.items()},
+        "cell_result_details_version": 1,
         "cell_count": totals["cells"],
         "replicate_count": totals["replicates"],
         "usage": usage,

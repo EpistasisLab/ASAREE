@@ -306,6 +306,7 @@ async def test_cell_result_readiness_requires_all_planned_replicates_and_applica
         'cancelled': ([('cancelled', None, None, False, None)], 'needs_attention'),
         'truncated': ([('completed', 'measured', 'measured', True, 'completed')], 'needs_attention'),
         'no_measured_values': ([('completed', 'not_applicable', 'not_applicable', False, 'completed')], 'needs_attention'),
+        'measurement_failed': ([('completed', 'measured', None, False, 'failed')], 'needs_attention'),
         'scoring_pending': ([('completed', 'measured', None, False, 'running')], 'awaiting_results'),
         'partial': ([good, waiting], 'awaiting_results'),
         'not_started': ([waiting], 'awaiting_results'),
@@ -340,8 +341,16 @@ async def test_cell_result_readiness_requires_all_planned_replicates_and_applica
     cells = (await read_cells(db, selected, limit=100))['items']
     for cell in cells:
         assert cell['result_status'] == cases[cell['cell_label']][1], cell['cell_label']
+        assert sum(cell['result_issues'].values()) == cell['results_needing_attention']
+    by_label = {cell['cell_label']: cell for cell in cells}
+    assert by_label['missing_measurement']['result_issues']['measurements_missing'] == 1
+    assert by_label['failed_and_pending']['result_issues']['failed'] == 1
+    assert by_label['cancelled']['result_issues']['cancelled'] == 1
+    assert by_label['truncated']['result_issues']['limit_reached'] == 1
+    assert by_label['measurement_failed']['result_issues']['measurement_failed'] == 1
+    assert by_label['ready_all']['result_issues']['failed'] == 0
     counts = (await read_summary(db, selected))['cell_result_counts']
-    assert counts == {'ready': 2, 'needs_attention': 6, 'awaiting_results': 3}
+    assert counts == {'ready': 2, 'needs_attention': 7, 'awaiting_results': 3}
     assert sum(counts.values()) == len(cases)
     for status, total in counts.items():
         filtered = await read_cells(db, selected, result_status=status, limit=100)
@@ -410,7 +419,7 @@ async def test_older_summary_requests_one_cell_result_rebuild(results_db):
     db, selected, _cell, _user = results_db
     await read_summary(db, selected)
     refresh = await db.get(ResultRefresh, selected.key)
-    refresh.summary = {'total': 0}
+    refresh.summary = {'total': 0, 'cell_result_counts': {'ready': 0, 'needs_attention': 0, 'awaiting_results': 0}}
     refresh.generation = refresh.processed_generation = 1
     await db.flush()
     first = await read_summary(db, selected)

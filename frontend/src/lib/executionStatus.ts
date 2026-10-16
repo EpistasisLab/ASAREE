@@ -1,6 +1,11 @@
 /** Shared status language for execution summaries, filters, and replicate badges. */
+export const STATUS_PILL_SIZE = 'h-[1.1rem] min-h-[1.1rem] shrink-0 px-[0.4125rem] py-0 text-[0.715rem] leading-none'
+
 export const cellResultStatusLabels = {
   ready: 'Ready to review', needs_attention: 'Needs attention', awaiting_results: 'Awaiting results',
+} as const
+export const cellResultStatusAccents = {
+  ready: 'var(--chart-3)', needs_attention: 'var(--chart-4)', awaiting_results: 'var(--primary)',
 } as const
 
 export const executionStatusLabels: Record<string, string> = {

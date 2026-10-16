@@ -68,15 +68,15 @@ export function RunAllCellsButton({ protocol, experimentId, regenerationRequired
       confirmLabel={label} confirmDisabled={preview.data?.status !== 'awaiting_confirmation' || !pending || run.isPending || publish.isPending}
       isConfirming={run.isPending} confirmError={run.error?.message}
       additionalContent={<div className="space-y-3">
-        {preview.data?.status !== 'awaiting_confirmation' && <p role="status" className="text-xs">Preparing batch preview… {preview.data?.progress.scanned ?? 0} executions checked.</p>}
+        {preview.data?.status !== 'awaiting_confirmation' && <p role="status" className="text-xs">Preparing batch preview… {preview.data?.progress.scanned ?? 0} {summary.data?.unit === 'row' ? 'rows' : 'replicates'} checked.</p>}
         {(preview.error || preview.data?.error) && <p role="alert" className="text-xs text-destructive">{preview.error?.message ?? preview.data?.error}</p>}
-        {preview.data?.status === 'awaiting_confirmation' && <p className="font-mono text-xs">{pending} executions will be queued.</p>}
+        {preview.data?.status === 'awaiting_confirmation' && <p className="font-mono text-xs">{pending} run attempts will be queued.</p>}
         {summary.error && <p role="alert" className="text-xs text-destructive">{summary.error.message}</p>}
-        {summary.data?.unit === 'row' && <p className="font-mono text-xs">{summary.data.expected ?? '?'} expected row executions across {summary.data.replicate_count ?? 0} replicates.</p>}
+        {summary.data?.unit === 'row' && <p className="font-mono text-xs">{summary.data.expected ?? '?'} expected rows across {summary.data.replicate_count ?? 0} replicates.</p>}
         {!experiment.data?.locked_at && <label className="flex items-center gap-2 text-xs"><Checkbox checked={lock} onCheckedChange={checked => setLock(checked === true)} />Lock experiment before running</label>}
         <ExperimentDefinitionDownload experimentId={experimentId} protocol={protocol} />
-        <p className="text-xs text-muted-foreground">Completed executions, including ones that hit their iteration limit, are skipped unless selected to run again.</p>
-        <label className="flex items-center gap-2 text-xs"><Checkbox checked={rerunAll} onCheckedChange={checked => setRerunAll(checked === true)} />Run every completed execution again (including iteration-limited)</label>
+        <p className="text-xs text-muted-foreground">Completed {summary.data?.unit === 'row' ? 'rows' : 'replicates'}, including ones that hit their iteration limit, are skipped unless selected to run again.</p>
+        <label className="flex items-center gap-2 text-xs"><Checkbox checked={rerunAll} onCheckedChange={checked => setRerunAll(checked === true)} />Run all completed {summary.data?.unit === 'row' ? 'rows' : 'replicates'} again (including iteration-limited)</label>
         <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}`} experimentId={experimentId} scope={scope} cellId={cellId} summary={summary.data} onSelect={() => {}} actions={row => runsAgainOnlyOnRequest(row.status) && <Checkbox aria-label={`Run replicate ${row.replicate_number} again`} checked={reruns.has(row.slot_id)} disabled={rerunAll || !reruns.has(row.slot_id) && reruns.size >= 100} onCheckedChange={checked => setReruns(current => { const next = new Set(current); if (checked) next.add(row.slot_id); else next.delete(row.slot_id); return next })} />} />
       </div>} />}
   </>
@@ -238,7 +238,7 @@ function RunReplicateButton({
           publishLabel={row ? 'Publish & prepare preview' : undefined}
           confirmLabel={`${actionLabel} replicate`}
           confirmDisabled={!!row && (preview.data?.status !== 'awaiting_confirmation' || !preview.data.progress.planned)}
-          additionalContent={row && <p className="text-xs">{preview.data?.status === 'awaiting_confirmation' ? `${preview.data.progress.planned ?? 0} executions will be queued.` : preview.data?.error ?? preview.error?.message ?? 'Preparing batch preview…'}</p>}
+          additionalContent={row && <p className="text-xs">{preview.data?.status === 'awaiting_confirmation' ? `${preview.data.progress.planned ?? 0} run attempts will be queued.` : preview.data?.error ?? preview.error?.message ?? 'Preparing batch preview…'}</p>}
           isConfirming={runMutation.isPending}
           confirmError={errorMessage}
         />
@@ -270,7 +270,8 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
         else if (selection.type === 'row') onViewRowResult?.(selection.rowResultId)
         else if (selection.type === 'replicate') onViewResult(selection.replicateLabel)
       }}
-      controls={<><StopAllButton protocol={protocol} experimentId={experimentId} active={!!summary.data?.has_active} /><RunAllCellsButton protocol={protocol} experimentId={experimentId}
+      controls={<StopAllButton protocol={protocol} experimentId={experimentId} active={!!summary.data?.has_active} />}
+      batchControls={<><span className="text-xs text-muted-foreground">Total cells: <span className="font-mono tabular-nums">{summary.data?.cell_count?.toLocaleString() ?? '—'}</span></span><RunAllCellsButton protocol={protocol} experimentId={experimentId}
         label={summary.data?.ready && allExecutionsFinished(summary.data.counts, summary.data.expected ?? summary.data.total) ? 'Re-run all cells' : 'Run all cells'}
         regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /></>}
       cellActions={cell => <><RunAllCellsButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id}

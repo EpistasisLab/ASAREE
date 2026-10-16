@@ -97,10 +97,11 @@ async def cells(
         "^(not_started|pending|running|finalizing|completed|failed|cancelled|limit_reached|scoring_failed)$"
     ))] = None,
     factors: Annotated[str | None, Query(max_length=10000)] = None,
+    result_status: Annotated[str | None, Query(pattern="^(ready|needs_attention|awaiting_results)$")] = None,
 ) -> dict[str, Any]:
     return await _read(
         result_reads.read_cells, db, scope, limit=limit, cursor=cursor,
-        search=search, status=status, factors=factor_selection(factors),
+        search=search, status=status, result_status=result_status, factors=factor_selection(factors),
     )
 
 

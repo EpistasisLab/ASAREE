@@ -49,6 +49,8 @@ class ResultScope:
     versioned: bool
     row_plan: dict[str, Any] | None
     measurement_plan: dict[str, Any] | None = None
+    protocol_revision: int | None = None
+    design_revision: int | None = None
 
     @property
     def key(self) -> str:
@@ -203,6 +205,8 @@ async def resolve_result_scope(
         publication.experiment_snapshot.get("measurement_plan")
         if versioned and publication and publication.experiment_snapshot
         else None,
+        protocol_revision=publication.revision if publication else None,
+        design_revision=revision.revision if revision else None,
     )
 
 
@@ -376,7 +380,18 @@ async def read_summary(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
     refresh = await db.get(ResultRefresh, scope.key)
     if refresh is None:
         await request_refresh(db, scope)
+    elif refresh.summary is not None and "cell_result_counts" not in refresh.summary and refresh.generation == refresh.processed_generation:
+        # Older cached summaries need one rebuild to acquire cell result counts.
+        refresh.generation += 1
+        await db.flush()
     metrics = list(runtime_metrics(scope).values())
+    connected = {edge.get("source") for edge in scope.graph.get("edges", [])}
+    datasets = {}
+    for node in scope.graph.get("nodes", []):
+        config = (node.get("data") or {}).get("config") or {}
+        if node.get("type") == "dataset" and node.get("id") in connected and config.get("enabled") is not False and config.get("dataset_id"):
+            identifier = str(config["dataset_id"])
+            datasets[identifier] = {"id": identifier, "name": config.get("dataset_name") or "Dataset"}
     return {
         "scope_key": scope.key,
         "unit": scope.unit,
@@ -396,6 +411,9 @@ async def read_summary(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
         "metric_aggregations": {metric["key"]: metric["aggregation"] for metric in metrics},
         "metric_directions": {metric["key"]: metric["direction"] for metric in metrics},
         **(refresh.summary if refresh and refresh.summary is not None else {}),
+        "protocol_revision": scope.protocol_revision,
+        "design_revision": scope.design_revision,
+        "datasets": list(datasets.values()),
         # Compatibility fields are inert, even while an old summary is cached.
         "primary_metric": None,
         "primary_metric_direction": None,
@@ -578,9 +596,10 @@ async def read_cells(
     limit: int = PAGE_SIZE,
     search: str = '',
     status: str | None = None,
+    result_status: str | None = None,
     factors: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    filters = {"search": search, "status": status, "factors": factors or {}}
+    filters = {"search": search, "status": status, "result_status": result_status, "factors": factors or {}}
     position = decode_cursor(cursor, scope, "cells", filters)
     cached = ResultCellRollup
     statement = (
@@ -603,6 +622,8 @@ async def read_cells(
                 FactorialReplicateResult.cell_id == FactorialCell.id, *parent_predicates(scope)).scalar_subquery()
             has_match = or_(has_match, actual_rows < parents * expected_rows)
         statement = statement.where(has_match)
+    if result_status:
+        statement = statement.where(cached.data["result_status"].astext == result_status)
     order_value = natural_label(FactorialCell.cell_label)
     count_statement = select(func.count()).select_from(statement.subquery())
     if position is not None:

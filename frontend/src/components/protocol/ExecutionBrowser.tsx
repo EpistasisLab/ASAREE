@@ -14,6 +14,7 @@ import type { ExecutionCell, ExecutionFilters, ExecutionSlot, ExecutionSummary }
 import type { Experiment } from '@/types/experiments'
 import type { ResultsSelection } from './ResultsTab'
 import { ResultsPanel } from './ResultsPanel'
+import { ResultsContext, ResultsMetadata } from './ResultsContext'
 import { CellCard, ReplicateRow, ReplicateStatus } from './CellPresentation'
 import { executionStatusColor, executionStatusCount, executionStatusPillColor } from '@/lib/executionStatus'
 import { emptyExecutionFilters, filterParams, hasExecutionFilters, statusLabels, RunBrowserControls } from './RunBrowserControls'
@@ -46,16 +47,17 @@ function Usage({ usage }: { usage: ExecutionSummary['usage'] }) {
 }
 
 function ResultsUsageSummary({ summary }: { summary: ExecutionSummary }) {
-  return <section aria-label="Results usage summary" className="space-y-2">
+  const units = summary.unit === 'row' ? 'rows' : 'replicates'
+  return <section aria-label="Results usage summary" className="space-y-2 pt-4">
     <Table aria-label="Usage by attempt scope" className="text-xs">
       <TableHeader><TableRow>
         <TableHead className="h-7">Scope</TableHead>
         <TableHead className="h-7 text-right">Cost</TableHead>
         <TableHead className="h-7 text-right">Tokens</TableHead>
-        <TableHead className="h-7 text-right" title="Sum of execution durations">Duration</TableHead>
+        <TableHead className="h-7 text-right" title="Sum of run attempt durations">Duration</TableHead>
       </TableRow></TableHeader>
       <TableBody>{([
-        ['Current results', summary.usage, 'Latest attempt for each execution'],
+        ['Current results', summary.usage, `Latest run attempt for each ${summary.unit === 'row' ? 'row' : 'replicate'}`],
         ['All attempts', summary.all_attempt_usage, 'Includes earlier attempts and re-runs'],
       ] as const).map(([label, usage, description]) => <TableRow key={label}>
         <TableHead scope="row" className="h-auto py-1.5 text-xs whitespace-normal" title={description}>{label}</TableHead>
@@ -64,8 +66,8 @@ function ResultsUsageSummary({ summary }: { summary: ExecutionSummary }) {
         <TableCell className="py-1.5 text-right font-mono tabular-nums">{usage?.duration_seconds == null ? '—' : `${usage.duration_seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })} s`}</TableCell>
       </TableRow>)}</TableBody>
     </Table>
-    <p className="text-xs text-muted-foreground">Usage available for {summary.usage_complete_count ?? 0} of {summary.total ?? 0} executions.{summary.refreshing && ' Updating summary…'}</p>
-    {!!summary.usage_pending_count && <p role="status" className="text-xs text-muted-foreground">Preparing usage for {summary.usage_pending_count} executions.</p>}
+    <p className="text-xs text-muted-foreground">Usage available for {summary.usage_complete_count ?? 0} of {summary.total ?? 0} {units}.{summary.refreshing && ' Updating summary…'}</p>
+    {!!summary.usage_pending_count && <p role="status" className="text-xs text-muted-foreground">Preparing usage for {summary.usage_pending_count} {units}.</p>}
   </section>
 }
 
@@ -84,7 +86,7 @@ export function ExecutionRows({ experimentId, scope, cellId, generation, summary
   useGenerationRefresh(query.refetch, generation)
   return <div className="space-y-2">
     {query.isPending ? <Skeleton className="h-16" /> : query.error && !query.data ? <p role="alert" className="text-xs text-destructive">{query.error.message}</p> : <>
-      {!query.data?.items.length && <p className="text-xs text-muted-foreground">No executions planned in this scope.</p>}
+      {!query.data?.items.length && <p className="text-xs text-muted-foreground">No {summary?.unit === 'row' ? 'rows' : 'replicates'} planned in this version.</p>}
       <ul className="space-y-1.5">{query.data?.items.map(row => <ReplicateRow key={row.slot_id} number={row.replicate_number} results={mode === 'results' && !actions}
         onView={mode === 'results' && !actions && (row.run_id || row.status === 'completed') ? () => onSelect({ type: 'execution', slotId: row.slot_id, scope }) : undefined}
         detail={row.row_index !== null ? <span className="font-mono">Source row {row.row_index + 1}</span> : undefined}
@@ -92,7 +94,7 @@ export function ExecutionRows({ experimentId, scope, cellId, generation, summary
         error={row.error} actions={actions?.(row)} />)}</ul>
       {query.error && query.data && <p role="alert" className="text-xs text-destructive">Refresh failed; showing the last loaded page.</p>}
       <CursorControls next={query.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={query.isFetching} pageIndex={pager.pageIndex} count={query.data?.items.length} total={query.data?.total} />
-      {summary?.unit === 'row' && !query.data?.items.length && <p className="text-xs text-muted-foreground">The published design forecasts {summary.expected ?? '?'} row executions. Rows appear when the batch is planned.</p>}
+      {summary?.unit === 'row' && !query.data?.items.length && <p className="text-xs text-muted-foreground">The published design forecasts {summary.expected ?? '?'} rows. Rows appear when the batch is planned.</p>}
     </>}
     {query.isError && <Button variant="outline" size="xs" disabled={query.isFetching} onClick={() => void query.refetch()}>Refresh</Button>}
   </div>
@@ -106,9 +108,10 @@ function useGenerationRefresh(refetch: () => unknown, generation?: number) {
   }, [generation, refetch])
 }
 
-export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSelect, controls, actions, cellActions }: {
+export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSelect, controls, batchControls, actions, cellActions }: {
   experimentId: string; scope: ResultsScope; experiment?: Experiment; mode: 'runs' | 'results'
   onSelect: (selection: ResultsSelection) => void; controls?: React.ReactNode
+  batchControls?: React.ReactNode
   actions?: (row: ExecutionSlot) => React.ReactNode
   cellActions?: (cell: ExecutionCell) => React.ReactNode
 }) {
@@ -116,7 +119,8 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [filters, setFilters] = useState<ExecutionFilters>(emptyExecutionFilters)
   const pager = useCursor()
-  const params = { cursor: pager.cursor, limit: EXECUTION_PAGE_SIZE, ...filterParams(filters) }
+  const params = { cursor: pager.cursor, limit: EXECUTION_PAGE_SIZE, ...filterParams(filters),
+    ...(filters.resultStatus ? { result_status: filters.resultStatus } : {}) }
   const changeFilters = (next: ExecutionFilters) => { pager.reset(); setFilters(next) }
   const cells = useQuery({
     queryKey: [...executionKeys.root(experimentId), 'cells', scope, params],
@@ -150,9 +154,9 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
       <CursorControls next={cells.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={cells.isFetching} pageIndex={pager.pageIndex} count={cells.data?.items.length} total={cells.data?.total} />
     </>}
   </div>
-  const overview = (headerActions?: React.ReactNode) => <div className="w-full min-w-0 space-y-2"><div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-medium">{mode === 'runs' ? 'Execution overview' : 'Current results'}</h2>{(summary.isError || cells.isError) && <Button variant="outline" size="xs" disabled={summary.isFetching || cells.isFetching} onClick={refresh}>Refresh</Button>}{(controls || headerActions) && <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{controls}{headerActions}</div>}</div>
-    {summary.isPending ? <p className="text-xs text-muted-foreground">Loading progress…</p> : summary.error && !summary.data ? <p role="alert" className="text-xs text-destructive">Progress unavailable. Execution records remain available below.</p> : !summary.data?.ready ? <p role="status" className="text-xs text-muted-foreground">Preparing the version summary. Execution records remain available below.</p> : <>
-      {mode === 'runs' && <ul aria-label="Execution status counts" className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-1.5">
+  const overview = (headerActions?: React.ReactNode) => <div className="w-full min-w-0 space-y-2"><div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-medium">{mode === 'runs' ? `${summary.data?.unit === 'row' ? 'Row' : 'Replicate'} overview` : 'Current results'}</h2>{(summary.isError || cells.isError) && <Button variant="outline" size="xs" disabled={summary.isFetching || cells.isFetching} onClick={refresh}>Refresh</Button>}{(controls || headerActions) && <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{controls}{headerActions}</div>}</div>
+    {summary.isPending ? <p className="text-xs text-muted-foreground">Loading progress…</p> : summary.error && !summary.data ? <p role="alert" className="text-xs text-destructive">Progress unavailable. Records remain available below.</p> : !summary.data?.ready ? <p role="status" className="text-xs text-muted-foreground">Preparing the version summary. Records remain available below.</p> : <>
+      {mode === 'runs' && <ul aria-label="Run status counts" className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-1.5">
         {summaryStatuses.map(status => <li key={status}>
           <Card style={cardAccent('currentColor')} className={`h-full gap-0 bg-[color-mix(in_oklch,currentColor,transparent_94%)] p-0 text-center ${status ? executionStatusColor(status) : 'text-foreground'}`}>
             <Button variant="ghost" aria-label={`Filter by ${status ? statusLabels[status] : 'All'}`} aria-pressed={filters.status === status}
@@ -165,11 +169,16 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
           </Card>
         </li>)}
       </ul>}
-      {mode === 'results' && <ResultsUsageSummary summary={summary.data} />}
+      {mode === 'results' && <><ResultsContext summary={summary.data} selectedStatus={filters.resultStatus}
+        onStatusChange={resultStatus => changeFilters({ ...filters, resultStatus })} /><ResultsUsageSummary summary={summary.data} /></>}
     </>}
     {summary.error && summary.data && <p role="alert" className="text-xs text-destructive">Progress refresh failed; showing the last summary.</p>}
   </div>
+  const metadata = mode === 'results' && summary.data?.ready ? <ResultsMetadata summary={summary.data} /> : null
   return mode === 'results' && experiment
-    ? <ResultsPanel experimentId={experimentId} experimentName={experiment.name} scope={scope} summary={overview} cells={cellBody} />
-    : <div className="@container space-y-3 p-3"><Card className="p-3">{overview()}</Card>{cellBody}</div>
+    ? <ResultsPanel experimentId={experimentId} experimentName={experiment.name} scope={scope} metadata={metadata} summary={overview} cells={cellBody} />
+    : <div className="@container space-y-3 p-3">
+      {metadata}
+      {batchControls && <div className="flex flex-wrap items-center justify-end gap-2">{batchControls}</div>}
+      <Card className="p-3">{overview()}</Card>{cellBody}</div>
 }

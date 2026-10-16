@@ -2,9 +2,11 @@ import type { DesignSpec, EvaluationArtifact, MetricObservation, MeasurementDire
 import type { DatasetRowSnapshot, NodeRunState } from './protocols'
 
 export interface CursorPage<T> { items: T[]; next_cursor: string | null; total?: number }
+export type CellResultStatus = 'ready' | 'needs_attention' | 'awaiting_results'
 export interface ExecutionFilters {
   search: string
   status: string
+  resultStatus?: CellResultStatus | ''
 }
 export interface ResultJob {
   id: string; kind: 'plan' | 'cancel' | 'export'
@@ -39,6 +41,9 @@ export interface ExecutionSummary {
   generation: number; change_id: number; refreshing: boolean; updated_at: string | null; as_of?: string
   counts?: Record<string, number>; total?: number; cell_count?: number; replicate_count?: number
   source_row_count?: number | null; expected?: number | null; has_active?: boolean
+  protocol_revision?: number | null; design_revision?: number | null
+  datasets?: Array<{ id: string; name: string }>
+  cell_result_counts?: { ready: number; needs_attention: number; awaiting_results: number }
   executed_count?: number; scored_count?: number
   usage?: UsageSummary; usage_complete_count?: number; truncated_count?: number; evaluating_count?: number
   all_attempt_usage?: UsageSummary; usage_pending_count?: number
@@ -53,6 +58,7 @@ export interface ExecutionSummary {
 }
 export interface ExecutionCell {
   cell_id: string; cell_label: string; factor_values: Record<string, unknown>
+  result_status?: CellResultStatus
   replicate_count?: number; total?: number; counts?: Record<string, number>; truncated?: number
   usage?: UsageSummary; metric_values?: Record<string, number>; metric_counts?: Record<string, number>
 }

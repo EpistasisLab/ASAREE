@@ -2,7 +2,10 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { experimentsApi, type ResultsScope } from '@/api/client'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { displayFactorCondition, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
+import { metricCatalogEntry } from '@/lib/metricCatalog'
 import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
 import type { AttemptDetail, ExecutionSlot } from '@/types/executionResults'
 import type { Experiment, ResultReplicate, ResultNodeRun } from '@/types/experiments'
@@ -77,7 +80,7 @@ function SlotInspector({ experimentId, slotId, scope, onClose }: { experimentId:
       <Button size="xs" variant="outline" className="my-3" onClick={() => setConversationOpen(value => !value)}>{conversationOpen ? 'Hide conversation' : 'View conversation'}</Button>
       {conversationOpen && runId && <ConversationPage key={runId} experimentId={experimentId} runId={runId} scope={scope} />}
     </div>}
-    {history.data && !runId && <p className="text-xs text-muted-foreground">This execution has no attempts.</p>}
+    {history.data && !runId && <p className="text-xs text-muted-foreground">This {slot?.row_index != null ? 'row' : 'replicate'} has no run attempts.</p>}
     {history.data?.legacy_result && <section className="mt-3 space-y-2"><h3 className="text-sm">Legacy result</h3><p className="text-xs text-muted-foreground">Original values; producer unknown. These values are not ranked.</p><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border p-2 font-mono text-xs">{JSON.stringify(history.data.legacy_result, null, 2)}</pre></section>}
   </aside>
 }
@@ -107,7 +110,7 @@ export function ExecutionInspector({ experimentId, selection, onClose }: { exper
   if (selection.type === 'cell') return <CellInspector key={`${JSON.stringify(scope)}:${selection.cellId ?? selection.cellLabel}`} experimentId={experimentId} selection={selection} scope={scope} onClose={onClose} />
   const slotId = selection.type === 'execution' ? selection.slotId : selection.type === 'row' ? selection.rowResultId : lookup.data?.slot_id
   if (slotId) return <SlotInspector key={`${JSON.stringify(scope)}:${slotId}`} experimentId={experimentId} slotId={slotId} scope={scope} onClose={onClose} />
-  return <aside className="absolute inset-0 z-20 bg-card p-3"><Button size="xs" onClick={onClose}>Close</Button><p className="mt-2 text-xs">{lookup.isFetching ? 'Loading result…' : lookup.error?.message ?? 'Expand the cell to inspect an execution.'}</p></aside>
+  return <aside className="absolute inset-0 z-20 bg-card p-3"><Button size="xs" onClick={onClose}>Close</Button><p className="mt-2 text-xs">{lookup.isFetching ? 'Loading result…' : lookup.error?.message ?? 'Expand the cell to inspect a replicate.'}</p></aside>
 }
 
 function CellInspector({ experimentId, selection, scope, onClose }: { experimentId: string; selection: Extract<ResultsSelection, { type: 'cell' }>; scope: ResultsScope; onClose: () => void }) {
@@ -116,8 +119,34 @@ function CellInspector({ experimentId, selection, scope, onClose }: { experiment
     queryFn: ({ signal }) => experimentsApi.getExecutionCell(experimentId, scope, { cell_id: selection.cellId, cell_label: selection.cellLabel }, signal) })
   const summary = useExecutionSummary(experimentId, scope)
   if (slot) return <SlotInspector experimentId={experimentId} slotId={slot} scope={scope} onClose={() => setSlot(undefined)} />
-  return <aside className="absolute inset-0 z-20 overflow-y-auto border-l bg-card p-3" aria-label="Cell result details"><div className="mb-3 flex justify-between"><h2 className="text-sm font-medium">Cell results</h2><Button size="xs" variant="ghost" onClick={onClose}>Close</Button></div>
-    {cell.data && <><p className="font-mono text-xs">{cell.data.cell_label}</p><dl className="my-3 grid grid-cols-2 gap-2 text-xs">{Object.entries(cell.data.metric_values ?? {}).map(([name, value]) => <div key={name}><dt>{name}</dt><dd className="font-mono">{String(value)}</dd></div>)}</dl>
+  return <aside className="@container absolute inset-0 z-20 overflow-y-auto border-l bg-card p-3" aria-label="Cell result details"><div className="mb-3 flex justify-between"><h2 className="text-sm font-medium">Cell results</h2><Button size="xs" variant="ghost" onClick={onClose}>Close</Button></div>
+    {cell.isPending && <Skeleton className="h-24" />}
+    {cell.data && <>
+      <Card className="gap-1 p-3">
+        <p className="text-sm font-medium break-words">{Object.entries(cell.data.factor_values).map(([name, value]) =>
+          displayFactorCondition(name, value, summary.data?.design_spec, cell.data!.cell_label)).join(' · ') || cell.data.cell_label}</p>
+        <p className="text-xs text-muted-foreground">{(cell.data.replicate_count ?? 0).toLocaleString()} replicates</p>
+      </Card>
+      <section aria-label="Cell measurements" className="my-4 space-y-2">
+        <h3 className="text-sm font-medium">Measurements</h3>
+        {Object.keys(cell.data.metric_values ?? {}).length ? <dl className="grid grid-cols-2 gap-2 @min-[600px]:grid-cols-3">
+          {Object.entries(cell.data.metric_values ?? {}).map(([key, value]) => {
+            const label = summary.data?.metric_labels?.[key] ?? metricCatalogEntry(key)?.name ?? formatMetricLabel(key)
+            const formatted = summary.data?.metric_types[key] === 'boolean'
+              ? new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(value)
+              : key === 'cost_usd' ? new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(value)
+              : formatMetricValue(key, value)
+            return <Card key={key} className="min-w-0 gap-1 p-3">
+              <dt className="text-xs text-muted-foreground break-words">{label}</dt>
+              <dd>
+                <span className="font-mono text-lg font-medium tabular-nums break-words">{formatted}</span>
+                {summary.data?.metric_aggregations[key] && <p className="mt-1 text-[0.65rem] text-muted-foreground">{summary.data.metric_aggregations[key] === 'sum' ? 'Total' : 'Average'}</p>}
+              </dd>
+            </Card>
+          })}
+        </dl> : <p className="text-xs text-muted-foreground">No aggregated measurements available yet.</p>}
+      </section>
+      <h3 className="mb-2 text-sm font-medium">Replicates</h3>
       <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}`} experimentId={experimentId} scope={scope} cellId={cell.data.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={item => { if (item.type === 'execution') setSlot(item.slotId) }} />
     </>}{cell.error && <p role="alert">{cell.error.message}</p>}
   </aside>

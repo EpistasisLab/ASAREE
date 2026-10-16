@@ -282,7 +282,142 @@ async def test_current_attempt_history_and_rerun_rollups(results_db):
     assert summary["total"] == 1
     assert summary["counts"]["failed"] == 1
     assert summary["counts"]["completed"] == 0
+    assert summary["protocol_revision"] == 1
+    assert summary["design_revision"] == 1
     assert len((await read_cells(db, selected))["items"]) == 1
+
+
+async def test_cell_result_readiness_requires_all_planned_replicates_and_applicable_measurements(results_db):
+    from dataclasses import replace
+
+    db, selected, first, user = results_db
+    selected = replace(selected, design_spec={'metrics': [
+        {'id': 'auc', 'name': 'ROC AUC', 'kind': 'custom', 'valueType': 'number'},
+        {'id': 'calibration', 'name': 'Calibration', 'kind': 'custom', 'valueType': 'number'},
+    ]})
+    good = ('completed', 'measured', 'measured', False, 'completed')
+    waiting = ('not_started', None, None, False, None)
+    cases = {
+        'ready_all': ([good, good], 'ready'),
+        'ready_not_applicable': ([('completed', 'measured', 'not_applicable', False, 'completed')], 'ready'),
+        'missing_measurement': ([('completed', 'measured', None, False, 'completed')], 'needs_attention'),
+        'unavailable_measurement': ([('completed', 'measured', 'unavailable', False, 'completed')], 'needs_attention'),
+        'failed_and_pending': ([('failed', None, None, False, None), waiting], 'needs_attention'),
+        'cancelled': ([('cancelled', None, None, False, None)], 'needs_attention'),
+        'truncated': ([('completed', 'measured', 'measured', True, 'completed')], 'needs_attention'),
+        'no_measured_values': ([('completed', 'not_applicable', 'not_applicable', False, 'completed')], 'needs_attention'),
+        'scoring_pending': ([('completed', 'measured', None, False, 'running')], 'awaiting_results'),
+        'partial': ([good, waiting], 'awaiting_results'),
+        'not_started': ([waiting], 'awaiting_results'),
+    }
+    for index, (label, (attempts, _expected)) in enumerate(cases.items()):
+        cell = first if index == 0 else FactorialCell(experiment_id=selected.experiment_id,
+            design_revision_id=selected.design_revision_id, cell_label=label, factor_values={})
+        cell.cell_label = label
+        db.add(cell)
+        await db.flush()
+        for number, (status, auc, calibration, truncated, evaluation) in enumerate(attempts, 1):
+            parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=number, replicate_label=f'{label}-{number}')
+            db.add(parent)
+            await db.flush()
+            if status != 'not_started':
+                if label == 'ready_all' and number == 1:
+                    db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
+                        protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+                        replicate_result_id=parent.id, replicate_label=parent.replicate_label, status='failed',
+                        created_at=datetime.now(UTC) - timedelta(days=1), result_summary={}))
+                db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
+                    protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+                    replicate_result_id=parent.id, replicate_label=parent.replicate_label, status=status,
+                    result_summary={'truncated': truncated, 'evaluation_state': evaluation, 'observations': [
+                        {'metric_id': identifier, 'status': state} for identifier, state in [('auc', auc), ('calibration', calibration)] if state
+                    ]}))
+    await db.flush()
+    await read_summary(db, selected)
+    refresh = await db.get(ResultRefresh, selected.key)
+    await rebuild_result_summary(db, selected, refresh.generation)
+    await db.refresh(refresh)
+    cells = (await read_cells(db, selected, limit=100))['items']
+    for cell in cells:
+        assert cell['result_status'] == cases[cell['cell_label']][1], cell['cell_label']
+    counts = (await read_summary(db, selected))['cell_result_counts']
+    assert counts == {'ready': 2, 'needs_attention': 6, 'awaiting_results': 3}
+    assert sum(counts.values()) == len(cases)
+    for status, total in counts.items():
+        filtered = await read_cells(db, selected, result_status=status, limit=100)
+        assert filtered['total'] == total
+        assert len(filtered['items']) == total
+        assert all(item['result_status'] == status for item in filtered['items'])
+    searched = await read_cells(db, selected, result_status='needs_attention', search='missing')
+    assert searched['total'] == 1
+    assert searched['items'][0]['cell_label'] == 'missing_measurement'
+    first_page = await read_cells(db, selected, result_status='ready', limit=1)
+    second_page = await read_cells(db, selected, result_status='ready', limit=1, cursor=first_page['next_cursor'])
+    assert first_page['total'] == second_page['total'] == 2
+    assert first_page['items'][0]['cell_id'] != second_page['items'][0]['cell_id']
+    with pytest.raises(ValueError, match='cursor_scope_mismatch'):
+        await read_cells(db, selected, result_status='needs_attention', limit=1, cursor=first_page['next_cursor'])
+
+
+async def test_results_context_uses_published_dataset_names(results_db):
+    db, selected, _cell, _user = results_db
+    publication = await db.get(ProtocolRevision, selected.protocol_revision_id)
+    publication.graph = {'nodes': [
+        {'id': 'dataset', 'type': 'dataset', 'data': {'config': {'dataset_id': 'dataset-id', 'dataset_name': 'Published dataset'}}},
+        {'id': 'unused', 'type': 'dataset', 'data': {'config': {'dataset_id': 'unused', 'dataset_name': 'Disconnected'}}},
+        {'id': 'agent', 'type': 'agent', 'data': {'config': {}}},
+    ], 'edges': [{'id': 'input', 'source': 'dataset', 'target': 'agent', 'sourceHandle': 'dataset'}]}
+    protocol = await db.get(Protocol, selected.protocol_id)
+    protocol.graph = {'nodes': [{'id': 'draft', 'type': 'dataset', 'data': {'config': {'dataset_name': 'Draft dataset'}}}], 'edges': []}
+    await db.flush()
+    pinned = await resolve_result_scope(db, experiment_id=selected.experiment_id, protocol_id=selected.protocol_id)
+    context = await read_summary(db, pinned)
+    assert context['datasets'] == [{'id': 'dataset-id', 'name': 'Published dataset'}]
+
+
+async def test_row_cell_waits_for_all_forecast_rows_before_becoming_ready(results_db):
+    from dataclasses import replace
+
+    db, selected, cell, user = results_db
+    dataset = RegisteredDataset(name='Row readiness', owner_id=user.id)
+    parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=1, replicate_label='rep1')
+    db.add_all([dataset, parent])
+    await db.flush()
+    selected = replace(selected, row_plan={'driver_dataset_id': str(dataset.id)}, design_spec={
+        'metrics': [{'id': 'auc', 'name': 'ROC AUC', 'kind': 'custom', 'valueType': 'number'}],
+    })
+    await read_summary(db, selected)
+    refresh = await db.get(ResultRefresh, selected.key)
+    refresh.summary = {'source_row_count': 2}
+    for index in range(2):
+        row = FactorialRowResult(replicate_result_id=parent.id, protocol_revision_id=selected.protocol_revision_id,
+            dataset_id=dataset.id, raw_sha256='a' * 64, row_index=index)
+        db.add(row)
+        await db.flush()
+        db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
+            protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+            replicate_result_id=parent.id, row_result_id=row.id, replicate_label=parent.replicate_label, status='completed',
+            result_summary={'observations': [{'metric_id': 'auc', 'status': 'measured'}]}))
+        await db.flush()
+        await rebuild_result_summary(db, selected, refresh.generation)
+        await db.refresh(refresh)
+        counts = (await read_summary(db, selected))['cell_result_counts']
+        assert counts == ({'ready': 0, 'needs_attention': 0, 'awaiting_results': 1} if index == 0
+                          else {'ready': 1, 'needs_attention': 0, 'awaiting_results': 0})
+
+
+async def test_older_summary_requests_one_cell_result_rebuild(results_db):
+    db, selected, _cell, _user = results_db
+    await read_summary(db, selected)
+    refresh = await db.get(ResultRefresh, selected.key)
+    refresh.summary = {'total': 0}
+    refresh.generation = refresh.processed_generation = 1
+    await db.flush()
+    first = await read_summary(db, selected)
+    second = await read_summary(db, selected)
+    assert first['refreshing'] is True and second['refreshing'] is True
+    assert refresh.generation == 2
+
 
 
 @pytest.mark.parametrize('labels', [('Cell 10', 'Cell 2'), ('size=10|model=A', 'size=2|model=A')])

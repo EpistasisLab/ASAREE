@@ -1,4 +1,8 @@
 /** Shared status language for execution summaries, filters, and replicate badges. */
+export const cellResultStatusLabels = {
+  ready: 'Ready to review', needs_attention: 'Needs attention', awaiting_results: 'Awaiting results',
+} as const
+
 export const executionStatusLabels: Record<string, string> = {
   not_started: 'Not started', pending: 'Queued', running: 'Running', finalizing: 'Finalizing',
   completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled', limit_reached: 'Hit iteration limit',

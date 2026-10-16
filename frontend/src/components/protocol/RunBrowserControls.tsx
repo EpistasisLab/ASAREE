@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import type { ExecutionFilters } from '@/types/executionResults'
-import { executionStatusLabels as statusLabels } from '@/lib/executionStatus'
+import { cellResultStatusLabels, executionStatusLabels as statusLabels } from '@/lib/executionStatus'
 
 export { statusLabels }
 
@@ -10,7 +10,7 @@ export function filterParams(filters: ExecutionFilters) {
   return { search: filters.search || undefined, status: filters.status || undefined }
 }
 export function hasExecutionFilters(filters: ExecutionFilters) {
-  return !!(filters.search || filters.status)
+  return !!(filters.search || filters.status || filters.resultStatus)
 }
 export function RunBrowserControls({ filters, onChange }: {
   filters: ExecutionFilters
@@ -23,6 +23,6 @@ export function RunBrowserControls({ filters, onChange }: {
     <div className="flex flex-wrap items-center gap-2">
       {hasExecutionFilters(filters) && <Button size="xs" variant="ghost" onClick={() => onChange(emptyExecutionFilters)}>Clear filters</Button>}
     </div>
-    {hasExecutionFilters(filters) && <p className="text-xs text-muted-foreground">Matching cells and replicates across all pages{filters.status ? ` · ${statusLabels[filters.status]}` : ''}{filters.search ? ` · “${filters.search}”` : ''}</p>}
+    {hasExecutionFilters(filters) && <p className="text-xs text-muted-foreground">Matching {filters.resultStatus ? 'cells' : 'cells and replicates'} across all pages{filters.resultStatus ? ` · ${cellResultStatusLabels[filters.resultStatus]}` : ''}{filters.status ? ` · ${statusLabels[filters.status]}` : ''}{filters.search ? ` · “${filters.search}”` : ''}</p>}
   </div>
 }

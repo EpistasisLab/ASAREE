@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Float, Text, and_, case, cast, delete, false, func, literal, select, true, update
+from sqlalchemy import Float, Text, and_, case, cast, delete, distinct, false, func, literal, or_, select, true, update
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,7 @@ from asaree.models.protocol import Protocol
 from asaree.models.protocol_run import ProtocolRun
 from asaree.models.result_read_model import ResultCellMetric, ResultCellRollup, ResultRefresh
 from asaree.services.indexed_row_source import read_indexed_row_source
+from asaree.services.metrics import normalize_metrics
 from asaree.services.result_reads import (
     ResultScope,
     cell_predicates,
@@ -65,6 +66,27 @@ def rollup_query(scope: ResultScope) -> Any:
     stats_columns.append(
         func.count().filter(and_(slots.c.status == "completed", (slots.c.run_id.is_(None) | measured))).label("scored")
     )
+    declarations = scope.measurement_plan.get("metrics", []) if scope.measurement_plan is not None else normalize_metrics((scope.design_spec or {}).get("metrics"))
+    expected_ids = {metric["id"] for metric in declarations if metric.get("id")}
+    observation_id = cast(observations.c.value, JSONB)["metric_id"].astext
+    observation_status = cast(observations.c.value, JSONB)["status"].astext
+    obtained = select(func.count(distinct(observation_id))).select_from(observations).where(
+        observation_id.in_(expected_ids), observation_status.in_(("measured", "not_applicable"))
+    ).correlate(slots).scalar_subquery()
+    has_measurement = select(literal(1)).select_from(observations).where(
+        observation_id.in_(expected_ids), observation_status == "measured"
+    ).correlate(slots).exists()
+    evaluation = func.coalesce(slots.c.result["evaluation_state"].astext, "")
+    scoring_pending = evaluation.in_(("pending", "queued", "running"))
+    usable = and_(slots.c.status == "completed", ~scoring_pending, evaluation != "failed",
+                  func.coalesce(slots.c.result["truncated"].as_boolean(), False).is_(False),
+                  obtained == len(expected_ids), has_measurement)
+    needs_attention = or_(slots.c.status.in_(("failed", "cancelled", "limit_reached")),
+                          and_(slots.c.status == "completed", ~scoring_pending, ~usable))
+    stats_columns += [
+        func.count().filter(usable).label("usable_results"),
+        func.count().filter(needs_attention).label("results_needing_attention"),
+    ]
     stats_columns += [func.count().filter(slots.c.status == status).label(status) for status in STATUSES]
     stats_columns += [
         func.count().filter(slots.c.run_id.is_not(None)).label("executed"),
@@ -192,6 +214,8 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
             "total": int(row["total"] or 0),
             "counts": counts,
             "truncated": int(row["truncated"] or 0),
+            "usable_results": int(row["usable_results"] or 0),
+            "results_needing_attention": int(row["results_needing_attention"] or 0),
             "usage": {key: row[key] for key in usage},
             "metric_values": {
                 key: value["sum" if aggregations.get(key) == "sum" else "mean"] for key, value in metrics.items()
@@ -290,12 +314,29 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
                 )
             )
         )
+    cells = ResultCellRollup
+    result_status = case(
+        (cells.data["results_needing_attention"].as_integer() > 0, "needs_attention"),
+        (and_(cells.data["total"].as_integer() > 0,
+              cells.data["usable_results"].as_integer() == cells.data["total"].as_integer(),
+              literal(scope.unit != "row" or row_count is not None)), "ready"),
+        else_="awaiting_results",
+    )
+    await db.execute(update(cells).where(cells.scope_key == scope.key).values(
+        data=func.jsonb_set(cells.data, cast(literal("{result_status}"), ARRAY(Text)),
+                            func.to_jsonb(cast(result_status, Text)))
+    ))
+    result_counts = (await db.execute(select(*[
+        func.count().filter(result_status == status).label(status)
+        for status in ("ready", "needs_attention", "awaiting_results")
+    ]).where(cells.scope_key == scope.key))).mappings().one()
     summary = {
         "counts": {status: totals[status] for status in STATUSES},
         "total": totals["total"],
         "planned_count": physical_total,
         "executed_count": totals["executed"],
         "scored_count": totals["scored"],
+        "cell_result_counts": {key: int(value) for key, value in result_counts.items()},
         "cell_count": totals["cells"],
         "replicate_count": totals["replicates"],
         "usage": usage,

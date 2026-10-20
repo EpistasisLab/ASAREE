@@ -1,21 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Coins, CircleDollarSign, Clock3 } from 'lucide-react'
 import { experimentsApi, type ResultsScope } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { displayFactorCondition, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
 import { metricCatalogEntry } from '@/lib/metricCatalog'
 import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
-import type { AttemptDetail, ExecutionSlot } from '@/types/executionResults'
+import type { AttemptDetail, ExecutionSlot, ExecutionUsageOptions, UsageRange } from '@/types/executionResults'
 import type { Experiment, ResultReplicate, ResultNodeRun } from '@/types/experiments'
 import { ReplicateResultDetail, type ResultsSelection } from './ResultsTab'
 import { CursorControls, useGenerationRefresh } from './ExecutionBrowser'
 import { CellResultStatus } from './CellResultStatus'
 import { useCursor } from '@/lib/executionPagination'
 import { ExecutionRows } from './ExecutionBrowser'
+import { formatUsageValue, runtimeUsageMetricKeys, usageMetricLabels, type UsageMetric } from '@/lib/resultUsage'
 import { ResultsInspectorSplit } from './ResultsInspectorSplit'
+import { ReplicateUsageDistribution } from './ReplicateUsageDistribution'
+
+const usageMetricIcons = { total_tokens: Coins, cost_usd: CircleDollarSign, duration_seconds: Clock3 }
+const usageMetricOrder: string[] = ['total_tokens', 'cost_usd', 'duration_seconds']
 
 function attemptAsReplicate(slot: ExecutionSlot, detail: AttemptDetail): ResultReplicate {
   const usage = detail.usage
@@ -56,10 +62,11 @@ function ConversationPage({ experimentId, runId, scope }: { experimentId: string
   </section>
 }
 
-function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onSelectSlot, embedded = false }: {
+function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onSelectSlot, embedded = false, usageMetricKeys }: {
   experimentId: string; slotId: string; scope: ResultsScope; onClose: () => void
   onBackToCell?: () => void; onSelectSlot?: (slotId: string) => void
   embedded?: boolean
+  usageMetricKeys: Record<string, UsageMetric>
 }) {
   const [selected, setSelected] = useState<string>()
   const [conversationOpen, setConversationOpen] = useState(false)
@@ -86,8 +93,8 @@ function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onS
       <Button variant="ghost" size="xs" className="ml-auto" onClick={onClose}>{embedded ? 'Close replicate' : 'Close'}</Button>
     </div>
     <div className="-mx-3 mb-4 shrink-0 border-b bg-muted/20 px-3 pb-4 pt-2">
-      <div className={onSelectSlot ? 'grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-stretch gap-2' : ''}>
-        {onSelectSlot && <Button variant="outline" size="icon" className="h-auto w-full"
+      <div className={onSelectSlot ? `grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-stretch gap-2 ${embedded ? '@min-[800px]/inspectors:grid-cols-1' : ''}` : ''}>
+        {onSelectSlot && <Button variant="outline" size="icon" className={`h-auto w-full ${embedded ? '@min-[800px]/inspectors:hidden' : ''}`}
           aria-label={summary.data?.unit === 'row' ? 'Previous row' : 'Previous replicate'} title={summary.data?.unit === 'row' ? 'Previous row' : 'Previous replicate'}
           disabled={neighbors.isFetching || neighbors.isError || !neighbors.data?.previous_slot_id}
           onClick={() => neighbors.data?.previous_slot_id && onSelectSlot(neighbors.data.previous_slot_id)}>
@@ -100,21 +107,21 @@ function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onS
       </p>
       {slot?.row_index != null && <p className="font-mono text-xs text-muted-foreground">Source row {slot.row_index + 1}</p>}
     </Card>
-        {onSelectSlot && <Button variant="outline" size="icon" className="h-auto w-full"
+        {onSelectSlot && <Button variant="outline" size="icon" className={`h-auto w-full ${embedded ? '@min-[800px]/inspectors:hidden' : ''}`}
           aria-label={summary.data?.unit === 'row' ? 'Next row' : 'Next replicate'} title={summary.data?.unit === 'row' ? 'Next row' : 'Next replicate'}
           disabled={neighbors.isFetching || neighbors.isError || !neighbors.data?.next_slot_id}
           onClick={() => neighbors.data?.next_slot_id && onSelectSlot(neighbors.data.next_slot_id)}>
           <ChevronRight aria-hidden="true" />
         </Button>}
       </div>
-      {neighbors.error && <p role="alert" className="mt-2 text-xs text-destructive">Navigation unavailable. <Button variant="ghost" size="xs" disabled={neighbors.isFetching} onClick={() => void neighbors.refetch()}>Refresh</Button></p>}
+      {neighbors.error && <p role="alert" className={`mt-2 text-xs text-destructive ${embedded ? '@min-[800px]/inspectors:hidden' : ''}`}>Navigation unavailable. <Button variant="ghost" size="xs" disabled={neighbors.isFetching} onClick={() => void neighbors.refetch()}>Refresh</Button></p>}
     </div>
     <div className="mt-2 space-y-2"><h3 className="text-xs font-medium">Attempts</h3>{history.data?.items.map(attempt => <Button key={attempt.run_id} size="xs" variant={runId === attempt.run_id ? 'default' : 'outline'} className="mr-1 mb-1" onClick={() => { setSelected(attempt.run_id); setConversationOpen(false) }}>{new Date(attempt.created_at).toLocaleString()} · {attempt.status}{attempt.current ? ' · current' : ' · prior'}</Button>)}
       <CursorControls next={history.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={history.isFetching} />
     </div>
     {(history.isPending || detail.isPending && !!runId) && <Skeleton className="my-3 h-32" />}
     {(history.error || detail.error) && <p role="alert" className="text-xs text-destructive">{history.error?.message ?? detail.error?.message}</p>}
-    {slot && detail.data && <div className="mt-3"><ReplicateResultDetail replicate={attemptAsReplicate(slot, detail.data)} metricKeys={Object.keys(summary.data?.metric_types ?? {})} metricTypes={summary.data?.metric_types ?? {}} metricLabels={summary.data?.metric_labels} executionContext={{ experimentId, runId: detail.data.run_id, scope }} />
+    {slot && detail.data && <div className="mt-3"><ReplicateResultDetail replicate={attemptAsReplicate(slot, detail.data)} metricKeys={Object.keys(summary.data?.metric_types ?? {})} metricTypes={summary.data?.metric_types ?? {}} metricLabels={summary.data?.metric_labels} usageMetricKeys={usageMetricKeys} executionContext={{ experimentId, runId: detail.data.run_id, scope }} />
       <Button size="xs" variant="outline" className="my-3" onClick={() => setEvidenceOpen(value => !value)}>{evidenceOpen ? 'Hide recorded JSON' : 'View complete recorded JSON'}</Button>
       {evidenceOpen && runId && <RecordedEvidence key={runId} experimentId={experimentId} runId={runId} scope={scope} />}
       <Button size="xs" variant="outline" className="my-3" onClick={() => setConversationOpen(value => !value)}>{conversationOpen ? 'Hide conversation' : 'View conversation'}</Button>
@@ -141,30 +148,40 @@ function EvidencePage({ experimentId, runId, scope, document }: { experimentId: 
   </div>
 }
 
-export function ExecutionInspector({ experimentId, selection, onClose }: { experimentId: string; experiment: Experiment; selection: ResultsSelection | null; onClose: () => void }) {
+export function ExecutionInspector({ experimentId, experiment, selection, onClose }: { experimentId: string; experiment: Experiment; selection: ResultsSelection | null; onClose: () => void }) {
+  const usageMetricKeys = runtimeUsageMetricKeys(experiment)
   const scope = selection?.scope ?? {}
   const legacyLabel = selection?.type === 'replicate' ? selection.replicateLabel : undefined
   const lookup = useQuery({ queryKey: [...executionKeys.root(experimentId), 'lookup', scope, legacyLabel],
     queryFn: ({ signal }) => experimentsApi.lookupExecution(experimentId, legacyLabel!, scope, signal), enabled: !!legacyLabel })
   if (!selection) return null
-  if (selection.type === 'cell') return <CellInspector key={`${JSON.stringify(scope)}:${selection.cellId ?? selection.cellLabel}`} experimentId={experimentId} selection={selection} scope={scope} onClose={onClose} />
+  if (selection.type === 'cell') return <CellInspector key={`${JSON.stringify(scope)}:${selection.cellId ?? selection.cellLabel}`} experimentId={experimentId} selection={selection} scope={scope} onClose={onClose} usageMetricKeys={usageMetricKeys} />
   const slotId = selection.type === 'execution' ? selection.slotId : selection.type === 'row' ? selection.rowResultId : lookup.data?.slot_id
-  if (slotId) return <SlotInspector key={`${JSON.stringify(scope)}:${slotId}`} experimentId={experimentId} slotId={slotId} scope={scope} onClose={onClose} />
+  if (slotId) return <SlotInspector key={`${JSON.stringify(scope)}:${slotId}`} experimentId={experimentId} slotId={slotId} scope={scope} onClose={onClose} usageMetricKeys={usageMetricKeys} />
   return <aside className="absolute inset-0 z-20 bg-card p-3"><Button size="xs" onClick={onClose}>Close</Button><p className="mt-2 text-xs">{lookup.isFetching ? 'Loading result…' : lookup.error?.message ?? 'Expand the cell to inspect a replicate.'}</p></aside>
 }
 
-function CellInspector({ experimentId, selection, scope, onClose }: { experimentId: string; selection: Extract<ResultsSelection, { type: 'cell' }>; scope: ResultsScope; onClose: () => void }) {
+function CellInspector({ experimentId, selection, scope, onClose, usageMetricKeys }: { experimentId: string; selection: Extract<ResultsSelection, { type: 'cell' }>; scope: ResultsScope; onClose: () => void; usageMetricKeys: Record<string, UsageMetric> }) {
   const [navigation, setNavigation] = useState({ origin: selection, current: selection })
   const current = navigation.origin === selection ? navigation.current : selection
   return <CellInspectorContent key={current.cellId ?? current.cellLabel} experimentId={experimentId} selection={current}
-    scope={scope} onClose={onClose} onSelectCell={cellId => setNavigation({ origin: selection, current: { type: 'cell', cellId, scope } })} />
+    scope={scope} onClose={onClose} usageMetricKeys={usageMetricKeys} onSelectCell={cellId => setNavigation({ origin: selection, current: { type: 'cell', cellId, scope } })} />
 }
 
-function CellInspectorContent({ experimentId, selection, scope, onClose, onSelectCell }: {
+function CellInspectorContent({ experimentId, selection, scope, onClose, onSelectCell, usageMetricKeys }: {
   experimentId: string; selection: Extract<ResultsSelection, { type: 'cell' }>; scope: ResultsScope
   onClose: () => void; onSelectCell: (cellId: string) => void
+  usageMetricKeys: Record<string, UsageMetric>
 }) {
   const [slot, setSlot] = useState<string>()
+  const [range, setRange] = useState<UsageRange | null>(null)
+  const [search, setSearch] = useState('')
+  const [executionSearch, setExecutionSearch] = useState('')
+  const usageOptions: ExecutionUsageOptions = { range }
+  useEffect(() => {
+    const timer = window.setTimeout(() => setExecutionSearch(search.trim()), 250)
+    return () => window.clearTimeout(timer)
+  }, [search])
   const listPanel = useRef<HTMLElement>(null)
   const savedScroll = useRef(0)
   const cell = useQuery({ queryKey: [...executionKeys.root(experimentId), 'cell', scope, selection.cellId ?? selection.cellLabel],
@@ -174,8 +191,9 @@ function CellInspectorContent({ experimentId, selection, scope, onClose, onSelec
   useEffect(() => { if (!slot && listPanel.current) listPanel.current.scrollTop = savedScroll.current }, [slot])
   const cellLabel = cell.data ? Object.entries(cell.data.factor_values).map(([name, value]) =>
     displayFactorCondition(name, value, summary.data?.design_spec, cell.data!.cell_label)).join(' · ') || cell.data.cell_label : ''
-  return <ResultsInspectorSplit replicate={slot ? <SlotInspector key={slot} embedded experimentId={experimentId} slotId={slot} scope={scope} onClose={() => setSlot(undefined)}
-    onBackToCell={() => setSlot(undefined)} onSelectSlot={setSlot} /> : undefined}>
+  const usageLabels = usageMetricLabels(!!cell.data?.total && (cell.data.counts?.completed ?? 0) >= cell.data.total)
+  return <ResultsInspectorSplit replicate={slot ? <SlotInspector key={slot} embedded experimentId={experimentId} slotId={slot} scope={scope} usageMetricKeys={usageMetricKeys} onClose={() => setSlot(undefined)}
+    onBackToCell={() => setSlot(undefined)} onSelectSlot={range || executionSearch ? undefined : setSlot} /> : undefined}>
     <aside ref={listPanel} className={`@container min-h-0 min-w-0 overflow-y-auto border-l bg-card p-3 ${slot ? 'hidden @min-[800px]/inspectors:block' : ''}`} aria-label="Cell result details"><div className="mb-3 flex items-center justify-between gap-2"><p className="text-xs text-muted-foreground">Results / Cell</p><Button size="xs" variant="ghost" onClick={onClose}>Close</Button></div>
     {cell.isPending && <Skeleton className="h-24" />}
     {cell.data && <>
@@ -199,25 +217,46 @@ function CellInspectorContent({ experimentId, selection, scope, onClose, onSelec
       <CellResultStatus cell={cell.data} unit={summary.data?.unit} />
       <section aria-label="Cell measurements" className="my-4 space-y-2">
         <h3 className="text-sm font-medium">Measurements</h3>
-        {Object.keys(cell.data.metric_values ?? {}).length ? <dl className="grid grid-cols-2 gap-2 @min-[600px]:grid-cols-3">
-          {Object.entries(cell.data.metric_values ?? {}).map(([key, value]) => {
-            const label = summary.data?.metric_labels?.[key] ?? metricCatalogEntry(key)?.name ?? formatMetricLabel(key)
+        {Object.keys(cell.data.metric_values ?? {}).length ? <dl className="grid grid-cols-6 gap-2">
+          {Object.entries(cell.data.metric_values ?? {}).sort(([a], [b]) => {
+            const rank = (key: string) => usageMetricOrder.includes(key) ? usageMetricOrder.indexOf(key) : usageMetricOrder.length
+            return rank(a) - rank(b)
+          }).map(([key, value]) => {
+            const usageMetric = usageMetricOrder.includes(key) ? key as UsageMetric : null
+            const Icon = usageMetric ? usageMetricIcons[usageMetric] : null
+            const aggregation = summary.data?.metric_aggregations[key]
+            const label = usageMetric
+              ? aggregation === 'mean' ? `Average ${usageMetric === 'total_tokens' ? 'tokens' : usageMetric === 'cost_usd' ? 'cost' : 'execution time'}` : usageLabels[usageMetric]
+              : summary.data?.metric_labels?.[key] ?? metricCatalogEntry(key)?.name ?? formatMetricLabel(key)
             const formatted = summary.data?.metric_types[key] === 'boolean'
               ? new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 }).format(value)
-              : key === 'cost_usd' ? new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(value)
+              : usageMetric ? formatUsageValue(usageMetric, value)
               : formatMetricValue(key, value)
-            return <Card key={key} className="min-w-0 gap-1 p-3">
-              <dt className="text-xs text-muted-foreground break-words">{label}</dt>
-              <dd>
-                <span className="font-mono text-lg font-medium tabular-nums break-words">{formatted}</span>
-                {summary.data?.metric_aggregations[key] && <p className="mt-1 text-[0.65rem] text-muted-foreground">{summary.data.metric_aggregations[key] === 'sum' ? 'Total' : 'Average'}</p>}
+            return <Card key={key} className={usageMetric ? 'col-span-2 min-w-0 gap-1 p-2 @min-[450px]:p-3' : 'col-span-3 min-w-0 gap-1 p-3 @min-[600px]:col-span-2'}>
+              <dt className={usageMetric ? 'flex items-start gap-1 text-[11px] text-muted-foreground @min-[450px]:text-xs' : 'text-xs text-muted-foreground break-words'}>
+                {Icon && <Icon className="mt-0.5 size-3 shrink-0" aria-hidden="true" />}<span className="min-w-0">{label}</span>
+              </dt>
+              <dd className={usageMetric ? 'mt-auto text-center' : undefined}>
+                <span className={usageMetric ? 'block truncate font-mono text-sm font-medium tabular-nums @min-[450px]:text-lg' : 'font-mono text-lg font-medium tabular-nums break-words'}
+                  title={usageMetric === 'total_tokens' ? `${value.toLocaleString()} tokens` : undefined}>{formatted}</span>
+                {aggregation && <p className="mt-1 text-[0.65rem] text-muted-foreground">{aggregation === 'sum' ? 'Total' : 'Average'}</p>}
               </dd>
             </Card>
           })}
         </dl> : <p className="text-xs text-muted-foreground">No aggregated measurements available yet.</p>}
       </section>
+      <ReplicateUsageDistribution experimentId={experimentId} cellId={cell.data.cell_id} scope={scope} generation={summary.data?.generation}
+        selectedSlotId={slot} range={range} onRangeChange={setRange} />
       <h3 className="mb-2 text-sm font-medium">Replicates</h3>
-      <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}`} experimentId={experimentId} scope={scope} cellId={cell.data.cell_id} selectedSlotId={slot} generation={summary.data?.generation} summary={summary.data} onSelect={item => {
+      <div className="mb-3 space-y-2">
+        <Input type="search" aria-label="Search replicates" placeholder={summary.data?.unit === 'row' ? 'Replicate number, label, or row 12…' : 'Replicate number or label…'} maxLength={200}
+          value={search} onChange={event => setSearch(event.target.value)} />
+        {summary.data?.unit === 'row' && <p className="text-xs text-muted-foreground">Use “replicate 12” or “row 12” to search by number.</p>}
+        {range && <p className="text-xs text-muted-foreground">Completed latest attempts within the selected range.</p>}
+        {(range || search) && <Button size="xs" variant="outline" onClick={() => { setRange(null); setSearch(''); setExecutionSearch('') }}>Clear filters</Button>}
+      </div>
+      <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}:${JSON.stringify({ executionSearch, usageOptions })}`} experimentId={experimentId} scope={scope} cellId={cell.data.cell_id} selectedSlotId={slot} generation={summary.data?.generation} summary={summary.data}
+        executionSearch={executionSearch} usageOptions={usageOptions} onSelect={item => {
         if (item.type === 'execution') { savedScroll.current = listPanel.current?.scrollTop ?? 0; setSlot(item.slotId) }
       }} />
     </>}{cell.error && <p role="alert">{cell.error.message}</p>}

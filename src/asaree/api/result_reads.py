@@ -122,7 +122,14 @@ async def executions(
         )),
     ] = None,
     search: Annotated[str, Query(max_length=200)] = '',
+    execution_search: Annotated[str, Query(max_length=200)] = '',
     factors: Annotated[str | None, Query(max_length=10000)] = None,
+    sort_metric: Annotated[str | None, Query(pattern="^(total_tokens|cost_usd|duration_seconds)$")] = None,
+    sort_direction: Annotated[str, Query(pattern="^(asc|desc)$")] = "asc",
+    usage_metric: Annotated[str | None, Query(pattern="^(total_tokens|cost_usd|duration_seconds)$")] = None,
+    usage_min: Annotated[float | None, Query(ge=0, allow_inf_nan=False)] = None,
+    usage_max: Annotated[float | None, Query(ge=0, allow_inf_nan=False)] = None,
+    usage_upper_inclusive: bool = False,
 ) -> dict[str, Any]:
     return await _read(
         result_reads.read_executions,
@@ -133,7 +140,10 @@ async def executions(
         cell_id=cell_id,
         replicate_id=replicate_id,
         status=status,
-        search=search, factors=factor_selection(factors),
+        search=search, execution_search=execution_search, factors=factor_selection(factors),
+        sort_metric=sort_metric, sort_direction=sort_direction,
+        usage_metric=usage_metric, usage_min=usage_min, usage_max=usage_max,
+        usage_upper_inclusive=usage_upper_inclusive,
     )
 
 
@@ -170,6 +180,14 @@ async def cell(
     if cell_id is None and cell_label is None:
         raise HTTPException(status_code=422, detail="cell_selection_required")
     return await _read(result_reads.read_cell, db, scope, cell_id, cell_label)
+
+
+@router.get("/cell/usage-distribution")
+async def usage_distribution(
+    db: DbSession, scope: Scope, cell_id: uuid.UUID,
+    metric: Annotated[str, Query(pattern="^(total_tokens|cost_usd|duration_seconds)$")],
+) -> dict[str, Any]:
+    return await _read(result_reads.read_usage_distribution, db, scope, cell_id=cell_id, metric=metric)
 
 
 @router.get("/attempts/{run_id}")

@@ -33,7 +33,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
-import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob } from '@/types/executionResults'
+import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob, UsageDistribution } from '@/types/executionResults'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -249,6 +249,8 @@ export const experimentsApi = {
     request<ExecutionSlot>(`/experiments/${id}/execution-results/lookup${resultPageQuery(scope, { replicate_label: replicateLabel })}`, { signal }),
   getExecutionCell: (id: string, scope: ResultsScope, selection: { cell_id?: string; cell_label?: string }, signal?: AbortSignal) =>
     request<ExecutionCell>(`/experiments/${id}/execution-results/cell${resultPageQuery(scope, selection)}`, { signal }),
+  getUsageDistribution: (id: string, scope: ResultsScope, cellId: string, metric: UsageDistribution['metric'], signal?: AbortSignal) =>
+    request<UsageDistribution>(`/experiments/${id}/execution-results/cell/usage-distribution${resultPageQuery(scope, { cell_id: cellId, metric })}`, { signal }),
   getExecutionAttempt: (id: string, runId: string, scope: ResultsScope, signal?: AbortSignal) =>
     request<AttemptDetail>(`/experiments/${id}/execution-results/attempts/${runId}${scopeQuery(scope)}`, { signal }),
   getExecutionConversation: (id: string, runId: string, scope: ResultsScope, offset = 0, signal?: AbortSignal) =>

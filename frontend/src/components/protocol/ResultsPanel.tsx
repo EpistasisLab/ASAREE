@@ -9,12 +9,12 @@ import { jobActive, useResultJob } from '@/lib/resultJobs'
 import { newRequestKey } from '@/lib/requestKey'
 import { InfoTooltip } from './InfoTooltip'
 
-export function ResultsScorecard({ label, help, value, note, icon: Icon }: { label: string; help: string; value: string; note?: string; icon: LucideIcon }) {
-  return <div className="rounded-md border bg-card px-2.5 py-2 transition-colors hover:bg-muted/30">
-    <div className="flex items-center justify-between gap-2 text-muted-foreground"><span className="flex items-center gap-1 text-xs">{label}<InfoTooltip>{help}</InfoTooltip></span><Icon className="size-3.5" aria-hidden="true" /></div>
-    <p className="mt-1 truncate text-base font-medium tabular-nums" title={value}>{value}</p>
+export function ResultsScorecard({ label, help, value, valueTitle, note, icon: Icon }: { label: string; help: string; value: string; valueTitle?: string; note?: string; icon: LucideIcon }) {
+  return <Card size="sm" className="min-w-0 gap-2 p-2 transition-colors hover:bg-muted/30 @min-[450px]:p-3">
+    <div className="flex items-start gap-1 text-[11px] text-muted-foreground @min-[450px]:text-xs"><Icon className="mt-0.5 size-3 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1 break-words">{label}</span><InfoTooltip>{help}</InfoTooltip></div>
+    <p className="mt-auto truncate text-center font-mono text-sm font-medium tabular-nums @min-[450px]:text-lg" title={valueTitle ?? value}>{value}</p>
     {note && <p className="mt-0.5 text-[11px] text-muted-foreground">{note}</p>}
-  </div>
+  </Card>
 }
 
 /** One panel structure for both modes; data-specific content occupies these slots. */
@@ -68,7 +68,7 @@ export function ResultsPanel({ experimentId, experimentName, scope, progress, co
     </section>
     {comparison}
     <section className="space-y-2">
-      <div><h2 className="flex items-center gap-1 text-sm font-medium">Cell results<InfoTooltip>Each cell groups replicates that share the same experimental factor levels. Select a cell to review its results and replicates in the inspector.</InfoTooltip></h2><p className="text-xs text-muted-foreground">Select a cell to inspect its replicates, measurements, usage, and outputs.</p></div>
+      <div><h2 className="flex items-center gap-1 text-sm font-medium">Cells<InfoTooltip>Each cell groups replicates that share the same experimental factor levels. Select a cell to review its results and replicates in the inspector.</InfoTooltip></h2><p className="text-xs text-muted-foreground">Select a cell to inspect its replicates, measurements, usage, and outputs.</p></div>
       {cells}
     </section>
     {details}

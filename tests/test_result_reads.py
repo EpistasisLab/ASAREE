@@ -13,7 +13,7 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -24,8 +24,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from asaree.models.experiment import ResearchExperiment
 from asaree.models.dataset import RegisteredDataset
+from asaree.models.experiment import ResearchExperiment
 from asaree.models.experiment_design_revision import ExperimentDesignRevision
 from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
@@ -40,10 +40,12 @@ from asaree.services import result_jobs
 from asaree.services.factorial_cells import summarize_cells
 from asaree.services.result_reads import (
     ResultScope,
-    cell_predicates,
     cell_attempt_usage_query,
+    cell_predicates,
+    completed_replicates_query,
     decode_cursor,
     encode_cursor,
+    execution_search_selection,
     page_size,
     parent_predicates,
     read_attempt_detail,
@@ -55,9 +57,11 @@ from asaree.services.result_reads import (
     read_execution_neighbors,
     read_executions,
     read_summary,
+    read_usage_distribution,
     resolve_result_scope,
     runtime_metrics,
     slot_query,
+    usage_distribution_query,
 )
 from asaree.services.result_rollups import rebuild_result_summary, rollup_query
 
@@ -98,6 +102,164 @@ def test_rollup_query_uses_compact_data_and_database_aggregates():
     assert "protocol_runs.conversation" not in sql
 
 
+@pytest.mark.parametrize("metric", ["total_tokens", "cost_usd", "duration_seconds"])
+def test_usage_distribution_is_aggregated_in_sql_and_scoped(metric):
+    sql = str(usage_distribution_query(scope(), uuid.UUID(int=5), metric).compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True},
+    ))
+    assert "percentile_cont" in sql
+    assert "GROUP BY" in sql
+    assert "usage_stats.maximum > usage_stats.minimum" in sql
+    assert "usage_slots.status = 'completed'" in sql
+    assert "factorial_cells.id = '00000000-0000-0000-0000-000000000005'" in sql
+    assert "factorial_cells.experiment_id =" in sql
+    assert "factorial_cells.design_revision_id =" in sql
+    assert "protocol_runs.protocol_revision_id =" in sql
+    assert "protocol_runs.is_test_run IS false" in sql
+    assert "protocol_runs.attempt_result" not in sql
+    assert "protocol_runs.node_runs" not in sql
+
+
+def test_usage_distribution_rejects_custom_metrics():
+    with pytest.raises(ValueError, match="unsupported_usage_metric"):
+        usage_distribution_query(scope(), uuid.UUID(int=5), "accuracy")
+
+
+@pytest.mark.parametrize("count,value", [(0, None), (7, 0), (7, 0.000001)])
+async def test_usage_distribution_empty_and_constant_samples(count, value):
+    db = AsyncMock()
+    db.scalar.return_value = uuid.UUID(int=5)
+    result = MagicMock()
+    result.mappings.return_value.all.return_value = [{
+        "completed_count": 9, "count": count, "minimum": value, "maximum": value,
+        "p25": value, "median": value, "p75": value, "bucket": 0 if count else None, "bin_count": count,
+    }]
+    db.execute.return_value = result
+    distribution = await read_usage_distribution(db, scope(), cell_id=uuid.UUID(int=5), metric="cost_usd")
+    assert distribution["count"] == count
+    assert distribution["completed_count"] == 9
+    assert distribution["median"] == value
+    assert distribution["bins"] == ([{
+        "lower": value, "upper": value, "upper_inclusive": True, "count": count,
+    }] if count else [])
+
+
+async def test_usage_distribution_rejects_cell_outside_scope():
+    from asaree.services.experiment_run_results import RunResultsProjectionError
+
+    db = AsyncMock()
+    db.scalar.return_value = None
+    with pytest.raises(RunResultsProjectionError, match="cell_not_found"):
+        await read_usage_distribution(db, scope(), cell_id=uuid.uuid4(), metric="total_tokens")
+    db.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("options,error", [
+    ({"usage_metric": "accuracy", "usage_min": 0, "usage_max": 1}, "unsupported_usage_metric"),
+    ({"usage_min": 0}, "usage_metric_required"),
+    ({"usage_metric": "cost_usd", "usage_min": 2, "usage_max": 1}, "invalid_usage_range"),
+    ({"usage_metric": "cost_usd", "usage_min": float("nan"), "usage_max": 1}, "invalid_usage_range"),
+    ({"usage_metric": "cost_usd", "usage_min": 0, "usage_max": float("inf")}, "invalid_usage_range"),
+    ({"sort_metric": "accuracy"}, "unsupported_usage_metric"),
+    ({"sort_direction": "sideways"}, "invalid_sort_direction"),
+])
+async def test_execution_usage_filters_validate_before_querying(options, error):
+    db = AsyncMock()
+    with pytest.raises(ValueError, match=error):
+        await read_executions(db, scope(), **options)
+    db.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+async def test_execution_usage_sort_uses_bound_keyset_cursors(direction):
+    db = AsyncMock()
+    db.scalar.return_value = 2
+    result = MagicMock()
+    result.mappings.return_value.all.return_value = [{
+        "slot_id": uuid.UUID(int=index), "cell_id": uuid.UUID(int=5), "replicate_id": uuid.UUID(int=index),
+        "replicate_number": index, "row_index": None,
+        "label_order": "condition", "sort_value": 100 if direction == "asc" else -100,
+    } for index in (1, 2)]
+    db.execute.return_value = result
+    selected = scope()
+    first = await read_executions(db, selected, limit=1, sort_metric="total_tokens", sort_direction=direction)
+    assert first["total"] == 2
+    assert first["next_cursor"]
+    await read_executions(db, selected, limit=1, sort_metric="total_tokens", sort_direction=direction,
+                          cursor=first["next_cursor"])
+    query = db.execute.call_args.args[0]
+    sql = str(query.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "ORDER BY" in sql and "total_tokens" in sql
+    assert "IS NOT NULL" in sql
+    assert "slots.replicate_number" in sql and "slots.slot_id" in sql
+    assert "-100" in sql if direction == "desc" else "100" in sql
+    with pytest.raises(ValueError, match="cursor_scope_mismatch"):
+        await read_executions(db, selected, limit=1, sort_metric="cost_usd", sort_direction=direction,
+                              cursor=first["next_cursor"])
+
+
+@pytest.mark.parametrize("inclusive", [False, True])
+async def test_execution_usage_range_compiles_in_database_with_completed_scope(inclusive):
+    db = AsyncMock()
+    db.scalar.return_value = 0
+    result = MagicMock()
+    result.mappings.return_value.all.return_value = []
+    db.execute.return_value = result
+    await read_executions(db, scope(), usage_metric="cost_usd", usage_min=0, usage_max=0.001,
+                          usage_upper_inclusive=inclusive)
+    sql = str(db.scalar.call_args.args[0].compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True},
+    ))
+    assert "slots.status = 'completed'" in sql
+    assert "cost_usd" in sql
+    assert "<= 0.001" in sql if inclusive else "< 0.001" in sql
+    assert "protocol_runs.protocol_revision_id" in sql
+    assert "protocol_runs.node_runs" not in sql
+
+
+@pytest.mark.parametrize("search,row_mode,expected_number,expected_row", [
+    ("12", False, 12, None), ("12", True, 12, 11),
+    ("Replicate 12", True, 12, None), ("row 12", True, None, 11),
+    ("source row #12", True, None, 11), ("row 12", False, None, None),
+    ("0", True, None, None), ("999999999999999999999", True, None, None),
+])
+def test_execution_search_matches_numbers_and_one_based_source_rows(search, row_mode, expected_number, expected_row):
+    parent_match, row_index = execution_search_selection(search, row_mode)
+    sql = str(parent_match.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert row_index == expected_row
+    assert sql == (f"factorial_replicate_results.replicate_number = {expected_number}"
+                   if expected_number is not None else "false")
+
+
+def test_execution_search_treats_labels_as_literal_text():
+    match, row_index = execution_search_selection("a%_b", False)
+    compiled = match.compile(dialect=postgresql.dialect())
+    assert row_index is None
+    assert "%a\\%\\_b%" in compiled.params.values()
+
+
+async def test_source_row_search_returns_bounded_unplanned_rows_without_expanding_source():
+    db = AsyncMock()
+    selected = scope(row_plan={"driver_dataset_id": str(uuid.UUID(int=6))})
+    db.get.return_value = MagicMock(summary={"source_row_count": 1000000})
+    db.scalar.return_value = 2
+    parent_result = MagicMock()
+    parent_result.mappings.return_value.all.return_value = [{
+        "replicate_id": uuid.UUID(int=number), "replicate_label": f"rep{number}", "replicate_number": number,
+        "cell_id": uuid.UUID(int=5), "cell_label": "condition", "factor_values": {}, "label_order": "condition",
+        "matches_execution_search": False,
+    } for number in (2, 10)]
+    existing = MagicMock()
+    existing.mappings.return_value.all.return_value = []
+    db.execute.side_effect = [parent_result, existing]
+    page = await read_executions(db, selected, execution_search="row 12")
+    assert page["total"] == 2
+    assert [(row["replicate_number"], row["row_index"]) for row in page["items"]] == [(2, 11), (10, 11)]
+    assert all(row["status"] == "not_started" for row in page["items"])
+    sql = str(db.execute.call_args_list[0].args[0].compile(dialect=postgresql.dialect()))
+    assert "LIMIT" in sql and "generate_series" not in sql
+
+
 def test_cell_attempt_usage_is_bounded_and_scoped():
     sql = str(cell_attempt_usage_query(scope(), [uuid.UUID(int=5)]).compile(
         dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True},
@@ -114,6 +276,47 @@ def test_cell_attempt_usage_is_bounded_and_scoped():
     assert "protocol_runs.row_result_id IS NULL" in sql
     assert "protocol_runs.attempt_result" not in sql
     assert "protocol_runs.node_runs" not in sql
+
+
+def test_row_replicate_progress_requires_all_planned_rows():
+    query = completed_replicates_query(scope(row_plan={"driver_dataset_id": str(uuid.UUID(int=6))}),
+                                       [uuid.UUID(int=5)], 10)
+    sql = str(query.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "HAVING count(*) = 10" in sql
+    assert "FILTER (WHERE replicate_progress_slots.status = 'completed') = 10" in sql
+    assert "replicate_progress_slots.cell_id IN ('00000000-0000-0000-0000-000000000005')" in sql
+    assert "factorial_cells.experiment_id" in sql
+    assert "protocol_runs.protocol_revision_id" in sql
+
+
+async def test_row_cell_progress_counts_complete_replicates(results_db):
+    from dataclasses import replace
+
+    db, selected, cell, user = results_db
+    dataset = RegisteredDataset(name="Progress rows", owner_id=user.id)
+    parents = [FactorialReplicateResult(cell_id=cell.id, replicate_number=number, replicate_label=f"rep{number}")
+               for number in (1, 2, 3)]
+    db.add_all([dataset, *parents])
+    await db.flush()
+    selected = replace(selected, row_plan={"driver_dataset_id": str(dataset.id)})
+    # Replicate 1 is complete, replicate 2 has an unfinished row, and replicate 3 is missing a planned row.
+    for number, indices in [(1, (0, 1)), (2, (0, 1)), (3, (0,))]:
+        parent = parents[number - 1]
+        for index in indices:
+            row = FactorialRowResult(replicate_result_id=parent.id, protocol_revision_id=selected.protocol_revision_id,
+                                     dataset_id=dataset.id, raw_sha256="a" * 64, row_index=index)
+            db.add(row)
+            await db.flush()
+            db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
+                               protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+                               replicate_result_id=parent.id, row_result_id=row.id,
+                               status="running" if (number, index) == (2, 1) else "completed"))
+    db.add(ResultRefresh(scope_key=selected.key, protocol_id=selected.protocol_id,
+                         protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+                         summary={"source_row_count": 2}))
+    await db.flush()
+    result = await read_cells(db, selected)
+    assert result["items"][0]["completed_replicate_count"] == 1
 
 
 async def test_cell_attempt_usage_counts_retries_and_excludes_other_scopes(results_db):
@@ -282,6 +485,121 @@ async def results_db():
             yield db, selected, cell, user
         await transaction.rollback()
     await engine.dispose()
+
+
+@pytest.mark.parametrize("row_mode", [False, True])
+async def test_usage_distribution_counts_latest_completed_values_across_all_slots(results_db, row_mode):
+    from dataclasses import replace
+
+    db, selected, cell, user = results_db
+    dataset = RegisteredDataset(name="Distribution rows", owner_id=user.id)
+    db.add(dataset)
+    await db.flush()
+    if row_mode:
+        selected = replace(selected, row_plan={"driver_dataset_id": str(dataset.id)})
+    now = datetime.now(UTC)
+    for index in range(29):
+        parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=index + 1,
+                                         replicate_label=f"distribution-{index}")
+        db.add(parent)
+        await db.flush()
+        row_id = None
+        if row_mode:
+            row = FactorialRowResult(replicate_result_id=parent.id,
+                protocol_revision_id=selected.protocol_revision_id, dataset_id=dataset.id,
+                raw_sha256="a" * 64, row_index=index)
+            db.add(row)
+            await db.flush()
+            row_id = row.id
+        usage = {"total_tokens": index * 1000, "cost_usd": index / 1000, "duration_seconds": index * 10}
+        if index in (25, 26):
+            usage = {key: None if index == 25 else True for key in usage}
+        common = dict(protocol_id=selected.protocol_id, owner_id=user.id,
+            protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+            replicate_result_id=parent.id, row_result_id=row_id, replicate_label=parent.replicate_label)
+        db.add(ProtocolRun(**common, status="failed" if index == 27 else "running" if index == 28 else "completed",
+                           usage_summary=usage, created_at=now))
+        if index == 0:
+            # A retry, test run and another publication must not enter the distribution.
+            db.add(ProtocolRun(**common, status="completed", created_at=now - timedelta(seconds=1),
+                usage_summary={key: 999999 for key in usage}))
+            db.add(ProtocolRun(**common, status="completed", created_at=now + timedelta(seconds=1),
+                usage_summary={key: 999999 for key in usage}, is_test_run=True))
+            db.add(ProtocolRun(**(common | {"protocol_revision_id": None}), status="completed", created_at=now,
+                usage_summary={key: 999999 for key in usage}))
+    # Another cell with valid usage cannot affect this cell's histogram.
+    other = FactorialCell(experiment_id=selected.experiment_id, design_revision_id=selected.design_revision_id,
+                         cell_label="other", factor_values={})
+    db.add(other)
+    await db.flush()
+    parent = FactorialReplicateResult(cell_id=other.id, replicate_number=1, replicate_label="other")
+    db.add(parent)
+    await db.flush()
+    row_id = None
+    if row_mode:
+        row = FactorialRowResult(replicate_result_id=parent.id, protocol_revision_id=selected.protocol_revision_id,
+            dataset_id=dataset.id, raw_sha256="a" * 64, row_index=0)
+        db.add(row)
+        await db.flush()
+        row_id = row.id
+    db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
+        protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+        replicate_result_id=parent.id, row_result_id=row_id, replicate_label=parent.replicate_label,
+        status="completed", usage_summary={"total_tokens": 999999}))
+    await db.flush()
+    for metric, scale in [("total_tokens", 1000), ("cost_usd", 0.001), ("duration_seconds", 10)]:
+        distribution = await read_usage_distribution(db, selected, cell_id=cell.id, metric=metric)
+        assert distribution["unit"] == ("row" if row_mode else "replicate")
+        assert distribution["count"] == 25
+        assert distribution["completed_count"] == 27
+        assert distribution["minimum"] == 0
+        assert distribution["maximum"] == pytest.approx(24 * scale)
+        assert distribution["median"] == pytest.approx(12 * scale)
+        assert distribution["p25"] == pytest.approx(6 * scale)
+        assert distribution["p75"] == pytest.approx(18 * scale)
+        assert len(distribution["bins"]) == 12
+        assert sum(bucket["count"] for bucket in distribution["bins"]) == 25
+        assert distribution["bins"][-1]["count"] >= 1  # Includes the upper endpoint.
+        for bucket in distribution["bins"]:
+            page = await read_executions(db, selected, cell_id=cell.id, usage_metric=metric,
+                usage_min=bucket["lower"], usage_max=bucket["upper"], usage_upper_inclusive=bucket["upper_inclusive"])
+            assert page["total"] == bucket["count"]
+        for direction in ("asc", "desc"):
+            items, cursor = [], None
+            while True:
+                page = await read_executions(db, selected, cell_id=cell.id, sort_metric=metric,
+                    sort_direction=direction, limit=7, cursor=cursor)
+                items.extend(page["items"])
+                cursor = page["next_cursor"]
+                if not cursor:
+                    break
+            values = [item["usage"][metric] for item in items]
+            assert len(values) == 27  # Recorded failed/running usage is sortable, too.
+            assert values == sorted(values, reverse=direction == "desc")
+
+
+@pytest.mark.parametrize("direction", ["asc", "desc"])
+async def test_usage_sorted_pages_keep_tied_values(results_db, direction):
+    db, selected, cell, user = results_db
+    for number in range(1, 7):
+        parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=number, replicate_label=f"tie-{number}")
+        db.add(parent)
+        await db.flush()
+        db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id, status="completed",
+            protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+            replicate_result_id=parent.id, replicate_label=parent.replicate_label,
+            usage_summary={"total_tokens": 100 if number < 6 else None}))
+    await db.flush()
+    numbers, cursor = [], None
+    while True:
+        page = await read_executions(db, selected, cell_id=cell.id, sort_metric="total_tokens",
+                                    sort_direction=direction, limit=2, cursor=cursor)
+        assert page["total"] == 5
+        numbers.extend(item["replicate_number"] for item in page["items"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    assert numbers == [1, 2, 3, 4, 5]
 
 
 async def test_execution_neighbors_stay_in_cell_and_publication_and_skip_unstarted(results_db):

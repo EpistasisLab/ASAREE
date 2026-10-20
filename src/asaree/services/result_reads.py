@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import base64
 import json
+import math
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -36,6 +38,8 @@ from asaree.services.metrics import METRIC_CATALOG, normalize_metrics
 
 PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
+USAGE_DISTRIBUTION_METRICS = {"total_tokens", "cost_usd", "duration_seconds"}
+USAGE_DISTRIBUTION_BINS = 12
 
 
 @dataclass(frozen=True)
@@ -422,6 +426,26 @@ async def read_summary(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
     }
 
 
+def execution_search_selection(search: str, row_mode: bool) -> tuple[Any, int | None]:
+    """Match displayed numbers exactly and labels/IDs literally; rows are one-based in the UI."""
+    value = search.strip()
+    if not value:
+        return true(), None
+    numbered = re.fullmatch(r"(?:(replicate|(?:source\s+)?row)\s*#?\s*)?#?(\d+)", value, re.IGNORECASE)
+    if numbered:
+        prefix, digits = numbered.groups()
+        number = int(digits)
+        if not 1 <= number <= 2147483647:
+            return false(), None
+        is_row = prefix is not None and "row" in prefix.lower()
+        parent_match = false() if is_row else FactorialReplicateResult.replicate_number == number
+        row_index = number - 1 if row_mode and (prefix is None or is_row) else None
+        return parent_match, row_index
+    pattern = "%" + value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    return or_(FactorialReplicateResult.replicate_label.ilike(pattern, escape="\\"),
+               cast(FactorialReplicateResult.id, Text).ilike(pattern, escape="\\")), None
+
+
 async def read_executions(
     db: AsyncSession,
     scope: ResultScope,
@@ -432,16 +456,44 @@ async def read_executions(
     replicate_id: uuid.UUID | None = None,
     status: str | None = None,
     search: str = '',
+    execution_search: str = '',
     factors: dict[str, Any] | None = None,
+    sort_metric: str | None = None,
+    sort_direction: str = "asc",
+    usage_metric: str | None = None,
+    usage_min: float | None = None,
+    usage_max: float | None = None,
+    usage_upper_inclusive: bool = False,
 ) -> dict[str, Any]:
+    if sort_metric is not None and sort_metric not in USAGE_DISTRIBUTION_METRICS:
+        raise ValueError("unsupported_usage_metric")
+    if sort_direction not in {"asc", "desc"}:
+        raise ValueError("invalid_sort_direction")
+    if usage_metric is not None:
+        if usage_metric not in USAGE_DISTRIBUTION_METRICS:
+            raise ValueError("unsupported_usage_metric")
+        if (usage_min is None or usage_max is None
+                or not all(math.isfinite(value) and value >= 0 for value in (usage_min, usage_max))
+                or usage_max < usage_min):
+            raise ValueError("invalid_usage_range")
+    elif usage_min is not None or usage_max is not None or usage_upper_inclusive:
+        raise ValueError("usage_metric_required")
     filters = {
         "cell_id": str(cell_id) if cell_id else None,
         "replicate_id": str(replicate_id) if replicate_id else None,
         "status": status, "search": search, "factors": factors or {},
     }
+    if execution_search.strip():
+        filters["execution_search"] = execution_search.strip()
+    if sort_metric is not None:
+        filters.update(sort_metric=sort_metric, sort_direction=sort_direction)
+    if usage_metric is not None:
+        filters.update(usage_metric=usage_metric, usage_min=usage_min, usage_max=usage_max,
+                       usage_upper_inclusive=usage_upper_inclusive)
     refresh = await db.get(ResultRefresh, scope.key) if scope.unit == "row" else None
     row_count = (refresh.summary or {}).get("source_row_count") if refresh else None
-    if scope.unit == "row" and row_count is not None and status in {None, "not_started"}:
+    if (scope.unit == "row" and row_count is not None and status in {None, "not_started"}
+            and sort_metric is None and usage_metric is None):
         return await _read_row_window(db, scope, int(row_count), filters, cursor, page_size(limit))
     position = decode_cursor(cursor, scope, "executions", filters)
     query = slot_query(scope)
@@ -450,18 +502,39 @@ async def read_executions(
         query = query.where(FactorialCell.id == cell_id)
     if replicate_id is not None:
         query = query.where(FactorialReplicateResult.id == replicate_id)
+    if execution_search.strip():
+        parent_match, row_index = execution_search_selection(execution_search, scope.unit == "row")
+        query = query.where(or_(parent_match, FactorialRowResult.row_index == row_index)
+                            if row_index is not None else parent_match)
     slots = query.subquery("slots")
     statement = select(slots).where(*slot_filters(slots, status))
+    if usage_metric is not None:
+        value = execution_usage_value(slots, usage_metric)
+        statement = statement.where(slots.c.status == "completed", value >= usage_min,
+                                    value <= usage_max if usage_upper_inclusive else value < usage_max)
+    if sort_metric is not None:
+        value = execution_usage_value(slots, sort_metric)
+        statement = statement.where(value.is_not(None))
     count_statement = select(func.count()).select_from(statement.subquery())
     label_order = natural_label(slots.c.cell_label)
     # Keep cells together, then order replicates numerically and rows by source position.
     row_order = func.coalesce(cast(slots.c.row_index, BigInteger), -1)
     orders = (label_order, slots.c.cell_id, slots.c.replicate_number, row_order, cast(slots.c.slot_id, Text))
+    if sort_metric is not None:
+        sort_value = execution_usage_value(slots, sort_metric)
+        if sort_direction == "desc":
+            sort_value = -sort_value
+        statement = statement.add_columns(sort_value.label("sort_value"))
+        orders = (sort_value, *orders)
     if position is not None:
-        if len(position) != 5:
+        if len(position) != (6 if sort_metric else 5):
             raise ValueError("invalid_cursor")
-        statement = statement.where(tuple_(*orders) > (
-            position[0], uuid.UUID(position[1]), position[2], position[3], position[4]))
+        base_position = position[1:] if sort_metric else position
+        comparison = (base_position[0], uuid.UUID(base_position[1]),
+                      base_position[2], base_position[3], base_position[4])
+        if sort_metric:
+            comparison = (position[0], *comparison)
+        statement = statement.where(tuple_(*orders) > comparison)
     total = int(await db.scalar(count_statement) or 0)
     rows = (await db.execute(statement.add_columns(label_order.label("label_order")).order_by(*orders)
                              .limit(page_size(limit) + 1))).mappings().all()
@@ -469,7 +542,7 @@ async def read_executions(
     return {
         "items": [execution_payload(dict(row)) for row in rows[:limit]],
         "total": total,
-        "next_cursor": encode_cursor(scope, "executions", [
+        "next_cursor": encode_cursor(scope, "executions", ([last["sort_value"]] if sort_metric else []) + [
             last["label_order"], str(last["cell_id"]), last["replicate_number"],
             last["row_index"] if last["row_index"] is not None else -1, str(last["slot_id"])], filters)
         if last is not None else None,
@@ -499,17 +572,31 @@ async def _read_row_window(
         parents = parents.where(cell.id == uuid.UUID(filters["cell_id"]))
     if filters["replicate_id"]:
         parents = parents.where(parent.id == uuid.UUID(filters["replicate_id"]))
+    search = filters.get("execution_search", "")
+    parent_match, target_row = execution_search_selection(search, True)
+    target_row = target_row if target_row is not None and target_row < row_count else None
+    wanted_count = literal(row_count)
+    if search:
+        if target_row is None:
+            parents = parents.where(parent_match)
+        else:
+            parents = parents.add_columns(parent_match.label("matches_execution_search"))
+            wanted_count = case((parent_match, row_count), else_=1)
     if filters["status"] == "not_started":
         slots = slot_query(scope).subquery("attempted_rows")
-        attempted = select(func.count()).select_from(slots).where(
+        attempted_query = select(func.count()).select_from(slots).where(
             slots.c.replicate_id == parent.id, slots.c.status != "not_started",
-            slots.c.row_index >= 0, slots.c.row_index < row_count).correlate(parent).scalar_subquery()
-        parents = parents.where(attempted < row_count)
+            slots.c.row_index >= 0, slots.c.row_index < row_count)
+        if search and target_row is not None:
+            attempted_query = attempted_query.where(or_(parent_match, slots.c.row_index == target_row))
+        attempted = attempted_query.correlate(parent).scalar_subquery()
+        parents = parents.where(attempted < wanted_count)
         remaining = parents.with_only_columns(
-            func.greatest(row_count - attempted, 0).label("remaining"), maintain_column_froms=True).subquery()
+            func.greatest(wanted_count - attempted, 0).label("remaining"), maintain_column_froms=True).subquery()
         count_statement = select(func.coalesce(func.sum(remaining.c.remaining), 0))
     else:
-        count_statement = select(func.count() * row_count).select_from(parents.with_only_columns(parent.id).subquery())
+        wanted = parents.with_only_columns(wanted_count.label("wanted"), maintain_column_froms=True).subquery()
+        count_statement = select(func.coalesce(func.sum(wanted.c.wanted), 0))
     total = int(await db.scalar(count_statement) or 0)
     if position:
         parents = parents.where(tuple_(*orders) >= (
@@ -520,7 +607,16 @@ async def _read_row_window(
     for record in records:
         start = int(position[4]) + 1 if position and str(record["replicate_id"]) == position[3] else 0
         needed = limit + 1 - len(candidates)
-        if filters["status"] == "not_started":
+        if search and target_row is not None and not record["matches_execution_search"]:
+            if target_row < start:
+                continue
+            if filters["status"] == "not_started":
+                indices = await _unstarted_row_indices(
+                    db, scope, record["replicate_id"], target_row, target_row + 1, needed
+                )
+            else:
+                indices = [target_row]
+        elif filters["status"] == "not_started":
             indices = await _unstarted_row_indices(db, scope, record["replicate_id"], start, row_count, needed)
         else:
             indices = range(start, min(row_count, start + needed))
@@ -634,6 +730,20 @@ def cell_attempt_usage_query(scope: ResultScope, cell_ids: list[uuid.UUID]) -> A
     )
 
 
+def completed_replicates_query(scope: ResultScope, cell_ids: list[uuid.UUID], expected_rows: int) -> Any:
+    """A row-mode replicate completes only when every planned row has completed."""
+    slots = slot_query(scope).subquery("replicate_progress_slots")
+    completed = (
+        select(slots.c.cell_id, slots.c.replicate_id)
+        .where(slots.c.cell_id.in_(cell_ids))
+        .group_by(slots.c.cell_id, slots.c.replicate_id)
+        .having(func.count() == expected_rows,
+                func.count().filter(slots.c.status == "completed") == expected_rows)
+        .subquery("completed_replicates")
+    )
+    return select(completed.c.cell_id, func.count().label("completed")).group_by(completed.c.cell_id)
+
+
 async def read_cells(
     db: AsyncSession,
     scope: ResultScope,
@@ -689,6 +799,17 @@ async def read_cells(
         item.pop("primary_rank", None)
         item["cell_number"] = row["cell_number"]
         items.append(item)
+    if items and scope.unit == "row":
+        refresh = await db.get(ResultRefresh, scope.key)
+        expected_rows = (refresh.summary or {}).get("source_row_count") if refresh else None
+        completed_by_cell = {}
+        if expected_rows is not None and expected_rows > 0:
+            progress = (await db.execute(completed_replicates_query(
+                scope, [uuid.UUID(item["cell_id"]) for item in items], expected_rows,
+            ))).mappings().all()
+            completed_by_cell = {str(row["cell_id"]): row["completed"] for row in progress}
+        for item in items:
+            item["completed_replicate_count"] = completed_by_cell.get(item["cell_id"], 0) if expected_rows is not None else None
     if include_all_attempt_usage and items:
         usage_rows = (await db.execute(cell_attempt_usage_query(
             scope, [uuid.UUID(item["cell_id"]) for item in items],
@@ -703,6 +824,72 @@ async def read_cells(
         "next_cursor": encode_cursor(scope, "cells", [
             rows[limit - 1]["order_value"], str(rows[limit - 1]["id"])], filters) if len(rows) > limit else None,
     }
+
+
+def execution_usage_value(slots: Any, metric: str) -> Any:
+    """The histogram, range filters and ordering share the same numeric contract."""
+    if metric not in USAGE_DISTRIBUTION_METRICS:
+        raise ValueError("unsupported_usage_metric")
+    numeric = case((func.jsonb_typeof(slots.c.usage[metric]) == "number", slots.c.usage[metric].as_float()))
+    return case((numeric >= 0, numeric))
+
+
+def usage_distribution_query(scope: ResultScope, cell_id: uuid.UUID, metric: str) -> Any:
+    """Fixed-size histogram of completed slots' latest attempts; never fetch evidence."""
+    slots = slot_query(scope).where(FactorialCell.id == cell_id).subquery("usage_slots")
+    value = execution_usage_value(slots, metric)
+    values = select(value.label("value")).where(slots.c.status == "completed").cte("usage_values")
+    stats = select(
+        func.count().label("completed_count"),
+        func.count(values.c.value).label("count"),
+        func.min(values.c.value).label("minimum"),
+        func.max(values.c.value).label("maximum"),
+        func.percentile_cont(0.25).within_group(values.c.value).label("p25"),
+        func.percentile_cont(0.5).within_group(values.c.value).label("median"),
+        func.percentile_cont(0.75).within_group(values.c.value).label("p75"),
+    ).select_from(values).cte("usage_stats")
+    # Compare the same boundaries returned to the client. floor(normalized_value)
+    # can put an exact floating-point boundary in a different bin than range filtering.
+    ranged_bucket = case(*[
+        (values.c.value >= stats.c.minimum
+         + (stats.c.maximum - stats.c.minimum) * index / USAGE_DISTRIBUTION_BINS, index)
+        for index in reversed(range(1, USAGE_DISTRIBUTION_BINS))
+    ], else_=0)
+    bucket = case((stats.c.maximum > stats.c.minimum, ranged_bucket), else_=0).label("bucket")
+    buckets = select(bucket, func.count().label("bin_count")).select_from(values).join(stats, true()).where(
+        values.c.value.is_not(None)
+    ).group_by(bucket).subquery("usage_buckets")
+    return select(stats, buckets.c.bucket, buckets.c.bin_count).select_from(stats).outerjoin(
+        buckets, true()
+    ).order_by(buckets.c.bucket)
+
+
+async def read_usage_distribution(
+    db: AsyncSession, scope: ResultScope, *, cell_id: uuid.UUID, metric: str
+) -> dict[str, Any]:
+    query = usage_distribution_query(scope, cell_id, metric)
+    exists = await db.scalar(select(FactorialCell.id).where(
+        FactorialCell.id == cell_id, FactorialCell.experiment_id == scope.experiment_id,
+        FactorialCell.design_revision_id == scope.design_revision_id, *cell_predicates(scope),
+    ))
+    if exists is None:
+        raise RunResultsProjectionError("cell_not_found")
+    rows = (await db.execute(query)).mappings().all()
+    stats = rows[0]
+    result = {key: stats[key] for key in ("completed_count", "count", "minimum", "maximum", "p25", "median", "p75")}
+    bins = []
+    if stats["count"]:
+        lower, upper = stats["minimum"], stats["maximum"]
+        size = USAGE_DISTRIBUTION_BINS if upper > lower else 1
+        counts = {row["bucket"]: row["bin_count"] for row in rows}
+        for index in range(size):
+            bins.append({
+                "lower": lower + (upper - lower) * index / size,
+                "upper": upper if index == size - 1 else lower + (upper - lower) * (index + 1) / size,
+                "upper_inclusive": index == size - 1,
+                "count": counts.get(index, 0),
+            })
+    return {"metric": metric, "unit": scope.unit, **result, "bins": bins}
 
 
 async def read_factor_options(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:

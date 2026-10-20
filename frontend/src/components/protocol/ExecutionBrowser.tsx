@@ -9,14 +9,15 @@ import { cardAccent } from '@/lib/utils'
 import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
 import { EXECUTION_PAGE_SIZE, useCursor } from '@/lib/executionPagination'
 import { displayFactorCondition } from '@/lib/experiment'
-import type { ExecutionCell, ExecutionFilters, ExecutionSlot, ExecutionSummary } from '@/types/executionResults'
+import type { ExecutionCell, ExecutionFilters, ExecutionSlot, ExecutionSummary, ExecutionUsageOptions } from '@/types/executionResults'
 import type { Experiment } from '@/types/experiments'
 import type { ResultsSelection } from './ResultsTab'
 import { ResultsPanel } from './ResultsPanel'
 import { ResultsProgress } from './ResultsProgress'
+import { ResultsCellsTable } from './ResultsCellsTable'
+import { formatUsageDistributionValue, type UsageMetric } from '@/lib/resultUsage'
 import { ResultsMetadata } from './ResultsContext'
 import { CellCard, ReplicateRow, ReplicateStatus } from './CellPresentation'
-import { CellResultStatusBadge } from './CellResultStatus'
 import { executionStatusColor, executionStatusCount, executionStatusPillColor, STATUS_PILL_SIZE } from '@/lib/executionStatus'
 import { emptyExecutionFilters, filterParams, hasExecutionFilters, statusLabels, RunBrowserControls } from './RunBrowserControls'
 
@@ -39,24 +40,26 @@ export function CursorControls({ next, back, onNext, onBack, busy, pageIndex = 0
   </div>
 }
 
-function Usage({ usage }: { usage: ExecutionSummary['usage'] }) {
-  if (!usage) return null
-  return <span className="font-mono text-xs text-muted-foreground">
-    {usage.cost_usd != null && `${new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(usage.cost_usd)} · `}
-    {usage.total_tokens != null && `${usage.total_tokens.toLocaleString()} tokens`}
-  </span>
-}
-
-export function ExecutionRows({ experimentId, scope, cellId, selectedSlotId, generation, summary, onSelect, actions, filters = emptyExecutionFilters, mode = 'results' }: {
+export function ExecutionRows({ experimentId, scope, cellId, selectedSlotId, generation, summary, onSelect, actions, filters = emptyExecutionFilters, mode = 'results', usageOptions, executionSearch }: {
   experimentId: string; scope: ResultsScope; cellId?: string; generation?: number; summary?: ExecutionSummary; filters?: ExecutionFilters
   onSelect: (selection: ResultsSelection) => void; actions?: (row: ExecutionSlot) => React.ReactNode; mode?: 'runs' | 'results'
   selectedSlotId?: string
+  usageOptions?: ExecutionUsageOptions
+  executionSearch?: string
 }) {
   const pager = useCursor()
   const params = { cell_id: cellId, cursor: pager.cursor, limit: EXECUTION_PAGE_SIZE, ...filterParams(filters) }
+  const usageParams = {
+    ...(usageOptions?.sortMetric ? { sort_metric: usageOptions.sortMetric, sort_direction: usageOptions.sortDirection ?? 'asc' } : {}),
+    ...(usageOptions?.range ? { usage_metric: usageOptions.range.metric, usage_min: usageOptions.range.lower,
+      usage_max: usageOptions.range.upper, usage_upper_inclusive: String(usageOptions.range.upper_inclusive) } : {}),
+  }
+  const requestParams = { ...params, ...usageParams, ...(executionSearch ? { execution_search: executionSearch } : {}) }
+  const readoutMetric = usageOptions?.sortMetric ?? usageOptions?.range?.metric
+  const filtered = !!(executionSearch || filters.status || filters.search || usageOptions?.range || usageOptions?.sortMetric)
   const query = useQuery({
-    queryKey: [...executionKeys.root(experimentId), 'executions', scope, summary?.source_row_count, params],
-    queryFn: ({ signal }) => experimentsApi.listExecutions(experimentId, scope, params, signal),
+    queryKey: [...executionKeys.root(experimentId), 'executions', scope, summary?.source_row_count, requestParams],
+    queryFn: ({ signal }) => experimentsApi.listExecutions(experimentId, scope, requestParams, signal),
     // Refresh only visible pages when the summary publishes a newer generation.
     staleTime: 5000,
   })
@@ -64,14 +67,15 @@ export function ExecutionRows({ experimentId, scope, cellId, selectedSlotId, gen
   return <div className="space-y-2">
     {query.isPending ? <Skeleton className="h-16" /> : query.error && !query.data ? <p role="alert" className="text-xs text-destructive">{query.error.message}</p> : <>
       <CursorControls next={query.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={query.isFetching} pageIndex={pager.pageIndex} count={query.data?.items.length} total={query.data?.total} recordLabel={summary?.unit === 'row' ? 'rows' : 'replicates'} />
-      {!query.data?.items.length && <p className="text-xs text-muted-foreground">No {summary?.unit === 'row' ? 'rows' : 'replicates'} planned in this version.</p>}
+      {!query.data?.items.length && <p className="text-xs text-muted-foreground">{filtered ? `No ${summary?.unit === 'row' ? 'rows' : 'replicates'} match these filters.` : `No ${summary?.unit === 'row' ? 'rows' : 'replicates'} planned in this version.`}</p>}
       <ul className="space-y-1.5">{query.data?.items.map(row => <ReplicateRow key={row.slot_id} number={row.replicate_number} results={mode === 'results' && !actions} selected={row.slot_id === selectedSlotId}
         onView={mode === 'results' && !actions && (row.run_id || row.status === 'completed') ? () => onSelect({ type: 'execution', slotId: row.slot_id, scope }) : undefined}
-        detail={row.row_index !== null ? <span className="font-mono">Source row {row.row_index + 1}</span> : undefined}
+        detail={row.row_index !== null || readoutMetric ? <>{row.row_index !== null && <span className="font-mono">Source row {row.row_index + 1}</span>}
+          {readoutMetric && <span className="font-mono">{readoutMetric === 'total_tokens' ? 'Tokens' : readoutMetric === 'cost_usd' ? 'Cost' : 'Duration'}: {formatUsageDistributionValue(readoutMetric, row.usage?.[readoutMetric] ?? null)}</span>}</> : undefined}
         status={<><ReplicateStatus status={row.status} filter={filters.status} />{row.result.truncated && row.status !== 'limit_reached' && <ReplicateStatus status="limit_reached" filter={filters.status} />}{row.result.evaluation_state === 'failed' && <ReplicateStatus status="scoring_failed" filter={filters.status} />}</>}
         error={row.error} actions={actions?.(row)} />)}</ul>
       {query.error && query.data && <p role="alert" className="text-xs text-destructive">Refresh failed; showing the last loaded page.</p>}
-      {summary?.unit === 'row' && !query.data?.items.length && <p className="text-xs text-muted-foreground">The published design forecasts {summary.expected ?? '?'} rows. Rows appear when the batch is planned.</p>}
+      {summary?.unit === 'row' && !filtered && !query.data?.items.length && <p className="text-xs text-muted-foreground">The published design forecasts {summary.expected ?? '?'} rows. Rows appear when the batch is planned.</p>}
     </>}
     {query.isError && <Button variant="outline" size="xs" disabled={query.isFetching} onClick={() => void query.refetch()}>Refresh</Button>}
   </div>
@@ -96,6 +100,7 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [filters, setFilters] = useState<ExecutionFilters>(emptyExecutionFilters)
   const [attemptScope, setAttemptScope] = useState<'latest' | 'all'>('latest')
+  const [metric, setMetric] = useState<UsageMetric>('total_tokens')
   const pager = useCursor()
   const params = { cursor: pager.cursor, limit: EXECUTION_PAGE_SIZE, ...filterParams(filters),
     ...(filters.resultStatus ? { result_status: filters.resultStatus } : {}),
@@ -114,19 +119,19 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
     {cells.isPending ? <Skeleton className="h-20" /> : cells.error && !cells.data ? <p role="alert" className="text-xs text-destructive">{cells.error.message}</p> : <>
       <CursorControls next={cells.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={cells.isFetching} pageIndex={pager.pageIndex} count={cells.data?.items.length} total={cells.data?.total} recordLabel="cells" />
       {!cells.data?.items.length && <p className="text-xs text-muted-foreground">{hasExecutionFilters(filters) ? 'No cells match these filters.' : 'No generated cells in this version.'}</p>}
-      {cells.data?.items.map(cell => <CellCard key={cell.cell_id} label={cell.cell_label} results={mode === 'results'}
+      {mode === 'results' ? !!cells.data?.items.length && <ResultsCellsTable cells={cells.data.items} metric={metric}
+        designSpec={summary.data?.design_spec ?? experiment?.design_spec}
+        attemptScope={attemptScope} unit={summary.data?.unit ?? 'replicate'} startIndex={pager.pageIndex * EXECUTION_PAGE_SIZE}
+        onSelect={cell => onSelect({ type: 'cell', cellId: cell.cell_id, cellLabel: cell.cell_label, scope })} />
+        : cells.data?.items.map(cell => <CellCard key={cell.cell_id} label={cell.cell_label}
         cellNumber={cell.cell_number}
         conditions={Object.entries(cell.factor_values).map(([name, value]) => displayFactorCondition(name, value, summary.data?.design_spec ?? experiment?.design_spec, cell.cell_label))}
-        replicateCount={cell.replicate_count ?? 0} expanded={mode === 'runs' && expanded.has(cell.cell_id)} listId={`executions-${cell.cell_id}`}
+        replicateCount={cell.replicate_count ?? 0} expanded={expanded.has(cell.cell_id)} listId={`executions-${cell.cell_id}`}
         onToggle={() => {
-          if (mode === 'results') {
-            onSelect({ type: 'cell', cellId: cell.cell_id, cellLabel: cell.cell_label, scope })
-            return
-          }
           const opening = !expanded.has(cell.cell_id)
           setExpanded(current => { const next = new Set(current); if (opening) next.add(cell.cell_id); else next.delete(cell.cell_id); return next })
         }}
-        progress={mode === 'results' ? (cell.usage ? <Usage usage={cell.usage} /> : undefined) : <>
+        progress={<>
           <span aria-label="Cell status counts" className="mt-1 flex w-full flex-wrap gap-1" title="Counts for the whole cell; use the overview tiles to filter replicates.">
             {summaryStatuses.filter(status => status && executionStatusCount(cell.counts, status) > 0).map(status =>
               <Badge key={status} variant="outline" className={`${STATUS_PILL_SIZE} border-current ${executionStatusPillColor(status, filters.status)}`}>
@@ -134,10 +139,9 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
               </Badge>)}
           </span>
         </>}
-        badges={mode === 'results' && cell.result_status ? <CellResultStatusBadge status={cell.result_status} />
-          : mode === 'runs' && cell.truncated ? <Badge variant="outline" className={`${STATUS_PILL_SIZE} ${executionStatusPillColor('limit_reached', filters.status)}`}>{cell.truncated} hit iteration limit</Badge> : undefined}
+        badges={cell.truncated ? <Badge variant="outline" className={`${STATUS_PILL_SIZE} ${executionStatusPillColor('limit_reached', filters.status)}`}>{cell.truncated} hit iteration limit</Badge> : undefined}
         actions={cellActions?.(cell)}>
-        {mode === 'runs' && expanded.has(cell.cell_id) && <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}:${cell.cell_id}:${JSON.stringify(filters)}`} experimentId={experimentId} scope={scope} cellId={cell.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={onSelect} actions={actions} filters={filters} mode={mode} />}
+        {expanded.has(cell.cell_id) && <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}:${cell.cell_id}:${JSON.stringify(filters)}`} experimentId={experimentId} scope={scope} cellId={cell.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={onSelect} actions={actions} filters={filters} mode={mode} />}
       </CellCard>)}
       {cells.error && cells.data && <p role="alert" className="text-xs text-destructive">Refresh failed; showing the last loaded cells.</p>}
     </>}
@@ -160,11 +164,12 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
     </>}
     {summary.error && summary.data && <p role="alert" className="text-xs text-destructive">Progress refresh failed; showing the last summary.</p>}
   </div>
-  const resultsNotice = <>{summary.isPending ? <p className="text-xs text-muted-foreground">Loading progress…</p> : summary.error && !summary.data ? <p role="alert" className="text-xs text-destructive">Progress unavailable. Records remain available below.</p> : !summary.data?.ready ? <p role="status" className="text-xs text-muted-foreground">Preparing the version summary. Records remain available below.</p> : null}{summary.error && summary.data && <p role="alert" className="text-xs text-destructive">Progress refresh failed; showing the last summary.</p>}{summary.isError && <Button variant="outline" size="xs" disabled={summary.isFetching} onClick={refresh}>Refresh</Button>}</>
+  const resultsNotice = <>{summary.isPending ? <p className="text-xs text-muted-foreground">Loading progress…</p> : summary.error && !summary.data ? <p role="alert" className="text-xs text-destructive">Progress unavailable. Records remain available below.</p> : !summary.data?.ready ? <p role="status" className="text-xs text-muted-foreground">Preparing the version summary. Records remain available below.</p> : null}{summary.error && summary.data && <p role="alert" className="text-xs text-destructive">Progress refresh failed; showing the last summary.</p>}{(summary.isError || cells.isError) && <Button variant="outline" size="xs" disabled={summary.isFetching || cells.isFetching} onClick={refresh}>Refresh</Button>}</>
   const metadata = mode === 'results' && summary.data?.ready ? <ResultsMetadata summary={summary.data} /> : null
   return mode === 'results' && experiment
     ? <ResultsPanel experimentId={experimentId} experimentName={experiment.name} scope={scope}
       progress={summary.data?.ready && <ResultsProgress summary={summary.data} cells={cells.data?.items ?? []}
+        selectedMetric={metric} onMetricChange={setMetric}
         cellsLoading={cells.isPending} cellsError={cells.error?.message} attemptScope={attemptScope} onAttemptScopeChange={setAttemptScope}
         chartPagination={!!cells.data?.items.length && <div className="flex flex-wrap items-center justify-end gap-2">
           <span className="font-mono text-[11px] text-muted-foreground">Cells {(pager.pageIndex * EXECUTION_PAGE_SIZE + 1).toLocaleString()}–{(pager.pageIndex * EXECUTION_PAGE_SIZE + cells.data.items.length).toLocaleString()}{cells.data.total !== undefined && ` of ${cells.data.total.toLocaleString()}`}</span>

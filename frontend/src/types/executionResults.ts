@@ -66,6 +66,7 @@ export interface ExecutionCell {
   replicate_count?: number; total?: number; counts?: Record<string, number>; truncated?: number
   usage?: UsageSummary; metric_values?: Record<string, number>; metric_counts?: Record<string, number>
   all_attempt_usage?: UsageSummary | null
+  completed_replicate_count?: number | null
 }
 export interface ExecutionSlot {
   slot_id: string; cell_id: string; cell_label: string; factor_values: Record<string, unknown>
@@ -73,6 +74,29 @@ export interface ExecutionSlot {
   row_index: number | null; dataset_id: string | null; raw_sha256: string | null
   run_id: string | null; status: string; updated_at: string | null; error: string | null
   result: ExecutionPreview; usage: UsageSummary | null
+}
+export interface UsageDistribution {
+  metric: 'total_tokens' | 'cost_usd' | 'duration_seconds'
+  unit: 'row' | 'replicate'
+  completed_count: number
+  count: number
+  minimum: number | null
+  maximum: number | null
+  p25: number | null
+  median: number | null
+  p75: number | null
+  bins: Array<{ lower: number; upper: number; upper_inclusive: boolean; count: number }>
+}
+export interface UsageRange {
+  metric: UsageDistribution['metric']
+  lower: number
+  upper: number
+  upper_inclusive: boolean
+}
+export interface ExecutionUsageOptions {
+  sortMetric?: UsageDistribution['metric']
+  sortDirection?: 'asc' | 'desc'
+  range?: UsageRange | null
 }
 export interface AttemptPreview {
   run_id: string; status: string; created_at: string; completed_at: string | null

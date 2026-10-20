@@ -3,15 +3,16 @@ import { useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import type { ExecutionCell, ExecutionSummary } from '@/types/executionResults'
-import { formatTokens } from '@/lib/tokenFormatting'
 import { CellUsageChart } from './CellUsageChart'
-import { experimentResultStatus, usageMetricLabels, type UsageMetric } from '@/lib/resultUsage'
+import { experimentResultStatus, formatUsageValue, usageMetricLabels, type UsageMetric } from '@/lib/resultUsage'
 
-export function ResultsProgress({ summary, cells, cellsLoading, cellsError, attemptScope = 'latest', onAttemptScopeChange, chartPagination }: {
+export function ResultsProgress({ summary, cells, cellsLoading, cellsError, attemptScope = 'latest', onAttemptScopeChange, chartPagination, selectedMetric, onMetricChange }: {
   summary: ExecutionSummary; cells: ExecutionCell[]; cellsLoading: boolean; cellsError?: string
   attemptScope?: 'latest' | 'all'; onAttemptScopeChange?: (scope: 'latest' | 'all') => void; chartPagination?: ReactNode
+  selectedMetric?: UsageMetric; onMetricChange?: (metric: UsageMetric) => void
 }) {
-  const [metric, setMetric] = useState<UsageMetric>('total_tokens')
+  const [internalMetric, setInternalMetric] = useState<UsageMetric>('total_tokens')
+  const metric = selectedMetric ?? internalMetric
   const completed = summary.counts?.completed ?? 0
   const total = summary.expected ?? summary.total ?? 0
   const status = experimentResultStatus(summary)
@@ -21,9 +22,6 @@ export function ResultsProgress({ summary, cells, cellsLoading, cellsError, atte
   const labels = usageMetricLabels(completedExperiment)
   const usageDescription = attemptScope === 'all' ? 'all attempts, including retries' : 'the most recent attempt for each replicate'
   const number = (value: number | null | undefined) => value == null ? '—' : value.toLocaleString()
-  const duration = usage?.duration_seconds
-  const durationLabel = duration == null ? '—' : duration < 60 ? `${Math.round(duration)} sec`
-    : duration < 3600 ? `${(duration / 60).toFixed(1)} min` : `${(duration / 3600).toFixed(1)} hr`
 
   return <section aria-label="Experiment progress" className="space-y-3">
     <div className="space-y-2">
@@ -50,12 +48,12 @@ export function ResultsProgress({ summary, cells, cellsLoading, cellsError, atte
     </div>
     <div className="grid grid-cols-3 gap-2">
       {([
-        ['total_tokens', labels.total_tokens, formatTokens(usage?.total_tokens), Coins, `Input and output tokens across ${usageDescription}.`],
-        ['cost_usd', labels.cost_usd, usage?.cost_usd == null ? '—' : new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(usage.cost_usd), CircleDollarSign, `Reported or estimated cost across ${usageDescription}.`],
-        ['duration_seconds', labels.duration_seconds, durationLabel, Clock3, `Cumulative duration of ${usageDescription}. Parallel runs overlap in wall-clock time.`],
+        ['total_tokens', labels.total_tokens, formatUsageValue('total_tokens', usage?.total_tokens), Coins, `Input and output tokens across ${usageDescription}.`],
+        ['cost_usd', labels.cost_usd, formatUsageValue('cost_usd', usage?.cost_usd), CircleDollarSign, `Reported or estimated cost across ${usageDescription}.`],
+        ['duration_seconds', labels.duration_seconds, formatUsageValue('duration_seconds', usage?.duration_seconds), Clock3, `Cumulative duration of ${usageDescription}. Parallel runs overlap in wall-clock time.`],
       ] as const).map(([key, title, value, Icon, help]) => <Card key={title} size="sm" className="min-w-0 gap-0 p-0">
         <Button variant="ghost" aria-label={`Show ${title.toLowerCase()} by cell`} aria-pressed={metric === key}
-          onClick={() => setMetric(key)} title={help}
+          onClick={() => { setInternalMetric(key); onMetricChange?.(key) }} title={help}
           className="h-full w-full min-w-0 flex-col items-stretch justify-start gap-1 whitespace-normal p-2 text-left aria-pressed:border-primary aria-pressed:bg-primary/10 @min-[450px]:p-3">
           <span className="flex items-start gap-1 text-[11px] text-muted-foreground @min-[450px]:text-xs">
             <Icon className="mt-0.5 size-3 shrink-0" aria-hidden="true" /><span className="min-w-0">{title}</span>

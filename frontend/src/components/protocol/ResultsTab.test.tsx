@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { experimentsApi } from '@/api/client'
 import { executionKeys } from '@/lib/executionQueries'
 import type { AttemptDetail, ExecutionCell, ExecutionSlot, ExecutionSummary } from '@/types/executionResults'
-import type { Experiment } from '@/types/experiments'
+import type { Experiment, MetricObservation } from '@/types/experiments'
 import { ResultsInspectorPanel, ResultsTab } from './ResultsTab'
 import { ExecutionBrowser, ExecutionRows } from './ExecutionBrowser'
 
@@ -12,7 +12,7 @@ vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
   return { ...actual, experimentsApi: { ...actual.experimentsApi,
     getExecutionSummary: vi.fn(), listExecutionCells: vi.fn(), listExecutions: vi.fn(), getExecutionFactorOptions: vi.fn(),
-    listExecutionAttempts: vi.fn(), getExecutionAttempt: vi.fn(), getRunResults: vi.fn(), getExecutionCell: vi.fn(), getExecutionNeighbors: vi.fn(),
+    listExecutionAttempts: vi.fn(), getExecutionAttempt: vi.fn(), getRunResults: vi.fn(), getExecutionCell: vi.fn(), getExecutionNeighbors: vi.fn(), getUsageDistribution: vi.fn(),
   } }
 })
 vi.mock('./NodeRunOutputPanel', () => ({ ReceivedPromptPanel: () => null, RunStepTrace: () => null, UnresolvedReferencesNote: () => null }))
@@ -39,6 +39,8 @@ function mount(ui: React.ReactNode) {
   return { ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>), client }
 }
 beforeEach(() => {
+  vi.mocked(experimentsApi.getUsageDistribution).mockResolvedValue({ metric: 'total_tokens', unit: 'replicate', completed_count: 0,
+    count: 0, minimum: null, maximum: null, median: null, p25: null, p75: null, bins: [] })
   vi.mocked(experimentsApi.getExecutionFactorOptions).mockResolvedValue({ factors: { model: ['a', 'b'] }, truncated: false })
   vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue(summary)
   vi.mocked(experimentsApi.listExecutionCells).mockResolvedValue({ items: [cell], next_cursor: null })
@@ -52,6 +54,83 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
 
 describe('bounded Results reads', () => {
+  it.each(['completed', 'running'] as const)('aligns %s usage observations by producer output and preserves reported values', async status => {
+    const observations: MetricObservation[] = [
+      { id: 'price', name: 'Provider price', value: 0.1234 },
+      { id: 'elapsed', name: 'Wall clock', value: 65 },
+      { id: 'count', name: 'Token count', value: 12500 },
+    ].map(item => ({ metric_id: item.id, metric_name: item.name, value: item.value,
+      status: 'measured', error: null, attempt_id: 'run-1', input_provenance: {},
+      producer: { binding_id: 'runtime', producer_id: 'asaree.runtime', kind: 'runtime', version: '1' },
+    }))
+    observations.push({ metric_id: 'report', metric_name: 'Duration', value: 'custom duration report',
+      status: 'measured', error: null, attempt_id: 'run-1', input_provenance: {},
+      producer: { binding_id: 'reported', producer_id: 'asaree.agent_output', kind: 'reported', version: '1' },
+    })
+    const withPlan: Experiment = { ...experiment, measurement_plan: {
+      metrics: observations.map(item => ({ id: item.metric_id, name: item.metric_name })), inputs: [],
+      producers: [{ id: 'runtime', producer_id: 'asaree.runtime', kind: 'runtime',
+        outputs: { cost_usd: 'price', duration_seconds: 'elapsed', total_tokens: 'count' }, artifacts: [], config: {} },
+      { id: 'reported', producer_id: 'asaree.agent_output', kind: 'reported', outputs: { text: 'report' }, artifacts: [], config: {} }],
+    } }
+    vi.mocked(experimentsApi.getExecutionAttempt).mockResolvedValue({ ...detail, status,
+      attempt_result: { measurement: { observations, artifacts: [] } },
+    })
+    mount(<ResultsInspectorPanel experimentId="experiment" experiment={withPlan}
+      selection={{ type: 'execution', slotId: 'slot-1', scope: {} }} onClose={vi.fn()} />)
+    const region = await screen.findByRole('region', { name: 'Measurement observations' })
+    const cards = within(region)
+    expect(Array.from(region.querySelectorAll('pre')).map(item => item.textContent))
+      .toEqual(['12.5K', '$0.12', '1.1 min', 'custom duration report'])
+    expect(cards.getByText(status === 'completed' ? 'Total tokens' : 'Tokens so far')).toBeInTheDocument()
+    expect(cards.getByText(status === 'completed' ? 'Final cost' : 'Cost so far')).toBeInTheDocument()
+    expect(cards.getByText(status === 'completed' ? 'Total execution time' : 'Accumulated execution time')).toBeInTheDocument()
+    expect(cards.getByText('Duration')).toBeInTheDocument()
+    expect(cards.getAllByText('asaree.runtime · v1')).toHaveLength(3)
+    expect(cards.getByText('asaree.agent_output · v1')).toBeInTheDocument()
+  })
+
+  it('combines replicate search with histogram ranges across server pages and preserves search in details', async () => {
+    vi.mocked(experimentsApi.getUsageDistribution).mockResolvedValue({ metric: 'total_tokens', unit: 'replicate',
+      completed_count: 11, count: 11, minimum: 0, maximum: 200, median: 80, p25: 40, p75: 100,
+      bins: [{ lower: 0, upper: 100, count: 10, upper_inclusive: false }, { lower: 100, upper: 200, count: 1, upper_inclusive: true }],
+    })
+    vi.mocked(experimentsApi.listExecutions).mockImplementation(async (_id, _scope, params) => {
+      if (params?.usage_metric || params?.execution_search) return { items: [slot], total: 1, next_cursor: null }
+      return { items: Array.from({ length: params?.cursor ? 1 : 10 }, (_, index) => ({ ...slot,
+        slot_id: `slot-${params?.cursor ? 11 : index + 1}`, replicate_number: params?.cursor ? 11 : index + 1,
+      })), total: 11, next_cursor: params?.cursor ? null : 'page-2' }
+    })
+    mount(<ResultsInspectorPanel experimentId="experiment" experiment={experiment}
+      selection={{ type: 'cell', cellId: 'cell-1', scope: {} }} onClose={vi.fn()} />)
+    await screen.findByText('Showing 1–10 of 11 replicates')
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    await screen.findByText('Showing 11–11 of 11 replicates')
+    fireEvent.click(screen.getByRole('button', { name: '0 ≤ value < 100: 10 replicates' }))
+    await screen.findByText('Showing 1–1 of 1 replicates')
+    expect(experimentsApi.listExecutions).toHaveBeenLastCalledWith('experiment', {}, expect.objectContaining({
+      cursor: undefined, usage_metric: 'total_tokens', usage_min: 0, usage_max: 100, usage_upper_inclusive: 'false',
+    }), expect.any(AbortSignal))
+    expect(screen.queryByRole('combobox', { name: 'Replicate sort' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'Replicate status' })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search replicates' }), { target: { value: 'replicate 11' } })
+    await waitFor(() => expect(experimentsApi.listExecutions).toHaveBeenLastCalledWith('experiment', {}, expect.objectContaining({
+      cursor: undefined, execution_search: 'replicate 11', usage_metric: 'total_tokens',
+    }), expect.any(AbortSignal)))
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search replicates' }), { target: { value: 'replicate 1' } })
+    await waitFor(() => expect(experimentsApi.listExecutions).toHaveBeenLastCalledWith('experiment', {}, expect.objectContaining({
+      cursor: undefined, execution_search: 'replicate 1', usage_metric: 'total_tokens',
+    }), expect.any(AbortSignal)))
+    fireEvent.click(screen.getByText('Replicate 1').closest('button')!)
+    await screen.findByRole('heading', { name: 'Replicate 1 details' })
+    fireEvent.click(screen.getByRole('button', { name: 'Back to cell' }))
+    expect(screen.getByRole('searchbox', { name: 'Search replicates' })).toHaveValue('replicate 1')
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+    await screen.findByText('Showing 1–10 of 11 replicates')
+    expect(screen.getByRole('searchbox', { name: 'Search replicates' })).toHaveValue('')
+    expect(screen.queryByRole('button', { name: 'Clear range' })).not.toBeInTheDocument()
+  })
+
   it('switches totals and cell bars between latest and all attempts', async () => {
     const latest = { cost_usd: 0.02, total_tokens: 200, duration_seconds: 60, input_tokens: null, output_tokens: null, agent_run_count: null }
     const all = { ...latest, total_tokens: 500, cost_usd: 0.05, duration_seconds: 120 }
@@ -65,6 +144,15 @@ describe('bounded Results reads', () => {
     expect(latestButton).toHaveAttribute('aria-pressed', 'true')
     expect(within(screen.getByRole('button', { name: 'Show total tokens by cell' })).getByText('200')).toBeInTheDocument()
     expect(await screen.findByRole('img', { name: 'Cell 1: 200' })).toBeInTheDocument()
+    const table = within(screen.getByRole('table', { name: 'Cells' }))
+    expect(table.getByRole('columnheader', { name: 'Tokens' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show final cost by cell' }))
+    expect(table.getByRole('columnheader', { name: 'Cost' })).toBeInTheDocument()
+    expect(table.getByText('$0.02')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show total execution time by cell' }))
+    expect(table.getByRole('columnheader', { name: 'Duration' })).toBeInTheDocument()
+    expect(table.getByText('1.0 min')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show total tokens by cell' }))
     fireEvent.click(screen.getByRole('button', { name: 'All attempts' }))
     expect(await screen.findByRole('img', { name: 'Cell 1: 500' })).toBeInTheDocument()
     expect(within(screen.getByRole('button', { name: 'Show total tokens by cell' })).getByText('500')).toBeInTheDocument()
@@ -78,10 +166,10 @@ describe('bounded Results reads', () => {
   it.each(['runs', 'results'] as const)('expands a %s cell and opens the inspector only in Results', async mode => {
     const select = vi.fn()
     mount(<ExecutionBrowser experimentId="experiment" scope={{ protocol_revision_id: 'v1' }} mode={mode} onSelect={select} />)
-    const toggle = await screen.findByRole('button', { name: /model: a/ })
+    const toggle = await screen.findByRole('button', { name: /model: a|^Cell 1$/ })
     expect(within(toggle).getByText('Cell 1:')).toBeInTheDocument()
     expect(within(toggle).queryByText('15786 replicates')).not.toBeInTheDocument()
-    expect(screen.getByText('15786 replicates')).toBeInTheDocument()
+    if (mode === 'runs') expect(screen.getByText('15786 replicates')).toBeInTheDocument()
     fireEvent.click(toggle)
     if (mode === 'results') {
       expect(toggle).not.toHaveAttribute('aria-expanded')
@@ -98,13 +186,13 @@ describe('bounded Results reads', () => {
     expect(select).toHaveBeenCalledTimes(mode === 'results' ? 2 : 0)
   })
 
-  it('shows an informational Results cell status pill while keeping filtering global', async () => {
+  it('shows replicate progress in the Results table and opens details', async () => {
     vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, cell_count: 1,
       cell_result_counts: { ready: 0, needs_attention: 1, awaiting_results: 0 } })
     vi.mocked(experimentsApi.listExecutionCells).mockResolvedValue({ items: [{ ...cell, result_status: 'needs_attention' }], total: 1, next_cursor: null })
     mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode="results" onSelect={vi.fn()} />)
-    const cellToggle = await screen.findByRole('button', { name: /model: a/ })
-    expect(within(cellToggle).getByText('Needs attention')).toBeInTheDocument()
+    const cellToggle = await screen.findByRole('button', { name: /model: a|^Cell 1$/ })
+    expect(screen.getByText('15,786/15,786')).toBeInTheDocument()
     expect(within(cellToggle).queryByRole('button')).not.toBeInTheDocument()
     fireEvent.click(cellToggle)
     expect(experimentsApi.listExecutions).not.toHaveBeenCalled()
@@ -123,11 +211,13 @@ describe('bounded Results reads', () => {
       selection={{ type: 'cell', cellId: 'cell-1', cellLabel: 'model=a', scope: {} }} onClose={vi.fn()} />)
     const dashboard = within(await screen.findByRole('region', { name: 'Cell measurements' }))
     await waitFor(() => expect(dashboard.getByText('ROC AUC')).toBeInTheDocument())
-    expect(dashboard.getByText('Cost')).toBeInTheDocument()
+    expect(dashboard.getByText('Final cost')).toBeInTheDocument()
     expect(dashboard.getByText('$0.12')).toBeInTheDocument()
     expect(dashboard.getByText('Total tokens')).toBeInTheDocument()
-    expect(dashboard.getByText('12,500')).toBeInTheDocument()
-    expect(dashboard.getByText('65 sec')).toBeInTheDocument()
+    expect(dashboard.getByText('12.5K')).toHaveAttribute('title', '12,500 tokens')
+    expect(dashboard.getByText('1.1 min')).toBeInTheDocument()
+    expect(Array.from(screen.getByRole('region', { name: 'Cell measurements' }).querySelectorAll('dt')).map(item => item.textContent))
+      .toEqual(['Total tokens', 'Final cost', 'Total execution time', 'ROC AUC'])
     expect(dashboard.getByText('0.9723')).toBeInTheDocument()
     expect(dashboard.getByText('Total')).toBeInTheDocument()
     expect(dashboard.getByText('Average')).toBeInTheDocument()
@@ -160,7 +250,7 @@ describe('bounded Results reads', () => {
 
   it('keeps Results search, usage, status badges and export without execution tiles', async () => {
     mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
-    await screen.findByRole('button', { name: /model: a/ })
+    await screen.findByRole('button', { name: /model: a|^Cell 1$/ })
     expect(screen.queryByRole('heading', { name: 'Current results' })).not.toBeInTheDocument()
     expect(screen.queryByRole('table', { name: 'Usage by attempt scope' })).not.toBeInTheDocument()
     expect(screen.queryByRole('list', { name: 'Run status counts' })).not.toBeInTheDocument()
@@ -168,11 +258,11 @@ describe('bounded Results reads', () => {
     expect(screen.getByRole('button', { name: 'Download CSV' })).toBeInTheDocument()
     expect(screen.queryByLabelText('Cell status counts')).not.toBeInTheDocument()
     expect(screen.queryByText('15786/15786 complete')).not.toBeInTheDocument()
-    expect(screen.getByText('15786 replicates')).toBeInTheDocument()
+    expect(screen.getByRole('table', { name: 'Cells' })).toBeInTheDocument()
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'model' } })
     await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', expect.anything(),
       { cursor: undefined, limit: 10, search: 'model', status: undefined }, expect.any(AbortSignal)))
-    fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /model: a|^Cell 1$/ }))
     expect(experimentsApi.listExecutions).not.toHaveBeenCalled()
   })
 
@@ -185,7 +275,7 @@ describe('bounded Results reads', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Filter by Cancelled' }))
     await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
       expect.objectContaining({ status: 'cancelled' }), expect.any(AbortSignal)))
-    const counts = within(screen.getByLabelText('Cell status counts'))
+    const counts = within(await screen.findByLabelText('Cell status counts'))
     expect(counts.getByText('3 Failed')).toHaveClass('text-muted-foreground', 'opacity-50')
     expect(counts.getByText('2 Cancelled')).not.toHaveClass('text-muted-foreground')
     fireEvent.click(screen.getByRole('button', { name: 'Filter by All' }))
@@ -211,7 +301,7 @@ describe('bounded Results reads', () => {
 
   it.each(['runs', 'results'] as const)('shows Refresh only after a failed load or refresh in %s', async mode => {
     const { client } = mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode={mode} onSelect={vi.fn()} />)
-    await screen.findByRole('button', { name: /model: a/ })
+    await screen.findByRole('button', { name: /model: a|^Cell 1$/ })
     expect(screen.queryByRole('button', { name: 'View results' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument()
 
@@ -226,7 +316,7 @@ describe('bounded Results reads', () => {
   it('offers Refresh when execution rows fail to load and hides it after recovery', async () => {
     vi.mocked(experimentsApi.listExecutions).mockRejectedValue(new Error('Executions unavailable'))
     mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode="runs" onSelect={vi.fn()} />)
-    fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /model: a|^Cell 1$/ }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Executions unavailable')
     vi.mocked(experimentsApi.listExecutions).mockResolvedValue({ items: [slot], next_cursor: null })
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
@@ -238,7 +328,7 @@ describe('bounded Results reads', () => {
     vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, ready: false })
     mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
     expect(await screen.findByText(/Preparing the version summary/)).toBeInTheDocument()
-    expect(await screen.findByRole('button', { name: /model: a/ })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /model: a|^Cell 1$/ })).toBeInTheDocument()
     expect(experimentsApi.listExecutions).not.toHaveBeenCalled()
     expect(experimentsApi.getRunResults).not.toHaveBeenCalled()
     expect(experimentsApi.getExecutionAttempt).not.toHaveBeenCalled()
@@ -276,7 +366,7 @@ describe('bounded Results reads', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
       expect.objectContaining({ cursor: 'page-2', search: 'model', status: 'failed' }), expect.any(AbortSignal)))
-    fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /model: a|^Cell 1$/ }))
     await screen.findByText('Replicate 1')
     expect(screen.queryByRole('button', { name: /View result/ })).not.toBeInTheDocument()
     expect(experimentsApi.listExecutions).toHaveBeenLastCalledWith('experiment', {},
@@ -425,11 +515,12 @@ describe('bounded Results reads', () => {
   it('fetches the selected attempt independently of the experiment list', async () => {
     mount(<ResultsInspectorPanel experimentId="experiment" experiment={experiment}
       selection={{ type: 'execution', slotId: 'slot-1', scope: { protocol_revision_id: 'v1' } }} onClose={vi.fn()} />)
-    expect(await screen.findByText('$0.01')).toBeInTheDocument()
+    expect(await screen.findByText('Agent calls:')).toHaveTextContent('Agent calls: 1')
+    expect(screen.queryByRole('heading', { name: 'Usage' })).not.toBeInTheDocument()
     expect(await screen.findByText('Cell 1:')).toBeInTheDocument()
     expect(screen.getByText('model: a', { exact: false })).toHaveTextContent('Cell 1: model: a')
     expect(screen.getByRole('heading', { name: 'Replicate 1 details' })).toBeInTheDocument()
-    expect(screen.getByText('1.1 min')).toBeInTheDocument()
+    expect(screen.queryByText('1.1 min')).not.toBeInTheDocument()
     expect(experimentsApi.getExecutionAttempt).toHaveBeenCalledWith('experiment', 'run-1',
       { protocol_revision_id: 'v1' }, expect.any(AbortSignal))
     expect(experimentsApi.getRunResults).not.toHaveBeenCalled()
@@ -494,7 +585,7 @@ describe('bounded Results reads', () => {
 
 describe('cell pagination during summary refreshes', () => {
   const page = (number: number) => ({
-    items: [{ ...cell, cell_id: `cell-${number}`, cell_label: `page-${number}`, factor_values: { page: number } }],
+    items: [{ ...cell, cell_id: `cell-${number}`, cell_number: number, cell_label: `page-${number}`, factor_values: { page: number } }],
     next_cursor: number < 3 ? `page-${number + 1}` : null,
   })
 
@@ -507,11 +598,11 @@ describe('cell pagination during summary refreshes', () => {
     vi.mocked(experimentsApi.listExecutionCells).mockImplementation(async (_id, _scope, params) =>
       page(params?.cursor === 'page-3' ? 3 : params?.cursor === 'page-2' ? 2 : 1))
     const { client } = mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode={mode} onSelect={vi.fn()} />)
-    await screen.findByRole('button', { name: /page: 1/ })
+    await screen.findByRole('button', { name: /page: 1|^Cell 1$/ })
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    await screen.findByRole('button', { name: /page: 2/ })
+    await screen.findByRole('button', { name: /page: 2|^Cell 2$/ })
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    await screen.findByRole('button', { name: /page: 3/ })
+    await screen.findByRole('button', { name: /page: 3|^Cell 3$/ })
     vi.mocked(experimentsApi.listExecutionCells).mockClear()
 
     await act(async () => {
@@ -520,11 +611,11 @@ describe('cell pagination during summary refreshes', () => {
 
     await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenCalled())
     expect(vi.mocked(experimentsApi.listExecutionCells).mock.calls.every(call => call[2]?.cursor === 'page-3')).toBe(true)
-    expect(screen.getByRole('button', { name: /page: 3/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /page: 3|^Cell 3$/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
     await waitFor(() => expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: 'Previous' }))
-    expect(await screen.findByRole('button', { name: /page: 2/ })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /page: 2|^Cell 2$/ })).toBeInTheDocument()
   })
 
   it('does not cancel last-page navigation when a new generation arrives mid-request', async () => {
@@ -534,9 +625,9 @@ describe('cell pagination during summary refreshes', () => {
     vi.mocked(experimentsApi.listExecutionCells).mockImplementation(async (_id, _scope, params) =>
       params?.cursor === 'page-3' ? lastPage : page(params?.cursor === 'page-2' ? 2 : 1))
     const { client } = mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode="runs" onSelect={vi.fn()} />)
-    await screen.findByRole('button', { name: /page: 1/ })
+    await screen.findByRole('button', { name: /page: 1|^Cell 1$/ })
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    await screen.findByRole('button', { name: /page: 2/ })
+    await screen.findByRole('button', { name: /page: 2|^Cell 2$/ })
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
       expect.objectContaining({ cursor: 'page-3' }), expect.any(AbortSignal)))
@@ -546,7 +637,7 @@ describe('cell pagination during summary refreshes', () => {
       finishLastPage(page(3))
     })
 
-    expect(await screen.findByRole('button', { name: /page: 3/ })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /page: 3|^Cell 3$/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled()
   })
